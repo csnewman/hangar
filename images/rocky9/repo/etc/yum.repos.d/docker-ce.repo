@@ -1,0 +1,11 @@
+# Docker's own rpm repository. See the Ubuntu base's docker.sources for why
+# this is both a SandboxTree and an ExtraTree.
+#
+# Docker builds for CentOS Stream 9, which is Rocky 9's upstream; there is no
+# separate Rocky channel.
+[docker-ce-stable]
+name=Docker CE Stable
+baseurl=https://download.docker.com/linux/centos/9/$basearch/stable
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Docker-CE

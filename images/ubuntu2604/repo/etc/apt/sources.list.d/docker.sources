@@ -1,0 +1,13 @@
+# Docker's own apt repository.
+#
+# Used twice: as a SandboxTree so the package manager can see it while the
+# image is being built, and as an ExtraTree so it ships in the image and
+# `apt install` inside an environment resolves against the same source.
+#
+# Suites tracks [Distribution] Release= in mkosi.conf. Docker publishes a
+# suite per Ubuntu release, so this names the matching one.
+Types: deb
+URIs: https://download.docker.com/linux/ubuntu
+Suites: resolute
+Components: stable
+Signed-By: /etc/apt/keyrings/docker.asc

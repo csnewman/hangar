@@ -1,0 +1,98 @@
+#!/bin/bash
+# Smoke test for the environment: does the thing we care about actually work?
+# Runs only when "hangar.smoketest" is on the kernel command line.
+set -u
+
+# Gate on the kernel command line ourselves; see the note in the Dockerfile.
+grep -qw hangar.smoketest /proc/cmdline || exit 0
+
+pass=0; fail=0
+ok()   { echo "SMOKE: PASS  $*"; pass=$((pass+1)); }
+bad()  { echo "SMOKE: FAIL  $*"; fail=$((fail+1)); }
+info() { echo "SMOKE: ....  $*"; }
+
+echo "SMOKE: ==== hangar environment smoke test ===="
+info "kernel   $(uname -r) $(uname -m)"
+info "distro   $(. /etc/os-release && echo "$PRETTY_NAME")"
+
+# Block devices and the docker store mount. docker.service has
+# RequiresMountsFor=/var/lib/docker, so if the mount never happens dockerd
+# never starts and every later check fails for a reason that has nothing to do
+# with Docker.
+info "block:     $(ls /dev/vd* 2>/dev/null | tr '\n' ' ')"
+info "by-label:  $(ls /dev/disk/by-label/ 2>/dev/null | tr '\n' ' ')"
+info "blkid vdc: $(blkid /dev/vdc 2>&1 | head -1)"
+info "udev vdc:  $(udevadm info --query=property --name=/dev/vdc 2>/dev/null | grep -E '^ID_FS_(TYPE|LABEL)=' | tr '\n' ' ')"
+info "mounted:   $(findmnt -no SOURCE /var/lib/docker 2>/dev/null || echo 'NOT MOUNTED')"
+info "mount unit: $(systemctl is-active var-lib-docker.mount 2>&1)"
+info "docker svc: $(systemctl is-active docker.service 2>&1)"
+
+# docker.service is Type=notify and initialises its storage driver on first
+# boot against an empty /var/lib/docker, which takes a while. After= orders the
+# units but sampling once here raced it, so wait rather than assume.
+info "waiting for docker (up to 90s) ..."
+for _ in $(seq 1 90); do
+    [ "$(systemctl is-active docker.service 2>&1)" = "active" ] && break
+    sleep 1
+done
+info "docker svc: $(systemctl is-active docker.service 2>&1) after wait"
+if [ "$(systemctl is-active docker.service 2>&1)" != "active" ]; then
+    # dockerd's own error goes to the journal, not the console, so lift it out.
+    journalctl -u docker.service --no-pager -n 25 2>/dev/null \
+        | sed 's/^/SMOKE: journal| /' || echo "SMOKE: journal| (unavailable)"
+fi
+
+# Storage driver: the silent-vfs-fallback trap.
+driver=$(docker info --format '{{.Driver}}' 2>/dev/null || echo "unavailable")
+info "docker storage driver: $driver"
+case "$driver" in
+  overlay2) ok "storage driver is overlay2" ;;
+  vfs)      bad "storage driver fell back to vfs" ;;
+  *)        bad "docker unavailable or unknown driver ($driver)" ;;
+esac
+
+# Egress, without which nothing can be pulled. The unit can start seconds
+# before DHCP finishes, so wait rather than sampling once.
+info "links:     $(ip -o link | awk -F": " '{print $2}' | tr '\n' ' ')"
+info "waiting for a non-docker address (up to 60s) ..."
+for _ in $(seq 1 60); do
+  ip -4 -o addr show scope global | grep -vq docker0 && \
+    ip -4 -o addr show scope global | grep -v docker0 | grep -q "inet " && break
+  sleep 1
+done
+info "addresses: $(ip -4 -o addr show scope global | awk '{print $2": "$4}' | tr '\n' ' ')"
+info "networkctl: $(networkctl --no-legend 2>/dev/null | awk '{print $2"="$4}' | tr '\n' ' ')"
+info "route:     $(ip -4 route show default | head -1)"
+info "resolv:    $(grep -h ^nameserver /etc/resolv.conf /run/systemd/resolve/resolv.conf 2>/dev/null | tr '\n' ' ')"
+
+for _ in $(seq 1 30); do
+  curl -fsS -m 5 -o /dev/null https://registry-1.docker.io/v2/ 2>/dev/null && break
+  [ "$?" = "22" ] && break
+  sleep 2
+done
+if curl -fsS -m 10 -o /dev/null https://registry-1.docker.io/v2/ 2>/dev/null || [ "$?" = "22" ]; then
+  ok "outbound network reaches the registry"
+else
+  bad "no outbound network"
+  info "networkd: $(systemctl is-active systemd-networkd 2>&1)"
+  info "resolved: $(systemctl is-active systemd-resolved 2>&1)"
+fi
+
+# The actual question: does nested Docker run a container?
+info "pulling and running hello-world ..."
+if timeout 180 docker run --rm hello-world 2>&1 | grep -q "Hello from Docker"; then
+  ok "nested docker ran a container"
+else
+  bad "nested docker could not run a container"
+fi
+
+# Something with a filesystem in it, since overlay2-on-our-root is the risk.
+if timeout 180 docker run --rm alpine:latest sh -c 'echo x > /tmp/f && cat /tmp/f' 2>/dev/null | grep -q x; then
+  ok "container filesystem writes work"
+else
+  bad "container filesystem writes failed"
+fi
+
+echo "SMOKE: ==== $pass passed, $fail failed ===="
+echo "SMOKE: DONE"
+systemctl poweroff --no-block

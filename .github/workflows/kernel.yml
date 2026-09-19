@@ -1,0 +1,92 @@
+# Builds the Hangar guest kernel and publishes it as an OCI image. The kernel
+# is monolithic, so there is no /lib/modules to ship alongside it and nothing
+# that can drift out of step with it.
+name: kernel
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'internal/kernel/**'
+      - '.github/workflows/kernel.yml'
+  pull_request:
+    paths:
+      - 'internal/kernel/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Upstream kernel version
+        required: false
+
+concurrency:
+  group: kernel-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository }}/kernel
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: ubuntu-26.04-arm
+          - arch: x86_64
+            runner: ubuntu-26.04
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - name: Build kernel
+        run: |
+          go run ./cmd/hangar kernel \
+            --arch ${{ matrix.arch }} \
+            ${{ inputs.version && format('--version {0}', inputs.version) || '' }} \
+            -o out/kernel -v
+
+      - name: Record version
+        id: kver
+        run: echo "release=$(cat out/kernel/kernelrelease)" >> "$GITHUB_OUTPUT"
+
+      # Packaged as an OCI image rather than a release asset so nodes pull it
+      # the same way they pull everything else, through the registry they
+      # already authenticate to and cache.
+      - name: Assemble image context
+        run: |
+          mkdir -p ctx/boot
+          cp out/kernel/vmlinuz ctx/boot/vmlinuz
+          cp out/kernel/config  ctx/boot/config
+          cat > ctx/Dockerfile <<'DOCKERFILE'
+          FROM scratch
+          COPY boot /boot
+          DOCKERFILE
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ctx
+          platforms: linux/${{ matrix.arch == 'x86_64' && 'amd64' || 'arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.kver.outputs.release }}-${{ matrix.arch }}
+            ${{ env.IMAGE }}:latest-${{ matrix.arch }}
+          labels: |
+            org.hangar.kernel.release=${{ steps.kver.outputs.release }}
+            org.hangar.kernel.arch=${{ matrix.arch }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

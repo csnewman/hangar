@@ -1,0 +1,16 @@
+#!/bin/sh
+# Runs inside the image after packages are installed.
+set -eu
+
+# Which units start is set by the shared preset in ../common/tree, because
+# mkosi applies presets after this script runs.
+
+# Ubuntu ships a stock `ubuntu` user at uid 1000; it must go before `dev` can
+# take that uid.
+userdel -r ubuntu 2>/dev/null || true
+useradd -m -u 1000 -s /bin/bash -G sudo,docker dev
+echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev
+mkdir -p /workspace /var/lib/docker
+chown dev:dev /workspace
+
+printf 'hangar\n' > /etc/hostname

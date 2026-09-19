@@ -1,0 +1,12 @@
+[Unit]
+Description=Hangar smoke test
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/hangar-smoke
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

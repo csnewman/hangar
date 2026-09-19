@@ -1,0 +1,9 @@
+# Local working notes — not part of the repo
+AGENTS.md
+CLAUDE.md
+docs/
+.claude/
+
+# Build output
+/out/
+/hangar

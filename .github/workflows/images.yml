@@ -1,0 +1,84 @@
+# Builds the Hangar base images with mkosi and publishes them so template
+# authors can FROM them. mkosi emits an OCI layout; skopeo pushes it directly.
+name: images
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'images/**'
+      - 'internal/image/**'
+      - '.github/workflows/images.yml'
+  pull_request:
+    paths:
+      - 'images/**'
+      - 'internal/image/**'
+  workflow_dispatch:
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  base:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - base: ubuntu2604
+            arch: arm64
+            runner: ubuntu-26.04-arm
+          - base: ubuntu2604
+            arch: amd64
+            runner: ubuntu-26.04
+          - base: rocky9
+            arch: arm64
+            runner: ubuntu-26.04-arm
+          - base: rocky9
+            arch: amd64
+            runner: ubuntu-26.04
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # On a Linux runner mkosi runs directly: no container, and none of the
+      # privilege or bind-mount-ownership problems that come with driving it
+      # from macOS.
+      #
+      # 26.04 packages mkosi 26, which is what SandboxTrees= needs and what the
+      # builder image in internal/image/mkosi.go uses. Keep the two in step so
+      # a config that builds locally builds here.
+      - name: Install mkosi and tooling
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            mkosi dnf rpm ca-certificates skopeo
+
+      - name: Build base image
+        run: |
+          cd images/${{ matrix.base }}
+          sudo mkosi --force --format oci --output hangar-base build
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push OCI layout
+        if: github.event_name != 'pull_request'
+        run: |
+          repo=$(echo "${{ github.repository }}" | tr 'A-Z' 'a-z')
+          dest="docker://${{ env.REGISTRY }}/${repo}/base-${{ matrix.base }}"
+          cd images/${{ matrix.base }}
+          skopeo copy --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            "oci:hangar-base" "${dest}:${{ github.sha }}-${{ matrix.arch }}"
+          skopeo copy --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+            "oci:hangar-base" "${dest}:latest-${{ matrix.arch }}"

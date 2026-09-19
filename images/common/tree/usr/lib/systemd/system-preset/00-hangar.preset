@@ -1,0 +1,25 @@
+# Which units a Hangar environment starts.
+#
+# mkosi runs `systemctl preset-all` after the postinstall script, so presets,
+# not `systemctl enable`, decide what is enabled in the finished image. The
+# distributions disagree on the default for a unit no preset mentions --
+# Debian's policy enables it, RHEL's disables it -- so every unit Hangar cares
+# about is named here rather than left to that default.
+#
+# Preset files are read in lexical order and the first matching rule wins, so
+# the 00- prefix puts these ahead of the distribution's own policy. A unit that
+# is not installed is skipped, which is what lets one file serve every base.
+
+enable docker.service
+enable containerd.service
+enable hangar-smoke.service
+
+# Debian-family bases use networkd, RHEL-family bases NetworkManager.
+enable systemd-networkd.service
+enable systemd-resolved.service
+enable NetworkManager.service
+
+# Nothing in an environment needs to block on the network being up, and these
+# add several seconds to every boot.
+disable systemd-networkd-wait-online.service
+disable NetworkManager-wait-online.service
