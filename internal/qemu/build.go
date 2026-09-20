@@ -82,6 +82,20 @@ func Build(ctx context.Context, o Options) (*Artifacts, error) {
 		return nil, err
 	}
 
+	// --disable-tcg leaves KVM as the only accelerator, and KVM exists only
+	// when the target architecture matches the host's. Cross-building is
+	// therefore impossible rather than merely slow, and saying so here beats
+	// a meson error thirty seconds into a container.
+	hostArch, err := HostArch()
+	if err != nil {
+		return nil, err
+	}
+	if o.Arch != hostArch {
+		return nil, fmt.Errorf(
+			"cannot build a %s QEMU on a %s host: the build disables TCG, so KVM is "+
+				"the only accelerator and it needs a matching architecture", o.Arch, hostArch)
+	}
+
 	absOut, err := filepath.Abs(o.OutDir)
 	if err != nil {
 		return nil, err
