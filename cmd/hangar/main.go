@@ -289,15 +289,25 @@ func runVM(ctx context.Context, argv []string) error {
 		}
 	}
 
-	cfg := &vm.Config{
-		Name:   *name,
-		Kernel: kpath,
-		Initrd: filepath.Join(*out, "initrd.img"),
-		Disks: []vm.Disk{
+	// The base layer reaches the guest one of two ways, never both. Giving it
+	// the same filesystem as a virtiofs export and as a block device is not
+	// merely redundant: the host and guest would both mount one ext4, and the
+	// guest hangs on it.
+	disks := []vm.Disk{
+		{Path: filepath.Join(*out, "upper.ext4")},
+		{Path: filepath.Join(*out, "docker.ext4")},
+	}
+	if *virtiofs == "" {
+		disks = append([]vm.Disk{
 			{Path: filepath.Join(*out, "base.ext4"), ReadOnly: true},
-			{Path: filepath.Join(*out, "upper.ext4")},
-			{Path: filepath.Join(*out, "docker.ext4")},
-		},
+		}, disks...)
+	}
+
+	cfg := &vm.Config{
+		Name:        *name,
+		Kernel:      kpath,
+		Initrd:      filepath.Join(*out, "initrd.img"),
+		Disks:       disks,
 		MemoryMB:    *mem,
 		Network:     true,
 		CPUs:        *cpus,

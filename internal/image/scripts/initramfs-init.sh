@@ -1,11 +1,17 @@
 #!/bin/busybox sh
 # PID 1 in the initramfs. Assembles the overlay root and hands over to systemd.
 #
-# The Hangar kernel is monolithic: overlayfs, ext4 and virtio-blk are built in,
-# so this script mounts and pivots with no module loading anywhere.
+# The Hangar kernel is monolithic: overlayfs, ext4, virtiofs and virtio-blk are
+# all built in, so this script mounts and pivots with no module loading.
 #
-#   /dev/vda  read-only base image   -> lowerdir
-#   /dev/vdb  per-environment layer  -> upperdir + workdir
+#   lowerdir   the base image, read-only
+#   upperdir   the per-environment writable layer, on a virtio-blk disk
+#
+# The base arrives over virtiofs when the host exported one: the host already
+# holds it unpacked as a directory, so nothing is converted into a disk image
+# and environments sharing a base share its page cache. A base on a block
+# device is the fallback for a host that exported none, and shifts the
+# writable layer along one device.
 #
 # /var/lib/docker is NOT part of this overlay: overlay2 cannot stack on
 # overlayfs, so it gets its own filesystem mounted by label from fstab.
@@ -21,8 +27,17 @@ fail() {
     exec /bin/busybox sh
 }
 
-mount -o ro /dev/vda /base || fail "cannot mount base (/dev/vda)"
-mount        /dev/vdb /rw  || fail "cannot mount upper (/dev/vdb)"
+# hangar-base is the tag internal/vm gives the vhost-user-fs device.
+if mount -t virtiofs -o ro hangar-base /base 2>/dev/null; then
+    echo "INITRAMFS: base over virtiofs"
+    rw=/dev/vda
+else
+    mount -o ro /dev/vda /base || fail "no virtiofs base, and /dev/vda will not mount either"
+    echo "INITRAMFS: base on /dev/vda"
+    rw=/dev/vdb
+fi
+
+mount "$rw" /rw || fail "cannot mount the writable layer ($rw)"
 
 mkdir -p /rw/upper /rw/work
 mount -t overlay overlay \
