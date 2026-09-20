@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -72,19 +73,65 @@ func Detect() (*Caps, error) {
 		return nil, fmt.Errorf("unsupported host architecture %q", runtime.GOARCH)
 	}
 
-	bin := "qemu-system-" + c.Arch
-	path, err := exec.LookPath(bin)
+	// Only Hangar's own QEMU is supported. A distribution build is not a
+	// degraded version of it, it is a different thing: not linked against
+	// virglrenderer, so no virtio-gpu-gl and no accelerated display at all,
+	// and carrying several hundred device models a guest can never address.
+	// Accepting one would produce environments that boot and are quietly
+	// wrong, which is worse than refusing.
+	bin, err := findQEMU(c.Arch)
 	if err != nil {
-		return nil, fmt.Errorf("%s not found in PATH: build it with \"hangar qemu\"", bin)
+		return nil, err
 	}
-	c.QEMUBin = path
+	c.QEMUBin = bin
 
-	if out, err := exec.Command(path, "--version").Output(); err == nil {
+	if out, err := exec.Command(bin, "--version").Output(); err == nil {
 		c.QEMUVer = strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
 	}
 
 	c.Accel = detectAccel()
 	return c, nil
+}
+
+// qemuSearchPath is where Hangar's own QEMU lives: the build output during
+// development, and the path the published OCI image installs to.
+var qemuSearchPath = []string{
+	filepath.Join("out", "qemu"),
+	"/usr/local/bin",
+}
+
+// findQEMU locates Hangar's QEMU and refuses anything else.
+//
+// Being in the right directory is not the test -- the binary is checked for
+// virtio-gpu-gl-pci, which only exists when QEMU was linked against
+// virglrenderer. That is the property Hangar's build exists to provide, so it
+// is also the cheapest way to tell the two apart.
+func findQEMU(arch string) (string, error) {
+	name := "qemu-system-" + arch
+	var tried []string
+	for _, dir := range qemuSearchPath {
+		p := filepath.Join(dir, name)
+		if _, err := os.Stat(p); err != nil {
+			tried = append(tried, p)
+			continue
+		}
+		abs, err := filepath.Abs(p)
+		if err != nil {
+			return "", err
+		}
+		out, err := exec.Command(abs, "-device", "help").CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("%s would not list its devices: %w", abs, err)
+		}
+		if !strings.Contains(string(out), "virtio-gpu-gl-pci") {
+			return "", fmt.Errorf("%s has no virtio-gpu-gl-pci, so it was not built by "+
+				"\"hangar qemu\" -- a distribution QEMU cannot accelerate a guest's "+
+				"display and is not supported", abs)
+		}
+		return abs, nil
+	}
+	return "", fmt.Errorf("%s not found in %s: build it with \"hangar qemu\"",
+		name, strings.Join(tried, " or "))
 }
 
 func detectAccel() Accel {

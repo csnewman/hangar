@@ -93,6 +93,68 @@ else
   bad "container filesystem writes failed"
 fi
 
+# --- virtiofs ---------------------------------------------------------------
+# Only when the host attached one. This is the settled shape for the read-only
+# base layer -- the host keeps it as an unpacked directory and shares the page
+# cache between environments -- but overlayfs has historically been particular
+# about what it will accept as a lowerdir, and Kata documents
+# docker-in-docker on virtiofs as a known failure. So it is measured, not
+# assumed.
+# The guard is the presence of a *device*, not of filesystem support. The
+# kernel has virtiofs built in, so /proc/filesystems lists it whether or not
+# the host attached anything -- checking that reported a failure on every
+# environment without one.
+if [ -n "$(ls /sys/bus/virtio/drivers/virtiofs/ 2>/dev/null | grep '^virtio')" ]; then
+  info "virtiofs: device attached"
+  mkdir -p /mnt/vfs
+  if timeout 30 mount -t virtiofs hangar-base /mnt/vfs 2>/tmp/vfs.err; then
+    ok "virtiofs mounts"
+    info "virtiofs: $(ls /mnt/vfs | head -c 120)"
+
+    # The real question: overlayfs on top of it.
+    #
+    # upperdir and workdir go on /var/lib/docker, which is a real ext4
+    # filesystem. They cannot live under / -- the root here is itself an
+    # overlay, and overlayfs refuses an overlay as an upperdir ("filesystem on
+    # ... not supported as upperdir"), which is the same constraint that keeps
+    # the docker image store off the root.
+    ovl=/var/lib/docker/hangar-overlay-probe
+    rm -rf "$ovl"
+    mkdir -p "$ovl/upper" "$ovl/work" "$ovl/merged"
+    if mount -t overlay overlay \
+         -o lowerdir=/mnt/vfs,upperdir=$ovl/upper,workdir=$ovl/work \
+         "$ovl/merged" 2>/tmp/ovl.err; then
+      ok "overlayfs accepts a virtiofs lowerdir"
+      if echo hangar > $ovl/merged/.probe 2>/dev/null \
+         && [ "$(cat $ovl/merged/.probe)" = hangar ]; then
+        ok "overlay-on-virtiofs is writable"
+      else
+        bad "overlay-on-virtiofs rejected a write"
+      fi
+      # A copy-up: reading a file that exists only in the virtiofs lower,
+      # modifying it, and seeing the change is what a real workload does.
+      if [ -f $ovl/merged/etc/hostname ] \
+         && echo probe >> $ovl/merged/etc/hostname 2>/dev/null \
+         && grep -q probe $ovl/merged/etc/hostname; then
+        ok "copy-up from a virtiofs lower works"
+      else
+        bad "copy-up from a virtiofs lower failed"
+      fi
+      umount "$ovl/merged" 2>/dev/null
+    else
+      bad "overlayfs rejected a virtiofs lowerdir"
+      info "overlay: $(head -c 160 /tmp/ovl.err 2>/dev/null)"
+      info "dmesg:   $(dmesg | grep -i overlay | tail -1)"
+    fi
+    umount /mnt/vfs 2>/dev/null
+  else
+    bad "virtiofs would not mount"
+    info "mount: $(head -c 160 /tmp/vfs.err 2>/dev/null)"
+  fi
+else
+  info "virtiofs: no device attached, skipping"
+fi
+
 echo "SMOKE: ==== $pass passed, $fail failed ===="
 echo "SMOKE: DONE"
 systemctl poweroff --no-block

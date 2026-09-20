@@ -19,6 +19,7 @@ import (
 	"github.com/csnewman/hangar/internal/image"
 	"github.com/csnewman/hangar/internal/kernel"
 	"github.com/csnewman/hangar/internal/qemu"
+	"github.com/csnewman/hangar/internal/snapshot"
 	"github.com/csnewman/hangar/internal/vm"
 	"github.com/csnewman/hangar/internal/vsock"
 )
@@ -34,6 +35,7 @@ Usage:
   hangar build [flags]       build a VM image with mkosi
   hangar kernel [flags]      build the guest kernel
   hangar qemu   [flags]      build the QEMU that runs environments
+  hangar pull  <ref>         pull an OCI image and unpack it for virtiofs
   hangar run   [flags]       boot an environment and attach to its console
 
 Run "hangar <command> -h" for the flags of a command.
@@ -57,6 +59,8 @@ func main() {
 		err = buildKernel(ctx, os.Args[2:])
 	case "qemu":
 		err = buildQEMU(ctx, os.Args[2:])
+	case "pull":
+		err = pullImage(ctx, os.Args[2:])
 	case "run":
 		err = runVM(ctx, os.Args[2:])
 	case "-h", "--help", "help":
@@ -203,6 +207,52 @@ func buildQEMU(ctx context.Context, argv []string) error {
 	return nil
 }
 
+// pullImage fetches an image and leaves it unpacked as a directory, which is
+// the form an environment's read-only base layer is meant to take: virtiofs
+// exports it, and environments sharing a base share its page cache.
+func pullImage(ctx context.Context, argv []string) error {
+	fs := flag.NewFlagSet("pull", flag.ExitOnError)
+	root := fs.String("root", "out/images", "where content and snapshots live")
+	platform := fs.String("platform", "", "platform to select (default: this host's)")
+	key := fs.String("key", "", "name for the mounted view (default: derived from the ref)")
+	mountIt := fs.Bool("mount", true, "mount the unpacked snapshot and print its path")
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return fmt.Errorf("usage: hangar pull [flags] <image-ref>")
+	}
+	ref := fs.Arg(0)
+
+	st, err := snapshot.Open(*root)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+
+	fmt.Fprintf(os.Stderr, "pulling %s\n", ref)
+	chainID, err := st.Pull(ctx, ref, *platform)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "chain       %s\n", chainID)
+
+	if !*mountIt {
+		return nil
+	}
+	k := *key
+	if k == "" {
+		k = strings.NewReplacer("/", "_", ":", "_").Replace(ref)
+	}
+	dir, err := st.Mount(ctx, chainID, k)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "mounted     %s\n", dir)
+	fmt.Println(dir)
+	return nil
+}
+
 func runVM(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	out := fs.String("o", "out", "directory holding the rootfs and kernel")
@@ -216,6 +266,7 @@ func runVM(ctx context.Context, argv []string) error {
 	cid := fs.Uint("cid", 0, "guest vsock context ID (default: the first free one)")
 	noAgent := fs.Bool("no-agent", false, "boot without an agent channel")
 	agentWait := fs.Duration("agent-wait", 90*time.Second, "how long to wait for the agent")
+	virtiofs := fs.String("virtiofs", "", "export this directory to the guest over virtiofs")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -261,6 +312,19 @@ func runVM(ctx context.Context, argv []string) error {
 		if cfg.GuestCID == 0 {
 			cfg.GuestCID = vsock.SuggestGuestCID()
 		}
+	}
+
+	// virtiofsd has to be running before QEMU starts: QEMU connects to its
+	// socket immediately and fails if nothing is listening.
+	if *virtiofs != "" {
+		sock := filepath.Join(os.TempDir(), "hangar-virtiofs-"+cfg.Name+".sock")
+		vfs, err := vm.StartVirtiofsd(ctx, *virtiofs, sock, true)
+		if err != nil {
+			return err
+		}
+		defer vfs.Close()
+		cfg.VirtiofsSocket = vfs.Socket()
+		fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag hangar-base\n", *virtiofs)
 	}
 
 	if *printOnly {

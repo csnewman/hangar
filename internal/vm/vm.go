@@ -24,6 +24,13 @@ type Disk struct {
 	ReadOnly bool
 }
 
+const (
+	// sharedMemID names the shared memory object vhost-user backends map.
+	sharedMemID = "hangar-mem"
+	// virtiofsChardevID names the socket to virtiofsd.
+	virtiofsChardevID = "hangar-virtiofs"
+)
+
 // Config describes one environment VM.
 type Config struct {
 	Name     string
@@ -51,6 +58,18 @@ type Config struct {
 	//
 	// It must be unique among the guests running on this host.
 	GuestCID uint32
+
+	// VirtiofsSocket is a virtiofsd vhost-user socket. The directory it
+	// exports appears in the guest as a virtiofs filesystem tagged
+	// VirtiofsTag. Empty leaves it out.
+	//
+	// This is how the read-only base layer is meant to reach a guest: the host
+	// already holds it as an unpacked directory, so nothing is converted to a
+	// disk image, and the page cache backing it is shared by every environment
+	// running the same base.
+	VirtiofsSocket string
+	// VirtiofsTag is the mount tag the guest uses. Defaults to "hangar-base".
+	VirtiofsTag string
 }
 
 func (c *Config) applyDefaults() {
@@ -79,6 +98,14 @@ func (c *Config) Args(h *host.Caps) ([]string, error) {
 	machine := h.Machine
 	if h.Accel != host.AccelNone {
 		machine += ",accel=" + string(h.Accel)
+	}
+	// vhost-user backends read and write the guest's memory directly, which
+	// they can only do if it is shared rather than private to QEMU. The
+	// backend has to be named on -machine itself, so it is appended here
+	// rather than passed as a separate option -- a second -machine would
+	// replace this one instead of adding to it.
+	if c.VirtiofsSocket != "" {
+		machine += ",memory-backend=" + sharedMemID
 	}
 
 	cpu := "host"
@@ -134,6 +161,19 @@ func (c *Config) Args(h *host.Caps) ([]string, error) {
 		args = append(args,
 			"-blockdev", blockdev,
 			"-device", fmt.Sprintf("virtio-blk-pci,drive=%s,serial=%s", node, node),
+		)
+	}
+
+	if c.VirtiofsSocket != "" {
+		tag := c.VirtiofsTag
+		if tag == "" {
+			tag = "hangar-base"
+		}
+		args = append(args,
+			"-object", fmt.Sprintf("memory-backend-memfd,id=%s,size=%dM,share=on",
+				sharedMemID, c.MemoryMB),
+			"-chardev", fmt.Sprintf("socket,id=%s,path=%s", virtiofsChardevID, c.VirtiofsSocket),
+			"-device", fmt.Sprintf("vhost-user-fs-pci,chardev=%s,tag=%s", virtiofsChardevID, tag),
 		)
 	}
 
