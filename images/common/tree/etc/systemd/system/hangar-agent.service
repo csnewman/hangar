@@ -11,8 +11,8 @@ Before=sysinit.target
 [Service]
 Type=exec
 ExecStart=/usr/local/bin/hangar-agent
-# The host listener may legitimately not be there -- a macOS host has no vsock
-# at all -- so a failure to connect must not hold up the boot.
+# The host listener may not be up yet when the guest reaches this point, so a
+# failure to connect must not hold up the boot.
 Restart=on-failure
 RestartSec=2s
 

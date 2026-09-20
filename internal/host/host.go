@@ -1,8 +1,8 @@
 // Package host detects the capabilities of the machine Hangar is running on:
 // which QEMU binary to use, which machine type, and which accelerator.
 //
-// This exists because the guest architecture follows the host. On an Apple
-// Silicon Mac we run aarch64 guests under HVF; on a Linux x86-64 node we run
+// This exists because the guest architecture follows the host: an arm64 node
+// runs aarch64 guests and an x86-64 node runs
 // x86-64 guests under KVM. The machine types differ too: QEMU's minimal
 // "microvm" type is x86-only, so aarch64 uses "virt".
 package host
@@ -75,7 +75,7 @@ func Detect() (*Caps, error) {
 	bin := "qemu-system-" + c.Arch
 	path, err := exec.LookPath(bin)
 	if err != nil {
-		return nil, fmt.Errorf("%s not found in PATH: install QEMU (macOS: brew install qemu)", bin)
+		return nil, fmt.Errorf("%s not found in PATH: build it with \"hangar qemu\"", bin)
 	}
 	c.QEMUBin = path
 

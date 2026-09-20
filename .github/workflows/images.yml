@@ -47,9 +47,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # On a Linux runner mkosi runs directly: no container, and none of the
-      # privilege or bind-mount-ownership problems that come with driving it
-      # from macOS.
+      # mkosi runs directly on the runner here, with no container wrapper --
+      # the runner is already the Linux host mkosi needs.
       #
       # 26.04 packages mkosi 26, which is what SandboxTrees= needs and what the
       # builder image in internal/image/mkosi.go uses. Keep the two in step so

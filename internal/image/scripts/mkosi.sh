@@ -19,8 +19,8 @@ apt-get install -y -qq --no-install-recommends \
 printf 'root:100000:65536\n' > /etc/subuid
 printf 'root:100000:65536\n' > /etc/subgid
 
-# Build on the container filesystem: a macOS bind mount cannot represent Linux
-# ownership, and mkosi's tar extraction fails on it.
+# Build on the container filesystem rather than the bind mount: mkosi's tar
+# extraction needs to set ownership the mount may not be able to represent.
 # /cfg is the whole images/ directory, not just one image, so that a config can
 # reference a sibling with a relative path -- ../common/tree is shared by every
 # base. IMAGE names the subdirectory to build.
