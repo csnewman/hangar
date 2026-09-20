@@ -1,0 +1,127 @@
+# Builds the Hangar QEMU and publishes it as an OCI image.
+#
+# Hangar builds its own because a distribution QEMU is typically not linked
+# against virglrenderer, so it has no virtio-gpu-gl device and cannot
+# accelerate a guest's display at all -- and because a stock build carries
+# several hundred device models a Hangar guest can never address, which is
+# where most QEMU CVEs live. See internal/qemu.
+#
+# The consequence is that QEMU security releases are Hangar's to track. This
+# workflow takes a version input so a rebuild is one dispatch.
+name: qemu
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'internal/qemu/**'
+      - '.github/workflows/qemu.yml'
+  pull_request:
+    paths:
+      - 'internal/qemu/**'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Upstream QEMU version
+        required: false
+
+concurrency:
+  group: qemu-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ghcr.io/${{ github.repository }}/qemu
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: aarch64
+            runner: ubuntu-26.04-arm
+          - arch: x86_64
+            runner: ubuntu-26.04
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+
+      - name: Build QEMU
+        run: |
+          go run ./cmd/hangar qemu \
+            --arch ${{ matrix.arch }} \
+            ${{ inputs.version && format('--version {0}', inputs.version) || '' }} \
+            -o out/qemu -v
+
+      # The build asserts its own device list, so this is here to put the
+      # numbers in the log: a reviewer should be able to see how much was
+      # left out without rerunning anything.
+      - name: Report what was built
+        id: q
+        run: |
+          ver="${{ inputs.version }}"
+          [ -n "$ver" ] || ver=$(grep -oE 'DefaultVersion = "[^"]+"' internal/qemu/build.go | cut -d'"' -f2)
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "### qemu $ver (${{ matrix.arch }})" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "devices: $(grep -c '^name ' out/qemu/devices)" >> "$GITHUB_STEP_SUMMARY"
+          grep -oE '^name "[^"]+"' out/qemu/devices | sort >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      # The image is a root filesystem the worker runs from, not a tarball of
+      # files to drop onto a node.
+      #
+      # A binary built here does not run on an arbitrary host: QEMU links
+      # against the builder's glibc, and against virglrenderer, epoxy, gbm,
+      # slirp and seccomp. Copying it onto a node with a different
+      # distribution version fails with "GLIBC_2.42 not found" before it
+      # prints anything. Pairing the binary with the userspace it was built
+      # against removes the question, and a worker pod can use this directly
+      # as its base.
+      - name: Assemble image context
+        run: |
+          mkdir -p ctx/usr/local/bin ctx/usr/local/share/qemu
+          cp out/qemu/qemu-system-${{ matrix.arch }} ctx/usr/local/bin/
+          [ -d out/qemu/share ] && cp -a out/qemu/share/. ctx/usr/local/share/qemu/ || true
+          cp out/qemu/devices ctx/usr/local/share/qemu/devices.txt
+          cat > ctx/Dockerfile <<'DOCKERFILE'
+          # Must match the builder image in internal/qemu/build.go: the binary
+          # was linked against this distribution's libraries.
+          FROM ubuntu:26.04
+          RUN apt-get update \
+           && apt-get install -y --no-install-recommends \
+                libglib2.0-0t64 libpixman-1-0 libfdt1 \
+                libvirglrenderer1 libepoxy0 libgbm1 libdrm2 \
+                libseccomp2 libslirp0 libcap-ng0 \
+           && rm -rf /var/lib/apt/lists/*
+          COPY usr /usr
+          RUN qemu-system-$(uname -m) --version
+          DOCKERFILE
+
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: ctx
+          platforms: linux/${{ matrix.arch == 'x86_64' && 'amd64' || 'arm64' }}
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.q.outputs.version }}-${{ matrix.arch }}
+            ${{ env.IMAGE }}:latest-${{ matrix.arch }}
+          labels: |
+            org.hangar.qemu.version=${{ steps.q.outputs.version }}
+            org.hangar.qemu.arch=${{ matrix.arch }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}

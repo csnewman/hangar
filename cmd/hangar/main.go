@@ -18,6 +18,7 @@ import (
 	"github.com/csnewman/hangar/internal/host"
 	"github.com/csnewman/hangar/internal/image"
 	"github.com/csnewman/hangar/internal/kernel"
+	"github.com/csnewman/hangar/internal/qemu"
 	"github.com/csnewman/hangar/internal/vm"
 	"github.com/csnewman/hangar/internal/vsock"
 )
@@ -31,7 +32,8 @@ const usage = `hangar - development environments for coding agents
 Usage:
   hangar doctor              check this machine can run environments
   hangar build [flags]       build a VM image with mkosi
-  hangar kernel [flags]      build the guest kernel and its modules
+  hangar kernel [flags]      build the guest kernel
+  hangar qemu   [flags]      build the QEMU that runs environments
   hangar run   [flags]       boot an environment and attach to its console
 
 Run "hangar <command> -h" for the flags of a command.
@@ -53,6 +55,8 @@ func main() {
 		err = build(ctx, os.Args[2:])
 	case "kernel":
 		err = buildKernel(ctx, os.Args[2:])
+	case "qemu":
+		err = buildQEMU(ctx, os.Args[2:])
 	case "run":
 		err = runVM(ctx, os.Args[2:])
 	case "-h", "--help", "help":
@@ -165,6 +169,37 @@ func buildKernel(ctx context.Context, argv []string) error {
 		fmt.Fprintf(os.Stderr, "  %-16s %s\n", "vmlinuz", humanSize(st.Size()))
 	}
 	fmt.Fprintf(os.Stderr, "  %-16s %s\n", "config", a.Config)
+	return nil
+}
+
+func buildQEMU(ctx context.Context, argv []string) error {
+	fs := flag.NewFlagSet("qemu", flag.ExitOnError)
+	version := fs.String("version", qemu.DefaultVersion, "upstream QEMU version")
+	arch := fs.String("arch", "", "target architecture (default: host)")
+	out := fs.String("o", "out/qemu", "output directory")
+	jobs := fs.Int("j", 0, "parallel build jobs (default: all cores)")
+	verbose := fs.Bool("v", false, "show build output")
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "building qemu %s (this takes a while)\n", *version)
+	a, err := qemu.Build(ctx, qemu.Options{
+		Version: *version,
+		Arch:    *arch,
+		OutDir:  *out,
+		Jobs:    *jobs,
+		Verbose: *verbose,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "\nbuilt qemu %s\n", a.Version)
+	if st, err := os.Stat(a.Binary); err == nil {
+		fmt.Fprintf(os.Stderr, "  %-16s %s\n", filepath.Base(a.Binary), humanSize(st.Size()))
+	}
+	fmt.Fprintf(os.Stderr, "  %-16s %d\n", "devices", qemu.DeviceCount(a.Devices))
 	return nil
 }
 
