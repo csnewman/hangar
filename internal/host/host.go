@@ -20,7 +20,6 @@ type Accel string
 
 const (
 	AccelKVM  Accel = "kvm"
-	AccelHVF  Accel = "hvf"
 	AccelNone Accel = "tcg" // emulation; correct but far too slow for real use
 )
 
@@ -33,12 +32,27 @@ type Caps struct {
 	Accel      Accel
 	Machine    string // "virt" or "microvm"/"q35"
 	ConsoleTTY string // serial console device as the guest sees it
+
 }
 
 // Detect inspects the host and returns its capabilities. A non-nil error means
 // Hangar cannot run VMs here at all; a Caps with Accel == AccelNone means it
 // can, but only under emulation.
 func Detect() (*Caps, error) {
+	// Hangar hosts environments on Linux only.
+	//
+	// The agent channel is vsock, which is backed by /dev/vhost-vsock -- a
+	// Linux kernel interface. QEMU built for any other host has no vsock
+	// device at all, not even the vhost-user one, because vhost-user is itself
+	// Linux-only. An environment without an agent is not an environment, so
+	// there is nothing to gain by half-supporting another host.
+	//
+	// On macOS, run Hangar inside a Linux VM: see docs/dev.md.
+	if runtime.GOOS != "linux" {
+		return nil, fmt.Errorf("Hangar requires a Linux host; this is %s. "+
+			"On macOS, run it inside a Linux VM with nested virtualisation", runtime.GOOS)
+	}
+
 	c := &Caps{OS: runtime.GOOS}
 
 	switch runtime.GOARCH {
@@ -74,19 +88,10 @@ func Detect() (*Caps, error) {
 }
 
 func detectAccel() Accel {
-	switch runtime.GOOS {
-	case "darwin":
-		// Hypervisor.framework is present on every supported macOS. QEMU will
-		// fail loudly at launch if the binary lacks the entitlement.
-		return AccelHVF
-	case "linux":
-		if _, err := os.Stat("/dev/kvm"); err == nil {
-			return AccelKVM
-		}
-		return AccelNone
-	default:
-		return AccelNone
+	if _, err := os.Stat("/dev/kvm"); err == nil {
+		return AccelKVM
 	}
+	return AccelNone
 }
 
 // Summary renders the capabilities for `hangar doctor`.

@@ -50,6 +50,19 @@ func requireDocker(ctx context.Context) error {
 	return nil
 }
 
+// runWithEnv is run with extra environment variables, for cross-compilation.
+func runWithEnv(ctx context.Context, verbose bool, env []string, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = append(os.Environ(), env...)
+	if verbose {
+		cmd.Stdout = os.Stderr
+	} else {
+		cmd.Stdout = io.Discard
+	}
+	cmd.Stderr = os.Stderr
+	return cmd.Run()
+}
+
 func run(ctx context.Context, verbose bool, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
 	if verbose {

@@ -4,13 +4,27 @@
 #
 # Inputs:  /r            unpacked root filesystem
 #          /scripts      this directory
+#          /agent        optional, holds hangar-agent
 #          SIZE_GB UPPER_GB DOCKER_GB
+#          OUT_UID OUT_GID  who should own the results
 # Outputs: /out/initrd.img /out/base.ext4 /out/upper.ext4 /out/docker.ext4
 #
 # The output is a root filesystem and an initramfs. The guest kernel is built
 # separately by `hangar kernel`, once per architecture, and shared by every
 # image, so an image carries no kernel, no /lib/modules and no bootloader.
 set -eu
+
+# --- agent ---------------------------------------------------------------
+# hangar-agent is built by the host and copied in, rather than installed from
+# a package. The agent belongs to the node, not to the image: an environment
+# built from an arbitrary Dockerfile gets the same agent as a Hangar base, and
+# upgrading it does not mean rebuilding every image.
+if [ -x /agent/hangar-agent ]; then
+    install -D -m 0755 /agent/hangar-agent /r/usr/local/bin/hangar-agent
+    echo "agent: installed $(stat -c%s /agent/hangar-agent) bytes" >&2
+else
+    echo "agent: none supplied, environment will have no control channel" >&2
+fi
 
 # --- disks -------------------------------------------------------------------
 rm -f /out/base.ext4 /out/upper.ext4 /out/docker.ext4
@@ -28,3 +42,11 @@ chmod +x /i/init
 
 ( cd /i && find . | cpio -H newc -o --quiet | gzip -9 ) > /out/initrd.img
 echo "initramfs: $(stat -c%s /out/initrd.img) bytes" >&2
+
+# --- ownership -------------------------------------------------------------
+# This script runs as root in the builder, so everything it writes to the bind
+# mount lands root-owned. The caller then cannot open the writable layers, and
+# QEMU fails with a bare "Permission denied" that says nothing about why.
+if [ -n "${OUT_UID:-}" ] && [ -n "${OUT_GID:-}" ]; then
+    chown "$OUT_UID:$OUT_GID" /out/base.ext4 /out/upper.ext4 /out/docker.ext4 /out/initrd.img
+fi

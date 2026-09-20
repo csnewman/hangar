@@ -45,6 +45,12 @@ type Config struct {
 
 	// ExtraCmdline is appended to the generated kernel command line.
 	ExtraCmdline string
+
+	// GuestCID gives the guest a vsock context ID, which is how hangar-agent
+	// reaches the host. Zero leaves the agent channel out.
+	//
+	// It must be unique among the guests running on this host.
+	GuestCID uint32
 }
 
 func (c *Config) applyDefaults() {
@@ -128,6 +134,14 @@ func (c *Config) Args(h *host.Caps) ([]string, error) {
 		args = append(args,
 			"-blockdev", blockdev,
 			"-device", fmt.Sprintf("virtio-blk-pci,drive=%s,serial=%s", node, node),
+		)
+	}
+
+	if c.GuestCID != 0 {
+		// The guest dials the host; nothing dials in. The device only has to
+		// exist and carry a CID unique among the guests on this host.
+		args = append(args,
+			"-device", fmt.Sprintf("vhost-vsock-pci,guest-cid=%d", c.GuestCID),
 		)
 	}
 

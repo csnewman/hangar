@@ -12,6 +12,7 @@
 
 enable docker.service
 enable containerd.service
+enable hangar-agent.service
 enable hangar-smoke.service
 
 # Debian-family bases use networkd, RHEL-family bases NetworkManager.

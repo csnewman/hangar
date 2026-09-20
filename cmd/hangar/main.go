@@ -11,11 +11,15 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
+	"time"
 
+	"github.com/csnewman/hangar/internal/agent"
 	"github.com/csnewman/hangar/internal/host"
 	"github.com/csnewman/hangar/internal/image"
 	"github.com/csnewman/hangar/internal/kernel"
 	"github.com/csnewman/hangar/internal/vm"
+	"github.com/csnewman/hangar/internal/vsock"
 )
 
 // defaultKernel is where `hangar kernel` leaves its build, and so where `hangar
@@ -174,6 +178,9 @@ func runVM(ctx context.Context, argv []string) error {
 	smoke := fs.Bool("smoke", false, "run the in-guest smoke test, then power off")
 	console := fs.String("console", "", "write the guest console to this file instead of stdio")
 	kernelPath := fs.String("kernel", "", "kernel to boot (default: "+defaultKernel+")")
+	cid := fs.Uint("cid", 0, "guest vsock context ID (default: the first free one)")
+	noAgent := fs.Bool("no-agent", false, "boot without an agent channel")
+	agentWait := fs.Duration("agent-wait", 90*time.Second, "how long to wait for the agent")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -214,6 +221,12 @@ func runVM(ctx context.Context, argv []string) error {
 	if *smoke {
 		cfg.ExtraCmdline = "hangar.smoketest"
 	}
+	if !*noAgent {
+		cfg.GuestCID = uint32(*cid)
+		if cfg.GuestCID == 0 {
+			cfg.GuestCID = vsock.SuggestGuestCID()
+		}
+	}
 
 	if *printOnly {
 		s, err := vm.PrintCommand(caps, cfg)
@@ -242,7 +255,56 @@ func runVM(ctx context.Context, argv []string) error {
 		fmt.Fprintf(os.Stderr, "console follows; quit with Ctrl-A then X\n\n")
 	}
 
-	return vm.Run(ctx, caps, cfg)
+	if cfg.GuestCID == 0 {
+		return vm.Run(ctx, caps, cfg)
+	}
+
+	// Listen before booting. The agent starts early in the guest, so a
+	// listener opened afterwards would miss the first connection attempts and
+	// only succeed on a retry.
+	srv, err := agent.Listen()
+	if err != nil {
+		return fmt.Errorf("starting the agent channel: %w", err)
+	}
+	defer srv.Close()
+
+	vmDone := make(chan error, 1)
+	go func() { vmDone <- vm.Run(ctx, caps, cfg) }()
+
+	sess, err := srv.Accept(*agentWait)
+	if err != nil {
+		// A VM that died explains the missing agent better than a timeout
+		// does, so prefer that error if one is waiting.
+		select {
+		case verr := <-vmDone:
+			if verr != nil {
+				return verr
+			}
+			return fmt.Errorf("the environment exited before its agent connected: %w", err)
+		default:
+		}
+		return err
+	}
+	defer sess.Close()
+
+	fmt.Fprintf(os.Stderr, "\nagent       cid %d, %s, kernel %s, ready in %.2fs\n",
+		sess.CID, sess.Hello.Hostname, sess.Hello.Kernel,
+		float64(sess.Hello.BootMicros)/1e6)
+
+	// Prove the channel end to end rather than just that something connected:
+	// a ping exercises the request path, and running a command exercises the
+	// half an environment is actually for.
+	if err := sess.Ping(5 * time.Second); err != nil {
+		return fmt.Errorf("agent did not answer a ping: %w", err)
+	}
+	who, err := sess.Exec(10*time.Second, "id", "-un")
+	if err != nil {
+		return fmt.Errorf("agent could not run a command: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "agent       ping ok, exec ok (runs as %s)\n",
+		strings.TrimSpace(who.Stdout))
+
+	return <-vmDone
 }
 
 func humanSize(n int64) string {

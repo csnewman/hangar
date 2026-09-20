@@ -63,6 +63,12 @@ func BuildWithMkosi(ctx context.Context, o Options) (*Artifacts, error) {
 	}
 	defer os.RemoveAll(scripts)
 
+	agentDir, err := buildAgent(ctx, o.Platform, o.Verbose)
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(agentDir)
+
 	args := []string{
 		"run", "--rm",
 		// mkosi creates user namespaces and mounts; this is the narrowest set
@@ -73,10 +79,15 @@ func BuildWithMkosi(ctx context.Context, o Options) (*Artifacts, error) {
 		"-e", fmt.Sprintf("SIZE_GB=%d", o.SizeGB),
 		"-e", fmt.Sprintf("UPPER_GB=%d", o.UpperGB),
 		"-e", fmt.Sprintf("DOCKER_GB=%d", o.DockerGB),
+		// The builder runs as root, so it must be told who to hand the
+		// results to; otherwise they come back root-owned and unusable.
+		"-e", fmt.Sprintf("OUT_UID=%d", os.Getuid()),
+		"-e", fmt.Sprintf("OUT_GID=%d", os.Getgid()),
 		"-e", "IMAGE=" + imageName,
 		"-v", absOut + ":/out",
 		"-v", imagesDir + ":/cfg:ro",
 		"-v", scripts + ":/scripts:ro",
+		"-v", agentDir + ":/agent:ro",
 	}
 	if o.Platform != "" {
 		args = append(args, "--platform", o.Platform)

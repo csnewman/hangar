@@ -1,0 +1,20 @@
+[Unit]
+Description=Hangar agent
+# The agent dials the host over vsock and needs no network, no DNS and no
+# mounted workspace, so it starts as early as systemd can run it. Being up
+# before the rest of the environment is the point: that is when a stuck boot
+# most needs to be observable.
+DefaultDependencies=no
+After=systemd-modules-load.service
+Before=sysinit.target
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/hangar-agent
+# The host listener may legitimately not be there -- a macOS host has no vsock
+# at all -- so a failure to connect must not hold up the boot.
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=sysinit.target
