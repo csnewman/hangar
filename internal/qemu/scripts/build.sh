@@ -158,7 +158,7 @@ echo "qemu: linked against virglrenderer" >&2
 # The shared-memory backend vhost-user needs, and the machine type.
 case "$QARCH" in
   aarch64) machine=virt ;;
-  x86_64)  machine=microvm ;;
+  x86_64)  machine=q35 ;;
 esac
 "$bin" -machine help 2>&1 | grep -q "^${machine} " || {
     echo "qemu: machine ${machine} is missing" >&2; exit 1; }

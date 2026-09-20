@@ -30,7 +30,7 @@ type Caps struct {
 	QEMUBin    string // absolute path to the qemu-system-* binary
 	QEMUVer    string
 	Accel      Accel
-	Machine    string // "virt" on arm64, "microvm,pcie=on" on x86-64
+	Machine    string // "virt" or "microvm"/"q35"
 	ConsoleTTY string // serial console device as the guest sees it
 
 }
@@ -64,12 +64,9 @@ func Detect() (*Caps, error) {
 		c.ConsoleTTY = "ttyAMA0"
 	case "amd64":
 		c.Arch = "x86_64"
-		// microvm with PCIe. q35 is a PC and instantiates a SATA
-		// controller, a PS/2 keyboard controller, a PC speaker and a DMA
-		// controller in every guest; microvm has none of them, boots to init
-		// in 0.39s against q35's 0.66s, and with pcie=on still offers the
-		// generic PCIe bridge virtio-gpu needs. See internal/qemu.
-		c.Machine = "microvm,pcie=on"
+		// q35 rather than microvm: virtio-gpu needs PCI. See
+		// docs/qemu-configuration.md section 1.
+		c.Machine = "q35"
 		c.ConsoleTTY = "ttyS0"
 	default:
 		return nil, fmt.Errorf("unsupported host architecture %q", runtime.GOARCH)

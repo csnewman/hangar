@@ -81,11 +81,6 @@ func (c *Config) Args(h *host.Caps) ([]string, error) {
 		machine += ",accel=" + string(h.Accel)
 	}
 
-	// -cpu host is not an optimisation on x86. The microvm machine has no PIT
-	// for the kernel to calibrate the LAPIC timer against, so it depends on
-	// the TSC-deadline timer that only a host-passthrough CPU exposes. Without
-	// it the guest silently falls back to tick-granularity timers: a 100us
-	// sleep overshoots by 3.9ms instead of 67us, and nothing is logged.
 	cpu := "host"
 	if h.Accel == host.AccelNone {
 		// "host" is meaningless without an accelerator.
