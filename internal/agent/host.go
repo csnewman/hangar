@@ -51,9 +51,15 @@ func (s *Server) Accept(timeout time.Duration) (*Session, error) {
 
 // Session is a live connection to one environment's agent.
 type Session struct {
-	// CID is the guest's context ID, as reported by the kernel.
+	// CID is the guest's context ID, as reported by the kernel. This is the
+	// only trustworthy identifier on the connection, and the only thing a
+	// caller may resolve to an environment.
+	//
+	// A CID identifies whichever VM holds it now. They are recycled when
+	// environments are destroyed, so a control plane must pair this with the
+	// allocation it made and drop a session whose CID is no longer live.
 	CID uint32
-	// Hello is what the agent announced on connecting.
+	// Hello is what the agent said about itself. Advisory; see its doc.
 	Hello Hello
 
 	f  *os.File
