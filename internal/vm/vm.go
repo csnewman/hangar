@@ -132,9 +132,13 @@ func (c *Config) Args(h *host.Caps) ([]string, error) {
 	}
 
 	if c.Network {
+		// romfile= disables the iPXE option ROM. A guest is direct-booted from
+		// -kernel and never boots over the network, so the ROM is dead weight,
+		// and it ships in a separate package (ipxe-qemu) that QEMU refuses to
+		// start without once the device asks for it.
 		args = append(args,
 			"-netdev", "user,id=net0",
-			"-device", "virtio-net-pci,netdev=net0",
+			"-device", "virtio-net-pci,netdev=net0,romfile=",
 		)
 	}
 
