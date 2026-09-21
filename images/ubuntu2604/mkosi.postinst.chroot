@@ -14,3 +14,19 @@ mkdir -p /workspace /var/lib/docker
 chown dev:dev /workspace
 
 printf 'hangar\n' > /etc/hostname
+
+# The hardware database maps device identifiers -- MAC vendor prefixes, PCI
+# and USB vendor-model names, keyboard and mouse quirks -- onto udev
+# properties. A guest sees virtio devices and a serial port, so it needs none
+# of it, but udev rebuilds the index whenever one is not already present, and
+# the trigger for that is literally `ConditionPathExists=|!/usr/lib/udev/hwdb.bin`.
+#
+# Without this the index is compiled from 9 MB of source on every boot of
+# every environment, over virtio-fs. Building it once here costs image size
+# that the page cache shares between guests.
+#
+# It must land in /usr, not /etc: a hwdb.bin under /etc is itself one of the
+# conditions that makes the unit run.
+systemd-hwdb update --usr
+test -f /usr/lib/udev/hwdb.bin
+test ! -e /etc/udev/hwdb.bin

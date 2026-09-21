@@ -2,7 +2,7 @@
 //
 // The shape here deliberately matches docs/qemu-configuration.md: direct
 // kernel boot, virtio-blk for writable storage, a serial console on stdio.
-// Features that document defers (virtio-gpu, virtio-mem, passt, vsock) are
+// Features that document defers (virtio-gpu, virtio-mem) are
 // absent rather than half-wired.
 package vm
 
@@ -39,11 +39,9 @@ type Config struct {
 	Disks    []Disk // first disk becomes /dev/vda
 	MemoryMB int
 	CPUs     int
-	// Network enables QEMU's built-in user-mode networking, which gives the
-	// guest outbound NAT with no host privileges and no TAP device. This is a
-	// stand-in for passt (docs/qemu-configuration.md section 5), which is the
-	// same shape -- an unprivileged userspace network backend -- but faster
-	// and production-grade.
+	// Network gives the guest outbound connectivity through passt, which
+	// needs no host privileges and no TAP device. See
+	// docs/qemu-configuration.md section 5.
 	Network bool
 
 	// ConsoleFile, when set, writes the guest serial console to this file
@@ -186,12 +184,20 @@ func (c *Config) Args(h *host.Caps) ([]string, error) {
 	}
 
 	if c.Network {
+		// passt rather than QEMU's built-in user-mode networking: both are
+		// unprivileged userspace backends needing no TAP and no NET_ADMIN, but
+		// passt translates to ordinary host sockets rather than carrying its
+		// own TCP stack, and is the one this design settled on.
+		//
+		// QEMU starts passt itself and connects to it, so there is no socket
+		// path to manage here.
+		//
 		// romfile= disables the iPXE option ROM. A guest is direct-booted from
 		// -kernel and never boots over the network, so the ROM is dead weight,
 		// and it ships in a separate package (ipxe-qemu) that QEMU refuses to
 		// start without once the device asks for it.
 		args = append(args,
-			"-netdev", "user,id=net0",
+			"-netdev", "passt,id=net0",
 			"-device", "virtio-net-pci,netdev=net0,romfile=",
 		)
 	}
