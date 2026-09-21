@@ -137,7 +137,11 @@ func (c *Config) Args(h *host.Caps) ([]string, error) {
 
 		// Paravirtual clock source and a shutdown path, so `poweroff` in the
 		// guest actually stops the process.
-		"-device", "virtio-balloon-pci",
+		// free-page-reporting is the whole point of having a balloon here:
+		// the guest hands back pages as it frees them and the host takes them
+		// without anyone deciding a target size. Without it the device is
+		// present but reclaims nothing.
+		"-device", "virtio-balloon-pci,free-page-reporting=on",
 
 		"-kernel", c.Kernel,
 	}
