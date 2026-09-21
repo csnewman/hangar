@@ -3,12 +3,14 @@
 //
 // What the channel proves, and what it does not:
 //
-// The context ID reported on accept is written by the host kernel's vhost-vsock
-// driver from the guest-cid QEMU was given, so a guest can neither choose nor
-// forge it, and vsock offers no guest-to-guest path -- a guest can reach only
-// the host. One environment therefore cannot impersonate another, as long as
-// the host resolves identity through its own CID-to-environment records and
-// treats everything in Hello as advisory.
+// The context ID reported on accept is established by the host, not by the
+// peer. The monitor implements vsock in userspace and gives each guest its own
+// unix socket, so identity is the socket a connection arrived on: the host
+// chose its name and only that guest's monitor was told it. A guest can
+// neither choose nor forge the CID, and vsock offers no guest-to-guest path --
+// a guest can reach only the host. One environment therefore cannot
+// impersonate another, as long as the host resolves identity through its own
+// CID-to-environment records and treats everything in Hello as advisory.
 //
 // It does not prove which process is talking. Connecting on AF_VSOCK needs no
 // privilege, so any code in the environment can open this port and speak the
@@ -65,7 +67,7 @@ type Hello struct {
 	Hostname string `json:"hostname"`
 	Kernel   string `json:"kernel"`
 	// BootMicros is how long the guest took to reach the agent, measured from
-	// the kernel's own clock, so it excludes QEMU and host process startup.
+	// the kernel's own clock, so it excludes monitor and host process startup.
 	BootMicros int64 `json:"boot_micros"`
 }
 

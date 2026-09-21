@@ -171,8 +171,8 @@ func kernelRelease() string {
 }
 
 // uptimeMicros reports how long the guest has been running, from the kernel's
-// own clock. Measuring here rather than on the host excludes QEMU startup and
-// host scheduling, so it answers "how long did the guest take to become
+// own clock. Measuring here rather than on the host excludes monitor startup
+// and host scheduling, so it answers "how long did the guest take to become
 // reachable" rather than "how long did the whole run take".
 func uptimeMicros() int64 {
 	b, err := os.ReadFile("/proc/uptime")

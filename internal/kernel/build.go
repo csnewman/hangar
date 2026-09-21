@@ -1,13 +1,13 @@
 // Package kernel builds Hangar's guest kernel.
 //
 // The kernel is Hangar's, not the distribution's, for two reasons. It has to
-// match the QEMU device model we actually use -- virtio-mmio with cmdline
-// devices for microvm, virtio-gpu for the graphics tier, vsock for the agent
-// tunnel -- and everything on the boot path has to be built in rather than a
-// module, because the initramfs assembles an overlay root before any
-// filesystem exists to load modules from. Distribution kernels satisfy neither
-// reliably: Ubuntu ships overlayfs as a module and wraps arm64 kernels in an
-// EFI zboot container that QEMU's -kernel cannot direct-boot.
+// match the device model we actually use -- virtio for the disks, the
+// filesystem and the network, vsock for the agent tunnel -- and everything on
+// the boot path has to be built in rather than a module, because the
+// initramfs assembles an overlay root before any filesystem exists to load
+// modules from. Distribution kernels satisfy neither reliably: Ubuntu ships
+// overlayfs as a module and wraps arm64 kernels in an EFI zboot container
+// that a direct kernel boot cannot use.
 //
 // Only the config fragment is source. The kernel tree is downloaded at build
 // time and never committed.
@@ -52,7 +52,7 @@ type Options struct {
 
 // Artifacts are the outputs of a kernel build.
 type Artifacts struct {
-	Image         string // raw Image / bzImage, for QEMU -kernel
+	Image         string // raw Image / bzImage, for a direct kernel boot
 	Config        string // the resolved .config
 	KernelRelease string // e.g. "6.18.52"
 }

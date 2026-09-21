@@ -5,7 +5,7 @@
 // the host without an address, a route or a NIC, so an environment whose
 // networking is broken, still booting, or deliberately locked down is still
 // reachable. Nothing on the host's network can dial into a guest either,
-// because the only path is the one QEMU created.
+// because the only path is the one the monitor created.
 //
 // It also has the right shape. A vsock endpoint is a socket, so an
 // environment can carry many independent connections at once -- a control

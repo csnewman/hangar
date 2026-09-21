@@ -1,4 +1,4 @@
-package vm
+package ch
 
 import (
 	"context"
@@ -68,8 +68,8 @@ func StartVirtiofsd(ctx context.Context, dir, socket string, verbose bool) (*Vir
 		return nil, fmt.Errorf("starting virtiofsd: %w", err)
 	}
 
-	// QEMU connects to the socket at startup and fails if it is not there
-	// yet, so wait for it rather than racing.
+	// The monitor connects to the socket at startup and fails if it is not
+	// there yet, so wait for it rather than racing.
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(socket); err == nil {
@@ -84,7 +84,7 @@ func StartVirtiofsd(ctx context.Context, dir, socket string, verbose bool) (*Vir
 	return nil, fmt.Errorf("virtiofsd did not create %s within 10s", socket)
 }
 
-// Socket is the path QEMU should connect to.
+// Socket is the path the monitor should connect to.
 func (v *Virtiofsd) Socket() string { return v.socket }
 
 // Close stops the daemon and removes its socket.

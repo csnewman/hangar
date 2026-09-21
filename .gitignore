@@ -11,6 +11,3 @@ docs/
 # Reference checkouts of other VMMs, for reading only.
 # Underscore-prefixed so the Go toolchain does not walk into them.
 /_refs/
-
-# Rust build output
-/vmm/target/
