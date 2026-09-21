@@ -31,7 +31,8 @@ impl Stop {
         let _ = self.0.write(1);
     }
 
-    fn fd(&self) -> i32 {
+    /// The descriptor to wait on alongside a device's own.
+    pub fn raw_fd(&self) -> i32 {
         use std::os::unix::io::AsRawFd;
         self.0.as_raw_fd()
     }
@@ -63,7 +64,7 @@ where
     }
     epoll.ctl(
         ControlOperation::Add,
-        stop.fd(),
+        stop.raw_fd(),
         EpollEvent::new(EventSet::IN, STOP_TOKEN),
     )?;
 

@@ -40,6 +40,10 @@ pub struct Config {
     #[serde(default)]
     pub vsock_cid: Option<u32>,
 
+    /// Outbound networking, through passt.
+    #[serde(default)]
+    pub net: Option<Net>,
+
     /// Balloon, for passive memory reclaim.
     #[serde(default)]
     pub balloon: Option<Balloon>,
@@ -83,6 +87,44 @@ fn default_dax_mib() -> u64 {
 
 fn default_fs_queues() -> u16 {
     1
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Net {
+    /// The guest's MAC address, as six colon-separated bytes. Absent picks a
+    /// fixed locally administered one, which is fine while a host runs one
+    /// guest per network.
+    #[serde(default)]
+    pub mac: Option<String>,
+    /// MTU handed to the guest over DHCP.
+    #[serde(default = "default_mtu")]
+    pub mtu: u16,
+}
+
+fn default_mtu() -> u16 {
+    1500
+}
+
+impl Net {
+    /// The MAC to put in the device's configuration space.
+    pub fn mac_bytes(&self) -> Result<[u8; 6], String> {
+        let Some(text) = &self.mac else {
+            // Locally administered, and not one of the ranges a real card
+            // would claim.
+            return Ok([0x52, 0x54, 0x00, 0x12, 0x34, 0x56]);
+        };
+        let parts: Vec<&str> = text.split(':').collect();
+        if parts.len() != 6 {
+            return Err(format!("{text:?} is not a MAC address"));
+        }
+        let mut out = [0u8; 6];
+        for (i, p) in parts.iter().enumerate() {
+            out[i] =
+                u8::from_str_radix(p, 16).map_err(|_| format!("{text:?} is not a MAC address"))?;
+        }
+        Ok(out)
+    }
 }
 
 #[derive(Debug, Deserialize)]

@@ -12,7 +12,7 @@ use vmm_sys_util::eventfd::EventFd;
 use crate::config::Config;
 use crate::devices::serial::Pl011;
 use crate::devices::virtio::worker::Stop;
-use crate::devices::virtio::{balloon, blk, fs, mmio, rng, vsock, Interrupt, VirtioDevice};
+use crate::devices::virtio::{balloon, blk, fs, mmio, net, rng, vsock, Interrupt, VirtioDevice};
 use crate::devices::{Bus, MmioDevice};
 use crate::memory::{DaxWindow, Ram};
 use crate::{boot, fdt, gic, layout};
@@ -140,6 +140,22 @@ impl Vm {
             Arc::new(Mutex::new(rng::Rng::new(stop.clone()))),
             false,
         )?;
+
+        if let Some(n) = &cfg.net {
+            let mac = n.mac_bytes().map_err(io::Error::other)?;
+            let device = net::Net::new(mac, n.mtu, stop.clone())?;
+            attach(
+                &vm,
+                &mut bus,
+                &mut nodes,
+                &mut devices,
+                &ram,
+                &mut slot,
+                Arc::new(Mutex::new(device)),
+                false,
+            )?;
+            log::info!("network via passt, mtu {}", n.mtu);
+        }
 
         if let Some(cid) = cfg.vsock_cid {
             let device = vsock::Vsock::new(cid, ram.mem.clone(), stop.clone())?;

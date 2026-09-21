@@ -37,6 +37,12 @@ type Fs struct {
 	Queues int `json:"queues,omitempty"`
 }
 
+// Net gives the guest outbound networking through passt.
+type Net struct {
+	MAC string `json:"mac,omitempty"`
+	MTU int    `json:"mtu,omitempty"`
+}
+
 // Balloon configures memory reclaim.
 type Balloon struct {
 	FreePageReporting bool `json:"freePageReporting"`
@@ -53,6 +59,7 @@ type Config struct {
 	Disks     []Disk   `json:"disks,omitempty"`
 	Fs        *Fs      `json:"fs,omitempty"`
 	VsockCID  uint32   `json:"vsockCid,omitempty"`
+	Net       *Net     `json:"net,omitempty"`
 	Balloon   *Balloon `json:"balloon,omitempty"`
 	Console   string   `json:"console,omitempty"`
 }

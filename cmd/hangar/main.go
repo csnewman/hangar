@@ -276,7 +276,7 @@ func runVM(ctx context.Context, argv []string) error {
 	execWait := fs.Duration("exec-timeout", 2*time.Minute, "how long to let -exec run")
 	virtiofs := fs.String("virtiofs", "", "export this directory to the guest over virtiofs")
 	monitor := fs.String("vmm", "qemu", "which monitor to run the guest under: qemu or hangar")
-	network := fs.Bool("net", true, "give the guest outbound networking (qemu only)")
+	network := fs.Bool("net", true, "give the guest outbound networking")
 	dax := fs.Int("dax", 1024, "size of the virtiofs DAX window in MiB, for -vmm hangar (0 disables it)")
 	if err := fs.Parse(argv); err != nil {
 		return err
@@ -366,6 +366,9 @@ func runVM(ctx context.Context, argv []string) error {
 			VsockCID:  cfg.GuestCID,
 			Console:   cfg.ConsoleFile,
 			Balloon:   &vmm.Balloon{FreePageReporting: true},
+		}
+		if *network {
+			hcfg.Net = &vmm.Net{MTU: 1500}
 		}
 		if *smoke {
 			hcfg.Cmdline += " hangar.smoketest"
