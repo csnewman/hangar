@@ -17,6 +17,7 @@ use std::io;
 use std::ops::Deref;
 use std::os::unix::io::RawFd;
 use std::sync::Arc;
+use std::time::Duration;
 
 use fuse_backend_rs::abi::virtio_fs::RemovemappingOne;
 use fuse_backend_rs::api::server::Server;
@@ -44,6 +45,12 @@ const SHM_ID_CACHE: u8 = 0;
 /// certainly not worth a mapping.
 const DAX_MIN_FILE_SIZE: u64 = 4096;
 
+/// How long the guest may trust what it has been told about a file.
+///
+/// A day rather than a literal forever because the FUSE field is a duration,
+/// and an environment does not outlive one.
+const CACHE_FOREVER: Duration = Duration::from_secs(86_400);
+
 pub struct Fs {
     server: Arc<Server<fsopts::Fs>>,
     tag: String,
@@ -70,9 +77,21 @@ impl Fs {
 
         let cfg = PassthroughConfig {
             root_dir: shared_dir.to_string_lossy().into_owned(),
-            // The host is the only writer of a base layer, so nothing the
-            // guest caches can go stale and there is nothing to revalidate.
+            // What is exported is an image layer the host assembled and
+            // nothing writes to again. Nothing the guest caches can go stale,
+            // so it is told to keep everything: caches that survive an open,
+            // lookups and attributes that never expire, and no OPEN or
+            // RELEASE messages at all.
+            //
+            // The timeouts are what the cost of a boot turns on. At the
+            // library's default of five seconds a guest that takes longer
+            // than that to start revalidates paths it has already looked up,
+            // and the lookups are most of the traffic.
             cache_policy: CachePolicy::Always,
+            entry_timeout: CACHE_FOREVER,
+            attr_timeout: CACHE_FOREVER,
+            no_open: true,
+            no_opendir: true,
             writeback: true,
             xattr: true,
             do_import: true,
