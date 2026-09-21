@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -21,6 +22,7 @@ import (
 	"github.com/csnewman/hangar/internal/qemu"
 	"github.com/csnewman/hangar/internal/snapshot"
 	"github.com/csnewman/hangar/internal/vm"
+	"github.com/csnewman/hangar/internal/vmm"
 	"github.com/csnewman/hangar/internal/vsock"
 )
 
@@ -34,6 +36,7 @@ Usage:
   hangar doctor              check this machine can run environments
   hangar build [flags]       build a VM image with mkosi
   hangar kernel [flags]      build the guest kernel
+  hangar vmm [flags]         build hangar-vmm, the KVM monitor
   hangar qemu   [flags]      build the QEMU that runs environments
   hangar pull  <ref>         pull an OCI image and unpack it for virtiofs
   hangar run   [flags]       boot an environment and attach to its console
@@ -55,6 +58,8 @@ func main() {
 		err = doctor()
 	case "build":
 		err = build(ctx, os.Args[2:])
+	case "vmm":
+		err = buildVMM(ctx, os.Args[2:])
 	case "kernel":
 		err = buildKernel(ctx, os.Args[2:])
 	case "qemu":
@@ -259,7 +264,7 @@ func runVM(ctx context.Context, argv []string) error {
 	mem := fs.Int("m", 4096, "memory in MiB")
 	cpus := fs.Int("c", 2, "vCPUs")
 	name := fs.String("name", "hangar-env", "environment name")
-	printOnly := fs.Bool("print", false, "print the QEMU command line and exit")
+	printOnly := fs.Bool("print", false, "print the machine the monitor would be given, and exit")
 	smoke := fs.Bool("smoke", false, "run the in-guest smoke test, then power off")
 	console := fs.String("console", "", "write the guest console to this file instead of stdio")
 	kernelPath := fs.String("kernel", "", "kernel to boot (default: "+defaultKernel+")")
@@ -267,6 +272,9 @@ func runVM(ctx context.Context, argv []string) error {
 	noAgent := fs.Bool("no-agent", false, "boot without an agent channel")
 	agentWait := fs.Duration("agent-wait", 90*time.Second, "how long to wait for the agent")
 	virtiofs := fs.String("virtiofs", "", "export this directory to the guest over virtiofs")
+	monitor := fs.String("vmm", "qemu", "which monitor to run the guest under: qemu or hangar")
+	network := fs.Bool("net", true, "give the guest outbound networking (qemu only)")
+	dax := fs.Int("dax", 1024, "size of the virtiofs DAX window in MiB, for -vmm hangar (0 disables it)")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -309,7 +317,7 @@ func runVM(ctx context.Context, argv []string) error {
 		Initrd:      filepath.Join(*out, "initrd.img"),
 		Disks:       disks,
 		MemoryMB:    *mem,
-		Network:     true,
+		Network:     *network,
 		CPUs:        *cpus,
 		ConsoleFile: *console,
 	}
@@ -322,6 +330,55 @@ func runVM(ctx context.Context, argv []string) error {
 		if cfg.GuestCID == 0 {
 			cfg.GuestCID = vsock.SuggestGuestCID()
 		}
+	}
+
+	required := []string{cfg.Kernel, cfg.Initrd}
+	for _, d := range cfg.Disks {
+		required = append(required, d.Path)
+	}
+	for _, p := range required {
+		if _, err := os.Stat(p); err != nil {
+			return fmt.Errorf("%s not found - run \"hangar build\" first", p)
+		}
+	}
+
+	// hangar-vmm serves the filesystem in its own process, so there is no
+	// daemon to start and the export is part of the machine description.
+	if *monitor == "hangar" {
+		hcfg := &vmm.Config{
+			Name:      cfg.Name,
+			Kernel:    cfg.Kernel,
+			Initrd:    cfg.Initrd,
+			Cmdline:   "console=" + caps.ConsoleTTY + " systemd.show_status=1",
+			MemoryMib: cfg.MemoryMB,
+			CPUs:      cfg.CPUs,
+			VsockCID:  cfg.GuestCID,
+			Console:   cfg.ConsoleFile,
+			Balloon:   &vmm.Balloon{FreePageReporting: true},
+		}
+		if *smoke {
+			hcfg.Cmdline += " hangar.smoketest"
+		}
+		for _, d := range cfg.Disks {
+			hcfg.Disks = append(hcfg.Disks, vmm.Disk{Path: d.Path, ReadOnly: d.ReadOnly})
+		}
+		if *virtiofs != "" {
+			hcfg.Fs = &vmm.Fs{
+				SharedDir: *virtiofs,
+				Tag:       "hangar-base",
+				DaxMib:    *dax,
+				Queues:    *cpus,
+			}
+		}
+		if *printOnly {
+			s, err := json.MarshalIndent(hcfg, "", "  ")
+			if err != nil {
+				return err
+			}
+			fmt.Println(string(s))
+			return nil
+		}
+		return runUnder(ctx, hcfg, *agentWait)
 	}
 
 	// virtiofsd has to be running before QEMU starts: QEMU connects to its
@@ -346,16 +403,6 @@ func runVM(ctx context.Context, argv []string) error {
 		return nil
 	}
 
-	required := []string{cfg.Kernel, cfg.Initrd}
-	for _, d := range cfg.Disks {
-		required = append(required, d.Path)
-	}
-	for _, p := range required {
-		if _, err := os.Stat(p); err != nil {
-			return fmt.Errorf("%s not found - run \"hangar build\" first", p)
-		}
-	}
-
 	fmt.Fprintf(os.Stderr, "booting %s (%s, %s, %d MiB, %d vCPU)\n",
 		cfg.Name, caps.Machine, caps.Accel, cfg.MemoryMB, cfg.CPUs)
 	if cfg.ConsoleFile != "" {
@@ -364,13 +411,35 @@ func runVM(ctx context.Context, argv []string) error {
 		fmt.Fprintf(os.Stderr, "console follows; quit with Ctrl-A then X\n\n")
 	}
 
-	if cfg.GuestCID == 0 {
+	return withAgent(ctx, cfg.GuestCID, *agentWait, func() error {
 		return vm.Run(ctx, caps, cfg)
+	})
+}
+
+// runUnder boots a guest under hangar-vmm, waiting for its agent the same way
+// the QEMU path does.
+func runUnder(ctx context.Context, cfg *vmm.Config, agentWait time.Duration) error {
+	fmt.Fprintf(os.Stderr, "booting %s under hangar-vmm (%d MiB, %d vCPU)\n",
+		cfg.Name, cfg.MemoryMib, cfg.CPUs)
+	if cfg.Fs != nil {
+		fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, dax %d MiB\n",
+			cfg.Fs.SharedDir, cfg.Fs.Tag, cfg.Fs.DaxMib)
+	}
+	return withAgent(ctx, cfg.VsockCID, agentWait, func() error {
+		return vmm.Run(ctx, cfg)
+	})
+}
+
+// withAgent boots a guest and proves its agent channel works.
+//
+// The listener is opened before the guest starts. The agent dials out early
+// in the boot, so a listener opened afterwards would miss its first attempts
+// and only succeed once it retried.
+func withAgent(ctx context.Context, cid uint32, agentWait time.Duration, boot func() error) error {
+	if cid == 0 {
+		return boot()
 	}
 
-	// Listen before booting. The agent starts early in the guest, so a
-	// listener opened afterwards would miss the first connection attempts and
-	// only succeed on a retry.
 	srv, err := agent.Listen()
 	if err != nil {
 		return fmt.Errorf("starting the agent channel: %w", err)
@@ -378,9 +447,9 @@ func runVM(ctx context.Context, argv []string) error {
 	defer srv.Close()
 
 	vmDone := make(chan error, 1)
-	go func() { vmDone <- vm.Run(ctx, caps, cfg) }()
+	go func() { vmDone <- boot() }()
 
-	sess, err := srv.Accept(*agentWait)
+	sess, err := srv.Accept(agentWait)
 	if err != nil {
 		// A VM that died explains the missing agent better than a timeout
 		// does, so prefer that error if one is waiting.
@@ -414,6 +483,24 @@ func runVM(ctx context.Context, argv []string) error {
 		strings.TrimSpace(who.Stdout))
 
 	return <-vmDone
+}
+
+func buildVMM(ctx context.Context, argv []string) error {
+	fs := flag.NewFlagSet("vmm", flag.ExitOnError)
+	debug := fs.Bool("debug", false, "build without optimisation, for faster iteration")
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	path, err := vmm.Build(ctx, !*debug)
+	if err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "\nbuilt %s (%s)\n", path, humanSize(info.Size()))
+	return nil
 }
 
 func humanSize(n int64) string {

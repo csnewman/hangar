@@ -22,3 +22,26 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./...
+
+  vmm:
+    # hangar-vmm links against KVM's headers only through kvm-bindings, so it
+    # builds anywhere; running a guest needs /dev/kvm and is not done here.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-26.04-arm, ubuntu-26.04]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: vmm
+      - run: cargo fmt --check
+        working-directory: vmm
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: vmm
+      - run: cargo test
+        working-directory: vmm
