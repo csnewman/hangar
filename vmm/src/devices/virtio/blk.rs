@@ -7,15 +7,14 @@
 
 use std::fs::File;
 use std::io;
-use std::ops::Deref;
 use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
 use virtio_queue::desc::split::Descriptor;
-use virtio_queue::{DescriptorChain, QueueT};
-use vm_memory::{Bytes, GuestAddressSpace, GuestMemory, GuestMemoryLoadGuard, GuestMemoryMmap};
+use virtio_queue::DescriptorChain;
+use vm_memory::{Bytes, GuestMemory};
 
-use super::worker::{self, Stop};
+use super::worker::{self, Guard, Stop};
 use super::{ActiveQueue, Interrupt, VirtioDevice, TYPE_BLOCK};
 use crate::memory::Mem;
 
@@ -136,36 +135,43 @@ struct Worker {
 
 impl Worker {
     fn process(&mut self) {
-        log::debug!("blk: kicked");
-        let guard = self.mem.memory();
-        let mut used_any = false;
-        while let Some(chain) = self.queue.pop_descriptor_chain(guard.clone()) {
-            let head = chain.head_index();
-            let written = self.serve(&guard, chain);
-            if let Err(e) = self.queue.add_used(guard.deref(), head, written) {
-                log::error!("blk: returning a descriptor chain: {e}");
-                break;
-            }
-            used_any = true;
-        }
-        if used_any {
-            if let Err(e) = self.interrupt.signal_if_wanted(&mut self.queue, &self.mem) {
-                log::error!("blk: raising the interrupt: {e}");
-            }
-        }
+        let Self {
+            queue,
+            mem,
+            interrupt,
+            file,
+            capacity_sectors,
+            read_only,
+            id,
+        } = self;
+        let mut request = Request {
+            file,
+            capacity_sectors: *capacity_sectors,
+            read_only: *read_only,
+            id,
+        };
+        worker::drain("blk", queue, mem, interrupt, |guard, chain| {
+            request.serve(guard, chain)
+        });
     }
+}
 
+/// Everything serving one request needs, without the queue it came from.
+struct Request<'a> {
+    file: &'a Arc<Mutex<File>>,
+    capacity_sectors: u64,
+    read_only: bool,
+    id: &'a str,
+}
+
+impl Request<'_> {
     /// Serve one request, returning how many bytes were written into the
     /// guest's buffers.
     ///
     /// A malformed chain is completed with an error status rather than
     /// dropped: a request the guest never gets an answer to hangs whatever
     /// issued it, which is a far worse failure than an I/O error.
-    fn serve(
-        &mut self,
-        guard: &GuestMemoryLoadGuard<GuestMemoryMmap<()>>,
-        chain: DescriptorChain<GuestMemoryLoadGuard<GuestMemoryMmap<()>>>,
-    ) -> u32 {
+    fn serve(&mut self, guard: &Guard, chain: DescriptorChain<Guard>) -> u32 {
         let descriptors: Vec<_> = chain.clone().collect();
         // Every request is a header, then data, then a one-byte status.
         if descriptors.len() < 2 {
@@ -237,7 +243,7 @@ impl Worker {
 
     fn read_into(
         &mut self,
-        guard: &GuestMemoryLoadGuard<GuestMemoryMmap<()>>,
+        guard: &Guard,
         sector: u64,
         data: &[Descriptor],
         written: &mut u32,
@@ -252,12 +258,7 @@ impl Worker {
         Ok(())
     }
 
-    fn write_from(
-        &mut self,
-        guard: &GuestMemoryLoadGuard<GuestMemoryMmap<()>>,
-        sector: u64,
-        data: &[Descriptor],
-    ) -> io::Result<()> {
+    fn write_from(&mut self, guard: &Guard, sector: u64, data: &[Descriptor]) -> io::Result<()> {
         let offset = self.offset_of(sector, data)?;
         let iovecs = iovecs(guard, data, false)?;
         if iovecs.is_empty() {
@@ -292,11 +293,7 @@ impl Worker {
 /// The vectors address guest memory directly, so a request becomes one
 /// `preadv` or `pwritev` into the pages the guest asked about rather than a
 /// copy through a buffer of this process's own.
-fn iovecs(
-    guard: &GuestMemoryLoadGuard<GuestMemoryMmap<()>>,
-    data: &[Descriptor],
-    writable: bool,
-) -> io::Result<Vec<libc::iovec>> {
+fn iovecs(guard: &Guard, data: &[Descriptor], writable: bool) -> io::Result<Vec<libc::iovec>> {
     let mut out = Vec::with_capacity(data.len());
     for d in data {
         if d.is_write_only() != writable {
@@ -350,10 +347,7 @@ fn pwritev(file: &File, iovecs: &[libc::iovec], offset: u64) -> io::Result<usize
 }
 
 /// Read a request header: type, a reserved word, then the starting sector.
-fn read_header(
-    guard: &GuestMemoryLoadGuard<GuestMemoryMmap<()>>,
-    desc: &Descriptor,
-) -> Option<(u32, u64)> {
+fn read_header(guard: &Guard, desc: &Descriptor) -> Option<(u32, u64)> {
     if desc.len() < 16 || desc.is_write_only() {
         return None;
     }

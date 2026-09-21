@@ -12,14 +12,12 @@
 //! guest faults them back in as zeroes if it ever touches them again.
 
 use std::io;
-use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use virtio_queue::QueueT;
-use vm_memory::{Bytes, GuestAddress, GuestAddressSpace, GuestMemory};
+use vm_memory::{Bytes, GuestAddress, GuestMemory};
 
-use super::worker::{self, Stop};
+use super::worker::{self, Guard, Stop};
 use super::{ActiveQueue, Interrupt, VirtioDevice, TYPE_BALLOON};
 use crate::memory::Mem;
 
@@ -143,45 +141,36 @@ struct Worker {
 
 impl Worker {
     fn process(&mut self) {
-        let guard = self.mem.memory();
-        let mut used_any = false;
-        while let Some(chain) = self.queue.pop_descriptor_chain(guard.clone()) {
-            let head = chain.head_index();
-            match self.kind {
+        let Self {
+            queue,
+            mem,
+            interrupt,
+            kind,
+        } = self;
+        let kind = &*kind;
+        worker::drain("balloon", queue, mem, interrupt, |guard, chain| {
+            match kind {
                 Kind::Inflate => {
-                    for desc in chain.clone().readable() {
-                        release_pfn_array(&guard, desc.addr(), desc.len());
+                    for desc in chain.readable() {
+                        release_pfn_array(guard, desc.addr(), desc.len());
                     }
                 }
                 Kind::Reporting => {
                     // The descriptor is the free memory, not a description of
                     // it, so there is nothing to read first.
-                    for desc in chain.clone() {
-                        release_range(&guard, desc.addr(), u64::from(desc.len()));
+                    for desc in chain {
+                        release_range(guard, desc.addr(), u64::from(desc.len()));
                     }
                 }
                 Kind::Deflate | Kind::Drain => {}
             }
-            if let Err(e) = self.queue.add_used(guard.deref(), head, 0) {
-                log::error!("balloon: returning a descriptor chain: {e}");
-                break;
-            }
-            used_any = true;
-        }
-        if used_any {
-            if let Err(e) = self.interrupt.signal_if_wanted(&mut self.queue, &self.mem) {
-                log::error!("balloon: raising the interrupt: {e}");
-            }
-        }
+            0
+        });
     }
 }
 
 /// Return the pages named by an array of 32-bit page frame numbers.
-fn release_pfn_array(
-    guard: &vm_memory::GuestMemoryLoadGuard<vm_memory::GuestMemoryMmap<()>>,
-    addr: GuestAddress,
-    len: u32,
-) {
+fn release_pfn_array(guard: &Guard, addr: GuestAddress, len: u32) {
     let count = (len / 4) as usize;
     let mut buf = vec![0u8; count * 4];
     if guard.read_slice(&mut buf, addr).is_err() {
@@ -202,11 +191,7 @@ fn release_pfn_array(
 /// `MADV_DONTNEED` on a private anonymous mapping drops the pages; the guest
 /// reading the range again gets zeroes, which is what the balloon protocol
 /// promises for a page the guest said it was finished with.
-fn release_range(
-    guard: &vm_memory::GuestMemoryLoadGuard<vm_memory::GuestMemoryMmap<()>>,
-    addr: GuestAddress,
-    len: u64,
-) {
+fn release_range(guard: &Guard, addr: GuestAddress, len: u64) {
     let host = match guard.get_host_address(addr) {
         Ok(p) => p,
         Err(_) => return,

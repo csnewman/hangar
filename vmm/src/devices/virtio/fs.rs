@@ -22,10 +22,8 @@ use fuse_backend_rs::abi::virtio_fs::RemovemappingOne;
 use fuse_backend_rs::api::server::Server;
 use fuse_backend_rs::passthrough::{CachePolicy, Config as PassthroughConfig, PassthroughFs};
 use fuse_backend_rs::transport::{FsCacheReqHandler, Reader, VirtioFsWriter, Writer};
-use virtio_queue::QueueT;
-use vm_memory::GuestAddressSpace;
 
-use super::worker::{self, Stop};
+use super::worker::{self, Guard, Stop};
 use super::{fsopts, ActiveQueue, Interrupt, ShmRegion, VirtioDevice, TYPE_FS};
 use crate::memory::{DaxWindow, Mem};
 
@@ -169,68 +167,61 @@ struct Worker {
 
 impl Worker {
     fn process(&mut self) {
-        let guard = self.mem.memory();
-        let mut used_any = false;
-        while let Some(chain) = self.queue.pop_descriptor_chain(guard.clone()) {
-            let head = chain.head_index();
-            let written = self.serve(&guard, chain);
-            if let Err(e) = self.queue.add_used(guard.deref(), head, written) {
-                log::error!("fs: returning a descriptor chain: {e}");
-                break;
-            }
-            used_any = true;
-        }
-        if used_any {
-            if let Err(e) = self.interrupt.signal_if_wanted(&mut self.queue, &self.mem) {
-                log::error!("fs: raising the interrupt: {e}");
-            }
-        }
+        let Self {
+            queue,
+            mem,
+            interrupt,
+            server,
+            cache,
+        } = self;
+        worker::drain("fs", queue, mem, interrupt, |guard, chain| {
+            serve(server, cache.as_mut(), guard, chain)
+        });
     }
+}
 
-    fn serve(
-        &mut self,
-        guard: &vm_memory::GuestMemoryLoadGuard<vm_memory::GuestMemoryMmap<()>>,
-        chain: virtio_queue::DescriptorChain<
-            vm_memory::GuestMemoryLoadGuard<vm_memory::GuestMemoryMmap<()>>,
-        >,
-    ) -> u32 {
-        let mem = guard.deref();
-        let reader = match Reader::from_descriptor_chain(mem, chain.clone()) {
-            Ok(r) => r,
-            Err(e) => {
-                log::error!("fs: reading a request: {e}");
-                return 0;
-            }
-        };
-        let writer = match VirtioFsWriter::new(mem, chain) {
-            Ok(w) => w,
-            Err(e) => {
-                log::error!("fs: preparing a reply: {e}");
-                return 0;
-            }
-        };
+/// Hand one FUSE message to the filesystem, returning how many bytes of reply
+/// were written into the guest's buffers.
+fn serve(
+    server: &Server<fsopts::Fs>,
+    cache: Option<&mut CacheHandler>,
+    guard: &Guard,
+    chain: virtio_queue::DescriptorChain<Guard>,
+) -> u32 {
+    let mem = guard.deref();
+    let reader = match Reader::from_descriptor_chain(mem, chain.clone()) {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("fs: reading a request: {e}");
+            return 0;
+        }
+    };
+    let writer = match VirtioFsWriter::new(mem, chain) {
+        Ok(w) => w,
+        Err(e) => {
+            log::error!("fs: preparing a reply: {e}");
+            return 0;
+        }
+    };
 
-        // The cache handler is what turns a `setupmapping` request into a
-        // mapping in the DAX window. Passing None leaves the filesystem to
-        // answer ENOSYS, which is what the guest sees when DAX is off.
-        let result = match self.cache.as_mut() {
-            Some(cache) => self.server.handle_message(
-                reader,
-                Writer::VirtioFs(writer),
-                Some(cache as &mut dyn FsCacheReqHandler),
-                None,
-            ),
-            None => self
-                .server
-                .handle_message(reader, Writer::VirtioFs(writer), None, None),
-        };
+    // The cache handler is what turns a `setupmapping` request into a mapping
+    // in the DAX window. Passing None leaves the filesystem to answer ENOSYS,
+    // which is what the guest sees when DAX is off.
+    let result = match cache {
+        Some(cache) => server.handle_message(
+            reader,
+            Writer::VirtioFs(writer),
+            Some(cache as &mut dyn FsCacheReqHandler),
+            None,
+        ),
+        None => server.handle_message(reader, Writer::VirtioFs(writer), None, None),
+    };
 
-        match result {
-            Ok(n) => n as u32,
-            Err(e) => {
-                log::error!("fs: serving a request: {e}");
-                0
-            }
+    match result {
+        Ok(n) => n as u32,
+        Err(e) => {
+            log::error!("fs: serving a request: {e}");
+            0
         }
     }
 }

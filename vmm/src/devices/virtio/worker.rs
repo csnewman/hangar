@@ -5,11 +5,17 @@
 //! loop lives here so the devices are only their protocol.
 
 use std::io;
+use std::ops::Deref;
 use std::sync::Arc;
 use std::thread;
 
+use virtio_queue::{DescriptorChain, Queue, QueueT};
+use vm_memory::GuestAddressSpace;
 use vmm_sys_util::epoll::{ControlOperation, Epoll, EpollEvent, EventSet};
 use vmm_sys_util::eventfd::EventFd;
+
+use super::Interrupt;
+use crate::memory::Mem;
 
 /// Told to every device thread when the VM is going away.
 #[derive(Clone)]
@@ -88,4 +94,62 @@ where
             }
         })
         .map(|_| ())
+}
+
+/// One load of guest memory, held for the length of a drain.
+pub type Guard = vm_memory::GuestMemoryLoadGuard<vm_memory::GuestMemoryMmap<()>>;
+
+/// Serve every chain the guest has put in `queue`, then raise an interrupt if
+/// it wants one.
+///
+/// The loop is the shape the virtio specification requires of a device that
+/// negotiated the event index. Notifications are switched off while the queue
+/// is being drained, so a guest adding work does not kick a thread that is
+/// already running; they are switched back on afterwards, which is also what
+/// publishes the point at which the device wants to be kicked again. A guest
+/// whose kick was suppressed because the device had not yet published that
+/// point would wait for an interrupt that never came, so this cannot be
+/// skipped.
+///
+/// `serve` returns how many bytes it wrote into the guest's buffers.
+pub fn drain<F>(name: &str, queue: &mut Queue, mem: &Mem, interrupt: &Interrupt, mut serve: F)
+where
+    F: FnMut(&Guard, DescriptorChain<Guard>) -> u32,
+{
+    let guard = mem.memory();
+    loop {
+        if let Err(e) = queue.disable_notification(guard.deref()) {
+            log::error!("{name}: silencing the queue: {e}");
+            return;
+        }
+
+        let mut used_any = false;
+        while let Some(chain) = queue.pop_descriptor_chain(guard.clone()) {
+            let head = chain.head_index();
+            let written = serve(&guard, chain);
+            if let Err(e) = queue.add_used(guard.deref(), head, written) {
+                log::error!("{name}: returning a descriptor chain: {e}");
+                return;
+            }
+            used_any = true;
+        }
+
+        if used_any {
+            if let Err(e) = interrupt.signal_if_wanted(queue, mem) {
+                log::error!("{name}: raising the interrupt: {e}");
+            }
+        }
+
+        // Anything the guest added while notifications were off is still
+        // here, so the queue is drained again rather than waiting for a kick
+        // that was suppressed.
+        match queue.enable_notification(guard.deref()) {
+            Ok(true) => continue,
+            Ok(false) => return,
+            Err(e) => {
+                log::error!("{name}: re-arming the queue: {e}");
+                return;
+            }
+        }
+    }
 }
