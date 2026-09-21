@@ -34,6 +34,33 @@ fn main() -> ExitCode {
     }
 }
 
+/// Raise the open file limit to the most this process is allowed.
+///
+/// The filesystem keeps an `O_PATH` descriptor for every inode the guest has
+/// looked up, so a base image of a few thousand files needs a few thousand
+/// descriptors. The usual soft limit is 1024; past it every lookup fails with
+/// EMFILE, and the guest sees a filesystem that has abruptly lost most of its
+/// contents rather than an error it can report.
+fn raise_file_limit() -> std::io::Result<u64> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit fills in a struct this call owns.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if limit.rlim_cur < limit.rlim_max {
+        limit.rlim_cur = limit.rlim_max;
+        // SAFETY: the new soft limit is the hard limit, which a process may
+        // always set.
+        if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(limit.rlim_cur)
+}
+
 fn run() -> Result<(), String> {
     let path = std::env::args().nth(1);
     let text = match path.as_deref() {
@@ -51,6 +78,9 @@ fn run() -> Result<(), String> {
     let cfg: config::Config =
         serde_json::from_str(&text).map_err(|e| format!("parsing the configuration: {e}"))?;
     cfg.validate()?;
+
+    let files = raise_file_limit().map_err(|e| format!("raising the open file limit: {e}"))?;
+    log::info!("open file limit {files}");
 
     let mut vm = vmm::Vm::new(&cfg).map_err(|e| format!("building the machine: {e}"))?;
     log::info!(
