@@ -14,15 +14,31 @@ import (
 // Server listens for agents dialling out and hands each connection to the
 // caller as a Session.
 type Server struct {
-	ln *vsock.Listener
+	ln vsock.Acceptor
 }
 
-// Listen starts accepting agent connections on Port.
+// Listen starts accepting agent connections on Port over AF_VSOCK.
 //
 // The listener binds CIDAny, so one server serves every environment on the
-// node rather than one per guest.
+// node rather than one per guest. This is the right form for a monitor whose
+// vsock is the host kernel's vhost-vsock.
 func Listen() (*Server, error) {
 	ln, err := vsock.Listen(vsock.CIDAny, Port)
+	if err != nil {
+		return nil, err
+	}
+	return &Server{ln: ln}, nil
+}
+
+// ListenHybrid starts accepting agent connections from a monitor that carries
+// vsock over a unix socket instead of the host kernel, which is what Cloud
+// Hypervisor does.
+//
+// base is the monitor's vsock socket path and cid is the context ID the host
+// allocated for that guest. Unlike Listen, one server serves one environment,
+// because the socket belongs to one monitor.
+func ListenHybrid(base string, cid uint32) (*Server, error) {
+	ln, err := vsock.ListenHybrid(base, Port, cid)
 	if err != nil {
 		return nil, err
 	}
@@ -34,8 +50,10 @@ func (s *Server) Close() error { return s.ln.Close() }
 
 // Accept waits for an agent to connect and reads its Hello.
 //
-// The CID comes from the kernel, not from the agent, so it identifies which
-// environment is calling even if the agent lies about its hostname.
+// The CID does not come from the agent, so it identifies which environment is
+// calling even if the agent lies about its hostname. On AF_VSOCK the kernel
+// stamps it; over a unix socket it is the host's own allocation for the guest
+// that socket belongs to.
 func (s *Server) Accept(timeout time.Duration) (*Session, error) {
 	f, cid, err := s.ln.Accept(timeout)
 	if err != nil {
@@ -51,9 +69,9 @@ func (s *Server) Accept(timeout time.Duration) (*Session, error) {
 
 // Session is a live connection to one environment's agent.
 type Session struct {
-	// CID is the guest's context ID, as reported by the kernel. This is the
-	// only trustworthy identifier on the connection, and the only thing a
-	// caller may resolve to an environment.
+	// CID is the guest's context ID, established by the host rather than by
+	// the peer. This is the only trustworthy identifier on the connection,
+	// and the only thing a caller may resolve to an environment.
 	//
 	// A CID identifies whichever VM holds it now. They are recycled when
 	// environments are destroyed, so a control plane must pair this with the

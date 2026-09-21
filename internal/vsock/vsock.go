@@ -18,6 +18,24 @@
 // struct is a smaller thing to own than a dependency.
 package vsock
 
+import (
+	"errors"
+	"os"
+	"time"
+)
+
+// ErrAcceptTimeout is returned when no guest connected within the deadline.
+var ErrAcceptTimeout = errors.New("timed out waiting for a vsock connection")
+
+// Acceptor is the host end of an agent channel, whichever transport carries
+// it. Both implementations hand back a connection and the context ID of the
+// environment that opened it, so a caller waiting for an agent does not have
+// to know which monitor is running the guest.
+type Acceptor interface {
+	Accept(timeout time.Duration) (*os.File, uint32, error)
+	Close() error
+}
+
 // Well-known context IDs from linux/vm_sockets.h.
 const (
 	// CIDHypervisor addresses the hypervisor itself. Unused here; listed so

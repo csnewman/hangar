@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/agent"
+	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/host"
 	"github.com/csnewman/hangar/internal/image"
 	"github.com/csnewman/hangar/internal/kernel"
@@ -90,9 +91,27 @@ func doctor() error {
 	}
 	fmt.Print(caps.Summary())
 
+	// Cloud Hypervisor runs the environments, so its state belongs here as
+	// much as QEMU's does.
+	if bin, err := ch.Find(); err != nil {
+		fmt.Printf("cloud-hyp   not available: %v\n", err)
+	} else {
+		fmt.Printf("cloud-hyp   %s\n", bin)
+	}
+	if err := ch.CheckHugePages(); err != nil {
+		fmt.Printf("huge pages  NO\n")
+	} else {
+		fmt.Printf("huge pages  yes, shared memory is eligible\n")
+	}
+
 	if caps.Accel == host.AccelNone {
 		fmt.Println()
 		fmt.Println("No hardware acceleration. Environments will boot, but slowly.")
+	}
+	// The full explanation is long and only worth printing when it applies.
+	if err := ch.CheckHugePages(); err != nil {
+		fmt.Println()
+		fmt.Println(err)
 	}
 	return nil
 }
@@ -275,7 +294,7 @@ func runVM(ctx context.Context, argv []string) error {
 	append_ := fs.String("append", "", "extra words for the guest kernel command line")
 	execWait := fs.Duration("exec-timeout", 2*time.Minute, "how long to let -exec run")
 	virtiofs := fs.String("virtiofs", "", "export this directory to the guest over virtiofs")
-	monitor := fs.String("vmm", "qemu", "which monitor to run the guest under: qemu or hangar")
+	monitor := fs.String("vmm", "ch", "which monitor to run the guest under: ch, qemu or hangar")
 	network := fs.Bool("net", true, "give the guest outbound networking")
 	hugetlb := fs.Bool("hugetlb", false, "back guest memory with hugetlbfs (qemu only; needs reserved pages)")
 	dax := fs.Int("dax", 1024, "size of the virtiofs DAX window in MiB, for -vmm hangar (0 disables it)")
@@ -400,6 +419,111 @@ func runVM(ctx context.Context, argv []string) error {
 		return runUnder(ctx, hcfg, *agentWait, probe)
 	}
 
+	if *monitor == "ch" {
+		// Guest memory has to be shared for virtio-fs, and shared memory gets
+		// huge pages only if the host allows it. Nothing fails without them,
+		// the guest is merely three to five times slower, so this is checked
+		// rather than left to be discovered.
+		if err := ch.CheckHugePages(); err != nil {
+			return err
+		}
+
+		ccfg := &ch.Config{
+			Name:         cfg.Name,
+			Kernel:       cfg.Kernel,
+			Initrd:       cfg.Initrd,
+			MemoryMB:     cfg.MemoryMB,
+			CPUs:         cfg.CPUs,
+			ConsoleFile:  cfg.ConsoleFile,
+			ConsoleTTY:   caps.ConsoleTTY,
+			ExtraCmdline: cfg.ExtraCmdline,
+			GuestCID:     cfg.GuestCID,
+		}
+		for _, d := range cfg.Disks {
+			ccfg.Disks = append(ccfg.Disks, ch.Disk{Path: d.Path, ReadOnly: d.ReadOnly})
+		}
+
+		run := filepath.Join(os.TempDir(), "hangar-"+cfg.Name)
+		if ccfg.GuestCID != 0 {
+			ccfg.VsockSocket = run + "-vsock.sock"
+		}
+
+		if *printOnly {
+			if *virtiofs != "" {
+				ccfg.VirtiofsSocket = run + "-virtiofs.sock"
+			}
+			if *network {
+				ccfg.NetSocket = run + "-net.sock"
+			}
+			out, err := ch.PrintCommand(ccfg)
+			if err != nil {
+				return err
+			}
+			fmt.Println(out)
+			return nil
+		}
+
+		// Both backends own their sockets and must be listening before the
+		// monitor starts: it connects to them as a client and gives up if
+		// nothing is there.
+		if *virtiofs != "" {
+			vfs, err := vm.StartVirtiofsd(ctx, *virtiofs, run+"-virtiofs.sock", true)
+			if err != nil {
+				return err
+			}
+			defer vfs.Close()
+			ccfg.VirtiofsSocket = vfs.Socket()
+			fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag hangar-base\n", *virtiofs)
+		}
+		if *network {
+			pst, err := ch.StartPasst(ctx, run+"-net.sock", false)
+			if err != nil {
+				return err
+			}
+			defer pst.Close()
+			ccfg.NetSocket = pst.Socket()
+		}
+
+		// Cloud Hypervisor carries vsock over a unix socket rather than the
+		// host kernel, so the agent is waited for on that socket instead of
+		// on AF_VSOCK.
+		var srv *agent.Server
+		if ccfg.GuestCID != 0 {
+			// The monitor binds this path itself, so a socket left by one
+			// that was killed rather than stopped would keep it from
+			// starting. The agent's own socket is a different path and is
+			// cleaned up by the listener.
+			_ = os.Remove(ccfg.VsockSocket)
+			srv, err = agent.ListenHybrid(ccfg.VsockSocket, ccfg.GuestCID)
+			if err != nil {
+				return fmt.Errorf("starting the agent channel: %w", err)
+			}
+		}
+
+		fmt.Fprintf(os.Stderr, "booting %s under cloud-hypervisor (%d MiB, %d vCPU)\n",
+			ccfg.Name, ccfg.MemoryMB, ccfg.CPUs)
+		if ccfg.ConsoleFile != "" {
+			fmt.Fprintf(os.Stderr, "console -> %s\n\n", ccfg.ConsoleFile)
+		}
+
+		// The monitor has to go before its backends do. -exec returns as soon
+		// as the command has run, with the guest still up, and tearing
+		// virtiofsd or passt out from under a live vhost-user connection makes
+		// the monitor report a broken device on the way out. Deferred calls
+		// run last-registered first, so this one precedes both Closes above.
+		vmCtx, stopVM := context.WithCancel(ctx)
+		vmDone := make(chan struct{})
+		defer func() {
+			stopVM()
+			<-vmDone
+		}()
+
+		return withAgent(ctx, srv, *agentWait, probe, func() error {
+			defer close(vmDone)
+			return ch.Run(vmCtx, ccfg)
+		})
+	}
+
 	// virtiofsd has to be running before QEMU starts: QEMU connects to its
 	// socket immediately and fails if nothing is listening.
 	if *virtiofs != "" {
@@ -430,7 +554,14 @@ func runVM(ctx context.Context, argv []string) error {
 		fmt.Fprintf(os.Stderr, "console follows; quit with Ctrl-A then X\n\n")
 	}
 
-	return withAgent(ctx, cfg.GuestCID, *agentWait, probe, func() error {
+	var srv *agent.Server
+	if cfg.GuestCID != 0 {
+		srv, err = agent.Listen()
+		if err != nil {
+			return fmt.Errorf("starting the agent channel: %w", err)
+		}
+	}
+	return withAgent(ctx, srv, *agentWait, probe, func() error {
 		return vm.Run(ctx, caps, cfg)
 	})
 }
@@ -444,24 +575,31 @@ func runUnder(ctx context.Context, cfg *vmm.Config, agentWait time.Duration, pro
 		fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, dax %d MiB\n",
 			cfg.Fs.SharedDir, cfg.Fs.Tag, cfg.Fs.DaxMib)
 	}
-	return withAgent(ctx, cfg.VsockCID, agentWait, probe, func() error {
+	var srv *agent.Server
+	if cfg.VsockCID != 0 {
+		var err error
+		srv, err = agent.Listen()
+		if err != nil {
+			return fmt.Errorf("starting the agent channel: %w", err)
+		}
+	}
+	return withAgent(ctx, srv, agentWait, probe, func() error {
 		return vmm.Run(ctx, cfg)
 	})
 }
 
 // withAgent boots a guest and proves its agent channel works.
 //
-// The listener is opened before the guest starts. The agent dials out early
-// in the boot, so a listener opened afterwards would miss its first attempts
-// and only succeed once it retried.
-func withAgent(ctx context.Context, cid uint32, agentWait time.Duration, probe *probeCmd, boot func() error) error {
-	if cid == 0 {
+// The listener is opened by the caller, before the guest starts. The agent
+// dials out early in the boot, so a listener opened afterwards would miss its
+// first attempts and only succeed once it retried. It is the caller's to open
+// because the two monitors carry vsock differently: QEMU through the host
+// kernel, Cloud Hypervisor over a unix socket of its own.
+//
+// A nil server means the guest has no agent channel.
+func withAgent(ctx context.Context, srv *agent.Server, agentWait time.Duration, probe *probeCmd, boot func() error) error {
+	if srv == nil {
 		return boot()
-	}
-
-	srv, err := agent.Listen()
-	if err != nil {
-		return fmt.Errorf("starting the agent channel: %w", err)
 	}
 	defer srv.Close()
 

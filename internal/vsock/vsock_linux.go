@@ -1,16 +1,12 @@
 package vsock
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"syscall"
 	"time"
 	"unsafe"
 )
-
-// ErrAcceptTimeout is returned when no guest connected within the deadline.
-var ErrAcceptTimeout = errors.New("timed out waiting for a vsock connection")
 
 // acceptPoll is how often a blocked Accept re-checks for a connection. The
 // sockets are non-blocking so that Accept can honour a deadline at all; the

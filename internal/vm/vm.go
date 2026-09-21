@@ -91,6 +91,9 @@ func (c *Config) applyDefaults() {
 func (c *Config) Args(h *host.Caps) ([]string, error) {
 	c.applyDefaults()
 
+	if h.QEMUBin == "" {
+		return nil, h.QEMUErr
+	}
 	if c.Kernel == "" {
 		return nil, fmt.Errorf("kernel path is required")
 	}

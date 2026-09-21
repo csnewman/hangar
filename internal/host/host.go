@@ -26,10 +26,13 @@ const (
 
 // Caps describes what this host can do.
 type Caps struct {
-	OS         string // runtime.GOOS
-	Arch       string // guest architecture, e.g. "aarch64", "x86_64"
-	QEMUBin    string // absolute path to the qemu-system-* binary
-	QEMUVer    string
+	OS      string // runtime.GOOS
+	Arch    string // guest architecture, e.g. "aarch64", "x86_64"
+	QEMUBin string // absolute path to the qemu-system-* binary, empty if absent
+	QEMUVer string
+	// QEMUErr says why QEMUBin is empty. The QEMU path returns it; every
+	// other path ignores it.
+	QEMUErr    error
 	Accel      Accel
 	Machine    string // "virt" or "microvm"/"q35"
 	ConsoleTTY string // serial console device as the guest sees it
@@ -79,14 +82,18 @@ func Detect() (*Caps, error) {
 	// and carrying several hundred device models a guest can never address.
 	// Accepting one would produce environments that boot and are quietly
 	// wrong, which is worse than refusing.
+	//
+	// Its absence is recorded rather than fatal. Cloud Hypervisor runs the
+	// environments, so a host with no QEMU is a working host; only the QEMU
+	// path has to refuse, and it does that with QEMUErr.
 	bin, err := findQEMU(c.Arch)
 	if err != nil {
-		return nil, err
-	}
-	c.QEMUBin = bin
-
-	if out, err := exec.Command(bin, "--version").Output(); err == nil {
-		c.QEMUVer = strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+		c.QEMUErr = err
+	} else {
+		c.QEMUBin = bin
+		if out, verr := exec.Command(bin, "--version").Output(); verr == nil {
+			c.QEMUVer = strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+		}
 	}
 
 	c.Accel = detectAccel()
@@ -146,9 +153,13 @@ func (c *Caps) Summary() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "host        %s/%s\n", c.OS, runtime.GOARCH)
 	fmt.Fprintf(&b, "guest arch  %s\n", c.Arch)
-	fmt.Fprintf(&b, "qemu        %s\n", c.QEMUBin)
-	if c.QEMUVer != "" {
-		fmt.Fprintf(&b, "            %s\n", c.QEMUVer)
+	if c.QEMUBin == "" {
+		fmt.Fprintf(&b, "qemu        not available: %v\n", c.QEMUErr)
+	} else {
+		fmt.Fprintf(&b, "qemu        %s\n", c.QEMUBin)
+		if c.QEMUVer != "" {
+			fmt.Fprintf(&b, "            %s\n", c.QEMUVer)
+		}
 	}
 	fmt.Fprintf(&b, "machine     %s\n", c.Machine)
 	fmt.Fprintf(&b, "accel       %s", c.Accel)
