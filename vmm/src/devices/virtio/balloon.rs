@@ -191,22 +191,36 @@ fn release_pfn_array(guard: &Guard, addr: GuestAddress, len: u32) {
 /// `MADV_DONTNEED` on a private anonymous mapping drops the pages; the guest
 /// reading the range again gets zeroes, which is what the balloon protocol
 /// promises for a page the guest said it was finished with.
+///
+/// Both the address and the length come from the guest, and on the reporting
+/// queue the length is a descriptor length it chose. `get_slice` is what
+/// makes that safe: it refuses a span that is not wholly inside one region of
+/// guest memory. Resolving only the first address would let a guest name a
+/// valid page and a length running past the end of its own RAM, and have the
+/// host zero whatever the kernel had placed after it.
 fn release_range(guard: &Guard, addr: GuestAddress, len: u64) {
-    let host = match guard.get_host_address(addr) {
-        Ok(p) => p,
-        Err(_) => return,
+    let Ok(len) = usize::try_from(len) else {
+        return;
     };
+    let slice = match guard.get_slice(addr, len) {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("balloon: {len} bytes at {addr:?} is not guest memory: {e}");
+            return;
+        }
+    };
+
     // Partial pages cannot be dropped, and rounding outwards would discard a
     // page the guest is still using.
-    let start = host as u64;
+    let start = slice.ptr_guard_mut().as_ptr() as u64;
     let aligned = crate::layout::align_up(start, BALLOON_PAGE_SIZE);
-    let trimmed = len.saturating_sub(aligned - start) & !(BALLOON_PAGE_SIZE - 1);
+    let trimmed = (len as u64).saturating_sub(aligned - start) & !(BALLOON_PAGE_SIZE - 1);
     if trimmed == 0 {
         return;
     }
-    // SAFETY: the range is inside the guest memory mapping this process owns,
-    // and MADV_DONTNEED on it only discards contents the guest has declared
-    // free.
+    // SAFETY: the span was just checked to lie wholly within one region of
+    // guest memory this process owns, and the aligned subrange is inside it.
+    // MADV_DONTNEED there only discards contents the guest has declared free.
     unsafe {
         libc::madvise(
             aligned as *mut libc::c_void,

@@ -30,3 +30,7 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+# Arithmetic here runs on lengths and offsets a hostile guest chose. A wrap
+# that turns a bounds check into a pass is a far worse outcome than the
+# process stopping, and with panic = "abort" that is what an overflow does.
+overflow-checks = true

@@ -14,7 +14,7 @@
 
 use std::io;
 use std::ops::Deref;
-use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::io::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command};
@@ -504,14 +504,4 @@ fn clear_cloexec(fd: RawFd) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
-}
-
-/// Silence the unused warning for a type only named in a signature.
-#[allow(dead_code)]
-fn _assert_fd(_: OwnedFd) {}
-
-/// Keeps the raw-fd conversion visible where passt's descriptor is made.
-#[allow(dead_code)]
-unsafe fn _from_raw(fd: RawFd) -> UnixStream {
-    unsafe { UnixStream::from_raw_fd(fd) }
 }
