@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use virtio_queue::{Queue, QueueT};
 use vmm_sys_util::eventfd::EventFd;
 
-use super::{ActiveQueue, Interrupt, ShmRegion, VirtioDevice, VIRTIO_F_VERSION_1};
+use super::{ActiveQueue, Interrupt, ShmRegion, VirtioDevice, VIRTIO_RING_F_EVENT_IDX};
 use crate::devices::MmioDevice;
 use crate::memory::Mem;
 
@@ -173,7 +173,8 @@ impl Transport {
                     return;
                 }
             };
-            let queue = std::mem::replace(&mut self.queues[i], replacement);
+            let mut queue = std::mem::replace(&mut self.queues[i], replacement);
+            queue.set_event_idx(self.acked_features & VIRTIO_RING_F_EVENT_IDX != 0);
             let kick = match self.kicks[i].try_clone() {
                 Ok(k) => k,
                 Err(e) => {
@@ -230,7 +231,9 @@ impl MmioDevice for Transport {
             DEVICE_ID => self.device.lock().unwrap().device_type(),
             VENDOR_ID => VENDOR,
             DEVICE_FEATURES => {
-                let features = self.device.lock().unwrap().features() | VIRTIO_F_VERSION_1;
+                let device = self.device.lock().unwrap();
+                let features = device.features() | device.transport_features();
+                drop(device);
                 match self.device_features_select {
                     0 => features as u32,
                     1 => (features >> 32) as u32,
@@ -362,6 +365,7 @@ fn write_le(data: &mut [u8], value: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::devices::virtio::VIRTIO_F_VERSION_1;
     use crate::memory::Ram;
 
     /// Records what the transport hands it, and offers one shared memory
@@ -447,10 +451,14 @@ mod tests {
     }
 
     #[test]
-    fn version_1_is_offered_whatever_the_device_asks_for() {
+    fn the_transport_adds_its_own_features_to_the_device_s() {
+        use crate::devices::virtio::TRANSPORT_FEATURES;
         let (mut t, _, _) = transport();
         write32(&mut t, DEVICE_FEATURES_SEL, 0);
-        assert_eq!(read32(&mut t, DEVICE_FEATURES), 1 << 3);
+        assert_eq!(
+            read32(&mut t, DEVICE_FEATURES),
+            (1 << 3) | TRANSPORT_FEATURES as u32
+        );
         write32(&mut t, DEVICE_FEATURES_SEL, 1);
         assert_eq!(
             read32(&mut t, DEVICE_FEATURES),
@@ -516,6 +524,8 @@ mod tests {
         // index the driver used rather than its position in the list.
         assert_eq!(activated.lock().unwrap().as_deref(), Some(&[0usize][..]));
         assert_eq!(*acked.lock().unwrap(), (1 << 3) | VIRTIO_F_VERSION_1);
+        // The event index was not acknowledged, so the queue was handed over
+        // without it.
     }
 
     #[test]

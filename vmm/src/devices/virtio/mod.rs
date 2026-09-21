@@ -13,10 +13,12 @@ pub mod vsock;
 pub mod worker;
 
 use std::io;
+use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
-use virtio_queue::Queue;
+use virtio_queue::{Queue, QueueT};
+use vm_memory::GuestAddressSpace;
 use vmm_sys_util::eventfd::EventFd;
 
 use crate::memory::Mem;
@@ -30,6 +32,23 @@ pub const TYPE_FS: u32 = 26;
 /// Feature bits every device here sets, because none of them speak the
 /// pre-1.0 layout.
 pub const VIRTIO_F_VERSION_1: u64 = 1 << 32;
+
+/// A descriptor may point at a table of further descriptors, so a long
+/// request costs one entry in the queue rather than one per segment.
+pub const VIRTIO_RING_F_INDIRECT_DESC: u64 = 1 << 28;
+
+/// Each side publishes the point at which it wants to be told, so a guest
+/// that is already draining a queue is not interrupted to be told there is
+/// more in it.
+pub const VIRTIO_RING_F_EVENT_IDX: u64 = 1 << 29;
+
+/// What the transport offers on every device's behalf.
+///
+/// These describe how a queue is laid out and when it is signalled, not what
+/// the device does with it, and every device here is served by the same queue
+/// handling -- so they are offered once rather than repeated per device.
+pub const TRANSPORT_FEATURES: u64 =
+    VIRTIO_F_VERSION_1 | VIRTIO_RING_F_INDIRECT_DESC | VIRTIO_RING_F_EVENT_IDX;
 
 /// Interrupt status bits, as the virtio-mmio transport defines them.
 pub const INT_VRING: u32 = 1 << 0;
@@ -97,6 +116,22 @@ impl Interrupt {
         self.signal(INT_VRING)
     }
 
+    /// Tell the guest about `queue`, if it has asked to be told.
+    ///
+    /// With the event index in use the guest publishes how far it has got, so
+    /// a queue it is already draining needs no interrupt at all.
+    pub fn signal_if_wanted(&self, queue: &mut Queue, mem: &Mem) -> io::Result<()> {
+        let guard = mem.memory();
+        match queue.needs_notification(guard.deref()) {
+            Ok(false) => Ok(()),
+            Ok(true) => self.signal_queue(),
+            Err(e) => {
+                log::warn!("reading the guest's notification point: {e}");
+                self.signal_queue()
+            }
+        }
+    }
+
     fn signal(&self, bits: u32) -> io::Result<()> {
         // The status has to be visible before the interrupt: the guest reads
         // it from the handler to find out why it was interrupted, and a
@@ -142,6 +177,16 @@ pub trait VirtioDevice: Send {
 
     /// Features this device offers.
     fn features(&self) -> u64;
+
+    /// Which of the transport's own features this device can have added.
+    ///
+    /// A device whose queues this process parses can have all of them. A
+    /// device whose queues are parsed by something else -- vsock's, by the
+    /// host kernel -- can only have the ones that parser understands, or the
+    /// guest and the parser would disagree about the ring layout.
+    fn transport_features(&self) -> u64 {
+        TRANSPORT_FEATURES
+    }
 
     /// Features the driver accepted. A device that cares records them here.
     fn ack_features(&mut self, _value: u64) {}

@@ -87,6 +87,12 @@ impl VirtioDevice for Vsock {
         self.available_features
     }
 
+    fn transport_features(&self) -> u64 {
+        // The host kernel parses these queues, so the guest may only be
+        // offered the ring features the kernel also understands.
+        super::TRANSPORT_FEATURES & self.available_features
+    }
+
     fn ack_features(&mut self, value: u64) {
         // The kernel parses the rings itself, so it has to be told exactly
         // what the guest agreed to: claiming an event index or indirect

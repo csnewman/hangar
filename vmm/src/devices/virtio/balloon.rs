@@ -169,7 +169,7 @@ impl Worker {
             used_any = true;
         }
         if used_any {
-            if let Err(e) = self.interrupt.signal_queue() {
+            if let Err(e) = self.interrupt.signal_if_wanted(&mut self.queue, &self.mem) {
                 log::error!("balloon: raising the interrupt: {e}");
             }
         }

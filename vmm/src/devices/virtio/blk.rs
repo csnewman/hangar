@@ -6,13 +6,14 @@
 //! put any filesystem on.
 
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io;
 use std::ops::Deref;
+use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, Mutex};
 
 use virtio_queue::desc::split::Descriptor;
 use virtio_queue::{DescriptorChain, QueueT};
-use vm_memory::{Bytes, GuestAddressSpace, GuestMemoryLoadGuard, GuestMemoryMmap};
+use vm_memory::{Bytes, GuestAddressSpace, GuestMemory, GuestMemoryLoadGuard, GuestMemoryMmap};
 
 use super::worker::{self, Stop};
 use super::{ActiveQueue, Interrupt, VirtioDevice, TYPE_BLOCK};
@@ -148,7 +149,7 @@ impl Worker {
             used_any = true;
         }
         if used_any {
-            if let Err(e) = self.interrupt.signal_queue() {
+            if let Err(e) = self.interrupt.signal_if_wanted(&mut self.queue, &self.mem) {
                 log::error!("blk: raising the interrupt: {e}");
             }
         }
@@ -241,21 +242,13 @@ impl Worker {
         data: &[Descriptor],
         written: &mut u32,
     ) -> io::Result<()> {
-        let mut file = self.file.lock().unwrap();
-        let mut offset = self.offset_of(sector, data)?;
-        for d in data {
-            if !d.is_write_only() {
-                continue;
-            }
-            file.seek(SeekFrom::Start(offset))?;
-            let mut buf = vec![0u8; d.len() as usize];
-            file.read_exact(&mut buf)?;
-            guard
-                .write_slice(&buf, d.addr())
-                .map_err(|e| io::Error::other(format!("writing to guest memory: {e}")))?;
-            offset += u64::from(d.len());
-            *written += d.len();
+        let offset = self.offset_of(sector, data)?;
+        let iovecs = iovecs(guard, data, true)?;
+        if iovecs.is_empty() {
+            return Ok(());
         }
+        let file = self.file.lock().unwrap();
+        *written += preadv(&file, &iovecs, offset)? as u32;
         Ok(())
     }
 
@@ -265,20 +258,13 @@ impl Worker {
         sector: u64,
         data: &[Descriptor],
     ) -> io::Result<()> {
-        let mut file = self.file.lock().unwrap();
-        let mut offset = self.offset_of(sector, data)?;
-        for d in data {
-            if d.is_write_only() {
-                continue;
-            }
-            let mut buf = vec![0u8; d.len() as usize];
-            guard
-                .read_slice(&mut buf, d.addr())
-                .map_err(|e| io::Error::other(format!("reading from guest memory: {e}")))?;
-            file.seek(SeekFrom::Start(offset))?;
-            file.write_all(&buf)?;
-            offset += u64::from(d.len());
+        let offset = self.offset_of(sector, data)?;
+        let iovecs = iovecs(guard, data, false)?;
+        if iovecs.is_empty() {
+            return Ok(());
         }
+        let file = self.file.lock().unwrap();
+        pwritev(&file, &iovecs, offset)?;
         Ok(())
     }
 
@@ -299,6 +285,68 @@ impl Worker {
         }
         Ok(sector * SECTOR_SIZE)
     }
+}
+
+/// Point an `iovec` at each descriptor going the right way.
+///
+/// The vectors address guest memory directly, so a request becomes one
+/// `preadv` or `pwritev` into the pages the guest asked about rather than a
+/// copy through a buffer of this process's own.
+fn iovecs(
+    guard: &GuestMemoryLoadGuard<GuestMemoryMmap<()>>,
+    data: &[Descriptor],
+    writable: bool,
+) -> io::Result<Vec<libc::iovec>> {
+    let mut out = Vec::with_capacity(data.len());
+    for d in data {
+        if d.is_write_only() != writable {
+            continue;
+        }
+        // get_slice refuses a range that leaves the region it starts in, so a
+        // descriptor pointing past the end of guest memory is caught here
+        // rather than by the kernel writing somewhere it should not.
+        let slice = guard
+            .get_slice(d.addr(), d.len() as usize)
+            .map_err(|e| io::Error::other(format!("addressing guest memory: {e}")))?;
+        out.push(libc::iovec {
+            iov_base: slice.ptr_guard_mut().as_ptr() as *mut libc::c_void,
+            iov_len: d.len() as usize,
+        });
+    }
+    Ok(out)
+}
+
+fn preadv(file: &File, iovecs: &[libc::iovec], offset: u64) -> io::Result<usize> {
+    // SAFETY: every vector addresses guest memory this process owns, for the
+    // length the descriptor gave, and the count matches the slice.
+    let n = unsafe {
+        libc::preadv(
+            file.as_raw_fd(),
+            iovecs.as_ptr(),
+            iovecs.len() as libc::c_int,
+            offset as libc::off_t,
+        )
+    };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(n as usize)
+}
+
+fn pwritev(file: &File, iovecs: &[libc::iovec], offset: u64) -> io::Result<usize> {
+    // SAFETY: as in preadv.
+    let n = unsafe {
+        libc::pwritev(
+            file.as_raw_fd(),
+            iovecs.as_ptr(),
+            iovecs.len() as libc::c_int,
+            offset as libc::off_t,
+        )
+    };
+    if n < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(n as usize)
 }
 
 /// Read a request header: type, a reserved word, then the starting sector.
