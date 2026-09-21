@@ -39,6 +39,11 @@ type Config struct {
 	Disks    []Disk // first disk becomes /dev/vda
 	MemoryMB int
 	CPUs     int
+	// HugePages backs the guest's memory with hugetlbfs, which needs pages
+	// reserved on the host beforehand. It is off by default because a host
+	// with none reserved refuses to start the guest at all.
+	HugePages bool
+
 	// Network gives the guest outbound connectivity through passt, which
 	// needs no host privileges and no TAP device. See
 	// docs/qemu-configuration.md section 5.
@@ -167,9 +172,18 @@ func (c *Config) Args(h *host.Caps) ([]string, error) {
 		if tag == "" {
 			tag = "hangar-base"
 		}
+		// vhost-user reads the guest's memory directly, so that memory has to
+		// be shared rather than private to QEMU. Shared memory does not
+		// follow the anonymous transparent hugepage setting, so unless it is
+		// explicitly huge the guest runs on 4 KiB pages -- which costs far
+		// more than the filesystem itself.
+		backend := fmt.Sprintf("memory-backend-memfd,id=%s,size=%dM,share=on",
+			sharedMemID, c.MemoryMB)
+		if c.HugePages {
+			backend += ",hugetlb=on,hugetlbsize=2M"
+		}
 		args = append(args,
-			"-object", fmt.Sprintf("memory-backend-memfd,id=%s,size=%dM,share=on",
-				sharedMemID, c.MemoryMB),
+			"-object", backend,
 			"-chardev", fmt.Sprintf("socket,id=%s,path=%s", virtiofsChardevID, c.VirtiofsSocket),
 			"-device", fmt.Sprintf("vhost-user-fs-pci,chardev=%s,tag=%s", virtiofsChardevID, tag),
 		)

@@ -277,6 +277,7 @@ func runVM(ctx context.Context, argv []string) error {
 	virtiofs := fs.String("virtiofs", "", "export this directory to the guest over virtiofs")
 	monitor := fs.String("vmm", "qemu", "which monitor to run the guest under: qemu or hangar")
 	network := fs.Bool("net", true, "give the guest outbound networking")
+	hugetlb := fs.Bool("hugetlb", false, "back guest memory with hugetlbfs (qemu only; needs reserved pages)")
 	dax := fs.Int("dax", 1024, "size of the virtiofs DAX window in MiB, for -vmm hangar (0 disables it)")
 	if err := fs.Parse(argv); err != nil {
 		return err
@@ -321,6 +322,7 @@ func runVM(ctx context.Context, argv []string) error {
 		Disks:       disks,
 		MemoryMB:    *mem,
 		Network:     *network,
+		HugePages:   *hugetlb,
 		CPUs:        *cpus,
 		ConsoleFile: *console,
 	}
