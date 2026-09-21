@@ -14,7 +14,7 @@ use kvm_bindings::kvm_userspace_memory_region;
 use kvm_ioctls::VmFd;
 use vm_memory::{
     Address, GuestAddress, GuestAddressSpace, GuestMemory, GuestMemoryAtomic, GuestMemoryMmap,
-    GuestMemoryRegion,
+    GuestMemoryRegion, GuestRegionMmap, MmapRegion,
 };
 
 use crate::layout;
@@ -29,9 +29,33 @@ pub struct Ram {
 
 impl Ram {
     /// Allocate `size` bytes of guest RAM at the architectural RAM base.
+    ///
+    /// The mapping is aligned to a huge page and asks for huge pages
+    /// explicitly, because the usual host setting is `madvise`: memory gets
+    /// them only if it says it wants them. Without that the guest's RAM is
+    /// backed by 4 KiB pages, and every one of them is a separate
+    /// second-stage fault the first time the guest touches it. That is not a
+    /// storage or device cost, it is paid by every access the guest makes,
+    /// and it slows a boot down several times over.
     pub fn new(size: u64) -> io::Result<Self> {
         let base = GuestAddress(layout::RAM_BASE);
-        let mmap = GuestMemoryMmap::from_ranges(&[(base, size as usize)])
+        let host = map_aligned(size as usize, HUGE_PAGE)?;
+
+        // SAFETY: the mapping was just made, is `size` bytes long, and is
+        // handed to the region which owns it from here on.
+        let region = unsafe {
+            MmapRegion::build_raw(
+                host as *mut u8,
+                size as usize,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_NORESERVE | libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            )
+        }
+        .map_err(|e| io::Error::other(format!("describing {size} bytes of guest RAM: {e}")))?;
+
+        let region = GuestRegionMmap::new(region, base)
+            .ok_or_else(|| io::Error::other("guest RAM does not fit at its base address"))?;
+        let mmap = GuestMemoryMmap::from_regions(vec![region])
             .map_err(|e| io::Error::other(format!("allocating {size} bytes of guest RAM: {e}")))?;
         Ok(Self {
             mem: GuestMemoryAtomic::new(mmap),
@@ -65,6 +89,48 @@ impl Ram {
     pub fn end(&self) -> u64 {
         layout::RAM_BASE + self.size
     }
+}
+
+/// Huge pages are 2 MiB on every architecture this runs on.
+const HUGE_PAGE: usize = 2 * 1024 * 1024;
+
+/// Map `size` bytes anonymously, aligned to `align`, backed by huge pages
+/// where the host will give them.
+///
+/// The kernel does not promise an aligned address, so a larger range is taken
+/// and the slack at each end given back. Huge pages need the alignment: a
+/// region that straddles one cannot be backed by it.
+fn map_aligned(size: usize, align: usize) -> io::Result<*mut libc::c_void> {
+    // SAFETY: a fresh anonymous reservation; the kernel picks the address.
+    let raw = unsafe {
+        libc::mmap(
+            std::ptr::null_mut(),
+            size + align,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_NORESERVE,
+            -1,
+            0,
+        )
+    };
+    if raw == libc::MAP_FAILED {
+        return Err(io::Error::last_os_error());
+    }
+
+    let start = raw as usize;
+    let aligned = layout::align_up(start as u64, align as u64) as usize;
+    // SAFETY: both ranges are inside the reservation just made, and neither
+    // is used for anything.
+    unsafe {
+        if aligned > start {
+            libc::munmap(raw, aligned - start);
+        }
+        let tail = aligned + size;
+        libc::munmap(tail as *mut libc::c_void, start + size + align - tail);
+        // Advisory: a host with huge pages switched off, or none left,
+        // simply does not give any.
+        libc::madvise(aligned as *mut libc::c_void, size, libc::MADV_HUGEPAGE);
+    }
+    Ok(aligned as *mut libc::c_void)
 }
 
 /// A region of guest physical address space that the virtio-fs device fills
