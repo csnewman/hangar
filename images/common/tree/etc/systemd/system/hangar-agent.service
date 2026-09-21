@@ -4,8 +4,10 @@ Description=Hangar agent
 # mounted workspace, so it starts as early as systemd can run it. Being up
 # before the rest of the environment is the point: that is when a stuck boot
 # most needs to be observable.
+#
+# It is ordered after nothing. The guest kernel is monolithic, so vsock is
+# present before userspace starts and there is no module to wait for.
 DefaultDependencies=no
-After=systemd-modules-load.service
 Before=sysinit.target
 
 [Service]

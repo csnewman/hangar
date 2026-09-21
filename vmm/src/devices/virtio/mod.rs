@@ -9,6 +9,7 @@ pub mod blk;
 pub mod fs;
 pub mod fsopts;
 pub mod mmio;
+pub mod rng;
 pub mod vsock;
 pub mod worker;
 
@@ -25,6 +26,7 @@ use crate::memory::Mem;
 
 /// Device type numbers from the virtio specification.
 pub const TYPE_BLOCK: u32 = 2;
+pub const TYPE_RNG: u32 = 4;
 pub const TYPE_BALLOON: u32 = 5;
 pub const TYPE_VSOCK: u32 = 19;
 pub const TYPE_FS: u32 = 26;

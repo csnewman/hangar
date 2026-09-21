@@ -271,6 +271,9 @@ func runVM(ctx context.Context, argv []string) error {
 	cid := fs.Uint("cid", 0, "guest vsock context ID (default: the first free one)")
 	noAgent := fs.Bool("no-agent", false, "boot without an agent channel")
 	agentWait := fs.Duration("agent-wait", 90*time.Second, "how long to wait for the agent")
+	exec := fs.String("exec", "", "run this shell command in the guest once its agent answers, print the output, and stop")
+	append_ := fs.String("append", "", "extra words for the guest kernel command line")
+	execWait := fs.Duration("exec-timeout", 2*time.Minute, "how long to let -exec run")
 	virtiofs := fs.String("virtiofs", "", "export this directory to the guest over virtiofs")
 	monitor := fs.String("vmm", "qemu", "which monitor to run the guest under: qemu or hangar")
 	network := fs.Bool("net", true, "give the guest outbound networking (qemu only)")
@@ -325,11 +328,19 @@ func runVM(ctx context.Context, argv []string) error {
 	if *smoke {
 		cfg.ExtraCmdline = "hangar.smoketest"
 	}
+	if *append_ != "" {
+		cfg.ExtraCmdline = strings.TrimSpace(cfg.ExtraCmdline + " " + *append_)
+	}
 	if !*noAgent {
 		cfg.GuestCID = uint32(*cid)
 		if cfg.GuestCID == 0 {
 			cfg.GuestCID = vsock.SuggestGuestCID()
 		}
+	}
+
+	var probe *probeCmd
+	if *exec != "" {
+		probe = &probeCmd{cmd: *exec, timeout: *execWait}
 	}
 
 	required := []string{cfg.Kernel, cfg.Initrd}
@@ -359,6 +370,9 @@ func runVM(ctx context.Context, argv []string) error {
 		if *smoke {
 			hcfg.Cmdline += " hangar.smoketest"
 		}
+		if *append_ != "" {
+			hcfg.Cmdline += " " + *append_
+		}
 		for _, d := range cfg.Disks {
 			hcfg.Disks = append(hcfg.Disks, vmm.Disk{Path: d.Path, ReadOnly: d.ReadOnly})
 		}
@@ -378,7 +392,7 @@ func runVM(ctx context.Context, argv []string) error {
 			fmt.Println(string(s))
 			return nil
 		}
-		return runUnder(ctx, hcfg, *agentWait)
+		return runUnder(ctx, hcfg, *agentWait, probe)
 	}
 
 	// virtiofsd has to be running before QEMU starts: QEMU connects to its
@@ -411,21 +425,21 @@ func runVM(ctx context.Context, argv []string) error {
 		fmt.Fprintf(os.Stderr, "console follows; quit with Ctrl-A then X\n\n")
 	}
 
-	return withAgent(ctx, cfg.GuestCID, *agentWait, func() error {
+	return withAgent(ctx, cfg.GuestCID, *agentWait, probe, func() error {
 		return vm.Run(ctx, caps, cfg)
 	})
 }
 
 // runUnder boots a guest under hangar-vmm, waiting for its agent the same way
 // the QEMU path does.
-func runUnder(ctx context.Context, cfg *vmm.Config, agentWait time.Duration) error {
+func runUnder(ctx context.Context, cfg *vmm.Config, agentWait time.Duration, probe *probeCmd) error {
 	fmt.Fprintf(os.Stderr, "booting %s under hangar-vmm (%d MiB, %d vCPU)\n",
 		cfg.Name, cfg.MemoryMib, cfg.CPUs)
 	if cfg.Fs != nil {
 		fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, dax %d MiB\n",
 			cfg.Fs.SharedDir, cfg.Fs.Tag, cfg.Fs.DaxMib)
 	}
-	return withAgent(ctx, cfg.VsockCID, agentWait, func() error {
+	return withAgent(ctx, cfg.VsockCID, agentWait, probe, func() error {
 		return vmm.Run(ctx, cfg)
 	})
 }
@@ -435,7 +449,7 @@ func runUnder(ctx context.Context, cfg *vmm.Config, agentWait time.Duration) err
 // The listener is opened before the guest starts. The agent dials out early
 // in the boot, so a listener opened afterwards would miss its first attempts
 // and only succeed once it retried.
-func withAgent(ctx context.Context, cid uint32, agentWait time.Duration, boot func() error) error {
+func withAgent(ctx context.Context, cid uint32, agentWait time.Duration, probe *probeCmd, boot func() error) error {
 	if cid == 0 {
 		return boot()
 	}
@@ -482,7 +496,28 @@ func withAgent(ctx context.Context, cid uint32, agentWait time.Duration, boot fu
 	fmt.Fprintf(os.Stderr, "agent       ping ok, exec ok (runs as %s)\n",
 		strings.TrimSpace(who.Stdout))
 
+	// A command to run inside the environment is a diagnostic: it reports
+	// what the guest sees rather than what the console shows, which is the
+	// only way to ask systemd about its own startup.
+	if probe != nil {
+		out, err := sess.Exec(probe.timeout, "sh", "-c", probe.cmd)
+		if err != nil {
+			return err
+		}
+		fmt.Print(out.Stdout)
+		if out.Stderr != "" {
+			fmt.Fprint(os.Stderr, out.Stderr)
+		}
+		return nil
+	}
+
 	return <-vmDone
+}
+
+// probeCmd is a command to run in the guest once it answers.
+type probeCmd struct {
+	cmd     string
+	timeout time.Duration
 }
 
 func buildVMM(ctx context.Context, argv []string) error {

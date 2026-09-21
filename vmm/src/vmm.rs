@@ -12,7 +12,7 @@ use vmm_sys_util::eventfd::EventFd;
 use crate::config::Config;
 use crate::devices::serial::Pl011;
 use crate::devices::virtio::worker::Stop;
-use crate::devices::virtio::{balloon, blk, fs, mmio, vsock, Interrupt, VirtioDevice};
+use crate::devices::virtio::{balloon, blk, fs, mmio, rng, vsock, Interrupt, VirtioDevice};
 use crate::devices::{Bus, MmioDevice};
 use crate::memory::{DaxWindow, Ram};
 use crate::{boot, fdt, gic, layout};
@@ -126,6 +126,20 @@ impl Vm {
                 false,
             )?;
         }
+
+        // Entropy, always. Nothing about an environment makes it optional,
+        // and a guest short of randomness stalls in places that are very hard
+        // to recognise as a missing device.
+        attach(
+            &vm,
+            &mut bus,
+            &mut nodes,
+            &mut devices,
+            &ram,
+            &mut slot,
+            Arc::new(Mutex::new(rng::Rng::new(stop.clone()))),
+            false,
+        )?;
 
         if let Some(cid) = cfg.vsock_cid {
             let device = vsock::Vsock::new(cid, ram.mem.clone(), stop.clone())?;
