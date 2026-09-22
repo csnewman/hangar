@@ -8,7 +8,7 @@
 //! becomes a `SHMEM_MAP` to the monitor, which places the file in the window
 //! the guest already has mapped.
 
-mod fsopts;
+mod remap;
 mod server;
 mod state;
 
@@ -90,7 +90,7 @@ fn raise_file_limit() {
 /// whatever is about to snapshot this guest, and it already knows how to find
 /// the process. The signal is blocked in every thread first, so it is
 /// delivered to this one rather than interrupting a request midway.
-fn save_on_signal(session: std::sync::Arc<state::Session>, path: PathBuf) {
+fn save_on_signal(fs: std::sync::Arc<remap::Remap>, path: PathBuf) {
     // SAFETY: a zeroed sigset is valid for sigemptyset to fill in.
     let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
     // SAFETY: set is a valid sigset for the duration of these calls.
@@ -106,10 +106,17 @@ fn save_on_signal(session: std::sync::Arc<state::Session>, path: PathBuf) {
         if unsafe { libc::sigwait(&set, &mut sig) } != 0 {
             return;
         }
-        match session.save(&path) {
-            Ok((inodes, maps)) => {
-                log::info!("session saved: {inodes} inodes, {maps} mappings -> {}", path.display())
-            }
+        let saved = fs.saved();
+        let (inodes, handles, maps) = (
+            saved.inodes.len(),
+            saved.handles.len(),
+            saved.mappings.len(),
+        );
+        match saved.save(&path) {
+            Ok(()) => log::info!(
+                "session saved: {inodes} inodes, {handles} handles, {maps} mappings -> {}",
+                path.display()
+            ),
             Err(e) => log::error!("saving the session to {}: {e}", path.display()),
         }
     });
@@ -137,7 +144,7 @@ fn main() {
     };
 
     if let Some(path) = args.state.clone() {
-        save_on_signal(backend.read().unwrap().session(), path);
+        save_on_signal(backend.read().unwrap().fs(), path);
     }
 
     let mut daemon = VhostUserDaemon::new(

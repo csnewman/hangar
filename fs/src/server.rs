@@ -22,8 +22,8 @@ use virtio_bindings::bindings::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
 use vm_memory::{ByteValued, GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap};
 use vmm_sys_util::epoll::EventSet;
 
-use crate::fsopts;
-use crate::state::Session;
+use crate::remap::Remap;
+use crate::state;
 
 /// Tags are a fixed-width field in the configuration space.
 const TAG_LEN: usize = 36;
@@ -151,41 +151,14 @@ impl FsCacheReqHandler for CacheHandler {
     }
 }
 
-/// Looks up every path the saved session names, so the filesystem holds the
-/// nodeids the guest is still using.
-///
-/// A path that has gone is skipped: losing one file is better than refusing
-/// to bring the guest back at all, and the guest finds out the same way it
-/// would have without a restore.
-fn restore_inodes(fs: &fsopts::Fs, session: &Session) {
-    let order = session.replay_order();
-    if order.is_empty() {
-        return;
-    }
-    let ctx = fuse_backend_rs::api::filesystem::Context::default();
-    let (mut ok, mut moved, mut gone) = (0usize, 0usize, 0usize);
-    for (inode, path) in order {
-        match fs.relookup(&ctx, &path) {
-            Ok(got) if got == inode => ok += 1,
-            Ok(got) => {
-                moved += 1;
-                log::warn!("{} came back as {got:#x}, not {inode:#x}", path.display());
-            }
-            Err(_) => gone += 1,
-        }
-    }
-    log::info!("restored {ok} inodes, {moved} moved, {gone} gone");
-}
-
 pub struct FsBackend {
     config: FsConfig,
     vconfig: VirtioFsConfig,
-    server: Arc<Server<Arc<fsopts::Fs>>>,
+    server: Arc<Server<Arc<Remap>>>,
     mem: Option<GuestMemoryAtomic<GuestMemoryMmap>>,
     frontend: Arc<Mutex<Option<Backend>>>,
     event_idx: bool,
-    session: Arc<Session>,
-    fs: Arc<fsopts::Fs>,
+    fs: Arc<Remap>,
     /// Mappings read from a saved session, waiting for a channel to the
     /// monitor to make them again.
     pending: Vec<crate::state::Mapping>,
@@ -224,19 +197,20 @@ impl FsBackend {
             .import()
             .map_err(|e| Error::SharedDir(dir.clone(), e))?;
 
+        let fs = Arc::new(Remap::new(passthrough));
+
         // A session on disk means this process is standing in for one the
-        // guest was already talking to, so the nodeids it holds have to mean
-        // the same files again before it sends a single request.
-        let (session, pending) = match config.state.as_ref().filter(|p| p.exists()) {
+        // guest was already talking to, so everything it holds has to mean
+        // the same thing again before it sends a single request.
+        let pending = match config.state.as_ref().filter(|p| p.exists()) {
             Some(p) => {
-                let s = Session::load(p).map_err(|e| Error::State(p.clone(), e))?;
-                let pending = s.mappings();
-                (Arc::new(s), pending)
+                let saved = state::Saved::load(p).map_err(|e| Error::State(p.clone(), e))?;
+                let (ok, gone) = fs.restore(&saved);
+                log::info!("restored {ok} inodes, {gone} gone");
+                fs.pending_mappings()
             }
-            None => (Arc::new(Session::new()), Vec::new()),
+            None => Vec::new(),
         };
-        let fs = Arc::new(fsopts::Fs::new(passthrough, Arc::clone(&session)));
-        restore_inodes(&fs, &session);
 
         let mut vconfig = VirtioFsConfig::default();
         let tag = config.tag.as_bytes();
@@ -253,15 +227,14 @@ impl FsBackend {
             mem: None,
             frontend: Arc::new(Mutex::new(None)),
             event_idx: false,
-            session,
             fs,
             pending,
         })
     }
 
-    /// The record of what the guest is holding.
-    pub fn session(&self) -> Arc<Session> {
-        Arc::clone(&self.session)
+    /// The layer holding what the guest has been told.
+    pub fn fs(&self) -> Arc<Remap> {
+        Arc::clone(&self.fs)
     }
 
     /// Serve every FUSE message the guest has queued.
@@ -378,6 +351,7 @@ impl VhostUserBackendMut for FsBackend {
         backend.set_shmem_flag(true);
         backend.set_reply_ack_flag(true);
         *self.frontend.lock().unwrap() = Some(backend);
+        log::info!("monitor channel up; {} mappings to make again", self.pending.len());
 
         // The mappings a restored guest is already holding have to be made
         // again before it runs. They cannot be made from here: this is the
