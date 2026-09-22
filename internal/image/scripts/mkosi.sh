@@ -29,5 +29,19 @@ cp -a /cfg /build
 cd "/build/$IMAGE"
 mkosi --force build
 
+# --- guest programs ---------------------------------------------------------
+# Native programs Hangar ships in an image are compiled here rather than in the
+# image, so the image carries no toolchain. The builder is the same
+# distribution and release as the Ubuntu base, so what links here runs there.
+# A base without Mesa -- Rocky, today -- has nothing for these to link against
+# and goes without.
+if ls rootfs/usr/lib/*/libEGL.so.1 >/dev/null 2>&1; then
+    apt-get install -y -qq --no-install-recommends gcc libc6-dev libegl-dev libgles-dev >/dev/null
+    install -d rootfs/usr/local/bin
+    gcc -O2 -Wall -Wextra -o rootfs/usr/local/bin/hangar-glcheck \
+        /cfg/common/src/hangar-glcheck.c -lEGL -lGLESv2
+    echo "glcheck: installed" >&2
+fi
+
 ln -s "/build/$IMAGE/rootfs" /r
 exec sh /scripts/postprocess.sh
