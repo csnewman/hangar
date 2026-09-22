@@ -10,9 +10,10 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
+	"sync"
 	"time"
 
+	"github.com/csnewman/hangar/internal/agent"
 	"github.com/csnewman/hangar/internal/ch"
 )
 
@@ -95,6 +96,36 @@ type liveEnv struct {
 	fs     *ch.FsBackend
 	gpu    *ch.GpuBackend
 	stopVM context.CancelFunc
+
+	mu   sync.Mutex
+	sess *agent.Session
+}
+
+func (l *liveEnv) setSession(s *agent.Session) {
+	l.mu.Lock()
+	l.sess = s
+	l.mu.Unlock()
+}
+
+func (l *liveEnv) session() *agent.Session {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.sess
+}
+
+// controlRequest is one request on the control socket, a JSON line.
+type controlRequest struct {
+	Op        string   `json:"op"`
+	Cmd       []string `json:"cmd,omitempty"`
+	TimeoutMS int64    `json:"timeout_ms,omitempty"`
+}
+
+// controlReply answers one request.
+type controlReply struct {
+	Error  string `json:"error,omitempty"`
+	Stdout string `json:"stdout,omitempty"`
+	Stderr string `json:"stderr,omitempty"`
+	Code   int    `json:"code"`
 }
 
 // suspend writes the environment to disk and stops it.
@@ -137,8 +168,8 @@ func (l *liveEnv) suspend(ctx context.Context) error {
 }
 
 // serveControl answers requests from other hangar processes about this
-// environment. Suspending is the only one: it has to be done by the process
-// holding the backends, since only it can reach them.
+// environment. They have to be answered by the process holding it: only it can
+// reach the backends to suspend them, and only it holds the agent's session.
 func serveControl(ctx context.Context, path string, l *liveEnv) (func(), error) {
 	_ = os.Remove(path)
 	ln, err := net.Listen("unix", path)
@@ -151,27 +182,112 @@ func serveControl(ctx context.Context, path string, l *liveEnv) (func(), error) 
 			if err != nil {
 				return
 			}
-			line, _ := bufio.NewReader(conn).ReadString('\n')
-			switch strings.TrimSpace(line) {
-			case "suspend":
-				if err := l.suspend(ctx); err != nil {
-					fmt.Fprintf(conn, "error: %v\n", err)
-				} else {
-					fmt.Fprintln(conn, "ok")
-					conn.Close()
-					// With the state on disk the monitor has nothing left to
-					// do, and stopping it ends the process that owns it.
-					_ = l.api.Shutdown(ctx)
-					l.stopVM()
-					continue
-				}
-			default:
-				fmt.Fprintf(conn, "error: unknown request %q\n", strings.TrimSpace(line))
-			}
-			conn.Close()
+			go l.answer(ctx, conn)
 		}
 	}()
 	return func() { ln.Close(); os.Remove(path) }, nil
+}
+
+func (l *liveEnv) answer(ctx context.Context, conn net.Conn) {
+	defer conn.Close()
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return
+	}
+	var req controlRequest
+	var reply controlReply
+	stop := false
+	if err := json.Unmarshal(line, &req); err != nil {
+		reply.Error = fmt.Sprintf("malformed request: %v", err)
+	} else {
+		switch req.Op {
+		case "suspend":
+			if err := l.suspend(ctx); err != nil {
+				reply.Error = err.Error()
+			} else {
+				stop = true
+			}
+		case "exec":
+			sess := l.session()
+			if sess == nil {
+				reply.Error = "the environment's agent is not connected"
+				break
+			}
+			timeout := time.Duration(req.TimeoutMS) * time.Millisecond
+			if timeout <= 0 {
+				timeout = 2 * time.Minute
+			}
+			resp, err := sess.Exec(timeout, req.Cmd...)
+			if err != nil {
+				reply.Error = err.Error()
+			} else {
+				reply.Stdout, reply.Stderr, reply.Code = resp.Stdout, resp.Stderr, resp.Code
+			}
+		default:
+			reply.Error = fmt.Sprintf("unknown request %q", req.Op)
+		}
+	}
+	b, _ := json.Marshal(reply)
+	_, _ = conn.Write(append(b, '\n'))
+	if stop {
+		// With the state on disk the monitor has nothing left to do, and
+		// stopping it ends the process that owns it.
+		_ = l.api.Shutdown(ctx)
+		l.stopVM()
+	}
+}
+
+// control sends one request to the process running an environment.
+func control(name string, req controlRequest, wait time.Duration) (*controlReply, error) {
+	conn, err := net.Dial("unix", runBase(name)+"-control.sock")
+	if err != nil {
+		return nil, fmt.Errorf("%s is not running here: %w", name, err)
+	}
+	defer conn.Close()
+	b, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := conn.Write(append(b, '\n')); err != nil {
+		return nil, err
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(wait))
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		return nil, fmt.Errorf("no answer from %s: %w", name, err)
+	}
+	var reply controlReply
+	if err := json.Unmarshal(line, &reply); err != nil {
+		return nil, fmt.Errorf("malformed answer from %s: %w", name, err)
+	}
+	if reply.Error != "" {
+		return nil, errors.New(reply.Error)
+	}
+	return &reply, nil
+}
+
+// execEnv runs a command in a running environment.
+func execEnv(argv []string) error {
+	fs := flag.NewFlagSet("exec", flag.ExitOnError)
+	name := fs.String("name", "hangar-env", "environment name")
+	timeout := fs.Duration("timeout", 2*time.Minute, "how long to let the command run")
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	cmd := fs.Args()
+	if len(cmd) == 0 {
+		return fmt.Errorf("usage: hangar exec -name N -- command [args...]")
+	}
+	reply, err := control(*name, controlRequest{Op: "exec", Cmd: cmd, TimeoutMS: timeout.Milliseconds()}, *timeout+10*time.Second)
+	if err != nil {
+		return err
+	}
+	fmt.Print(reply.Stdout)
+	fmt.Fprint(os.Stderr, reply.Stderr)
+	if reply.Code != 0 {
+		os.Exit(reply.Code)
+	}
+	return nil
 }
 
 // suspendEnv asks the process running an environment to suspend it.
@@ -181,22 +297,8 @@ func suspendEnv(ctx context.Context, argv []string) error {
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
-	conn, err := net.Dial("unix", runBase(*name)+"-control.sock")
-	if err != nil {
-		return fmt.Errorf("%s is not running here: %w", *name, err)
-	}
-	defer conn.Close()
-	if _, err := fmt.Fprintln(conn, "suspend"); err != nil {
+	if _, err := control(*name, controlRequest{Op: "suspend"}, 5*time.Minute); err != nil {
 		return err
-	}
-	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
-	reply, err := bufio.NewReader(conn).ReadString('\n')
-	if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) && reply == "" {
-		return fmt.Errorf("no answer from %s: %w", *name, err)
-	}
-	reply = strings.TrimSpace(reply)
-	if reply != "ok" {
-		return fmt.Errorf("%s", strings.TrimPrefix(reply, "error: "))
 	}
 	dir, _ := stateDir(*name)
 	fmt.Fprintf(os.Stderr, "%s suspended to %s\n", *name, dir)

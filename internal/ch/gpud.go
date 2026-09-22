@@ -99,3 +99,11 @@ func (g *GpuBackend) Close() error {
 	}
 	return os.Remove(g.socket)
 }
+
+// WaitRestored waits until a restored session has been built again in the
+// renderer: every resource with its contents, and every context's objects and
+// bindings. The guest must not run before then, since the first thing a
+// program mid-render does is use them.
+func (g *GpuBackend) WaitRestored(ctx context.Context, timeout time.Duration) error {
+	return waitFile(ctx, readyPath(g.state), timeout)
+}

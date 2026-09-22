@@ -10,6 +10,7 @@
 
 mod device;
 mod protocol;
+mod replay;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -17,8 +18,10 @@ use std::sync::{Arc, RwLock};
 use clap::Parser;
 use vhost_user_backend::VhostUserDaemon;
 use vm_memory::{GuestMemoryAtomic, GuestMemoryMmap};
+use vmm_sys_util::epoll::EventSet;
 
-use crate::device::{GpuBackend, GpuConfig, Live};
+use crate::device::{GpuBackend, GpuConfig, RESTORE_EVENT, SAVE_EVENT};
+use crate::replay::Session;
 
 #[derive(Parser, Debug)]
 #[command(about = "virtio-gpu vhost-user backend")]
@@ -50,13 +53,15 @@ struct Args {
     state: Option<PathBuf>,
 }
 
-/// Writes the live objects out whenever SIGUSR1 arrives.
+/// Has the session written out whenever SIGUSR1 arrives.
 ///
 /// A signal rather than a socket because the only thing that ever asks is
 /// whatever is about to snapshot this guest, and it already knows how to find
 /// the process. The signal is blocked in every thread first, so it is
-/// delivered to this one rather than interrupting a command midway.
-fn save_on_signal(backend: Arc<RwLock<GpuBackend>>, path: PathBuf) {
+/// delivered to this one rather than interrupting a command midway, and the
+/// write itself happens on the worker thread, which is the only one that can
+/// reach the renderer.
+fn save_on_signal(backend: Arc<RwLock<GpuBackend>>) {
     // SAFETY: a zeroed sigset is valid for sigemptyset to fill in.
     let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
     // SAFETY: set is a valid sigset for the duration of these calls.
@@ -72,16 +77,18 @@ fn save_on_signal(backend: Arc<RwLock<GpuBackend>>, path: PathBuf) {
         if unsafe { libc::sigwait(&set, &mut sig) } != 0 {
             return;
         }
-        let live = backend.read().unwrap().live();
-        let (r, c) = (live.resources.len(), live.contexts.len());
-        match live.save(&path) {
-            Ok(()) => log::info!(
-                "gpu state saved: {r} resources, {c} contexts -> {}",
-                path.display()
-            ),
-            Err(e) => log::error!("saving the gpu state to {}: {e}", path.display()),
+        if let Err(e) = backend.read().unwrap().request_save() {
+            log::error!("asking the worker to save: {e}");
         }
     });
+}
+
+/// Reads a saved session: the record, and the contents file beside it.
+fn load_session(path: &std::path::Path) -> std::io::Result<(Session, Vec<u8>)> {
+    let session: Session = serde_json::from_slice(&std::fs::read(path)?)
+        .map_err(|e| std::io::Error::other(format!("{e}")))?;
+    let contents = std::fs::read(path.with_extension("bin")).unwrap_or_default();
+    Ok((session, contents))
 }
 
 fn main() {
@@ -107,17 +114,28 @@ fn main() {
     };
 
     // A state file means this process is standing in for one the guest was
-    // already talking to. Nothing behind those objects survived, so they are
-    // recorded as lost and answered for rather than guessed at.
-    if let Some(p) = args.state.as_ref().filter(|p| p.exists()) {
-        match Live::load(p) {
-            Ok(live) => built.restore(live),
-            Err(e) => log::error!("reading the gpu state from {}: {e}", p.display()),
+    // already talking to. What the guest built is rebuilt once the monitor
+    // has connected and handed over guest memory; see kick_restore.
+    if let Some(p) = args.state.as_ref() {
+        let _ = std::fs::remove_file(p.with_extension("ready"));
+        if p.exists() {
+            match load_session(p) {
+                Ok((session, contents)) => {
+                    log::info!(
+                        "gpu session to restore: {} resources, {} contexts",
+                        session.resources.len(),
+                        session.contexts.len()
+                    );
+                    built.set_pending(session, contents);
+                }
+                Err(e) => log::error!("reading the gpu session from {}: {e}", p.display()),
+            }
         }
     }
+    let (save_fd, restore_fd) = (built.save_fd(), built.restore_fd());
     let backend = Arc::new(RwLock::new(built));
-    if let Some(p) = args.state.clone() {
-        save_on_signal(Arc::clone(&backend), p);
+    if args.state.is_some() {
+        save_on_signal(Arc::clone(&backend));
     }
 
     let mut daemon = VhostUserDaemon::new(
@@ -126,6 +144,14 @@ fn main() {
         GuestMemoryAtomic::new(GuestMemoryMmap::new()),
     )
     .expect("building the daemon");
+
+    // Saving and restoring have to run on the thread that owns the renderer,
+    // which is the one serving the queues, so they arrive as events there.
+    for (fd, event) in [(save_fd, SAVE_EVENT), (restore_fd, RESTORE_EVENT)] {
+        daemon.get_epoll_handlers()[0]
+            .register_listener(fd, EventSet::IN, event as u64)
+            .expect("registering a worker event");
+    }
 
     let _ = std::fs::remove_file(&args.socket);
     let mut listener = vhost::vhost_user::Listener::new(&args.socket, true)

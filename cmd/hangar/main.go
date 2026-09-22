@@ -35,6 +35,7 @@ Usage:
   hangar kernel [flags]      build the guest kernel
   hangar pull  <ref>         pull an OCI image and unpack it for virtiofs
   hangar run   [flags]       boot an environment and attach to its console
+  hangar exec    -name N -- cmd   run a command in a running environment
   hangar suspend -name N     write a running environment to disk and stop it
   hangar resume  -name N     bring a suspended environment back, even after a host restart
 
@@ -63,6 +64,8 @@ func main() {
 		err = resumeVM(ctx, os.Args[2:])
 	case "suspend":
 		err = suspendEnv(ctx, os.Args[2:])
+	case "exec":
+		err = execEnv(os.Args[2:])
 	case "run":
 		err = runVM(ctx, os.Args[2:])
 	case "-h", "--help", "help":
@@ -543,7 +546,7 @@ func runEnv(ctx context.Context, rec *envRecord, dir string, restoring bool, cfg
 	}
 	defer closeControl()
 
-	return withAgent(ctx, srv, agentWait, probe, func() error {
+	return withAgent(ctx, srv, agentWait, probe, live.setSession, func() error {
 		defer close(vmDone)
 		if !restoring {
 			return ch.Run(vmCtx, cfg)
@@ -553,6 +556,11 @@ func runEnv(ctx context.Context, rec *envRecord, dir string, restoring bool, cfg
 			func(ctx context.Context) error {
 				if live.fs != nil {
 					if err := live.fs.WaitRestored(ctx, 2*time.Minute); err != nil {
+						return err
+					}
+				}
+				if live.gpu != nil {
+					if err := live.gpu.WaitRestored(ctx, 2*time.Minute); err != nil {
 						return err
 					}
 				}
@@ -569,7 +577,7 @@ func runEnv(ctx context.Context, rec *envRecord, dir string, restoring bool, cfg
 // first attempts and only succeed once it retried.
 //
 // A nil server means the guest has no agent channel.
-func withAgent(ctx context.Context, srv *agent.Server, agentWait time.Duration, probe *probeCmd, boot func() error) error {
+func withAgent(ctx context.Context, srv *agent.Server, agentWait time.Duration, probe *probeCmd, onSession func(*agent.Session), boot func() error) error {
 	if srv == nil {
 		return boot()
 	}
@@ -593,6 +601,10 @@ func withAgent(ctx context.Context, srv *agent.Server, agentWait time.Duration, 
 		return err
 	}
 	defer sess.Close()
+	if onSession != nil {
+		onSession(sess)
+		defer onSession(nil)
+	}
 
 	// BootMicros is the guest's uptime when it said hello: on a fresh boot
 	// that is how long it took to be ready, and after a resume it is how long

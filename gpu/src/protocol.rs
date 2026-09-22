@@ -54,6 +54,7 @@ pub const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
 
 /// Set in a command header when the guest wants the command fenced.
 pub const VIRTIO_GPU_FLAG_FENCE: u32 = 1 << 0;
+pub const VIRTIO_GPU_FLAG_INFO_RING_IDX: u32 = 1 << 1;
 
 // Responses.
 pub const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
