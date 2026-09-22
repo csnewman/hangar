@@ -18,7 +18,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
         build-essential flex bison libssl-dev libelf-dev bc kmod cpio rsync \
-        zstd xz-utils curl ca-certificates python3-minimal >/dev/null
+        zstd xz-utils curl ca-certificates python3-minimal patch >/dev/null
 
 : "${KERNEL_VERSION:?}"
 : "${KARCH:?}"
@@ -39,6 +39,16 @@ else
 fi
 tar -xf linux.tar.xz
 cd "linux-${KERNEL_VERSION}"
+
+# Fixes carried against the upstream tree. Each one is expected to apply
+# cleanly; a rejected hunk means the fix has landed upstream or the code has
+# moved under it, and either way the build should stop rather than produce a
+# kernel whose contents nobody can predict.
+for p in /cfg/patches/*.patch; do
+    [ -e "$p" ] || break
+    echo "kernel: applying $(basename "$p")" >&2
+    patch -p1 --forward --fuzz=0 <"$p" >/dev/null
+done
 
 case "$KARCH" in
   arm64)  image_path=arch/arm64/boot/Image ;;

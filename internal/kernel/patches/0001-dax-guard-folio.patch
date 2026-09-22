@@ -1,0 +1,73 @@
+From: Chandler Newman <chandler2newman@gmail.com>
+Subject: [PATCH] fs/dax: do not derive a folio from a zero or empty entry
+
+dax_associate_entry(), dax_disassociate_entry() and dax_busy_page() call
+dax_to_folio() before testing the entry for the zero and empty cases,
+so the result is computed for entries that have no page behind them.
+
+dax_to_folio() is page_folio(pfn_to_page(dax_to_pfn(entry))), and
+page_folio() dereferences page->compound_head. An empty entry yields
+pfn 0, so on arm64 pfn_to_page(0) is VMEMMAP_START biased by
+memstart_addr; with memstart_addr non-zero that address lies below the
+start of the vmemmap in an unmapped hole, and the read of
+compound_head faults:
+
+  Unable to handle kernel paging request at virtual address fffffdffbf000008
+  Call trace:
+    dax_disassociate_entry+0x1c/0x88
+    __dax_invalidate_entry+0x9c/0x100
+
+A virtio-fs mount with a DAX window reaches this on the first
+invalidation of an entry that was never mapped, which makes it a boot
+failure rather than a corner case.
+
+Compute the folio only once the entry is known to have a page.
+
+Signed-off-by: Chandler Newman <chandler2newman@gmail.com>
+---
+ fs/dax.c | 12 ++++++++----
+ 1 file changed, 8 insertions(+), 4 deletions(-)
+
+--- a/fs/dax.c
++++ b/fs/dax.c
+@@ -443,11 +443,13 @@
+ 				unsigned long address, bool shared)
+ {
+ 	unsigned long size = dax_entry_size(entry), index;
+-	struct folio *folio = dax_to_folio(entry);
++	struct folio *folio;
+ 
+ 	if (dax_is_zero_entry(entry) || dax_is_empty_entry(entry))
+ 		return;
+ 
++	folio = dax_to_folio(entry);
++
+ 	index = linear_page_index(vma, address & ~(size - 1));
+ 	if (shared && (folio->mapping || dax_folio_is_shared(folio))) {
+ 		if (folio->mapping)
+@@ -468,21 +470,23 @@
+ static void dax_disassociate_entry(void *entry, struct address_space *mapping,
+ 				bool trunc)
+ {
+-	struct folio *folio = dax_to_folio(entry);
++	struct folio *folio;
+ 
+ 	if (dax_is_zero_entry(entry) || dax_is_empty_entry(entry))
+ 		return;
+ 
++	folio = dax_to_folio(entry);
+ 	dax_folio_put(folio);
+ }
+ 
+ static struct page *dax_busy_page(void *entry)
+ {
+-	struct folio *folio = dax_to_folio(entry);
++	struct folio *folio;
+ 
+ 	if (dax_is_zero_entry(entry) || dax_is_empty_entry(entry))
+ 		return NULL;
+ 
++	folio = dax_to_folio(entry);
+ 	if (folio_ref_count(folio) - folio_mapcount(folio))
+ 		return &folio->page;
+ 	else

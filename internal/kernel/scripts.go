@@ -25,6 +25,14 @@ var configFragment []byte
 //go:embed hangar-arm64.config hangar-x86_64.config
 var archFragments embed.FS
 
+// Fixes carried against the upstream kernel tree, applied in name order by
+// build.sh. They live beside the config for the same reason it does: the
+// kernel source is downloaded, so anything of ours that has to reach it must
+// be embedded here.
+//
+//go:embed patches
+var kernelPatches embed.FS
+
 func materialiseScripts() (string, error) {
 	dir, err := os.MkdirTemp("", "hangar-kscripts-")
 	if err != nil {
@@ -64,5 +72,33 @@ func materialiseConfig() (string, error) {
 			return "", err
 		}
 	}
+	if err := copyPatches(filepath.Join(dir, "patches")); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
 	return dir, nil
+}
+
+// copyPatches writes the embedded patch series into dst.
+func copyPatches(dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
+	entries, err := kernelPatches.ReadDir("patches")
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		b, err := kernelPatches.ReadFile(filepath.Join("patches", e.Name()))
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(dst, e.Name()), b, 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }
