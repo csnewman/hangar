@@ -1,7 +1,7 @@
 # Proposed upstream changes
 
-Unlike `../patches/`, these are meant to go *away*: each is written to be
-submitted to Cloud Hypervisor, and carried locally only until it lands.
+These are meant to go *away*: each is written to be submitted to Cloud
+Hypervisor, and carried locally only until it lands.
 
 Developed on a branch of upstream `main`, not of the pinned release, so it
 applies where a maintainer would look at it.
@@ -92,8 +92,8 @@ and the rest is anonymous.
 
 ### What it does not do
 
-Nothing about virtio-gpu. That device stays in `../patches/` until the backend
-in `../../../gpu/` has been exercised more widely.
+Nothing about virtio-gpu. The device is `../../../gpu/`, a vhost-user backend,
+and the monitor holds no GPU code at all.
 
 ## 0002-vsock-deliver-restore-resets.patch
 

@@ -20,9 +20,6 @@ apiVersion = 1.4.334
 The monitor running that guest is upstream `main` plus one generic patch, and
 contains no GPU code at all.
 
-The in-tree device in `../internal/ch/patches/` is kept until this has been
-exercised more widely.
-
 ## Why a separate process
 
 The monitor carries the guest's virtqueues here and publishes a shared memory
