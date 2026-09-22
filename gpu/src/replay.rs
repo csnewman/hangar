@@ -162,6 +162,81 @@ pub struct Context {
     /// the only place its commands are seen.
     #[serde(default)]
     pub venus: Option<(u64, u64)>,
+    /// A Venus context's rings, so that a context which cannot be rebuilt can
+    /// be marked failed where its guest driver looks.
+    #[serde(default)]
+    pub rings: Vec<Ring>,
+}
+
+/// Where a Venus ring keeps its status word.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Ring {
+    pub id: u64,
+    pub resource: u32,
+    /// Byte offset of the status word within the resource.
+    pub status: u64,
+}
+
+const VN_COMMAND_CREATE_RING: u32 = 188;
+const VN_COMMAND_DESTROY_RING: u32 = 189;
+
+/// The ring a submission creates or destroys, if it does.
+///
+/// Venus commands carry no length, so a stream cannot be walked without
+/// decoding every command in it. It does not need to be: the guest driver
+/// sends each ring's creation and destruction as a submission of its own, so
+/// only the first command is looked at.
+pub enum RingChange {
+    Created(Ring),
+    Destroyed(u64),
+}
+
+pub fn ring_change(bytes: &[u8]) -> Option<RingChange> {
+    let u32_at = |q: usize| {
+        bytes
+            .get(q..q + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
+    let u64_at = |q: usize| {
+        bytes
+            .get(q..q + 8)
+            .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+    };
+    match u32_at(0)? {
+        VN_COMMAND_DESTROY_RING => Some(RingChange::Destroyed(u64_at(8)?)),
+        VN_COMMAND_CREATE_RING => {
+            // type, flags, ring id, pCreateInfo marker, sType
+            let id = u64_at(8)?;
+            let mut q = 8 + 8;
+            if u64_at(q)? == 0 {
+                return None;
+            }
+            q += 8 + 4;
+            // The pNext chain: each entry is a marker, its sType, the rest of
+            // the chain, then its own single 32-bit field (the monitor's
+            // reporting period, or a priority).
+            let mut depth = 0;
+            while u64_at(q)? != 0 {
+                q += 8 + 4;
+                depth += 1;
+                if depth > 8 {
+                    return None;
+                }
+            }
+            q += 8 + 4 * depth;
+            // flags, resourceId, then offset, size, idleTimeout, headOffset,
+            // tailOffset, statusOffset, ...
+            let resource = u32_at(q + 4)?;
+            let offset = u64_at(q + 8)?;
+            let status_offset = u64_at(q + 8 + 8 * 5)?;
+            Some(RingChange::Created(Ring {
+                id,
+                resource,
+                status: offset + status_offset,
+            }))
+        }
+        _ => None,
+    }
 }
 
 /// The capset whose command stream is Venus.
@@ -182,6 +257,7 @@ impl Context {
             attached: BTreeSet::new(),
             virgl: is_virgl(init).then(Virgl::new),
             venus: None,
+            rings: Vec::new(),
         }
     }
 }
@@ -301,12 +377,17 @@ impl Virgl {
 
         let sub = self.subs.entry(self.current).or_default();
         let key = |parts: &[u32]| -> String {
-            parts.iter().map(u32::to_string).collect::<Vec<_>>().join(":")
+            parts
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(":")
         };
         match cmd {
             CREATE_OBJECT if !p.is_empty() => {
                 let handle = p[0];
-                let continues = obj == OBJECT_SHADER && p.len() > 2 && p[2] & SHADER_OFFSET_CONT != 0;
+                let continues =
+                    obj == OBJECT_SHADER && p.len() > 2 && p[2] & SHADER_OFFSET_CONT != 0;
                 if continues {
                     if let Some(o) = sub.objects.get_mut(&handle) {
                         o.cmds.push(full.to_vec());
@@ -314,7 +395,14 @@ impl Virgl {
                 } else {
                     let seq = sub.next_seq;
                     sub.next_seq += 1;
-                    sub.objects.insert(handle, Obj { seq, kind: obj, cmds: vec![full.to_vec()] });
+                    sub.objects.insert(
+                        handle,
+                        Obj {
+                            seq,
+                            kind: obj,
+                            cmds: vec![full.to_vec()],
+                        },
+                    );
                 }
             }
             DESTROY_OBJECT if !p.is_empty() => {
@@ -336,9 +424,17 @@ impl Virgl {
             SET_TWEAKS if !p.is_empty() => {
                 sub.singles.insert(key(&[cmd, p[0]]), full.to_vec());
             }
-            SET_VERTEX_BUFFERS | SET_INDEX_BUFFER | SET_STENCIL_REF | SET_BLEND_COLOR
-            | SET_POLYGON_STIPPLE | SET_CLIP_STATE | SET_SAMPLE_MASK | SET_STREAMOUT_TARGETS
-            | SET_TESS_STATE | SET_MIN_SAMPLES | SET_DEBUG_FLAGS => {
+            SET_VERTEX_BUFFERS
+            | SET_INDEX_BUFFER
+            | SET_STENCIL_REF
+            | SET_BLEND_COLOR
+            | SET_POLYGON_STIPPLE
+            | SET_CLIP_STATE
+            | SET_SAMPLE_MASK
+            | SET_STREAMOUT_TARGETS
+            | SET_TESS_STATE
+            | SET_MIN_SAMPLES
+            | SET_DEBUG_FLAGS => {
                 sub.singles.insert(key(&[cmd]), full.to_vec());
             }
             SET_SAMPLER_VIEWS if p.len() >= 2 => {
@@ -423,7 +519,13 @@ impl Virgl {
                 out.extend_from_slice(&[header(CREATE_SUB_CTX, 0, 1), id]);
             }
             out.extend_from_slice(&[header(SET_SUB_CTX, 0, 1), id]);
-            let obj = |h: u32| if h == 0 || sub.objects.contains_key(&h) { h } else { 0 };
+            let obj = |h: u32| {
+                if h == 0 || sub.objects.contains_key(&h) {
+                    h
+                } else {
+                    0
+                }
+            };
 
             let mut objects: Vec<&Obj> = sub.objects.values().collect();
             objects.sort_by_key(|o| o.seq);
@@ -487,14 +589,36 @@ impl Virgl {
             }
             for (k, e) in &sub.ssbos {
                 let (shader, slot) = split2(k);
-                out.extend_from_slice(&[header(SET_SHADER_BUFFERS, 0, 5), shader, slot, e[0], e[1], res(e[2])]);
+                out.extend_from_slice(&[
+                    header(SET_SHADER_BUFFERS, 0, 5),
+                    shader,
+                    slot,
+                    e[0],
+                    e[1],
+                    res(e[2]),
+                ]);
             }
             for (k, e) in &sub.images {
                 let (shader, slot) = split2(k);
-                out.extend_from_slice(&[header(SET_SHADER_IMAGES, 0, 7), shader, slot, e[0], e[1], e[2], e[3], res(e[4])]);
+                out.extend_from_slice(&[
+                    header(SET_SHADER_IMAGES, 0, 7),
+                    shader,
+                    slot,
+                    e[0],
+                    e[1],
+                    e[2],
+                    e[3],
+                    res(e[4]),
+                ]);
             }
             for (&slot, e) in &sub.abos {
-                out.extend_from_slice(&[header(SET_ATOMIC_BUFFERS, 0, 4), slot, e[0], e[1], res(e[2])]);
+                out.extend_from_slice(&[
+                    header(SET_ATOMIC_BUFFERS, 0, 4),
+                    slot,
+                    e[0],
+                    e[1],
+                    res(e[2]),
+                ]);
             }
             for (&slot, e) in &sub.viewports {
                 out.push(header(SET_VIEWPORT_STATE, 0, 7));
@@ -526,13 +650,13 @@ fn split2(k: &str) -> (u32, u32) {
 pub fn bytes_per_texel(format: u32) -> Option<u32> {
     Some(match format {
         9 | 10 | 11 | 23 | 64 | 69 | 74 | 82 | 95 | 139 | 147 | 148 | 150 | 168 | 169 => 1,
-        5 | 6 | 7 | 12 | 13 | 16 | 48 | 52 | 56 | 60 | 65 | 70 | 75 | 83 | 91 | 96 | 120
-        | 122 | 133 | 135 | 141 | 142 | 149 | 151 | 152 | 154 | 155 | 156 | 158 | 170 | 171 => 2,
+        5 | 6 | 7 | 12 | 13 | 16 | 48 | 52 | 56 | 60 | 65 | 70 | 75 | 83 | 91 | 96 | 120 | 122
+        | 133 | 135 | 141 | 142 | 149 | 151 | 152 | 154 | 155 | 156 | 158 | 170 | 171 => 2,
         66 | 71 | 76 | 84 | 97 => 3,
-        1 | 2 | 3 | 4 | 8 | 17 | 18 | 19 | 20 | 21 | 22 | 28 | 32 | 36 | 40 | 44 | 49 | 53
-        | 57 | 61 | 67 | 68 | 72 | 77 | 85 | 87 | 92 | 98 | 99 | 100 | 101 | 103 | 104 | 119
-        | 121 | 123 | 124 | 125 | 131 | 132 | 134 | 136 | 137 | 140 | 153 | 157 | 159 | 160
-        | 162 | 172 | 173 | 174 | 175 | 176 => 4,
+        1 | 2 | 3 | 4 | 8 | 17 | 18 | 19 | 20 | 21 | 22 | 28 | 32 | 36 | 40 | 44 | 49 | 53 | 57
+        | 61 | 67 | 68 | 72 | 77 | 85 | 87 | 92 | 98 | 99 | 100 | 101 | 103 | 104 | 119 | 121
+        | 123 | 124 | 125 | 131 | 132 | 134 | 136 | 137 | 140 | 153 | 157 | 159 | 160 | 162
+        | 172 | 173 | 174 | 175 | 176 => 4,
         50 | 54 | 58 | 62 | 93 => 6,
         24 | 29 | 33 | 37 | 41 | 45 | 51 | 55 | 59 | 63 | 88 | 94 | 126 | 161 => 8,
         30 | 34 | 38 | 42 | 46 | 89 => 12,
@@ -553,15 +677,28 @@ const TARGET_1D_ARRAY: u32 = 6;
 /// level, each covering every layer. Empty if the contents cannot be carried.
 pub fn chunks_for(c: &Create3D) -> Result<Vec<Chunk>, String> {
     if c.nr_samples > 1 {
-        return Err(format!("{} samples per texel cannot be read back", c.nr_samples));
+        return Err(format!(
+            "{} samples per texel cannot be read back",
+            c.nr_samples
+        ));
     }
     if c.target == TARGET_BUFFER {
         return Ok(vec![Chunk {
-            level: 0, x: 0, y: 0, z: 0, w: c.width, h: 1, d: 1,
-            stride: 0, layer_stride: 0, offset: 0, len: c.width as u64,
+            level: 0,
+            x: 0,
+            y: 0,
+            z: 0,
+            w: c.width,
+            h: 1,
+            d: 1,
+            stride: 0,
+            layer_stride: 0,
+            offset: 0,
+            len: c.width as u64,
         }]);
     }
-    let bpp = bytes_per_texel(c.format).ok_or_else(|| format!("format {} has no fixed texel size", c.format))?;
+    let bpp = bytes_per_texel(c.format)
+        .ok_or_else(|| format!("format {} has no fixed texel size", c.format))?;
     let mut v = Vec::new();
     for level in 0..=c.last_level {
         let w = (c.width >> level).max(1);
@@ -575,8 +712,17 @@ pub fn chunks_for(c: &Create3D) -> Result<Vec<Chunk>, String> {
         let stride = w * bpp;
         let layer_stride = stride * h;
         v.push(Chunk {
-            level, x: 0, y: 0, z: 0, w, h, d, stride, layer_stride,
-            offset: 0, len: layer_stride as u64 * d as u64,
+            level,
+            x: 0,
+            y: 0,
+            z: 0,
+            w,
+            h,
+            d,
+            stride,
+            layer_stride,
+            offset: 0,
+            len: layer_stride as u64 * d as u64,
         });
     }
     Ok(v)

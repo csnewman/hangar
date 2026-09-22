@@ -47,7 +47,11 @@ func FindGpuBackend() (string, error) {
 // connects to it as a client.
 //
 // state is where the objects the guest holds are recorded; see SaveState.
-func StartGpuBackend(ctx context.Context, socket string, venus bool, state string, verbose bool) (*GpuBackend, error) {
+//
+// venusRestore has the renderer carry Venus contexts across a suspend. It is
+// off by default: the rebuild is proven on software rendering only, and
+// without it a Venus program is told at once that its device is gone.
+func StartGpuBackend(ctx context.Context, socket string, venus, venusRestore bool, state string, verbose bool) (*GpuBackend, error) {
 	bin, err := FindGpuBackend()
 	if err != nil {
 		return nil, err
@@ -64,6 +68,9 @@ func StartGpuBackend(ctx context.Context, socket string, venus bool, state strin
 	}
 	if state != "" {
 		args = append(args, "--state", state)
+	}
+	if venusRestore {
+		args = append(args, "--venus-restore")
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	// A host with no /dev/dri has no GBM device, and the renderer needs

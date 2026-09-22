@@ -18,7 +18,6 @@ pub const CONTROL_QUEUE: u16 = 0;
 /// delays the pointer.
 pub const CURSOR_QUEUE: u16 = 1;
 
-
 // Feature bits from the virtio specification.
 pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
 pub const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
@@ -339,4 +338,3 @@ pub struct VirtioGpuConfig {
 }
 // SAFETY: plain data.
 unsafe impl ByteValued for VirtioGpuConfig {}
-

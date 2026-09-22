@@ -1,4 +1,4 @@
-From 8b386c55405c37d7b8c7aecfb997f4b104bffcef Mon Sep 17 00:00:00 2001
+From 82def7cb3a19e7ff0feffa0bc67cf9ffa8cd5fd7 Mon Sep 17 00:00:00 2001
 From: Chandler Newman <chandler2newman@gmail.com>
 Date: Tue, 22 Sep 2026 22:26:54 +0100
 Subject: [PATCH] venus: snapshot a context and restore it in another process
@@ -42,13 +42,13 @@ virgl_renderer_context_snapshot and virgl_renderer_context_restore.
  src/venus/vkr_renderer.c       |  18 +
  src/venus/vkr_renderer.h       |  10 +
  src/venus/vkr_ring.c           |  20 +-
- src/venus/vkr_snapshot.c       | 660 +++++++++++++++++++++++++++++++++
+ src/venus/vkr_snapshot.c       | 685 +++++++++++++++++++++++++++++++++
  src/venus/vkr_snapshot.h       |  68 ++++
  src/venus/vkr_transport.c      |   4 +-
  src/virgl_context.h            |   7 +
  src/virglrenderer.c            |  20 +
  src/virglrenderer.h            |   8 +
- 21 files changed, 982 insertions(+), 11 deletions(-)
+ 21 files changed, 1007 insertions(+), 11 deletions(-)
  create mode 100644 src/venus/vkr_snapshot.c
  create mode 100644 src/venus/vkr_snapshot.h
 
@@ -542,10 +542,10 @@ index 0d4899e..d3331ee 100644
  
 diff --git a/src/venus/vkr_snapshot.c b/src/venus/vkr_snapshot.c
 new file mode 100644
-index 0000000..9cc1ab7
+index 0000000..e0ec0f5
 --- /dev/null
 +++ b/src/venus/vkr_snapshot.c
-@@ -0,0 +1,660 @@
+@@ -0,0 +1,685 @@
 +/*
 + * Copyright 2026 Hangar
 + * SPDX-License-Identifier: MIT
@@ -554,6 +554,7 @@ index 0000000..9cc1ab7
 +#include "vkr_snapshot.h"
 +
 +#include <errno.h>
++#include <stdlib.h>
 +#include <string.h>
 +#include <sys/mman.h>
 +#include <sys/stat.h>
@@ -771,11 +772,29 @@ index 0000000..9cc1ab7
 +      record_add(ctx, RECORD_STATE, cmd_type, bytes, size, owners, owner_count);
 +}
 +
++/* Recording costs a copy of every lasting command for the life of the
++ * context, so it is off unless the embedder asks for it by setting
++ * VKR_RECORD in the environment the render server inherits.
++ */
++static bool
++record_enabled(void)
++{
++   static int enabled = -1;
++   if (enabled < 0)
++      enabled = getenv("VKR_RECORD") != NULL;
++   return enabled;
++}
++
 +void
 +vkr_record_dispatch(struct vkr_context *ctx,
 +                    struct vn_dispatch_context *dispatch,
 +                    struct vkr_cs_decoder *dec)
 +{
++   if (!record_enabled()) {
++      vn_dispatch_command(dispatch);
++      return;
++   }
++
 +   const uint8_t *start = dec->cur;
 +   uint32_t cmd_type = UINT32_MAX;
 +   if (dec->end - start >= 8)
@@ -935,6 +954,12 @@ index 0000000..9cc1ab7
 +bool
 +vkr_context_snapshot(struct vkr_context *ctx, int *out_fd)
 +{
++   /* without a record there is nothing a snapshot could rebuild from */
++   if (!record_enabled()) {
++      vkr_log("snapshot: VKR_RECORD is not set, so nothing was recorded");
++      return false;
++   }
++
 +   quiesce(ctx);
 +
 +   struct growbuf b = { 0 };

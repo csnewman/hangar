@@ -51,6 +51,12 @@ struct Args {
     /// this guest says so.
     #[arg(long)]
     state: Option<PathBuf>,
+
+    /// Carry Venus (Vulkan) contexts across a suspend, rebuilt by the
+    /// renderer. Off by default: without it a Venus program ends when its
+    /// environment resumes, and is told immediately.
+    #[arg(long, default_value_t = false)]
+    venus_restore: bool,
 }
 
 /// Has the session written out whenever SIGUSR1 arrives.
@@ -92,13 +98,19 @@ fn load_session(path: &std::path::Path) -> std::io::Result<(Session, Vec<u8>)> {
 }
 
 fn main() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info"),
-    )
-    .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = Args::parse();
+    // The renderer only records what a Venus context builds when asked to,
+    // since recording costs a copy of every lasting command. It reads this
+    // from the environment of the render server, which inherits ours.
+    if args.venus_restore {
+        // SAFETY: set before any other thread exists.
+        unsafe { std::env::set_var("VKR_RECORD", "1") };
+    }
+
     let config = GpuConfig {
+        venus_restore: args.venus_restore,
         state: args.state.clone(),
         virgl: args.virgl,
         venus: args.venus,
@@ -154,8 +166,8 @@ fn main() {
     }
 
     let _ = std::fs::remove_file(&args.socket);
-    let mut listener = vhost::vhost_user::Listener::new(&args.socket, true)
-        .expect("listening on the socket");
+    let mut listener =
+        vhost::vhost_user::Listener::new(&args.socket, true).expect("listening on the socket");
 
     log::info!("virtio-gpu backend listening on {}", args.socket.display());
     if let Err(e) = daemon.start(&mut listener) {

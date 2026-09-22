@@ -10,7 +10,7 @@ half of GPU suspend that only the renderer can do, because Venus commands
 travel through a ring in shared memory that the renderer reads directly and
 `hangar-gpu` never sees.
 
-**982 insertions, 11 deletions, across 21 files**, most of it the new
+**1007 insertions, 11 deletions, across 21 files**, most of it the new
 `src/venus/vkr_snapshot.c`.
 
 The renderer keeps the raw bytes of every command whose effect lasts, against
@@ -23,6 +23,18 @@ created during a restore resumes at the head its shared memory holds.
 `hangar-gpu` drives it through `virgl_renderer_context_snapshot` and
 `virgl_renderer_context_restore`, and restores the context's shared-memory
 blobs first, since the rings live in them.
+
+### Off unless asked for
+
+Recording costs a copy of every lasting command for the life of a context, and
+the replay is proven only on lavapipe, so nothing is recorded unless
+`VKR_RECORD` is set in the environment the render server inherits. Without it
+every command is dispatched untouched and a snapshot is refused.
+
+`hangar-gpu --venus-restore` sets it, and `hangar run -gpu-venus-restore`
+passes that flag. Without it a suspended Venus context is not carried: on
+resume `hangar-gpu` marks the context's rings fatal and the guest's Vulkan
+driver ends the program, which is the device-lost behaviour a real GPU gives.
 
 Measured with `hangar-vkcheck` -- command buffers recorded once and resubmitted
 every frame, descriptor sets written once, a uniform buffer kept mapped -- a

@@ -34,7 +34,11 @@ func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error
 		return nil, fmt.Errorf("passt not found (apt install passt): %w", err)
 	}
 
+	// passt also binds a second socket beside the one it is given, for moving
+	// TCP connections during a migration. Both have to go: one left by a passt
+	// that was killed makes the next refuse to start.
 	_ = os.Remove(socket)
+	_ = os.Remove(socket + ".repair")
 	if err := os.MkdirAll(filepath.Dir(socket), 0o755); err != nil {
 		return nil, err
 	}
@@ -62,5 +66,6 @@ func (p *Passt) Close() error {
 		_ = p.cmd.Process.Kill()
 		_, _ = p.cmd.Process.Wait()
 	}
+	_ = os.Remove(p.socket + ".repair")
 	return os.Remove(p.socket)
 }

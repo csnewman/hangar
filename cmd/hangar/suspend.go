@@ -27,16 +27,19 @@ import (
 // directory, which does not need to, since resuming creates them afresh at
 // the same paths the snapshot names.
 type envRecord struct {
-	Name      string `json:"name"`
-	Virtiofs  string `json:"virtiofs,omitempty"`
-	Dax       int    `json:"dax"`
-	Net       bool   `json:"net"`
-	GPU       bool   `json:"gpu"`
-	GPUVenus  bool   `json:"gpu_venus"`
-	GPUWindow int    `json:"gpu_window"`
-	CID       uint32 `json:"cid"`
-	Seccomp   string `json:"seccomp,omitempty"`
-	Suspended bool   `json:"suspended"`
+	Name     string `json:"name"`
+	Virtiofs string `json:"virtiofs,omitempty"`
+	Dax      int    `json:"dax"`
+	Net      bool   `json:"net"`
+	GPU      bool   `json:"gpu"`
+	GPUVenus bool   `json:"gpu_venus"`
+	// GPUVenusRestore carries Vulkan state across a suspend; see
+	// ch.StartGpuBackend.
+	GPUVenusRestore bool   `json:"gpu_venus_restore,omitempty"`
+	GPUWindow       int    `json:"gpu_window"`
+	CID             uint32 `json:"cid"`
+	Seccomp         string `json:"seccomp,omitempty"`
+	Suspended       bool   `json:"suspended"`
 }
 
 // stateDir is where an environment's suspended state is kept.
@@ -299,6 +302,20 @@ func suspendEnv(ctx context.Context, argv []string) error {
 	}
 	if _, err := control(*name, controlRequest{Op: "suspend"}, 5*time.Minute); err != nil {
 		return err
+	}
+	// The state is on disk once the reply comes, but the environment is only
+	// stopped when its process has let go of the monitor and backends, which
+	// it marks by removing its control socket.
+	sock := runBase(*name) + "-control.sock"
+	deadline := time.Now().Add(time.Minute)
+	for {
+		if _, err := os.Stat(sock); os.IsNotExist(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s was saved but has not stopped within a minute", *name)
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 	dir, _ := stateDir(*name)
 	fmt.Fprintf(os.Stderr, "%s suspended to %s\n", *name, dir)

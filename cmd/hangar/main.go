@@ -261,6 +261,7 @@ func runVM(ctx context.Context, argv []string) error {
 	network := fs.Bool("net", true, "give the guest outbound networking")
 	gpu := fs.Bool("gpu", false, "give the guest a virtio-gpu device")
 	gpuVenus := fs.Bool("gpu-venus", false, "offer Vulkan through venus, with -gpu")
+	gpuVenusRestore := fs.Bool("gpu-venus-restore", false, "carry Vulkan state across a suspend (experimental); without it a Vulkan program ends on resume")
 	gpuShm := fs.Int("gpu-window", 512, "MiB the guest may map blob resources into, with -gpu")
 	seccomp := fs.String("seccomp", "", "monitor syscall filtering: true, false, log or errno")
 	if err := fs.Parse(argv); err != nil {
@@ -373,15 +374,16 @@ func runVM(ctx context.Context, argv []string) error {
 		return err
 	}
 	rec := &envRecord{
-		Name:      ccfg.Name,
-		Virtiofs:  *virtiofs,
-		Dax:       *dax,
-		Net:       *network,
-		GPU:       *gpu,
-		GPUVenus:  *gpuVenus,
-		GPUWindow: *gpuShm,
-		CID:       ccfg.GuestCID,
-		Seccomp:   *seccomp,
+		Name:            ccfg.Name,
+		Virtiofs:        *virtiofs,
+		Dax:             *dax,
+		Net:             *network,
+		GPU:             *gpu,
+		GPUVenus:        *gpuVenus,
+		GPUVenusRestore: *gpuVenusRestore,
+		GPUWindow:       *gpuShm,
+		CID:             ccfg.GuestCID,
+		Seccomp:         *seccomp,
 	}
 	ccfg.APISocket = run + "-api.sock"
 
@@ -435,6 +437,17 @@ func resumeVM(ctx context.Context, argv []string) error {
 func runEnv(ctx context.Context, rec *envRecord, dir string, restoring bool, cfg *ch.Config, agentWait time.Duration, probe *probeCmd) error {
 	run := runBase(rec.Name)
 	live := &liveEnv{rec: rec, dir: dir, api: ch.NewAPI(run + "-api.sock")}
+
+	// The control socket goes last of all, after the monitor and every
+	// backend have stopped, so its disappearing tells a waiting suspend that
+	// the environment has let go of everything -- the next process to start
+	// it would otherwise find the monitor's API socket still held.
+	var closeControl func()
+	defer func() {
+		if closeControl != nil {
+			closeControl()
+		}
+	}()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
@@ -486,7 +499,7 @@ func runEnv(ctx context.Context, rec *envRecord, dir string, restoring bool, cfg
 		}
 	}
 	if rec.GPU {
-		gpud, err := ch.StartGpuBackend(ctx, run+"-gpu.sock", rec.GPUVenus, gpuState, false)
+		gpud, err := ch.StartGpuBackend(ctx, run+"-gpu.sock", rec.GPUVenus, rec.GPUVenusRestore, gpuState, false)
 		if err != nil {
 			return err
 		}
@@ -540,11 +553,11 @@ func runEnv(ctx context.Context, rec *envRecord, dir string, restoring bool, cfg
 		<-vmDone
 	}()
 
-	closeControl, err := serveControl(ctx, run+"-control.sock", live)
+	stopControl, err := serveControl(ctx, run+"-control.sock", live)
 	if err != nil {
 		return err
 	}
-	defer closeControl()
+	closeControl = stopControl
 
 	return withAgent(ctx, srv, agentWait, probe, live.setSession, func() error {
 		defer close(vmDone)

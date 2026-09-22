@@ -10,7 +10,6 @@ use std::io;
 use std::mem::size_of;
 use std::os::fd::AsFd;
 
-
 use log::{debug, warn};
 use rutabaga_gfx::{
     ResourceCreate3D, ResourceCreateBlob, Rutabaga, RutabagaBuilder, RutabagaComponentType,
@@ -22,9 +21,9 @@ use vhost::vhost_user::message::{
 };
 use vhost::vhost_user::{Backend, VhostUserFrontendReqHandler};
 use vhost_user_backend::{VhostUserBackendMut, VringRwLock, VringT};
-use virtio_queue::QueueT;
 use virtio_bindings::bindings::virtio_config::{VIRTIO_F_NOTIFY_ON_EMPTY, VIRTIO_F_VERSION_1};
 use virtio_bindings::bindings::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
+use virtio_queue::QueueT;
 use vm_memory::{
     ByteValued, Bytes, GuestAddress, GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap,
 };
@@ -44,6 +43,11 @@ pub struct GpuConfig {
     /// one the guest was already talking to knows which of the identifiers it
     /// holds stand for nothing.
     pub state: Option<std::path::PathBuf>,
+    /// Whether Venus contexts are carried across a suspend by the renderer
+    /// itself. Off, a Venus context does not survive one: its guest driver is
+    /// told at once, and its program ends -- which is the most a Venus guest
+    /// can be told, since the driver aborts rather than report a lost device.
+    pub venus_restore: bool,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -151,7 +155,6 @@ pub struct Live {
     pub contexts: std::collections::BTreeSet<u32>,
 }
 
-
 struct Request {
     body: Vec<u8>,
     resp_addrs: Vec<(GuestAddress, u32)>,
@@ -251,7 +254,10 @@ fn is_venus_memory_blob(session: &Session, r: &Resource) -> bool {
     match &r.kind {
         Kind::Blob(b) => {
             b.blob_id != 0
-                && session.contexts.get(&b.ctx_id).is_some_and(|c| replay::is_venus(c.init))
+                && session
+                    .contexts
+                    .get(&b.ctx_id)
+                    .is_some_and(|c| replay::is_venus(c.init))
         }
         _ => false,
     }
@@ -272,8 +278,10 @@ impl GpuBackend {
             rec: Session::default(),
             lost: Live::default(),
             retired: Retired::default(),
-            save_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(|e| Error::Renderer(format!("{e}")))?,
-            restore_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(|e| Error::Renderer(format!("{e}")))?,
+            save_evt: EventFd::new(libc::EFD_NONBLOCK)
+                .map_err(|e| Error::Renderer(format!("{e}")))?,
+            restore_evt: EventFd::new(libc::EFD_NONBLOCK)
+                .map_err(|e| Error::Renderer(format!("{e}")))?,
             pending: None,
             restore_kicked: false,
             blob_fds: std::collections::HashMap::new(),
@@ -297,7 +305,9 @@ impl GpuBackend {
             .map(|(_, len)| *len)
             .ok_or(Error::UnknownBlob)?;
 
-        let fd = self.blob_fd(rutabaga, resource_id).map_err(Error::Renderer)?;
+        let fd = self
+            .blob_fd(rutabaga, resource_id)
+            .map_err(Error::Renderer)?;
 
         let req = VhostUserMMap {
             shmid: self.config.shm_id,
@@ -313,8 +323,7 @@ impl GpuBackend {
             .shmem_map(&req, &fd)
             .map_err(Error::Map)?;
 
-        self.placed
-            .retain(|(id, ..)| *id != resource_id);
+        self.placed.retain(|(id, ..)| *id != resource_id);
         self.placed.push((resource_id, guest_offset, size));
         rutabaga
             .map_info(resource_id)
@@ -342,11 +351,7 @@ impl GpuBackend {
             .map_err(|e| Error::Renderer(format!("{e}")))
     }
 
-    fn iovec(
-        mem: &GuestMemoryMmap,
-        addr: u64,
-        len: u32,
-    ) -> Option<RutabagaIovec> {
+    fn iovec(mem: &GuestMemoryMmap, addr: u64, len: u32) -> Option<RutabagaIovec> {
         use vm_memory::GuestMemory;
         let start = vm_memory::GuestAddress(addr);
         let len = len as usize;
@@ -443,7 +448,11 @@ impl GpuBackend {
     /// the monitor, to place its blobs. The rebuild runs on the worker thread,
     /// which owns the renderer, so this only wakes it.
     fn kick_restore(&mut self) {
-        if self.pending.is_some() && !self.restore_kicked && self.mem.is_some() && self.frontend.is_some() {
+        if self.pending.is_some()
+            && !self.restore_kicked
+            && self.mem.is_some()
+            && self.frontend.is_some()
+        {
             self.restore_kicked = true;
             if let Err(e) = self.restore_evt.write(1) {
                 warn!("waking the worker to restore: {e}");
@@ -457,7 +466,11 @@ impl GpuBackend {
     /// Runs on the worker thread with the guest paused, so nothing is being
     /// rendered and nothing changes while it reads.
     fn save_session(&mut self, rutabaga: &mut Rutabaga) -> Result<String, String> {
-        let path = self.config.state.clone().ok_or("started without a state file")?;
+        let path = self
+            .config
+            .state
+            .clone()
+            .ok_or("started without a state file")?;
         let mut session = self.rec.clone();
         let mut data: Vec<u8> = Vec::new();
         let (mut carried, mut skipped) = (0usize, 0usize);
@@ -468,7 +481,7 @@ impl GpuBackend {
         let mut venus = 0usize;
         for (&id, c) in session.contexts.iter_mut() {
             c.venus = None;
-            if !replay::is_venus(c.init) {
+            if !replay::is_venus(c.init) || !self.config.venus_restore {
                 continue;
             }
             let mut fd: libc::c_int = -1;
@@ -501,8 +514,17 @@ impl GpuBackend {
             let chunks = match &r.kind {
                 Kind::ThreeD(c) => replay::chunks_for(c),
                 Kind::Blob(b) => Ok(vec![replay::Chunk {
-                    level: u32::MAX, x: 0, y: 0, z: 0, w: 0, h: 0, d: 0,
-                    stride: 0, layer_stride: 0, offset: 0, len: b.size,
+                    level: u32::MAX,
+                    x: 0,
+                    y: 0,
+                    z: 0,
+                    w: 0,
+                    h: 0,
+                    d: 0,
+                    stride: 0,
+                    layer_stride: 0,
+                    offset: 0,
+                    len: b.size,
                 }]),
             };
             let chunks = match chunks {
@@ -521,8 +543,16 @@ impl GpuBackend {
                     self.blob_bytes(rutabaga, id, &mut buf, false)
                 } else {
                     let t = Transfer3D {
-                        x: ch.x, y: ch.y, z: ch.z, w: ch.w, h: ch.h, d: ch.d,
-                        level: ch.level, stride: ch.stride, layer_stride: ch.layer_stride, offset: 0,
+                        x: ch.x,
+                        y: ch.y,
+                        z: ch.z,
+                        w: ch.w,
+                        h: ch.h,
+                        d: ch.d,
+                        level: ch.level,
+                        stride: ch.stride,
+                        layer_stride: ch.layer_stride,
+                        offset: 0,
                     };
                     rutabaga
                         .transfer_read(0, id, t, Some(std::io::IoSliceMut::new(&mut buf)))
@@ -568,8 +598,34 @@ impl GpuBackend {
         ))
     }
 
+    /// Sets a ring's FATAL status bit, and clears ALIVE, in the shared memory
+    /// the guest driver reads it from.
+    fn fail_ring(&mut self, rutabaga: &mut Rutabaga, ring: &replay::Ring) -> Result<(), String> {
+        const FATAL: u32 = 1 << 1;
+        const ALIVE: u32 = 1 << 2;
+        let size = self
+            .blob_sizes
+            .iter()
+            .find(|(id, _)| *id == ring.resource)
+            .map(|(_, s)| *s)
+            .ok_or("the ring's resource is not a blob")?;
+        if ring.status + 4 > size {
+            return Err("the status word is outside the ring's resource".into());
+        }
+        let mut buf = vec![0u8; size as usize];
+        self.blob_bytes(rutabaga, ring.resource, &mut buf, false)?;
+        let at = ring.status as usize;
+        let status = u32::from_le_bytes(buf[at..at + 4].try_into().unwrap());
+        buf[at..at + 4].copy_from_slice(&((status | FATAL) & !ALIVE).to_le_bytes());
+        self.blob_bytes(rutabaga, ring.resource, &mut buf, true)
+    }
+
     /// A blob's descriptor, exported the first time it is asked for and kept.
-    fn blob_fd(&mut self, rutabaga: &mut Rutabaga, id: u32) -> Result<std::os::fd::OwnedFd, String> {
+    fn blob_fd(
+        &mut self,
+        rutabaga: &mut Rutabaga,
+        id: u32,
+    ) -> Result<std::os::fd::OwnedFd, String> {
         if let Some(fd) = self.blob_fds.get(&id) {
             return fd.try_clone().map_err(|e| format!("{e}"));
         }
@@ -577,17 +633,31 @@ impl GpuBackend {
         let RutabagaHandle::MagmaGpuHandle(handle) = handle else {
             return Err("blob exported an unusable handle".into());
         };
-        let fd = handle.os_handle.as_fd().try_clone_to_owned().map_err(|e| format!("{e}"))?;
+        let fd = handle
+            .os_handle
+            .as_fd()
+            .try_clone_to_owned()
+            .map_err(|e| format!("{e}"))?;
         let copy = fd.try_clone().map_err(|e| format!("{e}"))?;
         self.blob_fds.insert(id, fd);
         Ok(copy)
     }
 
     /// Reads or writes a blob's bytes through a mapping of its descriptor.
-    fn blob_bytes(&mut self, rutabaga: &mut Rutabaga, id: u32, buf: &mut [u8], write: bool) -> Result<(), String> {
+    fn blob_bytes(
+        &mut self,
+        rutabaga: &mut Rutabaga,
+        id: u32,
+        buf: &mut [u8],
+        write: bool,
+    ) -> Result<(), String> {
         use std::os::fd::AsRawFd;
         let fd = self.blob_fd(rutabaga, id)?;
-        let prot = if write { libc::PROT_READ | libc::PROT_WRITE } else { libc::PROT_READ };
+        let prot = if write {
+            libc::PROT_READ | libc::PROT_WRITE
+        } else {
+            libc::PROT_READ
+        };
         // SAFETY: a fresh mapping of a descriptor we hold, sized to the blob,
         // unmapped before returning.
         unsafe {
@@ -617,7 +687,9 @@ impl GpuBackend {
             return Ok(());
         }
         let mut bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
-        rutabaga.submit_command(ctx_id, &mut bytes, &[]).map_err(|e| format!("{e}"))
+        rutabaga
+            .submit_command(ctx_id, &mut bytes, &[])
+            .map_err(|e| format!("{e}"))
     }
 
     /// Builds a restored session again in this process's renderer.
@@ -688,7 +760,11 @@ impl GpuBackend {
                     let iovecs = if b.entries.is_empty() {
                         None
                     } else {
-                        let v: Option<Vec<_>> = b.entries.iter().map(|&(a, l)| Self::iovec(mem, a, l)).collect();
+                        let v: Option<Vec<_>> = b
+                            .entries
+                            .iter()
+                            .map(|&(a, l)| Self::iovec(mem, a, l))
+                            .collect();
                         match v {
                             Some(v) => Some(v),
                             None => {
@@ -704,7 +780,9 @@ impl GpuBackend {
                         blob_id: b.blob_id,
                         size: b.size,
                     };
-                    let r = rutabaga.resource_create_blob(b.ctx_id, id, create, iovecs, None).map_err(|e| format!("{e}"));
+                    let r = rutabaga
+                        .resource_create_blob(b.ctx_id, id, create, iovecs, None)
+                        .map_err(|e| format!("{e}"));
                     if r.is_ok() {
                         self.blob_sizes.retain(|(i, _)| *i != id);
                         self.blob_sizes.push((id, b.size));
@@ -729,7 +807,10 @@ impl GpuBackend {
                 continue;
             }
             if let Some(backing) = &r.backing {
-                let v: Option<Vec<_>> = backing.iter().map(|&(a, l)| Self::iovec(mem, a, l)).collect();
+                let v: Option<Vec<_>> = backing
+                    .iter()
+                    .map(|&(a, l)| Self::iovec(mem, a, l))
+                    .collect();
                 match v.map(|v| rutabaga.attach_backing(id, v)) {
                     Some(Ok(())) => {}
                     Some(Err(e)) => warn!("resource {id}: reattaching backing: {e}"),
@@ -751,15 +832,38 @@ impl GpuBackend {
                     }
                     continue;
                 }
-                let mut b = VirglBox { x: ch.x, y: ch.y, z: ch.z, w: ch.w, h: ch.h, d: ch.d };
-                let mut iov = libc::iovec { iov_base: buf.as_mut_ptr() as *mut _, iov_len: buf.len() };
+                let mut b = VirglBox {
+                    x: ch.x,
+                    y: ch.y,
+                    z: ch.z,
+                    w: ch.w,
+                    h: ch.h,
+                    d: ch.d,
+                };
+                let mut iov = libc::iovec {
+                    iov_base: buf.as_mut_ptr() as *mut _,
+                    iov_len: buf.len(),
+                };
                 // SAFETY: the box and iovec live for the call, and the
                 // renderer only reads from the iovec.
                 let ret = unsafe {
-                    virgl_renderer_transfer_write_iov(id, 0, ch.level as i32, ch.stride, ch.layer_stride, &mut b, 0, &mut iov, 1)
+                    virgl_renderer_transfer_write_iov(
+                        id,
+                        0,
+                        ch.level as i32,
+                        ch.stride,
+                        ch.layer_stride,
+                        &mut b,
+                        0,
+                        &mut iov,
+                        1,
+                    )
                 };
                 if ret != 0 {
-                    warn!("resource {id}: writing level {} back failed ({ret})", ch.level);
+                    warn!(
+                        "resource {id}: writing level {} back failed ({ret})",
+                        ch.level
+                    );
                     ok = false;
                 }
             }
@@ -773,7 +877,9 @@ impl GpuBackend {
         // shared memory -- their rings, their reply streams -- exists again by
         // now with its contents, which is what a ring resumes from.
         for (&ctx_id, c) in &session.contexts {
-            let Some((offset, len)) = c.venus else { continue };
+            let Some((offset, len)) = c.venus else {
+                continue;
+            };
             if lost.contexts.contains(&ctx_id) {
                 continue;
             }
@@ -792,7 +898,8 @@ impl GpuBackend {
                 // SAFETY: fd was just created and is owned here.
                 let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
                 f.write_all(bytes).map_err(|e| format!("{e}"))?;
-                f.seek(std::io::SeekFrom::Start(0)).map_err(|e| format!("{e}"))?;
+                f.seek(std::io::SeekFrom::Start(0))
+                    .map_err(|e| format!("{e}"))?;
                 let fd = f.into_raw_fd();
                 // SAFETY: the renderer takes its own reference to the file.
                 let ret = unsafe { virgl_renderer_context_restore(ctx_id, fd) };
@@ -808,6 +915,27 @@ impl GpuBackend {
                 Err(e) => {
                     warn!("venus context {ctx_id}: {e}");
                     lost.contexts.insert(ctx_id);
+                }
+            }
+        }
+
+        // A Venus context that was not rebuilt is failed where its guest
+        // driver looks: the status word of each ring, which the driver reads
+        // on every submission and aborts on. Left alone the driver would sit
+        // waiting on a ring nothing reads until its watchdog gave up.
+        for (&ctx_id, c) in &session.contexts {
+            if !replay::is_venus(c.init) || !lost.contexts.contains(&ctx_id) {
+                continue;
+            }
+            for ring in &c.rings {
+                if !built.contains(&ring.resource) {
+                    continue;
+                }
+                match self.fail_ring(rutabaga, ring) {
+                    Ok(()) => {
+                        log::info!("venus context {ctx_id}: ring {:#x} marked failed", ring.id)
+                    }
+                    Err(e) => warn!("venus context {ctx_id}: failing ring {:#x}: {e}", ring.id),
                 }
             }
         }
@@ -913,7 +1041,12 @@ impl GpuBackend {
     /// Says a restored session is whole again; whatever resumes the guest
     /// waits for this.
     fn mark_ready(&self, summary: &str) {
-        if let Some(p) = self.config.state.as_ref().map(|p| p.with_extension("ready")) {
+        if let Some(p) = self
+            .config
+            .state
+            .as_ref()
+            .map(|p| p.with_extension("ready"))
+        {
             if let Err(e) = std::fs::write(&p, format!("{summary}\n")) {
                 warn!("marking the restore complete at {}: {e}", p.display());
             }
@@ -1065,12 +1198,11 @@ impl GpuBackend {
                             .to_vec()
                     }
                 };
-                match rutabaga
-                    .get_capset(req.capset_id, req.capset_version)
-                {
+                match rutabaga.get_capset(req.capset_id, req.capset_version) {
                     Ok(caps) => {
-                        let mut out =
-                            Self::header_of(VIRTIO_GPU_RESP_OK_CAPSET, &hdr).as_slice().to_vec();
+                        let mut out = Self::header_of(VIRTIO_GPU_RESP_OK_CAPSET, &hdr)
+                            .as_slice()
+                            .to_vec();
                         out.extend_from_slice(&caps);
                         out
                     }
@@ -1115,7 +1247,9 @@ impl GpuBackend {
 
             VIRTIO_GPU_CMD_RESOURCE_CREATE_3D => {
                 let Some(req) = ResourceCreate3DReq::from_slice(
-                    payload.get(..size_of::<ResourceCreate3DReq>()).unwrap_or(&[]),
+                    payload
+                        .get(..size_of::<ResourceCreate3DReq>())
+                        .unwrap_or(&[]),
                 ) else {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
@@ -1149,10 +1283,8 @@ impl GpuBackend {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
                 self.forget_resource(req.resource_id);
-                let code = Self::ok_or_err(
-                    rutabaga.unref_resource(req.resource_id),
-                    "resource_unref",
-                );
+                let code =
+                    Self::ok_or_err(rutabaga.unref_resource(req.resource_id), "resource_unref");
                 Self::err(&hdr, code)
             }
 
@@ -1171,8 +1303,7 @@ impl GpuBackend {
                 let mut phys = Vec::with_capacity(req.nr_entries as usize);
                 for i in 0..req.nr_entries as usize {
                     let off = i * size_of::<MemEntry>();
-                    let Some(e) =
-                        MemEntry::from_slice(&entries[off..off + size_of::<MemEntry>()])
+                    let Some(e) = MemEntry::from_slice(&entries[off..off + size_of::<MemEntry>()])
                     else {
                         return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                     };
@@ -1203,10 +1334,8 @@ impl GpuBackend {
                 ) else {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
-                let code = Self::ok_or_err(
-                    rutabaga.detach_backing(req.resource_id),
-                    "detach_backing",
-                );
+                let code =
+                    Self::ok_or_err(rutabaga.detach_backing(req.resource_id), "detach_backing");
                 if let Some(r) = self.rec.resources.get_mut(&req.resource_id) {
                     r.backing = None;
                 }
@@ -1214,9 +1343,9 @@ impl GpuBackend {
             }
 
             VIRTIO_GPU_CMD_SET_SCANOUT => {
-                let Some(req) = SetScanout::from_slice(
-                    payload.get(..size_of::<SetScanout>()).unwrap_or(&[]),
-                ) else {
+                let Some(req) =
+                    SetScanout::from_slice(payload.get(..size_of::<SetScanout>()).unwrap_or(&[]))
+                else {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
                 // Nothing is displayed on a host with no output, so the
@@ -1241,10 +1370,8 @@ impl GpuBackend {
                 ) else {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
-                let code = Self::ok_or_err(
-                    rutabaga.resource_flush(req.resource_id),
-                    "resource_flush",
-                );
+                let code =
+                    Self::ok_or_err(rutabaga.resource_flush(req.resource_id), "resource_flush");
                 Self::err(&hdr, code)
             }
 
@@ -1267,8 +1394,7 @@ impl GpuBackend {
                     offset: req.offset,
                 };
                 let code = Self::ok_or_err(
-                    rutabaga
-                        .transfer_write(0, req.resource_id, transfer, None),
+                    rutabaga.transfer_write(0, req.resource_id, transfer, None),
                     "transfer_to_host_2d",
                 );
                 Self::err(&hdr, code)
@@ -1293,11 +1419,9 @@ impl GpuBackend {
                     offset: req.offset,
                 };
                 let result = if hdr.type_ == VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D {
-                    rutabaga
-                        .transfer_write(hdr.ctx_id, req.resource_id, transfer, None)
+                    rutabaga.transfer_write(hdr.ctx_id, req.resource_id, transfer, None)
                 } else {
-                    rutabaga
-                        .transfer_read(hdr.ctx_id, req.resource_id, transfer, None)
+                    rutabaga.transfer_read(hdr.ctx_id, req.resource_id, transfer, None)
                 };
                 let code = Self::ok_or_err(result, "transfer_3d");
                 Self::err(&hdr, code)
@@ -1313,37 +1437,34 @@ impl GpuBackend {
                 let name = std::str::from_utf8(&req.debug_name[..nlen]).ok();
                 self.lost.contexts.remove(&hdr.ctx_id);
                 let code = Self::ok_or_err(
-                    rutabaga
-                        .create_context(hdr.ctx_id, req.context_init, name),
+                    rutabaga.create_context(hdr.ctx_id, req.context_init, name),
                     "ctx_create",
                 );
                 if code == VIRTIO_GPU_RESP_OK_NODATA {
-                    self.rec
-                        .contexts
-                        .insert(hdr.ctx_id, Context::new(req.context_init, name.map(String::from)));
+                    self.rec.contexts.insert(
+                        hdr.ctx_id,
+                        Context::new(req.context_init, name.map(String::from)),
+                    );
                 }
                 Self::err(&hdr, code)
             }
 
             VIRTIO_GPU_CMD_CTX_DESTROY => {
                 self.rec.contexts.remove(&hdr.ctx_id);
-                let code =
-                    Self::ok_or_err(rutabaga.destroy_context(hdr.ctx_id), "ctx_destroy");
+                let code = Self::ok_or_err(rutabaga.destroy_context(hdr.ctx_id), "ctx_destroy");
                 Self::err(&hdr, code)
             }
 
             VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE | VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE => {
-                let Some(req) = CtxResource::from_slice(
-                    payload.get(..size_of::<CtxResource>()).unwrap_or(&[]),
-                ) else {
+                let Some(req) =
+                    CtxResource::from_slice(payload.get(..size_of::<CtxResource>()).unwrap_or(&[]))
+                else {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
                 let result = if hdr.type_ == VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE {
-                    rutabaga
-                        .context_attach_resource(hdr.ctx_id, req.resource_id)
+                    rutabaga.context_attach_resource(hdr.ctx_id, req.resource_id)
                 } else {
-                    rutabaga
-                        .context_detach_resource(hdr.ctx_id, req.resource_id)
+                    rutabaga.context_detach_resource(hdr.ctx_id, req.resource_id)
                 };
                 let code = Self::ok_or_err(result, "ctx_attach_or_detach");
                 if code == VIRTIO_GPU_RESP_OK_NODATA {
@@ -1375,8 +1496,18 @@ impl GpuBackend {
                     "submit_3d",
                 );
                 if code == VIRTIO_GPU_RESP_OK_NODATA {
-                    if let Some(v) = self.rec.contexts.get_mut(&hdr.ctx_id).and_then(|c| c.virgl.as_mut()) {
-                        v.observe(&payload[start..end]);
+                    if let Some(c) = self.rec.contexts.get_mut(&hdr.ctx_id) {
+                        if let Some(v) = c.virgl.as_mut() {
+                            v.observe(&payload[start..end]);
+                        } else if replay::is_venus(c.init) {
+                            match replay::ring_change(&payload[start..end]) {
+                                Some(replay::RingChange::Created(r)) => c.rings.push(r),
+                                Some(replay::RingChange::Destroyed(id)) => {
+                                    c.rings.retain(|r| r.id != id)
+                                }
+                                None => {}
+                            }
+                        }
                     }
                 }
                 Self::err(&hdr, code)
@@ -1384,7 +1515,9 @@ impl GpuBackend {
 
             VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB => {
                 let Some(req) = ResourceCreateBlobReq::from_slice(
-                    payload.get(..size_of::<ResourceCreateBlobReq>()).unwrap_or(&[]),
+                    payload
+                        .get(..size_of::<ResourceCreateBlobReq>())
+                        .unwrap_or(&[]),
                 ) else {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
@@ -1489,7 +1622,8 @@ impl GpuBackend {
                 ) else {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
-                let code = Self::ok_or_err(self.unmap_blob(rutabaga, req.resource_id), "unmap_blob");
+                let code =
+                    Self::ok_or_err(self.unmap_blob(rutabaga, req.resource_id), "unmap_blob");
                 if let Some(r) = self.rec.resources.get_mut(&req.resource_id) {
                     r.mapped_at = None;
                 }
@@ -1514,14 +1648,11 @@ impl GpuBackend {
         Self::header_of(code, hdr).as_slice().to_vec()
     }
 
-
     /// Split a chain into the command the guest wrote and the buffers it left
     /// for the reply.
     fn split(
         mem: &GuestMemoryMmap,
-        chain: &mut virtio_queue::DescriptorChain<
-            vm_memory::GuestMemoryLoadGuard<GuestMemoryMmap>,
-        >,
+        chain: &mut virtio_queue::DescriptorChain<vm_memory::GuestMemoryLoadGuard<GuestMemoryMmap>>,
     ) -> Result<Request, Error> {
         let mut body = Vec::new();
         let mut resp_addrs = Vec::new();
@@ -1566,7 +1697,11 @@ impl GpuBackend {
     }
 
     /// Serve every chain the guest has queued.
-    fn process_queue(&mut self, rutabaga: &mut Rutabaga, vring: &VringRwLock) -> Result<bool, Error> {
+    fn process_queue(
+        &mut self,
+        rutabaga: &mut Rutabaga,
+        vring: &VringRwLock,
+    ) -> Result<bool, Error> {
         let Some(atomic) = self.mem.clone() else {
             return Ok(false);
         };
@@ -1607,7 +1742,8 @@ impl GpuBackend {
                             Err(e) => warn!("virtio-gpu create_fence: {e}"),
                         }
                         if resp.len() >= 8 {
-                            let flags = h.flags & (VIRTIO_GPU_FLAG_FENCE | VIRTIO_GPU_FLAG_INFO_RING_IDX);
+                            let flags =
+                                h.flags & (VIRTIO_GPU_FLAG_FENCE | VIRTIO_GPU_FLAG_INFO_RING_IDX);
                             resp[4..8].copy_from_slice(&flags.to_le_bytes());
                         }
                     }
@@ -1684,10 +1820,7 @@ impl VhostUserBackendMut for GpuBackend {
         bytes[start..end].to_vec()
     }
 
-    fn update_memory(
-        &mut self,
-        mem: GuestMemoryAtomic<GuestMemoryMmap>,
-    ) -> io::Result<()> {
+    fn update_memory(&mut self, mem: GuestMemoryAtomic<GuestMemoryMmap>) -> io::Result<()> {
         self.mem = Some(mem);
         self.kick_restore();
         Ok(())
@@ -1714,7 +1847,8 @@ impl VhostUserBackendMut for GpuBackend {
             let rutabaga = match slot {
                 Some(r) => r,
                 None => slot.insert(
-                    build_rutabaga(&config, self.retired.clone()).map_err(|e| io::Error::other(format!("{e}")))?,
+                    build_rutabaga(&config, self.retired.clone())
+                        .map_err(|e| io::Error::other(format!("{e}")))?,
                 ),
             };
 
