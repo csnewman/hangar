@@ -80,6 +80,12 @@ type Config struct {
 	// APISocket, when set, lets ch-remote drive the running VM, which is how
 	// the balloon is resized.
 	APISocket string
+
+	// Seccomp selects the monitor's syscall filtering: "true", "false",
+	// "log" or "errno". Empty leaves the monitor's default. "log" records
+	// refusals in the host's audit log instead of killing the guest, which is
+	// how the renderer's syscall set is extended.
+	Seccomp string
 }
 
 func (c *Config) applyDefaults() {
@@ -183,6 +189,10 @@ func (c *Config) Args() ([]string, error) {
 			spec += fmt.Sprintf(",blob_window_mib=%d", c.GPUBlobWindowMiB)
 		}
 		args = append(args, "--gpu", spec)
+	}
+
+	if c.Seccomp != "" {
+		args = append(args, "--seccomp", c.Seccomp)
 	}
 
 	if c.APISocket != "" {

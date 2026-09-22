@@ -251,6 +251,7 @@ func runVM(ctx context.Context, argv []string) error {
 	network := fs.Bool("net", true, "give the guest outbound networking")
 	gpu := fs.Bool("gpu", false, "give the guest a virtio-gpu device")
 	gpuVenus := fs.Bool("gpu-venus", false, "offer Vulkan through venus, with -gpu")
+	seccomp := fs.String("seccomp", "", "monitor syscall filtering: true, false, log or errno")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -298,6 +299,7 @@ func runVM(ctx context.Context, argv []string) error {
 		ConsoleTTY:  caps.ConsoleTTY,
 		GPU:         *gpu,
 		GPUVenus:    *gpuVenus,
+		Seccomp:     *seccomp,
 	}
 
 	if *smoke {

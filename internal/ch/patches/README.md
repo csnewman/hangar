@@ -49,7 +49,20 @@ a slice of it, so the guest reads the renderer's own pages:
 [drm] features: +virgl -edid +resource_blob +host_visible
 ```
 
-With the window present the guest's OpenGL goes from 4.3 to 4.5.
+With the window present the guest's OpenGL goes from 4.3 to 4.5, and Vulkan
+works through venus:
+
+```
+deviceName = Virtio-GPU Venus (llvmpipe (LLVM 21.1.8, 128 bits))
+driverName = venus
+apiVersion = 1.4.334
+```
+
+Venus needs virglrenderer's render server. Without it the venus capset is
+advertised but reads back as 160 zero bytes, and a guest Mesa correctly
+refuses to use it. The render server is a second process the device spawns,
+which is why `venus=on` widens the syscall filter further -- including
+`execve`.
 
 The capability carries an id the driver looks the region up by, and it is a
 property of the region rather than its position in the list: virtio-fs uses 0,

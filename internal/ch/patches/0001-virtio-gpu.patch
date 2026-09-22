@@ -423,10 +423,10 @@ index 5c63ad812..c50b58a87 100644
  }
 diff --git a/virtio-devices/src/gpu.rs b/virtio-devices/src/gpu.rs
 new file mode 100644
-index 000000000..08927e445
+index 000000000..871f0b687
 --- /dev/null
 +++ b/virtio-devices/src/gpu.rs
-@@ -0,0 +1,1374 @@
+@@ -0,0 +1,1378 @@
 +// SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 +
 +//! virtio-gpu, rendered in this process by rutabaga_gfx.
@@ -779,11 +779,9 @@ index 000000000..08927e445
 +    resource_id: u32,
 +    blob_mem: u32,
 +    blob_flags: u32,
-+    padding: u32,
++    nr_entries: u32,
 +    blob_id: u64,
 +    size: u64,
-+    nr_entries: u32,
-+    padding2: u32,
 +}
 +// SAFETY: plain data.
 +unsafe impl ByteValued for ResourceCreateBlobReq {}
@@ -874,6 +872,12 @@ index 000000000..08927e445
 +    RutabagaBuilder::new(capsets.mask(), handler)
 +        .set_use_egl(true)
 +        .set_use_surfaceless(true)
++        // Venus is Vulkan, and virglrenderer only reports a usable Venus
++        // capset when it runs in its render server. Without it the capset is
++        // advertised but reads as zeroes, and a guest Mesa correctly refuses
++        // to use it.
++        .set_use_vulkan(capsets.venus)
++        .set_use_render_server(capsets.venus)
 +        .set_default_component(RutabagaComponentType::VirglRenderer)
 +        .build()
 +        .map_err(|e| format!("{e}"))
@@ -1823,7 +1827,7 @@ index c81f37087..eb8a2ed6a 100644
  pub use self::epoll_helper::{
      EPOLL_HELPER_EVENT_LAST, EpollHelper, EpollHelperError, EpollHelperHandler,
 diff --git a/virtio-devices/src/seccomp_filters.rs b/virtio-devices/src/seccomp_filters.rs
-index 75f493448..bd972289f 100644
+index 75f493448..7fead0857 100644
 --- a/virtio-devices/src/seccomp_filters.rs
 +++ b/virtio-devices/src/seccomp_filters.rs
 @@ -19,6 +19,7 @@ pub enum Thread {
@@ -1834,7 +1838,7 @@ index 75f493448..bd972289f 100644
      VirtioIommu,
      VirtioMem,
      VirtioNet,
-@@ -146,6 +147,74 @@ fn create_virtio_block_ioctl_seccomp_rule() -> Vec<SeccompRule> {
+@@ -146,6 +147,89 @@ fn create_virtio_block_ioctl_seccomp_rule() -> Vec<SeccompRule> {
      ]
  }
  
@@ -1850,6 +1854,21 @@ index 75f493448..bd972289f 100644
 +    vec![
 +        (libc::SYS_brk, vec![]),
 +        (libc::SYS_clone3, vec![]),
++        // virglrenderer runs Venus in a separate render server, which this
++        // thread spawns and talks to over a socket pair.
++        (libc::SYS_clone, vec![]),
++        (libc::SYS_execve, vec![]),
++        (libc::SYS_getsockopt, vec![]),
++        (libc::SYS_kill, vec![]),
++        (libc::SYS_sendmsg, vec![]),
++        (libc::SYS_setpgid, vec![]),
++        (libc::SYS_socketpair, vec![]),
++        // Venus talks to the render server over a socket.
++        (libc::SYS_connect, vec![]),
++        (libc::SYS_recvmsg, vec![]),
++        (libc::SYS_signalfd4, vec![]),
++        (libc::SYS_socket, vec![]),
++        (libc::SYS_waitid, vec![]),
 +        (libc::SYS_close, vec![]),
 +        (libc::SYS_eventfd2, vec![]),
 +        (libc::SYS_faccessat, vec![]),
@@ -1909,7 +1928,7 @@ index 75f493448..bd972289f 100644
  fn virtio_console_thread_rules() -> Vec<(i64, Vec<SeccompRule>)> {
      vec![
          (libc::SYS_ioctl, create_virtio_console_ioctl_seccomp_rule()),
-@@ -325,6 +394,7 @@ fn get_seccomp_rules(thread_type: Thread) -> Vec<(i64, Vec<SeccompRule>)> {
+@@ -325,6 +409,7 @@ fn get_seccomp_rules(thread_type: Thread) -> Vec<(i64, Vec<SeccompRule>)> {
          Thread::VirtioBalloon => virtio_balloon_thread_rules(),
          Thread::VirtioBlock => virtio_block_thread_rules(),
          Thread::VirtioConsole => virtio_console_thread_rules(),
@@ -1917,6 +1936,14 @@ index 75f493448..bd972289f 100644
          Thread::VirtioIommu => virtio_iommu_thread_rules(),
          Thread::VirtioMem => virtio_mem_thread_rules(),
          Thread::VirtioNet => virtio_net_thread_rules(),
+@@ -348,6 +433,7 @@ fn virtio_thread_common() -> Vec<(i64, Vec<SeccompRule>)> {
+     vec![
+         (libc::SYS_brk, vec![]),
+         (libc::SYS_clock_gettime, vec![]),
++        (libc::SYS_clock_nanosleep, vec![]),
+         (libc::SYS_close, vec![]),
+         (libc::SYS_dup, vec![]),
+         (libc::SYS_epoll_create1, vec![]),
 diff --git a/virtio-devices/src/transport/pci_device.rs b/virtio-devices/src/transport/pci_device.rs
 index 429a03fa4..f95ec782a 100644
 --- a/virtio-devices/src/transport/pci_device.rs
@@ -2198,10 +2225,10 @@ index 416132e62..81851fd5a 100644
          &mut self,
          snapshot: Option<&Snapshot>,
 diff --git a/vmm/src/seccomp_filters.rs b/vmm/src/seccomp_filters.rs
-index 308cfa6bf..ad960e8fc 100644
+index 308cfa6bf..ff0f9d77c 100644
 --- a/vmm/src/seccomp_filters.rs
 +++ b/vmm/src/seccomp_filters.rs
-@@ -637,8 +637,105 @@ fn pty_foreground_thread_rules() -> Result<Vec<(i64, Vec<SeccompRule>)>, Backend
+@@ -637,8 +637,122 @@ fn pty_foreground_thread_rules() -> Result<Vec<(i64, Vec<SeccompRule>)>, Backend
  
  // The filter containing the white listed syscall rules required by the VMM to
  // function.
@@ -2222,6 +2249,23 @@ index 308cfa6bf..ad960e8fc 100644
 +    vec![
 +        (libc::SYS_brk, vec![]),
 +        (libc::SYS_clone3, vec![]),
++        // Venus runs in virglrenderer's render server, a separate process
++        // this one spawns. Allowing execve here is a real widening of the
++        // monitor's syscall surface, which is why it is gated on venus
++        // rather than on the GPU being present at all.
++        (libc::SYS_clone, vec![]),
++        (libc::SYS_execve, vec![]),
++        (libc::SYS_getsockopt, vec![]),
++        (libc::SYS_kill, vec![]),
++        (libc::SYS_sendmsg, vec![]),
++        (libc::SYS_setpgid, vec![]),
++        (libc::SYS_socketpair, vec![]),
++        // Venus talks to the render server over a socket.
++        (libc::SYS_connect, vec![]),
++        (libc::SYS_recvmsg, vec![]),
++        (libc::SYS_signalfd4, vec![]),
++        (libc::SYS_socket, vec![]),
++        (libc::SYS_waitid, vec![]),
 +        (libc::SYS_close, vec![]),
 +        (libc::SYS_eventfd2, vec![]),
 +        (libc::SYS_faccessat, vec![]),
@@ -2307,6 +2351,14 @@ index 308cfa6bf..ad960e8fc 100644
  ) -> Result<Vec<(i64, Vec<SeccompRule>)>, BackendError> {
      Ok(vec![
          (libc::SYS_accept4, vec![]),
+@@ -650,6 +764,7 @@ fn vmm_thread_rules(
+         (libc::SYS_brk, vec![]),
+         (libc::SYS_clock_gettime, vec![]),
+         (libc::SYS_clock_nanosleep, vec![]),
++        (libc::SYS_clock_nanosleep, vec![]),
+         (libc::SYS_clone, vec![]),
+         (libc::SYS_clone3, vec![]),
+         (libc::SYS_close, vec![]),
 diff --git a/vmm/src/vm_config.rs b/vmm/src/vm_config.rs
 index 04102478a..53c838a44 100644
 --- a/vmm/src/vm_config.rs
