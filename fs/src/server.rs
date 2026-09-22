@@ -162,6 +162,20 @@ pub struct FsBackend {
     /// Mappings read from a saved session, waiting for a channel to the
     /// monitor to make them again.
     pending: Vec<crate::state::Mapping>,
+    /// Written once a restored session is whole again; see `mark_ready`.
+    ready: Option<PathBuf>,
+}
+
+/// Says a restored session is whole again.
+///
+/// Whatever resumes the guest waits for this. The guest's vCPUs must not run
+/// before its window is filled, because it is already holding addresses that
+/// point into it, and only this process knows when that is done.
+fn mark_ready(path: &std::path::Path, inodes: usize, mappings: usize, lost: usize) {
+    let body = format!("{{\"inodes\":{inodes},\"mappings\":{mappings},\"lost\":{lost}}}\n");
+    if let Err(e) = std::fs::write(path, body) {
+        log::error!("marking the restore complete at {}: {e}", path.display());
+    }
 }
 
 impl FsBackend {
@@ -202,12 +216,23 @@ impl FsBackend {
         // A session on disk means this process is standing in for one the
         // guest was already talking to, so everything it holds has to mean
         // the same thing again before it sends a single request.
+        let ready = config.state.as_ref().map(|p| p.with_extension("ready"));
+        if let Some(r) = &ready {
+            let _ = std::fs::remove_file(r);
+        }
         let pending = match config.state.as_ref().filter(|p| p.exists()) {
             Some(p) => {
                 let saved = state::Saved::load(p).map_err(|e| Error::State(p.clone(), e))?;
                 let (ok, gone) = fs.restore(&saved);
                 log::info!("restored {ok} inodes, {gone} gone");
-                fs.pending_mappings()
+                let pending = fs.pending_mappings();
+                // With no mappings to make there is nothing to wait for.
+                if pending.is_empty() {
+                    if let Some(r) = &ready {
+                        mark_ready(r, ok, 0, 0);
+                    }
+                }
+                pending
             }
             None => Vec::new(),
         };
@@ -229,6 +254,7 @@ impl FsBackend {
             event_idx: false,
             fs,
             pending,
+            ready,
         })
     }
 
@@ -364,6 +390,7 @@ impl VhostUserBackendMut for FsBackend {
             let frontend = Arc::clone(&self.frontend);
             let fs = Arc::clone(&self.fs);
             let shm_id = self.config.shm_id;
+            let ready = self.ready.clone();
             std::thread::spawn(move || {
                 let mut handler = CacheHandler { frontend, shm_id };
                 let ctx = fuse_backend_rs::api::filesystem::Context::default();
@@ -378,6 +405,9 @@ impl VhostUserBackendMut for FsBackend {
                     }
                 }
                 log::info!("restored {ok} mappings, {failed} lost");
+                if let Some(r) = &ready {
+                    mark_ready(r, 0, ok, failed);
+                }
             });
         }
     }

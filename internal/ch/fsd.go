@@ -14,6 +14,7 @@ type FsBackend struct {
 	cmd    *exec.Cmd
 	socket string
 	dir    string
+	state  string
 }
 
 // fsSearchPath is where the backend lives: a local build during development,
@@ -55,7 +56,11 @@ const DefaultDaxMinFileSize = 64 * 1024
 // daxMinFileSize is the size from which a file is offered to the guest as a
 // mapping rather than read. It only has an effect if the monitor gives the
 // device a window to map into; without one the guest never asks.
-func StartFsBackend(ctx context.Context, dir, socket, tag string, daxMinFileSize uint64, verbose bool) (*FsBackend, error) {
+//
+// state is where the guest's session is kept so it can outlive this process.
+// If it exists the backend starts by restoring it, standing in for one the
+// guest was already talking to. Empty means the guest cannot be suspended.
+func StartFsBackend(ctx context.Context, dir, socket, tag string, daxMinFileSize uint64, state string, verbose bool) (*FsBackend, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return nil, err
@@ -82,6 +87,9 @@ func StartFsBackend(ctx context.Context, dir, socket, tag string, daxMinFileSize
 		"--tag", tag,
 		"--dax-min-file-size", fmt.Sprint(daxMinFileSize),
 	)
+	if state != "" {
+		cmd.Args = append(cmd.Args, "--state", state)
+	}
 	if verbose {
 		cmd.Stdout = os.Stderr
 		cmd.Stderr = os.Stderr
@@ -95,7 +103,7 @@ func StartFsBackend(ctx context.Context, dir, socket, tag string, daxMinFileSize
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(socket); err == nil {
-			return &FsBackend{cmd: cmd, socket: socket, dir: abs}, nil
+			return &FsBackend{cmd: cmd, socket: socket, dir: abs, state: state}, nil
 		}
 		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 			return nil, fmt.Errorf("fs backend exited before creating %s", socket)
@@ -108,6 +116,21 @@ func StartFsBackend(ctx context.Context, dir, socket, tag string, daxMinFileSize
 
 // Socket is the path the monitor should connect to.
 func (f *FsBackend) Socket() string { return f.socket }
+
+// SaveState writes the guest's session out, for a snapshot to be taken with.
+func (f *FsBackend) SaveState(timeout time.Duration) error {
+	if f.state == "" {
+		return fmt.Errorf("the fs backend was started without a state file")
+	}
+	return saveState(f.cmd.Process, f.state, timeout)
+}
+
+// WaitRestored waits until a restored session is whole again: every nodeid
+// rebound and every mapping the guest holds made again. The guest must not
+// run before then, because it is already holding addresses in its window.
+func (f *FsBackend) WaitRestored(ctx context.Context, timeout time.Duration) error {
+	return waitFile(ctx, readyPath(f.state), timeout)
+}
 
 // Close stops the backend and removes its socket.
 func (f *FsBackend) Close() error {

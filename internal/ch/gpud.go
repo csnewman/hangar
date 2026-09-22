@@ -13,6 +13,7 @@ import (
 type GpuBackend struct {
 	cmd    *exec.Cmd
 	socket string
+	state  string
 }
 
 // gpuSearchPath is where the backend lives: a local build during development,
@@ -44,7 +45,9 @@ func FindGpuBackend() (string, error) {
 //
 // It owns the socket and must be listening before the monitor starts, which
 // connects to it as a client.
-func StartGpuBackend(ctx context.Context, socket string, venus bool, verbose bool) (*GpuBackend, error) {
+//
+// state is where the objects the guest holds are recorded; see SaveState.
+func StartGpuBackend(ctx context.Context, socket string, venus bool, state string, verbose bool) (*GpuBackend, error) {
 	bin, err := FindGpuBackend()
 	if err != nil {
 		return nil, err
@@ -58,6 +61,9 @@ func StartGpuBackend(ctx context.Context, socket string, venus bool, verbose boo
 	args := []string{"--socket", socket, "--virgl", "true"}
 	if venus {
 		args = append(args, "--venus", "true")
+	}
+	if state != "" {
+		args = append(args, "--state", state)
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	// A host with no /dev/dri has no GBM device, and the renderer needs
@@ -74,7 +80,7 @@ func StartGpuBackend(ctx context.Context, socket string, venus bool, verbose boo
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
 		if _, err := os.Stat(socket); err == nil {
-			return &GpuBackend{cmd: cmd, socket: socket}, nil
+			return &GpuBackend{cmd: cmd, socket: socket, state: state}, nil
 		}
 		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
 			return nil, fmt.Errorf("gpu backend exited before creating %s", socket)
@@ -87,6 +93,19 @@ func StartGpuBackend(ctx context.Context, socket string, venus bool, verbose boo
 
 // Socket is the path the monitor should connect to.
 func (g *GpuBackend) Socket() string { return g.socket }
+
+// SaveState records the objects the guest holds.
+//
+// Nothing behind them can be carried across -- a renderer's state is not
+// readable -- so this is what lets a restored backend tell the guest precisely
+// which of its objects are gone, rather than answer as if it had invented
+// them.
+func (g *GpuBackend) SaveState(timeout time.Duration) error {
+	if g.state == "" {
+		return fmt.Errorf("the gpu backend was started without a state file")
+	}
+	return saveState(g.cmd.Process, g.state, timeout)
+}
 
 // Close stops the backend and removes its socket.
 func (g *GpuBackend) Close() error {

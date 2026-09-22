@@ -1,0 +1,47 @@
+From 3a1a0e6437c2455a7e0b93495e6a158d81524214 Mon Sep 17 00:00:00 2001
+From: Chandler Newman <chandler2newman@gmail.com>
+Date: Tue, 22 Sep 2026 20:22:05 +0100
+Subject: [PATCH] vsock: deliver the resets queued for a restored device
+
+A vsock device rebuilt from a snapshot queues a reset for every connection the
+guest had open, because the host ends of those connections did not survive.
+Nothing delivered them. The RX queue is processed when the guest posts buffers
+or the backend has input, and a restored guest does neither: a peer blocked
+reading a connection whose host end has gone sends nothing, and waits on it
+forever.
+
+Signal the RX queue once when the worker starts with resets pending. The
+epoll loop does not run until the device is resumed, so the first pass after
+resume delivers them and the guest sees ECONNRESET on each connection, which
+is what lets it reconnect.
+---
+ virtio-devices/src/vsock/device.rs | 13 +++++++++++++
+ 1 file changed, 13 insertions(+)
+
+diff --git a/virtio-devices/src/vsock/device.rs b/virtio-devices/src/vsock/device.rs
+index 8cad82e72..2a5e4398a 100644
+--- a/virtio-devices/src/vsock/device.rs
++++ b/virtio-devices/src/vsock/device.rs
+@@ -217,6 +217,19 @@ fn run(
+         helper.add_event(self.queue_evts[1].as_raw_fd(), TX_QUEUE_EVENT)?;
+         helper.add_event(self.queue_evts[2].as_raw_fd(), EVT_QUEUE_EVENT)?;
+         helper.add_event(self.backend.read().unwrap().get_polled_fd(), BACKEND_EVENT)?;
++
++        // A device rebuilt from a snapshot has queued a reset for every
++        // connection the guest had open, since the host ends of them did not
++        // survive. Nothing would deliver them: RX is processed when the guest
++        // posts buffers or the backend has input, and a restored guest does
++        // neither -- a peer blocked reading a dead connection sends nothing
++        // and waits forever. Signalling the RX queue once means the first
++        // pass of the loop, which runs only after the device is resumed,
++        // delivers them.
++        if self.backend.read().unwrap().has_pending_rx() {
++            self.queue_evts[0].write(1).map_err(EpollHelperError::IoError)?;
++        }
++
+         helper.run(paused, paused_sync, self)?;
+ 
+         Ok(())
+-- 
+2.53.0
+

@@ -13,9 +13,10 @@ Before=sysinit.target
 [Service]
 Type=exec
 ExecStart=/usr/local/bin/hangar-agent
-# The host listener may not be up yet when the guest reaches this point, so a
-# failure to connect must not hold up the boot.
-Restart=on-failure
+# The agent redials the host itself, for the life of the guest: the host
+# end goes away across a suspend and comes back after it. So it does not
+# exit of its own accord, and a restart is only ever for a crash.
+Restart=always
 RestartSec=2s
 
 [Install]

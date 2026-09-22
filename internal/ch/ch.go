@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // QUEUE_SIZE is the depth of each of the GPU's two virtqueues, and has to
@@ -276,11 +277,52 @@ func Find() (string, error) {
 
 // Run launches the VM and blocks until it exits.
 func Run(ctx context.Context, cfg *Config) error {
-	bin, err := Find()
+	args, err := cfg.Args()
 	if err != nil {
 		return err
 	}
-	args, err := cfg.Args()
+	return monitor(ctx, args, nil)
+}
+
+// Restore brings a suspended guest back from the snapshot in dir.
+//
+// The monitor is started with nothing but its API socket, since everything
+// else -- the machine, its devices, their sockets -- is in the snapshot. The
+// backends those devices connect to must already be listening, as for Run.
+//
+// The guest comes back paused, and ready is called before it is resumed. That
+// gap is the only moment a backend can rebuild state the guest is already
+// relying on without the guest racing it, so ready should return only once
+// every backend has.
+func Restore(ctx context.Context, apiSocket, dir, seccomp string, ready func(context.Context) error) error {
+	_ = os.Remove(apiSocket)
+	args := []string{"--api-socket", apiSocket}
+	if seccomp != "" {
+		args = append(args, "--seccomp", seccomp)
+	}
+	return monitor(ctx, args, func(ctx context.Context) error {
+		api := NewAPI(apiSocket)
+		if err := api.WaitReady(ctx, 10*time.Second); err != nil {
+			return err
+		}
+		if err := api.Restore(ctx, dir); err != nil {
+			return err
+		}
+		if ready != nil {
+			if err := ready(ctx); err != nil {
+				return fmt.Errorf("waiting for the backends to restore: %w", err)
+			}
+		}
+		return api.Resume(ctx)
+	})
+}
+
+// monitor runs the monitor in the foreground until it exits.
+//
+// started, if given, runs once the process is up; an error from it stops the
+// monitor and is returned.
+func monitor(ctx context.Context, args []string, started func(context.Context) error) error {
+	bin, err := Find()
 	if err != nil {
 		return err
 	}
@@ -295,7 +337,17 @@ func Run(ctx context.Context, cfg *Config) error {
 	cmd.Stderr = os.Stderr
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 
-	if err := cmd.Run(); err != nil {
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting cloud-hypervisor: %w", err)
+	}
+	if started != nil {
+		if err := started(ctx); err != nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+			_ = cmd.Wait()
+			return err
+		}
+	}
+	if err := cmd.Wait(); err != nil {
 		if ctx.Err() != nil {
 			return nil // we asked it to stop
 		}

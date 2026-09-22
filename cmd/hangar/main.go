@@ -35,6 +35,8 @@ Usage:
   hangar kernel [flags]      build the guest kernel
   hangar pull  <ref>         pull an OCI image and unpack it for virtiofs
   hangar run   [flags]       boot an environment and attach to its console
+  hangar suspend -name N     write a running environment to disk and stop it
+  hangar resume  -name N     bring a suspended environment back, even after a host restart
 
 Run "hangar <command> -h" for the flags of a command.
 `
@@ -57,6 +59,10 @@ func main() {
 		err = buildKernel(ctx, os.Args[2:])
 	case "pull":
 		err = pullImage(ctx, os.Args[2:])
+	case "resume":
+		err = resumeVM(ctx, os.Args[2:])
+	case "suspend":
+		err = suspendEnv(ctx, os.Args[2:])
 	case "run":
 		err = runVM(ctx, os.Args[2:])
 	case "-h", "--help", "help":
@@ -359,86 +365,200 @@ func runVM(ctx context.Context, argv []string) error {
 		return nil
 	}
 
-	// Both backends own their sockets and must be listening before the
-	// monitor starts: it connects to them as a client and gives up if
-	// nothing is there.
-	if *virtiofs != "" {
-		// The backend only offers mappings if the monitor gave it a window,
-		// so the threshold is meaningless without one.
-		var minSize uint64
-		if *dax > 0 {
-			minSize = ch.DefaultDaxMinFileSize
-		}
-		vfs, err := ch.StartFsBackend(ctx, *virtiofs, run+"-virtiofs.sock", ch.DefaultVirtiofsTag, minSize, true)
-		if err != nil {
-			return err
-		}
-		defer vfs.Close()
-		ccfg.VirtiofsSocket = vfs.Socket()
-		ccfg.VirtiofsDaxMiB = *dax
-		if *dax > 0 {
-			fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, %d MiB dax window\n",
-				*virtiofs, ch.DefaultVirtiofsTag, *dax)
-		} else {
-			fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, no dax\n", *virtiofs, ch.DefaultVirtiofsTag)
-		}
+	dir, err := stateDir(ccfg.Name)
+	if err != nil {
+		return err
 	}
-	if *network {
-		pst, err := ch.StartPasst(ctx, run+"-net.sock", false)
-		if err != nil {
-			return err
-		}
-		defer pst.Close()
-		ccfg.NetSocket = pst.Socket()
+	rec := &envRecord{
+		Name:      ccfg.Name,
+		Virtiofs:  *virtiofs,
+		Dax:       *dax,
+		Net:       *network,
+		GPU:       *gpu,
+		GPUVenus:  *gpuVenus,
+		GPUWindow: *gpuShm,
+		CID:       ccfg.GuestCID,
+		Seccomp:   *seccomp,
 	}
-	if *gpu {
-		gpud, err := ch.StartGpuBackend(ctx, run+"-gpu.sock", *gpuVenus, false)
-		if err != nil {
-			return err
-		}
-		defer gpud.Close()
-		ccfg.GpuSocket = gpud.Socket()
-		ccfg.GpuShmMiB = *gpuShm
-		fmt.Fprintf(os.Stderr, "gpu         rendered by hangar-gpu, %d MiB window\n", *gpuShm)
-	}
-
-	// Cloud Hypervisor carries vsock over a unix socket rather than the
-	// host kernel, so the agent is waited for on that socket instead of
-	// on AF_VSOCK.
-	var srv *agent.Server
-	if ccfg.GuestCID != 0 {
-		// The monitor binds this path itself, so a socket left by one
-		// that was killed rather than stopped would keep it from
-		// starting. The agent's own socket is a different path and is
-		// cleaned up by the listener.
-		_ = os.Remove(ccfg.VsockSocket)
-		srv, err = agent.ListenHybrid(ccfg.VsockSocket, ccfg.GuestCID)
-		if err != nil {
-			return fmt.Errorf("starting the agent channel: %w", err)
-		}
-	}
+	ccfg.APISocket = run + "-api.sock"
 
 	fmt.Fprintf(os.Stderr, "booting %s under cloud-hypervisor (%d MiB, %d vCPU)\n",
 		ccfg.Name, ccfg.MemoryMB, ccfg.CPUs)
 	if ccfg.ConsoleFile != "" {
 		fmt.Fprintf(os.Stderr, "console -> %s\n\n", ccfg.ConsoleFile)
 	}
+	return runEnv(ctx, rec, dir, false, ccfg, *agentWait, probe)
+}
+
+// resumeVM brings a suspended environment back.
+func resumeVM(ctx context.Context, argv []string) error {
+	fs := flag.NewFlagSet("resume", flag.ExitOnError)
+	name := fs.String("name", "hangar-env", "environment name")
+	agentWait := fs.Duration("agent-wait", 90*time.Second, "how long to wait for the agent to reconnect")
+	exec := fs.String("exec", "", "run this shell command in the guest once its agent answers, print the output, and stop")
+	execWait := fs.Duration("exec-timeout", 2*time.Minute, "how long to let -exec run")
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	dir, err := stateDir(*name)
+	if err != nil {
+		return err
+	}
+	rec, err := loadEnv(dir)
+	if err != nil {
+		return fmt.Errorf("%s has no saved state: %w", *name, err)
+	}
+	if !rec.Suspended {
+		return fmt.Errorf("%s was not suspended; its state in %s is not a snapshot", *name, dir)
+	}
+	if err := ch.CheckHugePages(); err != nil {
+		return err
+	}
+	var probe *probeCmd
+	if *exec != "" {
+		probe = &probeCmd{cmd: *exec, timeout: *execWait}
+	}
+	fmt.Fprintf(os.Stderr, "resuming %s from %s\n", rec.Name, dir)
+	return runEnv(ctx, rec, dir, true, nil, *agentWait, probe)
+}
+
+// runEnv starts an environment's backends and its monitor, and holds them
+// until the guest stops or is suspended.
+//
+// The same path serves a fresh boot and a resume, because the backends are
+// the same either way: they are told where their state lives, and if it is
+// there they start by restoring it. What differs is the monitor, which either
+// builds a machine from cfg or rebuilds one from the snapshot in dir.
+func runEnv(ctx context.Context, rec *envRecord, dir string, restoring bool, cfg *ch.Config, agentWait time.Duration, probe *probeCmd) error {
+	run := runBase(rec.Name)
+	live := &liveEnv{rec: rec, dir: dir, api: ch.NewAPI(run + "-api.sock")}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	fsState := filepath.Join(dir, "fs.json")
+	gpuState := filepath.Join(dir, "gpu.json")
+	if !restoring {
+		// State left by an earlier run of an environment with this name
+		// would otherwise be restored into a guest that never held it.
+		for _, p := range []string{fsState, gpuState, filepath.Join(dir, "fs.ready")} {
+			_ = os.Remove(p)
+		}
+	}
+
+	// Every backend owns its socket and must be listening before the
+	// monitor starts: it connects to them as a client and gives up if
+	// nothing is there.
+	if rec.Virtiofs != "" {
+		// The backend only offers mappings if the monitor gave it a window,
+		// so the threshold is meaningless without one.
+		var minSize uint64
+		if rec.Dax > 0 {
+			minSize = ch.DefaultDaxMinFileSize
+		}
+		vfs, err := ch.StartFsBackend(ctx, rec.Virtiofs, run+"-virtiofs.sock", ch.DefaultVirtiofsTag, minSize, fsState, true)
+		if err != nil {
+			return err
+		}
+		defer vfs.Close()
+		live.fs = vfs
+		if cfg != nil {
+			cfg.VirtiofsSocket = vfs.Socket()
+			cfg.VirtiofsDaxMiB = rec.Dax
+		}
+		if rec.Dax > 0 {
+			fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, %d MiB dax window\n",
+				rec.Virtiofs, ch.DefaultVirtiofsTag, rec.Dax)
+		} else {
+			fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, no dax\n", rec.Virtiofs, ch.DefaultVirtiofsTag)
+		}
+	}
+	if rec.Net {
+		pst, err := ch.StartPasst(ctx, run+"-net.sock", false)
+		if err != nil {
+			return err
+		}
+		defer pst.Close()
+		if cfg != nil {
+			cfg.NetSocket = pst.Socket()
+		}
+	}
+	if rec.GPU {
+		gpud, err := ch.StartGpuBackend(ctx, run+"-gpu.sock", rec.GPUVenus, gpuState, false)
+		if err != nil {
+			return err
+		}
+		defer gpud.Close()
+		live.gpu = gpud
+		if cfg != nil {
+			cfg.GpuSocket = gpud.Socket()
+			cfg.GpuShmMiB = rec.GPUWindow
+		}
+		fmt.Fprintf(os.Stderr, "gpu         rendered by hangar-gpu, %d MiB window\n", rec.GPUWindow)
+	}
+
+	// Cloud Hypervisor carries vsock over a unix socket rather than the
+	// host kernel, so the agent is waited for on that socket instead of
+	// on AF_VSOCK.
+	var srv *agent.Server
+	if rec.CID != 0 {
+		vsockSocket := run + "-vsock.sock"
+		if cfg != nil {
+			cfg.VsockSocket = vsockSocket
+		}
+		// The monitor binds this path itself, so a socket left by one
+		// that was killed rather than stopped would keep it from
+		// starting. The agent's own socket is a different path and is
+		// cleaned up by the listener.
+		_ = os.Remove(vsockSocket)
+		var err error
+		srv, err = agent.ListenHybrid(vsockSocket, rec.CID)
+		if err != nil {
+			return fmt.Errorf("starting the agent channel: %w", err)
+		}
+	}
+
+	if !restoring {
+		rec.Suspended = false
+		if err := rec.save(dir); err != nil {
+			return err
+		}
+	}
 
 	// The monitor has to go before its backends do. -exec returns as soon
 	// as the command has run, with the guest still up, and tearing
 	// a backend or passt out from under a live vhost-user connection makes
 	// the monitor report a broken device on the way out. Deferred calls
-	// run last-registered first, so this one precedes both Closes above.
+	// run last-registered first, so this one precedes the Closes above.
 	vmCtx, stopVM := context.WithCancel(ctx)
+	live.stopVM = stopVM
 	vmDone := make(chan struct{})
 	defer func() {
 		stopVM()
 		<-vmDone
 	}()
 
-	return withAgent(ctx, srv, *agentWait, probe, func() error {
+	closeControl, err := serveControl(ctx, run+"-control.sock", live)
+	if err != nil {
+		return err
+	}
+	defer closeControl()
+
+	return withAgent(ctx, srv, agentWait, probe, func() error {
 		defer close(vmDone)
-		return ch.Run(vmCtx, ccfg)
+		if !restoring {
+			return ch.Run(vmCtx, cfg)
+		}
+		start := time.Now()
+		return ch.Restore(vmCtx, run+"-api.sock", filepath.Join(dir, "snapshot"), rec.Seccomp,
+			func(ctx context.Context) error {
+				if live.fs != nil {
+					if err := live.fs.WaitRestored(ctx, 2*time.Minute); err != nil {
+						return err
+					}
+				}
+				fmt.Fprintf(os.Stderr, "restored    %s in %.2fs, resuming\n", rec.Name, time.Since(start).Seconds())
+				return nil
+			})
 	})
 }
 
@@ -474,7 +594,10 @@ func withAgent(ctx context.Context, srv *agent.Server, agentWait time.Duration, 
 	}
 	defer sess.Close()
 
-	fmt.Fprintf(os.Stderr, "\nagent       cid %d, %s, kernel %s, ready in %.2fs\n",
+	// BootMicros is the guest's uptime when it said hello: on a fresh boot
+	// that is how long it took to be ready, and after a resume it is how long
+	// the guest has been running in total, suspensions aside.
+	fmt.Fprintf(os.Stderr, "\nagent       cid %d, %s, kernel %s, guest up %.2fs\n",
 		sess.CID, sess.Hello.Hostname, sess.Hello.Kernel,
 		float64(sess.Hello.BootMicros)/1e6)
 

@@ -94,3 +94,24 @@ and the rest is anonymous.
 
 Nothing about virtio-gpu. That device stays in `../patches/` until the backend
 in `../../../gpu/` has been exercised more widely.
+
+## 0002-vsock-deliver-restore-resets.patch
+
+Delivers the connection resets a vsock device queues when it is rebuilt from a
+snapshot.
+
+**13 insertions, in one file.** Independent of 0001; either applies alone.
+
+A restored vsock device already queues a reset for every connection the guest
+had open, because the host ends of those connections did not survive. Nothing
+delivered them: the RX queue is processed when the guest posts buffers or the
+backend has input, and a restored guest does neither. A guest process blocked
+reading a connection whose host end has gone sends nothing, and so waits on it
+forever. For Hangar that process is the agent, which is how the host reaches
+the environment at all, so without this a resumed environment is running but
+unreachable.
+
+The fix signals the RX queue once when the worker starts with resets pending.
+The epoll loop does not run until the device is resumed, so the first pass
+after resume delivers them and the guest sees ECONNRESET, which is what lets it
+reconnect.

@@ -29,37 +29,37 @@ import (
 func main() {
 	port := flag.Uint("port", uint(agent.Port), "vsock port on the host")
 	retry := flag.Duration("retry", 500*time.Millisecond, "delay between connection attempts")
-	attempts := flag.Int("attempts", 60, "connection attempts before giving up")
 	flag.Parse()
 
-	if err := run(uint32(*port), *retry, *attempts); err != nil {
-		fmt.Fprintf(os.Stderr, "hangar-agent: %v\n", err)
-		os.Exit(1)
-	}
+	run(uint32(*port), *retry)
 }
 
-func run(port uint32, retry time.Duration, attempts int) error {
-	// The agent starts before sysinit.target so that a stuck boot is still
-	// observable, which means the vsock device may not be probed yet and the
-	// host may not be listening. A first failure is expected, not fatal.
-	var conn *os.File
-	var err error
-	for i := 0; i < attempts; i++ {
-		conn, err = vsock.Dial(vsock.CIDHost, port)
-		if err == nil {
-			break
+// run keeps the agent connected to the host for as long as the guest runs.
+//
+// The host end is not permanent. It goes away when the environment is
+// suspended and comes back, as a different process, when it is resumed --
+// possibly after the host itself has restarted. From in here that is a
+// connection that ends and a host that answers again later, so the agent
+// redials rather than exiting. The monitor resets every connection the guest
+// had open when it restores a snapshot, which is what ends the old one.
+func run(port uint32, retry time.Duration) {
+	for {
+		conn, err := vsock.Dial(vsock.CIDHost, port)
+		if err != nil {
+			// Expected while the host is not listening: during early boot,
+			// which is when the agent starts, and while an environment is
+			// being restored.
+			time.Sleep(retry)
+			continue
 		}
+		if err := sendHello(conn); err != nil {
+			fmt.Fprintf(os.Stderr, "hangar-agent: %v\n", err)
+		} else {
+			serve(conn)
+		}
+		conn.Close()
 		time.Sleep(retry)
 	}
-	if conn == nil {
-		return fmt.Errorf("no host on vsock port %d after %d attempts: %w", port, attempts, err)
-	}
-	defer conn.Close()
-
-	if err := sendHello(conn); err != nil {
-		return err
-	}
-	return serve(conn)
 }
 
 func sendHello(conn *os.File) error {
@@ -79,14 +79,13 @@ func sendHello(conn *os.File) error {
 }
 
 // serve answers requests until the host hangs up.
-func serve(conn *os.File) error {
+func serve(conn *os.File) {
 	br := bufio.NewReader(conn)
 	for {
 		line, err := br.ReadBytes('\n')
 		if err != nil {
-			// A closed channel is the host going away, which is how an agent
-			// normally ends its life.
-			return nil
+			// The host went away. See run.
+			return
 		}
 		var req agent.Request
 		if err := json.Unmarshal(line, &req); err != nil {
@@ -98,7 +97,7 @@ func serve(conn *os.File) error {
 			continue
 		}
 		if _, err := conn.Write(append(b, '\n')); err != nil {
-			return nil
+			return
 		}
 	}
 }
