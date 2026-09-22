@@ -33,11 +33,15 @@ use vmm_sys_util::epoll::EventSet;
 use crate::protocol::*;
 
 /// How the device was asked to be configured.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct GpuConfig {
     pub virgl: bool,
     pub venus: bool,
     pub shm_id: u8,
+    /// Where the set of live objects is kept, so a backend standing in for
+    /// one the guest was already talking to knows which of the identifiers it
+    /// holds stand for nothing.
+    pub state: Option<std::path::PathBuf>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -58,7 +62,7 @@ pub enum Error {
     UnknownBlob,
 }
 
-fn capset_mask(config: GpuConfig) -> u64 {
+fn capset_mask(config: &GpuConfig) -> u64 {
     let mut m = 0u64;
     if config.virgl {
         m |= (1 << RUTABAGA_CAPSET_VIRGL) | (1 << RUTABAGA_CAPSET_VIRGL2);
@@ -69,7 +73,7 @@ fn capset_mask(config: GpuConfig) -> u64 {
     m
 }
 
-fn capset_count(config: GpuConfig) -> u32 {
+fn capset_count(config: &GpuConfig) -> u32 {
     let mut n = 0;
     if config.virgl {
         n += 2;
@@ -86,9 +90,9 @@ fn capset_count(config: GpuConfig) -> u32 {
 /// `/dev/dri` has no GBM device, and virglrenderer dereferences a null
 /// context if it probes for one. Venus additionally needs virglrenderer's
 /// render server, without which its capset reads back as zeroes.
-fn build_rutabaga(config: GpuConfig) -> Result<Rutabaga, Error> {
+fn build_rutabaga(config: &GpuConfig) -> Result<Rutabaga, Error> {
     let handler = RutabagaFenceHandler::new(|_f: RutabagaFence| {});
-    RutabagaBuilder::new(capset_mask(config), handler)
+    RutabagaBuilder::new(capset_mask(&config), handler)
         .set_use_egl(true)
         .set_use_surfaceless(true)
         .set_use_vulkan(config.venus)
@@ -99,6 +103,29 @@ fn build_rutabaga(config: GpuConfig) -> Result<Rutabaga, Error> {
 }
 
 /// One command: the bytes the guest wrote, and where its answer goes.
+/// The objects a guest has been given and has not destroyed.
+#[derive(Default, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Live {
+    pub resources: std::collections::BTreeSet<u32>,
+    pub contexts: std::collections::BTreeSet<u32>,
+}
+
+impl Live {
+    pub fn save(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let tmp = path.with_extension("tmp");
+        let f = std::fs::File::create(&tmp)?;
+        serde_json::to_writer(std::io::BufWriter::new(f), self)
+            .map_err(|e| std::io::Error::other(format!("writing the gpu state: {e}")))?;
+        std::fs::rename(&tmp, path)
+    }
+
+    pub fn load(path: &std::path::Path) -> std::io::Result<Self> {
+        let f = std::fs::File::open(path)?;
+        serde_json::from_reader(std::io::BufReader::new(f))
+            .map_err(|e| std::io::Error::other(format!("reading the gpu state: {e}")))
+    }
+}
+
 struct Request {
     body: Vec<u8>,
     resp_addrs: Vec<(GuestAddress, u32)>,
@@ -128,11 +155,17 @@ pub struct GpuBackend {
     blob_sizes: Vec<(u32, u64)>,
     event_idx: bool,
     acked_features: u64,
+    /// Objects this process made, so they can be written out.
+    live: Live,
+    /// Objects a previous process made. The guest still refers to them and
+    /// nothing behind them exists, so they are answered rather than guessed
+    /// at: see `lost`.
+    lost: Live,
 }
 
 impl GpuBackend {
     pub fn new(config: GpuConfig) -> Result<Self, Error> {
-        log::info!("offering {} capset(s)", capset_count(config));
+        log::info!("offering {} capset(s)", capset_count(&config));
         Ok(GpuBackend {
             config,
             mem: None,
@@ -142,6 +175,8 @@ impl GpuBackend {
             blob_sizes: Vec::new(),
             event_idx: false,
             acked_features: 0,
+            live: Live::default(),
+            lost: Live::default(),
         })
     }
 
@@ -253,12 +288,91 @@ impl GpuBackend {
         }
     }
 
+    /// Loads the objects a previous process handed out.
+    ///
+    /// Nothing behind them survived, so they are recorded as lost rather than
+    /// rebuilt: a renderer's state is compiled pipelines, descriptor sets and
+    /// driver allocations, and no graphics API will read those out. What can
+    /// be done is to be honest about it, which is what `lost` is for.
+    pub fn restore(&mut self, live: Live) {
+        log::warn!(
+            "restored: {} resources and {} contexts the guest still holds are gone. \
+             Commands naming them are answered with an error, which a caller \
+             handling device loss can recover from",
+            live.resources.len(),
+            live.contexts.len()
+        );
+        self.lost = live;
+    }
+
+    /// The objects the guest is holding, for writing out.
+    pub fn live(&self) -> Live {
+        self.live.clone()
+    }
+
+    /// Answers for an object that did not survive a restore.
+    ///
+    /// The point is that the guest is told precisely what is wrong. Left to
+    /// itself the renderer would report that some resource id is unknown,
+    /// which is indistinguishable from the guest having invented one, and a
+    /// caller cannot tell a bug from a restore. Worse, an id could be handed
+    /// to a resource created later and the guest would read another object's
+    /// memory believing it was its own.
+    fn lost_resource(&self, hdr: &CtrlHeader, id: u32) -> Option<Vec<u8>> {
+        if !self.lost.resources.contains(&id) {
+            return None;
+        }
+        log::debug!("resource {id} did not survive the restore");
+        Some(Self::err(hdr, VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID))
+    }
+
+    fn lost_context(&self, hdr: &CtrlHeader) -> Option<Vec<u8>> {
+        if hdr.ctx_id == 0 || !self.lost.contexts.contains(&hdr.ctx_id) {
+            return None;
+        }
+        log::debug!("context {} did not survive the restore", hdr.ctx_id);
+        Some(Self::err(hdr, VIRTIO_GPU_RESP_ERR_INVALID_CONTEXT_ID))
+    }
+
+    /// The resource a command is about, where it is the first field of the
+    /// payload. Every command that names one puts it there.
+    fn resource_of(type_: u32, payload: &[u8]) -> Option<u32> {
+        const NAMES_A_RESOURCE: &[u32] = &[
+            VIRTIO_GPU_CMD_RESOURCE_UNREF,
+            VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
+            VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
+            VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
+            VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB,
+            VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB,
+        ];
+        if !NAMES_A_RESOURCE.contains(&type_) {
+            return None;
+        }
+        payload
+            .get(..4)
+            .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+    }
+
     fn dispatch(&mut self, rutabaga: &mut Rutabaga, body: &[u8], mem: &GuestMemoryMmap) -> Vec<u8> {
         let hdr = match CtrlHeader::from_slice(&body[..size_of::<CtrlHeader>()]) {
             Some(h) => *h,
             None => return Vec::new(),
         };
         let payload = &body[size_of::<CtrlHeader>()..];
+
+        // An identifier from before a restore stands for nothing, and is
+        // refused here rather than deeper down where it would be
+        // indistinguishable from the guest having invented one.
+        if !self.lost.resources.is_empty() || !self.lost.contexts.is_empty() {
+            if let Some(resp) = self.lost_context(&hdr) {
+                return resp;
+            }
+            if let Some(id) = Self::resource_of(hdr.type_, payload) {
+                if let Some(resp) = self.lost_resource(&hdr, id) {
+                    return resp;
+                }
+            }
+        }
 
         match hdr.type_ {
             VIRTIO_GPU_CMD_GET_DISPLAY_INFO => {
@@ -360,7 +474,11 @@ impl GpuBackend {
                     flags: 0,
                 };
                 let code = Self::ok_or_err(
-                    rutabaga.resource_create_3d(req.resource_id, create),
+                    {
+                        self.live.resources.insert(req.resource_id);
+                        self.lost.resources.remove(&req.resource_id);
+                        rutabaga.resource_create_3d(req.resource_id, create)
+                    },
                     "resource_create_2d",
                 );
                 Self::err(&hdr, code)
@@ -385,7 +503,11 @@ impl GpuBackend {
                     flags: req.flags,
                 };
                 let code = Self::ok_or_err(
-                    rutabaga.resource_create_3d(req.resource_id, create),
+                    {
+                        self.live.resources.insert(req.resource_id);
+                        self.lost.resources.remove(&req.resource_id);
+                        rutabaga.resource_create_3d(req.resource_id, create)
+                    },
                     "resource_create_3d",
                 );
                 Self::err(&hdr, code)
@@ -397,6 +519,7 @@ impl GpuBackend {
                 ) else {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
+                self.live.resources.remove(&req.resource_id);
                 let code = Self::ok_or_err(
                     rutabaga.unref_resource(req.resource_id),
                     "resource_unref",
@@ -542,6 +665,8 @@ impl GpuBackend {
                 };
                 let nlen = std::cmp::min(req.nlen as usize, req.debug_name.len());
                 let name = std::str::from_utf8(&req.debug_name[..nlen]).ok();
+                self.live.contexts.insert(hdr.ctx_id);
+                self.lost.contexts.remove(&hdr.ctx_id);
                 let code = Self::ok_or_err(
                     rutabaga
                         .create_context(hdr.ctx_id, req.context_init, name),
@@ -551,6 +676,7 @@ impl GpuBackend {
             }
 
             VIRTIO_GPU_CMD_CTX_DESTROY => {
+                self.live.contexts.remove(&hdr.ctx_id);
                 let code =
                     Self::ok_or_err(rutabaga.destroy_context(hdr.ctx_id), "ctx_destroy");
                 Self::err(&hdr, code)
@@ -850,7 +976,7 @@ impl VhostUserBackendMut for GpuBackend {
             events_read: 0,
             events_clear: 0,
             num_scanouts: 1,
-            num_capsets: capset_count(self.config),
+            num_capsets: capset_count(&self.config),
         };
         let bytes = config.as_slice();
         let start = std::cmp::min(offset as usize, bytes.len());
@@ -885,12 +1011,12 @@ impl VhostUserBackendMut for GpuBackend {
             return Err(io::Error::from_raw_os_error(libc::EINVAL));
         };
 
-        let config = self.config;
+        let config = self.config.clone();
         RENDERER.with_borrow_mut(|slot| {
             let rutabaga = match slot {
                 Some(r) => r,
                 None => slot.insert(
-                    build_rutabaga(config).map_err(|e| io::Error::other(format!("{e}")))?,
+                    build_rutabaga(&config).map_err(|e| io::Error::other(format!("{e}")))?,
                 ),
             };
 

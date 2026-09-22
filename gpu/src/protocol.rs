@@ -64,6 +64,7 @@ pub const VIRTIO_GPU_RESP_OK_MAP_INFO: u32 = 0x1106;
 pub const VIRTIO_GPU_RESP_ERR_UNSPEC: u32 = 0x1200;
 pub const VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
 pub const VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID: u32 = 0x1203;
+pub const VIRTIO_GPU_RESP_ERR_INVALID_CONTEXT_ID: u32 = 0x1204;
 
 /// The specification fixes the number of scanouts a device may expose.
 pub const VIRTIO_GPU_MAX_SCANOUTS: usize = 16;
