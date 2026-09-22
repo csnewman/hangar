@@ -1,0 +1,24 @@
+[package]
+name = "hangar-gpu"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "virtio-gpu vhost-user backend, rendered by rutabaga_gfx"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+libc = "0.2"
+log = "0.4"
+rutabaga_gfx = { version = "0.1.85", features = ["virgl_renderer"] }
+thiserror = "2"
+vhost = { version = "0.16", features = ["vhost-user-backend"] }
+vhost-user-backend = "0.22"
+virtio-bindings = "0.2"
+virtio-queue = "0.17"
+vm-memory = { version = "0.17", features = ["backend-mmap", "backend-atomic"] }
+vmm-sys-util = "0.15"
+
+[profile.release]
+panic = "abort"
+overflow-checks = true
