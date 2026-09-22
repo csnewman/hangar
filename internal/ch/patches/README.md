@@ -40,9 +40,22 @@ That is the guest's Mesa virgl driver talking to this device, which hands the
 command stream to virglrenderer on the host. `eglinfo` needs a real context,
 so the context, resource, transfer and submit paths are all exercised by it.
 
-Not implemented: blob resources and the shared memory window they need, which
-is why a guest reports `-resource_blob -host_visible`. Venus needs those, so
-`venus=on` is accepted but will not give the guest Vulkan yet.
+Blob resources work too. The device declares a shared memory window, the
+transport puts it in a dedicated PCI BAR, and the renderer maps each blob over
+a slice of it, so the guest reads the renderer's own pages:
+
+```
+[drm] Host memory window: 0x200000000 +0x20000000
+[drm] features: +virgl -edid +resource_blob +host_visible
+```
+
+With the window present the guest's OpenGL goes from 4.3 to 4.5.
+
+The capability carries an id the driver looks the region up by, and it is a
+property of the region rather than its position in the list: virtio-fs uses 0,
+virtio-gpu uses 1 for its host-visible window. The transport derived it from
+the list index, which is why the guest found nothing at first, so
+`VirtioSharedMemory` now carries the id and the transport uses it.
 
 ### Seccomp
 

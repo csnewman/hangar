@@ -73,6 +73,9 @@ type Config struct {
 	// additionally offers Vulkan, which needs blob resources.
 	GPU      bool
 	GPUVenus bool
+	// GPUBlobWindowMiB sizes the window the guest maps blob resources into.
+	// Zero leaves blob resources out.
+	GPUBlobWindowMiB int
 
 	// APISocket, when set, lets ch-remote drive the running VM, which is how
 	// the balloon is resized.
@@ -175,6 +178,9 @@ func (c *Config) Args() ([]string, error) {
 		spec := "virgl=on"
 		if c.GPUVenus {
 			spec += ",venus=on"
+		}
+		if c.GPUBlobWindowMiB > 0 {
+			spec += fmt.Sprintf(",blob_window_mib=%d", c.GPUBlobWindowMiB)
 		}
 		args = append(args, "--gpu", spec)
 	}

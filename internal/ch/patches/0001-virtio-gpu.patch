@@ -407,12 +407,26 @@ index 2ef499f8d..0c3f2b040 100644
  anyhow = { workspace = true }
  block = { path = "../block" }
  byteorder = { workspace = true }
+diff --git a/virtio-devices/src/device.rs b/virtio-devices/src/device.rs
+index 5c63ad812..c50b58a87 100644
+--- a/virtio-devices/src/device.rs
++++ b/virtio-devices/src/device.rs
+@@ -53,6 +53,9 @@ pub trait VirtioInterrupt: Send + Sync {
+ 
+ #[derive(Clone)]
+ pub struct VirtioSharedMemory {
++    /// The identifier the guest driver looks this region up by, carried in
++    /// the shared memory PCI capability. Each device type defines its own.
++    pub id: u8,
+     pub offset: u64,
+     pub len: u64,
+ }
 diff --git a/virtio-devices/src/gpu.rs b/virtio-devices/src/gpu.rs
 new file mode 100644
-index 000000000..fcf81ae82
+index 000000000..08927e445
 --- /dev/null
 +++ b/virtio-devices/src/gpu.rs
-@@ -0,0 +1,1209 @@
+@@ -0,0 +1,1374 @@
 +// SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 +
 +//! virtio-gpu, rendered in this process by rutabaga_gfx.
@@ -435,7 +449,8 @@ index 000000000..fcf81ae82
 +use event_monitor::event;
 +use log::{debug, error, info, warn};
 +use rutabaga_gfx::{
-+    ResourceCreate3D, Rutabaga, RutabagaBuilder, RutabagaComponentType, RutabagaFence,
++    ResourceCreate3D, ResourceCreateBlob, Rutabaga, RutabagaBuilder, RutabagaComponentType,
++    RutabagaFence,
 +    RutabagaFenceHandler, RutabagaIovec, Transfer3D, RUTABAGA_CAPSET_VENUS, RUTABAGA_CAPSET_VIRGL,
 +    RUTABAGA_CAPSET_VIRGL2,
 +};
@@ -451,7 +466,7 @@ index 000000000..fcf81ae82
 +use vmm_sys_util::eventfd::EventFd;
 +
 +use super::{
-+    ActivateResult, EpollHelper, EpollHelperError, EpollHelperHandler, Error as DeviceError,
++    ActivateResult, VirtioSharedMemoryList, EpollHelper, EpollHelperError, EpollHelperHandler, Error as DeviceError,
 +    VirtioCommon, VirtioDevice, VirtioDeviceType, EPOLL_HELPER_EVENT_LAST,
 +    VIRTIO_F_ACCESS_PLATFORM, VIRTIO_F_VERSION_1,
 +};
@@ -474,6 +489,7 @@ index 000000000..fcf81ae82
 +
 +// Feature bits from the virtio specification.
 +const VIRTIO_GPU_F_VIRGL: u32 = 0;
++const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
 +const VIRTIO_GPU_F_CONTEXT_INIT: u32 = 4;
 +
 +// Commands. 2D and capset queries are answered here; the 3D commands arrive
@@ -497,6 +513,9 @@ index 000000000..fcf81ae82
 +const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D: u32 = 0x0205;
 +const VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D: u32 = 0x0206;
 +const VIRTIO_GPU_CMD_SUBMIT_3D: u32 = 0x0207;
++const VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB: u32 = 0x010c;
++const VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB: u32 = 0x0208;
++const VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB: u32 = 0x0209;
 +
 +const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
 +const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
@@ -509,6 +528,7 @@ index 000000000..fcf81ae82
 +const VIRTIO_GPU_RESP_OK_DISPLAY_INFO: u32 = 0x1101;
 +const VIRTIO_GPU_RESP_OK_CAPSET_INFO: u32 = 0x1102;
 +const VIRTIO_GPU_RESP_OK_CAPSET: u32 = 0x1103;
++const VIRTIO_GPU_RESP_OK_MAP_INFO: u32 = 0x1106;
 +const VIRTIO_GPU_RESP_ERR_UNSPEC: u32 = 0x1200;
 +const VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
 +const VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID: u32 = 0x1203;
@@ -753,6 +773,41 @@ index 000000000..fcf81ae82
 +// SAFETY: plain data.
 +unsafe impl ByteValued for CmdSubmit {}
 +
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct ResourceCreateBlobReq {
++    resource_id: u32,
++    blob_mem: u32,
++    blob_flags: u32,
++    padding: u32,
++    blob_id: u64,
++    size: u64,
++    nr_entries: u32,
++    padding2: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for ResourceCreateBlobReq {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct ResourceMapBlob {
++    resource_id: u32,
++    padding: u32,
++    offset: u64,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for ResourceMapBlob {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct RespMapInfo {
++    hdr: CtrlHeader,
++    map_info: u32,
++    padding: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for RespMapInfo {}
++
 +/// The device configuration space the guest reads.
 +#[repr(C)]
 +#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
@@ -835,6 +890,8 @@ index 000000000..fcf81ae82
 +    pause_evt: EventFd,
 +    access_platform: Option<Arc<dyn AccessPlatform>>,
 +    rutabaga: Rutabaga,
++    /// Where blob resources are mapped for the guest to read directly.
++    cache: Option<VirtioSharedMemoryList>,
 +}
 +
 +/// One command: the bytes the guest wrote, and where its answer goes.
@@ -1306,6 +1363,104 @@ index 000000000..fcf81ae82
 +                Self::err(&hdr, code)
 +            }
 +
++            VIRTIO_GPU_CMD_RESOURCE_CREATE_BLOB => {
++                let Some(req) = ResourceCreateBlobReq::from_slice(
++                    payload.get(..size_of::<ResourceCreateBlobReq>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                // A blob may be backed by guest pages, by host memory, or by
++                // both. Only the guest-backed form carries an entry list.
++                let entries = &payload[size_of::<ResourceCreateBlobReq>()..];
++                let want = req.nr_entries as usize * size_of::<MemEntry>();
++                let iovecs = if req.nr_entries == 0 {
++                    None
++                } else if entries.len() < want {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                } else {
++                    let mut vecs = Vec::with_capacity(req.nr_entries as usize);
++                    for i in 0..req.nr_entries as usize {
++                        let off = i * size_of::<MemEntry>();
++                        let Some(e) =
++                            MemEntry::from_slice(&entries[off..off + size_of::<MemEntry>()])
++                        else {
++                            return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                        };
++                        match Self::iovec(mem, e.addr, e.length) {
++                            Some(v) => vecs.push(v),
++                            None => {
++                                warn!("create_blob: entry outside guest memory");
++                                return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                            }
++                        }
++                    }
++                    Some(vecs)
++                };
++                let create = ResourceCreateBlob {
++                    blob_mem: req.blob_mem,
++                    blob_flags: req.blob_flags,
++                    blob_id: req.blob_id,
++                    size: req.size,
++                };
++                let code = Self::ok_or_err(
++                    self.rutabaga.resource_create_blob(
++                        hdr.ctx_id,
++                        req.resource_id,
++                        create,
++                        iovecs,
++                        None,
++                    ),
++                    "resource_create_blob",
++                );
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB => {
++                let Some(req) = ResourceMapBlob::from_slice(
++                    payload.get(..size_of::<ResourceMapBlob>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let Some(cache) = self.cache.as_ref() else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_UNSPEC);
++                };
++                // The offset and the resource have to land inside the window,
++                // or the renderer would map over memory that is not ours.
++                let window = cache.mapping.size() as u64;
++                if req.offset >= window {
++                    warn!("map_blob: offset {} outside the window", req.offset);
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                }
++                let placed = cache.mapping.as_ptr() as u64 + req.offset;
++                if let Err(e) = self.rutabaga.map_placed(req.resource_id, placed) {
++                    warn!("virtio-gpu map_blob: {e}");
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_UNSPEC);
++                }
++                match self.rutabaga.map_info(req.resource_id) {
++                    Ok(map_info) => RespMapInfo {
++                        hdr: Self::header_of(VIRTIO_GPU_RESP_OK_MAP_INFO, &hdr),
++                        map_info,
++                        padding: 0,
++                    }
++                    .as_slice()
++                    .to_vec(),
++                    Err(e) => {
++                        warn!("virtio-gpu map_info: {e}");
++                        Self::err(&hdr, VIRTIO_GPU_RESP_ERR_UNSPEC)
++                    }
++                }
++            }
++
++            VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB => {
++                let Some(req) = ResourceUnref::from_slice(
++                    payload.get(..size_of::<ResourceUnref>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let code = Self::ok_or_err(self.rutabaga.unmap(req.resource_id), "unmap_blob");
++                Self::err(&hdr, code)
++            }
++
 +            // Nothing is displayed, so a cursor is accepted and dropped. The
 +            // guest still needs the queue drained and acknowledged.
 +            VIRTIO_GPU_CMD_UPDATE_CURSOR | VIRTIO_GPU_CMD_MOVE_CURSOR => {
@@ -1437,6 +1592,7 @@ index 000000000..fcf81ae82
 +    id: String,
 +    config: VirtioGpuConfig,
 +    capsets: GpuCapsets,
++    cache: Option<VirtioSharedMemoryList>,
 +    seccomp_action: SeccompAction,
 +    exit_evt: EventFd,
 +}
@@ -1452,6 +1608,7 @@ index 000000000..fcf81ae82
 +    pub fn new(
 +        id: String,
 +        capsets: GpuCapsets,
++        cache: Option<VirtioSharedMemoryList>,
 +        access_platform_enabled: bool,
 +        seccomp_action: SeccompAction,
 +        exit_evt: EventFd,
@@ -1476,6 +1633,11 @@ index 000000000..fcf81ae82
 +            let mut avail_features = (1u64 << VIRTIO_F_VERSION_1)
 +                | (1u64 << VIRTIO_GPU_F_VIRGL)
 +                | (1u64 << VIRTIO_GPU_F_CONTEXT_INIT);
++            // Blob resources are only offered when there is a window to map
++            // them into.
++            if cache.is_some() {
++                avail_features |= 1u64 << VIRTIO_GPU_F_RESOURCE_BLOB;
++            }
 +            if access_platform_enabled {
 +                avail_features |= 1u64 << VIRTIO_F_ACCESS_PLATFORM;
 +            }
@@ -1502,6 +1664,7 @@ index 000000000..fcf81ae82
 +            id,
 +            config,
 +            capsets,
++            cache,
 +            seccomp_action,
 +            exit_evt,
 +        })
@@ -1541,6 +1704,20 @@ index 000000000..fcf81ae82
 +        self.read_config_from_slice(self.config.as_slice(), offset, data);
 +    }
 +
++    fn get_shm_regions(&self) -> Option<VirtioSharedMemoryList> {
++        self.cache.clone()
++    }
++
++    fn set_shm_regions(
++        &mut self,
++        shm_regions: VirtioSharedMemoryList,
++    ) -> std::result::Result<(), DeviceError> {
++        // The transport calls this when the BAR moves, so the address the
++        // guest sees and the host memory behind it stay in step.
++        self.cache = Some(shm_regions);
++        Ok(())
++    }
++
 +    fn activate(&mut self, context: ActivationContext) -> ActivateResult {
 +        let ActivationContext {
 +            mem,
@@ -1558,6 +1735,7 @@ index 000000000..fcf81ae82
 +        // thread rather than handed to it. Everything captured here is, which
 +        // is why the handler is assembled inside the closure.
 +        let capsets = self.capsets;
++        let cache = self.cache.clone();
 +        let access_platform = self.common.access_platform();
 +        let interrupt_for_handler = interrupt_cb.clone();
 +
@@ -1587,6 +1765,7 @@ index 000000000..fcf81ae82
 +                    pause_evt,
 +                    access_platform,
 +                    rutabaga,
++                    cache,
 +                };
 +                handler.run(&paused, paused_sync.as_ref().unwrap())
 +            },
@@ -1623,7 +1802,7 @@ index 000000000..fcf81ae82
 +impl Transportable for Gpu {}
 +impl Migratable for Gpu {}
 diff --git a/virtio-devices/src/lib.rs b/virtio-devices/src/lib.rs
-index c81f37087..38566987f 100644
+index c81f37087..eb8a2ed6a 100644
 --- a/virtio-devices/src/lib.rs
 +++ b/virtio-devices/src/lib.rs
 @@ -23,6 +23,7 @@ pub mod balloon;
@@ -1634,6 +1813,15 @@ index c81f37087..38566987f 100644
  mod iommu;
  pub mod mem;
  pub mod net;
+@@ -46,7 +47,7 @@ pub use self::block::{Block, BlockState};
+ pub use self::console::{Console, ConsoleResizer, Endpoint};
+ pub use self::device::{
+     ActivationContext, DmaRemapping, VirtioCommon, VirtioDevice, VirtioInterrupt,
+-    VirtioInterruptType, VirtioSharedMemoryList,
++    VirtioInterruptType, VirtioSharedMemory, VirtioSharedMemoryList,
+ };
+ pub use self::epoll_helper::{
+     EPOLL_HELPER_EVENT_LAST, EpollHelper, EpollHelperError, EpollHelperHandler,
 diff --git a/virtio-devices/src/seccomp_filters.rs b/virtio-devices/src/seccomp_filters.rs
 index 75f493448..bd972289f 100644
 --- a/virtio-devices/src/seccomp_filters.rs
@@ -1729,8 +1917,26 @@ index 75f493448..bd972289f 100644
          Thread::VirtioIommu => virtio_iommu_thread_rules(),
          Thread::VirtioMem => virtio_mem_thread_rules(),
          Thread::VirtioNet => virtio_net_thread_rules(),
+diff --git a/virtio-devices/src/transport/pci_device.rs b/virtio-devices/src/transport/pci_device.rs
+index 429a03fa4..f95ec782a 100644
+--- a/virtio-devices/src/transport/pci_device.rs
++++ b/virtio-devices/src/transport/pci_device.rs
+@@ -1122,11 +1122,11 @@ impl PciDevice for VirtioPciDevice {
+                     PciDeviceError::IoRegistrationFailed(shm_list.addr.raw_value(), e)
+                 })?;
+ 
+-                for (idx, shm) in shm_list.region_list.iter().enumerate() {
++                for shm in shm_list.region_list.iter() {
+                     let shm_cap = VirtioPciCap64::new(
+                         PciCapabilityType::SharedMemory,
+                         VIRTIO_SHM_BAR_INDEX as u8,
+-                        idx as u8,
++                        shm.id,
+                         shm.offset,
+                         shm.len,
+                     );
 diff --git a/vmm/src/config.rs b/vmm/src/config.rs
-index 900fd3173..c11d65ffe 100644
+index 900fd3173..f97e3eafa 100644
 --- a/vmm/src/config.rs
 +++ b/vmm/src/config.rs
 @@ -120,6 +120,9 @@ pub enum Error {
@@ -1767,18 +1973,20 @@ index 900fd3173..c11d65ffe 100644
              fs,
              generic_vhost_user,
              pmem,
-@@ -1951,6 +1957,43 @@ impl RtcConfig {
+@@ -1951,6 +1957,51 @@ impl RtcConfig {
      }
  }
  
 +impl GpuConfig {
 +    pub const SYNTAX: &'static str = "GPU parameters \"virgl=on|off,venus=on|off,\
-+        iommu=on|off,id=<device_id>,pci_segment=<segment_id>,pci_device_id=<pci_slot>\"";
++        blob_window_mib=<size>,iommu=on|off,id=<device_id>,pci_segment=<segment_id>,\
++        pci_device_id=<pci_slot>\"";
 +
 +    pub fn parse(gpu: &str) -> Result<Self> {
 +        let mut parser = OptionParser::new();
 +        parser.add("virgl");
 +        parser.add("venus");
++        parser.add("blob_window_mib");
 +        parser.add_all(PciDeviceCommonConfig::OPTIONS_IOMMU);
 +        parser.parse(gpu).map_err(Error::ParseGpu)?;
 +
@@ -1794,12 +2002,18 @@ index 900fd3173..c11d65ffe 100644
 +            .unwrap_or(Toggle(false))
 +            .0;
 +
++        let blob_window_mib = parser
++            .convert::<u64>("blob_window_mib")
++            .map_err(Error::ParseGpu)?
++            .unwrap_or(512);
++
 +        let pci_common = PciDeviceCommonConfig::parse(gpu)?;
 +
 +        Ok(GpuConfig {
 +            pci_common,
 +            virgl,
 +            venus,
++            blob_window_mib,
 +        })
 +    }
 +
@@ -1811,7 +2025,7 @@ index 900fd3173..c11d65ffe 100644
  impl BalloonConfig {
      pub const SYNTAX: &'static str = "Balloon parameters \"size=<balloon_size>,deflate_on_oom=on|off,\
          free_page_reporting=on|off,iommu=on|off,id=<device_id>,pci_segment=<segment_id>,\
-@@ -3522,6 +3565,11 @@ impl VmConfig {
+@@ -3522,6 +3573,11 @@ impl VmConfig {
              balloon = Some(BalloonConfig::parse(balloon_params)?);
          }
  
@@ -1823,7 +2037,7 @@ index 900fd3173..c11d65ffe 100644
          #[cfg(feature = "pvmemcontrol")]
          let pvmemcontrol: Option<PvmemcontrolConfig> = vm_params
              .pvmemcontrol
-@@ -3681,6 +3729,7 @@ impl VmConfig {
+@@ -3681,6 +3737,7 @@ impl VmConfig {
              net,
              rng,
              balloon,
@@ -1831,7 +2045,7 @@ index 900fd3173..c11d65ffe 100644
              generic_vhost_user,
              fs,
              pmem,
-@@ -3821,6 +3870,7 @@ impl Clone for VmConfig {
+@@ -3821,6 +3878,7 @@ impl Clone for VmConfig {
              rng: self.rng.clone(),
              rtc: self.rtc.clone(),
              balloon: self.balloon.clone(),
@@ -1840,7 +2054,7 @@ index 900fd3173..c11d65ffe 100644
              pvmemcontrol: self.pvmemcontrol.clone(),
              fs: self.fs.clone(),
 diff --git a/vmm/src/device_manager.rs b/vmm/src/device_manager.rs
-index 416132e62..849ef500d 100644
+index 416132e62..81851fd5a 100644
 --- a/vmm/src/device_manager.rs
 +++ b/vmm/src/device_manager.rs
 @@ -156,6 +156,7 @@ const RTC_DEVICE_NAME: &str = "__rtc";
@@ -1851,7 +2065,7 @@ index 416132e62..849ef500d 100644
  const BALLOON_DEVICE_NAME: &str = "__balloon";
  const CONSOLE_DEVICE_NAME: &str = "__console";
  const PVPANIC_DEVICE_NAME: &str = "__pvpanic";
-@@ -267,6 +268,10 @@ pub enum DeviceManagerError {
+@@ -267,6 +268,14 @@ pub enum DeviceManagerError {
      #[error("Cannot create virtio-balloon device")]
      CreateVirtioBalloon(#[source] io::Error),
  
@@ -1859,10 +2073,14 @@ index 416132e62..849ef500d 100644
 +    #[error("Cannot create virtio-gpu device")]
 +    CreateVirtioGpu(#[source] io::Error),
 +
++    /// Cannot allocate the GPU's shared memory window
++    #[error("Cannot allocate the GPU's shared memory window")]
++    GpuRangeAllocation,
++
      /// Cannot create pvmemcontrol device
      #[cfg(feature = "pvmemcontrol")]
      #[error("Cannot create pvmemcontrol device")]
-@@ -2660,6 +2665,7 @@ impl DeviceManager {
+@@ -2660,6 +2669,7 @@ impl DeviceManager {
  
          // Add virtio-balloon if required
          self.make_virtio_balloon_devices(snapshot)?;
@@ -1870,7 +2088,7 @@ index 416132e62..849ef500d 100644
  
          // Add virtio-watchdog device
          self.make_virtio_watchdog_devices(snapshot)?;
-@@ -3675,6 +3681,53 @@ impl DeviceManager {
+@@ -3675,6 +3685,108 @@ impl DeviceManager {
          Ok((pvmemcontrol_bus_device, pvmemcontrol_pci_device))
      }
  
@@ -1887,6 +2105,60 @@ index 416132e62..849ef500d 100644
 +            };
 +            info!("Creating virtio-gpu device: id = {id}");
 +
++            // The window a guest maps blob resources into. It is host memory
++            // placed in the guest's address space through a dedicated PCI BAR,
++            // and the renderer maps each blob over a slice of it, so the guest
++            // reads the renderer's own pages rather than a copy.
++            let cache_size = gpu_config.blob_window_mib << 20;
++            let cache = if cache_size > 0 {
++                let mmap_region = MmapRegion::build(
++                    None,
++                    cache_size as usize,
++                    libc::PROT_NONE,
++                    libc::MAP_ANONYMOUS | libc::MAP_PRIVATE | libc::MAP_NORESERVE,
++                )
++                .map_err(DeviceManagerError::NewMmapRegion)?;
++
++                // 2 MiB alignment so the window can be backed by huge pages.
++                let region_base = self.pci_segments
++                    [gpu_config.pci_common.pci_segment as usize]
++                    .mem64_allocator
++                    .lock()
++                    .unwrap()
++                    .allocate(None, cache_size, Some(0x0020_0000))
++                    .ok_or(DeviceManagerError::GpuRangeAllocation)?;
++
++                // SAFETY: host_addr covers cache_size bytes of mapped memory.
++                let mem_slot = unsafe {
++                    self.memory_manager
++                        .lock()
++                        .unwrap()
++                        .create_userspace_mapping(
++                            region_base.raw_value(),
++                            cache_size as usize,
++                            mmap_region.as_ptr(),
++                            false,
++                            false,
++                            false,
++                        )
++                        .map_err(DeviceManagerError::MemoryManager)?
++                };
++
++                Some(virtio_devices::VirtioSharedMemoryList {
++                    mem_slot,
++                    addr: region_base,
++                    mapping: Arc::new(mmap_region),
++                    region_list: vec![virtio_devices::VirtioSharedMemory {
++                        // VIRTIO_GPU_SHM_ID_HOST_VISIBLE
++                        id: 1,
++                        offset: 0,
++                        len: cache_size,
++                    }],
++                })
++            } else {
++                None
++            };
++
 +            let virtio_gpu_device = Arc::new(Mutex::new(
 +                virtio_devices::gpu::Gpu::new(
 +                    id.clone(),
@@ -1894,6 +2166,7 @@ index 416132e62..849ef500d 100644
 +                        virgl: gpu_config.virgl,
 +                        venus: gpu_config.venus,
 +                    },
++                    cache,
 +                    self.force_access_platform | gpu_config.pci_common.iommu,
 +                    self.seccomp_action.clone(),
 +                    self.exit_evt
@@ -2035,10 +2308,10 @@ index 308cfa6bf..ad960e8fc 100644
      Ok(vec![
          (libc::SYS_accept4, vec![]),
 diff --git a/vmm/src/vm_config.rs b/vmm/src/vm_config.rs
-index 04102478a..178b67161 100644
+index 04102478a..53c838a44 100644
 --- a/vmm/src/vm_config.rs
 +++ b/vmm/src/vm_config.rs
-@@ -571,6 +571,39 @@ pub struct BalloonConfig {
+@@ -571,6 +571,47 @@ pub struct BalloonConfig {
      pub free_page_reporting: bool,
  }
  
@@ -2049,10 +2322,17 @@ index 04102478a..178b67161 100644
 +    /// Offer OpenGL through virgl.
 +    #[serde(default = "default_gpu_virgl")]
 +    pub virgl: bool,
-+    /// Offer Vulkan through venus. It needs blob resources, so it is off
-+    /// until the device carries a shared memory window.
++    /// Offer Vulkan through venus, which needs blob resources.
 +    #[serde(default)]
 +    pub venus: bool,
++    /// How large a window the guest may map blob resources into, in MiB.
++    /// Zero leaves blob resources out entirely.
++    #[serde(default = "default_gpu_blob_window_mib")]
++    pub blob_window_mib: u64,
++}
++
++fn default_gpu_blob_window_mib() -> u64 {
++    512
 +}
 +
 +fn default_gpu_virgl() -> bool {
@@ -2065,6 +2345,7 @@ index 04102478a..178b67161 100644
 +            pci_common: PciDeviceCommonConfig::default(),
 +            virgl: true,
 +            venus: false,
++            blob_window_mib: default_gpu_blob_window_mib(),
 +        }
 +    }
 +}
@@ -2078,7 +2359,7 @@ index 04102478a..178b67161 100644
  #[cfg(feature = "pvmemcontrol")]
  #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize, Default)]
  pub struct PvmemcontrolConfig {}
-@@ -1165,6 +1198,7 @@ pub struct VmConfig {
+@@ -1165,6 +1206,7 @@ pub struct VmConfig {
      #[serde(default)]
      pub rng: RngConfig,
      pub balloon: Option<BalloonConfig>,
