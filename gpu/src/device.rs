@@ -8,21 +8,26 @@
 
 use std::io;
 use std::mem::size_of;
-use std::os::unix::io::{AsRawFd, BorrowedFd};
+use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex};
 
 use log::{debug, warn};
 use rutabaga_gfx::{
     ResourceCreate3D, ResourceCreateBlob, Rutabaga, RutabagaBuilder, RutabagaComponentType,
-    RutabagaFence, RutabagaFenceHandler, RutabagaIovec, Transfer3D, RUTABAGA_CAPSET_VENUS,
-    RUTABAGA_CAPSET_VIRGL, RUTABAGA_CAPSET_VIRGL2,
+    RutabagaFence, RutabagaFenceHandler, RutabagaHandle, RutabagaIovec, Transfer3D,
+    RUTABAGA_CAPSET_VENUS, RUTABAGA_CAPSET_VIRGL, RUTABAGA_CAPSET_VIRGL2,
 };
-use vhost::vhost_user::message::{VhostUserMMap, VhostUserMMapFlags, VhostUserProtocolFeatures};
+use vhost::vhost_user::message::{
+    VhostUserMMap, VhostUserMMapFlags, VhostUserProtocolFeatures, VhostUserVirtioFeatures,
+};
 use vhost::vhost_user::{Backend, VhostUserFrontendReqHandler};
 use vhost_user_backend::{VhostUserBackendMut, VringRwLock, VringT};
+use virtio_queue::QueueT;
 use virtio_bindings::bindings::virtio_config::{VIRTIO_F_NOTIFY_ON_EMPTY, VIRTIO_F_VERSION_1};
 use virtio_bindings::bindings::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
-use vm_memory::{ByteValued, Bytes, GuestAddress, GuestMemoryAtomic, GuestMemoryMmap};
+use vm_memory::{
+    ByteValued, Bytes, GuestAddress, GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap,
+};
 use vmm_sys_util::epoll::EventSet;
 
 use crate::protocol::*;
@@ -49,6 +54,8 @@ pub enum Error {
     NoWindow,
     #[error("Mapping into the monitor's window failed")]
     Map(#[source] io::Error),
+    #[error("No blob of that id was created here")]
+    UnknownBlob,
 }
 
 fn capset_mask(config: GpuConfig) -> u64 {
@@ -116,6 +123,9 @@ pub struct GpuBackend {
     next_offset: u64,
     /// What each mapped resource was given, so it can be taken back.
     placed: Vec<(u32, u64, u64)>,
+    /// How large each blob was created, which an exported handle does not
+    /// carry and the monitor needs in order to place it.
+    blob_sizes: Vec<(u32, u64)>,
     event_idx: bool,
     acked_features: u64,
 }
@@ -129,18 +139,36 @@ impl GpuBackend {
             frontend: None,
             next_offset: 0,
             placed: Vec::new(),
+            blob_sizes: Vec::new(),
             event_idx: false,
             acked_features: 0,
         })
     }
 
     /// Ask the monitor to place a blob in the guest's window.
-    fn map_blob(&mut self, rutabaga: &mut Rutabaga, resource_id: u32, guest_offset: u64) -> Result<u32, Error> {
-        let frontend = self.frontend.as_ref().ok_or(Error::NoWindow)?;
-        let mapping = rutabaga
+    ///
+    /// The monitor owns the window, so the resource's memory is exported as a
+    /// descriptor and sent there rather than mapped in this process.
+    fn map_blob(
+        &mut self,
+        rutabaga: &mut Rutabaga,
+        resource_id: u32,
+        guest_offset: u64,
+    ) -> Result<u32, Error> {
+        let size = self
+            .blob_sizes
+            .iter()
+            .find(|(id, _)| *id == resource_id)
+            .map(|(_, len)| *len)
+            .ok_or(Error::UnknownBlob)?;
+
+        let handle = rutabaga
             .export_blob(resource_id)
             .map_err(|e| Error::Renderer(format!("{e}")))?;
-        let size = mapping.size;
+        let RutabagaHandle::MagmaGpuHandle(handle) = handle else {
+            return Err(Error::Renderer("blob exported an unusable handle".into()));
+        };
+
         let req = VhostUserMMap {
             shmid: self.config.shm_id,
             padding: [0; 7],
@@ -149,12 +177,15 @@ impl GpuBackend {
             len: size,
             flags: VhostUserMMapFlags::WRITABLE.bits(),
         };
-        // SAFETY: the descriptor belongs to the handle returned above and
-        // outlives this call.
-        let fd = unsafe { BorrowedFd::borrow_raw(mapping.os_handle.as_raw_fd()) };
-        frontend.shmem_map(&req, &fd).map_err(Error::Map)?;
+        self.frontend
+            .as_ref()
+            .ok_or(Error::NoWindow)?
+            .shmem_map(&req, &handle.os_handle.as_fd())
+            .map_err(Error::Map)?;
+
+        self.placed
+            .retain(|(id, ..)| *id != resource_id);
         self.placed.push((resource_id, guest_offset, size));
-        let _ = guest_offset;
         rutabaga
             .map_info(resource_id)
             .map_err(|e| Error::Renderer(format!("{e}")))
@@ -198,6 +229,18 @@ impl GpuBackend {
             base: slice.ptr_guard_mut().as_ptr() as *mut std::ffi::c_void,
             len,
         })
+    }
+
+    fn header_of(type_: u32, request: &CtrlHeader) -> CtrlHeader {
+        CtrlHeader {
+            type_,
+            // A fence is only acknowledged if the guest asked for one.
+            flags: 0,
+            fence_id: request.fence_id,
+            ctx_id: request.ctx_id,
+            ring_idx: request.ring_idx,
+            padding: [0; 3],
+        }
     }
 
     fn ok_or_err(result: Result<(), impl std::fmt::Display>, what: &str) -> u32 {
@@ -588,16 +631,18 @@ impl GpuBackend {
                     blob_id: req.blob_id,
                     size: req.size,
                 };
-                let code = Self::ok_or_err(
-                    rutabaga.resource_create_blob(
-                        hdr.ctx_id,
-                        req.resource_id,
-                        create,
-                        iovecs,
-                        None,
-                    ),
-                    "resource_create_blob",
+                let result = rutabaga.resource_create_blob(
+                    hdr.ctx_id,
+                    req.resource_id,
+                    create,
+                    iovecs,
+                    None,
                 );
+                if result.is_ok() {
+                    self.blob_sizes.retain(|(id, _)| *id != req.resource_id);
+                    self.blob_sizes.push((req.resource_id, req.size));
+                }
+                let code = Self::ok_or_err(result, "resource_create_blob");
                 Self::err(&hdr, code)
             }
 
@@ -772,15 +817,16 @@ impl VhostUserBackendMut for GpuBackend {
     }
 
     fn features(&self) -> u64 {
-        let mut f = (1 << VIRTIO_F_VERSION_1)
+        // PROTOCOL_FEATURES is what lets the two sides negotiate everything
+        // else. Without it the monitor cannot even read the config space, so
+        // the guest sees a device with no capsets and no features at all.
+        (1 << VIRTIO_F_VERSION_1)
             | (1 << VIRTIO_F_NOTIFY_ON_EMPTY)
             | (1 << VIRTIO_RING_F_EVENT_IDX)
             | (1u64 << VIRTIO_GPU_F_VIRGL)
-            | (1u64 << VIRTIO_GPU_F_CONTEXT_INIT);
-        // Blob resources need somewhere to be placed, which only exists when
-        // the monitor publishes a window and agrees to serve map requests.
-        f |= 1u64 << VIRTIO_GPU_F_RESOURCE_BLOB;
-        f
+            | (1u64 << VIRTIO_GPU_F_CONTEXT_INIT)
+            | (1u64 << VIRTIO_GPU_F_RESOURCE_BLOB)
+            | VhostUserVirtioFeatures::PROTOCOL_FEATURES.bits()
     }
 
     fn acked_features(&mut self, features: u64) {

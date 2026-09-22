@@ -24,6 +24,10 @@ import (
 	"syscall"
 )
 
+// QUEUE_SIZE is the depth of each of the GPU's two virtqueues, and has to
+// match what the backend offers.
+const QUEUE_SIZE = 256
+
 // Disk is a block device attached to the guest.
 type Disk struct {
 	Path     string
@@ -69,13 +73,14 @@ type Config struct {
 	// network.
 	NetSocket string
 
-	// GPU gives the guest a virtio-gpu device rendered on the host. Venus
-	// additionally offers Vulkan, which needs blob resources.
-	GPU      bool
-	GPUVenus bool
-	// GPUBlobWindowMiB sizes the window the guest maps blob resources into.
-	// Zero leaves blob resources out.
-	GPUBlobWindowMiB int
+	// GpuSocket is a hangar-gpu vhost-user socket. The guest gets a
+	// virtio-gpu device rendered by that process. Empty leaves it out.
+	GpuSocket string
+	// GpuShmMiB sizes the window the guest maps blob resources into, and
+	// GpuShmID is the identifier the guest looks it up by. virtio-gpu
+	// defines 1 for its host-visible window.
+	GpuShmMiB int
+	GpuShmID  int
 
 	// APISocket, when set, lets ch-remote drive the running VM, which is how
 	// the balloon is resized.
@@ -180,15 +185,21 @@ func (c *Config) Args() ([]string, error) {
 		args = append(args, "--net", "vhost_user=on,socket="+c.NetSocket)
 	}
 
-	if c.GPU {
-		spec := "virgl=on"
-		if c.GPUVenus {
-			spec += ",venus=on"
+	if c.GpuSocket != "" {
+		// The device type is named rather than numbered, and the window is
+		// published by the monitor for the backend to map blobs into.
+		spec := fmt.Sprintf(
+			"socket=%s,device_type=gpu,queue_sizes=[%d,%d]",
+			c.GpuSocket, QUEUE_SIZE, QUEUE_SIZE,
+		)
+		if c.GpuShmMiB > 0 {
+			id := c.GpuShmID
+			if id == 0 {
+				id = 1
+			}
+			spec += fmt.Sprintf(",shm_size=%dM,shm_id=%d", c.GpuShmMiB, id)
 		}
-		if c.GPUBlobWindowMiB > 0 {
-			spec += fmt.Sprintf(",blob_window_mib=%d", c.GPUBlobWindowMiB)
-		}
-		args = append(args, "--gpu", spec)
+		args = append(args, "--generic-vhost-user", spec)
 	}
 
 	if c.Seccomp != "" {

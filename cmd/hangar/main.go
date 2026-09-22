@@ -251,6 +251,7 @@ func runVM(ctx context.Context, argv []string) error {
 	network := fs.Bool("net", true, "give the guest outbound networking")
 	gpu := fs.Bool("gpu", false, "give the guest a virtio-gpu device")
 	gpuVenus := fs.Bool("gpu-venus", false, "offer Vulkan through venus, with -gpu")
+	gpuShm := fs.Int("gpu-window", 512, "MiB the guest may map blob resources into, with -gpu")
 	seccomp := fs.String("seccomp", "", "monitor syscall filtering: true, false, log or errno")
 	if err := fs.Parse(argv); err != nil {
 		return err
@@ -297,8 +298,6 @@ func runVM(ctx context.Context, argv []string) error {
 		CPUs:        *cpus,
 		ConsoleFile: *console,
 		ConsoleTTY:  caps.ConsoleTTY,
-		GPU:         *gpu,
-		GPUVenus:    *gpuVenus,
 		Seccomp:     *seccomp,
 	}
 
@@ -377,6 +376,16 @@ func runVM(ctx context.Context, argv []string) error {
 		}
 		defer pst.Close()
 		ccfg.NetSocket = pst.Socket()
+	}
+	if *gpu {
+		gpud, err := ch.StartGpuBackend(ctx, run+"-gpu.sock", *gpuVenus, false)
+		if err != nil {
+			return err
+		}
+		defer gpud.Close()
+		ccfg.GpuSocket = gpud.Socket()
+		ccfg.GpuShmMiB = *gpuShm
+		fmt.Fprintf(os.Stderr, "gpu         rendered by hangar-gpu, %d MiB window\n", *gpuShm)
 	}
 
 	// Cloud Hypervisor carries vsock over a unix socket rather than the

@@ -1,0 +1,98 @@
+package ch
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+)
+
+// GpuBackend is a running hangar-gpu, rendering for one guest.
+type GpuBackend struct {
+	cmd    *exec.Cmd
+	socket string
+}
+
+// gpuSearchPath is where the backend lives: a local build during development,
+// and the path the published image installs to.
+var gpuSearchPath = []string{
+	filepath.Join("gpu", "target", "release", "hangar-gpu"),
+	"/usr/local/bin/hangar-gpu",
+}
+
+// FindGpuBackend locates the renderer.
+func FindGpuBackend() (string, error) {
+	if p, err := exec.LookPath("hangar-gpu"); err == nil {
+		return p, nil
+	}
+	for _, p := range gpuSearchPath {
+		if _, err := os.Stat(p); err == nil {
+			return filepath.Abs(p)
+		}
+	}
+	return "", fmt.Errorf("hangar-gpu not found on PATH or in %v", gpuSearchPath)
+}
+
+// StartGpuBackend renders for one guest from a process of its own.
+//
+// The renderer links native graphics libraries whose syscall surface is not
+// ours to enumerate, and loads whichever driver the host has at run time.
+// Keeping it out of the monitor means that surface, and any crash in it,
+// belongs to a process holding no guest memory it was not handed.
+//
+// It owns the socket and must be listening before the monitor starts, which
+// connects to it as a client.
+func StartGpuBackend(ctx context.Context, socket string, venus bool, verbose bool) (*GpuBackend, error) {
+	bin, err := FindGpuBackend()
+	if err != nil {
+		return nil, err
+	}
+
+	_ = os.Remove(socket)
+	if err := os.MkdirAll(filepath.Dir(socket), 0o755); err != nil {
+		return nil, err
+	}
+
+	args := []string{"--socket", socket, "--virgl", "true"}
+	if venus {
+		args = append(args, "--venus", "true")
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	// A host with no /dev/dri has no GBM device, and the renderer needs
+	// telling to use the surfaceless platform rather than probing for one.
+	cmd.Env = append(os.Environ(), "EGL_PLATFORM=surfaceless")
+	if verbose {
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting the gpu backend: %w", err)
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(socket); err == nil {
+			return &GpuBackend{cmd: cmd, socket: socket}, nil
+		}
+		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+			return nil, fmt.Errorf("gpu backend exited before creating %s", socket)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	_ = cmd.Process.Kill()
+	return nil, fmt.Errorf("gpu backend did not create %s within 15s", socket)
+}
+
+// Socket is the path the monitor should connect to.
+func (g *GpuBackend) Socket() string { return g.socket }
+
+// Close stops the backend and removes its socket.
+func (g *GpuBackend) Close() error {
+	if g.cmd != nil && g.cmd.Process != nil {
+		_ = g.cmd.Process.Kill()
+		_, _ = g.cmd.Process.Wait()
+	}
+	return os.Remove(g.socket)
+}
