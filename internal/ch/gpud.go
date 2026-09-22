@@ -69,26 +69,10 @@ func StartGpuBackend(ctx context.Context, socket string, venus bool, state strin
 	// A host with no /dev/dri has no GBM device, and the renderer needs
 	// telling to use the surfaceless platform rather than probing for one.
 	cmd.Env = append(os.Environ(), "EGL_PLATFORM=surfaceless")
-	if verbose {
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
+	if err := launch(cmd, "the gpu backend", socket, 15*time.Second, verbose); err != nil {
+		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("starting the gpu backend: %w", err)
-	}
-
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(socket); err == nil {
-			return &GpuBackend{cmd: cmd, socket: socket, state: state}, nil
-		}
-		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			return nil, fmt.Errorf("gpu backend exited before creating %s", socket)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	_ = cmd.Process.Kill()
-	return nil, fmt.Errorf("gpu backend did not create %s within 15s", socket)
+	return &GpuBackend{cmd: cmd, socket: socket, state: state}, nil
 }
 
 // Socket is the path the monitor should connect to.

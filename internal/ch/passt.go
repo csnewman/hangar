@@ -47,26 +47,10 @@ func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error
 		"--foreground",
 		"--quiet",
 	)
-	if verbose {
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
+	if err := launch(cmd, "passt", socket, 10*time.Second, verbose); err != nil {
+		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("starting passt: %w", err)
-	}
-
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(socket); err == nil {
-			return &Passt{cmd: cmd, socket: socket}, nil
-		}
-		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			return nil, fmt.Errorf("passt exited before creating %s", socket)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	_ = cmd.Process.Kill()
-	return nil, fmt.Errorf("passt did not create %s within 10s", socket)
+	return &Passt{cmd: cmd, socket: socket}, nil
 }
 
 // Socket is the path the monitor should connect to.

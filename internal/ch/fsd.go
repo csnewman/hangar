@@ -90,28 +90,10 @@ func StartFsBackend(ctx context.Context, dir, socket, tag string, daxMinFileSize
 	if state != "" {
 		cmd.Args = append(cmd.Args, "--state", state)
 	}
-	if verbose {
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
+	if err := launch(cmd, "the fs backend", socket, 10*time.Second, verbose); err != nil {
+		return nil, err
 	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("starting the fs backend: %w", err)
-	}
-
-	// The monitor connects to the socket at startup and fails if it is not
-	// there yet, so wait for it rather than racing.
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(socket); err == nil {
-			return &FsBackend{cmd: cmd, socket: socket, dir: abs, state: state}, nil
-		}
-		if cmd.ProcessState != nil && cmd.ProcessState.Exited() {
-			return nil, fmt.Errorf("fs backend exited before creating %s", socket)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	_ = cmd.Process.Kill()
-	return nil, fmt.Errorf("fs backend did not create %s within 10s", socket)
+	return &FsBackend{cmd: cmd, socket: socket, dir: abs, state: state}, nil
 }
 
 // Socket is the path the monitor should connect to.
