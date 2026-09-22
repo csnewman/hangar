@@ -46,3 +46,12 @@ func waitFile(ctx context.Context, path string, timeout time.Duration) error {
 	}
 	return fmt.Errorf("%s did not appear within %s", path, timeout)
 }
+
+// logPathFor is where a backend's log goes: beside its state, so what it did
+// to that state can be read alongside it.
+func logPathFor(state string) string {
+	if state == "" {
+		return ""
+	}
+	return strings.TrimSuffix(state, filepath.Ext(state)) + ".log"
+}

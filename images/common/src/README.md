@@ -9,3 +9,8 @@ no base carries a toolchain.
   survive a suspend" something a test can observe: a lost texture, shader,
   sampler, vertex buffer or framebuffer shows up as a specific wrong pixel, and
   a lost context as a reset.
+- `hangar-vkcheck.c` does the same through Vulkan, with `vkcheck.vert` and
+  `vkcheck.frag` compiled to SPIR-V at build time. It also leans on what a
+  Vulkan program holds for its whole life: command buffers recorded once and
+  resubmitted every frame, descriptor sets written once, and a uniform buffer
+  that stays mapped.

@@ -42,6 +42,16 @@ if ls rootfs/usr/lib/*/libEGL.so.1 >/dev/null 2>&1; then
         /cfg/common/src/hangar-glcheck.c -lEGL -lGLESv2
     echo "glcheck: installed" >&2
 fi
+if ls rootfs/usr/lib/*/libvulkan.so.1 >/dev/null 2>&1; then
+    apt-get install -y -qq --no-install-recommends gcc libc6-dev libvulkan-dev glslang-tools >/dev/null
+    install -d rootfs/usr/local/bin /tmp/vkcheck
+    for s in vert frag; do
+        glslangValidator -V --vn "vkcheck_$s" -o "/tmp/vkcheck/vkcheck_$s.h" "/cfg/common/src/vkcheck.$s" >/dev/null
+    done
+    gcc -O2 -Wall -Wextra -I/tmp/vkcheck -o rootfs/usr/local/bin/hangar-vkcheck \
+        /cfg/common/src/hangar-vkcheck.c -lvulkan
+    echo "vkcheck: installed" >&2
+fi
 
 ln -s "/build/$IMAGE/rootfs" /r
 exec sh /scripts/postprocess.sh

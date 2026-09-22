@@ -1,0 +1,1382 @@
+From 8b386c55405c37d7b8c7aecfb997f4b104bffcef Mon Sep 17 00:00:00 2001
+From: Chandler Newman <chandler2newman@gmail.com>
+Date: Tue, 22 Sep 2026 22:26:54 +0100
+Subject: [PATCH] venus: snapshot a context and restore it in another process
+
+A Vulkan driver's state cannot be read out, but every command that built a
+Venus context passes through the decoder here. So each command whose effect
+lasts -- object creation, memory binds, descriptor updates, command buffer
+recording -- is kept as the raw bytes it arrived as, against the objects it
+concerns, and dropped when they are destroyed. Replayed in their original
+order through the same decoder, they recreate every object under the id the
+guest already holds, since Venus ids are the guest's own. Submits, waits and
+queries are not kept: their lasting effect is on memory, which is read back.
+
+vkr_record_dispatch wraps the three places commands are dispatched -- context
+submission, ring threads, and nested command streams -- and handlers note the
+objects their command concerns where the arguments do not say it plainly.
+
+A snapshot drains every ring, idles every device, and writes the recorded
+commands, each ring's virtqueue seqno, every host-visible allocation's
+contents and the state of fences and events. A restore replays the commands
+with replies switched off -- nobody is waiting for them -- then writes memory
+back and signals what was signalled. A ring created during a restore resumes
+at the head its shared memory holds rather than refusing a non-zero one.
+
+It reaches the render server as two context ops, SNAPSHOT and RESTORE, which
+carry the snapshot as a file descriptor, and the embedder as
+virgl_renderer_context_snapshot and virgl_renderer_context_restore.
+---
+ server/render_context.c        |  32 ++
+ server/render_protocol.h       |  22 ++
+ server/render_state.c          |  14 +
+ server/render_state.h          |   6 +
+ src/meson.build                |   1 +
+ src/proxy/proxy_context.c      |  43 +++
+ src/venus/vkr_buffer.c         |   9 +-
+ src/venus/vkr_command_buffer.c |  11 +-
+ src/venus/vkr_context.c        |   4 +-
+ src/venus/vkr_context.h        |   9 +
+ src/venus/vkr_descriptor_set.c |  18 +-
+ src/venus/vkr_image.c          |   9 +-
+ src/venus/vkr_renderer.c       |  18 +
+ src/venus/vkr_renderer.h       |  10 +
+ src/venus/vkr_ring.c           |  20 +-
+ src/venus/vkr_snapshot.c       | 660 +++++++++++++++++++++++++++++++++
+ src/venus/vkr_snapshot.h       |  68 ++++
+ src/venus/vkr_transport.c      |   4 +-
+ src/virgl_context.h            |   7 +
+ src/virglrenderer.c            |  20 +
+ src/virglrenderer.h            |   8 +
+ 21 files changed, 982 insertions(+), 11 deletions(-)
+ create mode 100644 src/venus/vkr_snapshot.c
+ create mode 100644 src/venus/vkr_snapshot.h
+
+diff --git a/server/render_context.c b/server/render_context.c
+index b44b5b5..98baf79 100644
+--- a/server/render_context.c
++++ b/server/render_context.c
+@@ -122,6 +122,36 @@ render_context_dispatch_create_resource(struct render_context *ctx,
+    return ok;
+ }
+ 
++static bool
++render_context_dispatch_snapshot(struct render_context *ctx,
++                                 UNUSED const union render_context_op_request *request,
++                                 UNUSED const int *fds,
++                                 UNUSED int fd_count)
++{
++   struct render_context_op_snapshot_reply reply = { .ok = false };
++   int fd = -1;
++   reply.ok = render_state_snapshot_context(ctx->ctx_id, &fd);
++   if (!reply.ok)
++      return render_socket_send_reply(&ctx->socket, &reply, sizeof(reply));
++   bool ok = render_socket_send_reply_with_fds(&ctx->socket, &reply, sizeof(reply), &fd, 1);
++   close(fd);
++   return ok;
++}
++
++static bool
++render_context_dispatch_restore(struct render_context *ctx,
++                                UNUSED const union render_context_op_request *request,
++                                const int *fds,
++                                int fd_count)
++{
++   struct render_context_op_restore_reply reply = { .ok = false };
++   if (fd_count == 1) {
++      reply.ok = render_state_restore_context(ctx->ctx_id, fds[0]);
++      close(fds[0]);
++   }
++   return render_socket_send_reply(&ctx->socket, &reply, sizeof(reply));
++}
++
+ static bool
+ render_context_dispatch_init(struct render_context *ctx,
+                              const union render_context_op_request *request,
+@@ -192,6 +222,8 @@ static const struct render_context_dispatch_entry
+       RENDER_CONTEXT_DISPATCH(DESTROY_RESOURCE, destroy_resource, 0),
+       RENDER_CONTEXT_DISPATCH(SUBMIT_CMD, submit_cmd, 0),
+       RENDER_CONTEXT_DISPATCH(SUBMIT_FENCE, submit_fence, 0),
++      RENDER_CONTEXT_DISPATCH(SNAPSHOT, snapshot, 0),
++      RENDER_CONTEXT_DISPATCH(RESTORE, restore, 1),
+ #undef RENDER_CONTEXT_DISPATCH
+    };
+ 
+diff --git a/server/render_protocol.h b/server/render_protocol.h
+index cae94a0..1636869 100644
+--- a/server/render_protocol.h
++++ b/server/render_protocol.h
+@@ -39,6 +39,8 @@ enum render_context_op {
+    RENDER_CONTEXT_OP_DESTROY_RESOURCE,
+    RENDER_CONTEXT_OP_SUBMIT_CMD,
+    RENDER_CONTEXT_OP_SUBMIT_FENCE,
++   RENDER_CONTEXT_OP_SNAPSHOT,
++   RENDER_CONTEXT_OP_RESTORE,
+ 
+    RENDER_CONTEXT_OP_COUNT,
+ };
+@@ -208,6 +210,24 @@ struct render_context_op_submit_fence_request {
+    uint32_t seqno;
+ };
+ 
++/* Write what the context has built into a file, sent back with the reply. */
++struct render_context_op_snapshot_request {
++   struct render_context_op_header header;
++};
++
++struct render_context_op_snapshot_reply {
++   bool ok;
++};
++
++/* Rebuild the context from the snapshot file sent with the request. */
++struct render_context_op_restore_request {
++   struct render_context_op_header header;
++};
++
++struct render_context_op_restore_reply {
++   bool ok;
++};
++
+ union render_context_op_request {
+    struct render_context_op_header header;
+    struct render_context_op_nop_request nop;
+@@ -217,6 +237,8 @@ union render_context_op_request {
+    struct render_context_op_destroy_resource_request destroy_resource;
+    struct render_context_op_submit_cmd_request submit_cmd;
+    struct render_context_op_submit_fence_request submit_fence;
++   struct render_context_op_snapshot_request snapshot;
++   struct render_context_op_restore_request restore;
+ };
+ 
+ #ifdef __APPLE__
+diff --git a/server/render_state.c b/server/render_state.c
+index bc7f8e1..10c7765 100644
+--- a/server/render_state.c
++++ b/server/render_state.c
+@@ -251,3 +251,17 @@ render_state_destroy_resource(uint32_t ctx_id, uint32_t res_id)
+    SCOPE_LOCK_RENDERER();
+    vkr_renderer_destroy_resource(ctx_id, res_id);
+ }
++
++bool
++render_state_snapshot_context(uint32_t ctx_id, int *out_fd)
++{
++   SCOPE_LOCK_RENDERER();
++   return vkr_renderer_snapshot_context(ctx_id, out_fd);
++}
++
++bool
++render_state_restore_context(uint32_t ctx_id, int fd)
++{
++   SCOPE_LOCK_RENDERER();
++   return vkr_renderer_restore_context(ctx_id, fd);
++}
+diff --git a/server/render_state.h b/server/render_state.h
+index 98de272..87bebf6 100644
+--- a/server/render_state.h
++++ b/server/render_state.h
+@@ -53,4 +53,10 @@ render_state_import_resource(uint32_t ctx_id,
+ void
+ render_state_destroy_resource(uint32_t ctx_id, uint32_t res_id);
+ 
++bool
++render_state_snapshot_context(uint32_t ctx_id, int *out_fd);
++
++bool
++render_state_restore_context(uint32_t ctx_id, int fd);
++
+ #endif /* RENDER_STATE_H */
+diff --git a/src/meson.build b/src/meson.build
+index 6fc7f7d..da14f84 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -92,6 +92,7 @@ venus_sources = [
+    'venus/vkr_render_pass.c',
+    'venus/vkr_renderer.c',
+    'venus/vkr_ring.c',
++   'venus/vkr_snapshot.c',
+    'venus/vkr_transport.c',
+ ]
+ 
+diff --git a/src/proxy/proxy_context.c b/src/proxy/proxy_context.c
+index 2780a54..dd350ef 100644
+--- a/src/proxy/proxy_context.c
++++ b/src/proxy/proxy_context.c
+@@ -506,6 +506,47 @@ proxy_context_attach_resource(struct virgl_context *base, struct virgl_resource
+    proxy_context_resource_add(ctx, res_id);
+ }
+ 
++static int
++proxy_context_snapshot(struct virgl_context *base, int *out_fd)
++{
++   struct proxy_context *ctx = (struct proxy_context *)base;
++   const struct render_context_op_snapshot_request req = {
++      .header.op = RENDER_CONTEXT_OP_SNAPSHOT,
++   };
++   if (!proxy_socket_send_request(&ctx->socket, &req, sizeof(req)))
++      return -1;
++
++   struct render_context_op_snapshot_reply reply;
++   int fd = -1;
++   int fd_count = 0;
++   if (!proxy_socket_receive_reply_with_fds(&ctx->socket, &reply, sizeof(reply), &fd, 1,
++                                            &fd_count))
++      return -1;
++   if (!reply.ok || fd_count != 1) {
++      if (fd_count)
++         close(fd);
++      return -1;
++   }
++   *out_fd = fd;
++   return 0;
++}
++
++static int
++proxy_context_restore(struct virgl_context *base, int fd)
++{
++   struct proxy_context *ctx = (struct proxy_context *)base;
++   const struct render_context_op_restore_request req = {
++      .header.op = RENDER_CONTEXT_OP_RESTORE,
++   };
++   if (!proxy_socket_send_request_with_fds(&ctx->socket, &req, sizeof(req), &fd, 1))
++      return -1;
++
++   struct render_context_op_restore_reply reply;
++   if (!proxy_socket_receive_reply(&ctx->socket, &reply, sizeof(reply)))
++      return -1;
++   return reply.ok ? 0 : -1;
++}
++
+ static void
+ proxy_context_destroy(struct virgl_context *base)
+ {
+@@ -563,6 +604,8 @@ proxy_context_init_base(struct proxy_context *ctx)
+    ctx->base.get_fencing_fd = proxy_context_get_fencing_fd;
+    ctx->base.retire_fences = proxy_context_retire_fences;
+    ctx->base.submit_fence = proxy_context_submit_fence;
++   ctx->base.snapshot = proxy_context_snapshot;
++   ctx->base.restore = proxy_context_restore;
+ }
+ 
+ static bool
+diff --git a/src/venus/vkr_buffer.c b/src/venus/vkr_buffer.c
+index 9e466f8..0673a8f 100644
+--- a/src/venus/vkr_buffer.c
++++ b/src/venus/vkr_buffer.c
+@@ -84,12 +84,19 @@ vkr_dispatch_vkBindBufferMemory(UNUSED struct vn_dispatch_context *dispatch,
+ }
+ 
+ static void
+-vkr_dispatch_vkBindBufferMemory2(UNUSED struct vn_dispatch_context *dispatch,
++vkr_dispatch_vkBindBufferMemory2(struct vn_dispatch_context *dispatch,
+                                  struct vn_command_vkBindBufferMemory2 *args)
+ {
+    struct vkr_device *dev = vkr_device_from_handle(args->device);
+    struct vn_device_proc_table *vk = &dev->proc_table;
+ 
++   for (uint32_t i = 0; i < args->bindInfoCount; i++) {
++      const struct vkr_object *buf =
++         (const struct vkr_object *)(uintptr_t)args->pBindInfos[i].buffer;
++      if (buf)
++         vkr_record_note(dispatch->data, buf->id);
++   }
++
+    vn_replace_vkBindBufferMemory2_args_handle(args);
+    args->ret = vk->BindBufferMemory2(args->device, args->bindInfoCount, args->pBindInfos);
+ }
+diff --git a/src/venus/vkr_command_buffer.c b/src/venus/vkr_command_buffer.c
+index 766c5c7..e6b12dc 100644
+--- a/src/venus/vkr_command_buffer.c
++++ b/src/venus/vkr_command_buffer.c
+@@ -47,12 +47,21 @@ vkr_dispatch_vkDestroyCommandPool(struct vn_dispatch_context *dispatch,
+ }
+ 
+ static void
+-vkr_dispatch_vkResetCommandPool(UNUSED struct vn_dispatch_context *dispatch,
++vkr_dispatch_vkResetCommandPool(struct vn_dispatch_context *dispatch,
+                                 struct vn_command_vkResetCommandPool *args)
+ {
+    struct vkr_device *dev = vkr_device_from_handle(args->device);
+    struct vn_device_proc_table *vk = &dev->proc_table;
+ 
++   /* resetting the pool resets every buffer in it, recordings included */
++   struct vkr_command_pool *pool =
++      (struct vkr_command_pool *)(uintptr_t)args->commandPool;
++   if (pool) {
++      list_for_each_entry (struct vkr_command_buffer, cb, &pool->command_buffers,
++                           base.track_head)
++         vkr_record_reset_command_buffer(dispatch->data, cb->base.id);
++   }
++
+    vn_replace_vkResetCommandPool_args_handle(args);
+    args->ret = vk->ResetCommandPool(args->device, args->commandPool, args->flags);
+ }
+diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
+index b97e5ea..138a8e4 100644
+--- a/src/venus/vkr_context.c
++++ b/src/venus/vkr_context.c
+@@ -172,7 +172,7 @@ vkr_context_submit_cmd(struct vkr_context *ctx, const void *buffer, size_t size)
+    vkr_cs_decoder_set_buffer_stream(&ctx->decoder, buffer, size);
+ 
+    while (vkr_cs_decoder_has_command(&ctx->decoder)) {
+-      vn_dispatch_command(&ctx->dispatch);
++      vkr_record_dispatch(ctx, &ctx->dispatch, &ctx->decoder);
+       if (vkr_context_get_fatal(ctx)) {
+          vkr_log("submit_cmd: vn_dispatch_command failed");
+ 
+@@ -623,6 +623,7 @@ vkr_context_destroy(struct vkr_context *ctx)
+       vkr_ring_destroy(ring);
+    }
+    mtx_destroy(&ctx->ring_mutex);
++   vkr_record_fini(&ctx->record);
+ 
+    vkr_context_wait_ring_fini(ctx);
+ 
+@@ -737,6 +738,7 @@ vkr_context_create(uint32_t ctx_id,
+       goto err_ctx_ring_mutex;
+ 
+    list_inithead(&ctx->rings);
++   vkr_record_init(&ctx->record);
+ 
+    return ctx;
+ 
+diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
+index 3867f13..4166b52 100644
+--- a/src/venus/vkr_context.h
++++ b/src/venus/vkr_context.h
+@@ -14,6 +14,7 @@
+ #include "virgl_resource.h"
+ 
+ #include "vkr_cs.h"
++#include "vkr_snapshot.h"
+ 
+ /*
+  * When vkr_context_create_resource or vkr_context_import_resource is called, a
+@@ -103,6 +104,11 @@ struct vkr_context {
+ 
+    struct list_head head;
+    struct vulkan_library vulkan_library;
++
++   /* what this context has built, so a snapshot can rebuild it */
++   struct vkr_record record;
++   /* true while a snapshot is being replayed into this context */
++   bool restoring;
+ };
+ 
+ struct vkr_context *
+@@ -198,6 +204,8 @@ vkr_context_add_object(struct vkr_context *ctx, struct vkr_object *obj)
+    if (vkr_context_validate_object_id_locked(ctx, obj->id))
+       _mesa_hash_table_insert(ctx->object_table, &obj->id, obj);
+    mtx_unlock(&ctx->object_mutex);
++
++   vkr_record_note(ctx, obj->id);
+ }
+ 
+ static inline void
+@@ -207,6 +215,7 @@ vkr_context_remove_object_locked(struct vkr_context *ctx, struct vkr_object *obj
+ 
+    struct hash_entry *entry = _mesa_hash_table_search(ctx->object_table, &obj->id);
+    if (likely(entry)) {
++      vkr_record_forget(ctx, obj->id);
+       vkr_context_free_object(entry);
+       _mesa_hash_table_remove(ctx->object_table, entry);
+    }
+diff --git a/src/venus/vkr_descriptor_set.c b/src/venus/vkr_descriptor_set.c
+index 5ec209f..d015b7e 100644
+--- a/src/venus/vkr_descriptor_set.c
++++ b/src/venus/vkr_descriptor_set.c
+@@ -133,12 +133,28 @@ vkr_dispatch_vkFreeDescriptorSets(struct vn_dispatch_context *dispatch,
+ }
+ 
+ static void
+-vkr_dispatch_vkUpdateDescriptorSets(UNUSED struct vn_dispatch_context *dispatch,
++vkr_dispatch_vkUpdateDescriptorSets(struct vn_dispatch_context *dispatch,
+                                     struct vn_command_vkUpdateDescriptorSets *args)
+ {
+    struct vkr_device *dev = vkr_device_from_handle(args->device);
+    struct vn_device_proc_table *vk = &dev->proc_table;
+ 
++   /* the sets written are what this update belongs to; their handles are still
++    * objects until replaced below
++    */
++   for (uint32_t i = 0; i < args->descriptorWriteCount; i++) {
++      const struct vkr_object *set =
++         (const struct vkr_object *)(uintptr_t)args->pDescriptorWrites[i].dstSet;
++      if (set)
++         vkr_record_note(dispatch->data, set->id);
++   }
++   for (uint32_t i = 0; i < args->descriptorCopyCount; i++) {
++      const struct vkr_object *set =
++         (const struct vkr_object *)(uintptr_t)args->pDescriptorCopies[i].dstSet;
++      if (set)
++         vkr_record_note(dispatch->data, set->id);
++   }
++
+    vn_replace_vkUpdateDescriptorSets_args_handle(args);
+    vk->UpdateDescriptorSets(args->device, args->descriptorWriteCount,
+                             args->pDescriptorWrites, args->descriptorCopyCount,
+diff --git a/src/venus/vkr_image.c b/src/venus/vkr_image.c
+index 2b627e3..7a5148b 100644
+--- a/src/venus/vkr_image.c
++++ b/src/venus/vkr_image.c
+@@ -106,12 +106,19 @@ vkr_dispatch_vkBindImageMemory(UNUSED struct vn_dispatch_context *dispatch,
+ }
+ 
+ static void
+-vkr_dispatch_vkBindImageMemory2(UNUSED struct vn_dispatch_context *dispatch,
++vkr_dispatch_vkBindImageMemory2(struct vn_dispatch_context *dispatch,
+                                 struct vn_command_vkBindImageMemory2 *args)
+ {
+    struct vkr_device *dev = vkr_device_from_handle(args->device);
+    struct vn_device_proc_table *vk = &dev->proc_table;
+ 
++   for (uint32_t i = 0; i < args->bindInfoCount; i++) {
++      const struct vkr_object *img =
++         (const struct vkr_object *)(uintptr_t)args->pBindInfos[i].image;
++      if (img)
++         vkr_record_note(dispatch->data, img->id);
++   }
++
+    vn_replace_vkBindImageMemory2_args_handle(args);
+    args->ret = vk->BindImageMemory2(args->device, args->bindInfoCount, args->pBindInfos);
+ }
+diff --git a/src/venus/vkr_renderer.c b/src/venus/vkr_renderer.c
+index 8aae924..4ee91a4 100644
+--- a/src/venus/vkr_renderer.c
++++ b/src/venus/vkr_renderer.c
+@@ -240,3 +240,21 @@ vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id)
+    if (ctx)
+       vkr_context_destroy_resource(ctx, res_id);
+ }
++
++bool
++vkr_renderer_snapshot_context(uint32_t ctx_id, int *out_fd)
++{
++   struct vkr_context *ctx = vkr_renderer_lookup_context(ctx_id);
++   if (!ctx)
++      return false;
++   return vkr_context_snapshot(ctx, out_fd);
++}
++
++bool
++vkr_renderer_restore_context(uint32_t ctx_id, int fd)
++{
++   struct vkr_context *ctx = vkr_renderer_lookup_context(ctx_id);
++   if (!ctx)
++      return false;
++   return vkr_context_restore(ctx, fd);
++}
+diff --git a/src/venus/vkr_renderer.h b/src/venus/vkr_renderer.h
+index be3ae04..4e299ff 100644
+--- a/src/venus/vkr_renderer.h
++++ b/src/venus/vkr_renderer.h
+@@ -74,4 +74,14 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+ void
+ vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id);
+ 
++/* Writes what a context has built into a new file, returned in out_fd. */
++bool
++vkr_renderer_snapshot_context(uint32_t ctx_id, int *out_fd);
++
++/* Rebuilds a snapshot into a context. The resources the snapshot names must
++ * already be attached.
++ */
++bool
++vkr_renderer_restore_context(uint32_t ctx_id, int fd);
++
+ #endif /* VKR_RENDERER_H */
+diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
+index 0d4899e..d3331ee 100644
+--- a/src/venus/vkr_ring.c
++++ b/src/venus/vkr_ring.c
+@@ -42,7 +42,9 @@ vkr_ring_init_buffer(struct vkr_ring *ring, const struct vkr_ring_layout *layout
+ }
+ 
+ static bool
+-vkr_ring_init_control(struct vkr_ring *ring, const struct vkr_ring_layout *layout)
++vkr_ring_init_control(struct vkr_ring *ring,
++                      const struct vkr_ring_layout *layout,
++                      bool restoring)
+ {
+    struct vkr_ring_control *ctrl = &ring->control;
+ 
+@@ -50,8 +52,11 @@ vkr_ring_init_control(struct vkr_ring *ring, const struct vkr_ring_layout *layou
+    ctrl->tail = get_resource_pointer(layout->resource, layout->tail.begin);
+    ctrl->status = get_resource_pointer(layout->resource, layout->status.begin);
+ 
+-   /* we will manage head and status, and we expect them to be 0 initially */
+-   if (*ctrl->head || *ctrl->status)
++   /* we will manage head and status, and we expect them to be 0 initially --
++    * unless the ring is being restored, when they are wherever the guest and
++    * the renderer before this one left them
++    */
++   if (!restoring && (*ctrl->head || *ctrl->status))
+       return false;
+ 
+    return true;
+@@ -119,10 +124,15 @@ vkr_ring_create(const struct vkr_ring_layout *layout,
+ 
+    ring->resource = layout->resource;
+ 
+-   if (!vkr_ring_init_control(ring, layout))
++   if (!vkr_ring_init_control(ring, layout, ctx->restoring))
+       goto err_init_control;
+ 
+    vkr_ring_init_buffer(ring, layout);
++   /* a restored ring resumes at the head, which is how far the renderer before
++    * this one had consumed
++    */
++   if (ctx->restoring)
++      ring->buffer.cur = atomic_load(ring->control.head);
+    vkr_ring_init_extra(ring, layout);
+ 
+    ring->cmd = malloc(ring->buffer.size);
+@@ -227,7 +237,7 @@ vkr_ring_submit_cmd(struct vkr_ring *ring,
+    vkr_cs_decoder_set_buffer_stream(dec, buffer, size);
+ 
+    while (vkr_cs_decoder_has_command(dec)) {
+-      vn_dispatch_command(&ring->dispatch);
++      vkr_record_dispatch(ring->dispatch.data, &ring->dispatch, dec);
+       if (vkr_cs_decoder_get_fatal(dec)) {
+          vkr_log("ring_submit_cmd: vn_dispatch_command failed");
+ 
+diff --git a/src/venus/vkr_snapshot.c b/src/venus/vkr_snapshot.c
+new file mode 100644
+index 0000000..9cc1ab7
+--- /dev/null
++++ b/src/venus/vkr_snapshot.c
+@@ -0,0 +1,660 @@
++/*
++ * Copyright 2026 Hangar
++ * SPDX-License-Identifier: MIT
++ */
++
++#include "vkr_snapshot.h"
++
++#include <errno.h>
++#include <string.h>
++#include <sys/mman.h>
++#include <sys/stat.h>
++#include <unistd.h>
++
++#include "vkr_context.h"
++#include "vkr_cs.h"
++#include "vkr_device.h"
++#include "vkr_device_memory.h"
++#include "vkr_queue.h"
++#include "vkr_ring.h"
++#include "vn_protocol_renderer_dispatches.h"
++
++#define SNAPSHOT_MAGIC 0x53524b56u /* "VKRS" */
++#define SNAPSHOT_VERSION 1u
++
++enum record_kind {
++   /* creation, binds, descriptor updates: kept while any owner lives */
++   RECORD_STATE = 0,
++   /* a command buffer's recording: dropped when the buffer is reset */
++   RECORD_COMMAND_BUFFER = 1,
++};
++
++struct record_entry {
++   struct list_head head;
++   uint64_t seq;
++   uint32_t kind;
++   uint32_t cmd_type;
++   uint32_t owner_count;
++   vkr_object_id *owners;
++   uint32_t size;
++   uint8_t *bytes;
++};
++
++/* Owners noted by handlers while one command is being dispatched on this
++ * thread. A nested dispatch -- vkExecuteCommandStreamsMESA runs the commands
++ * of a stream from inside its own handler -- works above the outer command's
++ * notes and truncates back to them when it returns.
++ */
++static _Thread_local struct {
++   struct vkr_context *ctx;
++   bool active;
++   vkr_object_id *ids;
++   uint32_t count;
++   uint32_t cap;
++} pending;
++
++void
++vkr_record_init(struct vkr_record *rec)
++{
++   mtx_init(&rec->mutex, mtx_plain);
++   list_inithead(&rec->entries);
++   rec->next_seq = 0;
++}
++
++static void
++entry_free(struct record_entry *e)
++{
++   list_del(&e->head);
++   free(e->owners);
++   free(e->bytes);
++   free(e);
++}
++
++void
++vkr_record_fini(struct vkr_record *rec)
++{
++   list_for_each_entry_safe (struct record_entry, e, &rec->entries, head)
++      entry_free(e);
++   mtx_destroy(&rec->mutex);
++}
++
++void
++vkr_record_note(struct vkr_context *ctx, vkr_object_id id)
++{
++   if (!pending.active || pending.ctx != ctx)
++      return;
++   for (uint32_t i = 0; i < pending.count; i++) {
++      if (pending.ids[i] == id)
++         return;
++   }
++   if (pending.count == pending.cap) {
++      uint32_t cap = pending.cap ? pending.cap * 2 : 16;
++      vkr_object_id *ids = realloc(pending.ids, cap * sizeof(*ids));
++      if (!ids)
++         return;
++      pending.ids = ids;
++      pending.cap = cap;
++   }
++   pending.ids[pending.count++] = id;
++}
++
++static void
++record_add(struct vkr_context *ctx,
++           uint32_t kind,
++           uint32_t cmd_type,
++           const uint8_t *bytes,
++           uint32_t size,
++           const vkr_object_id *owners,
++           uint32_t owner_count)
++{
++   struct record_entry *e = calloc(1, sizeof(*e));
++   if (!e)
++      return;
++   e->owners = malloc(owner_count * sizeof(*owners));
++   e->bytes = malloc(size);
++   if (!e->owners || !e->bytes) {
++      free(e->owners);
++      free(e->bytes);
++      free(e);
++      return;
++   }
++   memcpy(e->owners, owners, owner_count * sizeof(*owners));
++   memcpy(e->bytes, bytes, size);
++   e->owner_count = owner_count;
++   e->size = size;
++   e->kind = kind;
++   e->cmd_type = cmd_type;
++
++   struct vkr_record *rec = &ctx->record;
++   mtx_lock(&rec->mutex);
++   e->seq = rec->next_seq++;
++   list_addtail(&e->head, &rec->entries);
++   mtx_unlock(&rec->mutex);
++}
++
++void
++vkr_record_reset_command_buffer(struct vkr_context *ctx, vkr_object_id cb)
++{
++   struct vkr_record *rec = &ctx->record;
++   mtx_lock(&rec->mutex);
++   list_for_each_entry_safe (struct record_entry, e, &rec->entries, head) {
++      if (e->kind == RECORD_COMMAND_BUFFER && e->owners[0] == cb)
++         entry_free(e);
++   }
++   mtx_unlock(&rec->mutex);
++}
++
++void
++vkr_record_forget(struct vkr_context *ctx, vkr_object_id id)
++{
++   struct vkr_record *rec = &ctx->record;
++   mtx_lock(&rec->mutex);
++   list_for_each_entry_safe (struct record_entry, e, &rec->entries, head) {
++      uint32_t kept = 0;
++      for (uint32_t i = 0; i < e->owner_count; i++) {
++         if (e->owners[i] != id)
++            e->owners[kept++] = e->owners[i];
++      }
++      e->owner_count = kept;
++      if (!kept)
++         entry_free(e);
++   }
++   mtx_unlock(&rec->mutex);
++}
++
++static uint64_t
++read_u64(const uint8_t *bytes, uint32_t size, uint32_t offset)
++{
++   uint64_t v = 0;
++   if (offset + sizeof(v) <= size)
++      memcpy(&v, bytes + offset, sizeof(v));
++   return v;
++}
++
++/* Decides whether a dispatched command's effect lasts, and what it belongs to.
++ *
++ * A command is laid out as its type, its flags, then its arguments, and every
++ * vkCmd* takes the command buffer first, so the buffer it records into is the
++ * eight bytes after the header. The memory binds name their target second.
++ * Everything else that lasts -- creation, descriptor updates, the binds that
++ * take arrays -- is reported by its handler through vkr_record_note.
++ */
++static void
++record_command(struct vkr_context *ctx,
++               uint32_t cmd_type,
++               const uint8_t *bytes,
++               uint32_t size,
++               const vkr_object_id *owners,
++               uint32_t owner_count)
++{
++   const vkr_object_id first = read_u64(bytes, size, 8);
++   const vkr_object_id second = read_u64(bytes, size, 16);
++
++   switch (cmd_type) {
++   case VK_COMMAND_TYPE_vkBeginCommandBuffer_EXT:
++      /* beginning a recording implicitly resets the buffer */
++      vkr_record_reset_command_buffer(ctx, first);
++      record_add(ctx, RECORD_COMMAND_BUFFER, cmd_type, bytes, size, &first, 1);
++      return;
++   case VK_COMMAND_TYPE_vkEndCommandBuffer_EXT:
++      record_add(ctx, RECORD_COMMAND_BUFFER, cmd_type, bytes, size, &first, 1);
++      return;
++   case VK_COMMAND_TYPE_vkResetCommandBuffer_EXT:
++      vkr_record_reset_command_buffer(ctx, first);
++      return;
++   case VK_COMMAND_TYPE_vkBindBufferMemory_EXT:
++   case VK_COMMAND_TYPE_vkBindImageMemory_EXT:
++      record_add(ctx, RECORD_STATE, cmd_type, bytes, size, &second, 1);
++      return;
++   case VK_COMMAND_TYPE_vkExecuteCommandStreamsMESA_EXT:
++      /* the commands it ran were each recorded as they ran */
++      return;
++   default:
++      break;
++   }
++
++   const char *name = vn_dispatch_command_name((VkCommandTypeEXT)cmd_type);
++   if (name && !strncmp(name, "vkCmd", 5)) {
++      record_add(ctx, RECORD_COMMAND_BUFFER, cmd_type, bytes, size, &first, 1);
++      return;
++   }
++
++   if (owner_count)
++      record_add(ctx, RECORD_STATE, cmd_type, bytes, size, owners, owner_count);
++}
++
++void
++vkr_record_dispatch(struct vkr_context *ctx,
++                    struct vn_dispatch_context *dispatch,
++                    struct vkr_cs_decoder *dec)
++{
++   const uint8_t *start = dec->cur;
++   uint32_t cmd_type = UINT32_MAX;
++   if (dec->end - start >= 8)
++      memcpy(&cmd_type, start, sizeof(cmd_type));
++
++   const bool was_active = pending.active;
++   struct vkr_context *const was_ctx = pending.ctx;
++   const uint32_t base = pending.count;
++   pending.active = true;
++   pending.ctx = ctx;
++
++   vn_dispatch_command(dispatch);
++
++   if (!vkr_cs_decoder_get_fatal(dec) && dec->cur > start) {
++      record_command(ctx, cmd_type, start, (uint32_t)(dec->cur - start),
++                     pending.ids + base, pending.count - base);
++   }
++
++   pending.count = base;
++   pending.active = was_active;
++   pending.ctx = was_ctx;
++}
++
++/* --- snapshot -------------------------------------------------------------- */
++
++struct growbuf {
++   uint8_t *data;
++   size_t size;
++   size_t cap;
++   bool failed;
++};
++
++static void
++put(struct growbuf *b, const void *p, size_t n)
++{
++   if (b->failed)
++      return;
++   if (b->size + n > b->cap) {
++      size_t cap = b->cap ? b->cap : 4096;
++      while (cap < b->size + n)
++         cap *= 2;
++      uint8_t *d = realloc(b->data, cap);
++      if (!d) {
++         b->failed = true;
++         return;
++      }
++      b->data = d;
++      b->cap = cap;
++   }
++   memcpy(b->data + b->size, p, n);
++   b->size += n;
++}
++
++static void
++put_u32(struct growbuf *b, uint32_t v)
++{
++   put(b, &v, sizeof(v));
++}
++
++static void
++put_u64(struct growbuf *b, uint64_t v)
++{
++   put(b, &v, sizeof(v));
++}
++
++/* Waits until nothing is in flight: every ring has consumed what the guest
++ * wrote to it, and every device is idle. The guest is paused, so nothing new
++ * arrives meanwhile.
++ */
++static void
++quiesce(struct vkr_context *ctx)
++{
++   for (int i = 0; i < 5000; i++) {
++      bool idle = true;
++      mtx_lock(&ctx->ring_mutex);
++      list_for_each_entry (struct vkr_ring, ring, &ctx->rings, head) {
++         if (ring->buffer.cur != atomic_load(ring->control.tail))
++            idle = false;
++      }
++      mtx_unlock(&ctx->ring_mutex);
++      if (idle)
++         break;
++      usleep(1000);
++   }
++
++   mtx_lock(&ctx->object_mutex);
++   hash_table_foreach (ctx->object_table, entry) {
++      struct vkr_object *obj = entry->data;
++      if (obj->type != VK_OBJECT_TYPE_DEVICE)
++         continue;
++      struct vkr_device *dev = (struct vkr_device *)obj;
++      dev->proc_table.DeviceWaitIdle(obj->handle.device);
++   }
++   mtx_unlock(&ctx->object_mutex);
++}
++
++/* Appends every device's memory contents, and the state of its fences and
++ * events, which live in the driver and not in any recorded command.
++ */
++static void
++put_device_state(struct vkr_context *ctx, struct growbuf *mem, struct growbuf *sync,
++                 uint32_t *mem_count, uint32_t *sync_count)
++{
++   mtx_lock(&ctx->object_mutex);
++   hash_table_foreach (ctx->object_table, entry) {
++      struct vkr_object *obj = entry->data;
++      if (obj->type != VK_OBJECT_TYPE_DEVICE)
++         continue;
++      struct vkr_device *dev = (struct vkr_device *)obj;
++      struct vn_device_proc_table *vk = &dev->proc_table;
++      VkDevice device = obj->handle.device;
++
++      mtx_lock(&dev->object_mutex);
++      list_for_each_entry (struct vkr_object, child, &dev->objects, track_head) {
++         switch (child->type) {
++         case VK_OBJECT_TYPE_DEVICE_MEMORY: {
++            struct vkr_device_memory *m = (struct vkr_device_memory *)child;
++            if (!(m->property_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)) {
++               vkr_log("snapshot: memory %" PRIu64 " is not host visible; contents not kept",
++                       child->id);
++               break;
++            }
++            void *p = NULL;
++            if (vk->MapMemory(device, child->handle.device_memory, 0, VK_WHOLE_SIZE, 0,
++                              &p) != VK_SUCCESS) {
++               vkr_log("snapshot: mapping memory %" PRIu64 " failed", child->id);
++               break;
++            }
++            put_u64(mem, child->id);
++            put_u64(mem, m->allocation_size);
++            put(mem, p, m->allocation_size);
++            vk->UnmapMemory(device, child->handle.device_memory);
++            (*mem_count)++;
++            break;
++         }
++         case VK_OBJECT_TYPE_FENCE:
++            put_u64(sync, child->id);
++            put_u32(sync, VK_OBJECT_TYPE_FENCE);
++            put_u32(sync, vk->GetFenceStatus(device, child->handle.fence) == VK_SUCCESS);
++            (*sync_count)++;
++            break;
++         case VK_OBJECT_TYPE_EVENT:
++            put_u64(sync, child->id);
++            put_u32(sync, VK_OBJECT_TYPE_EVENT);
++            put_u32(sync, vk->GetEventStatus(device, child->handle.event) == VK_EVENT_SET);
++            (*sync_count)++;
++            break;
++         default:
++            break;
++         }
++      }
++      mtx_unlock(&dev->object_mutex);
++   }
++   mtx_unlock(&ctx->object_mutex);
++}
++
++bool
++vkr_context_snapshot(struct vkr_context *ctx, int *out_fd)
++{
++   quiesce(ctx);
++
++   struct growbuf b = { 0 };
++   put_u32(&b, SNAPSHOT_MAGIC);
++   put_u32(&b, SNAPSHOT_VERSION);
++
++   struct vkr_record *rec = &ctx->record;
++   mtx_lock(&rec->mutex);
++   uint32_t entry_count = 0;
++   list_for_each_entry (struct record_entry, e, &rec->entries, head)
++      entry_count++;
++   put_u32(&b, entry_count);
++   list_for_each_entry (struct record_entry, e, &rec->entries, head) {
++      put_u64(&b, e->seq);
++      put_u32(&b, e->kind);
++      put_u32(&b, e->cmd_type);
++      put_u32(&b, e->owner_count);
++      put(&b, e->owners, e->owner_count * sizeof(*e->owners));
++      put_u32(&b, e->size);
++      put(&b, e->bytes, e->size);
++   }
++   mtx_unlock(&rec->mutex);
++
++   mtx_lock(&ctx->ring_mutex);
++   uint32_t ring_count = 0;
++   list_for_each_entry (struct vkr_ring, ring, &ctx->rings, head)
++      ring_count++;
++   put_u32(&b, ring_count);
++   list_for_each_entry (struct vkr_ring, ring, &ctx->rings, head) {
++      put_u64(&b, ring->id);
++      put_u64(&b, ring->virtqueue_seqno);
++   }
++   mtx_unlock(&ctx->ring_mutex);
++
++   struct growbuf mem = { 0 }, sync = { 0 };
++   uint32_t mem_count = 0, sync_count = 0;
++   put_device_state(ctx, &mem, &sync, &mem_count, &sync_count);
++   put_u32(&b, mem_count);
++   put(&b, mem.data, mem.size);
++   put_u32(&b, sync_count);
++   put(&b, sync.data, sync.size);
++   free(mem.data);
++   free(sync.data);
++
++   if (b.failed || mem.failed || sync.failed) {
++      free(b.data);
++      return false;
++   }
++
++   int fd = memfd_create("vkr-snapshot", MFD_CLOEXEC);
++   bool ok = fd >= 0;
++   for (size_t off = 0; ok && off < b.size;) {
++      ssize_t n = write(fd, b.data + off, b.size - off);
++      if (n <= 0)
++         ok = false;
++      else
++         off += (size_t)n;
++   }
++   free(b.data);
++   if (!ok || lseek(fd, 0, SEEK_SET) != 0) {
++      if (fd >= 0)
++         close(fd);
++      return false;
++   }
++
++   vkr_log("snapshot: %u commands, %u rings, %u memories, %u sync objects",
++           entry_count, ring_count, mem_count, sync_count);
++   *out_fd = fd;
++   return true;
++}
++
++/* --- restore --------------------------------------------------------------- */
++
++struct reader {
++   const uint8_t *p;
++   const uint8_t *end;
++   bool failed;
++};
++
++static const void *
++take(struct reader *r, size_t n)
++{
++   if (r->failed || (size_t)(r->end - r->p) < n) {
++      r->failed = true;
++      return NULL;
++   }
++   const void *p = r->p;
++   r->p += n;
++   return p;
++}
++
++static uint32_t
++take_u32(struct reader *r)
++{
++   uint32_t v = 0;
++   const void *p = take(r, sizeof(v));
++   if (p)
++      memcpy(&v, p, sizeof(v));
++   return v;
++}
++
++static uint64_t
++take_u64(struct reader *r)
++{
++   uint64_t v = 0;
++   const void *p = take(r, sizeof(v));
++   if (p)
++      memcpy(&v, p, sizeof(v));
++   return v;
++}
++
++static struct vkr_queue *
++queue_of(struct vkr_context *ctx, struct vkr_device *dev)
++{
++   struct vkr_queue *found = NULL;
++   mtx_lock(&ctx->object_mutex);
++   hash_table_foreach (ctx->object_table, entry) {
++      struct vkr_object *obj = entry->data;
++      if (obj->type == VK_OBJECT_TYPE_QUEUE && ((struct vkr_queue *)obj)->device == dev) {
++         found = (struct vkr_queue *)obj;
++         break;
++      }
++   }
++   mtx_unlock(&ctx->object_mutex);
++   return found;
++}
++
++/* The device an object belongs to, found through each device's children. */
++static struct vkr_device *
++device_of(struct vkr_context *ctx, struct vkr_object *target)
++{
++   struct vkr_device *found = NULL;
++   mtx_lock(&ctx->object_mutex);
++   hash_table_foreach (ctx->object_table, entry) {
++      struct vkr_object *obj = entry->data;
++      if (obj->type != VK_OBJECT_TYPE_DEVICE)
++         continue;
++      struct vkr_device *dev = (struct vkr_device *)obj;
++      mtx_lock(&dev->object_mutex);
++      list_for_each_entry (struct vkr_object, child, &dev->objects, track_head) {
++         if (child == target) {
++            found = dev;
++            break;
++         }
++      }
++      mtx_unlock(&dev->object_mutex);
++      if (found)
++         break;
++   }
++   mtx_unlock(&ctx->object_mutex);
++   return found;
++}
++
++bool
++vkr_context_restore(struct vkr_context *ctx, int fd)
++{
++   struct stat st;
++   if (fstat(fd, &st) || st.st_size <= 0)
++      return false;
++   void *map = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
++   if (map == MAP_FAILED)
++      return false;
++   struct reader r = { .p = map, .end = (const uint8_t *)map + st.st_size };
++
++   if (take_u32(&r) != SNAPSHOT_MAGIC || take_u32(&r) != SNAPSHOT_VERSION) {
++      vkr_log("restore: not a snapshot this renderer wrote");
++      munmap(map, (size_t)st.st_size);
++      return false;
++   }
++
++   /* Commands, in the order they first ran. Each is replayed on its own, so
++    * one that cannot be applied again -- a command buffer that names an object
++    * destroyed since it was recorded, which Vulkan calls invalid and the
++    * guest will not submit -- costs that one command and not the rest.
++    * Replies are switched off: the guest is not waiting for them, and they
++    * would be written into its memory.
++    */
++   const uint32_t entry_count = take_u32(&r);
++   uint32_t replayed = 0, failed = 0;
++   ctx->restoring = true;
++   for (uint32_t i = 0; i < entry_count && !r.failed; i++) {
++      take_u64(&r); /* seq */
++      take_u32(&r); /* kind */
++      take_u32(&r); /* cmd_type */
++      const uint32_t owner_count = take_u32(&r);
++      take(&r, owner_count * sizeof(vkr_object_id));
++      const uint32_t size = take_u32(&r);
++      const uint8_t *bytes = take(&r, size);
++      if (!bytes || size < 8)
++         break;
++      uint8_t *cmd = malloc(size);
++      if (!cmd)
++         break;
++      memcpy(cmd, bytes, size);
++      memset(cmd + 4, 0, 4);
++      if (vkr_context_submit_cmd(ctx, cmd, size)) {
++         replayed++;
++      } else {
++         failed++;
++         ctx->cs_fatal_error = false;
++      }
++      free(cmd);
++   }
++   ctx->restoring = false;
++
++   const uint32_t ring_count = take_u32(&r);
++   for (uint32_t i = 0; i < ring_count && !r.failed; i++) {
++      const uint64_t id = take_u64(&r);
++      const uint64_t seqno = take_u64(&r);
++      mtx_lock(&ctx->ring_mutex);
++      list_for_each_entry (struct vkr_ring, ring, &ctx->rings, head) {
++         if (ring->id == id)
++            ring->virtqueue_seqno = seqno;
++      }
++      mtx_unlock(&ctx->ring_mutex);
++   }
++
++   const uint32_t mem_count = take_u32(&r);
++   uint32_t mem_ok = 0;
++   for (uint32_t i = 0; i < mem_count && !r.failed; i++) {
++      const uint64_t id = take_u64(&r);
++      const uint64_t size = take_u64(&r);
++      const void *data = take(&r, size);
++      struct vkr_object *obj = vkr_context_get_object(ctx, id);
++      if (!data || !obj || obj->type != VK_OBJECT_TYPE_DEVICE_MEMORY)
++         continue;
++      struct vkr_device_memory *m = (struct vkr_device_memory *)obj;
++      struct vn_device_proc_table *vk = &m->device->proc_table;
++      VkDevice device = m->device->base.handle.device;
++      void *p = NULL;
++      if (vk->MapMemory(device, obj->handle.device_memory, 0, VK_WHOLE_SIZE, 0, &p) ==
++          VK_SUCCESS) {
++         memcpy(p, data, size < m->allocation_size ? size : m->allocation_size);
++         vk->UnmapMemory(device, obj->handle.device_memory);
++         mem_ok++;
++      }
++   }
++
++   const uint32_t sync_count = take_u32(&r);
++   for (uint32_t i = 0; i < sync_count && !r.failed; i++) {
++      const uint64_t id = take_u64(&r);
++      const uint32_t type = take_u32(&r);
++      const uint32_t set = take_u32(&r);
++      struct vkr_object *obj = vkr_context_get_object(ctx, id);
++      if (!obj || !set)
++         continue;
++      struct vkr_device *dev = device_of(ctx, obj);
++      if (!dev)
++         continue;
++      struct vn_device_proc_table *vk = &dev->proc_table;
++      if (type == VK_OBJECT_TYPE_EVENT) {
++         vk->SetEvent(dev->base.handle.device, obj->handle.event);
++      } else if (type == VK_OBJECT_TYPE_FENCE) {
++         /* A fence comes back unsignaled; an empty submission signals it. */
++         struct vkr_queue *q = queue_of(ctx, dev);
++         if (q) {
++            mtx_lock(&q->vk_mutex);
++            vk->QueueSubmit(q->base.handle.queue, 0, NULL, obj->handle.fence);
++            mtx_unlock(&q->vk_mutex);
++            vk->WaitForFences(dev->base.handle.device, 1, &obj->handle.fence, VK_TRUE,
++                              UINT64_MAX);
++         }
++      }
++   }
++
++   const bool ok = !r.failed;
++   munmap(map, (size_t)st.st_size);
++   vkr_log("restore: %u of %u commands replayed (%u failed), %u of %u memories written",
++           replayed, entry_count, failed, mem_ok, mem_count);
++   return ok;
++}
+diff --git a/src/venus/vkr_snapshot.h b/src/venus/vkr_snapshot.h
+new file mode 100644
+index 0000000..e0ac8d6
+--- /dev/null
++++ b/src/venus/vkr_snapshot.h
+@@ -0,0 +1,68 @@
++/*
++ * Copyright 2026 Hangar
++ * SPDX-License-Identifier: MIT
++ */
++
++#ifndef VKR_SNAPSHOT_H
++#define VKR_SNAPSHOT_H
++
++#include "vkr_common.h"
++
++struct vn_dispatch_context;
++struct vkr_cs_decoder;
++
++/* What a context has built, kept so that a fresh renderer can build it again.
++ *
++ * A Vulkan driver's state cannot be read out, but every command that built it
++ * passes through the decoder here. So the raw bytes of each command whose
++ * effect lasts -- object creation, memory binds, descriptor updates, command
++ * buffer recording -- are kept against the objects they concern, and dropped
++ * when those objects are destroyed. Replayed in their original order through
++ * the same decoder, they recreate every object under the id the guest already
++ * holds. What commands only use -- submits, waits, queries -- leaves its
++ * lasting effect in memory, which is read back directly.
++ */
++struct vkr_record {
++   mtx_t mutex;
++   struct list_head entries;
++   uint64_t next_seq;
++};
++
++/* Owners that are rings rather than objects are tagged, so the two id spaces
++ * cannot collide.
++ */
++#define VKR_RECORD_RING_TAG (1ull << 63)
++
++void
++vkr_record_init(struct vkr_record *rec);
++
++void
++vkr_record_fini(struct vkr_record *rec);
++
++/* Dispatches one command, recording it if its effect lasts. */
++void
++vkr_record_dispatch(struct vkr_context *ctx,
++                    struct vn_dispatch_context *dispatch,
++                    struct vkr_cs_decoder *dec);
++
++/* Called by a handler to say its command concerns an object, which the
++ * command's record then belongs to.
++ */
++void
++vkr_record_note(struct vkr_context *ctx, vkr_object_id id);
++
++/* An object is gone: records that belonged only to it go too. */
++void
++vkr_record_forget(struct vkr_context *ctx, vkr_object_id id);
++
++/* A command buffer was reset: its recorded commands go. */
++void
++vkr_record_reset_command_buffer(struct vkr_context *ctx, vkr_object_id cb);
++
++bool
++vkr_context_snapshot(struct vkr_context *ctx, int *out_fd);
++
++bool
++vkr_context_restore(struct vkr_context *ctx, int fd);
++
++#endif /* VKR_SNAPSHOT_H */
+diff --git a/src/venus/vkr_transport.c b/src/venus/vkr_transport.c
+index a8daba4..4f4aa7f 100644
+--- a/src/venus/vkr_transport.c
++++ b/src/venus/vkr_transport.c
+@@ -80,7 +80,7 @@ vkr_dispatch_vkExecuteCommandStreamsMESA(
+       }
+ 
+       while (vkr_cs_decoder_has_command(dec)) {
+-         vn_dispatch_command(dispatch);
++         vkr_record_dispatch(ctx, dispatch, dec);
+          if (vkr_context_get_fatal(ctx))
+             break;
+       }
+@@ -217,6 +217,7 @@ vkr_dispatch_vkCreateRingMESA(struct vn_dispatch_context *dispatch,
+    }
+ 
+    ring->id = args->ring;
++   vkr_record_note(ctx, VKR_RECORD_RING_TAG | args->ring);
+ 
+    mtx_lock(&ctx->ring_mutex);
+    list_addtail(&ring->head, &ctx->rings);
+@@ -284,6 +285,7 @@ vkr_dispatch_vkDestroyRingMESA(struct vn_dispatch_context *dispatch,
+    mtx_lock(&ctx->ring_mutex);
+    vkr_ring_destroy(ring);
+    mtx_unlock(&ctx->ring_mutex);
++   vkr_record_forget(ctx, VKR_RECORD_RING_TAG | args->ring);
+ }
+ 
+ static void
+diff --git a/src/virgl_context.h b/src/virgl_context.h
+index 25bc106..0e71b7d 100644
+--- a/src/virgl_context.h
++++ b/src/virgl_context.h
+@@ -132,6 +132,13 @@ struct virgl_context {
+    /* For DRM native contexts, return the device fd: */
+    int (*get_device_fd)(struct virgl_context *ctx);
+ 
++   /* Write what the context has built into a new file returned in out_fd, so
++    * that restore can build it again in another process. Only contexts that
++    * support it set these.
++    */
++   int (*snapshot)(struct virgl_context *ctx, int *out_fd);
++   int (*restore)(struct virgl_context *ctx, int fd);
++
+    /* map a resource into a particular address */
+    void * (*resource_map)(struct virgl_context *ctx,
+                           struct virgl_resource *res,
+diff --git a/src/virglrenderer.c b/src/virglrenderer.c
+index ce2b03d..080da76 100644
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -487,6 +487,26 @@ void virgl_renderer_context_poll(uint32_t ctx_id)
+    ctx->retire_fences(ctx);
+ }
+ 
++int virgl_renderer_context_snapshot(uint32_t ctx_id, int *out_fd)
++{
++   struct virgl_context *ctx = virgl_context_lookup(ctx_id);
++   if (!ctx)
++      return -EINVAL;
++   if (!ctx->snapshot)
++      return -ENOTSUP;
++   return ctx->snapshot(ctx, out_fd) ? -EIO : 0;
++}
++
++int virgl_renderer_context_restore(uint32_t ctx_id, int fd)
++{
++   struct virgl_context *ctx = virgl_context_lookup(ctx_id);
++   if (!ctx)
++      return -EINVAL;
++   if (!ctx->restore)
++      return -ENOTSUP;
++   return ctx->restore(ctx, fd) ? -EIO : 0;
++}
++
+ int virgl_renderer_context_get_poll_fd(uint32_t ctx_id)
+ {
+    struct virgl_context *ctx = virgl_context_lookup(ctx_id);
+diff --git a/src/virglrenderer.h b/src/virglrenderer.h
+index 0bcafef..a887598 100644
+--- a/src/virglrenderer.h
++++ b/src/virglrenderer.h
+@@ -458,6 +458,14 @@ VIRGL_EXPORT int virgl_renderer_context_create_fence(uint32_t ctx_id,
+                                                      uint64_t fence_id);
+ 
+ VIRGL_EXPORT void virgl_renderer_context_poll(uint32_t ctx_id); /* force fences */
++
++/* Write what a context has built into a new file, returned in *out_fd, and
++ * rebuild it from such a file in a context that has been created again with
++ * the same id and the same resources attached. Returns -ENOTSUP for a context
++ * that cannot.
++ */
++VIRGL_EXPORT int virgl_renderer_context_snapshot(uint32_t ctx_id, int *out_fd);
++VIRGL_EXPORT int virgl_renderer_context_restore(uint32_t ctx_id, int fd);
+ VIRGL_EXPORT int virgl_renderer_context_get_poll_fd(uint32_t ctx_id);
+ 
+ /* Map a resource to an specific userspace address. If successful, the
+-- 
+2.53.0
+

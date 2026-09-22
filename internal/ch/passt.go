@@ -47,7 +47,7 @@ func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error
 		"--foreground",
 		"--quiet",
 	)
-	if err := launch(cmd, "passt", socket, 10*time.Second, verbose); err != nil {
+	if err := launch(cmd, "passt", socket, "", 10*time.Second, verbose); err != nil {
 		return nil, err
 	}
 	return &Passt{cmd: cmd, socket: socket}, nil

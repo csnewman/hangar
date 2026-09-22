@@ -90,7 +90,7 @@ func StartFsBackend(ctx context.Context, dir, socket, tag string, daxMinFileSize
 	if state != "" {
 		cmd.Args = append(cmd.Args, "--state", state)
 	}
-	if err := launch(cmd, "the fs backend", socket, 10*time.Second, verbose); err != nil {
+	if err := launch(cmd, "the fs backend", socket, logPathFor(state), 10*time.Second, verbose); err != nil {
 		return nil, err
 	}
 	return &FsBackend{cmd: cmd, socket: socket, dir: abs, state: state}, nil

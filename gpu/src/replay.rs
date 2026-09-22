@@ -22,9 +22,10 @@
 //! the guest's context what it had: the same objects under the same handles,
 //! bound the same way, over resources holding the same data.
 //!
-//! Only virgl is understood. Venus carries Vulkan, whose state is a far larger
-//! surface; a Venus context is recorded as existing and nothing more, and is
-//! reported lost after a restore.
+//! Venus is different. Its commands travel through a ring in shared memory
+//! that the renderer reads directly, so they never pass through here. The
+//! renderer records and rebuilds a Venus context itself, and this keeps its
+//! snapshot alongside the rest; see `Context::venus`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -156,6 +157,16 @@ pub struct Context {
     /// The context's virgl state. None for a context whose protocol is not
     /// understood here, which cannot be rebuilt.
     pub virgl: Option<Virgl>,
+    /// Where a Venus context's own snapshot is in the contents file, as
+    /// offset and length. Venus is rebuilt by the renderer itself, which is
+    /// the only place its commands are seen.
+    #[serde(default)]
+    pub venus: Option<(u64, u64)>,
+}
+
+/// The capset whose command stream is Venus.
+pub fn is_venus(context_init: u32) -> bool {
+    context_init & 0xff == 4
 }
 
 /// The capsets whose command stream is virgl.
@@ -170,6 +181,7 @@ impl Context {
             name,
             attached: BTreeSet::new(),
             virgl: is_virgl(init).then(Virgl::new),
+            venus: None,
         }
     }
 }

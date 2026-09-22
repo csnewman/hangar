@@ -198,6 +198,11 @@ pub struct GpuBackend {
     /// channel before it can be rebuilt.
     pending: Option<(Session, Vec<u8>)>,
     restore_kicked: bool,
+    /// Each blob's descriptor, from its first export. A blob the guest did
+    /// not mark shareable can be exported exactly once -- the renderer hands
+    /// over its only reference -- and it is needed again: to place the blob
+    /// in the window, and to read and write its contents across a restore.
+    blob_fds: std::collections::HashMap<u32, std::os::fd::OwnedFd>,
 }
 
 /// Device events beyond the queues and the exit event, which vhost-user
@@ -232,6 +237,24 @@ extern "C" {
         iovec: *mut libc::iovec,
         iovec_cnt: libc::c_uint,
     ) -> libc::c_int;
+
+    // Hangar's addition to virglrenderer: a context that can write out what it
+    // has built, and build it again. Venus is the one that does.
+    fn virgl_renderer_context_snapshot(ctx_id: u32, out_fd: *mut libc::c_int) -> libc::c_int;
+    fn virgl_renderer_context_restore(ctx_id: u32, fd: libc::c_int) -> libc::c_int;
+}
+
+/// A blob a Venus context made from device memory. Its contents are the
+/// memory's, which the renderer carries in the context's own snapshot, and it
+/// can only be made again once the renderer has rebuilt that memory.
+fn is_venus_memory_blob(session: &Session, r: &Resource) -> bool {
+    match &r.kind {
+        Kind::Blob(b) => {
+            b.blob_id != 0
+                && session.contexts.get(&b.ctx_id).is_some_and(|c| replay::is_venus(c.init))
+        }
+        _ => false,
+    }
 }
 
 impl GpuBackend {
@@ -253,6 +276,7 @@ impl GpuBackend {
             restore_evt: EventFd::new(libc::EFD_NONBLOCK).map_err(|e| Error::Renderer(format!("{e}")))?,
             pending: None,
             restore_kicked: false,
+            blob_fds: std::collections::HashMap::new(),
         })
     }
 
@@ -273,12 +297,7 @@ impl GpuBackend {
             .map(|(_, len)| *len)
             .ok_or(Error::UnknownBlob)?;
 
-        let handle = rutabaga
-            .export_blob(resource_id)
-            .map_err(|e| Error::Renderer(format!("{e}")))?;
-        let RutabagaHandle::MagmaGpuHandle(handle) = handle else {
-            return Err(Error::Renderer("blob exported an unusable handle".into()));
-        };
+        let fd = self.blob_fd(rutabaga, resource_id).map_err(Error::Renderer)?;
 
         let req = VhostUserMMap {
             shmid: self.config.shm_id,
@@ -291,7 +310,7 @@ impl GpuBackend {
         self.frontend
             .as_ref()
             .ok_or(Error::NoWindow)?
-            .shmem_map(&req, &handle.os_handle.as_fd())
+            .shmem_map(&req, &fd)
             .map_err(Error::Map)?;
 
         self.placed
@@ -411,6 +430,7 @@ impl GpuBackend {
     }
 
     fn forget_resource(&mut self, id: u32) {
+        self.blob_fds.remove(&id);
         self.rec.resources.remove(&id);
         for c in self.rec.contexts.values_mut() {
             c.attached.remove(&id);
@@ -442,8 +462,42 @@ impl GpuBackend {
         let mut data: Vec<u8> = Vec::new();
         let (mut carried, mut skipped) = (0usize, 0usize);
 
+        // Venus first: the renderer drains each context's rings before it
+        // writes, and the rings are in shared memory read back below, which
+        // then shows them drained.
+        let mut venus = 0usize;
+        for (&id, c) in session.contexts.iter_mut() {
+            c.venus = None;
+            if !replay::is_venus(c.init) {
+                continue;
+            }
+            let mut fd: libc::c_int = -1;
+            // SAFETY: fd is written by the call and owned here afterwards.
+            let ret = unsafe { virgl_renderer_context_snapshot(id, &mut fd) };
+            if ret != 0 || fd < 0 {
+                warn!("venus context {id}: snapshot failed ({ret})");
+                continue;
+            }
+            use std::io::Read;
+            use std::os::fd::FromRawFd;
+            // SAFETY: the renderer handed this descriptor over.
+            let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+            let mut bytes = Vec::new();
+            if let Err(e) = f.read_to_end(&mut bytes) {
+                warn!("venus context {id}: reading its snapshot: {e}");
+                continue;
+            }
+            c.venus = Some((data.len() as u64, bytes.len() as u64));
+            data.extend_from_slice(&bytes);
+            venus += 1;
+        }
+
+        let snapshot_view = session.clone();
         for (&id, r) in session.resources.iter_mut() {
             r.contents.clear();
+            if is_venus_memory_blob(&snapshot_view, r) {
+                continue;
+            }
             let chunks = match &r.kind {
                 Kind::ThreeD(c) => replay::chunks_for(c),
                 Kind::Blob(b) => Ok(vec![replay::Chunk {
@@ -507,21 +561,32 @@ impl GpuBackend {
         let json = serde_json::to_vec(&session).map_err(|e| format!("{e}"))?;
         write(&path, &json)?;
         Ok(format!(
-            "{} resources ({carried} with contents, {skipped} without), {} contexts, {} bytes of contents",
+            "{} resources ({carried} with contents, {skipped} without), {} contexts ({venus} venus), {} bytes of contents",
             session.resources.len(),
             session.contexts.len(),
             data.len()
         ))
     }
 
-    /// Reads or writes a blob's bytes through a mapping of its exported
-    /// descriptor.
-    fn blob_bytes(&mut self, rutabaga: &mut Rutabaga, id: u32, buf: &mut [u8], write: bool) -> Result<(), String> {
-        use std::os::fd::AsRawFd;
+    /// A blob's descriptor, exported the first time it is asked for and kept.
+    fn blob_fd(&mut self, rutabaga: &mut Rutabaga, id: u32) -> Result<std::os::fd::OwnedFd, String> {
+        if let Some(fd) = self.blob_fds.get(&id) {
+            return fd.try_clone().map_err(|e| format!("{e}"));
+        }
         let handle = rutabaga.export_blob(id).map_err(|e| format!("{e}"))?;
         let RutabagaHandle::MagmaGpuHandle(handle) = handle else {
             return Err("blob exported an unusable handle".into());
         };
+        let fd = handle.os_handle.as_fd().try_clone_to_owned().map_err(|e| format!("{e}"))?;
+        let copy = fd.try_clone().map_err(|e| format!("{e}"))?;
+        self.blob_fds.insert(id, fd);
+        Ok(copy)
+    }
+
+    /// Reads or writes a blob's bytes through a mapping of its descriptor.
+    fn blob_bytes(&mut self, rutabaga: &mut Rutabaga, id: u32, buf: &mut [u8], write: bool) -> Result<(), String> {
+        use std::os::fd::AsRawFd;
+        let fd = self.blob_fd(rutabaga, id)?;
         let prot = if write { libc::PROT_READ | libc::PROT_WRITE } else { libc::PROT_READ };
         // SAFETY: a fresh mapping of a descriptor we hold, sized to the blob,
         // unmapped before returning.
@@ -531,7 +596,7 @@ impl GpuBackend {
                 buf.len(),
                 prot,
                 libc::MAP_SHARED,
-                handle.os_handle.as_fd().as_raw_fd(),
+                fd.as_raw_fd(),
                 0,
             );
             if p == libc::MAP_FAILED {
@@ -574,9 +639,9 @@ impl GpuBackend {
             if let Err(e) = rutabaga.create_context(id, c.init, c.name.as_deref()) {
                 warn!("context {id}: {e}");
                 lost.contexts.insert(id);
-            } else if c.virgl.is_none() {
-                // Its protocol is not understood here, so it exists again
-                // but empty, and the guest is told so.
+            } else if c.virgl.is_none() && c.venus.is_none() {
+                // Neither this process nor the renderer can rebuild it, so it
+                // exists again but empty, and the guest is told so.
                 lost.contexts.insert(id);
             }
         }
@@ -597,6 +662,10 @@ impl GpuBackend {
         }
 
         for (&id, r) in &session.resources {
+            // Made below, once the renderer has rebuilt the memory behind it.
+            if is_venus_memory_blob(&session, r) {
+                continue;
+            }
             let made = match &r.kind {
                 Kind::ThreeD(c) => rutabaga
                     .resource_create_3d(
@@ -699,6 +768,80 @@ impl GpuBackend {
             }
         }
 
+        let mut venus_ok = 0usize;
+        // Venus contexts are rebuilt by the renderer. Everything they name in
+        // shared memory -- their rings, their reply streams -- exists again by
+        // now with its contents, which is what a ring resumes from.
+        for (&ctx_id, c) in &session.contexts {
+            let Some((offset, len)) = c.venus else { continue };
+            if lost.contexts.contains(&ctx_id) {
+                continue;
+            }
+            let Some(bytes) = data.get(offset as usize..(offset + len) as usize) else {
+                lost.contexts.insert(ctx_id);
+                continue;
+            };
+            let restored = (|| -> Result<(), String> {
+                // SAFETY: a fresh anonymous file, owned here.
+                let fd = unsafe { libc::memfd_create(c"hangar-venus".as_ptr(), libc::MFD_CLOEXEC) };
+                if fd < 0 {
+                    return Err(format!("{}", io::Error::last_os_error()));
+                }
+                use std::io::{Seek, Write};
+                use std::os::fd::{FromRawFd, IntoRawFd};
+                // SAFETY: fd was just created and is owned here.
+                let mut f = unsafe { std::fs::File::from_raw_fd(fd) };
+                f.write_all(bytes).map_err(|e| format!("{e}"))?;
+                f.seek(std::io::SeekFrom::Start(0)).map_err(|e| format!("{e}"))?;
+                let fd = f.into_raw_fd();
+                // SAFETY: the renderer takes its own reference to the file.
+                let ret = unsafe { virgl_renderer_context_restore(ctx_id, fd) };
+                // SAFETY: fd is still ours to close.
+                unsafe { libc::close(fd) };
+                if ret != 0 {
+                    return Err(format!("the renderer refused it ({ret})"));
+                }
+                Ok(())
+            })();
+            match restored {
+                Ok(()) => venus_ok += 1,
+                Err(e) => {
+                    warn!("venus context {ctx_id}: {e}");
+                    lost.contexts.insert(ctx_id);
+                }
+            }
+        }
+
+        // With the memory rebuilt, the blobs the guest made from it can be
+        // made again.
+        for (&id, r) in &session.resources {
+            if !is_venus_memory_blob(&session, r) {
+                continue;
+            }
+            let Kind::Blob(b) = &r.kind else { continue };
+            if lost.contexts.contains(&b.ctx_id) {
+                lost.resources.insert(id);
+                continue;
+            }
+            let create = ResourceCreateBlob {
+                blob_mem: b.blob_mem,
+                blob_flags: b.blob_flags,
+                blob_id: b.blob_id,
+                size: b.size,
+            };
+            match rutabaga.resource_create_blob(b.ctx_id, id, create, None, None) {
+                Ok(()) => {
+                    self.blob_sizes.retain(|(i, _)| *i != id);
+                    self.blob_sizes.push((id, b.size));
+                    built.insert(id);
+                }
+                Err(e) => {
+                    warn!("venus blob {id}: {e}");
+                    lost.resources.insert(id);
+                }
+            }
+        }
+
         for (&id, r) in &session.resources {
             if let (true, Some(offset)) = (built.contains(&id), r.mapped_at) {
                 if let Err(e) = self.map_blob(rutabaga, id, offset) {
@@ -739,9 +882,10 @@ impl GpuBackend {
         }
 
         let summary = format!(
-            "{} of {} resources rebuilt ({contents_ok} with contents), {replayed} of {} contexts replayed, {} resources and {} contexts lost",
+            "{} of {} resources rebuilt ({contents_ok} with contents), {} of {} contexts rebuilt ({replayed} virgl, {venus_ok} venus), {} resources and {} contexts lost",
             built.len(),
             session.resources.len(),
+            replayed + venus_ok,
             session.contexts.len(),
             lost.resources.len(),
             lost.contexts.len()
@@ -754,6 +898,9 @@ impl GpuBackend {
             if let Some(c) = rec.contexts.get_mut(id) {
                 c.virgl = None;
             }
+        }
+        for c in rec.contexts.values_mut() {
+            c.venus = None;
         }
         for r in rec.resources.values_mut() {
             r.contents.clear();
