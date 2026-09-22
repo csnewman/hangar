@@ -1,4 +1,4 @@
-From 694ae898f0d37ba50daff8b40f58cdbb80a88c0c Mon Sep 17 00:00:00 2001
+From 6f9b71806afcb63a08b757142358609f7a9984ea Mon Sep 17 00:00:00 2001
 From: Chandler Newman <chandler2newman@hotmail.co.uk>
 Date: Tue, 22 Sep 2026 08:34:23 +0100
 Subject: [PATCH] vhost-user: serve SHMEM_MAP and SHMEM_UNMAP backend requests
@@ -37,16 +37,17 @@ with the region.
  virtio-devices/src/epoll_helper.rs            |  98 +++++++++-
  virtio-devices/src/lib.rs                     |   2 +-
  virtio-devices/src/seccomp_filters.rs         |   6 +
- virtio-devices/src/transport/pci_device.rs    |   4 +-
+ virtio-devices/src/transport/mod.rs           |   4 +-
+ virtio-devices/src/transport/pci_device.rs    |   6 +-
  virtio-devices/src/vhost_user/fs.rs           |  61 ++++++-
  .../src/vhost_user/generic_vhost_user.rs      |  42 ++++-
  virtio-devices/src/vhost_user/mod.rs          |   6 +-
  virtio-devices/src/vhost_user/shmem.rs        | 171 ++++++++++++++++++
  .../src/vhost_user/vu_common_ctrl.rs          |   6 +
  vmm/src/config.rs                             |  14 ++
- vmm/src/device_manager.rs                     |  97 +++++++++-
+ vmm/src/device_manager.rs                     | 123 ++++++++++++-
  vmm/src/vm_config.rs                          |   9 +
- 13 files changed, 503 insertions(+), 18 deletions(-)
+ 14 files changed, 533 insertions(+), 20 deletions(-)
  create mode 100644 virtio-devices/src/vhost_user/shmem.rs
 
 diff --git a/virtio-devices/src/device.rs b/virtio-devices/src/device.rs
@@ -253,10 +254,34 @@ index 37cc6befe..89ba38f10 100644
          (libc::SYS_clock_nanosleep, vec![]),
          (libc::SYS_connect, vec![]),
          (libc::SYS_nanosleep, vec![]),
+diff --git a/virtio-devices/src/transport/mod.rs b/virtio-devices/src/transport/mod.rs
+index 9214de5db..19ad93d9d 100644
+--- a/virtio-devices/src/transport/mod.rs
++++ b/virtio-devices/src/transport/mod.rs
+@@ -6,7 +6,9 @@
+ mod pci_common_config;
+ mod pci_device;
+ pub use pci_common_config::{VIRTIO_PCI_COMMON_CONFIG_ID, VirtioPciCommonConfig};
+-pub use pci_device::{VirtioPciDevice, VirtioPciDeviceActivator, VirtioPciDeviceError};
++pub use pci_device::{
++    VIRTIO_SHM_BAR_INDEX, VirtioPciDevice, VirtioPciDeviceActivator, VirtioPciDeviceError,
++};
+ 
+ pub trait VirtioTransport {
+     fn ioeventfds(&self, base_addr: u64) -> impl Iterator<Item = (&EventFd, u64)>;
 diff --git a/virtio-devices/src/transport/pci_device.rs b/virtio-devices/src/transport/pci_device.rs
-index 6ba83682b..f56e52105 100644
+index 6ba83682b..a8374dada 100644
 --- a/virtio-devices/src/transport/pci_device.rs
 +++ b/virtio-devices/src/transport/pci_device.rs
+@@ -291,7 +291,7 @@ const fn next_bar_addr(offset: u64, size: u64) -> u64 {
+ // Align larger than natural alignment to work around Windows driver issues
+ const VIRTIO_PCI_BAR_ALIGN: u64 = 0x80_0000;
+ const VIRTIO_CONFIG_BAR_INDEX: usize = 0;
+-const VIRTIO_SHM_BAR_INDEX: usize = 2;
++pub const VIRTIO_SHM_BAR_INDEX: usize = 2;
+ 
+ const NOTIFY_OFF_MULTIPLIER: u32 = 4; // A dword per notification address.
+ 
 @@ -1123,11 +1123,11 @@ fn allocate_bars(
                      PciDeviceError::IoRegistrationFailed(shm_list.addr.raw_value(), e)
                  })?;
@@ -712,7 +737,7 @@ index 6f7fd4720..733db20f5 100644
      }
  
 diff --git a/vmm/src/device_manager.rs b/vmm/src/device_manager.rs
-index 5984538f9..306f33d46 100644
+index 5984538f9..e6a0ae832 100644
 --- a/vmm/src/device_manager.rs
 +++ b/vmm/src/device_manager.rs
 @@ -235,6 +235,10 @@ pub enum DeviceManagerError {
@@ -726,7 +751,7 @@ index 5984538f9..306f33d46 100644
      /// Cannot create vhost-user-blk device
      #[error("Cannot create vhost-user-blk device")]
      CreateVhostUserBlk(#[source] vhost_user::Error),
-@@ -3093,6 +3097,84 @@ fn make_virtio_rtc_devices(&mut self, snapshot: Option<&Snapshot>) -> DeviceMana
+@@ -3093,6 +3097,109 @@ fn make_virtio_rtc_devices(&mut self, snapshot: Option<&Snapshot>) -> DeviceMana
          Ok(())
      }
  
@@ -737,6 +762,7 @@ index 5984538f9..306f33d46 100644
 +    /// placed anything there faults rather than seeing unrelated memory.
 +    fn create_shm_window(
 +        &mut self,
++        device_id: &str,
 +        size: u64,
 +        id: u8,
 +        pci_segment: u16,
@@ -757,12 +783,36 @@ index 5984538f9..306f33d46 100644
 +        .map_err(DeviceManagerError::NewMmapRegion)?;
 +        let host_addr = mapping.as_ptr();
 +
++        // A restored window has to be where the guest last put it. The guest
++        // reprograms the BAR during boot and move_bar() follows it, so the
++        // address this device was first given is not where the guest's page
++        // tables point. The PCI configuration space comes back from the
++        // snapshot with the moved address, and nothing else consults it, so
++        // the memory slot has to be created there or the guest's first touch
++        // of the window finds no memory at all.
++        let restored_base = {
++            let tree = self.device_tree.lock().unwrap();
++            tree.get(&format!("{VIRTIO_PCI_DEVICE_NAME_PREFIX}-{device_id}"))
++                .and_then(|node| {
++                    node.resources.iter().find_map(|r| match r {
++                        Resource::PciBar {
++                            index, base, size: bar_size, ..
++                        } if *index == virtio_devices::transport::VIRTIO_SHM_BAR_INDEX
++                            && *bar_size == size =>
++                        {
++                            Some(GuestAddress(*base))
++                        }
++                        _ => None,
++                    })
++                })
++        };
++
 +        // 2 MiB aligned, so the window can be backed by huge pages.
 +        let region_base = self.pci_segments[pci_segment as usize]
 +            .mem64_allocator
 +            .lock()
 +            .unwrap()
-+            .allocate(None, size, Some(0x0020_0000))
++            .allocate(restored_base, size, Some(0x0020_0000))
 +            .ok_or(DeviceManagerError::SharedMemoryRangeAllocation)?;
 +
 +        // SAFETY: host_addr covers size bytes of mapped memory.
@@ -811,7 +861,7 @@ index 5984538f9..306f33d46 100644
      fn make_generic_vhost_user_device(
          &mut self,
          generic_vhost_user_cfg: &mut GenericVhostUserConfig,
-@@ -3112,13 +3194,26 @@ fn make_generic_vhost_user_device(
+@@ -3112,13 +3219,27 @@ fn make_generic_vhost_user_device(
          let mut node = device_node!(id);
  
          if let Some(generic_vhost_user_socket) = generic_vhost_user_cfg.socket.to_str() {
@@ -820,6 +870,7 @@ index 5984538f9..306f33d46 100644
 +            // allocated here and handed to the device.
 +            let cache = if generic_vhost_user_cfg.shm_size > 0 {
 +                Some(self.create_shm_window(
++                    &id,
 +                    generic_vhost_user_cfg.shm_size,
 +                    generic_vhost_user_cfg.shm_id,
 +                    generic_vhost_user_cfg.pci_common.pci_segment,

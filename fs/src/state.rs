@@ -58,6 +58,14 @@ pub struct Saved {
     /// identifier the guest is already using for something else.
     pub next_inode: u64,
     pub next_handle: u64,
+    /// What the guest offered in FUSE_INIT.
+    ///
+    /// Several of the filesystem's behaviours are switched on only by that
+    /// negotiation -- not needing an open before a read is one -- and a
+    /// restored guest never sends FUSE_INIT again, because as far as it knows
+    /// the session never ended. So it is replayed from here.
+    #[serde(default)]
+    pub capable: Option<u64>,
 }
 
 impl Saved {

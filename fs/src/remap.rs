@@ -88,6 +88,8 @@ struct Table {
 pub struct Remap {
     inner: PassthroughFs,
     table: Mutex<Table>,
+    /// What the guest offered in FUSE_INIT; see `state::Saved::capable`.
+    capable: Mutex<Option<u64>>,
 }
 
 impl Remap {
@@ -109,6 +111,7 @@ impl Remap {
         Self {
             inner,
             table: Mutex::new(t),
+            capable: Mutex::new(None),
         }
     }
 
@@ -140,6 +143,18 @@ impl Remap {
         );
         t.by_inner.insert(inner, id);
         id
+    }
+
+    /// Reports a refusal from the filesystem underneath of a nodeid this
+    /// layer holds, which means the two tables disagree.
+    fn note<T>(&self, op: &str, id: u64, r: io::Result<T>) -> io::Result<T> {
+        if let Err(e) = &r {
+            if e.raw_os_error() == Some(libc::EBADF) {
+                let inner = self.table.lock().unwrap().inodes.get(&id).map(|r| r.inner);
+                log::warn!("{op}: nodeid {id} (inner {inner:?}) refused by the filesystem underneath");
+            }
+        }
+        r
     }
 
     /// The filesystem's own nodeid for one the guest named.
@@ -209,6 +224,7 @@ impl Remap {
         let mut s = state::Saved::new();
         s.next_inode = t.next_inode;
         s.next_handle = t.next_handle;
+        s.capable = *self.capable.lock().unwrap();
         for (id, rec) in &t.inodes {
             // A file with no path cannot be looked up again, so recording it
             // would only promise something the restore cannot keep.
@@ -240,6 +256,14 @@ impl Remap {
     pub fn restore(&self, saved: &state::Saved) -> (usize, usize) {
         let ctx = Context::default();
         let (mut ok, mut gone) = (0usize, 0usize);
+        // Before anything else: the options the guest negotiated decide how
+        // the filesystem answers every request after this, and the guest will
+        // not negotiate them again.
+        if let Some(bits) = saved.capable {
+            if let Err(e) = self.init(FsOptions::from_bits_truncate(bits)) {
+                log::error!("replaying the guest's FUSE_INIT: {e}");
+            }
+        }
         {
             let mut t = self.table.lock().unwrap();
             t.next_inode = saved.next_inode.max(state::ROOT_ID + 1);
@@ -318,8 +342,9 @@ macro_rules! by_inode {
     ($( fn $name:ident ( &self, ctx: &Context, inode $(, $arg:ident : $ty:ty )* $(,)? ) -> $ret:ty ; )*) => {
         $(
             fn $name(&self, ctx: &Context, inode: Self::Inode $(, $arg: $ty)*) -> $ret {
+                let id = inode;
                 let inode = self.inode(inode)?;
-                self.inner.$name(ctx, inode $(, $arg)*)
+                self.note(stringify!($name), id, self.inner.$name(ctx, inode $(, $arg)*))
             }
         )*
     };
@@ -330,9 +355,10 @@ macro_rules! by_inode_handle {
     ($( fn $name:ident ( &self, ctx: &Context, inode, handle $(, $arg:ident : $ty:ty )* $(,)? ) -> $ret:ty ; )*) => {
         $(
             fn $name(&self, ctx: &Context, inode: Self::Inode, handle: Self::Handle $(, $arg: $ty)*) -> $ret {
+                let id = inode;
                 let inode = self.inode(inode)?;
                 let handle = self.handle(handle)?;
-                self.inner.$name(ctx, inode, handle $(, $arg)*)
+                self.note(stringify!($name), id, self.inner.$name(ctx, inode, handle $(, $arg)*))
             }
         )*
     };
@@ -343,6 +369,7 @@ impl FileSystem for Remap {
     type Handle = u64;
 
     fn init(&self, capable: FsOptions) -> io::Result<FsOptions> {
+        *self.capable.lock().unwrap() = Some(capable.bits());
         // `capable` is what the guest offered. Asking for anything outside it
         // would be dropped, so the union is intersected before it is
         // returned.
@@ -357,7 +384,7 @@ impl FileSystem for Remap {
 
     fn lookup(&self, ctx: &Context, parent: Self::Inode, name: &CStr) -> io::Result<Entry> {
         let inner_parent = self.inode(parent)?;
-        let entry = self.inner.lookup(ctx, inner_parent, name)?;
+        let entry = self.note("lookup", parent, self.inner.lookup(ctx, inner_parent, name))?;
         Ok(self.entry_out(entry, parent, name))
     }
 
@@ -410,7 +437,8 @@ impl FileSystem for Remap {
 
     fn open(&self, ctx: &Context, inode: Self::Inode, flags: u32, fuse_flags: u32) -> io::Result<(Option<Self::Handle>, OpenOptions, Option<u32>)> {
         let inner = self.inode(inode)?;
-        let (handle, opts, extra) = self.inner.open(ctx, inner, flags, fuse_flags)?;
+        let (handle, opts, extra) =
+            self.note("open", inode, self.inner.open(ctx, inner, flags, fuse_flags))?;
         Ok((self.intern_handle(handle, inode, flags, false), opts, extra))
     }
 
@@ -463,7 +491,11 @@ impl FileSystem for Remap {
     fn setupmapping(&self, ctx: &Context, inode: Self::Inode, handle: Self::Handle, foffset: u64, len: u64, flags: u64, moffset: u64, vu_req: &mut dyn FsCacheReqHandler) -> io::Result<()> {
         let inner = self.inode(inode)?;
         let inner_handle = self.handle(handle)?;
-        self.inner.setupmapping(ctx, inner, inner_handle, foffset, len, flags, moffset, vu_req)?;
+        self.note(
+            "setupmapping",
+            inode,
+            self.inner.setupmapping(ctx, inner, inner_handle, foffset, len, flags, moffset, vu_req),
+        )?;
         self.table.lock().unwrap().mappings.insert(
             moffset,
             state::Mapping { inode, foffset, len, flags, moffset },

@@ -11,7 +11,7 @@ applies where a maintainer would look at it.
 Serves `SHMEM_MAP` and `SHMEM_UNMAP` backend requests, so a vhost-user device
 can publish a shared memory window and let its backend place memory in it.
 
-**503 insertions, 18 deletions, across 13 files.**
+**533 insertions, 20 deletions, across 14 files.**
 
 Two consumers exist the moment it lands, and both are exercised here:
 virtio-fs gets a DAX cache (`../../../fs/`) and a vhost-user virtio-gpu
@@ -60,6 +60,19 @@ would spin.
 Measured on a restore with 154 regions to place: the whole set is made again
 in under a second and before the guest is resumed, against five minutes and
 only after resume without it.
+
+### A restored window is created where the guest left it
+
+The guest reprograms the window's BAR during boot, and `move_bar()` moves the
+memory slot to follow. A restore rebuilds the device from its configuration,
+though, and allocating the window afresh puts the slot back where the device
+was first given it -- while the PCI configuration space comes back from the
+snapshot holding the moved address, which is where the guest's page tables
+point. The guest's first touch of the window then finds no memory at all, and
+KVM answers with an external abort (the guest reports it as a machine check).
+
+So on restore the window is allocated at the BAR 2 address recorded for the
+device in the device tree, which `move_bar()` keeps current.
 
 ### Two rules a backend must follow
 
