@@ -10,6 +10,7 @@
 
 mod fsopts;
 mod server;
+mod state;
 
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
@@ -44,6 +45,14 @@ struct Args {
     /// defines 0 for its cache.
     #[arg(long, default_value_t = 0)]
     shm_id: u8,
+
+    /// Where to keep the guest's session.
+    ///
+    /// Read at startup if it is there, so a guest restored from a snapshot
+    /// finds the nodeids and mappings it is still holding. Written on
+    /// SIGUSR1, which is how a monitor about to snapshot says so.
+    #[arg(long)]
+    state: Option<PathBuf>,
 }
 
 /// Raises the open file limit to the hard limit.
@@ -75,6 +84,37 @@ fn raise_file_limit() {
     log::info!("open file limit raised to {}", lim.rlim_max);
 }
 
+/// Writes the session out whenever SIGUSR1 arrives.
+///
+/// A signal rather than a socket because the only thing that ever asks is
+/// whatever is about to snapshot this guest, and it already knows how to find
+/// the process. The signal is blocked in every thread first, so it is
+/// delivered to this one rather than interrupting a request midway.
+fn save_on_signal(session: std::sync::Arc<state::Session>, path: PathBuf) {
+    // SAFETY: a zeroed sigset is valid for sigemptyset to fill in.
+    let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+    // SAFETY: set is a valid sigset for the duration of these calls.
+    unsafe {
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGUSR1);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+    }
+    std::thread::spawn(move || loop {
+        let mut sig: libc::c_int = 0;
+        // SAFETY: set and sig are valid for the call, which blocks until a
+        // signal in the set is delivered.
+        if unsafe { libc::sigwait(&set, &mut sig) } != 0 {
+            return;
+        }
+        match session.save(&path) {
+            Ok((inodes, maps)) => {
+                log::info!("session saved: {inodes} inodes, {maps} mappings -> {}", path.display())
+            }
+            Err(e) => log::error!("saving the session to {}: {e}", path.display()),
+        }
+    });
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
@@ -85,6 +125,7 @@ fn main() {
         tag: args.tag.clone(),
         dax_min_file_size: args.dax_min_file_size,
         shm_id: args.shm_id,
+        state: args.state.clone(),
     };
 
     let backend = match FsBackend::new(config) {
@@ -94,6 +135,10 @@ fn main() {
             std::process::exit(1);
         }
     };
+
+    if let Some(path) = args.state.clone() {
+        save_on_signal(backend.read().unwrap().session(), path);
+    }
 
     let mut daemon = VhostUserDaemon::new(
         "hangar-fs".to_string(),

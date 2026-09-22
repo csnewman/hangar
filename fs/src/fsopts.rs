@@ -17,6 +17,7 @@
 
 use std::ffi::CStr;
 use std::io;
+use std::sync::Arc;
 use std::time::Duration;
 
 use fuse_backend_rs::abi::fuse_abi::{
@@ -29,6 +30,8 @@ use fuse_backend_rs::api::filesystem::{
 };
 use fuse_backend_rs::passthrough::PassthroughFs;
 use fuse_backend_rs::transport::FsCacheReqHandler;
+
+use crate::state::{Mapping, Session};
 
 /// Options added to whatever the filesystem asks for.
 ///
@@ -48,12 +51,41 @@ fn transport_options() -> FsOptions {
         | FsOptions::INIT_EXT
 }
 
-/// A passthrough filesystem that negotiates the transport's options too.
-pub struct Fs(PassthroughFs);
+/// A passthrough filesystem that negotiates the transport's options too, and
+/// records what the guest is holding.
+///
+/// The record is what makes the session outlive this process: see `state`.
+pub struct Fs(PassthroughFs, Arc<Session>);
 
 impl Fs {
-    pub fn new(inner: PassthroughFs) -> Self {
-        Self(inner)
+    pub fn new(inner: PassthroughFs, session: Arc<Session>) -> Self {
+        Self(inner, session)
+    }
+
+    /// Looks a path up so the filesystem holds its nodeid again.
+    ///
+    /// Each component is looked up in turn, because a lookup names a parent
+    /// nodeid rather than a path. The nodeid that comes back is the one the
+    /// guest already has, since it is derived from the file on disk.
+    pub fn relookup(&self, ctx: &Context, path: &std::path::Path) -> io::Result<u64> {
+        let parts = Session::components(path)
+            .ok_or_else(|| io::Error::other("a path that cannot be looked up"))?;
+        let mut inode = crate::state::ROOT_ID;
+        for part in parts {
+            inode = self.0.lookup(ctx, inode, &part)?.inode;
+        }
+        Ok(inode)
+    }
+
+    /// Makes a mapping the guest already believes in.
+    pub fn remap(
+        &self,
+        ctx: &Context,
+        m: &Mapping,
+        vu_req: &mut dyn FsCacheReqHandler,
+    ) -> io::Result<()> {
+        self.0
+            .setupmapping(ctx, m.inode, 0, m.foffset, m.len, m.flags, m.moffset, vu_req)
     }
 }
 
@@ -72,6 +104,48 @@ impl FileSystem for Fs {
     type Inode = <PassthroughFs as FileSystem>::Inode;
     type Handle = <PassthroughFs as FileSystem>::Handle;
 
+    fn lookup(&self, ctx: &Context, parent: Self::Inode, name: &CStr) -> io::Result<Entry> {
+        let entry = self.0.lookup(ctx, parent, name)?;
+        self.1.lookup(parent, name, entry.inode);
+        Ok(entry)
+    }
+
+    fn setupmapping(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        foffset: u64,
+        len: u64,
+        flags: u64,
+        moffset: u64,
+        vu_req: &mut dyn FsCacheReqHandler,
+    ) -> io::Result<()> {
+        self.0
+            .setupmapping(ctx, inode, handle, foffset, len, flags, moffset, vu_req)?;
+        self.1.map(Mapping {
+            inode,
+            foffset,
+            len,
+            flags,
+            moffset,
+        });
+        Ok(())
+    }
+
+    fn removemapping(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        requests: Vec<RemovemappingOne>,
+        vu_req: &mut dyn FsCacheReqHandler,
+    ) -> io::Result<()> {
+        for r in &requests {
+            self.1.unmap(r.moffset, r.len);
+        }
+        self.0.removemapping(ctx, inode, requests, vu_req)
+    }
+
     fn init(&self, capable: FsOptions) -> io::Result<FsOptions> {
         // `capable` is what the guest offered. Asking for anything outside it
         // would be dropped, so the union is intersected before it is
@@ -81,7 +155,6 @@ impl FileSystem for Fs {
 
     forward! {
         fn destroy(&self);
-        fn lookup(&self, ctx: &Context, parent: Self::Inode, name: &CStr) -> io::Result<Entry>;
         fn forget(&self, ctx: &Context, inode: Self::Inode, count: u64);
         fn batch_forget(&self, ctx: &Context, requests: Vec<(Self::Inode, u64)>);
         fn getattr(&self, ctx: &Context, inode: Self::Inode, handle: Option<Self::Handle>) -> io::Result<(stat64, Duration)>;
@@ -112,8 +185,6 @@ impl FileSystem for Fs {
         fn readdirplus(&self, ctx: &Context, inode: Self::Inode, handle: Self::Handle, size: u32, offset: u64, add_entry: &mut dyn FnMut(DirEntry, Entry) -> io::Result<usize>) -> io::Result<()>;
         fn fsyncdir(&self, ctx: &Context, inode: Self::Inode, datasync: bool, handle: Self::Handle) -> io::Result<()>;
         fn releasedir(&self, ctx: &Context, inode: Self::Inode, flags: u32, handle: Self::Handle) -> io::Result<()>;
-        fn setupmapping(&self, ctx: &Context, inode: Self::Inode, handle: Self::Handle, foffset: u64, len: u64, flags: u64, moffset: u64, vu_req: &mut dyn FsCacheReqHandler) -> io::Result<()>;
-        fn removemapping(&self, ctx: &Context, inode: Self::Inode, requests: Vec<RemovemappingOne>, vu_req: &mut dyn FsCacheReqHandler) -> io::Result<()>;
         fn access(&self, ctx: &Context, inode: Self::Inode, mask: u32) -> io::Result<()>;
         fn lseek(&self, ctx: &Context, inode: Self::Inode, handle: Self::Handle, offset: u64, whence: u32) -> io::Result<u64>;
         fn getlk(&self, ctx: &Context, inode: Self::Inode, handle: Self::Handle, owner: u64, lock: FileLock, flags: u32) -> io::Result<FileLock>;

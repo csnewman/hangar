@@ -23,6 +23,7 @@ use vm_memory::{ByteValued, GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMma
 use vmm_sys_util::epoll::EventSet;
 
 use crate::fsopts;
+use crate::state::Session;
 
 /// Tags are a fixed-width field in the configuration space.
 const TAG_LEN: usize = 36;
@@ -43,6 +44,9 @@ pub struct FsConfig {
     pub tag: String,
     pub dax_min_file_size: u64,
     pub shm_id: u8,
+    /// Where the session is written to and read back from. Without one the
+    /// guest cannot outlive this process.
+    pub state: Option<PathBuf>,
 }
 
 #[repr(C)]
@@ -69,6 +73,8 @@ pub enum Error {
     SharedDir(PathBuf, #[source] io::Error),
     #[error("The tag is longer than the {TAG_LEN} bytes the config space holds")]
     TagTooLong,
+    #[error("Reading the session from {0}: {1}")]
+    State(PathBuf, #[source] io::Error),
 }
 
 /// Turns the filesystem's mapping requests into requests to the monitor.
@@ -145,13 +151,44 @@ impl FsCacheReqHandler for CacheHandler {
     }
 }
 
+/// Looks up every path the saved session names, so the filesystem holds the
+/// nodeids the guest is still using.
+///
+/// A path that has gone is skipped: losing one file is better than refusing
+/// to bring the guest back at all, and the guest finds out the same way it
+/// would have without a restore.
+fn restore_inodes(fs: &fsopts::Fs, session: &Session) {
+    let order = session.replay_order();
+    if order.is_empty() {
+        return;
+    }
+    let ctx = fuse_backend_rs::api::filesystem::Context::default();
+    let (mut ok, mut moved, mut gone) = (0usize, 0usize, 0usize);
+    for (inode, path) in order {
+        match fs.relookup(&ctx, &path) {
+            Ok(got) if got == inode => ok += 1,
+            Ok(got) => {
+                moved += 1;
+                log::warn!("{} came back as {got:#x}, not {inode:#x}", path.display());
+            }
+            Err(_) => gone += 1,
+        }
+    }
+    log::info!("restored {ok} inodes, {moved} moved, {gone} gone");
+}
+
 pub struct FsBackend {
     config: FsConfig,
     vconfig: VirtioFsConfig,
-    server: Arc<Server<fsopts::Fs>>,
+    server: Arc<Server<Arc<fsopts::Fs>>>,
     mem: Option<GuestMemoryAtomic<GuestMemoryMmap>>,
     frontend: Arc<Mutex<Option<Backend>>>,
     event_idx: bool,
+    session: Arc<Session>,
+    fs: Arc<fsopts::Fs>,
+    /// Mappings read from a saved session, waiting for a channel to the
+    /// monitor to make them again.
+    pending: Vec<crate::state::Mapping>,
 }
 
 impl FsBackend {
@@ -181,10 +218,25 @@ impl FsBackend {
             ..Default::default()
         };
 
-        let fs = PassthroughFs::<()>::new(cfg)
+        let passthrough = PassthroughFs::<()>::new(cfg)
             .map_err(|e| Error::SharedDir(dir.clone(), e))?;
-        fs.import()
+        passthrough
+            .import()
             .map_err(|e| Error::SharedDir(dir.clone(), e))?;
+
+        // A session on disk means this process is standing in for one the
+        // guest was already talking to, so the nodeids it holds have to mean
+        // the same files again before it sends a single request.
+        let (session, pending) = match config.state.as_ref().filter(|p| p.exists()) {
+            Some(p) => {
+                let s = Session::load(p).map_err(|e| Error::State(p.clone(), e))?;
+                let pending = s.mappings();
+                (Arc::new(s), pending)
+            }
+            None => (Arc::new(Session::new()), Vec::new()),
+        };
+        let fs = Arc::new(fsopts::Fs::new(passthrough, Arc::clone(&session)));
+        restore_inodes(&fs, &session);
 
         let mut vconfig = VirtioFsConfig::default();
         let tag = config.tag.as_bytes();
@@ -197,11 +249,19 @@ impl FsBackend {
         Ok(FsBackend {
             config,
             vconfig,
-            server: Arc::new(Server::new(fsopts::Fs::new(fs))),
+            server: Arc::new(Server::new(Arc::clone(&fs))),
             mem: None,
             frontend: Arc::new(Mutex::new(None)),
             event_idx: false,
+            session,
+            fs,
+            pending,
         })
+    }
+
+    /// The record of what the guest is holding.
+    pub fn session(&self) -> Arc<Session> {
+        Arc::clone(&self.session)
     }
 
     /// Serve every FUSE message the guest has queued.
@@ -318,6 +378,34 @@ impl VhostUserBackendMut for FsBackend {
         backend.set_shmem_flag(true);
         backend.set_reply_ack_flag(true);
         *self.frontend.lock().unwrap() = Some(backend);
+
+        // The mappings a restored guest is already holding have to be made
+        // again before it runs. They cannot be made from here: this is the
+        // middle of the monitor's device setup, and asking it to service a
+        // hundred and fifty requests before it has finished leaves it unable
+        // to answer and it dies. So they go to a thread, which the monitor
+        // serves once it is listening.
+        if !self.pending.is_empty() {
+            let pending = std::mem::take(&mut self.pending);
+            let frontend = Arc::clone(&self.frontend);
+            let fs = Arc::clone(&self.fs);
+            let shm_id = self.config.shm_id;
+            std::thread::spawn(move || {
+                let mut handler = CacheHandler { frontend, shm_id };
+                let ctx = fuse_backend_rs::api::filesystem::Context::default();
+                let (mut ok, mut failed) = (0usize, 0usize);
+                for m in pending {
+                    match fs.remap(&ctx, &m, &mut handler) {
+                        Ok(()) => ok += 1,
+                        Err(e) => {
+                            failed += 1;
+                            log::warn!("could not make mapping at {:#x} again: {e}", m.moffset);
+                        }
+                    }
+                }
+                log::info!("restored {ok} mappings, {failed} lost");
+            });
+        }
     }
 
     fn handle_event(
