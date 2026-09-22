@@ -28,6 +28,17 @@ import (
 // match what the backend offers.
 const QUEUE_SIZE = 256
 
+// FS_QUEUE_SIZE is the depth of each of virtio-fs's virtqueues. Every read
+// the guest does is a request through one, so it is deeper than the GPU's.
+const FS_QUEUE_SIZE = 1024
+
+// VirtiofsShmID is the identifier the guest looks the DAX window up by.
+// virtio-fs defines 0 for its cache.
+const VirtiofsShmID = 0
+
+// DefaultVirtiofsTag is the mount tag the guest finds its root under.
+const DefaultVirtiofsTag = "hangar-base"
+
 // Disk is a block device attached to the guest.
 type Disk struct {
 	Path     string
@@ -63,11 +74,22 @@ type Config struct {
 	GuestCID    uint32
 	VsockSocket string
 
-	// VirtiofsSocket is a virtiofsd vhost-user socket. The directory it
-	// exports appears in the guest tagged VirtiofsTag. Empty leaves it out.
+	// VirtiofsSocket is a hangar-fs vhost-user socket. The directory that
+	// backend exports becomes the guest's root. Empty leaves it out.
+	//
+	// The mount tag is the backend's to set, since it is the backend that
+	// answers the guest's config space.
 	VirtiofsSocket string
-	// VirtiofsTag is the mount tag the guest uses. Defaults to "hangar-base".
-	VirtiofsTag string
+
+	// VirtiofsDaxMiB sizes the DAX window the guest maps files into. Zero
+	// leaves the guest reading every file through the backend instead.
+	//
+	// The window costs the guest nothing until it maps something into it: it
+	// is address space, not memory. What it buys is the base being read
+	// through the host's page cache rather than copied into each guest, which
+	// is worth more the more guests share a base. docs/plan.md has the
+	// numbers.
+	VirtiofsDaxMiB int
 
 	// NetSocket is a passt vhost-user socket. Empty leaves the guest with no
 	// network.
@@ -167,11 +189,16 @@ func (c *Config) Args() ([]string, error) {
 	}
 
 	if c.VirtiofsSocket != "" {
-		tag := c.VirtiofsTag
-		if tag == "" {
-			tag = "hangar-base"
+		// The generic device rather than --fs, because only it can be given
+		// a shared memory window; the tag comes from the backend either way.
+		spec := fmt.Sprintf(
+			"socket=%s,device_type=fs,queue_sizes=[%d,%d]",
+			c.VirtiofsSocket, FS_QUEUE_SIZE, FS_QUEUE_SIZE,
+		)
+		if c.VirtiofsDaxMiB > 0 {
+			spec += fmt.Sprintf(",shm_size=%dM,shm_id=%d", c.VirtiofsDaxMiB, VirtiofsShmID)
 		}
-		args = append(args, "--fs", fmt.Sprintf("tag=%s,socket=%s", tag, c.VirtiofsSocket))
+		args = append(args, "--generic-vhost-user", spec)
 	}
 
 	if c.GuestCID != 0 {

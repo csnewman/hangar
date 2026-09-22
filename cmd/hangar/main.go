@@ -248,6 +248,7 @@ func runVM(ctx context.Context, argv []string) error {
 	append_ := fs.String("append", "", "extra words for the guest kernel command line")
 	execWait := fs.Duration("exec-timeout", 2*time.Minute, "how long to let -exec run")
 	virtiofs := fs.String("virtiofs", "", "export this directory to the guest over virtiofs")
+	dax := fs.Int("dax", 1024, "MiB of DAX window for the virtiofs root; 0 turns mapping off")
 	network := fs.Bool("net", true, "give the guest outbound networking")
 	gpu := fs.Bool("gpu", false, "give the guest a virtio-gpu device")
 	gpuVenus := fs.Bool("gpu-venus", false, "offer Vulkan through venus, with -gpu")
@@ -345,6 +346,7 @@ func runVM(ctx context.Context, argv []string) error {
 	if *printOnly {
 		if *virtiofs != "" {
 			ccfg.VirtiofsSocket = run + "-virtiofs.sock"
+			ccfg.VirtiofsDaxMiB = *dax
 		}
 		if *network {
 			ccfg.NetSocket = run + "-net.sock"
@@ -361,13 +363,25 @@ func runVM(ctx context.Context, argv []string) error {
 	// monitor starts: it connects to them as a client and gives up if
 	// nothing is there.
 	if *virtiofs != "" {
-		vfs, err := ch.StartVirtiofsd(ctx, *virtiofs, run+"-virtiofs.sock", true)
+		// The backend only offers mappings if the monitor gave it a window,
+		// so the threshold is meaningless without one.
+		var minSize uint64
+		if *dax > 0 {
+			minSize = ch.DefaultDaxMinFileSize
+		}
+		vfs, err := ch.StartFsBackend(ctx, *virtiofs, run+"-virtiofs.sock", ch.DefaultVirtiofsTag, minSize, true)
 		if err != nil {
 			return err
 		}
 		defer vfs.Close()
 		ccfg.VirtiofsSocket = vfs.Socket()
-		fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag hangar-base\n", *virtiofs)
+		ccfg.VirtiofsDaxMiB = *dax
+		if *dax > 0 {
+			fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, %d MiB dax window\n",
+				*virtiofs, ch.DefaultVirtiofsTag, *dax)
+		} else {
+			fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, no dax\n", *virtiofs, ch.DefaultVirtiofsTag)
+		}
 	}
 	if *network {
 		pst, err := ch.StartPasst(ctx, run+"-net.sock", false)
@@ -412,7 +426,7 @@ func runVM(ctx context.Context, argv []string) error {
 
 	// The monitor has to go before its backends do. -exec returns as soon
 	// as the command has run, with the guest still up, and tearing
-	// virtiofsd or passt out from under a live vhost-user connection makes
+	// a backend or passt out from under a live vhost-user connection makes
 	// the monitor report a broken device on the way out. Deferred calls
 	// run last-registered first, so this one precedes both Closes above.
 	vmCtx, stopVM := context.WithCancel(ctx)

@@ -46,9 +46,39 @@ struct Args {
     shm_id: u8,
 }
 
+/// Raises the open file limit to the hard limit.
+///
+/// A passthrough filesystem holds a descriptor per inode the guest has open,
+/// so the guest's idea of how many files it may open is really this process's.
+/// At the default soft limit a guest doing ordinary work -- containerd
+/// starting, a build running -- reaches it and sees EMFILE from operations
+/// that have nothing wrong with them.
+fn raise_file_limit() {
+    let mut lim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: lim is a valid rlimit for the kernel to fill in.
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
+        log::warn!("could not read the open file limit: {}", std::io::Error::last_os_error());
+        return;
+    }
+    if lim.rlim_cur >= lim.rlim_max {
+        return;
+    }
+    lim.rlim_cur = lim.rlim_max;
+    // SAFETY: lim is a valid rlimit and rlim_cur is within rlim_max.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) } != 0 {
+        log::warn!("could not raise the open file limit: {}", std::io::Error::last_os_error());
+        return;
+    }
+    log::info!("open file limit raised to {}", lim.rlim_max);
+}
+
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let args = Args::parse();
+    raise_file_limit();
 
     let config = FsConfig {
         shared_dir: args.shared_dir.clone(),
