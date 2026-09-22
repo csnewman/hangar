@@ -249,6 +249,8 @@ func runVM(ctx context.Context, argv []string) error {
 	execWait := fs.Duration("exec-timeout", 2*time.Minute, "how long to let -exec run")
 	virtiofs := fs.String("virtiofs", "", "export this directory to the guest over virtiofs")
 	network := fs.Bool("net", true, "give the guest outbound networking")
+	gpu := fs.Bool("gpu", false, "give the guest a virtio-gpu device")
+	gpuVenus := fs.Bool("gpu-venus", false, "offer Vulkan through venus, with -gpu")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -294,6 +296,8 @@ func runVM(ctx context.Context, argv []string) error {
 		CPUs:        *cpus,
 		ConsoleFile: *console,
 		ConsoleTTY:  caps.ConsoleTTY,
+		GPU:         *gpu,
+		GPUVenus:    *gpuVenus,
 	}
 
 	if *smoke {

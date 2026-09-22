@@ -69,6 +69,11 @@ type Config struct {
 	// network.
 	NetSocket string
 
+	// GPU gives the guest a virtio-gpu device rendered on the host. Venus
+	// additionally offers Vulkan, which needs blob resources.
+	GPU      bool
+	GPUVenus bool
+
 	// APISocket, when set, lets ch-remote drive the running VM, which is how
 	// the balloon is resized.
 	APISocket string
@@ -164,6 +169,14 @@ func (c *Config) Args() ([]string, error) {
 		// listens; Cloud Hypervisor connects, which is vhost_mode=client and
 		// is its default.
 		args = append(args, "--net", "vhost_user=on,socket="+c.NetSocket)
+	}
+
+	if c.GPU {
+		spec := "virgl=on"
+		if c.GPUVenus {
+			spec += ",venus=on"
+		}
+		args = append(args, "--gpu", spec)
 	}
 
 	if c.APISocket != "" {

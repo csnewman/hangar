@@ -358,7 +358,7 @@ index 539337cdc..c1bf7c46b 100644
   "uuid",
   "vfio-ioctls",
 diff --git a/cloud-hypervisor/src/main.rs b/cloud-hypervisor/src/main.rs
-index 0c9b3d12e..51a556529 100644
+index 0c9b3d12e..18632b339 100644
 --- a/cloud-hypervisor/src/main.rs
 +++ b/cloud-hypervisor/src/main.rs
 @@ -38,7 +38,7 @@ use vmm::vm_config::FwCfgConfig;
@@ -382,6 +382,19 @@ index 0c9b3d12e..51a556529 100644
          Arg::new("cmdline")
              .long("cmdline")
              .help("Kernel command line")
+@@ -731,6 +736,12 @@ fn start_vmm(
+ 
+     event!("vmm", "starting");
+ 
++    // The monitor thread's filter is inherited by every device thread, so it
++    // has to know about the renderer before it is applied. The configuration
++    // is not parsed until after this thread starts, so the command line is
++    // consulted directly.
++    vmm::seccomp_filters::set_gpu_enabled(cmd_arguments.contains_id("gpu"));
++
+     let vmm_thread_handle = vmm::start_vmm_thread(
+         vmm::VmmVersionInfo::new(env!("BUILD_VERSION"), env!("CARGO_PKG_VERSION")),
+         api_socket_path,
 diff --git a/virtio-devices/Cargo.toml b/virtio-devices/Cargo.toml
 index 2ef499f8d..0c3f2b040 100644
 --- a/virtio-devices/Cargo.toml
@@ -396,10 +409,10 @@ index 2ef499f8d..0c3f2b040 100644
  byteorder = { workspace = true }
 diff --git a/virtio-devices/src/gpu.rs b/virtio-devices/src/gpu.rs
 new file mode 100644
-index 000000000..23f368b05
+index 000000000..fcf81ae82
 --- /dev/null
 +++ b/virtio-devices/src/gpu.rs
-@@ -0,0 +1,734 @@
+@@ -0,0 +1,1209 @@
 +// SPDX-License-Identifier: Apache-2.0 AND BSD-3-Clause
 +
 +//! virtio-gpu, rendered in this process by rutabaga_gfx.
@@ -412,6 +425,7 @@ index 000000000..23f368b05
 +//! directly.
 +
 +use std::io;
++use std::mem::size_of;
 +use std::ops::Deref;
 +use std::os::unix::io::AsRawFd;
 +use std::sync::atomic::AtomicBool;
@@ -421,8 +435,9 @@ index 000000000..23f368b05
 +use event_monitor::event;
 +use log::{debug, error, info, warn};
 +use rutabaga_gfx::{
-+    Rutabaga, RutabagaBuilder, RutabagaComponentType, RutabagaFence, RutabagaFenceHandler,
-+    RUTABAGA_CAPSET_VENUS, RUTABAGA_CAPSET_VIRGL, RUTABAGA_CAPSET_VIRGL2,
++    ResourceCreate3D, Rutabaga, RutabagaBuilder, RutabagaComponentType, RutabagaFence,
++    RutabagaFenceHandler, RutabagaIovec, Transfer3D, RUTABAGA_CAPSET_VENUS, RUTABAGA_CAPSET_VIRGL,
++    RUTABAGA_CAPSET_VIRGL2,
 +};
 +use seccompiler::SeccompAction;
 +use serde::{Deserialize, Serialize};
@@ -464,8 +479,30 @@ index 000000000..23f368b05
 +// Commands. 2D and capset queries are answered here; the 3D commands arrive
 +// once the guest has negotiated VIRGL.
 +const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;
++const VIRTIO_GPU_CMD_RESOURCE_CREATE_2D: u32 = 0x0101;
++const VIRTIO_GPU_CMD_RESOURCE_UNREF: u32 = 0x0102;
++const VIRTIO_GPU_CMD_SET_SCANOUT: u32 = 0x0103;
++const VIRTIO_GPU_CMD_RESOURCE_FLUSH: u32 = 0x0104;
++const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D: u32 = 0x0105;
++const VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING: u32 = 0x0106;
++const VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING: u32 = 0x0107;
 +const VIRTIO_GPU_CMD_GET_CAPSET_INFO: u32 = 0x0108;
 +const VIRTIO_GPU_CMD_GET_CAPSET: u32 = 0x0109;
++
++const VIRTIO_GPU_CMD_CTX_CREATE: u32 = 0x0200;
++const VIRTIO_GPU_CMD_CTX_DESTROY: u32 = 0x0201;
++const VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE: u32 = 0x0202;
++const VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE: u32 = 0x0203;
++const VIRTIO_GPU_CMD_RESOURCE_CREATE_3D: u32 = 0x0204;
++const VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D: u32 = 0x0205;
++const VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D: u32 = 0x0206;
++const VIRTIO_GPU_CMD_SUBMIT_3D: u32 = 0x0207;
++
++const VIRTIO_GPU_CMD_UPDATE_CURSOR: u32 = 0x0300;
++const VIRTIO_GPU_CMD_MOVE_CURSOR: u32 = 0x0301;
++
++/// Set in a command header when the guest wants the command fenced.
++const VIRTIO_GPU_FLAG_FENCE: u32 = 1 << 0;
 +
 +// Responses.
 +const VIRTIO_GPU_RESP_OK_NODATA: u32 = 0x1100;
@@ -474,6 +511,7 @@ index 000000000..23f368b05
 +const VIRTIO_GPU_RESP_OK_CAPSET: u32 = 0x1103;
 +const VIRTIO_GPU_RESP_ERR_UNSPEC: u32 = 0x1200;
 +const VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER: u32 = 0x1205;
++const VIRTIO_GPU_RESP_ERR_INVALID_RESOURCE_ID: u32 = 0x1203;
 +
 +/// The specification fixes the number of scanouts a device may expose.
 +const VIRTIO_GPU_MAX_SCANOUTS: usize = 16;
@@ -574,6 +612,146 @@ index 000000000..23f368b05
 +}
 +// SAFETY: plain data.
 +unsafe impl ByteValued for GetCapset {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct ResourceCreate2D {
++    resource_id: u32,
++    format: u32,
++    width: u32,
++    height: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for ResourceCreate2D {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct ResourceUnref {
++    resource_id: u32,
++    padding: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for ResourceUnref {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct SetScanout {
++    r: Rect,
++    scanout_id: u32,
++    resource_id: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for SetScanout {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct ResourceFlush {
++    r: Rect,
++    resource_id: u32,
++    padding: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for ResourceFlush {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct TransferToHost2D {
++    r: Rect,
++    offset: u64,
++    resource_id: u32,
++    padding: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for TransferToHost2D {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct AttachBacking {
++    resource_id: u32,
++    nr_entries: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for AttachBacking {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct MemEntry {
++    addr: u64,
++    length: u32,
++    padding: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for MemEntry {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug)]
++struct CtxCreate {
++    nlen: u32,
++    context_init: u32,
++    debug_name: [u8; 64],
++}
++
++impl Default for CtxCreate {
++    fn default() -> Self {
++        Self {
++            nlen: 0,
++            context_init: 0,
++            debug_name: [0; 64],
++        }
++    }
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for CtxCreate {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct CtxResource {
++    resource_id: u32,
++    padding: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for CtxResource {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct ResourceCreate3DReq {
++    resource_id: u32,
++    target: u32,
++    format: u32,
++    bind: u32,
++    width: u32,
++    height: u32,
++    depth: u32,
++    array_size: u32,
++    last_level: u32,
++    nr_samples: u32,
++    flags: u32,
++    padding: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for ResourceCreate3DReq {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct TransferHost3D {
++    box_: [u32; 6],
++    offset: u64,
++    resource_id: u32,
++    level: u32,
++    stride: u32,
++    layer_stride: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for TransferHost3D {}
++
++#[repr(C)]
++#[derive(Clone, Copy, Debug, Default)]
++struct CmdSubmit {
++    size: u32,
++    num_in_fences: u32,
++}
++// SAFETY: plain data.
++unsafe impl ByteValued for CmdSubmit {}
 +
 +/// The device configuration space the guest reads.
 +#[repr(C)]
@@ -707,7 +885,7 @@ index 000000000..23f368b05
 +                body.extend_from_slice(&buf);
 +            }
 +        }
-+        if body.len() < std::mem::size_of::<CtrlHeader>() {
++        if body.len() < size_of::<CtrlHeader>() {
 +            return Err(Error::NoCommand);
 +        }
 +        if resp_addrs.is_empty() {
@@ -754,12 +932,46 @@ index 000000000..23f368b05
 +
 +    /// Answer one command. Returns the bytes to place in the guest's reply
 +    /// buffers.
-+    fn dispatch(&mut self, body: &[u8]) -> Vec<u8> {
-+        let hdr = match CtrlHeader::from_slice(&body[..std::mem::size_of::<CtrlHeader>()]) {
++    /// Resolve a guest memory range to a host pointer the renderer can read.
++    ///
++    /// The renderer writes through these pointers, so each entry is checked
++    /// to lie wholly inside one guest region rather than trusting the guest's
++    /// address and length.
++    fn iovec(
++        mem: &GuestMemoryMmap,
++        addr: u64,
++        len: u32,
++    ) -> Option<RutabagaIovec> {
++        use vm_memory::GuestMemory;
++        let start = vm_memory::GuestAddress(addr);
++        let len = len as usize;
++        if len == 0 {
++            return None;
++        }
++        // get_slice fails unless the whole span sits in one region.
++        let slice = mem.get_slice(start, len).ok()?;
++        Some(RutabagaIovec {
++            base: slice.ptr_guard_mut().as_ptr() as *mut std::ffi::c_void,
++            len,
++        })
++    }
++
++    fn ok_or_err(result: Result<(), impl std::fmt::Display>, what: &str) -> u32 {
++        match result {
++            Ok(()) => VIRTIO_GPU_RESP_OK_NODATA,
++            Err(e) => {
++                warn!("virtio-gpu {what}: {e}");
++                VIRTIO_GPU_RESP_ERR_UNSPEC
++            }
++        }
++    }
++
++    fn dispatch(&mut self, body: &[u8], mem: &GuestMemoryMmap) -> Vec<u8> {
++        let hdr = match CtrlHeader::from_slice(&body[..size_of::<CtrlHeader>()]) {
 +            Some(h) => *h,
 +            None => return Vec::new(),
 +        };
-+        let payload = &body[std::mem::size_of::<CtrlHeader>()..];
++        let payload = &body[size_of::<CtrlHeader>()..];
 +
 +        match hdr.type_ {
 +            VIRTIO_GPU_CMD_GET_DISPLAY_INFO => {
@@ -784,7 +996,7 @@ index 000000000..23f368b05
 +
 +            VIRTIO_GPU_CMD_GET_CAPSET_INFO => {
 +                let req = match GetCapsetInfo::from_slice(
-+                    payload.get(..std::mem::size_of::<GetCapsetInfo>()).unwrap_or(&[]),
++                    payload.get(..size_of::<GetCapsetInfo>()).unwrap_or(&[]),
 +                ) {
 +                    Some(r) => *r,
 +                    None => {
@@ -814,7 +1026,7 @@ index 000000000..23f368b05
 +
 +            VIRTIO_GPU_CMD_GET_CAPSET => {
 +                let req = match GetCapset::from_slice(
-+                    payload.get(..std::mem::size_of::<GetCapset>()).unwrap_or(&[]),
++                    payload.get(..size_of::<GetCapset>()).unwrap_or(&[]),
 +                ) {
 +                    Some(r) => *r,
 +                    None => {
@@ -842,13 +1054,274 @@ index 000000000..23f368b05
 +                }
 +            }
 +
++            VIRTIO_GPU_CMD_RESOURCE_CREATE_2D => {
++                let Some(req) = ResourceCreate2D::from_slice(
++                    payload.get(..size_of::<ResourceCreate2D>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                // A 2D resource is a 3D one with a single level and no depth.
++                let create = ResourceCreate3D {
++                    target: 2,
++                    format: req.format,
++                    bind: (1 << 1) | (1 << 2),
++                    width: req.width,
++                    height: req.height,
++                    depth: 1,
++                    array_size: 1,
++                    last_level: 0,
++                    nr_samples: 0,
++                    flags: 0,
++                };
++                let code = Self::ok_or_err(
++                    self.rutabaga.resource_create_3d(req.resource_id, create),
++                    "resource_create_2d",
++                );
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_RESOURCE_CREATE_3D => {
++                let Some(req) = ResourceCreate3DReq::from_slice(
++                    payload.get(..size_of::<ResourceCreate3DReq>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let create = ResourceCreate3D {
++                    target: req.target,
++                    format: req.format,
++                    bind: req.bind,
++                    width: req.width,
++                    height: req.height,
++                    depth: req.depth,
++                    array_size: req.array_size,
++                    last_level: req.last_level,
++                    nr_samples: req.nr_samples,
++                    flags: req.flags,
++                };
++                let code = Self::ok_or_err(
++                    self.rutabaga.resource_create_3d(req.resource_id, create),
++                    "resource_create_3d",
++                );
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_RESOURCE_UNREF => {
++                let Some(req) = ResourceUnref::from_slice(
++                    payload.get(..size_of::<ResourceUnref>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let code = Self::ok_or_err(
++                    self.rutabaga.unref_resource(req.resource_id),
++                    "resource_unref",
++                );
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING => {
++                let Some(req) = AttachBacking::from_slice(
++                    payload.get(..size_of::<AttachBacking>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let entries = &payload[size_of::<AttachBacking>()..];
++                let want = req.nr_entries as usize * size_of::<MemEntry>();
++                if entries.len() < want {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                }
++                let mut vecs = Vec::with_capacity(req.nr_entries as usize);
++                for i in 0..req.nr_entries as usize {
++                    let off = i * size_of::<MemEntry>();
++                    let Some(e) =
++                        MemEntry::from_slice(&entries[off..off + size_of::<MemEntry>()])
++                    else {
++                        return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                    };
++                    match Self::iovec(mem, e.addr, e.length) {
++                        Some(v) => vecs.push(v),
++                        None => {
++                            warn!("attach_backing: entry outside guest memory");
++                            return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                        }
++                    }
++                }
++                let code = Self::ok_or_err(
++                    self.rutabaga.attach_backing(req.resource_id, vecs),
++                    "attach_backing",
++                );
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING => {
++                let Some(req) = ResourceUnref::from_slice(
++                    payload.get(..size_of::<ResourceUnref>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let code = Self::ok_or_err(
++                    self.rutabaga.detach_backing(req.resource_id),
++                    "detach_backing",
++                );
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_SET_SCANOUT => {
++                let Some(req) = SetScanout::from_slice(
++                    payload.get(..size_of::<SetScanout>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                // Nothing is displayed on a host with no output, so the
++                // scanout is recorded and the guest told it succeeded.
++                let code = Self::ok_or_err(
++                    self.rutabaga.set_scanout(req.scanout_id, req.resource_id, None),
++                    "set_scanout",
++                );
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_RESOURCE_FLUSH => {
++                let Some(req) = ResourceFlush::from_slice(
++                    payload.get(..size_of::<ResourceFlush>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let code = Self::ok_or_err(
++                    self.rutabaga.resource_flush(req.resource_id),
++                    "resource_flush",
++                );
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D => {
++                let Some(req) = TransferToHost2D::from_slice(
++                    payload.get(..size_of::<TransferToHost2D>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let transfer = Transfer3D {
++                    x: req.r.x,
++                    y: req.r.y,
++                    z: 0,
++                    w: req.r.width,
++                    h: req.r.height,
++                    d: 1,
++                    level: 0,
++                    stride: 0,
++                    layer_stride: 0,
++                    offset: req.offset,
++                };
++                let code = Self::ok_or_err(
++                    self.rutabaga
++                        .transfer_write(0, req.resource_id, transfer, None),
++                    "transfer_to_host_2d",
++                );
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D | VIRTIO_GPU_CMD_TRANSFER_FROM_HOST_3D => {
++                let Some(req) = TransferHost3D::from_slice(
++                    payload.get(..size_of::<TransferHost3D>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let transfer = Transfer3D {
++                    x: req.box_[0],
++                    y: req.box_[1],
++                    z: req.box_[2],
++                    w: req.box_[3],
++                    h: req.box_[4],
++                    d: req.box_[5],
++                    level: req.level,
++                    stride: req.stride,
++                    layer_stride: req.layer_stride,
++                    offset: req.offset,
++                };
++                let result = if hdr.type_ == VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D {
++                    self.rutabaga
++                        .transfer_write(hdr.ctx_id, req.resource_id, transfer, None)
++                } else {
++                    self.rutabaga
++                        .transfer_read(hdr.ctx_id, req.resource_id, transfer, None)
++                };
++                let code = Self::ok_or_err(result, "transfer_3d");
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_CTX_CREATE => {
++                let Some(req) =
++                    CtxCreate::from_slice(payload.get(..size_of::<CtxCreate>()).unwrap_or(&[]))
++                else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let nlen = std::cmp::min(req.nlen as usize, req.debug_name.len());
++                let name = std::str::from_utf8(&req.debug_name[..nlen]).ok();
++                let code = Self::ok_or_err(
++                    self.rutabaga
++                        .create_context(hdr.ctx_id, req.context_init, name),
++                    "ctx_create",
++                );
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_CTX_DESTROY => {
++                let code =
++                    Self::ok_or_err(self.rutabaga.destroy_context(hdr.ctx_id), "ctx_destroy");
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE | VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE => {
++                let Some(req) = CtxResource::from_slice(
++                    payload.get(..size_of::<CtxResource>()).unwrap_or(&[]),
++                ) else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let result = if hdr.type_ == VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE {
++                    self.rutabaga
++                        .context_attach_resource(hdr.ctx_id, req.resource_id)
++                } else {
++                    self.rutabaga
++                        .context_detach_resource(hdr.ctx_id, req.resource_id)
++                };
++                let code = Self::ok_or_err(result, "ctx_attach_or_detach");
++                Self::err(&hdr, code)
++            }
++
++            VIRTIO_GPU_CMD_SUBMIT_3D => {
++                let Some(req) =
++                    CmdSubmit::from_slice(payload.get(..size_of::<CmdSubmit>()).unwrap_or(&[]))
++                else {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                };
++                let start = size_of::<CmdSubmit>();
++                let end = start + req.size as usize;
++                if payload.len() < end {
++                    return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
++                }
++                let mut cmds = payload[start..end].to_vec();
++                let code = Self::ok_or_err(
++                    self.rutabaga.submit_command(hdr.ctx_id, &mut cmds, &[]),
++                    "submit_3d",
++                );
++                Self::err(&hdr, code)
++            }
++
++            // Nothing is displayed, so a cursor is accepted and dropped. The
++            // guest still needs the queue drained and acknowledged.
++            VIRTIO_GPU_CMD_UPDATE_CURSOR | VIRTIO_GPU_CMD_MOVE_CURSOR => {
++                Self::err(&hdr, VIRTIO_GPU_RESP_OK_NODATA)
++            }
++
 +            other => {
-+                debug!("virtio-gpu command {other:#06x} not handled yet");
-+                Self::header_of(VIRTIO_GPU_RESP_ERR_UNSPEC, &hdr)
-+                    .as_slice()
-+                    .to_vec()
++                debug!("virtio-gpu command {other:#06x} not handled");
++                Self::err(&hdr, VIRTIO_GPU_RESP_ERR_UNSPEC)
 +            }
 +        }
++    }
++
++    /// A bare header carrying one response code.
++    fn err(hdr: &CtrlHeader, code: u32) -> Vec<u8> {
++        Self::header_of(code, hdr).as_slice().to_vec()
 +    }
 +
 +    fn process(&mut self, which: u16) -> Result<bool, Error> {
@@ -867,7 +1340,22 @@ index 000000000..23f368b05
 +
 +            let written = match Self::split(&mut desc_chain, self.access_platform.as_deref()) {
 +                Ok(Request { body, resp_addrs }) => {
-+                    let resp = self.dispatch(&body);
++                    let resp = self.dispatch(&body, mem.deref());
++                    // A fenced command is only complete once the renderer says
++                    // so, which is what the guest waits on.
++                    if let Some(h) = CtrlHeader::from_slice(&body[..size_of::<CtrlHeader>()]) {
++                        if h.flags & VIRTIO_GPU_FLAG_FENCE != 0 {
++                            let fence = RutabagaFence {
++                                flags: h.flags,
++                                fence_id: h.fence_id,
++                                ctx_id: h.ctx_id,
++                                ring_idx: h.ring_idx,
++                            };
++                            if let Err(e) = self.rutabaga.create_fence(fence) {
++                                warn!("virtio-gpu create_fence: {e}");
++                            }
++                        }
++                    }
 +                    Self::reply(&desc_chain, &resp_addrs, &resp)?
 +                }
 +                Err(e) => {
@@ -1046,7 +1534,7 @@ index 000000000..23f368b05
 +    }
 +
 +    fn config_size(&self) -> Option<u64> {
-+        Some(std::mem::size_of::<VirtioGpuConfig>() as u64)
++        Some(size_of::<VirtioGpuConfig>() as u64)
 +    }
 +
 +    fn read_config(&self, offset: u64, data: &mut [u8]) {
@@ -1147,7 +1635,7 @@ index c81f37087..38566987f 100644
  pub mod mem;
  pub mod net;
 diff --git a/virtio-devices/src/seccomp_filters.rs b/virtio-devices/src/seccomp_filters.rs
-index 75f493448..dad6d5b40 100644
+index 75f493448..bd972289f 100644
 --- a/virtio-devices/src/seccomp_filters.rs
 +++ b/virtio-devices/src/seccomp_filters.rs
 @@ -19,6 +19,7 @@ pub enum Thread {
@@ -1158,21 +1646,82 @@ index 75f493448..dad6d5b40 100644
      VirtioIommu,
      VirtioMem,
      VirtioNet,
-@@ -146,6 +147,13 @@ fn create_virtio_block_ioctl_seccomp_rule() -> Vec<SeccompRule> {
+@@ -146,6 +147,74 @@ fn create_virtio_block_ioctl_seccomp_rule() -> Vec<SeccompRule> {
      ]
  }
  
 +fn virtio_gpu_thread_rules() -> Vec<(i64, Vec<SeccompRule>)> {
-+    // The renderer links native graphics libraries, so this is deliberately
-+    // the permissive set until the device has been exercised enough to know
-+    // what it actually calls.
-+    virtio_console_thread_rules()
++    // Measured, not guessed: this is what a full renderer initialisation
++    // touches on this host, collected with strace over rutabaga_gfx and the
++    // Mesa driver it loads.
++    //
++    // It is a wide set, and it is not a surface this project controls --
++    // Mesa loads whichever driver the host has at run time. A gap here
++    // surfaces as a killed VM rather than anything diagnosable, so the
++    // device is run with the filter in log mode when extending it.
++    vec![
++        (libc::SYS_brk, vec![]),
++        (libc::SYS_clone3, vec![]),
++        (libc::SYS_close, vec![]),
++        (libc::SYS_eventfd2, vec![]),
++        (libc::SYS_faccessat, vec![]),
++        (libc::SYS_fcntl, vec![]),
++        (libc::SYS_fstat, vec![]),
++        (libc::SYS_fstatfs, vec![]),
++        (libc::SYS_ftruncate, vec![]),
++        (libc::SYS_futex, vec![]),
++        (libc::SYS_getcwd, vec![]),
++        (libc::SYS_getdents64, vec![]),
++        (libc::SYS_getegid, vec![]),
++        (libc::SYS_geteuid, vec![]),
++        (libc::SYS_getgid, vec![]),
++        (libc::SYS_getpid, vec![]),
++        (libc::SYS_getrandom, vec![]),
++        (libc::SYS_gettid, vec![]),
++        (libc::SYS_getuid, vec![]),
++        (libc::SYS_ioctl, vec![]),
++        (libc::SYS_lseek, vec![]),
++        (libc::SYS_madvise, vec![]),
++        (libc::SYS_membarrier, vec![]),
++        (libc::SYS_memfd_create, vec![]),
++        (libc::SYS_mmap, vec![]),
++        (libc::SYS_mprotect, vec![]),
++        (libc::SYS_mremap, vec![]),
++        (libc::SYS_munmap, vec![]),
++        (libc::SYS_newfstatat, vec![]),
++        (libc::SYS_openat, vec![]),
++        (libc::SYS_pipe2, vec![]),
++        (libc::SYS_ppoll, vec![]),
++        (libc::SYS_prctl, vec![]),
++        (libc::SYS_pread64, vec![]),
++        (libc::SYS_prlimit64, vec![]),
++        (libc::SYS_read, vec![]),
++        (libc::SYS_readlinkat, vec![]),
++        (libc::SYS_rseq, vec![]),
++        (libc::SYS_rt_sigaction, vec![]),
++        (libc::SYS_rt_sigprocmask, vec![]),
++        (libc::SYS_sched_getaffinity, vec![]),
++        (libc::SYS_sched_getparam, vec![]),
++        (libc::SYS_sched_getscheduler, vec![]),
++        (libc::SYS_sched_setaffinity, vec![]),
++        (libc::SYS_sched_setscheduler, vec![]),
++        (libc::SYS_sched_yield, vec![]),
++        (libc::SYS_set_robust_list, vec![]),
++        (libc::SYS_set_tid_address, vec![]),
++        (libc::SYS_setpriority, vec![]),
++        (libc::SYS_sigaltstack, vec![]),
++        (libc::SYS_statx, vec![]),
++        (libc::SYS_sysinfo, vec![]),
++        (libc::SYS_tgkill, vec![]),
++        (libc::SYS_uname, vec![]),
++        (libc::SYS_write, vec![]),
++    ]
 +}
 +
  fn virtio_console_thread_rules() -> Vec<(i64, Vec<SeccompRule>)> {
      vec![
          (libc::SYS_ioctl, create_virtio_console_ioctl_seccomp_rule()),
-@@ -325,6 +333,7 @@ fn get_seccomp_rules(thread_type: Thread) -> Vec<(i64, Vec<SeccompRule>)> {
+@@ -325,6 +394,7 @@ fn get_seccomp_rules(thread_type: Thread) -> Vec<(i64, Vec<SeccompRule>)> {
          Thread::VirtioBalloon => virtio_balloon_thread_rules(),
          Thread::VirtioBlock => virtio_block_thread_rules(),
          Thread::VirtioConsole => virtio_console_thread_rules(),
@@ -1375,6 +1924,116 @@ index 416132e62..849ef500d 100644
      fn make_virtio_balloon_devices(
          &mut self,
          snapshot: Option<&Snapshot>,
+diff --git a/vmm/src/seccomp_filters.rs b/vmm/src/seccomp_filters.rs
+index 308cfa6bf..ad960e8fc 100644
+--- a/vmm/src/seccomp_filters.rs
++++ b/vmm/src/seccomp_filters.rs
+@@ -637,8 +637,105 @@ fn pty_foreground_thread_rules() -> Result<Vec<(i64, Vec<SeccompRule>)>, Backend
+ 
+ // The filter containing the white listed syscall rules required by the VMM to
+ // function.
++/// The syscalls a device thread needs when it renders in-process.
++///
++/// Device threads inherit this thread's filter, and seccomp filters stack --
++/// the most restrictive wins -- so a permissive filter on the GPU thread
++/// cannot re-permit what this one denies. The renderer is native graphics
++/// code whose syscall surface is not ours to enumerate, and it issues DRM
++/// ioctls that the hypervisor ioctl allowlist below does not cover, so the
++/// ioctl rule has to become unconditional when a GPU is present.
++fn gpu_host_rules() -> Vec<(i64, Vec<SeccompRule>)> {
++    // Device threads inherit this thread's filter, and seccomp filters stack
++    // -- the most restrictive wins -- so a permissive filter on the GPU
++    // thread cannot re-permit what this one denies. The renderer therefore
++    // needs its whole syscall set here too, including an unconditional ioctl:
++    // it issues DRM ioctls that the hypervisor allowlist does not cover.
++    vec![
++        (libc::SYS_brk, vec![]),
++        (libc::SYS_clone3, vec![]),
++        (libc::SYS_close, vec![]),
++        (libc::SYS_eventfd2, vec![]),
++        (libc::SYS_faccessat, vec![]),
++        (libc::SYS_fcntl, vec![]),
++        (libc::SYS_fstat, vec![]),
++        (libc::SYS_fstatfs, vec![]),
++        (libc::SYS_ftruncate, vec![]),
++        (libc::SYS_futex, vec![]),
++        (libc::SYS_getcwd, vec![]),
++        (libc::SYS_getdents64, vec![]),
++        (libc::SYS_getegid, vec![]),
++        (libc::SYS_geteuid, vec![]),
++        (libc::SYS_getgid, vec![]),
++        (libc::SYS_getpid, vec![]),
++        (libc::SYS_getrandom, vec![]),
++        (libc::SYS_gettid, vec![]),
++        (libc::SYS_getuid, vec![]),
++        (libc::SYS_ioctl, vec![]),
++        (libc::SYS_lseek, vec![]),
++        (libc::SYS_madvise, vec![]),
++        (libc::SYS_membarrier, vec![]),
++        (libc::SYS_memfd_create, vec![]),
++        (libc::SYS_mmap, vec![]),
++        (libc::SYS_mprotect, vec![]),
++        (libc::SYS_mremap, vec![]),
++        (libc::SYS_munmap, vec![]),
++        (libc::SYS_newfstatat, vec![]),
++        (libc::SYS_openat, vec![]),
++        (libc::SYS_pipe2, vec![]),
++        (libc::SYS_ppoll, vec![]),
++        (libc::SYS_prctl, vec![]),
++        (libc::SYS_pread64, vec![]),
++        (libc::SYS_prlimit64, vec![]),
++        (libc::SYS_read, vec![]),
++        (libc::SYS_readlinkat, vec![]),
++        (libc::SYS_rseq, vec![]),
++        (libc::SYS_rt_sigaction, vec![]),
++        (libc::SYS_rt_sigprocmask, vec![]),
++        (libc::SYS_sched_getaffinity, vec![]),
++        (libc::SYS_sched_getparam, vec![]),
++        (libc::SYS_sched_getscheduler, vec![]),
++        (libc::SYS_sched_setaffinity, vec![]),
++        (libc::SYS_sched_setscheduler, vec![]),
++        (libc::SYS_sched_yield, vec![]),
++        (libc::SYS_set_robust_list, vec![]),
++        (libc::SYS_set_tid_address, vec![]),
++        (libc::SYS_setpriority, vec![]),
++        (libc::SYS_sigaltstack, vec![]),
++        (libc::SYS_statx, vec![]),
++        (libc::SYS_sysinfo, vec![]),
++        (libc::SYS_tgkill, vec![]),
++        (libc::SYS_uname, vec![]),
++        (libc::SYS_write, vec![]),
++    ]
++}
++
+ fn vmm_thread_rules(
+     hypervisor_type: HypervisorType,
++) -> Result<Vec<(i64, Vec<SeccompRule>)>, BackendError> {
++    let mut rules = vmm_thread_rules_inner(hypervisor_type)?;
++    if gpu_enabled() {
++        // Appended last so the unconditional ioctl replaces the allowlist
++        // when these are collected into the filter's map.
++        rules.append(&mut gpu_host_rules());
++    }
++    Ok(rules)
++}
++
++/// Whether this process will run a renderer, set once from the VM
++/// configuration before the monitor thread applies its filter.
++static GPU_ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++
++pub fn set_gpu_enabled(on: bool) {
++    GPU_ENABLED.store(on, std::sync::atomic::Ordering::Relaxed);
++}
++
++fn gpu_enabled() -> bool {
++    GPU_ENABLED.load(std::sync::atomic::Ordering::Relaxed)
++}
++
++fn vmm_thread_rules_inner(
++    hypervisor_type: HypervisorType,
+ ) -> Result<Vec<(i64, Vec<SeccompRule>)>, BackendError> {
+     Ok(vec![
+         (libc::SYS_accept4, vec![]),
 diff --git a/vmm/src/vm_config.rs b/vmm/src/vm_config.rs
 index 04102478a..178b67161 100644
 --- a/vmm/src/vm_config.rs
