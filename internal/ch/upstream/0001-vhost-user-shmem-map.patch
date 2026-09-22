@@ -1,4 +1,4 @@
-From cecb18a8ea4045fe76ca783034c20f8f9c2b3d57 Mon Sep 17 00:00:00 2001
+From 694ae898f0d37ba50daff8b40f58cdbb80a88c0c Mon Sep 17 00:00:00 2001
 From: Chandler Newman <chandler2newman@hotmail.co.uk>
 Date: Tue, 22 Sep 2026 08:34:23 +0100
 Subject: [PATCH] vhost-user: serve SHMEM_MAP and SHMEM_UNMAP backend requests
@@ -34,18 +34,19 @@ with the region.
 --generic-vhost-user gains shm_size and shm_id so a window can be configured.
 ---
  virtio-devices/src/device.rs                  |   5 +
+ virtio-devices/src/epoll_helper.rs            |  98 +++++++++-
  virtio-devices/src/lib.rs                     |   2 +-
  virtio-devices/src/seccomp_filters.rs         |   6 +
  virtio-devices/src/transport/pci_device.rs    |   4 +-
  virtio-devices/src/vhost_user/fs.rs           |  61 ++++++-
  .../src/vhost_user/generic_vhost_user.rs      |  42 ++++-
- virtio-devices/src/vhost_user/mod.rs          |   1 +
+ virtio-devices/src/vhost_user/mod.rs          |   6 +-
  virtio-devices/src/vhost_user/shmem.rs        | 171 ++++++++++++++++++
  .../src/vhost_user/vu_common_ctrl.rs          |   6 +
  vmm/src/config.rs                             |  14 ++
  vmm/src/device_manager.rs                     |  97 +++++++++-
  vmm/src/vm_config.rs                          |   9 +
- 12 files changed, 408 insertions(+), 10 deletions(-)
+ 13 files changed, 503 insertions(+), 18 deletions(-)
  create mode 100644 virtio-devices/src/vhost_user/shmem.rs
 
 diff --git a/virtio-devices/src/device.rs b/virtio-devices/src/device.rs
@@ -64,6 +65,157 @@ index ee9c52a7b..538ab46d7 100644
      pub offset: u64,
      pub len: u64,
  }
+diff --git a/virtio-devices/src/epoll_helper.rs b/virtio-devices/src/epoll_helper.rs
+index 7fb494e0c..299acb822 100644
+--- a/virtio-devices/src/epoll_helper.rs
++++ b/virtio-devices/src/epoll_helper.rs
+@@ -21,6 +21,13 @@
+ pub struct EpollHelper {
+     pause_evt: EventFd,
+     epoll_file: File,
++    kill_fd: RawFd,
++    /// A second set holding only the events that are served while the device
++    /// is paused, so waiting on it cannot see the ones that are not.
++    ///
++    /// Filtering the main set instead would spin: epoll is level triggered,
++    /// so an event left unhandled is returned again immediately.
++    paused_epoll_file: Option<File>,
+ }
+ 
+ #[derive(Error, Debug)]
+@@ -82,6 +89,12 @@ fn event_list(
+ }
+ 
+ impl EpollHelper {
++    /// How long to wait between checks that the device has been resumed.
++    ///
++    /// The resume is signalled by unparking this thread, which a thread inside
++    /// epoll_wait does not observe, so the wait has to end by itself.
++    const PAUSED_POLL_MS: i32 = 10;
++
+     pub fn new(kill_evt: &EventFd, pause_evt: &EventFd) -> result::Result<Self, EpollHelperError> {
+         // Create the epoll file descriptor
+         let epoll_fd = epoll::create(true).map_err(EpollHelperError::CreateFd)?;
+@@ -92,6 +105,8 @@ pub fn new(kill_evt: &EventFd, pause_evt: &EventFd) -> result::Result<Self, Epol
+         let mut helper = Self {
+             pause_evt: pause_evt.try_clone().unwrap(),
+             epoll_file,
++            kill_fd: kill_evt.as_raw_fd(),
++            paused_epoll_file: None,
+         };
+ 
+         helper.add_event(kill_evt.as_raw_fd(), EPOLL_HELPER_EVENT_KILL)?;
+@@ -103,6 +118,74 @@ pub fn add_event(&mut self, fd: RawFd, id: u16) -> result::Result<(), EpollHelpe
+         self.add_event_custom(fd, id, epoll::Events::EPOLLIN)
+     }
+ 
++    /// Registers an event that is served even while the device is paused.
++    ///
++    /// Guest traffic stops when a device pauses, which is the whole point of
++    /// pausing. A few events are not guest traffic: a request from a
++    /// vhost-user backend asking the monitor to place something in a shared
++    /// memory window is the device being rebuilt, and a restored device has to
++    /// be able to do that before its guest runs, because the guest is already
++    /// holding the addresses.
++    pub fn add_event_paused(&mut self, fd: RawFd, id: u16) -> result::Result<(), EpollHelperError> {
++        self.add_event(fd, id)?;
++        if self.paused_epoll_file.is_none() {
++            let epoll_fd = epoll::create(true).map_err(EpollHelperError::CreateFd)?;
++            // SAFETY: epoll_fd is a valid fd this owns from here.
++            let file = unsafe { File::from_raw_fd(epoll_fd) };
++            epoll::ctl(
++                file.as_raw_fd(),
++                epoll::ControlOptions::EPOLL_CTL_ADD,
++                self.kill_fd,
++                epoll::Event::new(epoll::Events::EPOLLIN, EPOLL_HELPER_EVENT_KILL.into()),
++            )
++            .map_err(EpollHelperError::Ctl)?;
++            self.paused_epoll_file = Some(file);
++        }
++        let paused = self.paused_epoll_file.as_ref().unwrap();
++        epoll::ctl(
++            paused.as_raw_fd(),
++            epoll::ControlOptions::EPOLL_CTL_ADD,
++            fd,
++            epoll::Event::new(epoll::Events::EPOLLIN, id.into()),
++        )
++        .map_err(EpollHelperError::Ctl)
++    }
++
++    /// Blocks until the device is resumed, serving the events that are allowed
++    /// to run while it is paused.
++    ///
++    /// Returns true if the device was killed instead of resumed.
++    fn wait_while_paused(
++        &mut self,
++        paused: &AtomicBool,
++        handler: &mut dyn EpollHelperHandler,
++    ) -> result::Result<bool, EpollHelperError> {
++        if self.paused_epoll_file.is_none() {
++            while paused.load(Ordering::SeqCst) {
++                thread::park();
++            }
++            return Ok(false);
++        }
++
++        let fd = self.paused_epoll_file.as_ref().unwrap().as_raw_fd();
++        let mut events = vec![epoll::Event::new(epoll::Events::empty(), 0); 16];
++        while paused.load(Ordering::SeqCst) {
++            let num_events = match epoll::wait(fd, Self::PAUSED_POLL_MS, &mut events[..]) {
++                Ok(res) => res,
++                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
++                Err(e) => return Err(EpollHelperError::Wait(e)),
++            };
++            for event in events.iter().take(num_events) {
++                if event.data as u16 == EPOLL_HELPER_EVENT_KILL {
++                    debug!("KILL_EVENT received while paused, stopping epoll loop");
++                    return Ok(true);
++                }
++                handler.handle_event(self, event)?;
++            }
++        }
++        Ok(false)
++    }
++
+     pub fn add_event_custom(
+         &mut self,
+         fd: RawFd,
+@@ -172,9 +255,10 @@ pub fn run_with_timeout(
+         // Before jumping into the epoll loop, check if the device is expected
+         // to be in a paused state. This is helpful for the restore code path
+         // as the device thread should not start processing anything before the
+-        // device has been resumed.
+-        while paused.load(Ordering::SeqCst) {
+-            thread::park();
++        // device has been resumed -- bar the events registered with
++        // add_event_paused, which are how a device is rebuilt.
++        if self.wait_while_paused(paused, handler)? {
++            return Ok(());
+         }
+ 
+         loop {
+@@ -225,8 +309,8 @@ pub fn run_with_timeout(
+                         // We loop here to handle spurious park() returns.
+                         // Until we have not resumed, the paused boolean will
+                         // be true.
+-                        while paused.load(Ordering::SeqCst) {
+-                            thread::park();
++                        if self.wait_while_paused(paused, handler)? {
++                            return Ok(());
+                         }
+ 
+                         // Drain pause event after the device has been resumed.
+@@ -306,8 +390,8 @@ pub fn run_with_timeout(
+                         // We loop here to handle spurious park() returns.
+                         // Until we have not resumed, the paused boolean will
+                         // be true.
+-                        while paused.load(Ordering::SeqCst) {
+-                            thread::park();
++                        if self.wait_while_paused(paused, handler)? {
++                            return Ok(());
+                         }
+ 
+                         // Drain pause event after the device has been resumed.
 diff --git a/virtio-devices/src/lib.rs b/virtio-devices/src/lib.rs
 index 1d4e28b88..65627baa8 100644
 --- a/virtio-devices/src/lib.rs
@@ -303,7 +455,7 @@ index 26b6e0db3..8506a43c0 100644
                  .map_err(|e| {
                      crate::ActivateError::VhostUserSetup(Error::FrontendReqHandlerCreation(e))
 diff --git a/virtio-devices/src/vhost_user/mod.rs b/virtio-devices/src/vhost_user/mod.rs
-index 985f0d1fd..1f5e493dc 100644
+index 985f0d1fd..4cb940239 100644
 --- a/virtio-devices/src/vhost_user/mod.rs
 +++ b/virtio-devices/src/vhost_user/mod.rs
 @@ -37,6 +37,7 @@
@@ -314,6 +466,18 @@ index 985f0d1fd..1f5e493dc 100644
  pub mod blk;
  pub mod fs;
  pub mod generic_vhost_user;
+@@ -280,7 +281,10 @@ pub fn run(
+         )?;
+ 
+         if let Some(backend_req_handler) = &self.backend_req_handler {
+-            helper.add_event(backend_req_handler.as_raw_fd(), BACKEND_REQ_EVENT)?;
++            // Served while paused: a backend asking for a region to be mapped
++            // is rebuilding the device rather than carrying guest traffic, and
++            // a restored guest's window has to be filled before it runs.
++            helper.add_event_paused(backend_req_handler.as_raw_fd(), BACKEND_REQ_EVENT)?;
+         }
+ 
+         helper.add_event(self.resume_evt.as_raw_fd(), RESUME_EVENT)?;
 diff --git a/virtio-devices/src/vhost_user/shmem.rs b/virtio-devices/src/vhost_user/shmem.rs
 new file mode 100644
 index 000000000..d8a140670

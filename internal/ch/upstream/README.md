@@ -11,7 +11,7 @@ applies where a maintainer would look at it.
 Serves `SHMEM_MAP` and `SHMEM_UNMAP` backend requests, so a vhost-user device
 can publish a shared memory window and let its backend place memory in it.
 
-**408 insertions, 10 deletions, across 12 files.**
+**503 insertions, 18 deletions, across 13 files.**
 
 Two consumers exist the moment it lands, and both are exercised here:
 virtio-fs gets a DAX cache (`../../../fs/`) and a vhost-user virtio-gpu
@@ -34,6 +34,32 @@ the generic vhost-user device already carry a `cache` field, expose it through
 What was missing was a handler for the map requests, and anything to configure
 a window with. The message types have been in `vhost` since 0.16.0 -- the
 version Cloud Hypervisor already depends on -- and nothing consumed them.
+
+### Backend requests are served while the device is paused
+
+A device's epoll thread parks while it is paused, and that same thread is what
+answers a backend's requests -- so a paused device answers none of them. For
+guest traffic that is exactly right, and the comment in `epoll_helper.rs` says
+so: "the device thread should not start processing anything before the device
+has been resumed".
+
+A backend request is not guest traffic. A backend asking for a region to be
+placed in a shared memory window is the device being rebuilt, and a restored
+guest's window has to be filled *before* its vCPUs start, because the guest is
+already holding addresses that point into it. With the thread parked there is
+no moment when that can happen: the window can only be filled after the guest
+is already running and faulting on it.
+
+So `EpollHelper` grows `add_event_paused`, and the vhost-user handler
+registers its backend request channel with it. Those events are served while
+paused; everything else still waits for the resume. They are kept in a second
+epoll set rather than filtered out of the main one, because epoll is level
+triggered and an event left unhandled is returned again immediately, which
+would spin.
+
+Measured on a restore with 154 regions to place: the whole set is made again
+in under a second and before the guest is resumed, against five minutes and
+only after resume without it.
 
 ### Two rules a backend must follow
 

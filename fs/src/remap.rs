@@ -145,10 +145,10 @@ impl Remap {
     /// The filesystem's own nodeid for one the guest named.
     fn inode(&self, id: u64) -> io::Result<Inode> {
         let t = self.table.lock().unwrap();
-        t.inodes
-            .get(&id)
-            .map(|r| r.inner)
-            .ok_or_else(|| io::Error::from_raw_os_error(libc::EBADF))
+        t.inodes.get(&id).map(|r| r.inner).ok_or_else(|| {
+            log::warn!("the guest named nodeid {id}, which was never issued here");
+            io::Error::from_raw_os_error(libc::EBADF)
+        })
     }
 
     fn path_of(&self, t: &Table, id: u64) -> Option<PathBuf> {
@@ -167,10 +167,10 @@ impl Remap {
             return Ok(h);
         }
         let t = self.table.lock().unwrap();
-        t.handles
-            .get(&h)
-            .map(|(inner, _)| *inner)
-            .ok_or_else(|| io::Error::from_raw_os_error(libc::EBADF))
+        t.handles.get(&h).map(|(inner, _)| *inner).ok_or_else(|| {
+            log::warn!("the guest named handle {h}, which was never issued here");
+            io::Error::from_raw_os_error(libc::EBADF)
+        })
     }
 
     fn intern_handle(&self, inner: Option<Handle>, inode: u64, flags: u32, dir: bool) -> Option<u64> {
