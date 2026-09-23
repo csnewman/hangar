@@ -44,10 +44,34 @@ type Config struct {
 		Memory Size `yaml:"memory"`
 	} `yaml:"reserved"`
 
-	// Runtime is what runs environments on this machine. "simulated" runs
-	// nothing and walks each environment through its phases, for developing
-	// the control plane on a machine without KVM.
+	// Runtime is what runs environments on this machine: "cloud-hypervisor"
+	// runs each as a virtual machine; "simulated" runs nothing and walks
+	// each environment through its phases, for developing the control plane
+	// on a machine without KVM.
 	Runtime string `yaml:"runtime"`
+
+	// VM configures the cloud-hypervisor runtime.
+	VM VMConfig `yaml:"vm"`
+}
+
+// VMConfig is how this machine runs environments as virtual machines. The
+// files named here are the node's, not the environment's: one kernel serves
+// every environment, whatever its image.
+type VMConfig struct {
+	Kernel    string `yaml:"kernel"`
+	UpperGiB  int    `yaml:"upper_gib"`
+	DockerGiB int    `yaml:"docker_gib"`
+	DaxMiB    int    `yaml:"dax_mib"`
+	// Images maps each image reference a template may name to the files
+	// that provide it here.
+	Images map[string]VMImage `yaml:"images"`
+}
+
+// VMImage is one image as this machine holds it: its base, a directory for
+// virtio-fs or an ext4 image, and the initramfs that stacks it.
+type VMImage struct {
+	Base   string `yaml:"base"`
+	Initrd string `yaml:"initrd"`
 }
 
 // LoadConfig reads and checks a worker's YAML file.
@@ -76,8 +100,16 @@ func LoadConfig(path string) (*Config, error) {
 		}
 		c.Node.Name = h
 	}
-	if c.Runtime == "" {
+	switch c.Runtime {
+	case "":
 		return nil, errors.New(path + ": runtime is required")
+	case "cloud-hypervisor":
+		if c.VM.Kernel == "" {
+			return nil, errors.New(path + ": vm.kernel is required for the cloud-hypervisor runtime")
+		}
+		if c.Storage.Environments == "" {
+			return nil, errors.New(path + ": storage.environments is required for the cloud-hypervisor runtime")
+		}
 	}
 	return &c, nil
 }

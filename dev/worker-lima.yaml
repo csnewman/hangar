@@ -1,0 +1,34 @@
+# A worker that runs real environments, inside the Lima VM (see
+# dev/lima-worker.sh). It dials the control plane in compose.yaml on the Mac
+# through Caddy, which Lima publishes to the VM as host.lima.internal.
+server:
+  url: http://host.lima.internal:8080
+  token_file: /Users/csnewman/Projects/hangar/dev/bootstrap-token
+  credential_file: /var/lib/hangar/worker-credential
+
+node:
+  name: lima
+  labels:
+    runtime: cloud-hypervisor
+    kvm: "true"
+
+storage:
+  images: /var/lib/hangar/images
+  environments: /var/lib/hangar/env
+  caches: /var/lib/hangar/caches
+
+reserved:
+  cpus: 1
+  memory: 2GiB
+
+runtime: cloud-hypervisor
+
+vm:
+  kernel: /Users/csnewman/Projects/hangar/out/kernel/vmlinuz
+  dax_mib: 1024
+  images:
+    # Built by `hangar build -C images/ubuntu2604 -o out/worker`, agent
+    # included.
+    ghcr.io/csnewman/hangar/base-ubuntu2604:latest:
+      base: /Users/csnewman/Projects/hangar/out/worker/base.ext4
+      initrd: /Users/csnewman/Projects/hangar/out/worker/initrd.img

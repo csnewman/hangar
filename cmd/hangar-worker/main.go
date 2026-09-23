@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/csnewman/hangar/internal/vm"
 	"github.com/csnewman/hangar/internal/worker"
 )
 
@@ -33,6 +34,11 @@ func main() {
 	}
 }
 
+// shutdowner is a runtime with machines to stop before the worker exits.
+type shutdowner interface {
+	Shutdown(ctx context.Context) error
+}
+
 func run(path string, log *slog.Logger) error {
 	cfg, err := worker.LoadConfig(path)
 	if err != nil {
@@ -43,8 +49,25 @@ func run(path string, log *slog.Logger) error {
 	switch cfg.Runtime {
 	case "simulated":
 		rt = worker.NewSimulated(2 * time.Second)
+	case "cloud-hypervisor":
+		images := map[string]vm.Image{}
+		for ref, img := range cfg.VM.Images {
+			images[ref] = vm.Image{Base: img.Base, Initrd: img.Initrd}
+		}
+		rt, err = vm.New(vm.Config{
+			StateDir:  cfg.Storage.Environments,
+			Kernel:    cfg.VM.Kernel,
+			Images:    images,
+			UpperGiB:  cfg.VM.UpperGiB,
+			DockerGiB: cfg.VM.DockerGiB,
+			DaxMiB:    cfg.VM.DaxMiB,
+			Log:       log,
+		})
+		if err != nil {
+			return err
+		}
 	default:
-		return fmt.Errorf("runtime %q is not available; the only runtime is \"simulated\"", cfg.Runtime)
+		return fmt.Errorf("unknown runtime %q: want cloud-hypervisor or simulated", cfg.Runtime)
 	}
 
 	w, err := worker.New(cfg, rt, log)
@@ -55,6 +78,15 @@ func run(path string, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	err = w.Run(ctx)
+
+	if s, ok := rt.(shutdowner); ok {
+		log.Info("stopping environments")
+		sctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		if serr := s.Shutdown(sctx); serr != nil {
+			log.Warn("environments did not all stop", "err", serr)
+		}
+		cancel()
+	}
 	if ctx.Err() != nil {
 		return nil
 	}
