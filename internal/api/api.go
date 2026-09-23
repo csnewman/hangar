@@ -108,19 +108,20 @@ type Environment struct {
 	Name    string `json:"name"`
 	// TemplateID is empty once the template has been deleted; Template
 	// keeps its name.
-	TemplateID string       `json:"template_id,omitempty"`
-	Template   string       `json:"template"`
-	Spec       Spec         `json:"spec"`
-	Image      string       `json:"image"`
-	CPUs       int          `json:"cpus"`
-	MemoryMiB  int          `json:"memory_mib"`
-	Desired    DesiredState `json:"desired"`
-	Phase      Phase        `json:"phase"`
-	Reason     string       `json:"reason,omitempty"`
-	WorkerID   string       `json:"worker_id,omitempty"`
-	Worker     string       `json:"worker,omitempty"`
-	CreatedAt  time.Time    `json:"created_at"`
-	UpdatedAt  time.Time    `json:"updated_at"`
+	TemplateID string            `json:"template_id,omitempty"`
+	Template   string            `json:"template"`
+	Spec       Spec              `json:"spec"`
+	Image      string            `json:"image"`
+	CPUs       int               `json:"cpus"`
+	MemoryMiB  int               `json:"memory_mib"`
+	Desired    DesiredState      `json:"desired"`
+	Phase      Phase             `json:"phase"`
+	Reason     string            `json:"reason,omitempty"`
+	WorkerID   string            `json:"worker_id,omitempty"`
+	Worker     string            `json:"worker,omitempty"`
+	Stats      *EnvironmentStats `json:"stats,omitempty"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
 }
 
 // CreateEnvironment is a request to create an environment from a template.
@@ -143,9 +144,14 @@ type Worker struct {
 	// Unknown lists environments the worker is running that the server has no
 	// record of. They are reported and never stopped automatically: the likely
 	// cause is a control plane that lost data, not a rogue VM.
-	Unknown    []string   `json:"unknown"`
-	LastSeenAt *time.Time `json:"last_seen_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
+	Unknown    []string     `json:"unknown"`
+	LastSeenAt *time.Time   `json:"last_seen_at,omitempty"`
+	CreatedAt  time.Time    `json:"created_at"`
+	Stats      *WorkerStats `json:"stats,omitempty"`
+	Images     []LocalImage `json:"images"`
+	// PendingRemovals are images the worker has been asked to delete and
+	// still holds.
+	PendingRemovals []string `json:"pending_removals"`
 }
 
 // Resources is an amount of CPU and memory.
@@ -179,6 +185,9 @@ type WorkerCredential struct {
 type DesiredSet struct {
 	Version      int64             `json:"version"`
 	Environments []EnvironmentSpec `json:"environments"`
+	// RemoveImages are images the worker should delete from its store. One
+	// an environment still uses is kept, and stays asked for.
+	RemoveImages []string `json:"remove_images"`
 }
 
 // EnvironmentSpec is one environment as a worker needs to see it.
@@ -194,11 +203,52 @@ type WorkerStatus struct {
 	Capacity     Resources             `json:"capacity"`
 	Labels       map[string]string     `json:"labels"`
 	Environments []ObservedEnvironment `json:"environments"`
+	Stats        *WorkerStats          `json:"stats,omitempty"`
+	Images       []LocalImage          `json:"images"`
 }
 
 // ObservedEnvironment is one environment as the worker finds it.
 type ObservedEnvironment struct {
-	ID     string `json:"id"`
-	Phase  Phase  `json:"phase"`
-	Reason string `json:"reason,omitempty"`
+	ID     string            `json:"id"`
+	Phase  Phase             `json:"phase"`
+	Reason string            `json:"reason,omitempty"`
+	Stats  *EnvironmentStats `json:"stats,omitempty"`
+}
+
+// EnvironmentStats is what an environment is using, measured by its worker.
+// Rates are per second, averaged since the previous measurement.
+type EnvironmentStats struct {
+	// CPUPercent is of the environment's own vCPUs: 100 is all of them busy.
+	CPUPercent     float64 `json:"cpu_percent"`
+	MemoryUsedMiB  int     `json:"memory_used_mib"`
+	MemoryTotalMiB int     `json:"memory_total_mib"`
+	// DiskUsedBytes is what its writable layer and Docker store take up on
+	// the worker.
+	DiskUsedBytes int64   `json:"disk_used_bytes"`
+	DiskReadBps   float64 `json:"disk_read_bps"`
+	DiskWriteBps  float64 `json:"disk_write_bps"`
+	NetRxBps      float64 `json:"net_rx_bps"`
+	NetTxBps      float64 `json:"net_tx_bps"`
+}
+
+// WorkerStats is the load on a worker's machine as a whole.
+type WorkerStats struct {
+	CPUPercent     float64 `json:"cpu_percent"`
+	Load1          float64 `json:"load1"`
+	MemoryUsedMiB  int     `json:"memory_used_mib"`
+	MemoryTotalMiB int     `json:"memory_total_mib"`
+	// DiskUsedBytes and DiskTotalBytes are for the filesystem environments
+	// are kept on.
+	DiskUsedBytes  int64 `json:"disk_used_bytes"`
+	DiskTotalBytes int64 `json:"disk_total_bytes"`
+}
+
+// LocalImage is an image a worker holds in its own store.
+type LocalImage struct {
+	Ref       string `json:"ref"`
+	SizeBytes int64  `json:"size_bytes"`
+	// State is "ready", or "fetching" while it is being copied in.
+	State string `json:"state"`
+	// Environments lists the environments on the worker using it.
+	Environments []string `json:"environments"`
 }

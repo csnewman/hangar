@@ -29,6 +29,7 @@ func main() {
 	tokenFile := flag.String("bootstrap-token-file", os.Getenv("HANGAR_BOOTSTRAP_TOKEN_FILE"),
 		"file holding the token workers register with")
 	debug := flag.Bool("debug", false, "log at debug level")
+	migrateOnly := flag.Bool("migrate-only", false, "bring the schema up to date, then exit without serving")
 	flag.Parse()
 
 	level := slog.LevelInfo
@@ -37,13 +38,13 @@ func main() {
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
 
-	if err := run(*listen, *dbURL, *tokenFile); err != nil {
+	if err := run(*listen, *dbURL, *tokenFile, *migrateOnly); err != nil {
 		fmt.Fprintf(os.Stderr, "hangar-server: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(listen, dbURL, tokenFile string) error {
+func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 	if dbURL == "" {
 		return errors.New("no database: pass -database or set HANGAR_DATABASE_URL")
 	}
@@ -71,6 +72,10 @@ func run(listen, dbURL, tokenFile string) error {
 		return err
 	}
 	defer d.Close()
+	if migrateOnly {
+		slog.Info("schema up to date")
+		return nil
+	}
 
 	web := webui.FS()
 	if web == nil {

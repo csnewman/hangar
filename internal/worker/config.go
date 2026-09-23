@@ -62,8 +62,8 @@ type VMConfig struct {
 	UpperGiB  int    `yaml:"upper_gib"`
 	DockerGiB int    `yaml:"docker_gib"`
 	DaxMiB    int    `yaml:"dax_mib"`
-	// Images maps each image reference a template may name to the files
-	// that provide it here.
+	// Images maps each image reference a template may name to where this
+	// machine fetches it from into its local store.
 	Images map[string]VMImage `yaml:"images"`
 }
 
@@ -107,8 +107,8 @@ func LoadConfig(path string) (*Config, error) {
 		if c.VM.Kernel == "" {
 			return nil, errors.New(path + ": vm.kernel is required for the cloud-hypervisor runtime")
 		}
-		if c.Storage.Environments == "" {
-			return nil, errors.New(path + ": storage.environments is required for the cloud-hypervisor runtime")
+		if c.Storage.Environments == "" || c.Storage.Images == "" {
+			return nil, errors.New(path + ": storage.environments and storage.images are required for the cloud-hypervisor runtime")
 		}
 	}
 	return &c, nil

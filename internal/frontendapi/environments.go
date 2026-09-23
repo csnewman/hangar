@@ -118,7 +118,24 @@ func environment(e api.Environment) Environment {
 		Reason:     optional(e.Reason),
 		WorkerID:   optional(e.WorkerID),
 		Worker:     optional(e.Worker),
+		Stats:      environmentStats(e.Stats),
 		CreatedAt:  e.CreatedAt,
 		UpdatedAt:  e.UpdatedAt,
+	}
+}
+
+func environmentStats(s *api.EnvironmentStats) *EnvironmentStats {
+	if s == nil {
+		return nil
+	}
+	return &EnvironmentStats{
+		CPUPercent:     float32(s.CPUPercent),
+		MemoryUsedMiB:  s.MemoryUsedMiB,
+		MemoryTotalMiB: s.MemoryTotalMiB,
+		DiskUsedBytes:  s.DiskUsedBytes,
+		DiskReadBps:    float32(s.DiskReadBps),
+		DiskWriteBps:   float32(s.DiskWriteBps),
+		NetRxBps:       float32(s.NetRxBps),
+		NetTxBps:       float32(s.NetTxBps),
 	}
 }

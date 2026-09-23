@@ -6,8 +6,12 @@ export const environmentsKey = ['environments'] as const
 
 // useEnvironments is every environment the signed-in user may reach. The
 // sidebar and the pages share one query, so they cannot disagree.
-export function useEnvironments() {
-  return useQuery({ queryKey: environmentsKey, queryFn: api.environments })
+//
+// watching keeps it polling while the tab is hidden, for a view that charts
+// what it sees: without it the chart would have a hole for every minute the
+// tab spent in the background.
+export function useEnvironments({ watching = false }: { watching?: boolean } = {}) {
+  return useQuery({ queryKey: environmentsKey, queryFn: api.environments, refetchIntervalInBackground: watching })
 }
 
 export interface OwnerGroup {

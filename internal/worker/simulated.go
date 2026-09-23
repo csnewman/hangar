@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"math/rand/v2"
 	"sort"
 	"strings"
 	"sync"
@@ -15,12 +16,17 @@ import (
 //
 // An image whose reference contains "fail" fails to start, to exercise the
 // failure path.
+//
+// It also pretends to measure what running environments use, and keeps a
+// store of the images they were started from, so every view of a worker has
+// something moving in it.
 type Simulated struct {
 	// Step is how long each transition takes.
 	Step time.Duration
 
 	mu      sync.Mutex
 	envs    map[string]*simEnv
+	images  map[string]int64
 	changed chan struct{}
 }
 
@@ -31,10 +37,15 @@ type simEnv struct {
 	// transition whose target is stale when it lands is dropped.
 	target api.DesiredState
 	gen    int
+	spec   api.Spec
+	// usage is the pretend measurement, wandering from one Observe to the
+	// next.
+	usage api.EnvironmentStats
 }
 
 func NewSimulated(step time.Duration) *Simulated {
-	return &Simulated{Step: step, envs: map[string]*simEnv{}, changed: make(chan struct{}, 1)}
+	return &Simulated{Step: step, envs: map[string]*simEnv{}, images: map[string]int64{},
+		changed: make(chan struct{}, 1)}
 }
 
 func (s *Simulated) Changed() <-chan struct{} { return s.changed }
@@ -44,7 +55,13 @@ func (s *Simulated) Observe() []api.ObservedEnvironment {
 	defer s.mu.Unlock()
 	out := make([]api.ObservedEnvironment, 0, len(s.envs))
 	for id, e := range s.envs {
-		out = append(out, api.ObservedEnvironment{ID: id, Phase: e.phase, Reason: e.reason})
+		o := api.ObservedEnvironment{ID: id, Phase: e.phase, Reason: e.reason}
+		if e.phase == api.PhaseRunning {
+			e.wander()
+			u := e.usage
+			o.Stats = &u
+		}
+		out = append(out, o)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
@@ -54,12 +71,19 @@ func (s *Simulated) Apply(spec api.EnvironmentSpec) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	e, held := s.envs[spec.ID]
+	if held {
+		e.spec = spec.Spec
+	}
 
 	switch spec.Desired {
 	case api.DesiredRunning:
 		if !held {
-			e = &simEnv{}
+			e = &simEnv{spec: spec.Spec}
 			s.envs[spec.ID] = e
+		}
+		if _, ok := s.images[spec.Spec.Image]; !ok && spec.Spec.Image != "" {
+			// The same image always reports the same size.
+			s.images[spec.Spec.Image] = int64(900+len(spec.Spec.Image)*37) << 20
 		}
 		// Already heading for running, or there and failed. A failed
 		// environment stays failed until it is stopped and started again;
@@ -124,5 +148,66 @@ func (s *Simulated) notify() {
 	select {
 	case s.changed <- struct{}{}:
 	default:
+	}
+}
+
+// wander moves the pretend measurement a little, within what the
+// environment's spec allows.
+func (e *simEnv) wander() {
+	u := &e.usage
+	u.MemoryTotalMiB = e.spec.MemoryMiB
+	if u.MemoryUsedMiB == 0 {
+		u.MemoryUsedMiB = e.spec.MemoryMiB / 4
+		u.DiskUsedBytes = 600 << 20
+	}
+	step := func(v, by, lo, hi float64) float64 { return min(max(v+(rand.Float64()*2-1)*by, lo), hi) }
+	u.CPUPercent = step(u.CPUPercent, 12, 1, 95)
+	u.MemoryUsedMiB = int(step(float64(u.MemoryUsedMiB), float64(e.spec.MemoryMiB)/20, 128,
+		float64(e.spec.MemoryMiB)*0.9))
+	u.DiskUsedBytes += int64(rand.IntN(4 << 20))
+	burst := func(v float64) float64 {
+		if rand.IntN(4) == 0 {
+			return rand.Float64() * 40e6
+		}
+		return v * 0.4
+	}
+	u.DiskReadBps = burst(u.DiskReadBps)
+	u.DiskWriteBps = burst(u.DiskWriteBps)
+	u.NetRxBps = burst(u.NetRxBps)
+	u.NetTxBps = burst(u.NetTxBps) / 3
+}
+
+// Images reports the pretend store: every image an environment was started
+// from, until it is removed.
+func (s *Simulated) Images() []api.LocalImage {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]api.LocalImage, 0, len(s.images))
+	for ref, size := range s.images {
+		img := api.LocalImage{Ref: ref, SizeBytes: size, State: "ready", Environments: []string{}}
+		for id, e := range s.envs {
+			if e.spec.Image == ref {
+				img.Environments = append(img.Environments, id)
+			}
+		}
+		sort.Strings(img.Environments)
+		out = append(out, img)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ref < out[j].Ref })
+	return out
+}
+
+// RemoveImage forgets an image no held environment uses.
+func (s *Simulated) RemoveImage(ref string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, e := range s.envs {
+		if e.spec.Image == ref {
+			return
+		}
+	}
+	if _, ok := s.images[ref]; ok {
+		delete(s.images, ref)
+		s.notify()
 	}
 }

@@ -273,11 +273,30 @@ export interface paths {
             };
             cookie?: never;
         };
-        get?: never;
+        get: operations["getWorker"];
         put?: never;
         post?: never;
         /** @description Forgets a revoked worker that holds no environments, freeing its name to register again. */
         delete: operations["deleteWorker"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/workers/{id}/images/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Asks the worker to delete an image from its local store. Refused while an environment on the worker uses the image; otherwise the worker deletes it on its next sync, and fetches it again if it is needed. */
+        post: operations["removeWorkerImage"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -342,6 +361,7 @@ export interface components {
             worker_id?: string;
             /** @description That worker's name. */
             worker?: string;
+            stats?: components["schemas"]["EnvironmentStats"];
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
@@ -449,6 +469,49 @@ export interface components {
             last_seen_at?: string;
             /** Format: date-time */
             created_at: string;
+            stats?: components["schemas"]["WorkerStats"];
+            images: components["schemas"]["LocalImage"][];
+            /** @description Images the worker has been asked to delete and still holds. */
+            pending_removals: string[];
+        };
+        /** @description The worker's machine as a whole, as last measured. */
+        WorkerStats: {
+            cpu_percent: number;
+            load1: number;
+            memory_used_mib: number;
+            memory_total_mib: number;
+            /** Format: int64 */
+            disk_used_bytes: number;
+            /** Format: int64 */
+            disk_total_bytes: number;
+        };
+        /** @description What a running environment uses, as its worker last measured it. Rates are per second. */
+        EnvironmentStats: {
+            /** @description Of the environment's own vCPUs; 100 is all of them busy. */
+            cpu_percent: number;
+            memory_used_mib: number;
+            memory_total_mib: number;
+            /**
+             * Format: int64
+             * @description What its writable layer and Docker store take on the worker.
+             */
+            disk_used_bytes: number;
+            disk_read_bps: number;
+            disk_write_bps: number;
+            net_rx_bps: number;
+            net_tx_bps: number;
+        };
+        LocalImage: {
+            ref: string;
+            /** Format: int64 */
+            size_bytes: number;
+            /** @enum {string} */
+            state: "ready" | "fetching";
+            /** @description IDs of the environments on the worker using it. */
+            environments: string[];
+        };
+        RemoveImage: {
+            ref: string;
         };
         Login: {
             username: string;
@@ -1098,6 +1161,31 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
+    getWorker: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The worker, with its latest usage and its local images. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Worker"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     deleteWorker: {
         parameters: {
             query?: never;
@@ -1111,6 +1199,34 @@ export interface operations {
         responses: {
             /** @description Removed. */
             204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    removeWorkerImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RemoveImage"];
+            };
+        };
+        responses: {
+            /** @description Asked for. */
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };

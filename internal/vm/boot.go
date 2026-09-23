@@ -134,7 +134,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 	if s.GPU == api.GPUPassthrough {
 		return nil, fmt.Errorf("GPU passthrough is %w", errUnsupported)
 	}
-	img, err := m.resolve(spec)
+	img, err := m.resolve(ctx, spec)
 	if err != nil {
 		return nil, err
 	}

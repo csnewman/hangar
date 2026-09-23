@@ -36,6 +36,10 @@ CREATE TABLE workers (
     memory_mib      integer NOT NULL DEFAULT 0,
     -- Environments the worker reports that have no row here.
     unknown         jsonb NOT NULL DEFAULT '[]',
+    -- The machine's own load and usage, and the images it holds, as it last
+    -- reported them. Only the latest is kept.
+    stats           jsonb,
+    images          jsonb NOT NULL DEFAULT '[]',
     -- Bumped whenever the worker's desired set changes, in the same
     -- transaction as the change, so a waiting worker can tell whether it has
     -- seen the latest.
@@ -96,6 +100,8 @@ CREATE TABLE environments (
     worker_id   uuid REFERENCES workers (id),
     phase       text NOT NULL DEFAULT 'pending',
     reason      text NOT NULL DEFAULT '',
+    -- Usage as its worker last measured it. Only the latest is kept.
+    stats       jsonb,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -108,3 +114,13 @@ CREATE INDEX environments_worker ON environments (worker_id);
 
 -- Names are a user's own: two users may each have an environment called "dev".
 CREATE UNIQUE INDEX environments_owner_name ON environments (owner_id, name);
+
+-- Images the server has asked a worker to delete from its local store. A row
+-- stays until the worker no longer reports the image, so a request survives
+-- a worker that is offline or busy when it is made.
+CREATE TABLE worker_image_removals (
+    worker_id    uuid NOT NULL REFERENCES workers (id) ON DELETE CASCADE,
+    ref          text NOT NULL,
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (worker_id, ref)
+);

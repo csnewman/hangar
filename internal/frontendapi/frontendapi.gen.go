@@ -76,6 +76,24 @@ func (e GPU) Valid() bool {
 	}
 }
 
+// Defines values for LocalImageState.
+const (
+	Fetching LocalImageState = "fetching"
+	Ready    LocalImageState = "ready"
+)
+
+// Valid indicates whether the value is a known member of the LocalImageState enum.
+func (e LocalImageState) Valid() bool {
+	switch e {
+	case Fetching:
+		return true
+	case Ready:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Phase.
 const (
 	PhaseDeleting Phase = "deleting"
@@ -184,6 +202,9 @@ type Environment struct {
 	Reason *string `json:"reason,omitempty"`
 	Spec   Spec    `json:"spec"`
 
+	// Stats What a running environment uses, as its worker last measured it. Rates are per second.
+	Stats *EnvironmentStats `json:"stats,omitempty"`
+
 	// Template That template's name when the environment was made.
 	Template string `json:"template"`
 
@@ -198,6 +219,21 @@ type Environment struct {
 	WorkerID *string `json:"worker_id,omitempty"`
 }
 
+// EnvironmentStats What a running environment uses, as its worker last measured it. Rates are per second.
+type EnvironmentStats struct {
+	// CPUPercent Of the environment's own vCPUs; 100 is all of them busy.
+	CPUPercent  float32 `json:"cpu_percent"`
+	DiskReadBps float32 `json:"disk_read_bps"`
+
+	// DiskUsedBytes What its writable layer and Docker store take on the worker.
+	DiskUsedBytes  int64   `json:"disk_used_bytes"`
+	DiskWriteBps   float32 `json:"disk_write_bps"`
+	MemoryTotalMiB int     `json:"memory_total_mib"`
+	MemoryUsedMiB  int     `json:"memory_used_mib"`
+	NetRxBps       float32 `json:"net_rx_bps"`
+	NetTxBps       float32 `json:"net_tx_bps"`
+}
+
 // Error defines model for Error.
 type Error struct {
 	Error string `json:"error"`
@@ -205,6 +241,18 @@ type Error struct {
 
 // GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
 type GPU string
+
+// LocalImage defines model for LocalImage.
+type LocalImage struct {
+	// Environments IDs of the environments on the worker using it.
+	Environments []string        `json:"environments"`
+	Ref          string          `json:"ref"`
+	SizeBytes    int64           `json:"size_bytes"`
+	State        LocalImageState `json:"state"`
+}
+
+// LocalImageState defines model for LocalImage.State.
+type LocalImageState string
 
 // Login defines model for Login.
 type Login struct {
@@ -232,6 +280,11 @@ type Person struct {
 
 // Phase What the environment is doing, as its worker last reported. "pending" means no worker has reported on it yet.
 type Phase string
+
+// RemoveImage defines model for RemoveImage.
+type RemoveImage struct {
+	Ref string `json:"ref"`
+}
 
 // Repo defines model for Repo.
 type Repo struct {
@@ -346,14 +399,31 @@ type Worker struct {
 	Capacity   Resources         `json:"capacity"`
 	CreatedAt  time.Time         `json:"created_at"`
 	ID         string            `json:"id"`
+	Images     []LocalImage      `json:"images"`
 	Labels     map[string]string `json:"labels"`
 	LastSeenAt *time.Time        `json:"last_seen_at,omitempty"`
 	Name       string            `json:"name"`
 	Online     bool              `json:"online"`
-	Revoked    bool              `json:"revoked"`
+
+	// PendingRemovals Images the worker has been asked to delete and still holds.
+	PendingRemovals []string `json:"pending_removals"`
+	Revoked         bool     `json:"revoked"`
+
+	// Stats The worker's machine as a whole, as last measured.
+	Stats *WorkerStats `json:"stats,omitempty"`
 
 	// Unknown Environments the worker is running that the server has no record of. Reported, never stopped automatically.
 	Unknown []string `json:"unknown"`
+}
+
+// WorkerStats The worker's machine as a whole, as last measured.
+type WorkerStats struct {
+	CPUPercent     float32 `json:"cpu_percent"`
+	DiskTotalBytes int64   `json:"disk_total_bytes"`
+	DiskUsedBytes  int64   `json:"disk_used_bytes"`
+	Load1          float32 `json:"load1"`
+	MemoryTotalMiB int     `json:"memory_total_mib"`
+	MemoryUsedMiB  int     `json:"memory_used_mib"`
 }
 
 // ID defines model for ID.
@@ -397,6 +467,9 @@ type CreateUserJSONRequestBody = CreateUser
 
 // UpdateUserJSONRequestBody defines body for UpdateUser for application/json ContentType.
 type UpdateUserJSONRequestBody = UpdateUser
+
+// RemoveWorkerImageJSONRequestBody defines body for RemoveWorkerImage for application/json ContentType.
+type RemoveWorkerImageJSONRequestBody = RemoveImage
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
@@ -469,6 +542,12 @@ type ServerInterface interface {
 
 	// (DELETE /api/frontend/workers/{id})
 	DeleteWorker(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/workers/{id})
+	GetWorker(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (POST /api/frontend/workers/{id}/images/remove)
+	RemoveWorkerImage(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (POST /api/frontend/workers/{id}/revoke)
 	RevokeWorker(w http.ResponseWriter, r *http.Request, id ID)
@@ -937,6 +1016,58 @@ func (siw *ServerInterfaceWrapper) DeleteWorker(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// GetWorker operation middleware
+func (siw *ServerInterfaceWrapper) GetWorker(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetWorker(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RemoveWorkerImage operation middleware
+func (siw *ServerInterfaceWrapper) RemoveWorkerImage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemoveWorkerImage(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // RevokeWorker operation middleware
 func (siw *ServerInterfaceWrapper) RevokeWorker(w http.ResponseWriter, r *http.Request) {
 
@@ -1106,6 +1237,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/stop", wrapper.StopEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers", wrapper.ListWorkers)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.DeleteWorker)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.GetWorker)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/workers/{id}/images/remove", wrapper.RemoveWorkerImage)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/workers/{id}/revoke", wrapper.RevokeWorker)
 
 	return m
@@ -2459,6 +2592,143 @@ func (response DeleteWorker409JSONResponse) VisitDeleteWorkerResponse(w http.Res
 	return err
 }
 
+type GetWorkerRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type GetWorkerResponseObject interface {
+	VisitGetWorkerResponse(w http.ResponseWriter) error
+}
+
+type GetWorker200JSONResponse Worker
+
+func (response GetWorker200JSONResponse) VisitGetWorkerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetWorker401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetWorker401JSONResponse) VisitGetWorkerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetWorker403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetWorker403JSONResponse) VisitGetWorkerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetWorker404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetWorker404JSONResponse) VisitGetWorkerResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveWorkerImageRequestObject struct {
+	ID   ID `json:"id"`
+	Body *RemoveWorkerImageJSONRequestBody
+}
+
+type RemoveWorkerImageResponseObject interface {
+	VisitRemoveWorkerImageResponse(w http.ResponseWriter) error
+}
+
+type RemoveWorkerImage202Response struct {
+}
+
+func (response RemoveWorkerImage202Response) VisitRemoveWorkerImageResponse(w http.ResponseWriter) error {
+	w.WriteHeader(202)
+	return nil
+}
+
+type RemoveWorkerImage401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RemoveWorkerImage401JSONResponse) VisitRemoveWorkerImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveWorkerImage403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RemoveWorkerImage403JSONResponse) VisitRemoveWorkerImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveWorkerImage404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RemoveWorkerImage404JSONResponse) VisitRemoveWorkerImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveWorkerImage409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RemoveWorkerImage409JSONResponse) VisitRemoveWorkerImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RevokeWorkerRequestObject struct {
 	ID ID `json:"id"`
 }
@@ -2588,6 +2858,12 @@ type StrictServerInterface interface {
 
 	// (DELETE /api/frontend/workers/{id})
 	DeleteWorker(ctx context.Context, request DeleteWorkerRequestObject) (DeleteWorkerResponseObject, error)
+
+	// (GET /api/frontend/workers/{id})
+	GetWorker(ctx context.Context, request GetWorkerRequestObject) (GetWorkerResponseObject, error)
+
+	// (POST /api/frontend/workers/{id}/images/remove)
+	RemoveWorkerImage(ctx context.Context, request RemoveWorkerImageRequestObject) (RemoveWorkerImageResponseObject, error)
 
 	// (POST /api/frontend/workers/{id}/revoke)
 	RevokeWorker(ctx context.Context, request RevokeWorkerRequestObject) (RevokeWorkerResponseObject, error)
@@ -3255,6 +3531,65 @@ func (sh *strictHandler) DeleteWorker(w http.ResponseWriter, r *http.Request, id
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(DeleteWorkerResponseObject); ok {
 		if err := validResponse.VisitDeleteWorkerResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetWorker operation middleware
+func (sh *strictHandler) GetWorker(w http.ResponseWriter, r *http.Request, id ID) {
+	var request GetWorkerRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetWorker(ctx, request.(GetWorkerRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetWorker")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetWorkerResponseObject); ok {
+		if err := validResponse.VisitGetWorkerResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RemoveWorkerImage operation middleware
+func (sh *strictHandler) RemoveWorkerImage(w http.ResponseWriter, r *http.Request, id ID) {
+	var request RemoveWorkerImageRequestObject
+
+	request.ID = id
+
+	var body RemoveWorkerImageJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RemoveWorkerImage(ctx, request.(RemoveWorkerImageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RemoveWorkerImage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RemoveWorkerImageResponseObject); ok {
+		if err := validResponse.VisitRemoveWorkerImageResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

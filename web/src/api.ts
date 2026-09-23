@@ -26,6 +26,9 @@ export type Person = Schemas['Person']
 export type Template = Schemas['Template']
 export type TemplateInput = Schemas['TemplateInput']
 export type Visibility = Schemas['Visibility']
+export type WorkerStats = Schemas['WorkerStats']
+export type EnvironmentStats = Schemas['EnvironmentStats']
+export type LocalImage = Schemas['LocalImage']
 
 const client = createClient<paths>()
 
@@ -81,6 +84,9 @@ export const api = {
   people: () => unwrap(client.GET('/api/frontend/people')),
 
   workers: () => unwrap(client.GET('/api/frontend/workers')),
+  worker: (id: string) => unwrap(client.GET('/api/frontend/workers/{id}', byID(id))),
+  removeWorkerImage: (id: string, ref: string) =>
+    unwrap(client.POST('/api/frontend/workers/{id}/images/remove', { ...byID(id), body: { ref } })),
   revokeWorker: (id: string) => unwrap(client.POST('/api/frontend/workers/{id}/revoke', byID(id))),
   deleteWorker: (id: string) => unwrap(client.DELETE('/api/frontend/workers/{id}', byID(id))),
 

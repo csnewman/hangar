@@ -13,6 +13,8 @@ import { UsersPage } from './pages/admin/Users'
 import { WorkersPage } from './pages/admin/Workers'
 import { ConsoleTab, EnvironmentPage, SummaryTab } from './pages/Environment'
 import { LoginPage } from './pages/Login'
+import { MetricsTab } from './pages/Metrics'
+import { WorkerDetailPage } from './pages/admin/WorkerDetail'
 import { NewEnvironmentPage } from './pages/NewEnvironment'
 import { OverviewPage } from './pages/Overview'
 import { TemplateEditorPage } from './pages/TemplateEditor'
@@ -67,6 +69,7 @@ const router = createBrowserRouter([
             element: <EnvironmentPage />,
             children: [
               { index: true, element: <SummaryTab /> },
+              { path: 'metrics', element: <MetricsTab /> },
               { path: 'terminal', element: <ConsoleTab kind="terminal" /> },
               { path: 'editor', element: <ConsoleTab kind="editor" /> },
               { path: 'desktop', element: <ConsoleTab kind="desktop" /> },
@@ -81,6 +84,14 @@ const router = createBrowserRouter([
             element: (
               <RequireAdmin>
                 <WorkersPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: 'admin/workers/:id',
+            element: (
+              <RequireAdmin>
+                <WorkerDetailPage />
               </RequireAdmin>
             ),
           },

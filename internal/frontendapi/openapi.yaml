@@ -377,6 +377,18 @@ paths:
   /api/frontend/workers/{id}:
     parameters:
       - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getWorker
+      x-hangar-admin: true
+      responses:
+        "200":
+          description: The worker, with its latest usage and its local images.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Worker" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: deleteWorker
       x-hangar-admin: true
@@ -388,6 +400,29 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "204":
           description: Removed.
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/workers/{id}/images/remove:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: removeWorkerImage
+      x-hangar-admin: true
+      description: >-
+        Asks the worker to delete an image from its local store. Refused while
+        an environment on the worker uses the image; otherwise the worker
+        deletes it on its next sync, and fetches it again if it is needed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RemoveImage" }
+      responses:
+        "202":
+          description: Asked for.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
@@ -501,6 +536,8 @@ components:
         worker:
           type: string
           description: That worker's name.
+        stats:
+          $ref: "#/components/schemas/EnvironmentStats"
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
@@ -649,7 +686,7 @@ components:
 
     Worker:
       type: object
-      required: [id, name, labels, capacity, allocated, online, revoked, unknown, created_at]
+      required: [id, name, labels, capacity, allocated, online, revoked, unknown, created_at, images, pending_removals]
       properties:
         id: { type: string }
         name: { type: string }
@@ -669,6 +706,69 @@ components:
           items: { type: string }
         last_seen_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
+        stats:
+          $ref: "#/components/schemas/WorkerStats"
+        images:
+          type: array
+          items: { $ref: "#/components/schemas/LocalImage" }
+        pending_removals:
+          type: array
+          description: Images the worker has been asked to delete and still holds.
+          items: { type: string }
+
+    WorkerStats:
+      type: object
+      description: The worker's machine as a whole, as last measured.
+      required: [cpu_percent, load1, memory_used_mib, memory_total_mib, disk_used_bytes, disk_total_bytes]
+      properties:
+        cpu_percent: { type: number }
+        load1: { type: number }
+        memory_used_mib: { type: integer }
+        memory_total_mib: { type: integer }
+        disk_used_bytes: { type: integer, format: int64 }
+        disk_total_bytes: { type: integer, format: int64 }
+
+    EnvironmentStats:
+      type: object
+      description: >-
+        What a running environment uses, as its worker last measured it.
+        Rates are per second.
+      required: [cpu_percent, memory_used_mib, memory_total_mib, disk_used_bytes, disk_read_bps, disk_write_bps, net_rx_bps, net_tx_bps]
+      properties:
+        cpu_percent:
+          type: number
+          description: Of the environment's own vCPUs; 100 is all of them busy.
+        memory_used_mib: { type: integer }
+        memory_total_mib: { type: integer }
+        disk_used_bytes:
+          type: integer
+          format: int64
+          description: What its writable layer and Docker store take on the worker.
+        disk_read_bps: { type: number }
+        disk_write_bps: { type: number }
+        net_rx_bps: { type: number }
+        net_tx_bps: { type: number }
+
+    LocalImage:
+      type: object
+      required: [ref, size_bytes, state, environments]
+      properties:
+        ref: { type: string }
+        size_bytes: { type: integer, format: int64 }
+        state:
+          type: string
+          enum: [ready, fetching]
+        environments:
+          type: array
+          description: IDs of the environments on the worker using it.
+          items: { type: string }
+
+    RemoveImage:
+      type: object
+      required: [ref]
+      additionalProperties: false
+      properties:
+        ref: { type: string, minLength: 1 }
 
     Login:
       type: object

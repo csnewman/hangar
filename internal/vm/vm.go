@@ -21,7 +21,6 @@ package vm
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -46,11 +45,14 @@ type Image struct {
 type Config struct {
 	// StateDir holds one directory per environment.
 	StateDir string
+	// ImagesDir is the worker's local store of the images its environments
+	// boot from.
+	ImagesDir string
 	// Kernel is the guest kernel every environment boots.
 	Kernel string
-	// Images maps an image reference, as a template names it, to the files
-	// that provide it on this worker. A reference not listed here cannot be
-	// run on this worker.
+	// Images maps an image reference, as a template names it, to where the
+	// worker fetches it from into its store. A reference not listed here
+	// cannot be run on this worker.
 	Images map[string]Image
 	// UpperGiB and DockerGiB size each environment's writable layer and
 	// Docker store. The files are sparse, so this is a ceiling rather than
@@ -85,6 +87,7 @@ func (c *Config) defaults() {
 // Runtime interface.
 type Runtime struct {
 	cfg     Config
+	store   *store
 	ctx     context.Context
 	cancel  context.CancelFunc
 	mu      sync.Mutex
@@ -106,8 +109,13 @@ func New(cfg Config) (*Runtime, error) {
 	if err := os.MkdirAll(cfg.StateDir, 0o755); err != nil {
 		return nil, err
 	}
+	st, err := newStore(cfg.ImagesDir, cfg.Images)
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &Runtime{cfg: cfg, ctx: ctx, cancel: cancel, envs: map[string]*machine{}, changed: make(chan struct{}, 1)}
+	r := &Runtime{cfg: cfg, store: st, ctx: ctx, cancel: cancel, envs: map[string]*machine{},
+		changed: make(chan struct{}, 1)}
 
 	entries, err := os.ReadDir(cfg.StateDir)
 	if err != nil {
@@ -136,7 +144,14 @@ func (r *Runtime) Observe() []api.ObservedEnvironment {
 	out := make([]api.ObservedEnvironment, 0, len(r.envs))
 	for id, m := range r.envs {
 		phase, reason := m.status()
-		out = append(out, api.ObservedEnvironment{ID: id, Phase: phase, Reason: reason})
+		o := api.ObservedEnvironment{ID: id, Phase: phase, Reason: reason}
+		m.mu.Lock()
+		if m.stats != nil && phase == api.PhaseRunning {
+			s := *m.stats
+			o.Stats = &s
+		}
+		m.mu.Unlock()
+		out = append(out, o)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
@@ -226,6 +241,8 @@ type machine struct {
 	running *instance
 	// cancelBoot interrupts a boot in progress when what is wanted changes.
 	cancelBoot context.CancelFunc
+	// stats is the latest measurement of the running machine.
+	stats *api.EnvironmentStats
 
 	nudge chan struct{}
 }
@@ -354,6 +371,7 @@ func (m *machine) boot(ctx context.Context, spec api.EnvironmentSpec) {
 	m.running = inst
 	m.mu.Unlock()
 	m.set(api.PhaseRunning, "")
+	go m.sample(inst, spec.Spec.CPUs)
 }
 
 // lost handles a machine that exited without being asked to.
@@ -386,11 +404,55 @@ func (m *machine) powerOff() {
 
 var errUnsupported = errors.New("not supported by this worker")
 
-// resolve finds the files that provide an environment's image.
-func (m *machine) resolve(spec api.EnvironmentSpec) (Image, error) {
-	img, ok := m.rt.cfg.Images[spec.Spec.Image]
-	if !ok {
-		return Image{}, fmt.Errorf("the image %s is not available on this worker", spec.Spec.Image)
+// resolve returns the local copy of an environment's image, fetching it
+// into the store first if need be.
+func (m *machine) resolve(ctx context.Context, spec api.EnvironmentSpec) (Image, error) {
+	if _, err := os.Stat(m.rt.store.path(spec.Spec.Image)); err != nil {
+		m.set(api.PhaseStarting, "fetching the image")
 	}
-	return img, nil
+	return m.rt.store.get(ctx, spec.Spec.Image)
+}
+
+// Images reports the local store, with the environments using each image.
+func (r *Runtime) Images() []api.LocalImage {
+	imgs := r.store.list()
+	users := r.imageUsers()
+	for i := range imgs {
+		if u := users[imgs[i].Ref]; u != nil {
+			imgs[i].Environments = u
+		}
+	}
+	return imgs
+}
+
+// RemoveImage deletes an image's local copy, unless an environment on this
+// worker still uses it -- stopped or not, since starting it again boots
+// from that copy.
+func (r *Runtime) RemoveImage(ref string) {
+	if len(r.imageUsers()[ref]) > 0 {
+		return
+	}
+	if err := r.store.remove(ref); err != nil {
+		r.cfg.Log.Warn("removing an image", "image", ref, "err", err)
+		return
+	}
+	r.notify()
+}
+
+// imageUsers maps each image to the environments here that use it.
+func (r *Runtime) imageUsers() map[string][]string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	users := map[string][]string{}
+	for id, m := range r.envs {
+		m.mu.Lock()
+		if m.spec != nil && m.spec.Desired != api.DesiredDeleted {
+			users[m.spec.Spec.Image] = append(users[m.spec.Spec.Image], id)
+		}
+		m.mu.Unlock()
+	}
+	for _, u := range users {
+		sort.Strings(u)
+	}
+	return users
 }

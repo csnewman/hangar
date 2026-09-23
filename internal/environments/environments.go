@@ -42,7 +42,7 @@ func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
 const columns = `e.id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
 	e.spec, e.image, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
-	coalesce(w.name, ''), e.created_at, e.updated_at`
+	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats`
 
 const from = `environments e
 	JOIN users u ON u.id = e.owner_id
@@ -54,14 +54,22 @@ const visible = `($1 OR e.owner_id = $2)`
 
 func scan(row pgx.Row) (api.Environment, error) {
 	var e api.Environment
-	var spec []byte
+	var spec, stats []byte
 	err := row.Scan(&e.ID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.CPUs,
-		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt)
+		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}
 	if err != nil {
 		return e, err
+	}
+	// Usage is only meaningful for an environment that is running; a
+	// stopped one keeps the last figures it had, which would mislead.
+	if stats != nil && e.Phase == api.PhaseRunning {
+		e.Stats = &api.EnvironmentStats{}
+		if err := json.Unmarshal(stats, e.Stats); err != nil {
+			return e, err
+		}
 	}
 	return e, json.Unmarshal(spec, &e.Spec)
 }

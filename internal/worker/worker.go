@@ -36,10 +36,22 @@ type Runtime interface {
 	Changed() <-chan struct{}
 }
 
-// reportEvery is how often the worker reports even when nothing changed. It
-// is a third of the server's online window, so one lost report does not make
-// the worker look offline.
-const reportEvery = 15 * time.Second
+// ImageStore is a runtime that keeps images in a local store of its own,
+// which the control plane can see into and clear.
+type ImageStore interface {
+	// Images returns every image in the store.
+	Images() []api.LocalImage
+	// RemoveImage deletes an image from the store, unless an environment
+	// uses it. It is asked again on every desired set until the image is
+	// gone, so it must be idempotent.
+	RemoveImage(ref string)
+}
+
+// reportEvery is how often the worker reports even when nothing changed. The
+// report carries usage figures, which change all the time, so this is also
+// how fresh they are; it is well inside the server's online window, so a few
+// lost reports do not make the worker look offline.
+const reportEvery = 5 * time.Second
 
 type Worker struct {
 	cfg      *Config
@@ -47,6 +59,7 @@ type Worker struct {
 	client   *client
 	capacity api.Resources
 	log      *slog.Logger
+	sys      *sysStats
 }
 
 // New creates a worker. The capacity it offers is this machine's, less what
@@ -60,7 +73,8 @@ func New(cfg *Config, rt Runtime, log *slog.Logger) (*Worker, error) {
 		CPUs:      max(total.CPUs-cfg.Reserved.CPUs, 0),
 		MemoryMiB: max(total.MemoryMiB-cfg.Reserved.Memory.MiB(), 0),
 	}
-	return &Worker{cfg: cfg, rt: rt, client: newClient(cfg.Server.URL), capacity: offered, log: log}, nil
+	return &Worker{cfg: cfg, rt: rt, client: newClient(cfg.Server.URL), capacity: offered, log: log,
+		sys: &sysStats{path: cfg.Storage.Environments}}, nil
 }
 
 // Run registers if need be, then holds the desired set until ctx ends or the
@@ -105,6 +119,11 @@ func (w *Worker) desiredLoop(ctx context.Context) error {
 		for _, spec := range set.Environments {
 			w.rt.Apply(spec)
 		}
+		if store, ok := w.rt.(ImageStore); ok {
+			for _, ref := range set.RemoveImages {
+				store.RemoveImage(ref)
+			}
+		}
 	}
 }
 
@@ -113,11 +132,17 @@ func (w *Worker) reportLoop(ctx context.Context) error {
 	defer t.Stop()
 	for {
 		err := w.retry(ctx, "reporting status", func() error {
-			return w.client.report(ctx, api.WorkerStatus{
+			st := api.WorkerStatus{
 				Capacity:     w.capacity,
 				Labels:       w.cfg.Node.Labels,
 				Environments: w.rt.Observe(),
-			})
+				Stats:        w.sys.measure(),
+				Images:       []api.LocalImage{},
+			}
+			if store, ok := w.rt.(ImageStore); ok {
+				st.Images = store.Images()
+			}
+			return w.client.report(ctx, st)
 		})
 		if err != nil {
 			return err

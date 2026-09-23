@@ -11,7 +11,9 @@ set -eu
 repo=/Users/csnewman/Projects/hangar
 
 if [ "${1:-}" = stop ]; then
-    limactl shell hangar sudo pkill -TERM -x hangar-worker || true
+    limactl shell hangar bash -c '
+        sudo pkill -TERM -x hangar-worker || exit 0
+        for i in $(seq 1 150); do pgrep -x hangar-worker > /dev/null || exit 0; sleep 1; done'
     exit 0
 fi
 
@@ -20,8 +22,12 @@ limactl shell hangar bash -c "
     cd $repo
     /usr/local/go/bin/go build -o /var/tmp/hangar-worker ./cmd/hangar-worker
     # By process name: a pattern over whole command lines would also match
-    # this shell, whose command line names the worker.
-    sudo pkill -TERM -x hangar-worker && sleep 3 || true
+    # this shell, whose command line names the worker. A stopping worker
+    # powers its environments off first, so the new one waits for it: two
+    # workers would fight over the same machines' sockets.
+    if sudo pkill -TERM -x hangar-worker; then
+        for i in \$(seq 1 150); do pgrep -x hangar-worker > /dev/null || break; sleep 1; done
+    fi
     sudo env PATH=\$HOME/ch-upstream/target/release:\$PATH \
         LD_LIBRARY_PATH=/usr/local/lib/aarch64-linux-gnu \
         setsid /var/tmp/hangar-worker -config $repo/dev/worker-lima.yaml \

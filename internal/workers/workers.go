@@ -189,39 +189,83 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 func (m *Manager) List(ctx context.Context) ([]api.Worker, error) {
 	var out []api.Worker
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		out = []api.Worker{}
-		rows, err := tx.Query(ctx, `
-			SELECT w.id, w.name, w.labels, w.cpus, w.memory_mib, w.unknown, w.last_seen_at,
-			       w.revoked_at IS NOT NULL, w.created_at,
-			       coalesce(sum(e.cpus), 0), coalesce(sum(e.memory_mib), 0),
-			       coalesce(w.last_seen_at > now() - $1::interval, false)
-			FROM workers w
-			LEFT JOIN environments e ON e.worker_id = w.id AND e.desired <> 'deleted'
-			GROUP BY w.id
-			ORDER BY w.name`, OnlineWindow)
-		if err != nil {
-			return err
-		}
-		defer rows.Close()
-		for rows.Next() {
-			var w api.Worker
-			var labels, unknown []byte
-			if err := rows.Scan(&w.ID, &w.Name, &labels, &w.Capacity.CPUs, &w.Capacity.MemoryMiB, &unknown,
-				&w.LastSeenAt, &w.Revoked, &w.CreatedAt, &w.Allocated.CPUs, &w.Allocated.MemoryMiB, &w.Online); err != nil {
-				return err
-			}
-			if err := json.Unmarshal(labels, &w.Labels); err != nil {
-				return err
-			}
-			if err := json.Unmarshal(unknown, &w.Unknown); err != nil {
-				return err
-			}
-			w.Online = w.Online && !w.Revoked
-			out = append(out, w)
-		}
-		return rows.Err()
+		var err error
+		out, err = list(ctx, tx, "")
+		return err
 	})
+	if out == nil {
+		out = []api.Worker{}
+	}
 	return out, err
+}
+
+// Get returns one worker.
+func (m *Manager) Get(ctx context.Context, id string) (api.Worker, error) {
+	if !db.ValidUUID(id) {
+		return api.Worker{}, ErrNotFound
+	}
+	var out []api.Worker
+	err := m.db.Transact(ctx, func(tx db.Tx) error {
+		var err error
+		out, err = list(ctx, tx, id)
+		return err
+	})
+	if err != nil {
+		return api.Worker{}, err
+	}
+	if len(out) == 0 {
+		return api.Worker{}, ErrNotFound
+	}
+	return out[0], nil
+}
+
+// list reads every worker, or only the one with the given ID.
+func list(ctx context.Context, tx db.Tx, id string) ([]api.Worker, error) {
+	var only *string
+	if id != "" {
+		only = &id
+	}
+	rows, err := tx.Query(ctx, `
+		SELECT w.id, w.name, w.labels, w.cpus, w.memory_mib, w.unknown, w.last_seen_at,
+		       w.revoked_at IS NOT NULL, w.created_at,
+		       coalesce(sum(e.cpus), 0), coalesce(sum(e.memory_mib), 0),
+		       coalesce(w.last_seen_at > now() - $1::interval, false),
+		       w.stats, w.images,
+		       coalesce((SELECT jsonb_agg(r.ref ORDER BY r.ref) FROM worker_image_removals r
+		                 WHERE r.worker_id = w.id), '[]')
+		FROM workers w
+		LEFT JOIN environments e ON e.worker_id = w.id AND e.desired <> 'deleted'
+		WHERE $2::uuid IS NULL OR w.id = $2
+		GROUP BY w.id
+		ORDER BY w.name`, OnlineWindow, only)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (api.Worker, error) {
+		var w api.Worker
+		var labels, unknown, stats, images, removals []byte
+		if err := r.Scan(&w.ID, &w.Name, &labels, &w.Capacity.CPUs, &w.Capacity.MemoryMiB, &unknown,
+			&w.LastSeenAt, &w.Revoked, &w.CreatedAt, &w.Allocated.CPUs, &w.Allocated.MemoryMiB, &w.Online,
+			&stats, &images, &removals); err != nil {
+			return w, err
+		}
+		for _, f := range []struct {
+			raw []byte
+			to  any
+		}{{labels, &w.Labels}, {unknown, &w.Unknown}, {images, &w.Images}, {removals, &w.PendingRemovals}} {
+			if err := json.Unmarshal(f.raw, f.to); err != nil {
+				return w, err
+			}
+		}
+		if stats != nil {
+			w.Stats = &api.WorkerStats{}
+			if err := json.Unmarshal(stats, w.Stats); err != nil {
+				return w, err
+			}
+		}
+		w.Online = w.Online && !w.Revoked
+		return w, nil
+	})
 }
 
 // DesiredVersion is the version of a worker's desired set, for deciding
@@ -242,7 +286,7 @@ func (m *Manager) DesiredVersion(ctx context.Context, workerID string) (int64, e
 func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredSet, error) {
 	var set api.DesiredSet
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		set = api.DesiredSet{Environments: []api.EnvironmentSpec{}}
+		set = api.DesiredSet{Environments: []api.EnvironmentSpec{}, RemoveImages: []string{}}
 		// Every row repeats the version. A worker with no environments
 		// still has its row, with the environment columns NULL.
 		rows, err := tx.Query(ctx, `
@@ -278,7 +322,16 @@ func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredS
 		if !found {
 			return ErrNotFound
 		}
-		return nil
+		rows.Close()
+		// Read after the version: a removal asked for in between raises
+		// the version again, so the worker comes straight back for it.
+		rows, err = tx.Query(ctx, `SELECT ref FROM worker_image_removals WHERE worker_id = $1 ORDER BY ref`,
+			workerID)
+		if err != nil {
+			return err
+		}
+		set.RemoveImages, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
 	})
 	return set, err
 }
@@ -357,8 +410,16 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 				continue
 			}
 			reported[o.ID] = true
-			if _, err := tx.Exec(ctx, `UPDATE environments SET phase = $2, reason = $3, updated_at = now()
-				WHERE id = $1 AND (phase, reason) IS DISTINCT FROM ($2, $3)`, o.ID, o.Phase, o.Reason); err != nil {
+			var stats []byte
+			if o.Stats != nil {
+				if stats, err = json.Marshal(o.Stats); err != nil {
+					return err
+				}
+			}
+			// updated_at marks a change of phase, not every measurement.
+			if _, err := tx.Exec(ctx, `UPDATE environments SET phase = $2, reason = $3, stats = $4,
+				updated_at = CASE WHEN (phase, reason) IS DISTINCT FROM ($2, $3) THEN now() ELSE updated_at END
+				WHERE id = $1`, o.ID, o.Phase, o.Reason, stats); err != nil {
 				return err
 			}
 		}
@@ -382,15 +443,88 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 		if err != nil {
 			return err
 		}
+		var stats []byte
+		if st.Stats != nil {
+			if stats, err = json.Marshal(st.Stats); err != nil {
+				return err
+			}
+		}
+		images := st.Images
+		if images == nil {
+			images = []api.LocalImage{}
+		}
+		imagesJSON, err := json.Marshal(images)
+		if err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `UPDATE workers SET cpus = $2, memory_mib = $3, labels = $4, unknown = $5,
-			last_seen_at = now() WHERE id = $1`,
-			workerID, st.Capacity.CPUs, st.Capacity.MemoryMiB, labels, unknownJSON); err != nil {
+			stats = $6, images = $7, last_seen_at = now() WHERE id = $1`,
+			workerID, st.Capacity.CPUs, st.Capacity.MemoryMiB, labels, unknownJSON, stats, imagesJSON); err != nil {
+			return err
+		}
+
+		// A removal is done once the worker stops reporting the image.
+		held := make([]string, len(images))
+		for i, img := range images {
+			held[i] = img.Ref
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM worker_image_removals
+			WHERE worker_id = $1 AND NOT (ref = ANY($2::text[]))`, workerID, held); err != nil {
 			return err
 		}
 		if st.Capacity.CPUs != oldCPUs || st.Capacity.MemoryMiB != oldMem {
 			return db.Notify(ctx, tx, CapacityChannel, workerID)
 		}
 		return nil
+	})
+}
+
+var (
+	// ErrInUse is returned for an image an environment on the worker still
+	// uses.
+	ErrInUse = errors.New("in use")
+	// ErrNoImage is returned for an image the worker does not hold.
+	ErrNoImage = errors.New("image not found")
+)
+
+// RemoveImage asks a worker to delete an image from its local store. The
+// request is refused while an environment placed on the worker uses the
+// image; otherwise it stands until the worker reports the image gone.
+func (m *Manager) RemoveImage(ctx context.Context, workerID, ref string) error {
+	if !db.ValidUUID(workerID) {
+		return ErrNotFound
+	}
+	return m.db.Transact(ctx, func(tx db.Tx) error {
+		// Environments before workers, as everywhere.
+		var users []string
+		rows, err := tx.Query(ctx, `SELECT name FROM environments
+			WHERE worker_id = $1 AND desired <> 'deleted' AND image = $2 ORDER BY name FOR UPDATE`, workerID, ref)
+		if err != nil {
+			return err
+		}
+		if users, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+			return err
+		}
+		var held bool
+		err = tx.QueryRow(ctx, `SELECT images @> jsonb_build_array(jsonb_build_object('ref', $2::text))
+			FROM workers WHERE id = $1 FOR UPDATE`, workerID, ref).Scan(&held)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if !held {
+			return fmt.Errorf("%w: the worker does not hold %s", ErrNoImage, ref)
+		}
+		if len(users) > 0 {
+			return fmt.Errorf("%w: used by %s", ErrInUse, strings.Join(users, ", "))
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO worker_image_removals (worker_id, ref) VALUES ($1, $2)
+			ON CONFLICT DO NOTHING`, workerID, ref); err != nil {
+			return err
+		}
+		return Bump(ctx, tx, workerID)
 	})
 }
 

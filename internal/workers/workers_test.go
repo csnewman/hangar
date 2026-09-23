@@ -129,3 +129,120 @@ func report(t *testing.T, wm *workers.Manager, id string, cpus, mem int, envs ..
 		t.Fatalf("ReportStatus: %v", err)
 	}
 }
+
+// An image an environment on the worker uses cannot be removed. Once
+// nothing uses it, a removal is asked for in the desired set and stands
+// until the worker stops reporting the image.
+func TestImageRemoval(t *testing.T) {
+	d := dbtest.Open(t)
+	wm := workers.NewManager(d)
+	em := environments.NewManager(d)
+	w, _ := wm.Register(ctx, api.RegisterWorker{Name: "w"})
+	owner, _ := users.NewManager(d).Create(ctx, users.NewUser{Username: "owner", Password: "password1"})
+	p := users.Principal{UserID: owner.ID}
+
+	img := api.LocalImage{Ref: "img", SizeBytes: 1 << 30, State: "ready"}
+	status := func(images ...api.LocalImage) {
+		t.Helper()
+		if err := wm.ReportStatus(ctx, w.ID, api.WorkerStatus{
+			Capacity: api.Resources{CPUs: 4, MemoryMiB: 8192}, Images: images,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status(img)
+
+	tmpl, _ := templates.NewManager(d).Create(ctx, p, templates.Input{
+		Name: "t", Spec: api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 1, MemoryMiB: 1024}},
+	})
+	env, err := em.Create(ctx, p, api.CreateEnvironment{TemplateID: tmpl.ID, Name: "e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := placement.NewManager(d).Place(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := wm.RemoveImage(ctx, w.ID, "img"); !errors.Is(err, workers.ErrInUse) {
+		t.Fatalf("removing an image in use: %v, want ErrInUse", err)
+	}
+	if err := wm.RemoveImage(ctx, w.ID, "other"); !errors.Is(err, workers.ErrNoImage) {
+		t.Fatalf("removing an image the worker lacks: %v, want ErrNoImage", err)
+	}
+
+	// Deleted and gone from the worker: nothing uses it.
+	if _, err := em.SetDesired(ctx, p, env.ID, api.DesiredDeleted); err != nil {
+		t.Fatal(err)
+	}
+	status(img)
+	before, _ := wm.DesiredVersion(ctx, w.ID)
+	if err := wm.RemoveImage(ctx, w.ID, "img"); err != nil {
+		t.Fatalf("removing an unused image: %v", err)
+	}
+	set, _ := wm.DesiredSet(ctx, w.ID)
+	if set.Version <= before || len(set.RemoveImages) != 1 || set.RemoveImages[0] != "img" {
+		t.Fatalf("desired set after asking: version %d -> %d, removals %v", before, set.Version, set.RemoveImages)
+	}
+	got, _ := wm.Get(ctx, w.ID)
+	if len(got.PendingRemovals) != 1 {
+		t.Fatalf("pending removals %v", got.PendingRemovals)
+	}
+
+	// Still held: still asked for. Gone: done.
+	status(img)
+	if set, _ := wm.DesiredSet(ctx, w.ID); len(set.RemoveImages) != 1 {
+		t.Fatal("the removal was dropped while the worker still held the image")
+	}
+	status()
+	if set, _ := wm.DesiredSet(ctx, w.ID); len(set.RemoveImages) != 0 {
+		t.Fatalf("the removal stands after the image went: %v", set.RemoveImages)
+	}
+}
+
+// What a worker measures reaches the environment, and only while it runs.
+func TestStats(t *testing.T) {
+	d := dbtest.Open(t)
+	wm := workers.NewManager(d)
+	em := environments.NewManager(d)
+	w, _ := wm.Register(ctx, api.RegisterWorker{Name: "w"})
+	owner, _ := users.NewManager(d).Create(ctx, users.NewUser{Username: "owner", Password: "password1"})
+	p := users.Principal{UserID: owner.ID}
+	if err := wm.ReportStatus(ctx, w.ID, api.WorkerStatus{Capacity: api.Resources{CPUs: 4, MemoryMiB: 8192}}); err != nil {
+		t.Fatal(err)
+	}
+	tmpl, _ := templates.NewManager(d).Create(ctx, p, templates.Input{
+		Name: "t", Spec: api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 1, MemoryMiB: 1024}},
+	})
+	env, _ := em.Create(ctx, p, api.CreateEnvironment{TemplateID: tmpl.ID, Name: "e"})
+	placement.NewManager(d).Place(ctx)
+
+	report := func(phase api.Phase) {
+		t.Helper()
+		if err := wm.ReportStatus(ctx, w.ID, api.WorkerStatus{
+			Capacity: api.Resources{CPUs: 4, MemoryMiB: 8192},
+			Stats:    &api.WorkerStats{CPUPercent: 42, MemoryTotalMiB: 8192, MemoryUsedMiB: 1000},
+			Environments: []api.ObservedEnvironment{{ID: env.ID, Phase: phase,
+				Stats: &api.EnvironmentStats{CPUPercent: 12.5, MemoryUsedMiB: 300, MemoryTotalMiB: 1024}}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report(api.PhaseRunning)
+	got, _ := em.Get(ctx, p, env.ID)
+	if got.Stats == nil || got.Stats.CPUPercent != 12.5 || got.Stats.MemoryUsedMiB != 300 {
+		t.Fatalf("running environment's stats: %+v", got.Stats)
+	}
+	stamped := got.UpdatedAt
+	report(api.PhaseRunning)
+	if again, _ := em.Get(ctx, p, env.ID); !again.UpdatedAt.Equal(stamped) {
+		t.Fatal("a measurement alone moved updated_at, which marks changes of phase")
+	}
+	if w, _ := wm.Get(ctx, w.ID); w.Stats == nil || w.Stats.CPUPercent != 42 {
+		t.Fatalf("worker stats: %+v", w.Stats)
+	}
+
+	report(api.PhaseStopped)
+	if got, _ := em.Get(ctx, p, env.ID); got.Stats != nil {
+		t.Fatalf("a stopped environment reports usage: %+v", got.Stats)
+	}
+}

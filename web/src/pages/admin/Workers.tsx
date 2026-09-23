@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router'
 
 import { api, type Worker } from '../../api'
 import { ConfirmButton } from '../../components/ConfirmButton'
-import { formatAgo, formatMemory } from '../../components/format'
+import { Meter } from '../../components/charts'
+import { formatAgo, formatMemory, formatPercent } from '../../components/format'
 import { PageHeader } from '../../components/PageHeader'
 import { OnlineBadge } from '../../components/Status'
 
@@ -25,8 +27,9 @@ export function WorkersPage() {
             <tr>
               <th>Name</th>
               <th>Status</th>
-              <th>CPU</th>
-              <th>Memory</th>
+              <th>Allocated vCPUs</th>
+              <th>Allocated memory</th>
+              <th className="num">Usage</th>
               <th>Labels</th>
               <th>Last seen</th>
               <th />
@@ -36,14 +39,14 @@ export function WorkersPage() {
             {workers.data?.map((w) => <WorkerRow key={w.id} worker={w} />)}
             {workers.data?.length === 0 && (
               <tr>
-                <td colSpan={7} className="empty">
+                <td colSpan={8} className="empty">
                   No workers have registered.
                 </td>
               </tr>
             )}
             {workers.isPending && (
               <tr>
-                <td colSpan={7} className="empty">
+                <td colSpan={8} className="empty">
                   Loading…
                 </td>
               </tr>
@@ -66,7 +69,9 @@ function WorkerRow({ worker: w }: { worker: Worker }) {
   return (
     <tr>
       <td>
-        <div className="strong">{w.name}</div>
+        <Link to={`/admin/workers/${w.id}`} className="strong row-link">
+          {w.name}
+        </Link>
         <div className="mono muted small">{w.id.slice(0, 8)}</div>
       </td>
       <td>
@@ -87,6 +92,18 @@ function WorkerRow({ worker: w }: { worker: Worker }) {
           total={w.capacity.memory_mib}
           label={`${formatMemory(w.allocated.memory_mib)} / ${formatMemory(w.capacity.memory_mib)}`}
         />
+      </td>
+      <td className="num nowrap">
+        {w.stats ? (
+          <>
+            <div>{formatPercent(w.stats.cpu_percent)} CPU</div>
+            <div className="muted small">
+              {formatMemory(w.stats.memory_used_mib)} of {formatMemory(w.stats.memory_total_mib)}
+            </div>
+          </>
+        ) : (
+          <span className="muted">—</span>
+        )}
       </td>
       <td>
         <div className="labels">
@@ -109,17 +126,5 @@ function WorkerRow({ worker: w }: { worker: Worker }) {
         </div>
       </td>
     </tr>
-  )
-}
-
-function Meter({ used, total, label }: { used: number; total: number; label: string }) {
-  const pct = total > 0 ? Math.min(100, (used / total) * 100) : 0
-  return (
-    <div className="meter" title={label}>
-      <div className="meter-label nowrap">{label}</div>
-      <div className="meter-track">
-        <div className={`meter-fill${pct > 90 ? ' meter-hot' : ''}`} style={{ width: `${pct}%` }} />
-      </div>
-    </div>
   )
 }
