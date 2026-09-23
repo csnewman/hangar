@@ -17,6 +17,33 @@ chown dev:dev /workspace
 
 printf 'hangar\n' > /etc/hostname
 
+# Ubuntu's archive, for apt inside an environment. amd64 is served from
+# archive.ubuntu.com and security.ubuntu.com, every other architecture from
+# ports.ubuntu.com.
+case "$(dpkg --print-architecture)" in
+amd64)
+	archive=http://archive.ubuntu.com/ubuntu
+	security=http://security.ubuntu.com/ubuntu
+	;;
+*)
+	archive=http://ports.ubuntu.com/ubuntu-ports
+	security=$archive
+	;;
+esac
+cat > /etc/apt/sources.list.d/ubuntu.sources <<EOF
+Types: deb
+URIs: $archive
+Suites: resolute resolute-updates resolute-backports
+Components: main universe
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+
+Types: deb
+URIs: $security
+Suites: resolute-security
+Components: main universe
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+EOF
+
 # The hardware database maps device identifiers -- MAC vendor prefixes, PCI
 # and USB vendor-model names, keyboard and mouse quirks -- onto udev
 # properties. A guest sees virtio devices and a serial port, so it needs none
