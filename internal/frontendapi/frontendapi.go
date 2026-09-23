@@ -126,6 +126,7 @@ func New(cfg Config) (http.Handler, error) {
 	// a route of its own beside the validated API.
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/frontend/environments/{id}/terminal", h.terminalSocket)
+	mux.HandleFunc("GET /api/frontend/environments/{id}/desktop", h.desktopSocket)
 	mux.Handle("/", validate(routes))
 	return h.session(sameOrigin(mux)), nil
 }

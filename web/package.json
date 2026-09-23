@@ -12,6 +12,7 @@
     "gen:api": "openapi-typescript ../internal/frontendapi/openapi.yaml -o src/gen/frontend.ts"
   },
   "dependencies": {
+    "@novnc/novnc": "^1.7.0",
     "@tanstack/react-query": "^5.103.2",
     "@xterm/addon-clipboard": "0.3.0-beta.303",
     "@xterm/addon-fit": "0.12.0-beta.301",

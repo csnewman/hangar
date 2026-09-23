@@ -11,7 +11,7 @@ import './index.css'
 import { AccountPage } from './pages/Account'
 import { UsersPage } from './pages/admin/Users'
 import { WorkersPage } from './pages/admin/Workers'
-import { ConsoleTab, EnvironmentPage, SummaryTab } from './pages/Environment'
+import { EnvironmentPage, SummaryTab } from './pages/Environment'
 import { LoginPage } from './pages/Login'
 import { MetricsTab } from './pages/Metrics'
 import { WorkerDetailPage } from './pages/admin/WorkerDetail'
@@ -78,7 +78,11 @@ const router = createBrowserRouter([
                 lazy: async () => ({ Component: (await import('./terminal/TerminalTab')).TerminalTab }),
               },
               { path: 'editor', element: <EditorTab /> },
-              { path: 'desktop', element: <ConsoleTab kind="desktop" /> },
+              {
+                path: 'desktop',
+                // noVNC is fetched when a desktop is first opened.
+                lazy: async () => ({ Component: (await import('./desktop/DesktopTab')).DesktopTab }),
+              },
             ],
           },
           { path: 'templates', element: <TemplatesPage /> },

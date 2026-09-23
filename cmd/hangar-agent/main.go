@@ -36,6 +36,7 @@ func main() {
 
 	go serveTerminals()
 	go serveEditor()
+	go serveDesktop()
 	run(uint32(*port), *retry)
 }
 

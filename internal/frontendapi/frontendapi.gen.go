@@ -174,6 +174,12 @@ type CreateUser struct {
 // DesiredState What the environment's owner has asked for.
 type DesiredState string
 
+// DesktopSize defines model for DesktopSize.
+type DesktopSize struct {
+	Height int `json:"height"`
+	Width  int `json:"width"`
+}
+
 // Display Whether the environment has a graphical desktop.
 type Display string
 
@@ -471,6 +477,9 @@ type LoginJSONRequestBody = Login
 // CreateEnvironmentJSONRequestBody defines body for CreateEnvironment for application/json ContentType.
 type CreateEnvironmentJSONRequestBody = CreateEnvironment
 
+// ResizeDesktopJSONRequestBody defines body for ResizeDesktop for application/json ContentType.
+type ResizeDesktopJSONRequestBody = DesktopSize
+
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePassword
 
@@ -512,6 +521,9 @@ type ServerInterface interface {
 
 	// (GET /api/frontend/environments/{id})
 	GetEnvironment(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (PUT /api/frontend/environments/{id}/desktop/size)
+	ResizeDesktop(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (POST /api/frontend/environments/{id}/editor)
 	OpenEditor(w http.ResponseWriter, r *http.Request, id ID)
@@ -691,6 +703,32 @@ func (siw *ServerInterfaceWrapper) GetEnvironment(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetEnvironment(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResizeDesktop operation middleware
+func (siw *ServerInterfaceWrapper) ResizeDesktop(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResizeDesktop(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1354,6 +1392,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/stop", wrapper.StopEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/terminals", wrapper.ListTerminals)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/editor", wrapper.OpenEditor)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/desktop/size", wrapper.ResizeDesktop)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/environments/{id}/terminals/{session}", wrapper.CloseTerminal)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers", wrapper.ListWorkers)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.DeleteWorker)
@@ -1676,6 +1715,79 @@ func (response GetEnvironment404JSONResponse) VisitGetEnvironmentResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResizeDesktopRequestObject struct {
+	ID   ID `json:"id"`
+	Body *ResizeDesktopJSONRequestBody
+}
+
+type ResizeDesktopResponseObject interface {
+	VisitResizeDesktopResponse(w http.ResponseWriter) error
+}
+
+type ResizeDesktop204Response struct {
+}
+
+func (response ResizeDesktop204Response) VisitResizeDesktopResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type ResizeDesktop401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ResizeDesktop401JSONResponse) VisitResizeDesktopResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResizeDesktop404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ResizeDesktop404JSONResponse) VisitResizeDesktopResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResizeDesktop409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ResizeDesktop409JSONResponse) VisitResizeDesktopResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResizeDesktop503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response ResizeDesktop503JSONResponse) VisitResizeDesktopResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3159,6 +3271,9 @@ type StrictServerInterface interface {
 	// (GET /api/frontend/environments/{id})
 	GetEnvironment(ctx context.Context, request GetEnvironmentRequestObject) (GetEnvironmentResponseObject, error)
 
+	// (PUT /api/frontend/environments/{id}/desktop/size)
+	ResizeDesktop(ctx context.Context, request ResizeDesktopRequestObject) (ResizeDesktopResponseObject, error)
+
 	// (POST /api/frontend/environments/{id}/editor)
 	OpenEditor(ctx context.Context, request OpenEditorRequestObject) (OpenEditorResponseObject, error)
 
@@ -3423,6 +3538,39 @@ func (sh *strictHandler) GetEnvironment(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetEnvironmentResponseObject); ok {
 		if err := validResponse.VisitGetEnvironmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResizeDesktop operation middleware
+func (sh *strictHandler) ResizeDesktop(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ResizeDesktopRequestObject
+
+	request.ID = id
+
+	var body ResizeDesktopJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResizeDesktop(ctx, request.(ResizeDesktopRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResizeDesktop")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResizeDesktopResponseObject); ok {
+		if err := validResponse.VisitResizeDesktopResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

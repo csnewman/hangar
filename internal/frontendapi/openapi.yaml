@@ -401,6 +401,29 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
+  /api/frontend/environments/{id}/desktop/size:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: resizeDesktop
+      description: >-
+        Sets the size of the environment's desktop, which everyone watching
+        it sees change. Sizes outside 640x400 to 3840x2160 are brought within
+        it, and odd sides rounded down. A viewer connects to the desktop over
+        VNC on the WebSocket at /api/frontend/environments/{id}/desktop.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DesktopSize" }
+      responses:
+        "204":
+          description: Resized.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
   /api/frontend/environments/{id}/terminals/{session}:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -842,6 +865,14 @@ components:
           description: How many windows are attached to it.
         cols: { type: integer }
         rows: { type: integer }
+
+    DesktopSize:
+      type: object
+      required: [width, height]
+      additionalProperties: false
+      properties:
+        width: { type: integer, minimum: 1, maximum: 100000 }
+        height: { type: integer, minimum: 1, maximum: 100000 }
 
     EditorURL:
       type: object

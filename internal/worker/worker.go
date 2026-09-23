@@ -58,6 +58,12 @@ type TerminalDialer interface {
 	DialTerminal(ctx context.Context, environment string) (net.Conn, error)
 }
 
+// DesktopDialer is a runtime whose environments may have a desktop. Each
+// connection it opens carries one VNC (RFB) connection to it.
+type DesktopDialer interface {
+	DialDesktop(ctx context.Context, environment string) (net.Conn, error)
+}
+
 // EditorDialer is a runtime whose environments have an editor. Each
 // connection it opens carries one HTTP connection to it.
 type EditorDialer interface {
@@ -231,6 +237,13 @@ func (w *Worker) stream(h tunnel.Header, r io.Reader, stream net.Conn) {
 			return
 		}
 		guest, err = dialer.DialEditor(ctx, h.Environment)
+	case tunnel.KindDesktop:
+		dialer, ok := w.rt.(DesktopDialer)
+		if !ok {
+			cancel()
+			return
+		}
+		guest, err = dialer.DialDesktop(ctx, h.Environment)
 	default:
 		cancel()
 		w.log.Warn("unknown stream from the control plane", "kind", h.Kind)

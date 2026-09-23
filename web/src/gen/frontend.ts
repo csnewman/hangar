@@ -286,6 +286,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/environments/{id}/desktop/size": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Sets the size of the environment's desktop, which everyone watching it sees change. Sizes outside 640x400 to 3840x2160 are brought within it, and odd sides rounded down. A viewer connects to the desktop over VNC on the WebSocket at /api/frontend/environments/{id}/desktop. */
+        put: operations["resizeDesktop"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/environments/{id}/terminals/{session}": {
         parameters: {
             query?: never;
@@ -578,6 +597,10 @@ export interface components {
             clients: number;
             cols: number;
             rows: number;
+        };
+        DesktopSize: {
+            width: number;
+            height: number;
         };
         EditorURL: {
             url: string;
@@ -1265,6 +1288,34 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["EditorURL"];
                 };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    resizeDesktop: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DesktopSize"];
+            };
+        };
+        responses: {
+            /** @description Resized. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];

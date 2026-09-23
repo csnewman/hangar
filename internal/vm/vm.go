@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/desktop"
 	"github.com/csnewman/hangar/internal/terminal"
 	"github.com/csnewman/hangar/internal/vscode"
 )
@@ -490,6 +491,16 @@ func (r *Runtime) DialEditor(ctx context.Context, id string) (net.Conn, error) {
 		return nil, err
 	}
 	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), vscode.Port)
+}
+
+// DialDesktop opens one VNC connection to a running environment's desktop,
+// which its agent serves in the guest.
+func (r *Runtime) DialDesktop(ctx context.Context, id string) (net.Conn, error) {
+	m, err := r.runningMachine(id)
+	if err != nil {
+		return nil, err
+	}
+	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), desktop.Port)
 }
 
 // runningMachine is the environment here with this ID, if it is running.

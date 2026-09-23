@@ -1,4 +1,4 @@
-import { Activity, AppWindow, Code2, GitBranch, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
+import { Activity, Code2, GitBranch, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router'
 
 import type { Environment } from '../api'
@@ -140,42 +140,6 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
     <div className="prop">
       <dt>{label}</dt>
       <dd>{children}</dd>
-    </div>
-  )
-}
-
-// ConsoleTab holds the place of a way into the environment that is not built
-// yet: the desktop. It will fill the whole tab.
-export function ConsoleTab({ kind }: { kind: 'desktop' }) {
-  const env = useEnv()
-  const what = {
-    desktop: { icon: AppWindow, title: 'Desktop', body: `${env.name}'s desktop, as the agent sees it.` },
-  }[kind]
-  const running = env.phase === 'running'
-  if (kind === 'desktop' && env.spec.display === 'none') {
-    return (
-      <div className="console">
-        <div className="console-empty">
-          <what.icon size={36} strokeWidth={1.4} />
-          <h2>No desktop</h2>
-          <p>{env.name} is headless: its template runs it without a graphical stack.</p>
-        </div>
-      </div>
-    )
-  }
-
-  return (
-    <div className="console">
-      <div className="console-empty">
-        <what.icon size={36} strokeWidth={1.4} />
-        <h2>{what.title}</h2>
-        <p>{what.body}</p>
-        <p className="muted small">
-          {running
-            ? 'Not available yet: this needs the agent to carry the stream to the browser.'
-            : 'Start the environment to connect.'}
-        </p>
-      </div>
     </div>
   )
 }
