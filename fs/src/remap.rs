@@ -151,7 +151,9 @@ impl Remap {
         if let Err(e) = &r {
             if e.raw_os_error() == Some(libc::EBADF) {
                 let inner = self.table.lock().unwrap().inodes.get(&id).map(|r| r.inner);
-                log::warn!("{op}: nodeid {id} (inner {inner:?}) refused by the filesystem underneath");
+                log::warn!(
+                    "{op}: nodeid {id} (inner {inner:?}) refused by the filesystem underneath"
+                );
             }
         }
         r
@@ -188,7 +190,13 @@ impl Remap {
         })
     }
 
-    fn intern_handle(&self, inner: Option<Handle>, inode: u64, flags: u32, dir: bool) -> Option<u64> {
+    fn intern_handle(
+        &self,
+        inner: Option<Handle>,
+        inode: u64,
+        flags: u32,
+        dir: bool,
+    ) -> Option<u64> {
         let inner = inner?;
         let mut t = self.table.lock().unwrap();
         let id = t.next_handle;
@@ -292,10 +300,12 @@ impl Remap {
                 continue;
             };
             let opened = if h.dir {
-                self.inner.opendir(&ctx, inner_inode, h.flags)
+                self.inner
+                    .opendir(&ctx, inner_inode, h.flags)
                     .map(|(x, _)| x)
             } else {
-                self.inner.open(&ctx, inner_inode, h.flags, 0)
+                self.inner
+                    .open(&ctx, inner_inode, h.flags, 0)
                     .map(|(x, _, _)| x)
             };
             if let Ok(Some(inner)) = opened {
@@ -388,32 +398,67 @@ impl FileSystem for Remap {
         Ok(self.entry_out(entry, parent, name))
     }
 
-    fn mknod(&self, ctx: &Context, parent: Self::Inode, name: &CStr, mode: u32, rdev: u32, umask: u32) -> io::Result<Entry> {
+    fn mknod(
+        &self,
+        ctx: &Context,
+        parent: Self::Inode,
+        name: &CStr,
+        mode: u32,
+        rdev: u32,
+        umask: u32,
+    ) -> io::Result<Entry> {
         let inner_parent = self.inode(parent)?;
-        let entry = self.inner.mknod(ctx, inner_parent, name, mode, rdev, umask)?;
+        let entry = self
+            .inner
+            .mknod(ctx, inner_parent, name, mode, rdev, umask)?;
         Ok(self.entry_out(entry, parent, name))
     }
 
-    fn mkdir(&self, ctx: &Context, parent: Self::Inode, name: &CStr, mode: u32, umask: u32) -> io::Result<Entry> {
+    fn mkdir(
+        &self,
+        ctx: &Context,
+        parent: Self::Inode,
+        name: &CStr,
+        mode: u32,
+        umask: u32,
+    ) -> io::Result<Entry> {
         let inner_parent = self.inode(parent)?;
         let entry = self.inner.mkdir(ctx, inner_parent, name, mode, umask)?;
         Ok(self.entry_out(entry, parent, name))
     }
 
-    fn symlink(&self, ctx: &Context, linkname: &CStr, parent: Self::Inode, name: &CStr) -> io::Result<Entry> {
+    fn symlink(
+        &self,
+        ctx: &Context,
+        linkname: &CStr,
+        parent: Self::Inode,
+        name: &CStr,
+    ) -> io::Result<Entry> {
         let inner_parent = self.inode(parent)?;
         let entry = self.inner.symlink(ctx, linkname, inner_parent, name)?;
         Ok(self.entry_out(entry, parent, name))
     }
 
-    fn link(&self, ctx: &Context, inode: Self::Inode, newparent: Self::Inode, newname: &CStr) -> io::Result<Entry> {
+    fn link(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        newparent: Self::Inode,
+        newname: &CStr,
+    ) -> io::Result<Entry> {
         let inner = self.inode(inode)?;
         let inner_parent = self.inode(newparent)?;
         let entry = self.inner.link(ctx, inner, inner_parent, newname)?;
         Ok(self.entry_out(entry, newparent, newname))
     }
 
-    fn create(&self, ctx: &Context, parent: Self::Inode, name: &CStr, args: CreateIn) -> io::Result<(Entry, Option<Self::Handle>, OpenOptions, Option<u32>)> {
+    fn create(
+        &self,
+        ctx: &Context,
+        parent: Self::Inode,
+        name: &CStr,
+        args: CreateIn,
+    ) -> io::Result<(Entry, Option<Self::Handle>, OpenOptions, Option<u32>)> {
         let inner_parent = self.inode(parent)?;
         let (entry, handle, opts, extra) = self.inner.create(ctx, inner_parent, name, args)?;
         let entry = self.entry_out(entry, parent, name);
@@ -421,41 +466,88 @@ impl FileSystem for Remap {
         Ok((entry, handle, opts, extra))
     }
 
-    fn readdirplus(&self, ctx: &Context, inode: Self::Inode, handle: Self::Handle, size: u32, offset: u64, add_entry: &mut dyn FnMut(DirEntry, Entry) -> io::Result<usize>) -> io::Result<()> {
+    fn readdirplus(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        size: u32,
+        offset: u64,
+        add_entry: &mut dyn FnMut(DirEntry, Entry) -> io::Result<usize>,
+    ) -> io::Result<()> {
         let inner = self.inode(inode)?;
         let inner_handle = self.handle(handle)?;
         // A nodeid reaches the guest here exactly as it does from a lookup,
         // and has to be ours for the same reason.
-        self.inner.readdirplus(ctx, inner, inner_handle, size, offset, &mut |de, entry| {
-            let name = std::ffi::CString::new(de.name).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
-            let entry = self.entry_out(entry, inode, &name);
-            add_entry(de, entry)
-        })
+        self.inner
+            .readdirplus(ctx, inner, inner_handle, size, offset, &mut |de, entry| {
+                let name = std::ffi::CString::new(de.name)
+                    .map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+                let entry = self.entry_out(entry, inode, &name);
+                add_entry(de, entry)
+            })
     }
 
     // --- replies that carry a handle ------------------------------------
 
-    fn open(&self, ctx: &Context, inode: Self::Inode, flags: u32, fuse_flags: u32) -> io::Result<(Option<Self::Handle>, OpenOptions, Option<u32>)> {
+    fn open(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        flags: u32,
+        fuse_flags: u32,
+    ) -> io::Result<(Option<Self::Handle>, OpenOptions, Option<u32>)> {
         let inner = self.inode(inode)?;
-        let (handle, opts, extra) =
-            self.note("open", inode, self.inner.open(ctx, inner, flags, fuse_flags))?;
+        let (handle, opts, extra) = self.note(
+            "open",
+            inode,
+            self.inner.open(ctx, inner, flags, fuse_flags),
+        )?;
         Ok((self.intern_handle(handle, inode, flags, false), opts, extra))
     }
 
-    fn opendir(&self, ctx: &Context, inode: Self::Inode, flags: u32) -> io::Result<(Option<Self::Handle>, OpenOptions)> {
+    fn opendir(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        flags: u32,
+    ) -> io::Result<(Option<Self::Handle>, OpenOptions)> {
         let inner = self.inode(inode)?;
         let (handle, opts) = self.inner.opendir(ctx, inner, flags)?;
         Ok((self.intern_handle(handle, inode, flags, true), opts))
     }
 
-    fn release(&self, ctx: &Context, inode: Self::Inode, flags: u32, handle: Self::Handle, flush: bool, flock_release: bool, lock_owner: Option<u64>) -> io::Result<()> {
+    fn release(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        flags: u32,
+        handle: Self::Handle,
+        flush: bool,
+        flock_release: bool,
+        lock_owner: Option<u64>,
+    ) -> io::Result<()> {
         let inner = self.inode(inode)?;
         let inner_handle = self.handle(handle)?;
         self.table.lock().unwrap().handles.remove(&handle);
-        self.inner.release(ctx, inner, flags, inner_handle, flush, flock_release, lock_owner)
+        self.inner.release(
+            ctx,
+            inner,
+            flags,
+            inner_handle,
+            flush,
+            flock_release,
+            lock_owner,
+        )
     }
 
-    fn releasedir(&self, ctx: &Context, inode: Self::Inode, flags: u32, handle: Self::Handle) -> io::Result<()> {
+    fn releasedir(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        flags: u32,
+        handle: Self::Handle,
+    ) -> io::Result<()> {
         let inner = self.inode(inode)?;
         let inner_handle = self.handle(handle)?;
         self.table.lock().unwrap().handles.remove(&handle);
@@ -488,22 +580,53 @@ impl FileSystem for Remap {
 
     // --- mappings --------------------------------------------------------
 
-    fn setupmapping(&self, ctx: &Context, inode: Self::Inode, handle: Self::Handle, foffset: u64, len: u64, flags: u64, moffset: u64, vu_req: &mut dyn FsCacheReqHandler) -> io::Result<()> {
+    fn setupmapping(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        foffset: u64,
+        len: u64,
+        flags: u64,
+        moffset: u64,
+        vu_req: &mut dyn FsCacheReqHandler,
+    ) -> io::Result<()> {
         let inner = self.inode(inode)?;
         let inner_handle = self.handle(handle)?;
         self.note(
             "setupmapping",
             inode,
-            self.inner.setupmapping(ctx, inner, inner_handle, foffset, len, flags, moffset, vu_req),
+            self.inner.setupmapping(
+                ctx,
+                inner,
+                inner_handle,
+                foffset,
+                len,
+                flags,
+                moffset,
+                vu_req,
+            ),
         )?;
         self.table.lock().unwrap().mappings.insert(
             moffset,
-            state::Mapping { inode, foffset, len, flags, moffset },
+            state::Mapping {
+                inode,
+                foffset,
+                len,
+                flags,
+                moffset,
+            },
         );
         Ok(())
     }
 
-    fn removemapping(&self, ctx: &Context, inode: Self::Inode, requests: Vec<RemovemappingOne>, vu_req: &mut dyn FsCacheReqHandler) -> io::Result<()> {
+    fn removemapping(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        requests: Vec<RemovemappingOne>,
+        vu_req: &mut dyn FsCacheReqHandler,
+    ) -> io::Result<()> {
         let inner = self.inode(inode)?;
         {
             let mut t = self.table.lock().unwrap();
@@ -511,7 +634,8 @@ impl FileSystem for Remap {
                 // One removal may cover several mappings, so anything
                 // starting inside the range goes.
                 let end = r.moffset.saturating_add(r.len);
-                t.mappings.retain(|off, _| !(*off >= r.moffset && *off < end));
+                t.mappings
+                    .retain(|off, _| !(*off >= r.moffset && *off < end));
             }
         }
         self.inner.removemapping(ctx, inner, requests, vu_req)
@@ -529,10 +653,19 @@ impl FileSystem for Remap {
         self.inner.rmdir(ctx, inner, name)
     }
 
-    fn rename(&self, ctx: &Context, olddir: Self::Inode, oldname: &CStr, newdir: Self::Inode, newname: &CStr, flags: u32) -> io::Result<()> {
+    fn rename(
+        &self,
+        ctx: &Context,
+        olddir: Self::Inode,
+        oldname: &CStr,
+        newdir: Self::Inode,
+        newname: &CStr,
+        flags: u32,
+    ) -> io::Result<()> {
         let inner_old = self.inode(olddir)?;
         let inner_new = self.inode(newdir)?;
-        self.inner.rename(ctx, inner_old, oldname, inner_new, newname, flags)?;
+        self.inner
+            .rename(ctx, inner_old, oldname, inner_new, newname, flags)?;
         // The file keeps its nodeid, so the path behind it has to follow it to
         // its new name, which is where a restore will look for it.
         let mut t = self.table.lock().unwrap();
@@ -556,10 +689,19 @@ impl FileSystem for Remap {
 
     // --- plain forwards ---------------------------------------------------
 
-    fn readdir(&self, ctx: &Context, inode: Self::Inode, handle: Self::Handle, size: u32, offset: u64, add_entry: &mut dyn FnMut(DirEntry) -> io::Result<usize>) -> io::Result<()> {
+    fn readdir(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        size: u32,
+        offset: u64,
+        add_entry: &mut dyn FnMut(DirEntry) -> io::Result<usize>,
+    ) -> io::Result<()> {
         let inner = self.inode(inode)?;
         let inner_handle = self.handle(handle)?;
-        self.inner.readdir(ctx, inner, inner_handle, size, offset, add_entry)
+        self.inner
+            .readdir(ctx, inner, inner_handle, size, offset, add_entry)
     }
 
     fn notify_reply(&self) -> io::Result<()> {
@@ -597,22 +739,43 @@ impl FileSystem for Remap {
 
     // `datasync` sits between the nodeid and the handle in these two, so they
     // do not fit either shape above.
-    fn fsync(&self, ctx: &Context, inode: Self::Inode, datasync: bool, handle: Self::Handle) -> io::Result<()> {
+    fn fsync(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        datasync: bool,
+        handle: Self::Handle,
+    ) -> io::Result<()> {
         let inner = self.inode(inode)?;
         let inner_handle = self.handle(handle)?;
         self.inner.fsync(ctx, inner, datasync, inner_handle)
     }
 
-    fn fsyncdir(&self, ctx: &Context, inode: Self::Inode, datasync: bool, handle: Self::Handle) -> io::Result<()> {
+    fn fsyncdir(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        datasync: bool,
+        handle: Self::Handle,
+    ) -> io::Result<()> {
         let inner = self.inode(inode)?;
         let inner_handle = self.handle(handle)?;
         self.inner.fsyncdir(ctx, inner, datasync, inner_handle)
     }
 
-    fn poll(&self, ctx: &Context, inode: Self::Inode, handle: Self::Handle, khandle: Self::Handle, flags: u32, events: u32) -> io::Result<u32> {
+    fn poll(
+        &self,
+        ctx: &Context,
+        inode: Self::Inode,
+        handle: Self::Handle,
+        khandle: Self::Handle,
+        flags: u32,
+        events: u32,
+    ) -> io::Result<u32> {
         let inner = self.inode(inode)?;
         let inner_handle = self.handle(handle)?;
         let inner_khandle = self.handle(khandle)?;
-        self.inner.poll(ctx, inner, inner_handle, inner_khandle, flags, events)
+        self.inner
+            .poll(ctx, inner, inner_handle, inner_khandle, flags, events)
     }
 }

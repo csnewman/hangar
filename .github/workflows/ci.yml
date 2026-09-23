@@ -67,14 +67,17 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
-  vmm:
-    # hangar-vmm links against KVM's headers only through kvm-bindings, so it
-    # builds anywhere; running a guest needs /dev/kvm and is not done here.
+  fs:
+    # hangar-fs needs nothing from the host at build time; running it needs a
+    # monitor to connect to, which is not done here.
     strategy:
       fail-fast: false
       matrix:
         runner: [ubuntu-26.04-arm, ubuntu-26.04]
     runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: fs
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -82,10 +85,52 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: vmm
+          workspaces: fs
       - run: cargo fmt --check
-        working-directory: vmm
       - run: cargo clippy --all-targets -- -D warnings
-        working-directory: vmm
       - run: cargo test
-        working-directory: vmm
+
+  gpu:
+    # hangar-gpu links against virglrenderer with the patches in
+    # gpu/virglrenderer applied: the snapshot API it calls exists nowhere
+    # else. That build is cached on the patches and the script that applies
+    # them, so it reruns only when they change.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-26.04-arm, ubuntu-26.04]
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: gpu
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config python3-yaml python3-mako \
+            libepoxy-dev libdrm-dev libgbm-dev libvulkan-dev libegl-dev \
+            clang libclang-dev
+      - id: virgl-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/virgl
+          key: virgl-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gpu/virglrenderer/**') }}
+      - name: Build patched virglrenderer
+        if: steps.virgl-cache.outputs.cache-hit != 'true'
+        run: sudo sh virglrenderer/build.sh /opt/virgl
+      - name: Point the build at it
+        run: |
+          lib=$(dirname "$(dirname "$(find /opt/virgl -name virglrenderer.pc)")")
+          echo "PKG_CONFIG_PATH=$lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$lib" >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: gpu
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test

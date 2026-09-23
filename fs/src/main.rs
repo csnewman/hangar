@@ -69,7 +69,10 @@ fn raise_file_limit() {
     };
     // SAFETY: lim is a valid rlimit for the kernel to fill in.
     if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
-        log::warn!("could not read the open file limit: {}", std::io::Error::last_os_error());
+        log::warn!(
+            "could not read the open file limit: {}",
+            std::io::Error::last_os_error()
+        );
         return;
     }
     if lim.rlim_cur >= lim.rlim_max {
@@ -78,7 +81,10 @@ fn raise_file_limit() {
     lim.rlim_cur = lim.rlim_max;
     // SAFETY: lim is a valid rlimit and rlim_cur is within rlim_max.
     if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) } != 0 {
-        log::warn!("could not raise the open file limit: {}", std::io::Error::last_os_error());
+        log::warn!(
+            "could not raise the open file limit: {}",
+            std::io::Error::last_os_error()
+        );
         return;
     }
     log::info!("open file limit raised to {}", lim.rlim_max);

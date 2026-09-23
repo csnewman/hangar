@@ -10,13 +10,6 @@ use vm_memory::ByteValued;
 
 pub const QUEUE_SIZE: u16 = 256;
 pub const NUM_QUEUES: usize = 2;
-pub const QUEUE_SIZES: &[u16] = &[QUEUE_SIZE; NUM_QUEUES];
-
-/// The queue the guest submits rendering commands on.
-pub const CONTROL_QUEUE: u16 = 0;
-/// The queue carrying cursor updates, kept separate so a busy renderer never
-/// delays the pointer.
-pub const CURSOR_QUEUE: u16 = 1;
 
 // Feature bits from the virtio specification.
 pub const VIRTIO_GPU_F_VIRGL: u32 = 0;

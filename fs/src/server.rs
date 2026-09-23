@@ -12,13 +12,14 @@ use fuse_backend_rs::abi::virtio_fs::RemovemappingOne;
 use fuse_backend_rs::api::server::Server;
 use fuse_backend_rs::passthrough::{CachePolicy, Config as PassthroughConfig, PassthroughFs};
 use fuse_backend_rs::transport::{FsCacheReqHandler, Reader, VirtioFsWriter, Writer};
-use vhost::vhost_user::message::{VhostUserMMap, VhostUserMMapFlags, VhostUserProtocolFeatures,
-    VhostUserVirtioFeatures};
+use vhost::vhost_user::message::{
+    VhostUserMMap, VhostUserMMapFlags, VhostUserProtocolFeatures, VhostUserVirtioFeatures,
+};
 use vhost::vhost_user::{Backend, VhostUserFrontendReqHandler};
 use vhost_user_backend::{VhostUserBackendMut, VringRwLock, VringT};
-use virtio_queue::QueueT;
 use virtio_bindings::bindings::virtio_config::{VIRTIO_F_NOTIFY_ON_EMPTY, VIRTIO_F_VERSION_1};
 use virtio_bindings::bindings::virtio_ring::VIRTIO_RING_F_EVENT_IDX;
+use virtio_queue::QueueT;
 use vm_memory::{ByteValued, GuestAddressSpace, GuestMemoryAtomic, GuestMemoryMmap};
 use vmm_sys_util::epoll::EventSet;
 
@@ -205,8 +206,8 @@ impl FsBackend {
             ..Default::default()
         };
 
-        let passthrough = PassthroughFs::<()>::new(cfg)
-            .map_err(|e| Error::SharedDir(dir.clone(), e))?;
+        let passthrough =
+            PassthroughFs::<()>::new(cfg).map_err(|e| Error::SharedDir(dir.clone(), e))?;
         passthrough
             .import()
             .map_err(|e| Error::SharedDir(dir.clone(), e))?;
@@ -377,7 +378,10 @@ impl VhostUserBackendMut for FsBackend {
         backend.set_shmem_flag(true);
         backend.set_reply_ack_flag(true);
         *self.frontend.lock().unwrap() = Some(backend);
-        log::info!("monitor channel up; {} mappings to make again", self.pending.len());
+        log::info!(
+            "monitor channel up; {} mappings to make again",
+            self.pending.len()
+        );
 
         // The mappings a restored guest is already holding have to be made
         // again before it runs. They cannot be made from here: this is the

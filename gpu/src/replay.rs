@@ -246,7 +246,7 @@ pub fn is_venus(context_init: u32) -> bool {
 
 /// The capsets whose command stream is virgl.
 pub fn is_virgl(context_init: u32) -> bool {
-    matches!(context_init & 0xff, 0 | 1 | 2)
+    matches!(context_init & 0xff, 0..=2)
 }
 
 impl Context {
@@ -325,8 +325,10 @@ impl Virgl {
     /// Records what a submitted command stream defines.
     pub fn observe(&mut self, bytes: &[u8]) {
         let dw: Vec<u32> = bytes
-            .chunks_exact(4)
-            .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|c| u32::from_le_bytes(*c))
             .collect();
         let mut i = 0;
         while i < dw.len() {
@@ -460,27 +462,27 @@ impl Virgl {
                 }
             }
             SET_SHADER_BUFFERS if p.len() >= 2 => {
-                for (i, e) in p[2..].chunks_exact(3).enumerate() {
+                for (i, e) in p[2..].as_chunks::<3>().0.iter().enumerate() {
                     sub.ssbos.insert(key(&[p[0], p[1] + i as u32]), e.to_vec());
                 }
             }
             SET_SHADER_IMAGES if p.len() >= 2 => {
-                for (i, e) in p[2..].chunks_exact(5).enumerate() {
+                for (i, e) in p[2..].as_chunks::<5>().0.iter().enumerate() {
                     sub.images.insert(key(&[p[0], p[1] + i as u32]), e.to_vec());
                 }
             }
             SET_ATOMIC_BUFFERS if !p.is_empty() => {
-                for (i, e) in p[1..].chunks_exact(3).enumerate() {
+                for (i, e) in p[1..].as_chunks::<3>().0.iter().enumerate() {
                     sub.abos.insert(p[0] + i as u32, e.to_vec());
                 }
             }
             SET_VIEWPORT_STATE if !p.is_empty() => {
-                for (i, e) in p[1..].chunks_exact(6).enumerate() {
+                for (i, e) in p[1..].as_chunks::<6>().0.iter().enumerate() {
                     sub.viewports.insert(p[0] + i as u32, e.to_vec());
                 }
             }
             SET_SCISSOR_STATE if !p.is_empty() => {
-                for (i, e) in p[1..].chunks_exact(2).enumerate() {
+                for (i, e) in p[1..].as_chunks::<2>().0.iter().enumerate() {
                     sub.scissors.insert(p[0] + i as u32, e.to_vec());
                 }
             }
@@ -557,7 +559,7 @@ impl Virgl {
                         }
                     }
                     SET_VERTEX_BUFFERS => {
-                        for e in p.chunks_exact_mut(3) {
+                        for e in p.as_chunks_mut::<3>().0 {
                             e[2] = res(e[2]);
                         }
                     }
@@ -647,8 +649,10 @@ impl Virgl {
 /// tracing.
 pub fn describe(bytes: &[u8]) -> String {
     let dw: Vec<u32> = bytes
-        .chunks_exact(4)
-        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
         .collect();
     let mut out = Vec::new();
     let mut i = 0;

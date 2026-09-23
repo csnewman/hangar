@@ -125,7 +125,7 @@ fn withhold_buffer_storage(caps: &mut [u8]) {
 /// render server, without which its capset reads back as zeroes.
 fn build_rutabaga(config: &GpuConfig, retired: Retired) -> Result<Rutabaga, Error> {
     let handler = RutabagaFenceHandler::new(move |f: RutabagaFence| retired.retire(&f));
-    RutabagaBuilder::new(capset_mask(&config), handler)
+    RutabagaBuilder::new(capset_mask(config), handler)
         .set_use_egl(true)
         .set_use_surfaceless(true)
         .set_use_vulkan(config.venus)
@@ -202,8 +202,6 @@ pub struct GpuBackend {
     /// The channel the monitor gave us for asking it to place memory in the
     /// guest's window.
     frontend: Option<Backend>,
-    /// Where the next blob is placed inside that window.
-    next_offset: u64,
     /// What each mapped resource was given, so it can be taken back.
     placed: Vec<(u32, u64, u64)>,
     /// How large each blob was created, which an exported handle does not
@@ -297,7 +295,6 @@ impl GpuBackend {
             config,
             mem: None,
             frontend: None,
-            next_offset: 0,
             placed: Vec::new(),
             blob_sizes: Vec::new(),
             event_idx: false,

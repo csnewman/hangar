@@ -3,6 +3,9 @@
 Carried against virglrenderer `7d4eb14`, which `hangar-gpu` links and whose
 render server runs Venus contexts.
 
+`build.sh [prefix]` fetches that commit, applies every patch here in order, and
+installs the result; CI builds `hangar-gpu` against it the same way.
+
 ## 0001-venus-snapshot.patch
 
 Snapshots a Venus (Vulkan) context and restores it in another process -- the
