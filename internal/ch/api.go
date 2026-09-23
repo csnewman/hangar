@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"time"
 )
 
@@ -37,11 +36,15 @@ func NewAPI(socket string) *API {
 	}
 }
 
-// WaitReady waits for the monitor to create its API socket.
+// WaitReady waits for the monitor to accept connections on its API socket.
 func (a *API) WaitReady(ctx context.Context, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, err := os.Stat(a.socket); err == nil {
+		// The socket file exists from the moment the monitor binds it, which
+		// is before it listens; only a connection that is accepted shows it
+		// is ready for requests.
+		if c, err := net.DialTimeout("unix", a.socket, time.Second); err == nil {
+			c.Close()
 			return nil
 		}
 		select {
@@ -50,7 +53,7 @@ func (a *API) WaitReady(ctx context.Context, timeout time.Duration) error {
 		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	return fmt.Errorf("the monitor did not create %s within %s", a.socket, timeout)
+	return fmt.Errorf("the monitor did not accept connections on %s within %s", a.socket, timeout)
 }
 
 func (a *API) put(ctx context.Context, action string, body any) error {

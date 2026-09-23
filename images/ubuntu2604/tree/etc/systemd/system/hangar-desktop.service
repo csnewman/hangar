@@ -12,13 +12,9 @@ User=dev
 # user logging in would.
 PAMName=login
 Environment=WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1
-# pixman composites on the CPU. A GL compositor on virgl reads back zeroes
-# on a host without GBM, which blanks every capture of the screen. The cost
-# falls on clients: pixman takes frames only in shared memory, so Vulkan
-# clients still render on the GPU and copy their frames out, but GL clients
-# on Wayland find no GPU buffer path and render in software. Chromium draws
-# on the GPU here only with --use-angle=vulkan.
-Environment=WLR_RENDERER=pixman
+# The renderer is left to wlroots: GLES2 on the GPU when the environment has
+# one, so clients hand sway their frames as GPU buffers, and pixman on the CPU
+# when it does not.
 # The GPU's device nodes are created root-only and handed to the render and
 # video groups by udev. This unit is ordered after udev has been triggered
 # (sysinit.target), but not after it has finished processing what that

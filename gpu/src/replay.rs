@@ -414,9 +414,15 @@ impl Virgl {
             BIND_SHADER if p.len() >= 2 => {
                 sub.singles.insert(key(&[BIND_SHADER, p[1]]), full.to_vec());
             }
-            SET_FRAMEBUFFER_STATE | SET_FRAMEBUFFER_STATE_NO_ATTACH => {
-                // Either form replaces the framebuffer, so they share a key.
+            SET_FRAMEBUFFER_STATE => {
                 sub.singles.insert("fb".into(), full.to_vec());
+            }
+            SET_FRAMEBUFFER_STATE_NO_ATTACH => {
+                // Not a framebuffer of its own: the default size of the one
+                // bound, which Mesa sends after every framebuffer it sets. It
+                // is kept apart so it cannot stand in for the attachments,
+                // and its key sorts after "fb" so it is replayed after them.
+                sub.singles.insert("fb:size".into(), full.to_vec());
             }
             SET_CONSTANT_BUFFER | SET_UNIFORM_BUFFER if p.len() >= 2 => {
                 sub.singles.insert(key(&[cmd, p[0], p[1]]), full.to_vec());
@@ -635,6 +641,28 @@ impl Virgl {
         out.extend_from_slice(&[header(SET_SUB_CTX, 0, 1), self.current]);
         out
     }
+}
+
+/// The commands in a virgl command stream, as `command/object` pairs, for
+/// tracing.
+pub fn describe(bytes: &[u8]) -> String {
+    let dw: Vec<u32> = bytes
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < dw.len() {
+        let h = dw[i];
+        let len = (h >> 16) as usize;
+        let mut s = format!("{}/{}", h & 0xff, (h >> 8) & 0xff);
+        if len >= 1 && i + 1 < dw.len() {
+            s += &format!("({})", dw[i + 1]);
+        }
+        out.push(s);
+        i += 1 + len;
+    }
+    out.join(" ")
 }
 
 fn split2(k: &str) -> (u32, u32) {

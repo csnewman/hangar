@@ -1,0 +1,42 @@
+From ce72f77cb0ec4e2e74317a5b33340782e152f782 Mon Sep 17 00:00:00 2001
+From: Chandler Newman <chandler2newman@gmail.com>
+Date: Wed, 23 Sep 2026 13:01:27 +0100
+Subject: [PATCH] vrend: record the context made current by creating one
+
+Creating a context creates its first sub-context, which makes that
+sub-context's GL context current, but vrend_state still named the
+context that was current before. Switching back to that one was then
+skipped as a no-op, and its next command ran in the new context's GL
+context: its vertex array objects do not exist there and no framebuffer
+is bound, so the draw fails with GL_INVALID_OPERATION and the context
+is marked in error.
+
+Any guest process that creates a GL context while another is rendering
+triggers it, and a readback through TRANSFER_FROM_HOST_3D is where it
+shows, because that path checks for GL errors.
+---
+ src/vrend/vrend_renderer.c | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
+index 2eb5bd3..2445fb7 100644
+--- a/src/vrend/vrend_renderer.c
++++ b/src/vrend/vrend_renderer.c
+@@ -8044,6 +8044,14 @@ struct vrend_context *vrend_create_context(int id, uint32_t nlen, const char *de
+    vrend_renderer_create_sub_ctx(grctx, 0);
+    vrend_renderer_set_sub_ctx(grctx, 0);
+ 
++   /* Creating the sub-context made its GL context current. Record that, or
++    * the context that was current before still appears to be, and switching
++    * back to it is skipped: its next command would run in this context's GL
++    * context, against objects that do not exist there.
++    */
++   vrend_state.current_ctx = grctx;
++   vrend_state.current_hw_ctx = grctx;
++
+    int glver = get_glsl_version();
+    if (glver < 0) {
+       virgl_error("Unable to query GL version\n");
+-- 
+2.53.0
+

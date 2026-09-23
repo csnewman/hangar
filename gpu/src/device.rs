@@ -90,6 +90,33 @@ fn capset_count(config: &GpuConfig) -> u32 {
     n
 }
 
+/// Byte offset of `capability_bits` in virglrenderer's `struct virgl_caps_v2`.
+const VIRGL_CAPS_V2_CAPABILITY_BITS: usize = 392;
+/// `VIRGL_CAP_ARB_BUFFER_STORAGE` in `capability_bits`.
+const VIRGL_CAP_ARB_BUFFER_STORAGE: u32 = 1 << 31;
+
+/// Clear the persistent buffer mapping capability from a virgl capset.
+///
+/// With it, the guest's GL driver backs every persistently mapped buffer --
+/// including its own staging buffers, so every readback -- with a mappable
+/// blob, and expects the device to place that blob in the shared memory
+/// window. virgl allocates such a blob as a GL buffer in this process, and can
+/// hand it to the monitor only as a GBM buffer, which this renderer never has:
+/// it runs surfaceless, with no GBM device. Every map would fail and every
+/// readback would return zeroes. Without the capability the guest moves the
+/// same data with transfers instead, and its GL version is 4.3, the last
+/// without `ARB_buffer_storage`.
+///
+/// Venus maps its memory through the window too, but its blobs are shared
+/// memory the render server exports, so it is unaffected.
+fn withhold_buffer_storage(caps: &mut [u8]) {
+    let at = VIRGL_CAPS_V2_CAPABILITY_BITS;
+    if let Some(bytes) = caps.get_mut(at..at + 4) {
+        let bits = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        bytes.copy_from_slice(&(bits & !VIRGL_CAP_ARB_BUFFER_STORAGE).to_le_bytes());
+    }
+}
+
 /// Build the renderer.
 ///
 /// EGL and the surfaceless platform are selected explicitly. A host with no
@@ -994,7 +1021,25 @@ impl GpuBackend {
             if lost.contexts.contains(&ctx_id) {
                 continue;
             }
-            match Self::submit_words(rutabaga, ctx_id, &v.replay(&built)) {
+            // The renderer finds a resource named in a command only among
+            // those attached to the context, but an object made from one
+            // outlives the attachment: a guest that samples a buffer it
+            // imported and then closed keeps the sampler view, holding the
+            // resource, after the kernel has detached it. Replay recreates
+            // that view by id, so every rebuilt resource is attached for
+            // the replay, and those that were not attached before are
+            // detached again afterwards.
+            let borrowed: Vec<u32> = built
+                .iter()
+                .copied()
+                .filter(|res| !c.attached.contains(res))
+                .filter(|&res| rutabaga.context_attach_resource(ctx_id, res).is_ok())
+                .collect();
+            let result = Self::submit_words(rutabaga, ctx_id, &v.replay(&built));
+            for res in borrowed {
+                let _ = rutabaga.context_detach_resource(ctx_id, res);
+            }
+            match result {
                 Ok(()) => replayed += 1,
                 Err(e) => {
                     warn!("context {ctx_id}: replaying its state: {e}");
@@ -1121,6 +1166,14 @@ impl GpuBackend {
             None => return Vec::new(),
         };
         let payload = &body[size_of::<CtrlHeader>()..];
+        log::trace!(
+            "command {:#06x} ctx {} flags {:#x} fence {} ring {}",
+            hdr.type_,
+            hdr.ctx_id,
+            hdr.flags,
+            hdr.fence_id,
+            hdr.ring_idx
+        );
 
         // Releasing a lost object is the guest agreeing it is gone. It
         // succeeds, and the id stops standing for a lost object: the guest
@@ -1219,7 +1272,10 @@ impl GpuBackend {
                     }
                 };
                 match rutabaga.get_capset(req.capset_id, req.capset_version) {
-                    Ok(caps) => {
+                    Ok(mut caps) => {
+                        if req.capset_id == RUTABAGA_CAPSET_VIRGL2 {
+                            withhold_buffer_storage(&mut caps);
+                        }
                         let mut out = Self::header_of(VIRTIO_GPU_RESP_OK_CAPSET, &hdr)
                             .as_slice()
                             .to_vec();
@@ -1438,6 +1494,13 @@ impl GpuBackend {
                     layer_stride: req.layer_stride,
                     offset: req.offset,
                 };
+                log::trace!(
+                    "transfer resource {} box {:?} level {} offset {}",
+                    req.resource_id,
+                    req.box_,
+                    req.level,
+                    req.offset
+                );
                 let result = if hdr.type_ == VIRTIO_GPU_CMD_TRANSFER_TO_HOST_3D {
                     rutabaga.transfer_write(hdr.ctx_id, req.resource_id, transfer, None)
                 } else {
@@ -1511,6 +1574,13 @@ impl GpuBackend {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 }
                 let mut cmds = payload[start..end].to_vec();
+                if log::log_enabled!(log::Level::Trace) {
+                    log::trace!(
+                        "submit ctx {}: {}",
+                        hdr.ctx_id,
+                        replay::describe(&payload[start..end])
+                    );
+                }
                 let code = Self::ok_or_err(
                     rutabaga.submit_command(hdr.ctx_id, &mut cmds, &[]),
                     "submit_3d",
@@ -1887,6 +1957,20 @@ impl VhostUserBackendMut for GpuBackend {
                     Err(e) => format!("failed: {e}"),
                 };
                 log::info!("gpu session restored: {summary}");
+                // The guest may have queued requests, and kicked for them,
+                // after the previous backend last read its queues: that kick
+                // went to the previous backend, which has exited, and a guest waiting
+                // on those requests will not kick again. Replies completed
+                // while it was being suspended may likewise be in its used
+                // rings with no interrupt left to say so. So every queue is
+                // served once, as if kicked, and interrupted once, as if
+                // answered; where there is nothing to do it costs nothing.
+                for vring in vrings {
+                    if let Err(e) = self.process_queue(rutabaga, vring) {
+                        warn!("serving a queue after the restore: {e}");
+                    }
+                    vring.signal_used_queue().ok();
+                }
                 self.mark_ready(&summary);
                 return Ok(());
             }

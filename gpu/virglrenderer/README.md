@@ -53,3 +53,27 @@ Vulkan program mid-render carries on across a suspend and a host restart:
 - Binary semaphores signalled but not yet waited on, and timeline semaphore
   values, are not carried.
 - One program, one context, on lavapipe.
+
+## 0002-vrend-record-context-made-current.patch
+
+Fixes a GL context mix-up that fails a running guest context whenever another
+one is created.
+
+**8 insertions, in one file.** Independent of 0001, and meant for upstream.
+
+Creating a context creates its first sub-context, and that makes the
+sub-context's GL context current. `vrend_state` went on naming whichever
+context was current before, so switching back to that one was skipped as a
+no-op: its next command ran in the new context's GL context, where none of its
+vertex array objects exist and no framebuffer is bound. The draw fails with
+`GL_INVALID_OPERATION` (`glBindVertexArray(non-gen name)`) and the context is
+marked in error.
+
+Any guest process that opens a GL context while another is rendering
+triggers it. A readback through `TRANSFER_FROM_HOST_3D` is where it shows,
+because that path checks for GL errors: a compositor went dark the first
+time something took a screenshot of it.
+
+Found by recording a backtrace at every `make_current` and checking, before
+each draw and transfer, that the EGL context current is the one vrend's
+bookkeeping expects.
