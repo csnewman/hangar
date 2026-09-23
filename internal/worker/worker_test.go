@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -16,10 +17,26 @@ import (
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/server"
+	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/worker"
 )
 
 const token = "test-bootstrap-token"
+
+// browser is the signed-in client the tests call the frontend API with.
+var browser *http.Client
+
+// signIn creates an administrator and signs browser in as them.
+func signIn(t *testing.T, srv *server.Server, base string) {
+	t.Helper()
+	if _, err := srv.Users().Create(context.Background(),
+		users.NewUser{Username: "admin", Password: "password1", Admin: true}); err != nil {
+		t.Fatal(err)
+	}
+	jar, _ := cookiejar.New(nil)
+	browser = &http.Client{Jar: jar}
+	call(t, base, http.MethodPost, "/api/frontend/auth/login", `{"username":"admin","password":"password1"}`, nil)
+}
 
 // A real server, a real worker over HTTP, and the simulated runtime: an
 // environment created through the public API is placed, started, stopped and
@@ -35,6 +52,7 @@ func TestEndToEnd(t *testing.T) {
 	go srv.Run(ctx)
 	hs := httptest.NewServer(srv.Handler())
 	defer hs.Close()
+	signIn(t, srv, hs.URL)
 
 	cfg := writeConfig(t, hs.URL)
 	w, err := worker.New(cfg, worker.NewSimulated(50*time.Millisecond), quiet())
@@ -74,6 +92,7 @@ func TestRevokedWorkerStops(t *testing.T) {
 	go srv.Run(ctx)
 	hs := httptest.NewServer(srv.Handler())
 	defer hs.Close()
+	signIn(t, srv, hs.URL)
 
 	cfg := writeConfig(t, hs.URL)
 	w, err := worker.New(cfg, worker.NewSimulated(time.Millisecond), quiet())
@@ -159,7 +178,7 @@ func call(t *testing.T, base, method, path, body string, out any) {
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := browser.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

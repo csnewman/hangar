@@ -51,6 +51,9 @@ services:
     environment:
       HANGAR_DATABASE_URL: postgres://hangar:hangar@postgres:5432/hangar?sslmode=disable
       HANGAR_BOOTSTRAP_TOKEN_FILE: /src/dev/bootstrap-token
+      # Sign in as admin / hangar-dev. Only used while there are no users.
+      HANGAR_INITIAL_ADMIN_USERNAME: admin
+      HANGAR_INITIAL_ADMIN_PASSWORD: hangar-dev
     depends_on:
       postgres:
         condition: service_healthy
@@ -69,7 +72,10 @@ services:
   web:
     image: node:24
     working_dir: /src/web
-    command: [sh, -c, "npm ci && exec npm run dev"]
+    # --host on the command line as well as in vite.config.ts: Vite rereads
+    # its config when the file changes, and a read that catches the file
+    # mid-write restarts it listening on localhost only, out of Caddy's reach.
+    command: [sh, -c, "npm ci && exec npm run dev -- --host 0.0.0.0"]
     volumes:
       - ./web:/src/web
       # The host's node_modules holds binaries for the host's platform, not

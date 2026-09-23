@@ -6,18 +6,160 @@
 # Both sides are generated from this file: `go generate ./internal/frontendapi`
 # for the Go server interface, `npm run gen:api` in web/ for the TypeScript
 # types.
+#
+# Access is declared here and enforced from here. Every operation needs a
+# signed-in session unless it sets `security: []`, and an operation marked
+# `x-hangar-admin: true` needs an administrator. The server reads both from
+# this file at startup.
 openapi: 3.0.3
 info:
   title: Hangar frontend API
   version: unversioned
 
+security:
+  - session: []
+
 paths:
+  /api/frontend/auth/login:
+    post:
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Login" }
+      responses:
+        "200":
+          description: Signed in. The session is in a cookie the browser keeps.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/auth/logout:
+    post:
+      operationId: logout
+      responses:
+        "204":
+          description: Signed out, and the session ended.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/me:
+    get:
+      operationId: getMe
+      responses:
+        "200":
+          description: The signed-in user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/me/password:
+    post:
+      operationId: changePassword
+      description: >-
+        Changes the signed-in user's password. Every other session they have
+        is ended; this one continues.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangePassword" }
+      responses:
+        "204":
+          description: Changed.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/users:
+    get:
+      operationId: listUsers
+      x-hangar-admin: true
+      responses:
+        "200":
+          description: Every user, by username.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      operationId: createUser
+      x-hangar-admin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateUser" }
+      responses:
+        "201":
+          description: Created.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/users/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    patch:
+      operationId: updateUser
+      x-hangar-admin: true
+      description: >-
+        Changes a user. Setting a password or disabling the user ends their
+        sessions. A change that would leave no enabled administrator is
+        refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateUser" }
+      responses:
+        "200":
+          description: The user as changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteUser
+      x-hangar-admin: true
+      description: Removes a user who owns no environments.
+      responses:
+        "204":
+          description: Removed.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/frontend/environments:
     get:
       operationId: listEnvironments
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
-          description: Every environment, oldest first.
+          description: >-
+            Every environment the caller may reach, oldest first: their own,
+            or every user's for an administrator.
           content:
             application/json:
               schema:
@@ -31,6 +173,7 @@ paths:
           application/json:
             schema: { $ref: "#/components/schemas/CreateEnvironment" }
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "201":
           description: Created. Placement picks it up from here.
           content:
@@ -45,6 +188,7 @@ paths:
     get:
       operationId: getEnvironment
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: The environment.
           content:
@@ -58,6 +202,7 @@ paths:
         desired "deleted", until the worker reports it gone; one no worker
         holds is removed at once.
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: Deletion is under way.
           content:
@@ -73,6 +218,7 @@ paths:
     post:
       operationId: startEnvironment
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: The environment, now desired running.
           content:
@@ -87,6 +233,7 @@ paths:
     post:
       operationId: stopEnvironment
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
         "200":
           description: The environment, now desired stopped.
           content:
@@ -98,7 +245,10 @@ paths:
   /api/frontend/workers:
     get:
       operationId: listWorkers
+      x-hangar-admin: true
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "200":
           description: Every worker, by name.
           content:
@@ -112,10 +262,13 @@ paths:
       - $ref: "#/components/parameters/ID"
     delete:
       operationId: deleteWorker
+      x-hangar-admin: true
       description: >-
         Forgets a revoked worker that holds no environments, freeing its name
         to register again.
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "204":
           description: Removed.
         "404": { $ref: "#/components/responses/NotFound" }
@@ -126,15 +279,24 @@ paths:
       - $ref: "#/components/parameters/ID"
     post:
       operationId: revokeWorker
+      x-hangar-admin: true
       description: >-
         Stops the worker's credential working. Its environments stay placed
         on it, because their disks are there.
       responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "204":
           description: Revoked.
         "404": { $ref: "#/components/responses/NotFound" }
 
 components:
+  securitySchemes:
+    session:
+      type: apiKey
+      in: cookie
+      name: hangar_session
+
   parameters:
     ID:
       name: id
@@ -150,6 +312,16 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Invalid:
       description: The request was malformed or failed validation.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unauthorized:
+      description: Not signed in, or the credentials given were wrong.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Forbidden:
+      description: Signed in, but only an administrator may do this.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -180,10 +352,16 @@ components:
 
     Environment:
       type: object
-      required: [id, name, image, cpus, memory_mib, desired, phase, created_at, updated_at]
+      required: [id, owner_id, owner, name, image, cpus, memory_mib, desired, phase, created_at, updated_at]
       properties:
         id: { type: string }
-        name: { type: string }
+        owner_id: { type: string }
+        owner:
+          type: string
+          description: The owner's username.
+        name:
+          type: string
+          description: Unique among its owner's environments.
         image: { type: string }
         cpus: { type: integer }
         memory_mib: { type: integer }
@@ -243,3 +421,70 @@ components:
           items: { type: string }
         last_seen_at: { type: string, format: date-time }
         created_at: { type: string, format: date-time }
+
+    Login:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username: { type: string, minLength: 1 }
+        password: { type: string, minLength: 1 }
+
+    Me:
+      type: object
+      required: [id, username, display_name, admin, has_password]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        display_name: { type: string }
+        admin: { type: boolean }
+        has_password:
+          type: boolean
+          description: Whether the user has a local password that they can change.
+
+    ChangePassword:
+      type: object
+      required: [current_password, new_password]
+      additionalProperties: false
+      properties:
+        current_password: { type: string }
+        new_password: { type: string, minLength: 8 }
+
+    User:
+      type: object
+      required: [id, username, display_name, admin, disabled, has_password, environments, created_at]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        display_name: { type: string }
+        admin: { type: boolean }
+        disabled:
+          type: boolean
+          description: A disabled user cannot sign in. Their environments are kept.
+        has_password: { type: boolean }
+        environments:
+          type: integer
+          description: How many environments the user owns.
+        created_at: { type: string, format: date-time }
+
+    CreateUser:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          pattern: "^[A-Za-z0-9][A-Za-z0-9._@-]{0,62}$"
+        display_name: { type: string, maxLength: 200 }
+        password: { type: string, minLength: 8 }
+        admin: { type: boolean }
+
+    UpdateUser:
+      type: object
+      additionalProperties: false
+      description: Only the fields present are changed.
+      properties:
+        display_name: { type: string, maxLength: 200 }
+        admin: { type: boolean }
+        disabled: { type: boolean }
+        password: { type: string, minLength: 8 }

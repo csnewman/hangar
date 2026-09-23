@@ -1,3 +1,32 @@
+CREATE TABLE users (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    username      text NOT NULL,
+    display_name  text NOT NULL DEFAULT '',
+    -- An argon2id hash in PHC string form. NULL for a user who signs in only
+    -- through an external identity provider and has no local password.
+    password_hash text,
+    is_admin      boolean NOT NULL DEFAULT false,
+    -- A disabled user cannot sign in, and their sessions stop working. Their
+    -- environments are kept, so disabling is reversible.
+    disabled_at   timestamptz,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+-- Usernames compare case-insensitively, so "Alice" and "alice" are one user.
+CREATE UNIQUE INDEX users_username ON users (lower(username));
+
+CREATE TABLE sessions (
+    -- SHA-256 of the token in the cookie. The token itself is never stored,
+    -- so a copy of this table cannot be used to sign in.
+    token_hash   bytea PRIMARY KEY,
+    user_id      uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    last_seen_at timestamptz NOT NULL DEFAULT now(),
+    expires_at   timestamptz NOT NULL
+);
+
+CREATE INDEX sessions_user ON sessions (user_id);
+
 CREATE TABLE workers (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name            text NOT NULL UNIQUE,
@@ -18,7 +47,10 @@ CREATE TABLE workers (
 
 CREATE TABLE environments (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    name        text NOT NULL UNIQUE,
+    -- A user who owns environments cannot be deleted; disable them instead,
+    -- or delete their environments first.
+    owner_id    uuid NOT NULL REFERENCES users (id),
+    name        text NOT NULL,
     image       text NOT NULL,
     cpus        integer NOT NULL CHECK (cpus > 0),
     memory_mib  integer NOT NULL CHECK (memory_mib > 0),
@@ -37,3 +69,6 @@ CREATE INDEX environments_unplaced ON environments (created_at)
     WHERE worker_id IS NULL AND desired = 'running';
 
 CREATE INDEX environments_worker ON environments (worker_id);
+
+-- Names are a user's own: two users may each have an environment called "dev".
+CREATE UNIQUE INDEX environments_owner_name ON environments (owner_id, name);

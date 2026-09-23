@@ -39,6 +39,8 @@ const (
 // Environment is the public view of one environment.
 type Environment struct {
 	ID        string       `json:"id"`
+	OwnerID   string       `json:"owner_id"`
+	Owner     string       `json:"owner"`
 	Name      string       `json:"name"`
 	Image     string       `json:"image"`
 	CPUs      int          `json:"cpus"`

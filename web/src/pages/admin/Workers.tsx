@@ -1,21 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { api, type Worker } from '../api'
-import { ConfirmButton } from '../components/ConfirmButton'
-import { formatAgo, formatMemory } from '../components/format'
-import { OnlineBadge } from '../components/Status'
+import { api, type Worker } from '../../api'
+import { ConfirmButton } from '../../components/ConfirmButton'
+import { formatAgo, formatMemory } from '../../components/format'
+import { PageHeader } from '../../components/PageHeader'
+import { OnlineBadge } from '../../components/Status'
 
 export function WorkersPage() {
   const workers = useQuery({ queryKey: ['workers'], queryFn: api.workers })
 
   return (
-    <section>
-      <div className="page-head">
-        <div>
-          <h1>Workers</h1>
-          <p className="muted">Machines that run environments. Each dials in to the control plane.</p>
-        </div>
-      </div>
+    <div className="page">
+      <PageHeader
+        crumbs={[{ label: 'Administration' }]}
+        title="Workers"
+        subtitle="Machines that run environments. Each dials in to the control plane."
+      />
 
       {workers.isError && <div className="alert">Could not load workers: {workers.error.message}</div>}
 
@@ -51,7 +51,7 @@ export function WorkersPage() {
           </tbody>
         </table>
       </div>
-    </section>
+    </div>
   )
 }
 

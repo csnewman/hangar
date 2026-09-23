@@ -14,6 +14,10 @@ export type DesiredState = Schemas['DesiredState']
 export type Phase = Schemas['Phase']
 export type Worker = Schemas['Worker']
 export type Resources = Schemas['Resources']
+export type Me = Schemas['Me']
+export type User = Schemas['User']
+export type CreateUser = Schemas['CreateUser']
+export type UpdateUser = Schemas['UpdateUser']
 
 const client = createClient<paths>()
 
@@ -45,6 +49,13 @@ async function unwrap<T>(
 const byID = (id: string) => ({ params: { path: { id } } })
 
 export const api = {
+  me: () => unwrap(client.GET('/api/frontend/me')),
+  login: (username: string, password: string) =>
+    unwrap(client.POST('/api/frontend/auth/login', { body: { username, password } })),
+  logout: () => unwrap(client.POST('/api/frontend/auth/logout')),
+  changePassword: (current_password: string, new_password: string) =>
+    unwrap(client.POST('/api/frontend/me/password', { body: { current_password, new_password } })),
+
   environments: () => unwrap(client.GET('/api/frontend/environments')),
   createEnvironment: (body: CreateEnvironment) => unwrap(client.POST('/api/frontend/environments', { body })),
   startEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/start', byID(id))),
@@ -54,4 +65,10 @@ export const api = {
   workers: () => unwrap(client.GET('/api/frontend/workers')),
   revokeWorker: (id: string) => unwrap(client.POST('/api/frontend/workers/{id}/revoke', byID(id))),
   deleteWorker: (id: string) => unwrap(client.DELETE('/api/frontend/workers/{id}', byID(id))),
+
+  users: () => unwrap(client.GET('/api/frontend/users')),
+  createUser: (body: CreateUser) => unwrap(client.POST('/api/frontend/users', { body })),
+  updateUser: (id: string, body: UpdateUser) =>
+    unwrap(client.PATCH('/api/frontend/users/{id}', { ...byID(id), body })),
+  deleteUser: (id: string) => unwrap(client.DELETE('/api/frontend/users/{id}', byID(id))),
 }

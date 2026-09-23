@@ -7,11 +7,13 @@ export function ConfirmButton({
   confirmLabel = 'Confirm',
   onConfirm,
   disabled,
+  title,
 }: {
   label: string
   confirmLabel?: string
   onConfirm: () => void
   disabled?: boolean
+  title?: string
 }) {
   const [armed, setArmed] = useState(false)
 
@@ -26,6 +28,7 @@ export function ConfirmButton({
       type="button"
       className={armed ? 'btn btn-danger' : 'btn btn-ghost'}
       disabled={disabled}
+      title={title}
       onClick={() => {
         if (armed) {
           setArmed(false)

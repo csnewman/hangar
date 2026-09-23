@@ -9,6 +9,7 @@ import (
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/placement"
+	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/workers"
 )
 
@@ -73,7 +74,12 @@ func TestReportCannotTouchAnotherWorkersEnvironment(t *testing.T) {
 	b, _ := wm.Register(ctx, api.RegisterWorker{Name: "b"})
 	report(t, wm, a.ID, 4, 8192)
 
-	env, err := em.Create(ctx, api.CreateEnvironment{Name: "e", Image: "img", CPUs: 1, MemoryMiB: 1024})
+	owner, err := users.NewManager(d).Create(ctx, users.NewUser{Username: "owner", Password: "password1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := users.Principal{UserID: owner.ID}
+	env, err := em.Create(ctx, p, api.CreateEnvironment{Name: "e", Image: "img", CPUs: 1, MemoryMiB: 1024})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +89,7 @@ func TestReportCannotTouchAnotherWorkersEnvironment(t *testing.T) {
 
 	report(t, wm, b.ID, 4, 8192, api.ObservedEnvironment{ID: env.ID, Phase: api.PhaseFailed, Reason: "forged"})
 
-	got, _ := em.Get(ctx, env.ID)
+	got, _ := em.Get(ctx, p, env.ID)
 	if got.Phase != api.PhasePending {
 		t.Fatalf("worker b changed worker a's environment to %s", got.Phase)
 	}

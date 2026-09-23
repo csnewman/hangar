@@ -22,6 +22,7 @@ import (
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/frontendapi"
 	"github.com/csnewman/hangar/internal/placement"
+	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/workers"
 )
 
@@ -40,6 +41,7 @@ type Server struct {
 	db        *db.DB
 	frontend  http.Handler
 	workers   *workers.Manager
+	users     *users.Manager
 	placement *placement.Manager
 	bootstrap string
 	web       fs.FS
@@ -54,7 +56,13 @@ func New(cfg Config) (*Server, error) {
 		log = slog.Default()
 	}
 	wm := workers.NewManager(cfg.DB)
-	frontend, err := frontendapi.New(environments.NewManager(cfg.DB), wm, log)
+	um := users.NewManager(cfg.DB)
+	frontend, err := frontendapi.New(frontendapi.Config{
+		Environments: environments.NewManager(cfg.DB),
+		Workers:      wm,
+		Users:        um,
+		Log:          log,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -62,6 +70,7 @@ func New(cfg Config) (*Server, error) {
 		db:        cfg.DB,
 		frontend:  frontend,
 		workers:   wm,
+		users:     um,
 		placement: placement.NewManager(cfg.DB),
 		bootstrap: cfg.BootstrapToken,
 		web:       cfg.Web,
@@ -87,7 +96,31 @@ func (s *Server) Run(ctx context.Context) {
 			s.kickPlacement()
 		}
 	}, workers.Channel, workers.CapacityChannel, placement.Channel)
+	go s.pruneSessions(ctx)
 	s.placementLoop(ctx)
+}
+
+// Users returns the server's user manager, for creating the first
+// administrator before the server is serving.
+func (s *Server) Users() *users.Manager { return s.users }
+
+// pruneSessions deletes expired sessions now and then. They are refused
+// whether or not they are deleted; this only keeps the table small.
+func (s *Server) pruneSessions(ctx context.Context) {
+	t := time.NewTicker(time.Hour)
+	defer t.Stop()
+	for {
+		if n, err := s.users.PruneSessions(ctx); err != nil && ctx.Err() == nil {
+			s.log.Warn("pruning sessions", "err", err)
+		} else if n > 0 {
+			s.log.Info("pruned expired sessions", "count", n)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
 }
 
 func (s *Server) kickPlacement() {

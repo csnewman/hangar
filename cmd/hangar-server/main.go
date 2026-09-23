@@ -81,6 +81,20 @@ func run(listen, dbURL, tokenFile string) error {
 	if err != nil {
 		return err
 	}
+
+	// A new installation has no users, and so nobody who could create one.
+	// The first administrator comes from the environment, and only while the
+	// users table is empty; afterwards these are ignored.
+	if pw := os.Getenv("HANGAR_INITIAL_ADMIN_PASSWORD"); pw != "" {
+		name := envOr("HANGAR_INITIAL_ADMIN_USERNAME", "admin")
+		created, err := srv.Users().EnsureAdmin(ctx, name, pw)
+		if err != nil {
+			return fmt.Errorf("creating the initial administrator: %w", err)
+		}
+		if created {
+			slog.Info("created the initial administrator", "username", name)
+		}
+	}
 	go srv.Run(ctx)
 
 	hs := &http.Server{

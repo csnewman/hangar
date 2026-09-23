@@ -12,6 +12,7 @@ import (
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/placement"
+	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/workers"
 )
 
@@ -21,11 +22,17 @@ type plane struct {
 	envs    *environments.Manager
 	workers *workers.Manager
 	place   *placement.Manager
+	owner   users.Principal
 }
 
 func newPlane(t *testing.T) (*plane, *db.DB) {
 	d := dbtest.Open(t)
-	return &plane{environments.NewManager(d), workers.NewManager(d), placement.NewManager(d)}, d
+	u, err := users.NewManager(d).Create(ctx, users.NewUser{Username: "owner", Password: "password1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &plane{environments.NewManager(d), workers.NewManager(d), placement.NewManager(d),
+		users.Principal{UserID: u.ID}}, d
 }
 
 func (p *plane) worker(t *testing.T, name string, cpus, mem int) string {
@@ -50,7 +57,7 @@ func (p *plane) report(t *testing.T, id string, cpus, mem int, envs ...api.Obser
 
 func (p *plane) env(t *testing.T, name string, cpus, mem int) api.Environment {
 	t.Helper()
-	e, err := p.envs.Create(ctx, api.CreateEnvironment{Name: name, Image: "img", CPUs: cpus, MemoryMiB: mem})
+	e, err := p.envs.Create(ctx, p.owner, api.CreateEnvironment{Name: name, Image: "img", CPUs: cpus, MemoryMiB: mem})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +66,7 @@ func (p *plane) env(t *testing.T, name string, cpus, mem int) api.Environment {
 
 func (p *plane) get(t *testing.T, id string) api.Environment {
 	t.Helper()
-	e, err := p.envs.Get(ctx, id)
+	e, err := p.envs.Get(ctx, p.owner, id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,10 +103,10 @@ func TestLifecycle(t *testing.T) {
 		t.Fatalf("after report: %s on %q", got.Phase, got.Worker)
 	}
 
-	if _, err := p.envs.SetDesired(ctx, e.ID, api.DesiredDeleted); err != nil {
+	if _, err := p.envs.SetDesired(ctx, p.owner, e.ID, api.DesiredDeleted); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.envs.SetDesired(ctx, e.ID, api.DesiredRunning); !errors.Is(err, environments.ErrConflict) {
+	if _, err := p.envs.SetDesired(ctx, p.owner, e.ID, api.DesiredRunning); !errors.Is(err, environments.ErrConflict) {
 		t.Fatalf("restarting a deleting environment: %v, want ErrConflict", err)
 	}
 	set, _ = p.workers.DesiredSet(ctx, w)
@@ -114,7 +121,7 @@ func TestLifecycle(t *testing.T) {
 	// No longer held: the row goes, and the worker's set shrinks.
 	before := set.Version
 	p.report(t, w, 4, 8192)
-	if _, err := p.envs.Get(ctx, e.ID); !errors.Is(err, environments.ErrNotFound) {
+	if _, err := p.envs.Get(ctx, p.owner, e.ID); !errors.Is(err, environments.ErrNotFound) {
 		t.Fatalf("environment survived its worker reporting it gone: %v", err)
 	}
 	set, _ = p.workers.DesiredSet(ctx, w)
@@ -128,7 +135,7 @@ func TestUnplacedEnvironmentsChangeAtOnce(t *testing.T) {
 	p, _ := newPlane(t)
 	e := p.env(t, "e", 1, 1024)
 
-	if _, err := p.envs.SetDesired(ctx, e.ID, api.DesiredStopped); err != nil {
+	if _, err := p.envs.SetDesired(ctx, p.owner, e.ID, api.DesiredStopped); err != nil {
 		t.Fatal(err)
 	}
 	if got := p.get(t, e.ID); got.Phase != api.PhaseStopped {
@@ -141,7 +148,7 @@ func TestUnplacedEnvironmentsChangeAtOnce(t *testing.T) {
 		t.Fatalf("placed %d stopped environments", n)
 	}
 
-	exists, err := p.envs.SetDesired(ctx, e.ID, api.DesiredDeleted)
+	exists, err := p.envs.SetDesired(ctx, p.owner, e.ID, api.DesiredDeleted)
 	if err != nil || exists {
 		t.Fatalf("deleting an unplaced environment: exists=%v err=%v", exists, err)
 	}
@@ -178,7 +185,7 @@ func TestStoppedEnvironmentsHoldCapacity(t *testing.T) {
 	p.worker(t, "w", 2, 4096)
 	first := p.env(t, "first", 2, 4096)
 	p.place.Place(ctx)
-	p.envs.SetDesired(ctx, first.ID, api.DesiredStopped)
+	p.envs.SetDesired(ctx, p.owner, first.ID, api.DesiredStopped)
 
 	second := p.env(t, "second", 1, 1024)
 	if n, _ := p.place.Place(ctx); n != 0 {

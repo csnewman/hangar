@@ -1,0 +1,137 @@
+import { AppWindow, Code2, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
+import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router'
+
+import type { Environment } from '../api'
+import { useMe } from '../session'
+import { EnvironmentActions } from '../components/EnvironmentActions'
+import { formatAgo, formatMemory } from '../components/format'
+import { PageHeader, type Crumb } from '../components/PageHeader'
+import { PhaseBadge } from '../components/Status'
+import { useEnvironments } from '../environments'
+
+const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
+  { to: '', label: 'Summary', icon: LayoutDashboard, end: true },
+  { to: 'terminal', label: 'Terminal', icon: SquareTerminal },
+  { to: 'editor', label: 'Editor', icon: Code2 },
+  { to: 'desktop', label: 'Desktop', icon: Monitor },
+]
+
+// EnvironmentPage is one environment: its header and actions, and a tab for
+// each way into it. The tabs are routes, so a console can be linked to and
+// survives a reload.
+export function EnvironmentPage() {
+  const { id } = useParams()
+  const me = useMe()
+  const envs = useEnvironments()
+  const env = envs.data?.find((e) => e.id === id)
+
+  if (envs.isPending) return <div className="page" />
+  if (!env) {
+    return (
+      <div className="page">
+        <PageHeader crumbs={[{ label: 'Environments', to: '/environments' }]} title="Not found" />
+        <div className="panel empty-state">
+          This environment does not exist, or it is not yours. <Link to="/environments">Back to environments</Link>
+        </div>
+      </div>
+    )
+  }
+
+  const crumbs: Crumb[] = [{ label: 'Environments', to: '/environments' }]
+  if (env.owner_id !== me.id) crumbs.push({ label: env.owner })
+
+  return (
+    <div className="page page-flush">
+      <div className="page-pad">
+        <PageHeader
+          crumbs={crumbs}
+          title={env.name}
+          subtitle={<PhaseBadge phase={env.phase} desired={env.desired} />}
+          actions={<EnvironmentActions env={env} afterDelete="/environments" />}
+        />
+        {env.reason && <div className="notice">{env.reason}</div>}
+        <nav className="tabs">
+          {tabs.map((t) => (
+            <NavLink key={t.label} to={t.to} end={t.end} className="tab">
+              <t.icon size={15} />
+              {t.label}
+            </NavLink>
+          ))}
+        </nav>
+      </div>
+      <div className="tab-body">
+        <Outlet context={env} />
+      </div>
+    </div>
+  )
+}
+
+function useEnv() {
+  return useOutletContext<Environment>()
+}
+
+export function SummaryTab() {
+  const env = useEnv()
+  return (
+    <div className="page-pad">
+      <div className="panel">
+        <dl className="props">
+          <Prop label="Status">
+            <PhaseBadge phase={env.phase} desired={env.desired} />
+          </Prop>
+          <Prop label="Asked to be">{env.desired}</Prop>
+          <Prop label="Owner">{env.owner}</Prop>
+          <Prop label="Worker">{env.worker ?? <span className="muted">not yet placed</span>}</Prop>
+          <Prop label="Image">
+            <span className="mono">{env.image}</span>
+          </Prop>
+          <Prop label="vCPUs">{env.cpus}</Prop>
+          <Prop label="Memory">{formatMemory(env.memory_mib)}</Prop>
+          <Prop label="Created">
+            {new Date(env.created_at).toLocaleString()} ({formatAgo(env.created_at)})
+          </Prop>
+          <Prop label="Last change">{formatAgo(env.updated_at)}</Prop>
+          <Prop label="ID">
+            <span className="mono">{env.id}</span>
+          </Prop>
+        </dl>
+      </div>
+    </div>
+  )
+}
+
+function Prop({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="prop">
+      <dt>{label}</dt>
+      <dd>{children}</dd>
+    </div>
+  )
+}
+
+// ConsoleTab holds the place of a way into the environment that is not built
+// yet: a terminal, the editor, or the desktop. Each will fill the whole tab.
+export function ConsoleTab({ kind }: { kind: 'terminal' | 'editor' | 'desktop' }) {
+  const env = useEnv()
+  const what = {
+    terminal: { icon: SquareTerminal, title: 'Terminal', body: `A shell in ${env.name}, in your browser.` },
+    editor: { icon: Code2, title: 'Editor', body: `The editor, open on ${env.name}'s workspace.` },
+    desktop: { icon: AppWindow, title: 'Desktop', body: `${env.name}'s desktop, as the agent sees it.` },
+  }[kind]
+  const running = env.phase === 'running'
+
+  return (
+    <div className="console">
+      <div className="console-empty">
+        <what.icon size={36} strokeWidth={1.4} />
+        <h2>{what.title}</h2>
+        <p>{what.body}</p>
+        <p className="muted small">
+          {running
+            ? 'Not available yet: this needs the agent to carry the stream to the browser.'
+            : 'Start the environment to connect.'}
+        </p>
+      </div>
+    </div>
+  )
+}

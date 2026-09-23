@@ -18,6 +18,11 @@ const settled: Record<DesiredState, Phase[]> = {
   deleted: [],
 }
 
+// PhaseDot is the status as a single dot, for the sidebar's tree.
+export function PhaseDot({ phase }: { phase: Phase }) {
+  return <span className={`phase-dot tone-${tone[phase]}`} aria-label={phase} />
+}
+
 export function PhaseBadge({ phase, desired }: { phase: Phase; desired?: DesiredState }) {
   const moving = desired !== undefined && !settled[desired].includes(phase)
   return (

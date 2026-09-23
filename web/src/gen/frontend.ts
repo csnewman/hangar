@@ -4,6 +4,107 @@
  */
 
 export interface paths {
+    "/api/frontend/auth/login": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["login"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/auth/logout": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["logout"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["getMe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/me/password": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Changes the signed-in user's password. Every other session they have is ended; this one continues. */
+        post: operations["changePassword"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listUsers"];
+        put?: never;
+        post: operations["createUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/users/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Removes a user who owns no environments. */
+        delete: operations["deleteUser"];
+        options?: never;
+        head?: never;
+        /** @description Changes a user. Setting a password or disabling the user ends their sessions. A change that would leave no enabled administrator is refused. */
+        patch: operations["updateUser"];
+        trace?: never;
+    };
     "/api/frontend/environments": {
         parameters: {
             query?: never;
@@ -148,6 +249,10 @@ export interface components {
         Phase: "pending" | "starting" | "running" | "stopping" | "stopped" | "failed" | "deleting";
         Environment: {
             id: string;
+            owner_id: string;
+            /** @description The owner's username. */
+            owner: string;
+            /** @description Unique among its owner's environments. */
             name: string;
             image: string;
             cpus: number;
@@ -193,6 +298,48 @@ export interface components {
             /** Format: date-time */
             created_at: string;
         };
+        Login: {
+            username: string;
+            password: string;
+        };
+        Me: {
+            id: string;
+            username: string;
+            display_name: string;
+            admin: boolean;
+            /** @description Whether the user has a local password that they can change. */
+            has_password: boolean;
+        };
+        ChangePassword: {
+            current_password: string;
+            new_password: string;
+        };
+        User: {
+            id: string;
+            username: string;
+            display_name: string;
+            admin: boolean;
+            /** @description A disabled user cannot sign in. Their environments are kept. */
+            disabled: boolean;
+            has_password: boolean;
+            /** @description How many environments the user owns. */
+            environments: number;
+            /** Format: date-time */
+            created_at: string;
+        };
+        CreateUser: {
+            username: string;
+            display_name?: string;
+            password: string;
+            admin?: boolean;
+        };
+        /** @description Only the fields present are changed. */
+        UpdateUser: {
+            display_name?: string;
+            admin?: boolean;
+            disabled?: boolean;
+            password?: string;
+        };
     };
     responses: {
         /** @description No such object. */
@@ -206,6 +353,24 @@ export interface components {
         };
         /** @description The request was malformed or failed validation. */
         Invalid: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Not signed in, or the credentials given were wrong. */
+        Unauthorized: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Signed in, but only an administrator may do this. */
+        Forbidden: {
             headers: {
                 [name: string]: unknown;
             };
@@ -232,6 +397,203 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    login: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Login"];
+            };
+        };
+        responses: {
+            /** @description Signed in. The session is in a cookie the browser keeps. */
+            200: {
+                headers: {
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    logout: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Signed out, and the session ended. */
+            204: {
+                headers: {
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    getMe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The signed-in user. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Me"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    changePassword: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePassword"];
+            };
+        };
+        responses: {
+            /** @description Changed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    listUsers: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every user, by username. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    createUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateUser"];
+            };
+        };
+        responses: {
+            /** @description Created. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateUser"];
+            };
+        };
+        responses: {
+            /** @description The user as changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["User"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
     listEnvironments: {
         parameters: {
             query?: never;
@@ -241,7 +603,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Every environment, oldest first. */
+            /** @description Every environment the caller may reach, oldest first: their own, or every user's for an administrator. */
             200: {
                 headers: {
                     [name: string]: unknown;
@@ -250,6 +612,7 @@ export interface operations {
                     "application/json": components["schemas"]["Environment"][];
                 };
             };
+            401: components["responses"]["Unauthorized"];
         };
     };
     createEnvironment: {
@@ -275,6 +638,7 @@ export interface operations {
                 };
             };
             400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
             409: components["responses"]["Conflict"];
         };
     };
@@ -298,6 +662,7 @@ export interface operations {
                     "application/json": components["schemas"]["Environment"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -328,6 +693,7 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -351,6 +717,7 @@ export interface operations {
                     "application/json": components["schemas"]["Environment"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
@@ -375,6 +742,7 @@ export interface operations {
                     "application/json": components["schemas"]["Environment"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
@@ -397,6 +765,8 @@ export interface operations {
                     "application/json": components["schemas"]["Worker"][];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
         };
     };
     deleteWorker: {
@@ -417,6 +787,8 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
         };
@@ -439,6 +811,8 @@ export interface operations {
                 };
                 content?: never;
             };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };
