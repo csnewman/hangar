@@ -52,6 +52,8 @@ const (
 	KindPing  = "ping"
 	KindExec  = "exec"
 	KindInfo  = "info"
+	// KindSetClock sets the guest's wall clock. See Session.SetClock.
+	KindSetClock = "set_clock"
 )
 
 // Hello is the first line the agent sends. It is unsolicited and has no ID,
@@ -76,6 +78,8 @@ type Request struct {
 	ID   uint64   `json:"id"`
 	Kind string   `json:"kind"`
 	Cmd  []string `json:"cmd,omitempty"`
+	// UnixNanos is the wall-clock time for KindSetClock.
+	UnixNanos int64 `json:"unix_nanos,omitempty"`
 }
 
 // Response is an agent-to-host reply. Err is set when the request could not be

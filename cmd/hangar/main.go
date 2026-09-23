@@ -626,6 +626,14 @@ func withAgent(ctx context.Context, srv *agent.Server, agentWait time.Duration, 
 		sess.CID, sess.Hello.Hostname, sess.Hello.Kernel,
 		float64(sess.Hello.BootMicros)/1e6)
 
+	// The guest's clock is wrong on arrival: a fresh boot starts from the
+	// image's build time and a resume from the moment of the suspend. It is
+	// set as soon as the agent connects. A guest whose clock cannot be set
+	// keeps running with the wrong time, and this says so.
+	if err := sess.SetClock(time.Now(), 5*time.Second); err != nil {
+		fmt.Fprintf(os.Stderr, "agent       could not set the guest clock: %v\n", err)
+	}
+
 	// Prove the channel end to end rather than just that something connected:
 	// a ping exercises the request path, and running a command exercises the
 	// half an environment is actually for.

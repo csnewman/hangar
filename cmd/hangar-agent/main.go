@@ -14,12 +14,15 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/csnewman/hangar/internal/agent"
@@ -79,7 +82,24 @@ func sendHello(conn *os.File) error {
 }
 
 // serve answers requests until the host hangs up.
+//
+// Each request is handled on its own, and its reply written when it is ready,
+// so a command that runs for minutes does not hold up a ping sent after it.
+// The host matches replies to requests by ID.
 func serve(conn *os.File) {
+	var wmu sync.Mutex
+	reply := func(resp agent.Response) {
+		b, err := json.Marshal(resp)
+		if err != nil {
+			return
+		}
+		wmu.Lock()
+		defer wmu.Unlock()
+		// A failed write means the host went away, which the read loop sees
+		// too; see run.
+		_, _ = conn.Write(append(b, '\n'))
+	}
+
 	br := bufio.NewReader(conn)
 	for {
 		line, err := br.ReadBytes('\n')
@@ -91,14 +111,7 @@ func serve(conn *os.File) {
 		if err := json.Unmarshal(line, &req); err != nil {
 			continue
 		}
-		resp := handle(req)
-		b, err := json.Marshal(resp)
-		if err != nil {
-			continue
-		}
-		if _, err := conn.Write(append(b, '\n')); err != nil {
-			return
-		}
+		go func() { reply(handle(req)) }()
 	}
 }
 
@@ -116,6 +129,11 @@ func handle(req agent.Request) agent.Response {
 			return resp
 		}
 		return execute(req.ID, req.Cmd)
+	case agent.KindSetClock:
+		if err := setClock(req.UnixNanos); err != nil {
+			resp.Err = err.Error()
+		}
+		return resp
 	default:
 		resp.Err = "unknown request kind " + strconv.Quote(req.Kind)
 		return resp
@@ -129,8 +147,20 @@ func execute(id uint64, argv []string) agent.Response {
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	// The reply is due when the command exits, not when every process that
+	// inherited its output has closed it. A command that starts something
+	// long-lived in the background -- a desktop, a server -- leaves that
+	// process holding the pipes, and would otherwise never be answered. What
+	// the command itself wrote is collected; anything written after this is
+	// not.
+	cmd.WaitDelay = outputGrace
 
 	err := cmd.Run()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// The command exited, successfully, and left something holding its
+		// output. That is the case above, not a failure.
+		err = nil
+	}
 	resp.Stdout = stdout.String()
 	resp.Stderr = stderr.String()
 
@@ -145,6 +175,21 @@ func execute(id uint64, argv []string) agent.Response {
 		resp.Err = err.Error()
 	}
 	return resp
+}
+
+// outputGrace is how long a command's output is still collected after the
+// command exits, for processes it left behind to finish writing what they
+// were writing.
+const outputGrace = 500 * time.Millisecond
+
+// setClock sets the wall clock. The host sends its own time whenever it
+// connects; see agent.Session.SetClock.
+func setClock(unixNanos int64) error {
+	tv := syscall.NsecToTimeval(unixNanos)
+	if err := syscall.Settimeofday(&tv); err != nil {
+		return fmt.Errorf("settimeofday: %w", err)
+	}
+	return nil
 }
 
 func hostname() string {

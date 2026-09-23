@@ -59,15 +59,27 @@ func (s *Server) Accept(timeout time.Duration) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	sess := &Session{CID: cid, f: f, br: bufio.NewReader(f), next: 1}
+	sess := &Session{
+		CID:     cid,
+		f:       f,
+		br:      bufio.NewReader(f),
+		next:    1,
+		pending: map[uint64]chan *Response{},
+	}
 	if err := sess.readHello(timeout); err != nil {
 		f.Close()
 		return nil, err
 	}
+	go sess.readReplies()
 	return sess, nil
 }
 
 // Session is a live connection to one environment's agent.
+//
+// Requests are independent: several may be outstanding at once, and each
+// reply is matched to its request by ID. A long-running command therefore
+// holds up nothing but its own caller, and a request that times out leaves
+// nothing behind to be mistaken for the reply to the next.
 type Session struct {
 	// CID is the guest's context ID, established by the host rather than by
 	// the peer. This is the only trustworthy identifier on the connection,
@@ -83,8 +95,14 @@ type Session struct {
 	f  *os.File
 	br *bufio.Reader
 
-	mu   sync.Mutex
-	next uint64
+	// wmu keeps each request's line whole on the wire.
+	wmu sync.Mutex
+
+	mu      sync.Mutex
+	next    uint64
+	pending map[uint64]chan *Response
+	// broken is why the connection stopped carrying replies, once it has.
+	broken error
 }
 
 func (s *Session) readHello(timeout time.Duration) error {
@@ -109,43 +127,87 @@ func (s *Session) readHello(timeout time.Duration) error {
 	return nil
 }
 
-// Do sends a request and waits for its reply.
-//
-// Requests are serialised: the port carries one exchange at a time, which is
-// enough for a control plane and avoids a correlation table. The IDs are on
-// the wire so a later version can relax this without a protocol change.
-func (s *Session) Do(req Request, timeout time.Duration) (*Response, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// readReplies hands each reply to the request waiting for it, until the
+// connection ends. A reply nobody is waiting for belongs to a request that
+// timed out, and is dropped.
+func (s *Session) readReplies() {
+	for {
+		line, err := s.br.ReadBytes('\n')
+		if err != nil {
+			s.mu.Lock()
+			s.broken = err
+			for id, ch := range s.pending {
+				close(ch)
+				delete(s.pending, id)
+			}
+			s.mu.Unlock()
+			return
+		}
+		var resp Response
+		if json.Unmarshal(line, &resp) != nil {
+			continue
+		}
+		s.mu.Lock()
+		ch, ok := s.pending[resp.ID]
+		delete(s.pending, resp.ID)
+		s.mu.Unlock()
+		if ok {
+			ch <- &resp
+		}
+	}
+}
 
+// Do sends a request and waits for its reply.
+func (s *Session) Do(req Request, timeout time.Duration) (*Response, error) {
+	ch := make(chan *Response, 1)
+	s.mu.Lock()
+	if s.broken != nil {
+		err := s.broken
+		s.mu.Unlock()
+		return nil, fmt.Errorf("sending %s: the agent connection ended: %w", req.Kind, err)
+	}
 	req.ID = s.next
 	s.next++
-
-	if err := s.f.SetDeadline(time.Now().Add(timeout)); err != nil {
-		return nil, err
+	s.pending[req.ID] = ch
+	s.mu.Unlock()
+	forget := func() {
+		s.mu.Lock()
+		delete(s.pending, req.ID)
+		s.mu.Unlock()
 	}
-	defer s.f.SetDeadline(time.Time{})
 
 	b, err := json.Marshal(req)
 	if err != nil {
+		forget()
 		return nil, err
 	}
-	if _, err := s.f.Write(append(b, '\n')); err != nil {
+	s.wmu.Lock()
+	err = s.f.SetWriteDeadline(time.Now().Add(timeout))
+	if err == nil {
+		_, err = s.f.Write(append(b, '\n'))
+		_ = s.f.SetWriteDeadline(time.Time{})
+	}
+	s.wmu.Unlock()
+	if err != nil {
+		forget()
 		return nil, fmt.Errorf("sending %s: %w", req.Kind, err)
 	}
 
-	line, err := s.br.ReadBytes('\n')
-	if err != nil {
-		return nil, fmt.Errorf("awaiting reply to %s: %w", req.Kind, err)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case resp, ok := <-ch:
+		if !ok {
+			s.mu.Lock()
+			err := s.broken
+			s.mu.Unlock()
+			return nil, fmt.Errorf("awaiting reply to %s: the agent connection ended: %w", req.Kind, err)
+		}
+		return resp, nil
+	case <-timer.C:
+		forget()
+		return nil, fmt.Errorf("awaiting reply to %s: no answer in %v", req.Kind, timeout)
 	}
-	var resp Response
-	if err := json.Unmarshal(line, &resp); err != nil {
-		return nil, fmt.Errorf("malformed reply to %s: %w", req.Kind, err)
-	}
-	if resp.ID != req.ID {
-		return nil, fmt.Errorf("reply id %d does not match request %d", resp.ID, req.ID)
-	}
-	return &resp, nil
 }
 
 // Ping checks the agent is answering.
@@ -156,6 +218,24 @@ func (s *Session) Ping(timeout time.Duration) error {
 	}
 	if resp.Err != "" {
 		return fmt.Errorf("ping: %s", resp.Err)
+	}
+	return nil
+}
+
+// SetClock sets the guest's wall clock to t.
+//
+// A guest has no clock of its own worth trusting: it boots at whatever time
+// its image was built with, and a restored guest carries on from the moment
+// it was suspended, however long ago that was. The host's clock is the
+// reference, so the host sets the guest's every time the agent connects,
+// which is both after boot and after every resume.
+func (s *Session) SetClock(t time.Time, timeout time.Duration) error {
+	resp, err := s.Do(Request{Kind: KindSetClock, UnixNanos: t.UnixNano()}, timeout)
+	if err != nil {
+		return err
+	}
+	if resp.Err != "" {
+		return fmt.Errorf("setting the clock: %s", resp.Err)
 	}
 	return nil
 }
