@@ -1,0 +1,33 @@
+[Unit]
+Description=Hangar desktop
+# The desktop is a Wayland session with no display attached: sway draws into
+# memory, and anything that wants to see it -- a screenshot, a remote viewer
+# -- reads it from there.
+After=systemd-user-sessions.service
+
+[Service]
+Type=simple
+User=dev
+# A logind session, so dev gets a runtime directory and XDG_RUNTIME_DIR, as a
+# user logging in would.
+PAMName=login
+Environment=WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1
+# pixman composites on the CPU. A GL compositor on virgl reads back zeroes
+# on a host without GBM, which blanks every capture of the screen. The cost
+# falls on clients: pixman takes frames only in shared memory, so Vulkan
+# clients still render on the GPU and copy their frames out, but GL clients
+# on Wayland find no GPU buffer path and render in software. Chromium draws
+# on the GPU here only with --use-angle=vulkan.
+Environment=WLR_RENDERER=pixman
+# The GPU's device nodes are created root-only and handed to the render and
+# video groups by udev. This unit is ordered after udev has been triggered
+# (sysinit.target), but not after it has finished processing what that
+# queued, and a client that opens the render node before then is refused.
+# Settling waits for exactly that.
+ExecStartPre=/usr/bin/udevadm settle --timeout=30
+ExecStart=/usr/bin/sway -c /etc/hangar/sway.conf
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=graphical.target
