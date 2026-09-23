@@ -1,0 +1,9 @@
+# Priority 1 makes a Debian package a candidate only when Ubuntu has no
+# package by that name, so Debian fills gaps and never replaces anything.
+Package: *
+Pin: origin deb.debian.org
+Pin-Priority: 1
+
+Package: chromium chromium-common chromium-sandbox
+Pin: origin deb.debian.org
+Pin-Priority: 500

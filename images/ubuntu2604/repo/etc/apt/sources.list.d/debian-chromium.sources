@@ -1,0 +1,20 @@
+# Debian's apt repository, for Chromium alone.
+#
+# Ubuntu ships Chromium only as a snap, and snapd does not run in an
+# environment. Debian builds it as an ordinary package for arm64 and amd64,
+# and carries security updates for it in trixie-security.
+#
+# preferences.d/debian-chromium keeps everything else coming from Ubuntu:
+# a Debian package is installed only when Chromium needs it and Ubuntu has
+# nothing by that name.
+Types: deb
+URIs: http://deb.debian.org/debian
+Suites: trixie
+Components: main
+Signed-By: /etc/apt/keyrings/debian-13.asc
+
+Types: deb
+URIs: http://deb.debian.org/debian-security
+Suites: trixie-security
+Components: main
+Signed-By: /etc/apt/keyrings/debian-13-security.asc

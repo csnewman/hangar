@@ -8,7 +8,9 @@ set -eu
 # Ubuntu ships a stock `ubuntu` user at uid 1000; it must go before `dev` can
 # take that uid.
 userdel -r ubuntu 2>/dev/null || true
-useradd -m -u 1000 -s /bin/bash -G sudo,docker dev
+# render and video open the GPU's device nodes, which the desktop and anything
+# it runs draw through.
+useradd -m -u 1000 -s /bin/bash -G sudo,docker,render,video dev
 echo 'dev ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/dev
 mkdir -p /workspace /var/lib/docker
 chown dev:dev /workspace

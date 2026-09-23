@@ -1122,10 +1122,30 @@ impl GpuBackend {
         };
         let payload = &body[size_of::<CtrlHeader>()..];
 
-        // An identifier from before a restore stands for nothing, and is
-        // refused here rather than deeper down where it would be
-        // indistinguishable from the guest having invented one.
-        if !self.lost.resources.is_empty() || !self.lost.contexts.is_empty() {
+        // Releasing a lost object is the guest agreeing it is gone. It
+        // succeeds, and the id stops standing for a lost object: the guest
+        // hands freed ids out again, and the next object to get one is new.
+        // Creating a context is likewise never refused.
+        match hdr.type_ {
+            VIRTIO_GPU_CMD_CTX_DESTROY if self.lost.contexts.remove(&hdr.ctx_id) => {
+                return Self::err(&hdr, VIRTIO_GPU_RESP_OK_NODATA);
+            }
+            VIRTIO_GPU_CMD_RESOURCE_UNREF => {
+                if let Some(id) = Self::resource_of(hdr.type_, payload) {
+                    if self.lost.resources.remove(&id) {
+                        return Self::err(&hdr, VIRTIO_GPU_RESP_OK_NODATA);
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Any other use of an identifier from before a restore stands for
+        // nothing, and is refused here rather than deeper down where it would
+        // be indistinguishable from the guest having invented one.
+        if hdr.type_ != VIRTIO_GPU_CMD_CTX_CREATE
+            && (!self.lost.resources.is_empty() || !self.lost.contexts.is_empty())
+        {
             if let Some(resp) = self.lost_context(&hdr) {
                 return resp;
             }
