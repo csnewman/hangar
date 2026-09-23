@@ -43,7 +43,10 @@ type Config struct {
 	// https://hangar.example.com. Each environment's editor is served on a
 	// subdomain of its host. Empty leaves environments without an editor.
 	PublicURL string
-	Log       *slog.Logger
+	// AutoSignIn, for development only, signs every visitor in as this
+	// existing user without a password. Empty requires signing in.
+	AutoSignIn string
+	Log        *slog.Logger
 }
 
 type Server struct {
@@ -84,6 +87,7 @@ func New(cfg Config) (*Server, error) {
 		Templates:    templates.NewManager(cfg.DB),
 		Workers:      wm,
 		Users:        um,
+		AutoSignIn:   cfg.AutoSignIn,
 		Log:          log,
 	}
 	// A nil Gateway would be a non-nil interface.

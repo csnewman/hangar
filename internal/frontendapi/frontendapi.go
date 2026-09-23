@@ -49,7 +49,10 @@ type Config struct {
 	// Editors signs users in to environments' editors. Nil leaves
 	// environments without an editor.
 	Editors Editors
-	Log     *slog.Logger
+	// AutoSignIn, for development only, signs every request that has no
+	// session in as this user. Empty requires signing in.
+	AutoSignIn string
+	Log        *slog.Logger
 }
 
 type handler struct {
@@ -59,7 +62,9 @@ type handler struct {
 	users     *users.Manager
 	tunnels   Tunnels
 	editors   Editors
-	log       *slog.Logger
+	// autoSignIn is Config.AutoSignIn.
+	autoSignIn string
+	log        *slog.Logger
 }
 
 var _ StrictServerInterface = (*handler)(nil)
@@ -80,7 +85,7 @@ func New(cfg Config) (http.Handler, error) {
 	}
 
 	h := &handler{envs: cfg.Environments, templates: cfg.Templates, workers: cfg.Workers, users: cfg.Users,
-		tunnels: cfg.Tunnels, editors: cfg.Editors, log: cfg.Log}
+		tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, log: cfg.Log}
 	strict := NewStrictHandlerWithOptions(h, []StrictMiddlewareFunc{rules.enforce}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			writeError(w, http.StatusBadRequest, err.Error())

@@ -57,6 +57,16 @@ func (h *handler) session(next http.Handler) http.Handler {
 				return
 			}
 		}
+		if !s.ok && h.autoSignIn != "" {
+			token, p, err := h.users.SignInAs(r.Context(), h.autoSignIn)
+			if err != nil {
+				h.log.Error("signing in automatically", "user", h.autoSignIn, "err", err)
+				writeError(w, http.StatusInternalServerError, "automatic sign-in failed")
+				return
+			}
+			s.principal, s.token, s.ok = p, token, true
+			w.Header().Add("Set-Cookie", sessionCookie(token, s.secure, int(users.SessionLifetime.Seconds())))
+		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionKey{}, s)))
 	})
 }

@@ -82,8 +82,15 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 		slog.Warn("the web UI was not built into this binary")
 	}
 
+	// HANGAR_DEV_AUTO_SIGN_IN signs every visitor in as that user, with no
+	// password: for a development stack on one machine, never anything else.
+	autoSignIn := os.Getenv("HANGAR_DEV_AUTO_SIGN_IN")
+	if autoSignIn != "" {
+		slog.Warn("AUTHENTICATION IS OFF: every visitor is signed in as this user (HANGAR_DEV_AUTO_SIGN_IN)", "username", autoSignIn)
+	}
+
 	srv, err := server.New(server.Config{DB: d, BootstrapToken: token, Web: web,
-		PublicURL: os.Getenv("HANGAR_PUBLIC_URL")})
+		PublicURL: os.Getenv("HANGAR_PUBLIC_URL"), AutoSignIn: autoSignIn})
 	if err != nil {
 		return err
 	}

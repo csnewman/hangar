@@ -54,6 +54,9 @@ services:
       # Editors are served on e-<environment>.hangar.localhost:8080. Browsers
       # resolve every *.localhost name to this machine, so no DNS is needed.
       HANGAR_PUBLIC_URL: http://hangar.localhost:8080
+      # Signs every visitor in as admin, with no password: development only.
+      # Remove it to sign in properly, or set it to another existing user.
+      HANGAR_DEV_AUTO_SIGN_IN: admin
       # Sign in as admin / hangar-dev. Only used while there are no users.
       HANGAR_INITIAL_ADMIN_USERNAME: admin
       HANGAR_INITIAL_ADMIN_PASSWORD: hangar-dev

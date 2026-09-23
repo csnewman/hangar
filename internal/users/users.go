@@ -341,6 +341,25 @@ func (m *Manager) Login(ctx context.Context, username, password string) (string,
 	return token, u, err
 }
 
+// SignInAs opens a session for an enabled user without asking for any
+// credential. It is for development only, where the server is configured to
+// sign every visitor in as one user.
+func (m *Manager) SignInAs(ctx context.Context, username string) (string, Principal, error) {
+	var p Principal
+	err := m.db.Transact(ctx, func(tx db.Tx) error {
+		return tx.QueryRow(ctx, `SELECT id, is_admin FROM users
+			WHERE lower(username) = lower($1) AND disabled_at IS NULL`, username).Scan(&p.UserID, &p.Admin)
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", Principal{}, ErrNotFound
+	}
+	if err != nil {
+		return "", Principal{}, err
+	}
+	token, err := m.openSession(ctx, p.UserID)
+	return token, p, err
+}
+
 func (m *Manager) openSession(ctx context.Context, userID string) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {

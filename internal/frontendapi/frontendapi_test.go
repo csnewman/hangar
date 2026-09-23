@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -496,5 +497,38 @@ func TestNamePatternAndBranch(t *testing.T) {
 		if status, got := alice.do("POST", "/api/frontend/templates", body); status != 400 {
 			t.Fatalf("%s: %d %v, want 400", name, status, got)
 		}
+	}
+}
+
+func TestAutoSignIn(t *testing.T) {
+	d := dbtest.Open(t)
+	um := users.NewManager(d)
+	if _, err := um.Create(context.Background(), users.NewUser{Username: "dev", Password: password, Admin: true}); err != nil {
+		t.Fatal(err)
+	}
+	h, err := frontendapi.New(frontendapi.Config{
+		Environments: environments.NewManager(d),
+		Templates:    templates.NewManager(d),
+		Workers:      workers.NewManager(d),
+		Users:        um,
+		AutoSignIn:   "dev",
+		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+
+	f := &fixture{srv: srv, users: um}
+	c := f.anonymous(t)
+	status, body := c.do("GET", "/api/frontend/me", "")
+	if status != 200 || body["username"] != "dev" {
+		t.Fatalf("with no session: %d %v", status, body)
+	}
+	// The session it opened is kept, so later requests reuse it.
+	u, _ := url.Parse(srv.URL)
+	if len(c.http.Jar.Cookies(u)) != 1 {
+		t.Fatalf("cookies after automatic sign-in: %v", c.http.Jar.Cookies(u))
 	}
 }
