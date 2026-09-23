@@ -43,7 +43,10 @@ type Config struct {
 	Templates    *templates.Manager
 	Workers      *workers.Manager
 	Users        *users.Manager
-	Log          *slog.Logger
+	// Tunnels reaches workers, for terminals. Nil leaves terminals
+	// unavailable.
+	Tunnels Tunnels
+	Log     *slog.Logger
 }
 
 type handler struct {
@@ -51,6 +54,7 @@ type handler struct {
 	templates *templates.Manager
 	workers   *workers.Manager
 	users     *users.Manager
+	tunnels   Tunnels
 	log       *slog.Logger
 }
 
@@ -72,7 +76,7 @@ func New(cfg Config) (http.Handler, error) {
 	}
 
 	h := &handler{envs: cfg.Environments, templates: cfg.Templates, workers: cfg.Workers, users: cfg.Users,
-		log: cfg.Log}
+		tunnels: cfg.Tunnels, log: cfg.Log}
 	strict := NewStrictHandlerWithOptions(h, []StrictMiddlewareFunc{rules.enforce}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -109,7 +113,12 @@ func New(cfg Config) (http.Handler, error) {
 			writeError(w, opts.StatusCode, describe(err))
 		},
 	})
-	return h.session(sameOrigin(validate(routes))), nil
+	// The terminal is a WebSocket, which the spec does not describe; it has
+	// a route of its own beside the validated API.
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/frontend/environments/{id}/terminal", h.terminalSocket)
+	mux.Handle("/", validate(routes))
+	return h.session(sameOrigin(mux)), nil
 }
 
 // describe turns a validation failure into a message fit to show a person:

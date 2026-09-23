@@ -248,6 +248,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/environments/{id}/terminals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description The environment's terminal sessions. Each is a shell that runs until it exits, whoever is attached; a browser attaches to one over the WebSocket at /api/frontend/environments/{id}/terminal. */
+        get: operations["listTerminals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/environments/{id}/terminals/{session}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                session: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Ends a terminal session, hanging up on its shell. */
+        delete: operations["closeTerminal"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/workers": {
         parameters: {
             query?: never;
@@ -510,6 +549,17 @@ export interface components {
             /** @description IDs of the environments on the worker using it. */
             environments: string[];
         };
+        TerminalSession: {
+            id: string;
+            /** @description What the shell or the program in it last set as the window title. */
+            title: string;
+            /** Format: date-time */
+            created_at: string;
+            /** @description How many windows are attached to it. */
+            clients: number;
+            cols: number;
+            rows: number;
+        };
         RemoveImage: {
             ref: string;
         };
@@ -586,6 +636,15 @@ export interface components {
         };
         /** @description Signed in, but only an administrator may do this. */
         Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The environment's worker cannot be reached from this server just now. */
+        Unavailable: {
             headers: {
                 [name: string]: unknown;
             };
@@ -1137,6 +1196,57 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    listTerminals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Its sessions, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TerminalSession"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    closeTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                session: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Ended. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
         };
     };
     listWorkers: {

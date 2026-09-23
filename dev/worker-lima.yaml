@@ -25,6 +25,8 @@ runtime: cloud-hypervisor
 
 vm:
   kernel: /Users/csnewman/Projects/hangar/out/kernel/vmlinuz
+  # Built by dev/lima-worker.sh for the guest, and added to every boot.
+  agent: /var/tmp/hangar-agent-guest
   dax_mib: 1024
   images:
     # Built by `hangar build -C images/ubuntu2604 -o out/worker`, agent

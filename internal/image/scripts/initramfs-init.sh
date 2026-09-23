@@ -44,6 +44,15 @@ mount -t overlay overlay \
       -o lowerdir=/base,upperdir=/rw/upper,workdir=/rw/work \
       /root || fail "cannot stack overlayfs"
 
+# The node supplies the agent. The worker appends it to this initramfs at
+# boot, so every environment runs the agent that matches its worker whatever
+# its image carries, and a new agent needs no image rebuilt. An initramfs
+# without one boots the agent the image has.
+if [ -x /hangar/hangar-agent ]; then
+    mkdir -p /root/usr/local/bin
+    cp /hangar/hangar-agent /root/usr/local/bin/hangar-agent
+fi
+
 # Keep the layers reachable in the new root rather than orphaning the mounts.
 mkdir -p /root/run/hangar/base /root/run/hangar/rw
 mount --move /base /root/run/hangar/base

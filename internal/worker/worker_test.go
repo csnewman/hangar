@@ -8,15 +8,19 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/dbtest"
+
 	"github.com/csnewman/hangar/internal/server"
+	"github.com/csnewman/hangar/internal/terminal"
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/worker"
 )
@@ -197,3 +201,145 @@ func call(t *testing.T, base, method, path, body string, out any) {
 }
 
 func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
+
+// A terminal, end to end: browser WebSocket to the server, through the
+// worker's tunnel, to a shell the runtime holds -- and a second window on
+// the same session, which is what a refresh or another tab is.
+func TestTerminal(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	srv, err := server.New(server.Config{DB: dbtest.Open(t), BootstrapToken: token, Log: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Run(ctx)
+	hs := httptest.NewServer(srv.Handler())
+	defer hs.Close()
+	signIn(t, srv, hs.URL)
+
+	w, err := worker.New(writeConfig(t, hs.URL), worker.NewSimulated(50*time.Millisecond), quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	werr := make(chan error, 1)
+	go func() { werr <- w.Run(ctx) }()
+	// The worker stops before the server does: the server's Close waits for
+	// the worker's held request for its desired set.
+	defer func() {
+		cancel()
+		<-werr
+	}()
+
+	var tmpl struct{ ID string }
+	call(t, hs.URL, http.MethodPost, "/api/frontend/templates", `{"name":"t","visibility":"private","spec":`+
+		`{"image":"img","cpus":1,"memory_mib":512,"display":"none","gpu":"none","repos":[],"placement":{}}}`, &tmpl)
+	var env api.Environment
+	call(t, hs.URL, http.MethodPost, "/api/frontend/environments", `{"template_id":"`+tmpl.ID+`","name":"term"}`, &env)
+	waitFor(t, hs.URL, env.ID, func(e *api.Environment) bool { return e != nil && e.Phase == api.PhaseRunning })
+
+	u, _ := url.Parse(hs.URL)
+	dial := func(query string) (*websocket.Conn, terminal.Reply) {
+		t.Helper()
+		ws := strings.Replace(hs.URL, "http", "ws", 1) + "/api/frontend/environments/" + env.ID + "/terminal?" + query
+		var c *websocket.Conn
+		var err error
+		// The worker's tunnel may still be coming up.
+		for range 50 {
+			c, _, err = websocket.Dial(ctx, ws, &websocket.DialOptions{HTTPHeader: http.Header{
+				"Cookie": {cookieHeader(browser.Jar.Cookies(u))},
+			}})
+			if err == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.SetReadLimit(-1)
+		_, first, err := c.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var r terminal.Reply
+		if err := json.Unmarshal(first, &r); err != nil || r.Err != "" {
+			t.Fatalf("attach reply %s: %v", first, err)
+		}
+		return c, r
+	}
+	readUntil := func(c *websocket.Conn, want string) {
+		t.Helper()
+		rctx, rcancel := context.WithTimeout(ctx, 15*time.Second)
+		defer rcancel()
+		var seen strings.Builder
+		for !strings.Contains(seen.String(), want) {
+			_, msg, err := c.Read(rctx)
+			if err != nil {
+				t.Fatalf("waiting for %q, saw %q: %v", want, seen.String(), err)
+			}
+			if len(msg) > 0 && msg[0] == terminal.FrameOutput {
+				seen.Write(msg[1:])
+			}
+		}
+	}
+
+	first, r := dial("cols=100&rows=30")
+	session := r.Session.ID
+	first.Write(ctx, websocket.MessageBinary, append([]byte{terminal.FrameInput}, "echo mark-$((40+2))\n"...))
+	readUntil(first, "mark-42")
+
+	// Another window on the same session sees what was already there.
+	second, r := dial("session=" + session)
+	if r.Session.Clients != 2 {
+		t.Fatalf("second window: %d clients, want 2", r.Session.Clients)
+	}
+	readUntil(second, "mark-42")
+	first.CloseNow()
+
+	var sessions []struct {
+		ID      string
+		Clients int
+	}
+	call(t, hs.URL, http.MethodGet, "/api/frontend/environments/"+env.ID+"/terminals", "", &sessions)
+	if len(sessions) != 1 || sessions[0].ID != session {
+		t.Fatalf("sessions %+v", sessions)
+	}
+	call(t, hs.URL, http.MethodDelete, "/api/frontend/environments/"+env.ID+"/terminals/"+session, "", nil)
+	rctx, rcancel := context.WithTimeout(ctx, 15*time.Second)
+	defer rcancel()
+	for exited := false; !exited; {
+		_, msg, err := second.Read(rctx)
+		if err != nil {
+			t.Fatalf("the window was not told the session ended: %v", err)
+		}
+		exited = len(msg) > 0 && msg[0] == terminal.FrameExit
+	}
+
+	// Someone who may not reach the environment cannot open its terminal.
+	if _, err := srv.Users().Create(ctx, users.NewUser{Username: "stranger", Password: "password1"}); err != nil {
+		t.Fatal(err)
+	}
+	jar, _ := cookiejar.New(nil)
+	stranger := &http.Client{Jar: jar}
+	resp, err := stranger.Post(hs.URL+"/api/frontend/auth/login", "application/json",
+		strings.NewReader(`{"username":"stranger","password":"password1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	ws := strings.Replace(hs.URL, "http", "ws", 1) + "/api/frontend/environments/" + env.ID + "/terminal"
+	_, resp, err = websocket.Dial(ctx, ws, &websocket.DialOptions{HTTPHeader: http.Header{
+		"Cookie": {cookieHeader(jar.Cookies(u))},
+	}})
+	if err == nil || resp == nil || resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("a stranger opening the terminal: %v %v", resp, err)
+	}
+}
+
+func cookieHeader(cs []*http.Cookie) string {
+	parts := make([]string, len(cs))
+	for i, c := range cs {
+		parts[i] = c.Name + "=" + c.Value
+	}
+	return strings.Join(parts, "; ")
+}

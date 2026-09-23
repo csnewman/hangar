@@ -1573,6 +1573,172 @@ code {
   color: var(--muted);
 }
 
+/* Terminal */
+
+.term-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 420px;
+  margin: 14px 28px 0;
+}
+
+.term-sessions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-bottom: 8px;
+  overflow-x: auto;
+}
+
+.term-tab {
+  display: flex;
+  align-items: center;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  max-width: 240px;
+}
+
+.term-tab-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.term-tab-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 4px 4px 9px;
+  border: none;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.term-tab-name span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.term-tab-name svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.term-tab-shared {
+  flex: none;
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.term-tab-close,
+.term-new {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 3px;
+  border-radius: 5px;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.term-tab-close:hover,
+.term-new:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.term-new {
+  border: 1px dashed var(--border-strong);
+  width: 28px;
+  height: 28px;
+}
+
+.term-progress {
+  margin-left: auto;
+  width: 140px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.term-progress div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.term-progress-2 div {
+  background: var(--bad);
+}
+
+.term-progress-3 div {
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.term-progress-4 div {
+  background: var(--busy);
+}
+
+.term-pane {
+  position: relative;
+  flex: 1;
+  min-height: 360px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  background: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  .term-pane {
+    background: #0d1117;
+  }
+}
+
+.term-host {
+  position: absolute;
+  inset: 8px 4px 4px 10px;
+}
+
+.term-status {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+  font-size: 12.5px;
+  /* Above xterm.js's own layers, which reach z-index 11. */
+  z-index: 20;
+}
+
+.term-status-ended {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  transform: translate(-50%, -50%);
+}
+
 /* Login */
 
 .login {

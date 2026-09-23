@@ -21,6 +21,9 @@ limactl shell hangar bash -c "
     set -e
     cd $repo
     /usr/local/go/bin/go build -o /var/tmp/hangar-worker ./cmd/hangar-worker
+    # The agent every environment boots with: static, for the guest.
+    CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath -ldflags '-s -w' \
+        -o /var/tmp/hangar-agent-guest ./cmd/hangar-agent
     # By process name: a pattern over whole command lines would also match
     # this shell, whose command line names the worker. A stopping worker
     # powers its environments off first, so the new one waits for it: two

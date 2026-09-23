@@ -1,13 +1,17 @@
 package worker
 
 import (
+	"context"
+	"fmt"
 	"math/rand/v2"
+	"net"
 	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/terminal"
 )
 
 // Simulated is a Runtime that runs nothing. Each environment walks through
@@ -28,6 +32,10 @@ type Simulated struct {
 	envs    map[string]*simEnv
 	images  map[string]int64
 	changed chan struct{}
+	// terminals are the environments' sessions, run on this machine by the
+	// same manager the guest agent uses, so a terminal behaves the same in
+	// development as against a real environment.
+	terminals map[string]*terminal.Manager
 }
 
 type simEnv struct {
@@ -45,7 +53,7 @@ type simEnv struct {
 
 func NewSimulated(step time.Duration) *Simulated {
 	return &Simulated{Step: step, envs: map[string]*simEnv{}, images: map[string]int64{},
-		changed: make(chan struct{}, 1)}
+		changed: make(chan struct{}, 1), terminals: map[string]*terminal.Manager{}}
 }
 
 func (s *Simulated) Changed() <-chan struct{} { return s.changed }
@@ -210,4 +218,24 @@ func (s *Simulated) RemoveImage(ref string) {
 		delete(s.images, ref)
 		s.notify()
 	}
+}
+
+// DialTerminal connects to a running environment's terminal sessions. The
+// shells run on this machine, as whoever runs the worker: there is no guest
+// to run them in.
+func (s *Simulated) DialTerminal(_ context.Context, id string) (net.Conn, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.envs[id]
+	if !ok || e.phase != api.PhaseRunning {
+		return nil, fmt.Errorf("environment %s is not running here", id)
+	}
+	m, ok := s.terminals[id]
+	if !ok {
+		m = terminal.NewManager(terminal.LoginShell("dev"), nil)
+		s.terminals[id] = m
+	}
+	a, b := net.Pipe()
+	go m.Serve(b)
+	return a, nil
 }

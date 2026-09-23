@@ -359,6 +359,46 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/frontend/environments/{id}/terminals:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listTerminals
+      description: >-
+        The environment's terminal sessions. Each is a shell that runs until
+        it exits, whoever is attached; a browser attaches to one over the
+        WebSocket at /api/frontend/environments/{id}/terminal.
+      responses:
+        "200":
+          description: Its sessions, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TerminalSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/frontend/environments/{id}/terminals/{session}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: session
+        in: path
+        required: true
+        schema: { type: string, pattern: "^[0-9a-f]{1,32}$" }
+    delete:
+      operationId: closeTerminal
+      description: Ends a terminal session, hanging up on its shell.
+      responses:
+        "204":
+          description: Ended.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
   /api/frontend/workers:
     get:
       operationId: listWorkers
@@ -474,6 +514,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Forbidden:
       description: Signed in, but only an administrator may do this.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: The environment's worker cannot be reached from this server just now.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -762,6 +807,21 @@ components:
           type: array
           description: IDs of the environments on the worker using it.
           items: { type: string }
+
+    TerminalSession:
+      type: object
+      required: [id, title, created_at, clients, cols, rows]
+      properties:
+        id: { type: string }
+        title:
+          type: string
+          description: What the shell or the program in it last set as the window title.
+        created_at: { type: string, format: date-time }
+        clients:
+          type: integer
+          description: How many windows are attached to it.
+        cols: { type: integer }
+        rows: { type: integer }
 
     RemoveImage:
       type: object

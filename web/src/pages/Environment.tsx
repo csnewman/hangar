@@ -145,11 +145,10 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
 }
 
 // ConsoleTab holds the place of a way into the environment that is not built
-// yet: a terminal, the editor, or the desktop. Each will fill the whole tab.
-export function ConsoleTab({ kind }: { kind: 'terminal' | 'editor' | 'desktop' }) {
+// yet: the editor, or the desktop. Each will fill the whole tab.
+export function ConsoleTab({ kind }: { kind: 'editor' | 'desktop' }) {
   const env = useEnv()
   const what = {
-    terminal: { icon: SquareTerminal, title: 'Terminal', body: `A shell in ${env.name}, in your browser.` },
     editor: { icon: Code2, title: 'Editor', body: `The editor, open on ${env.name}'s workspace.` },
     desktop: { icon: AppWindow, title: 'Desktop', body: `${env.name}'s desktop, as the agent sees it.` },
   }[kind]

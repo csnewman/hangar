@@ -58,7 +58,10 @@ type Config struct {
 // files named here are the node's, not the environment's: one kernel serves
 // every environment, whatever its image.
 type VMConfig struct {
-	Kernel    string `yaml:"kernel"`
+	Kernel string `yaml:"kernel"`
+	// Agent is a hangar-agent built for the guest's architecture, which
+	// every environment here boots with whatever its image carries.
+	Agent     string `yaml:"agent"`
 	UpperGiB  int    `yaml:"upper_gib"`
 	DockerGiB int    `yaml:"docker_gib"`
 	DaxMiB    int    `yaml:"dax_mib"`

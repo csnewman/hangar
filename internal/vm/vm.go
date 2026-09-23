@@ -19,16 +19,21 @@
 package vm
 
 import (
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/terminal"
 )
 
 // Image is how a worker finds the base an environment's image names.
@@ -50,6 +55,11 @@ type Config struct {
 	ImagesDir string
 	// Kernel is the guest kernel every environment boots.
 	Kernel string
+	// Agent is the hangar-agent every environment runs, built for the
+	// guest's architecture. It is the node's, not the image's: the worker
+	// adds it to each boot, so it always matches the worker that talks to
+	// it. Empty boots the agent each image carries.
+	Agent string
 	// Images maps an image reference, as a template names it, to where the
 	// worker fetches it from into its store. A reference not listed here
 	// cannot be run on this worker.
@@ -456,3 +466,60 @@ func (r *Runtime) imageUsers() map[string][]string {
 	}
 	return users
 }
+
+// DialTerminal connects to a running environment's terminal sessions, which
+// its agent holds in the guest.
+func (r *Runtime) DialTerminal(ctx context.Context, id string) (net.Conn, error) {
+	r.mu.Lock()
+	m, ok := r.envs[id]
+	r.mu.Unlock()
+	if !ok {
+		return nil, fmt.Errorf("environment %s is not on this worker", id)
+	}
+	m.mu.Lock()
+	running := m.running != nil
+	m.mu.Unlock()
+	if !running {
+		return nil, fmt.Errorf("environment %s is not running", id)
+	}
+	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), terminal.Port)
+}
+
+// dialGuest opens a connection to a port in the guest through the monitor's
+// vsock socket: Cloud Hypervisor carries each guest's vsock on a unix socket,
+// and a host process reaches a guest port by connecting and asking for it.
+func dialGuest(ctx context.Context, socket string, port uint32) (net.Conn, error) {
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", socket)
+	if err != nil {
+		return nil, err
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		conn.SetDeadline(deadline)
+	}
+	if _, err := fmt.Fprintf(conn, "CONNECT %d\n", port); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	br := bufio.NewReader(conn)
+	line, err := br.ReadString('\n')
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("connecting to guest port %d: %w", port, err)
+	}
+	if !strings.HasPrefix(line, "OK ") {
+		conn.Close()
+		return nil, fmt.Errorf("connecting to guest port %d: %s", port, strings.TrimSpace(line))
+	}
+	conn.SetDeadline(time.Time{})
+	return &bufferedConn{Conn: conn, r: br}, nil
+}
+
+// bufferedConn is a connection whose first bytes were read into a buffer
+// while its handshake was.
+type bufferedConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }

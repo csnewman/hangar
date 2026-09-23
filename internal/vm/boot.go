@@ -49,6 +49,11 @@ func preflight(cfg *Config) error {
 	if _, err := os.Stat(cfg.Kernel); err != nil {
 		return fmt.Errorf("guest kernel: %w", err)
 	}
+	if cfg.Agent != "" {
+		if _, err := os.Stat(cfg.Agent); err != nil {
+			return fmt.Errorf("agent: %w", err)
+		}
+	}
 	for ref, img := range cfg.Images {
 		if _, err := os.Stat(img.Base); err != nil {
 			return fmt.Errorf("image %s: base: %w", ref, err)
@@ -175,10 +180,14 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 	}()
 	inst.backends = append(inst.backends, closer(cancelProcs))
 
+	initrd, err := bootInitrd(img.Initrd, m.rt.cfg.Agent, run)
+	if err != nil {
+		return nil, err
+	}
 	cfg := &ch.Config{
 		Name:        spec.Name,
 		Kernel:      m.rt.cfg.Kernel,
-		Initrd:      img.Initrd,
+		Initrd:      initrd,
 		MemoryMB:    s.MemoryMiB,
 		CPUs:        s.CPUs,
 		ConsoleFile: filepath.Join(m.dir, "console.log"),

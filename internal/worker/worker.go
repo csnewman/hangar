@@ -16,10 +16,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/tunnel"
 )
 
 // Runtime is what actually runs environments on a machine.
@@ -45,6 +48,14 @@ type ImageStore interface {
 	// uses it. It is asked again on every desired set until the image is
 	// gone, so it must be idempotent.
 	RemoveImage(ref string)
+}
+
+// TerminalDialer is a runtime whose environments have terminals. The
+// control plane reaches one through the worker's tunnel; the runtime opens
+// the connection to wherever the environment's sessions live, which speaks
+// the internal/terminal protocol.
+type TerminalDialer interface {
+	DialTerminal(ctx context.Context, environment string) (net.Conn, error)
 }
 
 // reportEvery is how often the worker reports even when nothing changed. The
@@ -91,6 +102,11 @@ func (w *Worker) Run(ctx context.Context) error {
 	go func() {
 		if err := w.reportLoop(ctx); err != nil {
 			cancel(err)
+		}
+	}()
+	go func() {
+		if err := tunnel.Serve(ctx, w.cfg.Server.URL, w.client.credential, w.stream, w.log); err != nil {
+			cancel(ErrRejected)
 		}
 	}()
 	err := w.desiredLoop(ctx)
@@ -182,5 +198,33 @@ func (w *Worker) retry(ctx context.Context, what string, fn func() error) error 
 		case <-time.After(backoff):
 		}
 		backoff = min(backoff*2, 15*time.Second)
+	}
+}
+
+// stream serves one stream the control plane opens over the tunnel.
+func (w *Worker) stream(h tunnel.Header, r io.Reader, stream net.Conn) {
+	defer stream.Close()
+	switch h.Kind {
+	case tunnel.KindTerminal:
+		dialer, ok := w.rt.(TerminalDialer)
+		if !ok {
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		guest, err := dialer.DialTerminal(ctx, h.Environment)
+		cancel()
+		if err != nil {
+			w.log.Warn("opening a terminal", "environment", h.Environment, "err", err)
+			return
+		}
+		defer guest.Close()
+		// The bytes are relayed as they are; the protocol is the guest's and
+		// the browser's, and nothing here needs to read it.
+		done := make(chan struct{}, 2)
+		go func() { io.Copy(guest, r); done <- struct{}{} }()
+		go func() { io.Copy(stream, guest); done <- struct{}{} }()
+		<-done
+	default:
+		w.log.Warn("unknown stream from the control plane", "kind", h.Kind)
 	}
 }

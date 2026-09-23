@@ -70,7 +70,12 @@ const router = createBrowserRouter([
             children: [
               { index: true, element: <SummaryTab /> },
               { path: 'metrics', element: <MetricsTab /> },
-              { path: 'terminal', element: <ConsoleTab kind="terminal" /> },
+              {
+                path: 'terminal',
+                // The terminal emulator is most of the UI's weight, so it is
+                // fetched when a terminal is first opened, not with the page.
+                lazy: async () => ({ Component: (await import('./terminal/TerminalTab')).TerminalTab }),
+              },
               { path: 'editor', element: <ConsoleTab kind="editor" /> },
               { path: 'desktop', element: <ConsoleTab kind="desktop" /> },
             ],

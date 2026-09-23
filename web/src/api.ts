@@ -29,6 +29,7 @@ export type Visibility = Schemas['Visibility']
 export type WorkerStats = Schemas['WorkerStats']
 export type EnvironmentStats = Schemas['EnvironmentStats']
 export type LocalImage = Schemas['LocalImage']
+export type TerminalSession = Schemas['TerminalSession']
 
 const client = createClient<paths>()
 
@@ -71,6 +72,11 @@ export const api = {
   createEnvironment: (body: CreateEnvironment) => unwrap(client.POST('/api/frontend/environments', { body })),
   startEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/start', byID(id))),
   stopEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/stop', byID(id))),
+  terminals: (id: string) => unwrap(client.GET('/api/frontend/environments/{id}/terminals', byID(id))),
+  closeTerminal: (id: string, session: string) =>
+    unwrap(
+      client.DELETE('/api/frontend/environments/{id}/terminals/{session}', { params: { path: { id, session } } }),
+    ),
   deleteEnvironment: (id: string) => unwrap(client.DELETE('/api/frontend/environments/{id}', byID(id))),
 
   templates: () => unwrap(client.GET('/api/frontend/templates')),

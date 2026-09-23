@@ -8,12 +8,14 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -23,6 +25,7 @@ import (
 	"github.com/csnewman/hangar/internal/frontendapi"
 	"github.com/csnewman/hangar/internal/placement"
 	"github.com/csnewman/hangar/internal/templates"
+	"github.com/csnewman/hangar/internal/tunnel"
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/workers"
 )
@@ -41,6 +44,7 @@ type Config struct {
 type Server struct {
 	db        *db.DB
 	frontend  http.Handler
+	tunnels   *tunnel.Registry
 	workers   *workers.Manager
 	users     *users.Manager
 	placement *placement.Manager
@@ -58,7 +62,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	wm := workers.NewManager(cfg.DB)
 	um := users.NewManager(cfg.DB)
+	tunnels := tunnel.NewRegistry(log)
 	frontend, err := frontendapi.New(frontendapi.Config{
+		Tunnels:      tunnels,
 		Environments: environments.NewManager(cfg.DB),
 		Templates:    templates.NewManager(cfg.DB),
 		Workers:      wm,
@@ -71,6 +77,7 @@ func New(cfg Config) (*Server, error) {
 	return &Server{
 		db:        cfg.DB,
 		frontend:  frontend,
+		tunnels:   tunnels,
 		workers:   wm,
 		users:     um,
 		placement: placement.NewManager(cfg.DB),
@@ -175,6 +182,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/worker/v1/register", s.registerWorker)
 	mux.Handle("GET /api/worker/v1/desired", s.workerAuth(s.workerDesired))
 	mux.Handle("PUT /api/worker/v1/status", s.workerAuth(s.workerStatus))
+	mux.Handle("GET /api/worker/v1/tunnel", s.workerAuth(func(w http.ResponseWriter, r *http.Request) {
+		s.tunnels.Accept(w, r, workerID(r))
+	}))
 
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such endpoint")
@@ -265,6 +275,16 @@ func (r *statusRecorder) WriteHeader(code int) {
 }
 
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// Hijack hands over the connection, which a WebSocket needs.
+func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("the connection cannot be taken over")
+	}
+	r.status = http.StatusSwitchingProtocols
+	return hj.Hijack()
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

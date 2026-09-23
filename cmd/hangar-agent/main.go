@@ -34,6 +34,7 @@ func main() {
 	retry := flag.Duration("retry", 500*time.Millisecond, "delay between connection attempts")
 	flag.Parse()
 
+	go serveTerminals()
 	run(uint32(*port), *retry)
 }
 

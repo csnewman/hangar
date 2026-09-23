@@ -366,6 +366,19 @@ type TemplateInput struct {
 	Visibility Visibility `json:"visibility"`
 }
 
+// TerminalSession defines model for TerminalSession.
+type TerminalSession struct {
+	// Clients How many windows are attached to it.
+	Clients   int       `json:"clients"`
+	Cols      int       `json:"cols"`
+	CreatedAt time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	Rows      int       `json:"rows"`
+
+	// Title What the shell or the program in it last set as the window title.
+	Title string `json:"title"`
+}
+
 // UpdateUser Only the fields present are changed.
 type UpdateUser struct {
 	Admin       *bool   `json:"admin,omitempty"`
@@ -444,6 +457,9 @@ type NotFound = Error
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
+// Unavailable defines model for Unavailable.
+type Unavailable = Error
+
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = Login
 
@@ -497,6 +513,12 @@ type ServerInterface interface {
 
 	// (POST /api/frontend/environments/{id}/stop)
 	StopEnvironment(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/environments/{id}/terminals)
+	ListTerminals(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (DELETE /api/frontend/environments/{id}/terminals/{session})
+	CloseTerminal(w http.ResponseWriter, r *http.Request, id ID, session string)
 
 	// (GET /api/frontend/me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -713,6 +735,67 @@ func (siw *ServerInterfaceWrapper) StopEnvironment(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.StopEnvironment(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTerminals operation middleware
+func (siw *ServerInterfaceWrapper) ListTerminals(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTerminals(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CloseTerminal operation middleware
+func (siw *ServerInterfaceWrapper) CloseTerminal(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "session" -------------
+	var session string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "session", r.PathValue("session"), &session, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "session", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CloseTerminal(w, r, id, session)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1235,6 +1318,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}", wrapper.GetEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/start", wrapper.StartEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/stop", wrapper.StopEnvironment)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/terminals", wrapper.ListTerminals)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/environments/{id}/terminals/{session}", wrapper.CloseTerminal)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers", wrapper.ListWorkers)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.DeleteWorker)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.GetWorker)
@@ -1253,6 +1338,8 @@ type InvalidJSONResponse Error
 type NotFoundJSONResponse Error
 
 type UnauthorizedJSONResponse Error
+
+type UnavailableJSONResponse Error
 
 type LoginRequestObject struct {
 	Body *LoginJSONRequestBody
@@ -1682,6 +1769,157 @@ func (response StopEnvironment409JSONResponse) VisitStopEnvironmentResponse(w ht
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTerminalsRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type ListTerminalsResponseObject interface {
+	VisitListTerminalsResponse(w http.ResponseWriter) error
+}
+
+type ListTerminals200JSONResponse []TerminalSession
+
+func (response ListTerminals200JSONResponse) VisitListTerminalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTerminals401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListTerminals401JSONResponse) VisitListTerminalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTerminals404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListTerminals404JSONResponse) VisitListTerminalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTerminals409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ListTerminals409JSONResponse) VisitListTerminalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTerminals503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response ListTerminals503JSONResponse) VisitListTerminalsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CloseTerminalRequestObject struct {
+	ID      ID     `json:"id"`
+	Session string `json:"session"`
+}
+
+type CloseTerminalResponseObject interface {
+	VisitCloseTerminalResponse(w http.ResponseWriter) error
+}
+
+type CloseTerminal204Response struct {
+}
+
+func (response CloseTerminal204Response) VisitCloseTerminalResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type CloseTerminal401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CloseTerminal401JSONResponse) VisitCloseTerminalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CloseTerminal404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CloseTerminal404JSONResponse) VisitCloseTerminalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CloseTerminal409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CloseTerminal409JSONResponse) VisitCloseTerminalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CloseTerminal503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response CloseTerminal503JSONResponse) VisitCloseTerminalResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2814,6 +3052,12 @@ type StrictServerInterface interface {
 	// (POST /api/frontend/environments/{id}/stop)
 	StopEnvironment(ctx context.Context, request StopEnvironmentRequestObject) (StopEnvironmentResponseObject, error)
 
+	// (GET /api/frontend/environments/{id}/terminals)
+	ListTerminals(ctx context.Context, request ListTerminalsRequestObject) (ListTerminalsResponseObject, error)
+
+	// (DELETE /api/frontend/environments/{id}/terminals/{session})
+	CloseTerminal(ctx context.Context, request CloseTerminalRequestObject) (CloseTerminalResponseObject, error)
+
 	// (GET /api/frontend/me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
 
@@ -3115,6 +3359,59 @@ func (sh *strictHandler) StopEnvironment(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(StopEnvironmentResponseObject); ok {
 		if err := validResponse.VisitStopEnvironmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListTerminals operation middleware
+func (sh *strictHandler) ListTerminals(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ListTerminalsRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTerminals(ctx, request.(ListTerminalsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTerminals")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListTerminalsResponseObject); ok {
+		if err := validResponse.VisitListTerminalsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CloseTerminal operation middleware
+func (sh *strictHandler) CloseTerminal(w http.ResponseWriter, r *http.Request, id ID, session string) {
+	var request CloseTerminalRequestObject
+
+	request.ID = id
+	request.Session = session
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CloseTerminal(ctx, request.(CloseTerminalRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CloseTerminal")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CloseTerminalResponseObject); ok {
+		if err := validResponse.VisitCloseTerminalResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
