@@ -59,6 +59,7 @@ func run(path string, log *slog.Logger) error {
 			ImagesDir: cfg.Storage.Images,
 			Kernel:    cfg.VM.Kernel,
 			Agent:     cfg.VM.Agent,
+			Editor:    cfg.VM.Editor,
 			Images:    images,
 			UpperGiB:  cfg.VM.UpperGiB,
 			DockerGiB: cfg.VM.DockerGiB,

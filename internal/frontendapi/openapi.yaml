@@ -381,6 +381,26 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
+  /api/frontend/environments/{id}/editor:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: openEditor
+      description: >-
+        Signs the caller in to the environment's editor, which is served on an
+        origin of its own, and returns the URL to open it at. The URL carries
+        a ticket that works once, within a minute.
+      responses:
+        "200":
+          description: Where to open the editor.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EditorURL" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
   /api/frontend/environments/{id}/terminals/{session}:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -822,6 +842,12 @@ components:
           description: How many windows are attached to it.
         cols: { type: integer }
         rows: { type: integer }
+
+    EditorURL:
+      type: object
+      required: [url]
+      properties:
+        url: { type: string }
 
     RemoveImage:
       type: object

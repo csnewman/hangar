@@ -27,6 +27,8 @@ vm:
   kernel: /Users/csnewman/Projects/hangar/out/kernel/vmlinuz
   # Built by dev/lima-worker.sh for the guest, and added to every boot.
   agent: /var/tmp/hangar-agent-guest
+  # VS Code's server, built by `editor/build.sh` in this VM.
+  editor: /Users/csnewman/Projects/hangar/out/editor/editor-arm64.ext4
   dax_mib: 1024
   images:
     # Built by `hangar build -C images/ubuntu2604 -o out/worker`, agent

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/db"
+	"github.com/csnewman/hangar/internal/editor"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/frontendapi"
 	"github.com/csnewman/hangar/internal/placement"
@@ -38,12 +39,18 @@ type Config struct {
 	BootstrapToken string
 	// Web is the built UI. Nil serves a page saying it was not built.
 	Web fs.FS
-	Log *slog.Logger
+	// PublicURL is Hangar's origin as browsers reach it, such as
+	// https://hangar.example.com. Each environment's editor is served on a
+	// subdomain of its host. Empty leaves environments without an editor.
+	PublicURL string
+	Log       *slog.Logger
 }
 
 type Server struct {
 	db        *db.DB
 	frontend  http.Handler
+	editors   *editor.Gateway
+	edits     *editor.Manager
 	tunnels   *tunnel.Registry
 	workers   *workers.Manager
 	users     *users.Manager
@@ -63,20 +70,35 @@ func New(cfg Config) (*Server, error) {
 	wm := workers.NewManager(cfg.DB)
 	um := users.NewManager(cfg.DB)
 	tunnels := tunnel.NewRegistry(log)
-	frontend, err := frontendapi.New(frontendapi.Config{
+	edits := editor.NewManager(cfg.DB)
+	var editors *editor.Gateway
+	if cfg.PublicURL != "" {
+		var err error
+		if editors, err = editor.NewGateway(edits, tunnels, cfg.PublicURL, log); err != nil {
+			return nil, err
+		}
+	}
+	cfgAPI := frontendapi.Config{
 		Tunnels:      tunnels,
 		Environments: environments.NewManager(cfg.DB),
 		Templates:    templates.NewManager(cfg.DB),
 		Workers:      wm,
 		Users:        um,
 		Log:          log,
-	})
+	}
+	// A nil Gateway would be a non-nil interface.
+	if editors != nil {
+		cfgAPI.Editors = editors
+	}
+	frontend, err := frontendapi.New(cfgAPI)
 	if err != nil {
 		return nil, err
 	}
 	return &Server{
 		db:        cfg.DB,
 		frontend:  frontend,
+		editors:   editors,
+		edits:     edits,
 		tunnels:   tunnels,
 		workers:   wm,
 		users:     um,
@@ -123,6 +145,11 @@ func (s *Server) pruneSessions(ctx context.Context) {
 			s.log.Warn("pruning sessions", "err", err)
 		} else if n > 0 {
 			s.log.Info("pruned expired sessions", "count", n)
+		}
+		if n, err := s.edits.Prune(ctx); err != nil && ctx.Err() == nil {
+			s.log.Warn("pruning editor sessions", "err", err)
+		} else if n > 0 {
+			s.log.Info("pruned expired editor sessions", "count", n)
 		}
 		select {
 		case <-ctx.Done():
@@ -191,7 +218,19 @@ func (s *Server) Handler() http.Handler {
 	})
 	mux.Handle("/", s.webHandler())
 
-	return s.logRequests(mux)
+	api := s.logRequests(mux)
+	if s.editors == nil {
+		return api
+	}
+	// An environment's editor has a host of its own, and everything on it
+	// is the editor's.
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := s.editors.Owns(r.Host); ok {
+			s.editors.ServeHTTP(w, r)
+			return
+		}
+		api.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {

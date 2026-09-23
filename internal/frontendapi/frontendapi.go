@@ -46,6 +46,9 @@ type Config struct {
 	// Tunnels reaches workers, for terminals. Nil leaves terminals
 	// unavailable.
 	Tunnels Tunnels
+	// Editors signs users in to environments' editors. Nil leaves
+	// environments without an editor.
+	Editors Editors
 	Log     *slog.Logger
 }
 
@@ -55,6 +58,7 @@ type handler struct {
 	workers   *workers.Manager
 	users     *users.Manager
 	tunnels   Tunnels
+	editors   Editors
 	log       *slog.Logger
 }
 
@@ -76,7 +80,7 @@ func New(cfg Config) (http.Handler, error) {
 	}
 
 	h := &handler{envs: cfg.Environments, templates: cfg.Templates, workers: cfg.Workers, users: cfg.Users,
-		tunnels: cfg.Tunnels, log: cfg.Log}
+		tunnels: cfg.Tunnels, editors: cfg.Editors, log: cfg.Log}
 	strict := NewStrictHandlerWithOptions(h, []StrictMiddlewareFunc{rules.enforce}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			writeError(w, http.StatusBadRequest, err.Error())

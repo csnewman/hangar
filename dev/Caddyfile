@@ -1,11 +1,27 @@
-# The development front door. The Go server answers the API; Vite serves the
-# UI with hot reload. Both are on one origin, as they are in production,
-# where hangar-server serves the built UI itself.
+# The development front door, at http://hangar.localhost:8080. The Go server
+# answers the API and every environment's editor; Vite serves the UI with hot
+# reload. The UI and API are on one origin, as they are in production, where
+# hangar-server serves the built UI itself.
 {
 	admin off
 }
 
 :8080 {
+	# Each environment's editor has a host of its own, a subdomain of
+	# Hangar's, and all of it is the server's.
+	@editor host *.hangar.localhost
+	handle @editor {
+		reverse_proxy server:8081
+	}
+
+	# Editors must be subdomains of the host Hangar is opened on, so the UI
+	# lives at hangar.localhost rather than localhost. The worker in the Lima
+	# VM arrives as host.lima.internal and only calls the API.
+	@localhost host localhost
+	handle @localhost {
+		redir http://hangar.localhost:8080{uri}
+	}
+
 	handle /api/* {
 		reverse_proxy server:8081
 	}

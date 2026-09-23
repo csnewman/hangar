@@ -72,6 +72,7 @@ export const api = {
   createEnvironment: (body: CreateEnvironment) => unwrap(client.POST('/api/frontend/environments', { body })),
   startEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/start', byID(id))),
   stopEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/stop', byID(id))),
+  openEditor: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/editor', byID(id))),
   terminals: (id: string) => unwrap(client.GET('/api/frontend/environments/{id}/terminals', byID(id))),
   closeTerminal: (id: string, session: string) =>
     unwrap(

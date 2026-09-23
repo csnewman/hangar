@@ -68,7 +68,7 @@ export function EnvironmentPage() {
   )
 }
 
-function useEnv() {
+export function useEnv() {
   return useOutletContext<Environment>()
 }
 
@@ -145,11 +145,10 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
 }
 
 // ConsoleTab holds the place of a way into the environment that is not built
-// yet: the editor, or the desktop. Each will fill the whole tab.
-export function ConsoleTab({ kind }: { kind: 'editor' | 'desktop' }) {
+// yet: the desktop. It will fill the whole tab.
+export function ConsoleTab({ kind }: { kind: 'desktop' }) {
   const env = useEnv()
   const what = {
-    editor: { icon: Code2, title: 'Editor', body: `The editor, open on ${env.name}'s workspace.` },
     desktop: { icon: AppWindow, title: 'Desktop', body: `${env.name}'s desktop, as the agent sees it.` },
   }[kind]
   const running = env.phase === 'running'

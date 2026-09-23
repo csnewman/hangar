@@ -17,6 +17,7 @@ import { MetricsTab } from './pages/Metrics'
 import { WorkerDetailPage } from './pages/admin/WorkerDetail'
 import { NewEnvironmentPage } from './pages/NewEnvironment'
 import { OverviewPage } from './pages/Overview'
+import { EditorTab } from './pages/EditorTab'
 import { TemplateEditorPage } from './pages/TemplateEditor'
 import { TemplatesPage } from './pages/Templates'
 
@@ -76,7 +77,7 @@ const router = createBrowserRouter([
                 // fetched when a terminal is first opened, not with the page.
                 lazy: async () => ({ Component: (await import('./terminal/TerminalTab')).TerminalTab }),
               },
-              { path: 'editor', element: <ConsoleTab kind="editor" /> },
+              { path: 'editor', element: <EditorTab /> },
               { path: 'desktop', element: <ConsoleTab kind="desktop" /> },
             ],
           },

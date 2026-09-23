@@ -58,6 +58,12 @@ type TerminalDialer interface {
 	DialTerminal(ctx context.Context, environment string) (net.Conn, error)
 }
 
+// EditorDialer is a runtime whose environments have an editor. Each
+// connection it opens carries one HTTP connection to it.
+type EditorDialer interface {
+	DialEditor(ctx context.Context, environment string) (net.Conn, error)
+}
+
 // reportEvery is how often the worker reports even when nothing changed. The
 // report carries usage figures, which change all the time, so this is also
 // how fresh they are; it is well inside the server's online window, so a few
@@ -204,27 +210,42 @@ func (w *Worker) retry(ctx context.Context, what string, fn func() error) error 
 // stream serves one stream the control plane opens over the tunnel.
 func (w *Worker) stream(h tunnel.Header, r io.Reader, stream net.Conn) {
 	defer stream.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	var guest net.Conn
+	var err error
 	switch h.Kind {
 	case tunnel.KindTerminal:
 		dialer, ok := w.rt.(TerminalDialer)
 		if !ok {
+			cancel()
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		guest, err := dialer.DialTerminal(ctx, h.Environment)
-		cancel()
-		if err != nil {
-			w.log.Warn("opening a terminal", "environment", h.Environment, "err", err)
+		guest, err = dialer.DialTerminal(ctx, h.Environment)
+	case tunnel.KindEditor:
+		dialer, ok := w.rt.(EditorDialer)
+		if !ok {
+			cancel()
+			// The stream carries HTTP, so the refusal is an HTTP response
+			// the browser can show.
+			io.WriteString(stream, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nThis worker's environments have no editor.\n")
 			return
 		}
-		defer guest.Close()
-		// The bytes are relayed as they are; the protocol is the guest's and
-		// the browser's, and nothing here needs to read it.
-		done := make(chan struct{}, 2)
-		go func() { io.Copy(guest, r); done <- struct{}{} }()
-		go func() { io.Copy(stream, guest); done <- struct{}{} }()
-		<-done
+		guest, err = dialer.DialEditor(ctx, h.Environment)
 	default:
+		cancel()
 		w.log.Warn("unknown stream from the control plane", "kind", h.Kind)
+		return
 	}
+	cancel()
+	if err != nil {
+		w.log.Warn("opening a stream to an environment", "kind", h.Kind, "environment", h.Environment, "err", err)
+		return
+	}
+	defer guest.Close()
+	// The bytes are relayed as they are; the protocol is the guest's and
+	// the browser's, and nothing here needs to read it.
+	done := make(chan struct{}, 2)
+	go func() { io.Copy(guest, r); done <- struct{}{} }()
+	go func() { io.Copy(stream, guest); done <- struct{}{} }()
+	<-done
 }

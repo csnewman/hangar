@@ -1,0 +1,15 @@
+{
+	"nameShort": "Hangar",
+	"nameLong": "Hangar",
+	"extensionsGallery": {
+		"serviceUrl": "https://open-vsx.org/vscode/gallery",
+		"itemUrl": "https://open-vsx.org/vscode/item",
+		"extensionUrlTemplate": "https://open-vsx.org/vscode/gallery/{publisher}/{name}/latest",
+		"resourceUrlTemplate": "https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}",
+		"controlUrl": "",
+		"nlsBaseUrl": ""
+	},
+	"linkProtectionTrustedDomains": [
+		"https://open-vsx.org"
+	]
+}

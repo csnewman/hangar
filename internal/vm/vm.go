@@ -34,6 +34,7 @@ import (
 
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/terminal"
+	"github.com/csnewman/hangar/internal/vscode"
 )
 
 // Image is how a worker finds the base an environment's image names.
@@ -60,6 +61,10 @@ type Config struct {
 	// adds it to each boot, so it always matches the worker that talks to
 	// it. Empty boots the agent each image carries.
 	Agent string
+	// Editor is the editor disk, attached read-only to every environment;
+	// the agent mounts it and runs VS Code's server from it. Empty leaves
+	// environments without an editor.
+	Editor string
 	// Images maps an image reference, as a template names it, to where the
 	// worker fetches it from into its store. A reference not listed here
 	// cannot be run on this worker.
@@ -470,6 +475,25 @@ func (r *Runtime) imageUsers() map[string][]string {
 // DialTerminal connects to a running environment's terminal sessions, which
 // its agent holds in the guest.
 func (r *Runtime) DialTerminal(ctx context.Context, id string) (net.Conn, error) {
+	m, err := r.runningMachine(id)
+	if err != nil {
+		return nil, err
+	}
+	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), terminal.Port)
+}
+
+// DialEditor opens one connection to a running environment's editor, which
+// its agent runs in the guest.
+func (r *Runtime) DialEditor(ctx context.Context, id string) (net.Conn, error) {
+	m, err := r.runningMachine(id)
+	if err != nil {
+		return nil, err
+	}
+	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), vscode.Port)
+}
+
+// runningMachine is the environment here with this ID, if it is running.
+func (r *Runtime) runningMachine(id string) (*machine, error) {
 	r.mu.Lock()
 	m, ok := r.envs[id]
 	r.mu.Unlock()
@@ -482,7 +506,7 @@ func (r *Runtime) DialTerminal(ctx context.Context, id string) (net.Conn, error)
 	if !running {
 		return nil, fmt.Errorf("environment %s is not running", id)
 	}
-	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), terminal.Port)
+	return m, nil
 }
 
 // dialGuest opens a connection to a port in the guest through the monitor's

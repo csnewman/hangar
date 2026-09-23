@@ -37,6 +37,8 @@ import (
 // Kinds of stream.
 const (
 	KindTerminal = "terminal"
+	// KindEditor carries one HTTP connection to the environment's editor.
+	KindEditor = "editor"
 )
 
 // Header opens a stream.

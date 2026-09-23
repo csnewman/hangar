@@ -267,6 +267,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/environments/{id}/editor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Signs the caller in to the environment's editor, which is served on an origin of its own, and returns the URL to open it at. The URL carries a ticket that works once, within a minute. */
+        post: operations["openEditor"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/environments/{id}/terminals/{session}": {
         parameters: {
             query?: never;
@@ -559,6 +578,9 @@ export interface components {
             clients: number;
             cols: number;
             rows: number;
+        };
+        EditorURL: {
+            url: string;
         };
         RemoveImage: {
             ref: string;
@@ -1216,6 +1238,32 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TerminalSession"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    openEditor: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Where to open the editor. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EditorURL"];
                 };
             };
             401: components["responses"]["Unauthorized"];

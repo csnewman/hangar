@@ -124,3 +124,19 @@ CREATE TABLE worker_image_removals (
     requested_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (worker_id, ref)
 );
+
+-- Sign-ins to one environment's editor, which is served on an origin of its
+-- own and so cannot see the Hangar session cookie. A row starts as a ticket,
+-- handed to the browser once and good for a minute, and is replaced by the
+-- editor origin's own cookie when the ticket is redeemed.
+CREATE TABLE editor_sessions (
+    -- SHA-256 of the ticket or cookie. The token itself is never stored.
+    token_hash     bytea PRIMARY KEY,
+    -- The Hangar session it was opened from: signing out there ends it.
+    session_hash   bytea NOT NULL REFERENCES sessions (token_hash) ON DELETE CASCADE,
+    environment_id uuid NOT NULL REFERENCES environments (id) ON DELETE CASCADE,
+    ticket         boolean NOT NULL,
+    expires_at     timestamptz NOT NULL
+);
+
+CREATE INDEX editor_sessions_session ON editor_sessions (session_hash);

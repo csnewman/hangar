@@ -1,0 +1,15 @@
+diff --git a/build/gulpfile.reh.ts b/build/gulpfile.reh.ts
+index c643cf99..18d819d9 100644
+--- a/build/gulpfile.reh.ts
++++ b/build/gulpfile.reh.ts
+@@ -527,6 +527,10 @@ function prepareCopilotRipgrepShimTaskREH(platform: string, arch: string, destin
+ 		const nodeModulesDir = path.join(outputDir, 'node_modules');
+ 
+ 		const builtInCopilotExtensionDir = path.join(outputDir, 'extensions', 'copilot');
++		// Hangar: its build leaves the Copilot extension out.
++		if (!fs.existsSync(builtInCopilotExtensionDir)) {
++			return;
++		}
+ 		prepareBuiltInCopilotRipgrepShim(platform, arch, builtInCopilotExtensionDir, nodeModulesDir);
+ 	};
+ }

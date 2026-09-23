@@ -61,7 +61,11 @@ type VMConfig struct {
 	Kernel string `yaml:"kernel"`
 	// Agent is a hangar-agent built for the guest's architecture, which
 	// every environment here boots with whatever its image carries.
-	Agent     string `yaml:"agent"`
+	Agent string `yaml:"agent"`
+	// Editor is the editor disk editor/build.sh makes for the guest's
+	// architecture, attached read-only to every environment here. Without
+	// one, environments have no editor.
+	Editor    string `yaml:"editor"`
 	UpperGiB  int    `yaml:"upper_gib"`
 	DockerGiB int    `yaml:"docker_gib"`
 	DaxMiB    int    `yaml:"dax_mib"`

@@ -177,6 +177,11 @@ type DesiredState string
 // Display Whether the environment has a graphical desktop.
 type Display string
 
+// EditorURL defines model for EditorURL.
+type EditorURL struct {
+	URL string `json:"url"`
+}
+
 // Environment defines model for Environment.
 type Environment struct {
 	CPUs      int       `json:"cpus"`
@@ -508,6 +513,9 @@ type ServerInterface interface {
 	// (GET /api/frontend/environments/{id})
 	GetEnvironment(w http.ResponseWriter, r *http.Request, id ID)
 
+	// (POST /api/frontend/environments/{id}/editor)
+	OpenEditor(w http.ResponseWriter, r *http.Request, id ID)
+
 	// (POST /api/frontend/environments/{id}/start)
 	StartEnvironment(w http.ResponseWriter, r *http.Request, id ID)
 
@@ -683,6 +691,32 @@ func (siw *ServerInterfaceWrapper) GetEnvironment(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetEnvironment(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// OpenEditor operation middleware
+func (siw *ServerInterfaceWrapper) OpenEditor(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.OpenEditor(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1319,6 +1353,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/start", wrapper.StartEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/stop", wrapper.StopEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/terminals", wrapper.ListTerminals)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/editor", wrapper.OpenEditor)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/environments/{id}/terminals/{session}", wrapper.CloseTerminal)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers", wrapper.ListWorkers)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.DeleteWorker)
@@ -1641,6 +1676,84 @@ func (response GetEnvironment404JSONResponse) VisitGetEnvironmentResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenEditorRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type OpenEditorResponseObject interface {
+	VisitOpenEditorResponse(w http.ResponseWriter) error
+}
+
+type OpenEditor200JSONResponse EditorURL
+
+func (response OpenEditor200JSONResponse) VisitOpenEditorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenEditor401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response OpenEditor401JSONResponse) VisitOpenEditorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenEditor404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response OpenEditor404JSONResponse) VisitOpenEditorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenEditor409JSONResponse struct{ ConflictJSONResponse }
+
+func (response OpenEditor409JSONResponse) VisitOpenEditorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type OpenEditor503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response OpenEditor503JSONResponse) VisitOpenEditorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3046,6 +3159,9 @@ type StrictServerInterface interface {
 	// (GET /api/frontend/environments/{id})
 	GetEnvironment(ctx context.Context, request GetEnvironmentRequestObject) (GetEnvironmentResponseObject, error)
 
+	// (POST /api/frontend/environments/{id}/editor)
+	OpenEditor(ctx context.Context, request OpenEditorRequestObject) (OpenEditorResponseObject, error)
+
 	// (POST /api/frontend/environments/{id}/start)
 	StartEnvironment(ctx context.Context, request StartEnvironmentRequestObject) (StartEnvironmentResponseObject, error)
 
@@ -3307,6 +3423,32 @@ func (sh *strictHandler) GetEnvironment(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetEnvironmentResponseObject); ok {
 		if err := validResponse.VisitGetEnvironmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// OpenEditor operation middleware
+func (sh *strictHandler) OpenEditor(w http.ResponseWriter, r *http.Request, id ID) {
+	var request OpenEditorRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.OpenEditor(ctx, request.(OpenEditorRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "OpenEditor")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(OpenEditorResponseObject); ok {
+		if err := validResponse.VisitOpenEditorResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

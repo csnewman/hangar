@@ -1,15 +1,13 @@
 package terminal
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/user"
 	"path/filepath"
-	"strconv"
-	"strings"
-	"syscall"
+
+	"github.com/csnewman/hangar/internal/sysuser"
 )
 
 // LoginShell returns a Shell that starts a login shell for a request's user,
@@ -35,7 +33,7 @@ func LoginShell(fallback string) Shell {
 			}
 		}
 
-		shell := loginShellOf(u.Username)
+		shell := sysuser.LoginShell(u.Username)
 		dir := req.Dir
 		if dir == "" {
 			dir = u.HomeDir
@@ -61,59 +59,9 @@ func LoginShell(fallback string) Shell {
 			"LANG=C.UTF-8",
 		}
 
-		if strconv.Itoa(os.Geteuid()) != u.Uid {
-			cred, err := credential(u)
-			if err != nil {
-				return nil, err
-			}
-			cmd.SysProcAttr = &syscall.SysProcAttr{Credential: cred}
+		if err := sysuser.RunAs(cmd, u); err != nil {
+			return nil, err
 		}
 		return cmd, nil
 	}
-}
-
-// credential is who a user's shell runs as, with every group they are in:
-// without the supplementary groups a user in docker's group could not reach
-// Docker from their own terminal.
-func credential(u *user.User) (*syscall.Credential, error) {
-	uid, err := strconv.ParseUint(u.Uid, 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	gid, err := strconv.ParseUint(u.Gid, 10, 32)
-	if err != nil {
-		return nil, err
-	}
-	cred := &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}
-	if ids, err := u.GroupIds(); err == nil {
-		for _, id := range ids {
-			if g, err := strconv.ParseUint(id, 10, 32); err == nil {
-				cred.Groups = append(cred.Groups, uint32(g))
-			}
-		}
-	}
-	return cred, nil
-}
-
-// loginShellOf reads a user's shell from /etc/passwd, which os/user does
-// not report, and falls back to bash or sh.
-func loginShellOf(name string) string {
-	if f, err := os.Open("/etc/passwd"); err == nil {
-		defer f.Close()
-		sc := bufio.NewScanner(f)
-		for sc.Scan() {
-			fields := strings.Split(sc.Text(), ":")
-			if len(fields) == 7 && fields[0] == name && fields[6] != "" {
-				if _, err := os.Stat(fields[6]); err == nil && !strings.HasSuffix(fields[6], "nologin") {
-					return fields[6]
-				}
-			}
-		}
-	}
-	for _, sh := range []string{"/bin/bash", "/bin/sh"} {
-		if _, err := os.Stat(sh); err == nil {
-			return sh
-		}
-	}
-	return "/bin/sh"
 }

@@ -1,0 +1,56 @@
+{
+	"name": "hangar-terminal",
+	"displayName": "Hangar Terminal",
+	"description": "Terminals on the environment's own sessions, shared with Hangar's Terminal tab.",
+	"version": "0.0.1",
+	"publisher": "hangar",
+	"license": "MIT",
+	"private": true,
+	"engines": {
+		"vscode": "^1.100.0"
+	},
+	"extensionKind": [
+		"workspace"
+	],
+	"main": "./extension.js",
+	"activationEvents": [
+		"onStartupFinished",
+		"onTerminalProfile:hangar.terminal"
+	],
+	"contributes": {
+		"terminal": {
+			"profiles": [
+				{
+					"id": "hangar.terminal",
+					"title": "Hangar",
+					"icon": "terminal"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "hangar.terminal.new",
+				"title": "New Terminal",
+				"category": "Hangar"
+			},
+			{
+				"command": "hangar.terminal.attachAll",
+				"title": "Show All Terminal Sessions",
+				"category": "Hangar"
+			}
+		],
+		"configuration": {
+			"title": "Hangar",
+			"properties": {
+				"hangar.terminal.showAllSessions": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show every terminal session in the environment, including those opened from Hangar's Terminal tab or another window."
+				}
+			}
+		},
+		"configurationDefaults": {
+			"terminal.integrated.defaultProfile.linux": "Hangar"
+		}
+	}
+}

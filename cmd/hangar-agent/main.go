@@ -35,6 +35,7 @@ func main() {
 	flag.Parse()
 
 	go serveTerminals()
+	go serveEditor()
 	run(uint32(*port), *retry)
 }
 

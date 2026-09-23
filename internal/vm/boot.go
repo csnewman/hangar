@@ -226,6 +226,11 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 		// at /dev/vda.
 		disks = append([]ch.Disk{{Path: img.Base, ReadOnly: true}}, disks...)
 	}
+	if m.rt.cfg.Editor != "" {
+		// Shared read-only by every environment; the agent finds it by its
+		// label, wherever it lands among the devices.
+		disks = append(disks, ch.Disk{Path: m.rt.cfg.Editor, ReadOnly: true})
+	}
 	cfg.Disks = disks
 
 	pdir, err := passtDir(m.id)

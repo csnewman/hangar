@@ -82,7 +82,8 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 		slog.Warn("the web UI was not built into this binary")
 	}
 
-	srv, err := server.New(server.Config{DB: d, BootstrapToken: token, Web: web})
+	srv, err := server.New(server.Config{DB: d, BootstrapToken: token, Web: web,
+		PublicURL: os.Getenv("HANGAR_PUBLIC_URL")})
 	if err != nil {
 		return err
 	}

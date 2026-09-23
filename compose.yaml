@@ -1,4 +1,4 @@
-# Development stack: `docker compose up --watch`, then http://localhost:8080.
+# Development stack: `docker compose up --watch`, then http://hangar.localhost:8080.
 #
 # Caddy is the only published web port. It sends /api/ to hangar-server and
 # everything else to Vite, so the UI reloads as it is edited while talking to
@@ -51,6 +51,9 @@ services:
     environment:
       HANGAR_DATABASE_URL: postgres://hangar:hangar@postgres:5432/hangar?sslmode=disable
       HANGAR_BOOTSTRAP_TOKEN_FILE: /src/dev/bootstrap-token
+      # Editors are served on e-<environment>.hangar.localhost:8080. Browsers
+      # resolve every *.localhost name to this machine, so no DNS is needed.
+      HANGAR_PUBLIC_URL: http://hangar.localhost:8080
       # Sign in as admin / hangar-dev. Only used while there are no users.
       HANGAR_INITIAL_ADMIN_USERNAME: admin
       HANGAR_INITIAL_ADMIN_PASSWORD: hangar-dev

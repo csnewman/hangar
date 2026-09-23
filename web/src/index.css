@@ -1575,6 +1575,21 @@ code {
 
 /* Terminal */
 
+.editor-page {
+  flex: 1;
+  display: flex;
+  min-height: 420px;
+  margin: 14px 28px 0;
+}
+
+.editor-frame {
+  flex: 1;
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
 .term-page {
   flex: 1;
   display: flex;
