@@ -26,6 +26,7 @@ import (
 	middleware "github.com/oapi-codegen/nethttp-middleware"
 
 	"github.com/csnewman/hangar/internal/environments"
+	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/workers"
 )
@@ -33,22 +34,24 @@ import (
 //go:embed openapi.yaml
 var spec []byte
 
-// Spec returns the API's OpenAPI document.
-func Spec() []byte { return spec }
+// Document returns the API's OpenAPI document.
+func Document() []byte { return spec }
 
 // Config is what the API is served from.
 type Config struct {
 	Environments *environments.Manager
+	Templates    *templates.Manager
 	Workers      *workers.Manager
 	Users        *users.Manager
 	Log          *slog.Logger
 }
 
 type handler struct {
-	envs    *environments.Manager
-	workers *workers.Manager
-	users   *users.Manager
-	log     *slog.Logger
+	envs      *environments.Manager
+	templates *templates.Manager
+	workers   *workers.Manager
+	users     *users.Manager
+	log       *slog.Logger
 }
 
 var _ StrictServerInterface = (*handler)(nil)
@@ -68,7 +71,8 @@ func New(cfg Config) (http.Handler, error) {
 		return nil, err
 	}
 
-	h := &handler{envs: cfg.Environments, workers: cfg.Workers, users: cfg.Users, log: cfg.Log}
+	h := &handler{envs: cfg.Environments, templates: cfg.Templates, workers: cfg.Workers, users: cfg.Users,
+		log: cfg.Log}
 	strict := NewStrictHandlerWithOptions(h, []StrictMiddlewareFunc{rules.enforce}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			writeError(w, http.StatusBadRequest, err.Error())

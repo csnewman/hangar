@@ -68,8 +68,8 @@ func (s *Simulated) Apply(spec api.EnvironmentSpec) {
 			return
 		}
 		s.transition(spec.ID, e, api.DesiredRunning, api.PhaseStarting, func(e *simEnv) {
-			if strings.Contains(spec.Image, "fail") {
-				e.phase, e.reason = api.PhaseFailed, "simulated failure: image "+spec.Image
+			if strings.Contains(spec.Spec.Image, "fail") {
+				e.phase, e.reason = api.PhaseFailed, "simulated failure: image "+spec.Spec.Image
 				return
 			}
 			e.phase, e.reason = api.PhaseRunning, ""

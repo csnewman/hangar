@@ -6,4 +6,4 @@ generate:
   strict-server: true
 output-options:
   name-normalizer: ToCamelCaseWithInitialisms
-  additional-initialisms: [CPUs, MiB]
+  additional-initialisms: [CPUs, MiB, GPU]

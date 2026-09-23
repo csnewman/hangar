@@ -13,15 +13,17 @@ package environments
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/placement"
+	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/workers"
 )
@@ -32,23 +34,15 @@ var (
 	ErrInvalid  = errors.New("invalid")
 )
 
-// A name becomes a hostname and part of URLs, so it is held to a DNS label.
-var validName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
-
-const (
-	MaxCPUs      = 64
-	MinMemoryMiB = 512
-	MaxMemoryMiB = 256 * 1024
-)
-
 type Manager struct {
 	db *db.DB
 }
 
 func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
-const columns = `e.id, e.owner_id, u.username, e.name, e.image, e.cpus, e.memory_mib, e.desired, e.phase,
-	e.reason, coalesce(e.worker_id::text, ''), coalesce(w.name, ''), e.created_at, e.updated_at`
+const columns = `e.id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
+	e.spec, e.image, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
+	coalesce(w.name, ''), e.created_at, e.updated_at`
 
 const from = `environments e
 	JOIN users u ON u.id = e.owner_id
@@ -60,12 +54,16 @@ const visible = `($1 OR e.owner_id = $2)`
 
 func scan(row pgx.Row) (api.Environment, error) {
 	var e api.Environment
-	err := row.Scan(&e.ID, &e.OwnerID, &e.Owner, &e.Name, &e.Image, &e.CPUs, &e.MemoryMiB, &e.Desired,
-		&e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt)
+	var spec []byte
+	err := row.Scan(&e.ID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.CPUs,
+		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}
-	return e, err
+	if err != nil {
+		return e, err
+	}
+	return e, json.Unmarshal(spec, &e.Spec)
 }
 
 // List returns every environment p may reach, oldest first.
@@ -100,33 +98,39 @@ func (m *Manager) Get(ctx context.Context, p users.Principal, id string) (api.En
 	return e, err
 }
 
-// Validate checks a request to create an environment.
-func Validate(req api.CreateEnvironment) error {
-	switch {
-	case !validName.MatchString(req.Name):
-		return fmt.Errorf("%w: name must be lowercase letters, digits and hyphens, at most 63 characters", ErrInvalid)
-	case req.Image == "":
-		return fmt.Errorf("%w: image is required", ErrInvalid)
-	case req.CPUs < 1 || req.CPUs > MaxCPUs:
-		return fmt.Errorf("%w: cpus must be between 1 and %d", ErrInvalid, MaxCPUs)
-	case req.MemoryMiB < MinMemoryMiB || req.MemoryMiB > MaxMemoryMiB:
-		return fmt.Errorf("%w: memory_mib must be between %d and %d", ErrInvalid, MinMemoryMiB, MaxMemoryMiB)
-	}
-	return nil
-}
-
-// Create records a new environment, owned by p, that wants to run.
-// Placement picks it up from there.
+// Create makes an environment, owned by p, from a template p may see, and
+// asks for it to run. Placement picks it up from there.
+//
+// The template's spec is resolved for the new name and copied into the
+// environment, in the same transaction that reads it, so the environment is
+// exactly what the template said at that moment.
 func (m *Manager) Create(ctx context.Context, p users.Principal, req api.CreateEnvironment) (api.Environment, error) {
-	if err := Validate(req); err != nil {
-		return api.Environment{}, err
-	}
 	var e api.Environment
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
+		tname, tspec, err := templates.ForUse(ctx, tx, p, req.TemplateID)
+		if errors.Is(err, templates.ErrNotFound) {
+			return fmt.Errorf("%w: no such template", ErrInvalid)
+		}
+		if err != nil {
+			return err
+		}
+		spec, err := templates.Resolve(tspec, req.Name)
+		if errors.Is(err, templates.ErrInvalid) {
+			return fmt.Errorf("%w%s", ErrInvalid, strings.TrimPrefix(err.Error(), templates.ErrInvalid.Error()))
+		}
+		if err != nil {
+			return err
+		}
+		raw, err := json.Marshal(spec)
+		if err != nil {
+			return err
+		}
+
 		var id string
-		err := tx.QueryRow(ctx, `INSERT INTO environments (owner_id, name, image, cpus, memory_mib, desired)
-			VALUES ($1, $2, $3, $4, $5, 'running') RETURNING id`,
-			p.UserID, req.Name, req.Image, req.CPUs, req.MemoryMiB).Scan(&id)
+		err = tx.QueryRow(ctx, `INSERT INTO environments
+				(owner_id, name, template_id, template_name, spec, image, cpus, memory_mib, desired)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'running') RETURNING id`,
+			p.UserID, req.Name, req.TemplateID, tname, raw, spec.Image, spec.CPUs, spec.MemoryMiB).Scan(&id)
 		if db.IsUniqueViolation(err) {
 			return fmt.Errorf("%w: you already have an environment named %s", ErrConflict, req.Name)
 		}

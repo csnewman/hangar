@@ -22,10 +22,8 @@ func (h *handler) ListEnvironments(ctx context.Context, _ ListEnvironmentsReques
 
 func (h *handler) CreateEnvironment(ctx context.Context, req CreateEnvironmentRequestObject) (CreateEnvironmentResponseObject, error) {
 	e, err := h.envs.Create(ctx, principal(ctx), api.CreateEnvironment{
-		Name:      req.Body.Name,
-		Image:     req.Body.Image,
-		CPUs:      req.Body.CPUs,
-		MemoryMiB: req.Body.MemoryMiB,
+		TemplateID: req.Body.TemplateID,
+		Name:       req.Body.Name,
 	})
 	switch {
 	case errors.Is(err, environments.ErrInvalid):
@@ -105,19 +103,22 @@ func (h *handler) setDesired(ctx context.Context, id string, d api.DesiredState)
 
 func environment(e api.Environment) Environment {
 	return Environment{
-		ID:        e.ID,
-		OwnerID:   e.OwnerID,
-		Owner:     e.Owner,
-		Name:      e.Name,
-		Image:     e.Image,
-		CPUs:      e.CPUs,
-		MemoryMiB: e.MemoryMiB,
-		Desired:   DesiredState(e.Desired),
-		Phase:     Phase(e.Phase),
-		Reason:    optional(e.Reason),
-		WorkerID:  optional(e.WorkerID),
-		Worker:    optional(e.Worker),
-		CreatedAt: e.CreatedAt,
-		UpdatedAt: e.UpdatedAt,
+		ID:         e.ID,
+		OwnerID:    e.OwnerID,
+		Owner:      e.Owner,
+		Name:       e.Name,
+		TemplateID: optional(e.TemplateID),
+		Template:   e.Template,
+		Spec:       toSpec(e.Spec),
+		Image:      e.Image,
+		CPUs:       e.CPUs,
+		MemoryMiB:  e.MemoryMiB,
+		Desired:    DesiredState(e.Desired),
+		Phase:      Phase(e.Phase),
+		Reason:     optional(e.Reason),
+		WorkerID:   optional(e.WorkerID),
+		Worker:     optional(e.Worker),
+		CreatedAt:  e.CreatedAt,
+		UpdatedAt:  e.UpdatedAt,
 	}
 }

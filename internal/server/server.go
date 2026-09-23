@@ -22,6 +22,7 @@ import (
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/frontendapi"
 	"github.com/csnewman/hangar/internal/placement"
+	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/workers"
 )
@@ -59,6 +60,7 @@ func New(cfg Config) (*Server, error) {
 	um := users.NewManager(cfg.DB)
 	frontend, err := frontendapi.New(frontendapi.Config{
 		Environments: environments.NewManager(cfg.DB),
+		Templates:    templates.NewManager(cfg.DB),
 		Workers:      wm,
 		Users:        um,
 		Log:          log,

@@ -31,7 +31,7 @@ func eventually(t *testing.T, s *worker.Simulated, id string, want api.Phase, go
 
 func TestSimulatedLifecycle(t *testing.T) {
 	s := worker.NewSimulated(20 * time.Millisecond)
-	spec := api.EnvironmentSpec{ID: "a", Image: "img", Desired: api.DesiredRunning}
+	spec := api.EnvironmentSpec{ID: "a", Spec: api.Spec{Image: "img"}, Desired: api.DesiredRunning}
 
 	s.Apply(spec)
 	if got := phases(s)["a"]; got != api.PhaseStarting {
@@ -53,7 +53,7 @@ func TestSimulatedLifecycle(t *testing.T) {
 
 func TestSimulatedFailureIsSticky(t *testing.T) {
 	s := worker.NewSimulated(time.Millisecond)
-	spec := api.EnvironmentSpec{ID: "f", Image: "will-fail", Desired: api.DesiredRunning}
+	spec := api.EnvironmentSpec{ID: "f", Spec: api.Spec{Image: "will-fail"}, Desired: api.DesiredRunning}
 	s.Apply(spec)
 	eventually(t, s, "f", api.PhaseFailed, false)
 
@@ -82,8 +82,8 @@ func TestSimulatedNeverStarted(t *testing.T) {
 // A newer desired state overtakes a transition still in flight.
 func TestSimulatedOvertake(t *testing.T) {
 	s := worker.NewSimulated(30 * time.Millisecond)
-	s.Apply(api.EnvironmentSpec{ID: "o", Image: "img", Desired: api.DesiredRunning})
-	s.Apply(api.EnvironmentSpec{ID: "o", Image: "img", Desired: api.DesiredStopped})
+	s.Apply(api.EnvironmentSpec{ID: "o", Spec: api.Spec{Image: "img"}, Desired: api.DesiredRunning})
+	s.Apply(api.EnvironmentSpec{ID: "o", Spec: api.Spec{Image: "img"}, Desired: api.DesiredStopped})
 	eventually(t, s, "o", api.PhaseStopped, false)
 	time.Sleep(60 * time.Millisecond)
 	if got := phases(s)["o"]; got != api.PhaseStopped {

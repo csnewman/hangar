@@ -15,6 +15,8 @@ import { ConsoleTab, EnvironmentPage, SummaryTab } from './pages/Environment'
 import { LoginPage } from './pages/Login'
 import { NewEnvironmentPage } from './pages/NewEnvironment'
 import { OverviewPage } from './pages/Overview'
+import { TemplateEditorPage } from './pages/TemplateEditor'
+import { TemplatesPage } from './pages/Templates'
 
 // A 401 from anything means the session has gone -- expired, signed out
 // elsewhere, or the user disabled. Refetching the current user then fails
@@ -70,6 +72,9 @@ const router = createBrowserRouter([
               { path: 'desktop', element: <ConsoleTab kind="desktop" /> },
             ],
           },
+          { path: 'templates', element: <TemplatesPage /> },
+          { path: 'templates/new', element: <TemplateEditorPage /> },
+          { path: 'templates/:id', element: <TemplateEditorPage /> },
           { path: 'account', element: <AccountPage /> },
           {
             path: 'admin/workers',

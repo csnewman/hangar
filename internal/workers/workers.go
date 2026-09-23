@@ -246,7 +246,7 @@ func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredS
 		// Every row repeats the version. A worker with no environments
 		// still has its row, with the environment columns NULL.
 		rows, err := tx.Query(ctx, `
-			SELECT w.desired_version, e.id, e.name, e.image, e.cpus, e.memory_mib, e.desired
+			SELECT w.desired_version, e.id, e.name, e.desired, e.spec
 			FROM workers w
 			LEFT JOIN environments e ON e.worker_id = w.id
 			WHERE w.id = $1
@@ -258,18 +258,19 @@ func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredS
 		found := false
 		for rows.Next() {
 			found = true
-			var id, name, image, desired *string
-			var cpus, mem *int
-			if err := rows.Scan(&set.Version, &id, &name, &image, &cpus, &mem, &desired); err != nil {
+			var id, name, desired *string
+			var spec []byte
+			if err := rows.Scan(&set.Version, &id, &name, &desired, &spec); err != nil {
 				return err
 			}
 			if id == nil {
 				continue
 			}
-			set.Environments = append(set.Environments, api.EnvironmentSpec{
-				ID: *id, Name: *name, Image: *image, CPUs: *cpus, MemoryMiB: *mem,
-				Desired: api.DesiredState(*desired),
-			})
+			e := api.EnvironmentSpec{ID: *id, Name: *name, Desired: api.DesiredState(*desired)}
+			if err := json.Unmarshal(spec, &e.Spec); err != nil {
+				return fmt.Errorf("environment %s: %w", *id, err)
+			}
+			set.Environments = append(set.Environments, e)
 		}
 		if err := rows.Err(); err != nil {
 			return err

@@ -69,6 +69,78 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/people": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Every enabled user, as others see them: for choosing collaborators. */
+        get: operations["listPeople"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/templates": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listTemplates"];
+        put?: never;
+        post: operations["createTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/templates/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get: operations["getTemplate"];
+        /** @description Replaces the template's content. The owner and collaborators may do this; only the owner may change its visibility. Environments already made from it are unchanged. */
+        put: operations["updateTemplate"];
+        post?: never;
+        /** @description Deletes the template. Only its owner may. Environments made from it keep their copy of what it said. */
+        delete: operations["deleteTemplate"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/templates/{id}/collaborators": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replaces who, besides the owner, may edit the template. The owner and any collaborator may. */
+        put: operations["setTemplateCollaborators"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/users": {
         parameters: {
             query?: never;
@@ -254,6 +326,11 @@ export interface components {
             owner: string;
             /** @description Unique among its owner's environments. */
             name: string;
+            /** @description The template it was made from. Absent once that template is deleted. */
+            template_id?: string;
+            /** @description That template's name when the environment was made. */
+            template: string;
+            spec: components["schemas"]["Spec"];
             image: string;
             cpus: number;
             memory_mib: number;
@@ -271,11 +348,86 @@ export interface components {
             updated_at: string;
         };
         CreateEnvironment: {
-            /** @description A DNS label, since it becomes a hostname. */
+            template_id: string;
+            /** @description A DNS label, since it becomes a hostname, and whatever else the template's name pattern demands. */
             name: string;
+        };
+        /**
+         * @description Whether the environment has a graphical desktop.
+         * @enum {string}
+         */
+        Display: "none" | "desktop";
+        /**
+         * @description virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
+         * @enum {string}
+         */
+        GPU: "none" | "virtual" | "passthrough";
+        Repo: {
+            url: string;
+            /** @description Branch, tag or commit to check out. Empty for the default branch. */
+            ref?: string;
+            /** @description Where in the environment to clone it. Absolute. */
+            path: string;
+            /** @description A new branch to create after cloning. In a template, {name} is replaced by the environment's name. */
+            branch?: string;
+        };
+        Spec: {
             image: string;
             cpus: number;
             memory_mib: number;
+            display: components["schemas"]["Display"];
+            gpu: components["schemas"]["GPU"];
+            repos: components["schemas"]["Repo"][];
+            /** @description The folder the editor opens on. */
+            editor_path?: string;
+            /** @description Worker labels the environment requires: it runs only on a worker with every one of these labels, with these values. */
+            placement: {
+                [key: string]: string;
+            };
+        };
+        Person: {
+            id: string;
+            username: string;
+            display_name: string;
+        };
+        Template: {
+            id: string;
+            name: string;
+            description: string;
+            visibility: components["schemas"]["Visibility"];
+            owner: components["schemas"]["Person"];
+            collaborators: components["schemas"]["Person"][];
+            spec: components["schemas"]["Spec"];
+            /** @description A regular expression an environment's whole name must match, such as a ticket ID. */
+            name_pattern?: string;
+            /** @description What name the pattern wants, in words. */
+            name_hint?: string;
+            /** @description How many environments made from it exist. */
+            environments: number;
+            /** @description Whether the caller may change the recipe and its collaborators. */
+            can_edit: boolean;
+            /** @description Whether the caller may also change its visibility, or delete it. */
+            can_manage: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        /**
+         * @description private: the owner and collaborators see it. shared: everyone does.
+         * @enum {string}
+         */
+        Visibility: "private" | "shared";
+        TemplateInput: {
+            name: string;
+            description?: string;
+            visibility: components["schemas"]["Visibility"];
+            spec: components["schemas"]["Spec"];
+            name_pattern?: string;
+            name_hint?: string;
+        };
+        Collaborators: {
+            user_ids: string[];
         };
         Resources: {
             cpus: number;
@@ -487,6 +639,183 @@ export interface operations {
             };
             400: components["responses"]["Invalid"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    listPeople: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Enabled users, by username. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Person"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    listTemplates: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Every template the caller may use: shared ones, and private ones they own or collaborate on (all of them, for an administrator). */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Template"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemplateInput"];
+            };
+        };
+        responses: {
+            /** @description Created, owned by the caller. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Template"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The template. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Template"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TemplateInput"];
+            };
+        };
+        responses: {
+            /** @description The template as changed. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Template"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    deleteTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setTemplateCollaborators: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Collaborators"];
+            };
+        };
+        responses: {
+            /** @description The template with its new collaborators. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Template"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listUsers: {

@@ -7,6 +7,7 @@ package placement
 
 import (
 	"context"
+	"encoding/json"
 
 	"github.com/jackc/pgx/v5"
 
@@ -17,8 +18,14 @@ import (
 // Channel fires when an environment may be waiting to be placed.
 const Channel = "hangar_placement"
 
-// Unplaceable is the reason given to an environment no worker has room for.
-const Unplaceable = "waiting for a worker with room for it"
+// The reasons given to an environment that cannot be placed yet.
+const (
+	// Unplaceable is for an environment no suitable worker has room for.
+	Unplaceable = "waiting for a worker with room for it"
+	// NoMatch is for an environment whose template's placement rules no
+	// online worker satisfies, however much room it has.
+	NoMatch = "waiting for a worker that matches its placement rules"
+)
 
 // batch bounds how much of the queue one transaction claims, so a long queue
 // is shared between replicas rather than taken whole by one.
@@ -31,15 +38,28 @@ type Manager struct {
 func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
 type env struct {
-	id     string
-	cpus   int
-	mem    int
-	reason string
+	id        string
+	cpus      int
+	mem       int
+	reason    string
+	placement map[string]string
 }
 
 type worker struct {
 	id        string
 	cpus, mem int
+	labels    map[string]string
+}
+
+// matches reports whether a worker's labels satisfy a placement selector:
+// every key present, with the same value.
+func (w *worker) matches(selector map[string]string) bool {
+	for k, v := range selector {
+		if got, ok := w.labels[k]; !ok || got != v {
+			return false
+		}
+	}
+	return true
 }
 
 // Place assigns environments that want to run to online workers with room
@@ -57,7 +77,8 @@ func (m *Manager) Place(ctx context.Context) (int, error) {
 	var placed int
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
 		placed = 0
-		rows, err := tx.Query(ctx, `SELECT id, cpus, memory_mib, reason FROM environments
+		rows, err := tx.Query(ctx, `SELECT id, cpus, memory_mib, reason, coalesce(spec->'placement', '{}')
+			FROM environments
 			WHERE worker_id IS NULL AND desired = 'running'
 			ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED`, batch)
 		if err != nil {
@@ -65,7 +86,11 @@ func (m *Manager) Place(ctx context.Context) (int, error) {
 		}
 		queue, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (env, error) {
 			var e env
-			return e, r.Scan(&e.id, &e.cpus, &e.mem, &e.reason)
+			var sel []byte
+			if err := r.Scan(&e.id, &e.cpus, &e.mem, &e.reason, &sel); err != nil {
+				return e, err
+			}
+			return e, json.Unmarshal(sel, &e.placement)
 		})
 		if err != nil || len(queue) == 0 {
 			return err
@@ -86,7 +111,7 @@ func (m *Manager) Place(ctx context.Context) (int, error) {
 			return err
 		}
 		rows, err = tx.Query(ctx, `
-			SELECT w.id, w.cpus - coalesce(sum(e.cpus), 0), w.memory_mib - coalesce(sum(e.memory_mib), 0)
+			SELECT w.id, w.cpus - coalesce(sum(e.cpus), 0), w.memory_mib - coalesce(sum(e.memory_mib), 0), w.labels
 			FROM workers w
 			LEFT JOIN environments e ON e.worker_id = w.id AND e.desired <> 'deleted'
 			WHERE w.id = ANY($1::uuid[])
@@ -96,7 +121,11 @@ func (m *Manager) Place(ctx context.Context) (int, error) {
 		}
 		free, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (*worker, error) {
 			w := &worker{}
-			return w, r.Scan(&w.id, &w.cpus, &w.mem)
+			var labels []byte
+			if err := r.Scan(&w.id, &w.cpus, &w.mem, &labels); err != nil {
+				return w, err
+			}
+			return w, json.Unmarshal(labels, &w.labels)
 		})
 		if err != nil {
 			return err
@@ -104,11 +133,15 @@ func (m *Manager) Place(ctx context.Context) (int, error) {
 
 		bumped := map[string]bool{}
 		for _, e := range queue {
-			best := choose(free, e)
+			best, matched := choose(free, e)
 			if best == nil {
-				if e.reason != Unplaceable {
+				reason := Unplaceable
+				if !matched {
+					reason = NoMatch
+				}
+				if e.reason != reason {
 					if _, err := tx.Exec(ctx, `UPDATE environments SET reason = $2, updated_at = now() WHERE id = $1`,
-						e.id, Unplaceable); err != nil {
+						e.id, reason); err != nil {
 						return err
 					}
 				}
@@ -133,14 +166,21 @@ func (m *Manager) Place(ctx context.Context) (int, error) {
 	return placed, err
 }
 
-// choose spreads rather than packs: the worker with the most free memory
-// that fits takes the environment. Memory is what runs out first.
-func choose(free []*worker, e env) *worker {
+// choose picks a worker for an environment from those its placement rules
+// allow, and reports whether any were allowed at all. It spreads rather than
+// packs: the allowed worker with the most free memory that fits takes the
+// environment. Memory is what runs out first.
+func choose(free []*worker, e env) (*worker, bool) {
 	var best *worker
+	matched := false
 	for _, w := range free {
+		if !w.matches(e.placement) {
+			continue
+		}
+		matched = true
 		if w.cpus >= e.cpus && w.mem >= e.mem && (best == nil || w.mem > best.mem) {
 			best = w
 		}
 	}
-	return best
+	return best, matched
 }

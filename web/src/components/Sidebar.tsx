@@ -1,4 +1,4 @@
-import { ChevronRight, LayoutGrid, Plus, Server, Users } from 'lucide-react'
+import { ChevronRight, LayoutGrid, LayoutTemplate, Plus, Server, Users } from 'lucide-react'
 import { useState } from 'react'
 import { Link, NavLink } from 'react-router'
 
@@ -20,6 +20,10 @@ export function Sidebar() {
         <NavLink to="/environments" end className="side-link">
           <LayoutGrid size={16} />
           <span>Overview</span>
+        </NavLink>
+        <NavLink to="/templates" className="side-link">
+          <LayoutTemplate size={16} />
+          <span>Templates</span>
         </NavLink>
       </nav>
 

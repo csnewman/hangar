@@ -9,6 +9,7 @@ import (
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/placement"
+	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/workers"
 )
@@ -79,7 +80,13 @@ func TestReportCannotTouchAnotherWorkersEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := users.Principal{UserID: owner.ID}
-	env, err := em.Create(ctx, p, api.CreateEnvironment{Name: "e", Image: "img", CPUs: 1, MemoryMiB: 1024})
+	tmpl, err := templates.NewManager(d).Create(ctx, p, templates.Input{
+		Name: "t", Spec: api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 1, MemoryMiB: 1024}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := em.Create(ctx, p, api.CreateEnvironment{TemplateID: tmpl.ID, Name: "e"})
 	if err != nil {
 		t.Fatal(err)
 	}

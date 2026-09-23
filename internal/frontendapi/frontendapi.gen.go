@@ -37,6 +37,45 @@ func (e DesiredState) Valid() bool {
 	}
 }
 
+// Defines values for Display.
+const (
+	DisplayDesktop Display = "desktop"
+	DisplayNone    Display = "none"
+)
+
+// Valid indicates whether the value is a known member of the Display enum.
+func (e Display) Valid() bool {
+	switch e {
+	case DisplayDesktop:
+		return true
+	case DisplayNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GPU.
+const (
+	GPUNone        GPU = "none"
+	GPUPassthrough GPU = "passthrough"
+	GPUVirtual     GPU = "virtual"
+)
+
+// Valid indicates whether the value is a known member of the GPU enum.
+func (e GPU) Valid() bool {
+	switch e {
+	case GPUNone:
+		return true
+	case GPUPassthrough:
+		return true
+	case GPUVirtual:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Phase.
 const (
 	PhaseDeleting Phase = "deleting"
@@ -70,20 +109,40 @@ func (e Phase) Valid() bool {
 	}
 }
 
+// Defines values for Visibility.
+const (
+	Private Visibility = "private"
+	Shared  Visibility = "shared"
+)
+
+// Valid indicates whether the value is a known member of the Visibility enum.
+func (e Visibility) Valid() bool {
+	switch e {
+	case Private:
+		return true
+	case Shared:
+		return true
+	default:
+		return false
+	}
+}
+
 // ChangePassword defines model for ChangePassword.
 type ChangePassword struct {
 	CurrentPassword string `json:"current_password"`
 	NewPassword     string `json:"new_password"`
 }
 
+// Collaborators defines model for Collaborators.
+type Collaborators struct {
+	UserIds []string `json:"user_ids"`
+}
+
 // CreateEnvironment defines model for CreateEnvironment.
 type CreateEnvironment struct {
-	CPUs      int    `json:"cpus"`
-	Image     string `json:"image"`
-	MemoryMiB int    `json:"memory_mib"`
-
-	// Name A DNS label, since it becomes a hostname.
-	Name string `json:"name"`
+	// Name A DNS label, since it becomes a hostname, and whatever else the template's name pattern demands.
+	Name       string `json:"name"`
+	TemplateID string `json:"template_id"`
 }
 
 // CreateUser defines model for CreateUser.
@@ -96,6 +155,9 @@ type CreateUser struct {
 
 // DesiredState What the environment's owner has asked for.
 type DesiredState string
+
+// Display Whether the environment has a graphical desktop.
+type Display string
 
 // Environment defines model for Environment.
 type Environment struct {
@@ -119,8 +181,15 @@ type Environment struct {
 	Phase Phase `json:"phase"`
 
 	// Reason Why the environment is in its phase, when there is more to say.
-	Reason    *string   `json:"reason,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Reason *string `json:"reason,omitempty"`
+	Spec   Spec    `json:"spec"`
+
+	// Template That template's name when the environment was made.
+	Template string `json:"template"`
+
+	// TemplateID The template it was made from. Absent once that template is deleted.
+	TemplateID *string   `json:"template_id,omitempty"`
+	UpdatedAt  time.Time `json:"updated_at"`
 
 	// Worker That worker's name.
 	Worker *string `json:"worker,omitempty"`
@@ -133,6 +202,9 @@ type Environment struct {
 type Error struct {
 	Error string `json:"error"`
 }
+
+// GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
+type GPU string
 
 // Login defines model for Login.
 type Login struct {
@@ -151,13 +223,94 @@ type Me struct {
 	Username    string `json:"username"`
 }
 
+// Person defines model for Person.
+type Person struct {
+	DisplayName string `json:"display_name"`
+	ID          string `json:"id"`
+	Username    string `json:"username"`
+}
+
 // Phase What the environment is doing, as its worker last reported. "pending" means no worker has reported on it yet.
 type Phase string
+
+// Repo defines model for Repo.
+type Repo struct {
+	// Branch A new branch to create after cloning. In a template, {name} is replaced by the environment's name.
+	Branch *string `json:"branch,omitempty"`
+
+	// Path Where in the environment to clone it. Absolute.
+	Path string `json:"path"`
+
+	// Ref Branch, tag or commit to check out. Empty for the default branch.
+	Ref *string `json:"ref,omitempty"`
+	URL string  `json:"url"`
+}
 
 // Resources defines model for Resources.
 type Resources struct {
 	CPUs      int `json:"cpus"`
 	MemoryMiB int `json:"memory_mib"`
+}
+
+// Spec defines model for Spec.
+type Spec struct {
+	CPUs int `json:"cpus"`
+
+	// Display Whether the environment has a graphical desktop.
+	Display Display `json:"display"`
+
+	// EditorPath The folder the editor opens on.
+	EditorPath *string `json:"editor_path,omitempty"`
+
+	// GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
+	GPU       GPU    `json:"gpu"`
+	Image     string `json:"image"`
+	MemoryMiB int    `json:"memory_mib"`
+
+	// Placement Worker labels the environment requires: it runs only on a worker with every one of these labels, with these values.
+	Placement map[string]string `json:"placement"`
+	Repos     []Repo            `json:"repos"`
+}
+
+// Template defines model for Template.
+type Template struct {
+	// CanEdit Whether the caller may change the recipe and its collaborators.
+	CanEdit bool `json:"can_edit"`
+
+	// CanManage Whether the caller may also change its visibility, or delete it.
+	CanManage     bool      `json:"can_manage"`
+	Collaborators []Person  `json:"collaborators"`
+	CreatedAt     time.Time `json:"created_at"`
+	Description   string    `json:"description"`
+
+	// Environments How many environments made from it exist.
+	Environments int    `json:"environments"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+
+	// NameHint What name the pattern wants, in words.
+	NameHint *string `json:"name_hint,omitempty"`
+
+	// NamePattern A regular expression an environment's whole name must match, such as a ticket ID.
+	NamePattern *string   `json:"name_pattern,omitempty"`
+	Owner       Person    `json:"owner"`
+	Spec        Spec      `json:"spec"`
+	UpdatedAt   time.Time `json:"updated_at"`
+
+	// Visibility private: the owner and collaborators see it. shared: everyone does.
+	Visibility Visibility `json:"visibility"`
+}
+
+// TemplateInput defines model for TemplateInput.
+type TemplateInput struct {
+	Description *string `json:"description,omitempty"`
+	Name        string  `json:"name"`
+	NameHint    *string `json:"name_hint,omitempty"`
+	NamePattern *string `json:"name_pattern,omitempty"`
+	Spec        Spec    `json:"spec"`
+
+	// Visibility private: the owner and collaborators see it. shared: everyone does.
+	Visibility Visibility `json:"visibility"`
 }
 
 // UpdateUser Only the fields present are changed.
@@ -183,6 +336,9 @@ type User struct {
 	ID           string `json:"id"`
 	Username     string `json:"username"`
 }
+
+// Visibility private: the owner and collaborators see it. shared: everyone does.
+type Visibility string
 
 // Worker defines model for Worker.
 type Worker struct {
@@ -227,6 +383,15 @@ type CreateEnvironmentJSONRequestBody = CreateEnvironment
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePassword
 
+// CreateTemplateJSONRequestBody defines body for CreateTemplate for application/json ContentType.
+type CreateTemplateJSONRequestBody = TemplateInput
+
+// UpdateTemplateJSONRequestBody defines body for UpdateTemplate for application/json ContentType.
+type UpdateTemplateJSONRequestBody = TemplateInput
+
+// SetTemplateCollaboratorsJSONRequestBody defines body for SetTemplateCollaborators for application/json ContentType.
+type SetTemplateCollaboratorsJSONRequestBody = Collaborators
+
 // CreateUserJSONRequestBody defines body for CreateUser for application/json ContentType.
 type CreateUserJSONRequestBody = CreateUser
 
@@ -265,6 +430,27 @@ type ServerInterface interface {
 
 	// (POST /api/frontend/me/password)
 	ChangePassword(w http.ResponseWriter, r *http.Request)
+
+	// (GET /api/frontend/people)
+	ListPeople(w http.ResponseWriter, r *http.Request)
+
+	// (GET /api/frontend/templates)
+	ListTemplates(w http.ResponseWriter, r *http.Request)
+
+	// (POST /api/frontend/templates)
+	CreateTemplate(w http.ResponseWriter, r *http.Request)
+
+	// (DELETE /api/frontend/templates/{id})
+	DeleteTemplate(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/templates/{id})
+	GetTemplate(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (PUT /api/frontend/templates/{id})
+	UpdateTemplate(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (PUT /api/frontend/templates/{id}/collaborators)
+	SetTemplateCollaborators(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (GET /api/frontend/users)
 	ListUsers(w http.ResponseWriter, r *http.Request)
@@ -476,6 +662,152 @@ func (siw *ServerInterfaceWrapper) ChangePassword(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ChangePassword(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListPeople operation middleware
+func (siw *ServerInterfaceWrapper) ListPeople(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListPeople(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTemplates operation middleware
+func (siw *ServerInterfaceWrapper) ListTemplates(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTemplates(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateTemplate operation middleware
+func (siw *ServerInterfaceWrapper) CreateTemplate(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateTemplate(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteTemplate operation middleware
+func (siw *ServerInterfaceWrapper) DeleteTemplate(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteTemplate(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetTemplate operation middleware
+func (siw *ServerInterfaceWrapper) GetTemplate(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetTemplate(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateTemplate operation middleware
+func (siw *ServerInterfaceWrapper) UpdateTemplate(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateTemplate(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetTemplateCollaborators operation middleware
+func (siw *ServerInterfaceWrapper) SetTemplateCollaborators(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetTemplateCollaborators(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -755,6 +1087,13 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/auth/logout", wrapper.Logout)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/password", wrapper.ChangePassword)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/people", wrapper.ListPeople)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/templates", wrapper.ListTemplates)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/templates", wrapper.CreateTemplate)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/templates/{id}", wrapper.DeleteTemplate)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/templates/{id}", wrapper.GetTemplate)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/templates/{id}", wrapper.UpdateTemplate)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/templates/{id}/collaborators", wrapper.SetTemplateCollaborators)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/users", wrapper.ListUsers)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/users", wrapper.CreateUser)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/users/{id}", wrapper.DeleteUser)
@@ -1293,6 +1632,420 @@ func (response ChangePassword401JSONResponse) VisitChangePasswordResponse(w http
 	return err
 }
 
+type ListPeopleRequestObject struct {
+}
+
+type ListPeopleResponseObject interface {
+	VisitListPeopleResponse(w http.ResponseWriter) error
+}
+
+type ListPeople200JSONResponse []Person
+
+func (response ListPeople200JSONResponse) VisitListPeopleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPeople401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListPeople401JSONResponse) VisitListPeopleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTemplatesRequestObject struct {
+}
+
+type ListTemplatesResponseObject interface {
+	VisitListTemplatesResponse(w http.ResponseWriter) error
+}
+
+type ListTemplates200JSONResponse []Template
+
+func (response ListTemplates200JSONResponse) VisitListTemplatesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTemplates401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListTemplates401JSONResponse) VisitListTemplatesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTemplateRequestObject struct {
+	Body *CreateTemplateJSONRequestBody
+}
+
+type CreateTemplateResponseObject interface {
+	VisitCreateTemplateResponse(w http.ResponseWriter) error
+}
+
+type CreateTemplate201JSONResponse Template
+
+func (response CreateTemplate201JSONResponse) VisitCreateTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTemplate400JSONResponse struct{ InvalidJSONResponse }
+
+func (response CreateTemplate400JSONResponse) VisitCreateTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTemplate401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateTemplate401JSONResponse) VisitCreateTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTemplate409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateTemplate409JSONResponse) VisitCreateTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTemplateRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type DeleteTemplateResponseObject interface {
+	VisitDeleteTemplateResponse(w http.ResponseWriter) error
+}
+
+type DeleteTemplate204Response struct {
+}
+
+func (response DeleteTemplate204Response) VisitDeleteTemplateResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteTemplate401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteTemplate401JSONResponse) VisitDeleteTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTemplate403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteTemplate403JSONResponse) VisitDeleteTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteTemplate404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteTemplate404JSONResponse) VisitDeleteTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTemplateRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type GetTemplateResponseObject interface {
+	VisitGetTemplateResponse(w http.ResponseWriter) error
+}
+
+type GetTemplate200JSONResponse Template
+
+func (response GetTemplate200JSONResponse) VisitGetTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTemplate401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetTemplate401JSONResponse) VisitGetTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetTemplate404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetTemplate404JSONResponse) VisitGetTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTemplateRequestObject struct {
+	ID   ID `json:"id"`
+	Body *UpdateTemplateJSONRequestBody
+}
+
+type UpdateTemplateResponseObject interface {
+	VisitUpdateTemplateResponse(w http.ResponseWriter) error
+}
+
+type UpdateTemplate200JSONResponse Template
+
+func (response UpdateTemplate200JSONResponse) VisitUpdateTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTemplate400JSONResponse struct{ InvalidJSONResponse }
+
+func (response UpdateTemplate400JSONResponse) VisitUpdateTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTemplate401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateTemplate401JSONResponse) VisitUpdateTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTemplate403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateTemplate403JSONResponse) VisitUpdateTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTemplate404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateTemplate404JSONResponse) VisitUpdateTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateTemplate409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateTemplate409JSONResponse) VisitUpdateTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetTemplateCollaboratorsRequestObject struct {
+	ID   ID `json:"id"`
+	Body *SetTemplateCollaboratorsJSONRequestBody
+}
+
+type SetTemplateCollaboratorsResponseObject interface {
+	VisitSetTemplateCollaboratorsResponse(w http.ResponseWriter) error
+}
+
+type SetTemplateCollaborators200JSONResponse Template
+
+func (response SetTemplateCollaborators200JSONResponse) VisitSetTemplateCollaboratorsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetTemplateCollaborators400JSONResponse struct{ InvalidJSONResponse }
+
+func (response SetTemplateCollaborators400JSONResponse) VisitSetTemplateCollaboratorsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetTemplateCollaborators401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SetTemplateCollaborators401JSONResponse) VisitSetTemplateCollaboratorsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetTemplateCollaborators403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetTemplateCollaborators403JSONResponse) VisitSetTemplateCollaboratorsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetTemplateCollaborators404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetTemplateCollaborators404JSONResponse) VisitSetTemplateCollaboratorsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListUsersRequestObject struct {
 }
 
@@ -1797,6 +2550,27 @@ type StrictServerInterface interface {
 	// (POST /api/frontend/me/password)
 	ChangePassword(ctx context.Context, request ChangePasswordRequestObject) (ChangePasswordResponseObject, error)
 
+	// (GET /api/frontend/people)
+	ListPeople(ctx context.Context, request ListPeopleRequestObject) (ListPeopleResponseObject, error)
+
+	// (GET /api/frontend/templates)
+	ListTemplates(ctx context.Context, request ListTemplatesRequestObject) (ListTemplatesResponseObject, error)
+
+	// (POST /api/frontend/templates)
+	CreateTemplate(ctx context.Context, request CreateTemplateRequestObject) (CreateTemplateResponseObject, error)
+
+	// (DELETE /api/frontend/templates/{id})
+	DeleteTemplate(ctx context.Context, request DeleteTemplateRequestObject) (DeleteTemplateResponseObject, error)
+
+	// (GET /api/frontend/templates/{id})
+	GetTemplate(ctx context.Context, request GetTemplateRequestObject) (GetTemplateResponseObject, error)
+
+	// (PUT /api/frontend/templates/{id})
+	UpdateTemplate(ctx context.Context, request UpdateTemplateRequestObject) (UpdateTemplateResponseObject, error)
+
+	// (PUT /api/frontend/templates/{id}/collaborators)
+	SetTemplateCollaborators(ctx context.Context, request SetTemplateCollaboratorsRequestObject) (SetTemplateCollaboratorsResponseObject, error)
+
 	// (GET /api/frontend/users)
 	ListUsers(ctx context.Context, request ListUsersRequestObject) (ListUsersResponseObject, error)
 
@@ -2120,6 +2894,203 @@ func (sh *strictHandler) ChangePassword(w http.ResponseWriter, r *http.Request) 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ChangePasswordResponseObject); ok {
 		if err := validResponse.VisitChangePasswordResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListPeople operation middleware
+func (sh *strictHandler) ListPeople(w http.ResponseWriter, r *http.Request) {
+	var request ListPeopleRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListPeople(ctx, request.(ListPeopleRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListPeople")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListPeopleResponseObject); ok {
+		if err := validResponse.VisitListPeopleResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListTemplates operation middleware
+func (sh *strictHandler) ListTemplates(w http.ResponseWriter, r *http.Request) {
+	var request ListTemplatesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTemplates(ctx, request.(ListTemplatesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTemplates")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListTemplatesResponseObject); ok {
+		if err := validResponse.VisitListTemplatesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateTemplate operation middleware
+func (sh *strictHandler) CreateTemplate(w http.ResponseWriter, r *http.Request) {
+	var request CreateTemplateRequestObject
+
+	var body CreateTemplateJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateTemplate(ctx, request.(CreateTemplateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateTemplate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateTemplateResponseObject); ok {
+		if err := validResponse.VisitCreateTemplateResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteTemplate operation middleware
+func (sh *strictHandler) DeleteTemplate(w http.ResponseWriter, r *http.Request, id ID) {
+	var request DeleteTemplateRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteTemplate(ctx, request.(DeleteTemplateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteTemplate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteTemplateResponseObject); ok {
+		if err := validResponse.VisitDeleteTemplateResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetTemplate operation middleware
+func (sh *strictHandler) GetTemplate(w http.ResponseWriter, r *http.Request, id ID) {
+	var request GetTemplateRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetTemplate(ctx, request.(GetTemplateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetTemplate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetTemplateResponseObject); ok {
+		if err := validResponse.VisitGetTemplateResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateTemplate operation middleware
+func (sh *strictHandler) UpdateTemplate(w http.ResponseWriter, r *http.Request, id ID) {
+	var request UpdateTemplateRequestObject
+
+	request.ID = id
+
+	var body UpdateTemplateJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateTemplate(ctx, request.(UpdateTemplateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateTemplate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateTemplateResponseObject); ok {
+		if err := validResponse.VisitUpdateTemplateResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetTemplateCollaborators operation middleware
+func (sh *strictHandler) SetTemplateCollaborators(w http.ResponseWriter, r *http.Request, id ID) {
+	var request SetTemplateCollaboratorsRequestObject
+
+	request.ID = id
+
+	var body SetTemplateCollaboratorsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetTemplateCollaborators(ctx, request.(SetTemplateCollaboratorsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetTemplateCollaborators")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetTemplateCollaboratorsResponseObject); ok {
+		if err := validResponse.VisitSetTemplateCollaboratorsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

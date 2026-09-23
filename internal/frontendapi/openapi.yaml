@@ -80,6 +80,123 @@ paths:
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /api/frontend/people:
+    get:
+      operationId: listPeople
+      description: >-
+        Every enabled user, as others see them: for choosing collaborators.
+      responses:
+        "200":
+          description: Enabled users, by username.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Person" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/templates:
+    get:
+      operationId: listTemplates
+      responses:
+        "200":
+          description: >-
+            Every template the caller may use: shared ones, and private ones
+            they own or collaborate on (all of them, for an administrator).
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Template" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createTemplate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TemplateInput" }
+      responses:
+        "201":
+          description: Created, owned by the caller.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Template" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/templates/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getTemplate
+      responses:
+        "200":
+          description: The template.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Template" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: updateTemplate
+      description: >-
+        Replaces the template's content. The owner and collaborators may do
+        this; only the owner may change its visibility. Environments already
+        made from it are unchanged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TemplateInput" }
+      responses:
+        "200":
+          description: The template as changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Template" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+    delete:
+      operationId: deleteTemplate
+      description: >-
+        Deletes the template. Only its owner may. Environments made from it
+        keep their copy of what it said.
+      responses:
+        "204":
+          description: Deleted.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/templates/{id}/collaborators:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: setTemplateCollaborators
+      description: >-
+        Replaces who, besides the owner, may edit the template. The owner and
+        any collaborator may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Collaborators" }
+      responses:
+        "200":
+          description: The template with its new collaborators.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Template" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/frontend/users:
     get:
       operationId: listUsers
@@ -352,7 +469,7 @@ components:
 
     Environment:
       type: object
-      required: [id, owner_id, owner, name, image, cpus, memory_mib, desired, phase, created_at, updated_at]
+      required: [id, owner_id, owner, name, template, spec, image, cpus, memory_mib, desired, phase, created_at, updated_at]
       properties:
         id: { type: string }
         owner_id: { type: string }
@@ -362,6 +479,14 @@ components:
         name:
           type: string
           description: Unique among its owner's environments.
+        template_id:
+          type: string
+          description: The template it was made from. Absent once that template is deleted.
+        template:
+          type: string
+          description: That template's name when the environment was made.
+        spec:
+          $ref: "#/components/schemas/Spec"
         image: { type: string }
         cpus: { type: integer }
         memory_mib: { type: integer }
@@ -381,16 +506,139 @@ components:
 
     CreateEnvironment:
       type: object
-      required: [name, image, cpus, memory_mib]
+      required: [template_id, name]
       additionalProperties: false
       properties:
+        template_id: { type: string }
         name:
           type: string
-          description: A DNS label, since it becomes a hostname.
+          description: >-
+            A DNS label, since it becomes a hostname, and whatever else the
+            template's name pattern demands.
           pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+
+    Display:
+      type: string
+      description: Whether the environment has a graphical desktop.
+      enum: [none, desktop]
+
+    GPU:
+      type: string
+      description: >-
+        virtual renders through a GPU shared with other environments;
+        passthrough gives the environment a whole physical GPU.
+      enum: [none, virtual, passthrough]
+
+    Repo:
+      type: object
+      required: [url, path]
+      additionalProperties: false
+      properties:
+        url: { type: string, minLength: 1 }
+        ref:
+          type: string
+          description: Branch, tag or commit to check out. Empty for the default branch.
+        path:
+          type: string
+          description: Where in the environment to clone it. Absolute.
+        branch:
+          type: string
+          description: >-
+            A new branch to create after cloning. In a template, {name} is
+            replaced by the environment's name.
+
+    Spec:
+      type: object
+      required: [image, cpus, memory_mib, display, gpu, repos, placement]
+      additionalProperties: false
+      properties:
         image: { type: string, minLength: 1 }
         cpus: { type: integer, minimum: 1, maximum: 64 }
         memory_mib: { type: integer, minimum: 512, maximum: 262144 }
+        display: { $ref: "#/components/schemas/Display" }
+        gpu: { $ref: "#/components/schemas/GPU" }
+        repos:
+          type: array
+          maxItems: 16
+          items: { $ref: "#/components/schemas/Repo" }
+        editor_path:
+          type: string
+          description: The folder the editor opens on.
+        placement:
+          type: object
+          description: >-
+            Worker labels the environment requires: it runs only on a worker
+            with every one of these labels, with these values.
+          additionalProperties: { type: string }
+
+    Person:
+      type: object
+      required: [id, username, display_name]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        display_name: { type: string }
+
+    Template:
+      type: object
+      required: [id, name, description, visibility, owner, collaborators, spec, environments, can_edit, can_manage, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        owner: { $ref: "#/components/schemas/Person" }
+        collaborators:
+          type: array
+          items: { $ref: "#/components/schemas/Person" }
+        spec: { $ref: "#/components/schemas/Spec" }
+        name_pattern:
+          type: string
+          description: >-
+            A regular expression an environment's whole name must match, such
+            as a ticket ID.
+        name_hint:
+          type: string
+          description: What name the pattern wants, in words.
+        environments:
+          type: integer
+          description: How many environments made from it exist.
+        can_edit:
+          type: boolean
+          description: Whether the caller may change the recipe and its collaborators.
+        can_manage:
+          type: boolean
+          description: Whether the caller may also change its visibility, or delete it.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    Visibility:
+      type: string
+      description: >-
+        private: the owner and collaborators see it. shared: everyone does.
+      enum: [private, shared]
+
+    TemplateInput:
+      type: object
+      required: [name, visibility, spec]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 2000 }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        spec: { $ref: "#/components/schemas/Spec" }
+        name_pattern: { type: string, maxLength: 500 }
+        name_hint: { type: string, maxLength: 200 }
+
+    Collaborators:
+      type: object
+      required: [user_ids]
+      additionalProperties: false
+      properties:
+        user_ids:
+          type: array
+          maxItems: 100
+          items: { type: string }
 
     Resources:
       type: object

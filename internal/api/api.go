@@ -36,30 +36,97 @@ const (
 	PhaseDeleting Phase = "deleting"
 )
 
-// Environment is the public view of one environment.
-type Environment struct {
-	ID        string       `json:"id"`
-	OwnerID   string       `json:"owner_id"`
-	Owner     string       `json:"owner"`
-	Name      string       `json:"name"`
-	Image     string       `json:"image"`
-	CPUs      int          `json:"cpus"`
-	MemoryMiB int          `json:"memory_mib"`
-	Desired   DesiredState `json:"desired"`
-	Phase     Phase        `json:"phase"`
-	Reason    string       `json:"reason,omitempty"`
-	WorkerID  string       `json:"worker_id,omitempty"`
-	Worker    string       `json:"worker,omitempty"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt time.Time    `json:"updated_at"`
+// Display is whether an environment has a graphical desktop.
+type Display string
+
+const (
+	// DisplayNone is a headless environment: no compositor, no VNC, and
+	// less memory spent on both.
+	DisplayNone    Display = "none"
+	DisplayDesktop Display = "desktop"
+)
+
+// GPU is what kind of GPU an environment is given.
+type GPU string
+
+const (
+	GPUNone GPU = "none"
+	// GPUVirtual renders through the host's GPU via virtio-gpu, shared with
+	// other environments.
+	GPUVirtual GPU = "virtual"
+	// GPUPassthrough hands the environment a whole physical GPU. It pins the
+	// environment's memory and cannot be suspended.
+	GPUPassthrough GPU = "passthrough"
+)
+
+// Repo is a git repository cloned into an environment when it is created.
+type Repo struct {
+	URL string `json:"url"`
+	// Ref is what to check out: a branch, tag or commit. Empty means the
+	// remote's default branch.
+	Ref string `json:"ref,omitempty"`
+	// Path is where in the environment the repository is cloned.
+	Path string `json:"path"`
+	// Branch, if set, is a new branch created from Ref after cloning. In a
+	// template it may contain {name}, replaced by the environment's name; in
+	// an environment it is the resolved name.
+	Branch string `json:"branch,omitempty"`
 }
 
-// CreateEnvironment is the body of a request to create an environment.
+// Spec is what an environment is. A template holds one, with patterns in it;
+// an environment holds its own resolved copy, made when it was created.
+type Spec struct {
+	Image     string  `json:"image"`
+	CPUs      int     `json:"cpus"`
+	MemoryMiB int     `json:"memory_mib"`
+	Display   Display `json:"display"`
+	GPU       GPU     `json:"gpu"`
+	Repos     []Repo  `json:"repos"`
+	// EditorPath is the folder the editor opens on.
+	EditorPath string `json:"editor_path,omitempty"`
+	// Placement limits which workers may run the environment: each key must
+	// be a label the worker has, with this value.
+	Placement map[string]string `json:"placement"`
+}
+
+// TemplateSpec is a Spec with the rules for naming the environments made
+// from it.
+type TemplateSpec struct {
+	Spec
+	// NamePattern, if set, is a regular expression an environment's whole
+	// name must match -- a ticket ID, say, which then names its branch.
+	NamePattern string `json:"name_pattern,omitempty"`
+	// NameHint tells a person what name the pattern wants.
+	NameHint string `json:"name_hint,omitempty"`
+}
+
+// Environment is the public view of one environment.
+type Environment struct {
+	ID      string `json:"id"`
+	OwnerID string `json:"owner_id"`
+	Owner   string `json:"owner"`
+	Name    string `json:"name"`
+	// TemplateID is empty once the template has been deleted; Template
+	// keeps its name.
+	TemplateID string       `json:"template_id,omitempty"`
+	Template   string       `json:"template"`
+	Spec       Spec         `json:"spec"`
+	Image      string       `json:"image"`
+	CPUs       int          `json:"cpus"`
+	MemoryMiB  int          `json:"memory_mib"`
+	Desired    DesiredState `json:"desired"`
+	Phase      Phase        `json:"phase"`
+	Reason     string       `json:"reason,omitempty"`
+	WorkerID   string       `json:"worker_id,omitempty"`
+	Worker     string       `json:"worker,omitempty"`
+	CreatedAt  time.Time    `json:"created_at"`
+	UpdatedAt  time.Time    `json:"updated_at"`
+}
+
+// CreateEnvironment is a request to create an environment from a template.
 type CreateEnvironment struct {
-	Name      string `json:"name"`
-	Image     string `json:"image"`
-	CPUs      int    `json:"cpus"`
-	MemoryMiB int    `json:"memory_mib"`
+	TemplateID string `json:"template_id"`
+	Name       string `json:"name"`
 }
 
 // Worker is the public view of one worker.
@@ -116,12 +183,10 @@ type DesiredSet struct {
 
 // EnvironmentSpec is one environment as a worker needs to see it.
 type EnvironmentSpec struct {
-	ID        string       `json:"id"`
-	Name      string       `json:"name"`
-	Image     string       `json:"image"`
-	CPUs      int          `json:"cpus"`
-	MemoryMiB int          `json:"memory_mib"`
-	Desired   DesiredState `json:"desired"`
+	ID      string       `json:"id"`
+	Name    string       `json:"name"`
+	Desired DesiredState `json:"desired"`
+	Spec    Spec         `json:"spec"`
 }
 
 // WorkerStatus is everything a worker is holding, and what it can offer.

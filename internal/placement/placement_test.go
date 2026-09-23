@@ -12,6 +12,7 @@ import (
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/placement"
+	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/workers"
 )
@@ -19,10 +20,11 @@ import (
 var ctx = context.Background()
 
 type plane struct {
-	envs    *environments.Manager
-	workers *workers.Manager
-	place   *placement.Manager
-	owner   users.Principal
+	envs      *environments.Manager
+	workers   *workers.Manager
+	place     *placement.Manager
+	templates *templates.Manager
+	owner     users.Principal
 }
 
 func newPlane(t *testing.T) (*plane, *db.DB) {
@@ -32,7 +34,7 @@ func newPlane(t *testing.T) (*plane, *db.DB) {
 		t.Fatal(err)
 	}
 	return &plane{environments.NewManager(d), workers.NewManager(d), placement.NewManager(d),
-		users.Principal{UserID: u.ID}}, d
+		templates.NewManager(d), users.Principal{UserID: u.ID}}, d
 }
 
 func (p *plane) worker(t *testing.T, name string, cpus, mem int) string {
@@ -57,7 +59,21 @@ func (p *plane) report(t *testing.T, id string, cpus, mem int, envs ...api.Obser
 
 func (p *plane) env(t *testing.T, name string, cpus, mem int) api.Environment {
 	t.Helper()
-	e, err := p.envs.Create(ctx, p.owner, api.CreateEnvironment{Name: name, Image: "img", CPUs: cpus, MemoryMiB: mem})
+	return p.envWith(t, name, cpus, mem, nil)
+}
+
+// envWith makes an environment from a template of its own, which asks for
+// the given size and placement.
+func (p *plane) envWith(t *testing.T, name string, cpus, mem int, placement map[string]string) api.Environment {
+	t.Helper()
+	tmpl, err := p.templates.Create(ctx, p.owner, templates.Input{
+		Name: "for " + name,
+		Spec: api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: cpus, MemoryMiB: mem, Placement: placement}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := p.envs.Create(ctx, p.owner, api.CreateEnvironment{TemplateID: tmpl.ID, Name: name})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,5 +272,37 @@ func TestConcurrentPlacementNeverOvercommits(t *testing.T) {
 	}
 	if total != 12 {
 		t.Errorf("placed %d vCPUs across three 4-vCPU workers, want 12", total)
+	}
+}
+
+// A template's placement rules keep its environments off workers without the
+// labels it asks for, and say so rather than blaming capacity.
+func TestPlacementFollowsLabels(t *testing.T) {
+	p, _ := newPlane(t)
+	p.worker(t, "plain", 8, 16384)
+	gpu, _ := p.workers.Register(ctx, api.RegisterWorker{Name: "gpu"})
+	if err := p.workers.ReportStatus(ctx, gpu.ID, api.WorkerStatus{
+		Capacity: api.Resources{CPUs: 4, MemoryMiB: 8192},
+		Labels:   map[string]string{"gpu": "passthrough", "zone": "a"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	wantsGPU := p.envWith(t, "wants-gpu", 1, 1024, map[string]string{"gpu": "passthrough"})
+	anywhere := p.envWith(t, "anywhere", 1, 1024, nil)
+	nowhere := p.envWith(t, "nowhere", 1, 1024, map[string]string{"gpu": "passthrough", "zone": "b"})
+	if n, err := p.place.Place(ctx); err != nil || n != 2 {
+		t.Fatalf("Place = %d, %v; want 2", n, err)
+	}
+	if got := p.get(t, wantsGPU.ID).Worker; got != "gpu" {
+		t.Errorf("wants-gpu landed on %q, want gpu", got)
+	}
+	// Spread: plain has more free memory, and nothing rules it out.
+	if got := p.get(t, anywhere.ID).Worker; got != "plain" {
+		t.Errorf("anywhere landed on %q, want plain", got)
+	}
+	got := p.get(t, nowhere.ID)
+	if got.WorkerID != "" || got.Reason != placement.NoMatch {
+		t.Errorf("nowhere: worker %q, reason %q", got.Worker, got.Reason)
 	}
 }

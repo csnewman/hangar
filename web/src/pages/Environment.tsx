@@ -1,11 +1,12 @@
-import { AppWindow, Code2, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
+import { AppWindow, Code2, GitBranch, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router'
 
 import type { Environment } from '../api'
 import { useMe } from '../session'
 import { EnvironmentActions } from '../components/EnvironmentActions'
-import { formatAgo, formatMemory } from '../components/format'
+import { formatAgo } from '../components/format'
 import { PageHeader, type Crumb } from '../components/PageHeader'
+import { SpecChips } from '../components/SpecChips'
 import { PhaseBadge } from '../components/Status'
 import { useEnvironments } from '../environments'
 
@@ -82,11 +83,44 @@ export function SummaryTab() {
           <Prop label="Asked to be">{env.desired}</Prop>
           <Prop label="Owner">{env.owner}</Prop>
           <Prop label="Worker">{env.worker ?? <span className="muted">not yet placed</span>}</Prop>
+          <Prop label="Template">
+            {env.template_id ? (
+              <Link to={`/templates/${env.template_id}`}>{env.template}</Link>
+            ) : (
+              <span>
+                {env.template} <span className="muted">(deleted)</span>
+              </span>
+            )}
+          </Prop>
           <Prop label="Image">
             <span className="mono">{env.image}</span>
           </Prop>
-          <Prop label="vCPUs">{env.cpus}</Prop>
-          <Prop label="Memory">{formatMemory(env.memory_mib)}</Prop>
+          <Prop label="Resources">
+            <SpecChips spec={env.spec} />
+          </Prop>
+          {env.spec.repos.map((r) => (
+            <Prop key={r.path} label="Repository">
+              <span className="mono">{r.url}</span> <span className="muted">in</span>{' '}
+              <span className="mono">{r.path}</span>
+              {r.ref && (
+                <>
+                  {' '}
+                  <span className="muted">at</span> <span className="mono">{r.ref}</span>
+                </>
+              )}
+              {r.branch && (
+                <span className="branch">
+                  <GitBranch size={12} />
+                  <span className="mono">{r.branch}</span>
+                </span>
+              )}
+            </Prop>
+          ))}
+          {env.spec.editor_path && (
+            <Prop label="Editor opens">
+              <span className="mono">{env.spec.editor_path}</span>
+            </Prop>
+          )}
           <Prop label="Created">
             {new Date(env.created_at).toLocaleString()} ({formatAgo(env.created_at)})
           </Prop>
@@ -119,6 +153,17 @@ export function ConsoleTab({ kind }: { kind: 'terminal' | 'editor' | 'desktop' }
     desktop: { icon: AppWindow, title: 'Desktop', body: `${env.name}'s desktop, as the agent sees it.` },
   }[kind]
   const running = env.phase === 'running'
+  if (kind === 'desktop' && env.spec.display === 'none') {
+    return (
+      <div className="console">
+        <div className="console-empty">
+          <what.icon size={36} strokeWidth={1.4} />
+          <h2>No desktop</h2>
+          <p>{env.name} is headless: its template runs it without a graphical stack.</p>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="console">

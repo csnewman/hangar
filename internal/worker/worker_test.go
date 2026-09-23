@@ -62,9 +62,11 @@ func TestEndToEnd(t *testing.T) {
 	werr := make(chan error, 1)
 	go func() { werr <- w.Run(ctx) }()
 
+	var tmpl struct{ ID string }
+	call(t, hs.URL, http.MethodPost, "/api/frontend/templates", `{"name":"t","visibility":"private","spec":`+
+		`{"image":"img","cpus":1,"memory_mib":512,"display":"none","gpu":"none","repos":[],"placement":{}}}`, &tmpl)
 	var env api.Environment
-	call(t, hs.URL, http.MethodPost, "/api/frontend/environments",
-		`{"name":"e2e","image":"img","cpus":1,"memory_mib":512}`, &env)
+	call(t, hs.URL, http.MethodPost, "/api/frontend/environments", `{"template_id":"`+tmpl.ID+`","name":"e2e"}`, &env)
 
 	waitFor(t, hs.URL, env.ID, func(e *api.Environment) bool { return e != nil && e.Phase == api.PhaseRunning })
 	call(t, hs.URL, http.MethodPost, "/api/frontend/environments/"+env.ID+"/stop", "", nil)

@@ -93,7 +93,7 @@ function EnvironmentTable({
                 <Link to={`/environments/${e.id}`} className="strong row-link">
                   {e.name}
                 </Link>
-                <div className="mono muted small">{e.image}</div>
+                <div className="muted small">{e.template}</div>
               </td>
               {showOwner && <td>{e.owner}</td>}
               <td>

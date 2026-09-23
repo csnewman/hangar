@@ -18,6 +18,14 @@ export type Me = Schemas['Me']
 export type User = Schemas['User']
 export type CreateUser = Schemas['CreateUser']
 export type UpdateUser = Schemas['UpdateUser']
+export type Spec = Schemas['Spec']
+export type Repo = Schemas['Repo']
+export type Display = Schemas['Display']
+export type GPU = Schemas['GPU']
+export type Person = Schemas['Person']
+export type Template = Schemas['Template']
+export type TemplateInput = Schemas['TemplateInput']
+export type Visibility = Schemas['Visibility']
 
 const client = createClient<paths>()
 
@@ -61,6 +69,16 @@ export const api = {
   startEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/start', byID(id))),
   stopEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/stop', byID(id))),
   deleteEnvironment: (id: string) => unwrap(client.DELETE('/api/frontend/environments/{id}', byID(id))),
+
+  templates: () => unwrap(client.GET('/api/frontend/templates')),
+  template: (id: string) => unwrap(client.GET('/api/frontend/templates/{id}', byID(id))),
+  createTemplate: (body: TemplateInput) => unwrap(client.POST('/api/frontend/templates', { body })),
+  updateTemplate: (id: string, body: TemplateInput) =>
+    unwrap(client.PUT('/api/frontend/templates/{id}', { ...byID(id), body })),
+  deleteTemplate: (id: string) => unwrap(client.DELETE('/api/frontend/templates/{id}', byID(id))),
+  setCollaborators: (id: string, user_ids: string[]) =>
+    unwrap(client.PUT('/api/frontend/templates/{id}/collaborators', { ...byID(id), body: { user_ids } })),
+  people: () => unwrap(client.GET('/api/frontend/people')),
 
   workers: () => unwrap(client.GET('/api/frontend/workers')),
   revokeWorker: (id: string) => unwrap(client.POST('/api/frontend/workers/{id}/revoke', byID(id))),

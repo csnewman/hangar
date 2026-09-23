@@ -169,6 +169,25 @@ func (m *Manager) List(ctx context.Context) ([]User, error) {
 	return out, err
 }
 
+// Directory returns every enabled user, by username: who there is to name as
+// a collaborator.
+func (m *Manager) Directory(ctx context.Context) ([]User, error) {
+	var out []User
+	err := m.db.Transact(ctx, func(tx db.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT `+columns+` FROM users u WHERE u.disabled_at IS NULL
+			ORDER BY lower(u.username)`)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (User, error) { return scan(r) })
+		return err
+	})
+	if out == nil {
+		out = []User{}
+	}
+	return out, err
+}
+
 func (m *Manager) Get(ctx context.Context, id string) (User, error) {
 	if !db.ValidUUID(id) {
 		return User{}, ErrNotFound
