@@ -13,3 +13,7 @@ docs/
 # Reference checkouts of other VMMs, for reading only.
 # Underscore-prefixed so the Go toolchain does not walk into them.
 /_refs/
+
+# The built web UI, embedded by internal/webui.
+/internal/webui/dist/app/
+/web/node_modules/

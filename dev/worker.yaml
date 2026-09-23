@@ -1,0 +1,23 @@
+# A worker for the development stack. It runs the simulated runtime, which
+# needs no KVM, so the whole control loop runs on any machine.
+server:
+  url: http://server:8081
+  token_file: /src/dev/bootstrap-token
+  credential_file: /var/lib/hangar/worker-credential
+
+node:
+  name: dev-worker
+  labels:
+    zone: local
+    runtime: simulated
+
+storage:
+  images: /var/lib/hangar/images
+  environments: /var/lib/hangar/env
+  caches: /var/lib/hangar/caches
+
+reserved:
+  cpus: 0
+  memory: 1GiB
+
+runtime: simulated

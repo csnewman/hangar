@@ -1,0 +1,161 @@
+// Package worker is hangar-worker: it holds the environments the control
+// plane places on this machine.
+//
+// It is level-triggered. The server sends the complete set of environments
+// this worker should hold, and the worker applies all of it every time,
+// whether or not anything changed; it reports the complete set it actually
+// holds, on every change and on a timer. A lost message on either side is
+// repaired by the next one, so nothing needs acknowledging or replaying.
+//
+// Losing the server is not a reason to change anything. A worker that cannot
+// reach it keeps running what it is running, and an environment the server
+// has no record of is reported, never stopped.
+package worker
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/csnewman/hangar/internal/api"
+)
+
+// Runtime is what actually runs environments on a machine.
+type Runtime interface {
+	// Apply moves one environment towards spec.Desired. It returns promptly
+	// and does the work in the background, and it is called again with the
+	// same spec on every desired set, so it must be idempotent.
+	Apply(spec api.EnvironmentSpec)
+	// Observe returns every environment the runtime holds, whether or not
+	// the server asked for it. An environment that has been deleted and
+	// fully removed is absent.
+	Observe() []api.ObservedEnvironment
+	// Changed receives whenever Observe's answer may have changed.
+	Changed() <-chan struct{}
+}
+
+// reportEvery is how often the worker reports even when nothing changed. It
+// is a third of the server's online window, so one lost report does not make
+// the worker look offline.
+const reportEvery = 15 * time.Second
+
+type Worker struct {
+	cfg      *Config
+	rt       Runtime
+	client   *client
+	capacity api.Resources
+	log      *slog.Logger
+}
+
+// New creates a worker. The capacity it offers is this machine's, less what
+// the configuration reserves for the host.
+func New(cfg *Config, rt Runtime, log *slog.Logger) (*Worker, error) {
+	total, err := machineCapacity()
+	if err != nil {
+		return nil, fmt.Errorf("measuring this machine: %w", err)
+	}
+	offered := api.Resources{
+		CPUs:      max(total.CPUs-cfg.Reserved.CPUs, 0),
+		MemoryMiB: max(total.MemoryMiB-cfg.Reserved.Memory.MiB(), 0),
+	}
+	return &Worker{cfg: cfg, rt: rt, client: newClient(cfg.Server.URL), capacity: offered, log: log}, nil
+}
+
+// Run registers if need be, then holds the desired set until ctx ends or the
+// server rejects this worker's credential.
+func (w *Worker) Run(ctx context.Context) error {
+	if err := w.retry(ctx, "registering", func() error { return w.client.loadOrRegister(ctx, w.cfg) }); err != nil {
+		return err
+	}
+	w.log.Info("worker ready", "name", w.cfg.Node.Name, "server", w.cfg.Server.URL,
+		"cpus", w.capacity.CPUs, "memory_mib", w.capacity.MemoryMiB)
+
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	go func() {
+		if err := w.reportLoop(ctx); err != nil {
+			cancel(err)
+		}
+	}()
+	err := w.desiredLoop(ctx)
+	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, context.Canceled) {
+		return cause
+	}
+	return err
+}
+
+func (w *Worker) desiredLoop(ctx context.Context) error {
+	var version int64
+	for {
+		var set api.DesiredSet
+		err := w.retry(ctx, "fetching the desired set", func() error {
+			var err error
+			set, err = w.client.desired(ctx, version)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if set.Version != version {
+			w.log.Debug("desired set", "version", set.Version, "environments", len(set.Environments))
+		}
+		version = set.Version
+		for _, spec := range set.Environments {
+			w.rt.Apply(spec)
+		}
+	}
+}
+
+func (w *Worker) reportLoop(ctx context.Context) error {
+	t := time.NewTicker(reportEvery)
+	defer t.Stop()
+	for {
+		err := w.retry(ctx, "reporting status", func() error {
+			return w.client.report(ctx, api.WorkerStatus{
+				Capacity:     w.capacity,
+				Labels:       w.cfg.Node.Labels,
+				Environments: w.rt.Observe(),
+			})
+		})
+		if err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-t.C:
+		case <-w.rt.Changed():
+			// Changes tend to arrive in bursts, and one report can carry
+			// them all.
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(100 * time.Millisecond):
+			}
+		}
+	}
+}
+
+// retry runs fn until it succeeds, backing off between failures. A rejected
+// credential ends it: no amount of retrying fixes a revoked worker.
+func (w *Worker) retry(ctx context.Context, what string, fn func() error) error {
+	backoff := 500 * time.Millisecond
+	for {
+		err := fn()
+		if err == nil || errors.Is(err, ErrRejected) {
+			return err
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		w.log.Warn(what+" failed, retrying", "err", err, "after", backoff)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(backoff):
+		}
+		backoff = min(backoff*2, 15*time.Second)
+	}
+}

@@ -1,0 +1,10 @@
+# Only what cmd/hangar-server/Dockerfile copies. The rest of the tree -- build
+# output, reference checkouts, Rust targets -- is gigabytes it never reads.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!web/
+web/node_modules
+internal/webui/dist/app

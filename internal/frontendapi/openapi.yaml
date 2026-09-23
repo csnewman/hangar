@@ -1,0 +1,245 @@
+# The API the web UI uses. It is served by hangar-server under /api/frontend
+# and ships in the same binary as the UI that calls it, so it is unversioned
+# and changes with the UI. Anything outside that binary -- scripts, other
+# tools, integrations -- belongs on a versioned API instead.
+#
+# Both sides are generated from this file: `go generate ./internal/frontendapi`
+# for the Go server interface, `npm run gen:api` in web/ for the TypeScript
+# types.
+openapi: 3.0.3
+info:
+  title: Hangar frontend API
+  version: unversioned
+
+paths:
+  /api/frontend/environments:
+    get:
+      operationId: listEnvironments
+      responses:
+        "200":
+          description: Every environment, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Environment" }
+    post:
+      operationId: createEnvironment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateEnvironment" }
+      responses:
+        "201":
+          description: Created. Placement picks it up from here.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/environments/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getEnvironment
+      responses:
+        "200":
+          description: The environment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteEnvironment
+      description: >-
+        Asks for the environment to be deleted. One its worker holds stays,
+        desired "deleted", until the worker reports it gone; one no worker
+        holds is removed at once.
+      responses:
+        "200":
+          description: Deletion is under way.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "204":
+          description: Removed outright.
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/environments/{id}/start:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: startEnvironment
+      responses:
+        "200":
+          description: The environment, now desired running.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/environments/{id}/stop:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: stopEnvironment
+      responses:
+        "200":
+          description: The environment, now desired stopped.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/workers:
+    get:
+      operationId: listWorkers
+      responses:
+        "200":
+          description: Every worker, by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Worker" }
+
+  /api/frontend/workers/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    delete:
+      operationId: deleteWorker
+      description: >-
+        Forgets a revoked worker that holds no environments, freeing its name
+        to register again.
+      responses:
+        "204":
+          description: Removed.
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/workers/{id}/revoke:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: revokeWorker
+      description: >-
+        Stops the worker's credential working. Its environments stay placed
+        on it, because their disks are there.
+      responses:
+        "204":
+          description: Revoked.
+        "404": { $ref: "#/components/responses/NotFound" }
+
+components:
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    NotFound:
+      description: No such object.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Invalid:
+      description: The request was malformed or failed validation.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: The request conflicts with the object's current state.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    DesiredState:
+      type: string
+      description: What the environment's owner has asked for.
+      enum: [running, stopped, deleted]
+
+    Phase:
+      type: string
+      description: >-
+        What the environment is doing, as its worker last reported.
+        "pending" means no worker has reported on it yet.
+      enum: [pending, starting, running, stopping, stopped, failed, deleting]
+
+    Environment:
+      type: object
+      required: [id, name, image, cpus, memory_mib, desired, phase, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        image: { type: string }
+        cpus: { type: integer }
+        memory_mib: { type: integer }
+        desired: { $ref: "#/components/schemas/DesiredState" }
+        phase: { $ref: "#/components/schemas/Phase" }
+        reason:
+          type: string
+          description: Why the environment is in its phase, when there is more to say.
+        worker_id:
+          type: string
+          description: The worker it is placed on. Absent until placed.
+        worker:
+          type: string
+          description: That worker's name.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    CreateEnvironment:
+      type: object
+      required: [name, image, cpus, memory_mib]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          description: A DNS label, since it becomes a hostname.
+          pattern: "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"
+        image: { type: string, minLength: 1 }
+        cpus: { type: integer, minimum: 1, maximum: 64 }
+        memory_mib: { type: integer, minimum: 512, maximum: 262144 }
+
+    Resources:
+      type: object
+      required: [cpus, memory_mib]
+      properties:
+        cpus: { type: integer }
+        memory_mib: { type: integer }
+
+    Worker:
+      type: object
+      required: [id, name, labels, capacity, allocated, online, revoked, unknown, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+        capacity: { $ref: "#/components/schemas/Resources" }
+        allocated:
+          $ref: "#/components/schemas/Resources"
+        online: { type: boolean }
+        revoked: { type: boolean }
+        unknown:
+          type: array
+          description: >-
+            Environments the worker is running that the server has no record
+            of. Reported, never stopped automatically.
+          items: { type: string }
+        last_seen_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }

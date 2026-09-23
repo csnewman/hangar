@@ -1,0 +1,111 @@
+// Command hangar-server is the Hangar control plane: the API, the web UI,
+// placement, and the only program that touches the database.
+//
+// Any number of replicas may run against one database. They share nothing
+// but it.
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/csnewman/hangar/internal/db"
+	"github.com/csnewman/hangar/internal/server"
+	"github.com/csnewman/hangar/internal/webui"
+)
+
+func main() {
+	listen := flag.String("listen", envOr("HANGAR_LISTEN", ":8081"), "address to serve on")
+	dbURL := flag.String("database", os.Getenv("HANGAR_DATABASE_URL"), "Postgres connection URL")
+	tokenFile := flag.String("bootstrap-token-file", os.Getenv("HANGAR_BOOTSTRAP_TOKEN_FILE"),
+		"file holding the token workers register with")
+	debug := flag.Bool("debug", false, "log at debug level")
+	flag.Parse()
+
+	level := slog.LevelInfo
+	if *debug {
+		level = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+
+	if err := run(*listen, *dbURL, *tokenFile); err != nil {
+		fmt.Fprintf(os.Stderr, "hangar-server: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(listen, dbURL, tokenFile string) error {
+	if dbURL == "" {
+		return errors.New("no database: pass -database or set HANGAR_DATABASE_URL")
+	}
+
+	// HANGAR_BOOTSTRAP_TOKEN is for development; a file keeps the token out
+	// of the process environment, where anything that can read /proc can see
+	// it.
+	token := os.Getenv("HANGAR_BOOTSTRAP_TOKEN")
+	if tokenFile != "" {
+		b, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return fmt.Errorf("reading the bootstrap token: %w", err)
+		}
+		token = strings.TrimSpace(string(b))
+	}
+	if token == "" {
+		slog.Warn("no bootstrap token; workers cannot register")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	d, err := db.Open(ctx, dbURL)
+	if err != nil {
+		return err
+	}
+	defer d.Close()
+
+	web := webui.FS()
+	if web == nil {
+		slog.Warn("the web UI was not built into this binary")
+	}
+
+	srv, err := server.New(server.Config{DB: d, BootstrapToken: token, Web: web})
+	if err != nil {
+		return err
+	}
+	go srv.Run(ctx)
+
+	hs := &http.Server{
+		Addr:              listen,
+		Handler:           srv.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- hs.ListenAndServe() }()
+	slog.Info("serving", "addr", listen)
+
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+	}
+	slog.Info("shutting down")
+	shutdown, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return hs.Shutdown(shutdown)
+}
+
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}

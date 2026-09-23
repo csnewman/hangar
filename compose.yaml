@@ -1,0 +1,94 @@
+# Development stack: `docker compose up --watch`, then http://localhost:8080.
+#
+# Caddy is the only published web port. It sends /api/ to hangar-server and
+# everything else to Vite, so the UI reloads as it is edited while talking to
+# the real API on the same origin. The Go services restart on any change to
+# Go source; `go run` rebuilds them from a cached build.
+#
+# `docker compose down -v` resets everything, including the database and the
+# worker's credential. Resetting only one of the two leaves a worker whose
+# credential the server has never heard of.
+
+name: hangar
+
+x-go: &go
+  image: golang:1.27
+  working_dir: /src
+  volumes:
+    - .:/src
+    - gomod:/go/pkg/mod
+    - gocache:/root/.cache/go-build
+  develop:
+    watch:
+      - path: ./internal
+        action: restart
+      - path: ./cmd
+        action: restart
+      - path: ./go.mod
+        action: restart
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: hangar
+      POSTGRES_PASSWORD: hangar
+      POSTGRES_DB: hangar
+    volumes:
+      - pgdata:/var/lib/postgresql
+    ports:
+      # For running the Go tests against it from the host.
+      - 127.0.0.1:55432:5432
+    healthcheck:
+      test: [CMD, pg_isready, -U, hangar]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  server:
+    <<: *go
+    command: [go, run, ./cmd/hangar-server, -listen, ":8081"]
+    environment:
+      HANGAR_DATABASE_URL: postgres://hangar:hangar@postgres:5432/hangar?sslmode=disable
+      HANGAR_BOOTSTRAP_TOKEN_FILE: /src/dev/bootstrap-token
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    <<: *go
+    command: [go, run, ./cmd/hangar-worker, -config, /src/dev/worker.yaml]
+    volumes:
+      - .:/src
+      - gomod:/go/pkg/mod
+      - gocache:/root/.cache/go-build
+      - workerstate:/var/lib/hangar
+    depends_on:
+      - server
+
+  web:
+    image: node:24
+    working_dir: /src/web
+    command: [sh, -c, "npm ci && exec npm run dev"]
+    volumes:
+      - ./web:/src/web
+      # The host's node_modules holds binaries for the host's platform, not
+      # this container's, so the container keeps its own.
+      - webmodules:/src/web/node_modules
+
+  caddy:
+    image: caddy:2
+    volumes:
+      - ./dev/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - 127.0.0.1:8080:8080
+    depends_on:
+      - server
+      - web
+
+volumes:
+  pgdata:
+  gomod:
+  gocache:
+  workerstate:
+  webmodules:
