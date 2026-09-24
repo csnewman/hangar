@@ -1,4 +1,4 @@
-import { Activity, Code2, GitBranch, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
+import { Activity, Code2, FileCode2, GitBranch, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router'
 
 import type { Environment } from '../api'
@@ -14,7 +14,8 @@ const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: '', label: 'Summary', icon: LayoutDashboard, end: true },
   { to: 'metrics', label: 'Metrics', icon: Activity },
   { to: 'terminal', label: 'Terminal', icon: SquareTerminal },
-  { to: 'editor', label: 'Editor', icon: Code2 },
+  { to: 'code', label: 'Code', icon: FileCode2 },
+  { to: 'editor', label: 'VS Code', icon: Code2 },
   { to: 'desktop', label: 'Desktop', icon: Monitor },
 ]
 

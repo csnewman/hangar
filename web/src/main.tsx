@@ -77,6 +77,11 @@ const router = createBrowserRouter([
                 // fetched when a terminal is first opened, not with the page.
                 lazy: async () => ({ Component: (await import('./terminal/TerminalTab')).TerminalTab }),
               },
+              {
+                path: 'code',
+                // CodeMirror and Yjs are fetched when the Code tab is first opened.
+                lazy: async () => ({ Component: (await import('./code/CodeTab')).CodeTab }),
+              },
               { path: 'editor', element: <EditorTab /> },
               {
                 path: 'desktop',

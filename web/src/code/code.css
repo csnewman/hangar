@@ -1,0 +1,709 @@
+/* The Code tab: IntelliJ's arrangement of tool windows, at IntelliJ's density,
+   in Hangar's colours. */
+
+.code-page {
+  --code-bg: var(--surface);
+  --code-active-line: rgb(0 0 0 / 0.035);
+  --code-selection: rgb(33 125 220 / 0.22);
+  --code-font: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, 'DejaVu Sans Mono', monospace;
+  --code-git-modified: #2f6fbf;
+  --code-git-added: #2c8a3e;
+  --code-git-unversioned: #b8491d;
+  --code-git-deleted: #7a7a7a;
+  --code-git-conflict: #c9302c;
+
+  flex: 1;
+  display: flex;
+  min-height: 520px;
+  margin: 10px 28px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .code-page {
+    --code-bg: #15191f;
+    --code-active-line: rgb(255 255 255 / 0.04);
+    --code-selection: rgb(59 155 224 / 0.3);
+    --code-git-modified: #6aa6f2;
+    --code-git-added: #5cc27a;
+    --code-git-unversioned: #e58a5b;
+    --code-git-deleted: #8a96a8;
+    --code-git-conflict: #f07370;
+  }
+}
+
+/* Stripes */
+
+.code-stripe {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 36px;
+  padding: 6px 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+
+.code-stripe:last-child {
+  border-right: none;
+  border-left: 1px solid var(--border);
+}
+
+.code-stripe-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.code-stripe-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.code-stripe-btn-on {
+  background: var(--sidebar-active);
+  color: var(--accent);
+}
+
+.code-stripe-count {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 9.5px;
+  line-height: 14px;
+  font-weight: 650;
+}
+
+/* Panels */
+
+.code-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-split {
+  background: var(--border);
+  transition: background 0.1s;
+}
+
+.code-split-v {
+  width: 1px;
+}
+
+.code-split-h {
+  height: 1px;
+}
+
+.code-split:hover,
+.code-split[data-separator='active'] {
+  background: var(--accent);
+}
+
+.code-status {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 5px 12px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-pop);
+  font-size: 12.5px;
+  z-index: 5;
+}
+
+/* Tool windows */
+
+.code-tool {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  min-width: 0;
+}
+
+.code-tool-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 4px 0 10px;
+  border-bottom: 1px solid var(--border);
+  flex: none;
+  min-width: 0;
+}
+
+.code-tool-title {
+  font-weight: 600;
+  font-size: 12.5px;
+}
+
+.code-tool-spacer {
+  flex: 1;
+}
+
+.code-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  min-width: 22px;
+  justify-content: center;
+  padding: 0 3px;
+  border-radius: 5px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.code-tool-btn:hover {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.code-tool-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.code-note {
+  padding: 10px 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.code-note-error {
+  color: var(--danger);
+}
+
+.code-link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.code-danger {
+  color: var(--danger);
+}
+
+.btn-sm {
+  padding: 4px 10px;
+  font-size: 12.5px;
+}
+
+/* Project */
+
+.code-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 4px 0 12px;
+  user-select: none;
+}
+
+.code-tree-root {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+.code-tree-rootpath {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding-right: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.code-tree-row:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-tree-row-on {
+  background: var(--sidebar-active);
+}
+
+.code-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-tree-input {
+  flex: 1;
+  min-width: 0;
+  height: 20px;
+  padding: 0 4px;
+  font: inherit;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+}
+
+.code-chev {
+  flex: none;
+  color: var(--muted);
+  transition: transform 0.1s ease;
+}
+
+.code-chev-open {
+  transform: rotate(90deg);
+}
+
+.code-chev-space {
+  width: 13px;
+  flex: none;
+}
+
+.code-icon-dir {
+  flex: none;
+  color: #c09553;
+}
+
+.code-icon-file {
+  flex: none;
+  color: var(--muted);
+}
+
+.code-icon-diff {
+  flex: none;
+  color: var(--accent);
+}
+
+.code-git-modified {
+  color: var(--code-git-modified);
+}
+
+.code-git-added {
+  color: var(--code-git-added);
+}
+
+.code-git-unversioned {
+  color: var(--code-git-unversioned);
+}
+
+.code-git-conflict {
+  color: var(--code-git-conflict);
+}
+
+.code-menu {
+  position: fixed;
+  z-index: 20;
+  min-width: 170px;
+  padding: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: var(--shadow-pop);
+}
+
+.code-menu button {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  text-align: left;
+  background: none;
+  border: none;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.code-menu button:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-menu .code-menu-danger {
+  color: var(--danger);
+}
+
+/* Changes */
+
+.code-changes {
+  flex: 1;
+  overflow: auto;
+  padding-bottom: 8px;
+}
+
+.code-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-changes-section {
+  padding-top: 4px;
+}
+
+.code-changes-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+
+.code-change {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 24px;
+  padding: 0 4px 0 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.code-change:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-change-letter {
+  width: 12px;
+  font-family: var(--code-font);
+  font-size: 11.5px;
+  font-weight: 700;
+  flex: none;
+}
+
+.code-change-modified {
+  color: var(--code-git-modified);
+}
+
+.code-change-added,
+.code-change-renamed {
+  color: var(--code-git-added);
+}
+
+.code-change-unversioned {
+  color: var(--code-git-unversioned);
+}
+
+.code-change-deleted {
+  color: var(--code-git-deleted);
+}
+
+.code-change-conflict {
+  color: var(--code-git-conflict);
+}
+
+.code-change-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-change-dir {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-change-actions {
+  display: none;
+  gap: 1px;
+}
+
+.code-change:hover .code-change-actions {
+  display: inline-flex;
+}
+
+.code-commit {
+  flex: none;
+  border-top: 1px solid var(--border);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.code-commit-message {
+  min-height: 64px;
+  resize: vertical;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 12.5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--code-bg);
+  color: var(--text);
+}
+
+.code-commit-message:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.code-commit-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Editors */
+
+.code-editors {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--code-bg);
+  min-width: 0;
+}
+
+.code-tabs {
+  display: flex;
+  flex: none;
+  height: 34px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  scrollbar-width: thin;
+}
+
+.code-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 6px 0 12px;
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12.5px;
+  border-bottom: 2px solid transparent;
+}
+
+.code-tab:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-tab-on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  background: var(--code-bg);
+}
+
+.code-tab-close {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  visibility: hidden;
+}
+
+.code-tab:hover .code-tab-close,
+.code-tab-on .code-tab-close {
+  visibility: visible;
+}
+
+.code-tab-close:hover {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.code-editor-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.code-editor {
+  position: absolute;
+  inset: 0;
+}
+
+.code-editor .cm-editor {
+  height: 100%;
+}
+
+.code-editor .cm-editor.cm-focused {
+  outline: none;
+}
+
+/* A shared caret's name, as y-codemirror.next draws it. */
+.code-editor .cm-ySelectionInfo {
+  font-family: var(--font);
+  font-size: 10.5px;
+  padding: 1px 4px;
+  border-radius: 3px 3px 3px 0;
+  opacity: 1;
+}
+
+.code-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  text-align: center;
+  color: var(--muted);
+  padding: 20px;
+}
+
+.code-empty p {
+  margin: 4px 0;
+}
+
+.code-diff {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-diff-heads {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: none;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.code-diff-heads span {
+  padding: 4px 12px;
+}
+
+.code-diff-host {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.code-diff-host .cm-mergeView {
+  height: 100%;
+}
+
+.code-diff-host .cm-editor {
+  height: auto;
+}
+
+/* Terminal */
+
+.code-term-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 8px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.code-term-tab {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 5px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.code-term-tab button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 180px;
+  padding: 2px 4px 2px 6px;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 12px;
+  color: inherit;
+  cursor: pointer;
+}
+
+.code-term-tab span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-term-tab:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-term-tab-on {
+  background: var(--sidebar-active);
+  color: var(--text);
+}
+
+.code-term-tab .code-term-close {
+  padding: 2px 4px;
+  visibility: hidden;
+}
+
+.code-term-tab:hover .code-term-close {
+  visibility: visible;
+}
+
+.code-term {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: 4px 0 0 6px;
+}
+
+.code-term .term-pane {
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+}

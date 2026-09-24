@@ -12,6 +12,14 @@
     "gen:api": "openapi-typescript ../internal/frontendapi/openapi.yaml -o src/gen/frontend.ts"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/language-data": "^6.5.2",
+    "@codemirror/merge": "^6.12.2",
+    "@codemirror/search": "^6.7.2",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.43.13",
     "@novnc/novnc": "^1.7.0",
     "@tanstack/react-query": "^5.103.2",
     "@xterm/addon-clipboard": "0.3.0-beta.303",
@@ -22,11 +30,17 @@
     "@xterm/addon-web-links": "0.13.0-beta.301",
     "@xterm/addon-webgl": "0.20.0-beta.300",
     "@xterm/xterm": "6.1.0-beta.304",
+    "codemirror": "^6.0.2",
+    "lib0": "^0.2.117",
     "lucide-react": "^1.47.0",
     "openapi-fetch": "^0.17.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "react-router": "^8.4.0"
+    "react-resizable-panels": "^4.13.3",
+    "react-router": "^8.4.0",
+    "y-codemirror.next": "^0.3.6",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

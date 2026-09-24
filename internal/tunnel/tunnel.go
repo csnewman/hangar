@@ -42,6 +42,9 @@ const (
 	// KindDesktop carries one VNC (RFB) connection to the environment's
 	// desktop.
 	KindDesktop = "desktop"
+	// KindCode carries one connection to the environment's Code tab
+	// service.
+	KindCode = "code"
 )
 
 // Header opens a stream.

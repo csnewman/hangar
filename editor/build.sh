@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds the editor every environment runs: VS Code's own server (Code - OSS,
 # MIT) at a pinned release, with the patches in patches/ applied, the
-# extensions in extensions/ built in, and product.json merged over upstream's.
+# extensions in extensions/ built in, and product.json merged over upstream's;
+# and beside it the Code tab's service (code/).
 #
 #   editor/build.sh [out-dir]
 #
@@ -58,11 +59,6 @@ while read -r patch; do
 	git apply "$here/patches/$patch"
 done < "$here/patches/series"
 
-# The built-in Copilot extension is Microsoft's service, reached only with a
-# GitHub Copilot subscription, and the largest built-in by far. Hangar's build
-# leaves it out; no-builtin-copilot.diff lets the packaging do without it.
-rm -rf extensions/copilot
-
 # Hangar's own extensions are built in, as VS Code's are.
 cp -a "$here"/extensions/. extensions/
 
@@ -80,14 +76,21 @@ if [ "$(cat "$stamp" 2>/dev/null)" != "$lock_sha" ]; then
 	echo "$lock_sha" > "$stamp"
 fi
 
+# The built-in Copilot extension is Microsoft's service, reached only with a
+# GitHub Copilot subscription, and the largest built-in by far. Hangar's build
+# leaves it out; no-builtin-copilot.diff lets the packaging do without it. It
+# goes after installing, whose postinstall visits every extension's directory.
+rm -rf extensions/copilot
+
 NODE_OPTIONS=--max-old-space-size=8192 npm run gulp "vscode-reh-web-linux-$arch-min"
 
 name=vscode-reh-web-linux-$arch
 rm -rf "${out:?}/$name"
 cp -a "$work/$name" "$out/$name"
+"$here/code-build.sh" "$out/$name" "$work/hangar-code"
 # What Hangar adds to upstream, as one hash: the patches, the product overlay
 # and the extensions.
-hangar_sha=$(cd "$here" && find patches product.json extensions -type f | LC_ALL=C sort | xargs cat | sha256sum | cut -d' ' -f1)
+hangar_sha=$(cd "$here" && find patches product.json extensions code/src code/package-lock.json -type f | LC_ALL=C sort | xargs cat | sha256sum | cut -d' ' -f1)
 printf 'vscode %s %s\nhangar %s\n' "$VSCODE_TAG" "$VSCODE_COMMIT" "$hangar_sha" > "$out/$name/HANGAR_VERSION"
 
 "$here/disk.sh" "$out/$name" "$out/editor-$arch.ext4"

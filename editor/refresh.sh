@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Copies editor/extensions into an existing build in out/editor and remakes
-# its disk, without rebuilding VS Code: for working on Hangar's extensions,
-# which are plain JavaScript and need no build of their own. Linux only.
+# Rebuilds what Hangar adds to the editor disk -- its extensions and the Code
+# tab's service -- into an existing build in out/editor, and remakes the disk,
+# without rebuilding VS Code. For working on those; Linux only.
+#
+#   editor/refresh.sh [out-dir]
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 out=$(realpath -m "${1:-$here/../out/editor}")
@@ -14,4 +16,5 @@ for ext in "$here"/extensions/*/; do
 	rm -rf "$out/$name/extensions/$(basename "$ext")"
 	cp -a "$ext" "$out/$name/extensions/"
 done
+"$here/code-build.sh" "$out/$name" "${HANGAR_EDITOR_WORK:-$HOME/.cache/hangar-editor}/hangar-code"
 "$here/disk.sh" "$out/$name" "$out/editor-$arch.ext4"

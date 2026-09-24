@@ -41,10 +41,12 @@ const DiskLabel = "hangar-editor"
 // ErrNoEditor is returned when the node supplied no editor.
 var ErrNoEditor = errors.New("this environment has no editor: its worker supplies none")
 
+// MountPoint is where the editor disk is mounted in the guest.
+const MountPoint = "/run/hangar/editor"
+
 const (
-	mountPoint = "/run/hangar/editor"
-	socketDir  = "/run/hangar/vscode"
-	logFile    = "/var/log/hangar-vscode.log"
+	socketDir = "/run/hangar/vscode"
+	logFile   = "/var/log/hangar-vscode.log"
 	// startTimeout covers a cold start: Node loading the server from a disk
 	// not yet in the page cache.
 	startTimeout = 60 * time.Second
@@ -114,7 +116,7 @@ func (s *Server) ensure(ctx context.Context) (string, error) {
 }
 
 func (s *Server) start(ctx context.Context) (*process, error) {
-	if err := mountEditor(); err != nil {
+	if err := MountEditor(); err != nil {
 		return nil, err
 	}
 	u, err := user.Lookup(s.user)
@@ -138,7 +140,7 @@ func (s *Server) start(ctx context.Context) (*process, error) {
 	}
 	defer logOut.Close()
 
-	cmd := exec.Command(filepath.Join(mountPoint, "bin", "code-server-oss"),
+	cmd := exec.Command(filepath.Join(MountPoint, "bin", "code-server-oss"),
 		"--socket-path", socket,
 		"--without-connection-token",
 		"--accept-server-license-terms",
@@ -186,12 +188,13 @@ func (s *Server) start(ctx context.Context) (*process, error) {
 	}
 }
 
-// mountEditor mounts the node's editor disk, read-only, if it is not
-// mounted already.
-func mountEditor() error {
+// MountEditor mounts the node's editor disk at MountPoint, read-only, if it is
+// not mounted already. It carries VS Code's server and the Node it runs on,
+// which the Code tab's service uses too.
+func MountEditor() error {
 	if mounts, err := os.ReadFile("/proc/mounts"); err == nil {
 		for _, line := range strings.Split(string(mounts), "\n") {
-			if f := strings.Fields(line); len(f) > 1 && f[1] == mountPoint {
+			if f := strings.Fields(line); len(f) > 1 && f[1] == MountPoint {
 				return nil
 			}
 		}
@@ -200,10 +203,10 @@ func mountEditor() error {
 	if err != nil {
 		return ErrNoEditor
 	}
-	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
+	if err := os.MkdirAll(MountPoint, 0o755); err != nil {
 		return err
 	}
-	if out, err := exec.Command("mount", "-t", "ext4", "-o", "ro", dev, mountPoint).CombinedOutput(); err != nil {
+	if out, err := exec.Command("mount", "-t", "ext4", "-o", "ro", dev, MountPoint).CombinedOutput(); err != nil {
 		return fmt.Errorf("mounting the editor: %v: %s", err, strings.TrimSpace(string(out)))
 	}
 	return nil
