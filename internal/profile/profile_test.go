@@ -204,13 +204,14 @@ func TestFilesFollowTheOwner(t *testing.T) {
 	}
 }
 
-// Claude refreshes its sign-in under a lock directory. Taken in one
-// environment it is held in the others, and the new credentials reach them
-// before they let it go.
-func TestLockCarriesAcrossEnvironments(t *testing.T) {
+// Claude refreshes its sign-in under a lock directory, which LockFS puts
+// to the server before it is made. Held in one environment, it cannot be
+// taken in another; taken, it comes with the profile's latest, and let go,
+// it sends what changed under it first.
+func TestLocksAreTheServers(t *testing.T) {
 	p := newPlane(t)
-	_, a, _ := p.env(t, "a", false)
-	_, b, _ := p.env(t, "b", false)
+	_, a, ga := p.env(t, "a", false)
+	_, b, gb := p.env(t, "b", false)
 	const creds = ".claude/.credentials.json"
 	const lock = ".claude/.oauth_refresh.lock"
 	os.MkdirAll(filepath.Join(a, ".claude"), 0o755)
@@ -218,28 +219,75 @@ func TestLockCarriesAcrossEnvironments(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, "the credentials to reach the other", func() bool { return read(b, creds) == "old" })
-	if st, err := os.Stat(filepath.Join(b, creds)); err != nil || st.Mode().Perm() != 0o600 {
-		t.Errorf("credentials arrived as %v, %v", st.Mode(), err)
+
+	held, err := ga.Lock(lock)
+	if err != nil || !held {
+		t.Fatalf("taking the lock in a: %v, %v", held, err)
+	}
+	if held, err := gb.Lock(lock); err != nil || held {
+		t.Fatalf("b took a lock a holds: %v, %v", held, err)
 	}
 
-	if err := os.Mkdir(filepath.Join(a, lock), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "the lock to be held in the other", func() bool { return exists(b, lock) })
-	// A program there waiting on the lock sees it held.
-	if err := os.Mkdir(filepath.Join(b, lock), 0o755); !errors.Is(err, os.ErrExist) {
-		t.Fatalf("taking the held lock: %v", err)
-	}
-
+	// Refreshed under the lock, and let go at once: faster than the file
+	// would travel on its own.
 	if err := os.WriteFile(filepath.Join(a, creds), []byte("new"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(a, lock)); err != nil {
+	if err := ga.Unlock(lock); err != nil {
 		t.Fatal(err)
 	}
-	eventually(t, "the lock to be let go in the other", func() bool { return !exists(b, lock) })
+	held, err = gb.Lock(lock)
+	if err != nil || !held {
+		t.Fatalf("taking the lock in b once a let go: %v, %v", held, err)
+	}
 	if got := read(b, creds); got != "new" {
-		t.Fatalf("the lock was let go with the credentials still %q", got)
+		t.Fatalf("b took the lock with the credentials still %q", got)
+	}
+	if err := gb.Unlock(lock); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A user shares paths of their own, files and directories; what they stop
+// sharing stays in each environment as that environment's own.
+func TestUserPaths(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	_, a, _ := p.env(t, "a", false)
+	_, b, _ := p.env(t, "b", false)
+	for _, bad := range []string{"", "/etc/passwd", "../x", ".cache/", ".claude/", ".claude/projects/x", ".vscode-server-oss/data/"} {
+		if err := p.store.AddPath(ctx, p.owner, bad); !errors.Is(err, profile.ErrInvalid) {
+			t.Errorf("sharing %q: %v", bad, err)
+		}
+	}
+	if err := p.store.AddPath(ctx, p.owner, ".config/nvim/"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.AddPath(ctx, p.owner, ".bash_aliases"); err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Join(a, ".config", "nvim", "lua"), 0o755)
+	os.WriteFile(filepath.Join(a, ".config", "nvim", "lua", "init.lua"), []byte("-- mine\n"), 0o644)
+	os.WriteFile(filepath.Join(a, ".bash_aliases"), []byte("alias ll='ls -l'\n"), 0o644)
+	eventually(t, "a shared directory to reach the other", func() bool {
+		return read(b, ".config/nvim/lua/init.lua") == "-- mine\n"
+	})
+	eventually(t, "a shared file to reach the other", func() bool { return read(b, ".bash_aliases") == "alias ll='ls -l'\n" })
+
+	if err := p.store.RemovePath(ctx, p.owner, ".bash_aliases"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	os.WriteFile(filepath.Join(a, ".bash_aliases"), []byte("changed\n"), 0o644)
+	time.Sleep(500 * time.Millisecond)
+	if got := read(b, ".bash_aliases"); got != "alias ll='ls -l'\n" {
+		t.Errorf("a file the profile stopped sharing still travels: %q", got)
+	}
+	files, _ := p.store.Files(ctx, p.owner, true)
+	for _, f := range files {
+		if f.Path == ".bash_aliases" {
+			t.Error("the profile kept a file it stopped sharing")
+		}
 	}
 }
 

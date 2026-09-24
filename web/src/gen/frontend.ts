@@ -107,6 +107,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/me/profile/paths": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Share another path, relative to the home directory: a file, or a directory, ending in a slash, with everything under it. It is taken from and given to every environment the user owns. */
+        post: operations["addProfilePath"];
+        /** @description Stop sharing a path the user added. Each environment keeps its copy, as a file of its own. */
+        delete: operations["removeProfilePath"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/me/profile/keys": {
         parameters: {
             query?: never;
@@ -494,11 +512,16 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        ProfilePath: {
+            path: string;
+        };
         Profile: {
             files: components["schemas"]["ProfileFile"][];
             keys: components["schemas"]["SSHKey"][];
             /** @description What a profile holds, relative to the home directory. One ending in a slash holds everything under it. */
             paths: string[];
+            /** @description The paths among them the user added, which they may remove. */
+            own_paths: string[];
             /** @description Whether the server can keep secrets: without its key, credentials and SSH keys are refused. */
             secrets: boolean;
         };
@@ -1042,6 +1065,52 @@ export interface operations {
             };
             400: components["responses"]["Invalid"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    addProfilePath: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfilePath"];
+            };
+        };
+        responses: {
+            /** @description Shared. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    removeProfilePath: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No longer shared. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
         };
     };
     addSSHKey: {

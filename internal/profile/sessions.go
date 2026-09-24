@@ -10,6 +10,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"path"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -154,6 +157,10 @@ type session struct {
 	// sent back: the agent has them, and a later change it has made since
 	// must not be overwritten by the echo of an earlier one.
 	own map[int64]bool
+	// sent is the last version of the profile sent, and paths the shared
+	// paths.
+	sent  int64
+	paths Paths
 }
 
 func (x *session) nudge() {
@@ -238,20 +245,19 @@ func (x *session) serve(ctx context.Context) error {
 		}
 	}()
 
-	// Everything, then that it is everything: the agent sends what it has
-	// that the profile does not only once it knows what the profile has.
-	var sent int64
-	if sent, err = x.sendFiles(ctx, 0); err != nil {
+	// What is shared, everything in it, then that it is everything: the
+	// agent sends what it has that the profile does not only once it knows
+	// what the profile has.
+	if err := x.sendPaths(ctx); err != nil {
+		return err
+	}
+	if err := x.sendFiles(ctx); err != nil {
 		return err
 	}
 	if err := x.sendKeys(ctx); err != nil {
 		return err
 	}
 	if err := x.send(Message{Type: TypeSynced}); err != nil {
-		return err
-	}
-	held := map[string]bool{}
-	if err := x.sendLocks(ctx, held); err != nil {
 		return err
 	}
 
@@ -270,38 +276,49 @@ func (x *session) serve(ctx context.Context) error {
 		case <-x.nudges:
 		case <-tick.C:
 		}
-		// Files before locks: a program waiting on a lock here must find
-		// what was changed under it before the lock is let go.
-		if sent, err = x.sendFiles(ctx, sent); err != nil {
+		if err := x.sendPaths(ctx); err != nil {
+			return err
+		}
+		if err := x.sendFiles(ctx); err != nil {
 			return err
 		}
 		if err := x.sendKeys(ctx); err != nil {
 			return err
 		}
-		if err := x.sendLocks(ctx, held); err != nil {
-			return err
-		}
 	}
 }
 
-func (x *session) sendFiles(ctx context.Context, after int64) (int64, error) {
-	files, err := x.s.store.Since(ctx, x.owner, x.trusted, after)
+// sendPaths sends the shared paths when they are not what was last sent.
+func (x *session) sendPaths(ctx context.Context) error {
+	paths, err := x.s.store.Paths(ctx, x.owner)
 	if err != nil {
-		return after, err
+		return err
+	}
+	if slices.Equal(paths, x.paths) {
+		return nil
+	}
+	x.paths = paths
+	return x.send(Message{Type: TypePaths, Paths: paths})
+}
+
+// sendFiles sends what changed since the last it sent.
+func (x *session) sendFiles(ctx context.Context) error {
+	files, err := x.s.store.Since(ctx, x.owner, x.trusted, x.sent)
+	if err != nil {
+		return err
 	}
 	for _, f := range files {
+		x.sent = max(x.sent, f.Version)
 		if x.own[f.Version] {
 			delete(x.own, f.Version)
-			after = max(after, f.Version)
 			continue
 		}
 		if err := x.send(Message{Type: TypeFile, Path: f.Path, Data: f.Data, Mode: f.Mode,
 			Version: f.Version, Deleted: f.Deleted}); err != nil {
-			return after, err
+			return err
 		}
-		after = max(after, f.Version)
 	}
-	return after, nil
+	return nil
 }
 
 // sendKeys sends the public keys the environment's SSH agent offers. It is
@@ -320,31 +337,11 @@ func (x *session) sendKeys(ctx context.Context) error {
 	return x.send(Message{Type: TypeKeys, Keys: keys})
 }
 
-// sendLocks tells the agent which locks another environment holds, so it
-// holds them here, and which it can let go.
-func (x *session) sendLocks(ctx context.Context, held map[string]bool) error {
-	holders, err := x.s.store.LockHolders(ctx, x.owner)
-	if err != nil {
-		return err
-	}
-	for _, l := range Locks {
-		h, ok := holders[l.Path]
-		elsewhere := ok && h != x.env
-		if elsewhere != held[l.Path] {
-			if err := x.send(Message{Type: TypeLock, Path: l.Path, Held: elsewhere}); err != nil {
-				return err
-			}
-			held[l.Path] = elsewhere
-		}
-	}
-	return nil
-}
-
 func (x *session) handle(ctx context.Context, m Message) error {
 	log := x.s.log.With("environment", x.env)
 	switch m.Type {
 	case TypePut, TypeDelete:
-		if !Synced(m.Path) || (Secret(m.Path) && !x.trusted) {
+		if !x.paths.Synced(m.Path) || (Secret(m.Path) && !x.trusted) {
 			return nil
 		}
 		var f File
@@ -362,21 +359,49 @@ func (x *session) handle(ctx context.Context, m Message) error {
 			return nil
 		}
 		return err
-	case TypeLocked:
+	case TypeLock:
 		if _, ok := LockAt(m.Path); !ok {
 			return nil
 		}
+		if m.ID == 0 {
+			// A renewal from the holder.
+			if m.Held {
+				_, err := x.s.store.Lock(ctx, x.owner, m.Path, x.env)
+				return err
+			}
+			return nil
+		}
+		reply := Message{Type: TypeLocked, ID: m.ID, Path: m.Path}
 		if !m.Held {
-			return x.s.store.Unlock(ctx, x.owner, m.Path, x.env)
+			// The agent sent what changed under the lock before asking
+			// to let it go, and those have been written above.
+			if err := x.s.store.Unlock(ctx, x.owner, m.Path, x.env); err != nil {
+				return err
+			}
+			return x.send(reply)
 		}
 		got, err := x.s.store.Lock(ctx, x.owner, m.Path, x.env)
-		if err == nil && !got {
-			// Taken in two environments at once, closer together than the
-			// lock can travel. The program here goes on, and finds on disk
-			// whatever the other wrote when it next reads.
-			log.Warn("profile: a lock was taken in two environments at once", "path", m.Path)
+		if err != nil {
+			return err
 		}
-		return err
+		if got {
+			// The holder starts from the profile as it stands: what it
+			// is about to read, another environment may have just
+			// written.
+			files, err := x.s.store.Files(ctx, x.owner, x.trusted)
+			if err != nil {
+				return err
+			}
+			dir := path.Dir(m.Path) + "/"
+			for _, f := range files {
+				if strings.HasPrefix(f.Path, dir) {
+					reply.Files = append(reply.Files, Message{Type: TypeFile, Path: f.Path, Data: f.Data,
+						Mode: f.Mode, Version: f.Version, Deleted: f.Deleted})
+				}
+			}
+		}
+		reply.Held = got
+		return x.send(reply)
 	case TypeSign:
 		reply := Message{Type: TypeSigned, ID: m.ID}
 		sig, err := x.sign(ctx, m)

@@ -315,6 +315,9 @@ type Profile struct {
 	Files []ProfileFile `json:"files"`
 	Keys  []SSHKey      `json:"keys"`
 
+	// OwnPaths The paths among them the user added, which they may remove.
+	OwnPaths []string `json:"own_paths"`
+
 	// Paths What a profile holds, relative to the home directory. One ending in a slash holds everything under it.
 	Paths []string `json:"paths"`
 
@@ -339,6 +342,11 @@ type ProfileFileContent struct {
 	Mode      int       `json:"mode"`
 	Path      string    `json:"path"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ProfilePath defines model for ProfilePath.
+type ProfilePath struct {
+	Path string `json:"path"`
 }
 
 // PutProfileFile defines model for PutProfileFile.
@@ -560,6 +568,11 @@ type PutProfileFileParams struct {
 	Path string `form:"path" json:"path"`
 }
 
+// RemoveProfilePathParams defines parameters for RemoveProfilePath.
+type RemoveProfilePathParams struct {
+	Path string `form:"path" json:"path"`
+}
+
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = Login
 
@@ -577,6 +590,9 @@ type PutProfileFileJSONRequestBody = PutProfileFile
 
 // AddSSHKeyJSONRequestBody defines body for AddSSHKey for application/json ContentType.
 type AddSSHKeyJSONRequestBody = AddSSHKey
+
+// AddProfilePathJSONRequestBody defines body for AddProfilePath for application/json ContentType.
+type AddProfilePathJSONRequestBody = ProfilePath
 
 // CreateTemplateJSONRequestBody defines body for CreateTemplate for application/json ContentType.
 type CreateTemplateJSONRequestBody = TemplateInput
@@ -661,6 +677,12 @@ type ServerInterface interface {
 
 	// (DELETE /api/frontend/me/profile/keys/{id})
 	DeleteSSHKey(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (DELETE /api/frontend/me/profile/paths)
+	RemoveProfilePath(w http.ResponseWriter, r *http.Request, params RemoveProfilePathParams)
+
+	// (POST /api/frontend/me/profile/paths)
+	AddProfilePath(w http.ResponseWriter, r *http.Request)
 
 	// (GET /api/frontend/people)
 	ListPeople(w http.ResponseWriter, r *http.Request)
@@ -1200,6 +1222,53 @@ func (siw *ServerInterfaceWrapper) DeleteSSHKey(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// RemoveProfilePath operation middleware
+func (siw *ServerInterfaceWrapper) RemoveProfilePath(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RemoveProfilePathParams
+
+	// ------------- Required query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemoveProfilePath(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AddProfilePath operation middleware
+func (siw *ServerInterfaceWrapper) AddProfilePath(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AddProfilePath(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListPeople operation middleware
 func (siw *ServerInterfaceWrapper) ListPeople(w http.ResponseWriter, r *http.Request) {
 
@@ -1672,6 +1741,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.DeleteProfileFile)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.GetProfileFile)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.PutProfileFile)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.RemoveProfilePath)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.AddProfilePath)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/keys", wrapper.AddSSHKey)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/keys/{id}", wrapper.DeleteSSHKey)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/people", wrapper.ListPeople)
@@ -2882,6 +2953,94 @@ func (response DeleteSSHKey404JSONResponse) VisitDeleteSSHKeyResponse(w http.Res
 	return err
 }
 
+type RemoveProfilePathRequestObject struct {
+	Params RemoveProfilePathParams
+}
+
+type RemoveProfilePathResponseObject interface {
+	VisitRemoveProfilePathResponse(w http.ResponseWriter) error
+}
+
+type RemoveProfilePath204Response struct {
+}
+
+func (response RemoveProfilePath204Response) VisitRemoveProfilePathResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RemoveProfilePath401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RemoveProfilePath401JSONResponse) VisitRemoveProfilePathResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveProfilePath404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RemoveProfilePath404JSONResponse) VisitRemoveProfilePathResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddProfilePathRequestObject struct {
+	Body *AddProfilePathJSONRequestBody
+}
+
+type AddProfilePathResponseObject interface {
+	VisitAddProfilePathResponse(w http.ResponseWriter) error
+}
+
+type AddProfilePath204Response struct {
+}
+
+func (response AddProfilePath204Response) VisitAddProfilePathResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type AddProfilePath400JSONResponse struct{ InvalidJSONResponse }
+
+func (response AddProfilePath400JSONResponse) VisitAddProfilePathResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddProfilePath401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AddProfilePath401JSONResponse) VisitAddProfilePathResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListPeopleRequestObject struct {
 }
 
@@ -3970,6 +4129,12 @@ type StrictServerInterface interface {
 	// (DELETE /api/frontend/me/profile/keys/{id})
 	DeleteSSHKey(ctx context.Context, request DeleteSSHKeyRequestObject) (DeleteSSHKeyResponseObject, error)
 
+	// (DELETE /api/frontend/me/profile/paths)
+	RemoveProfilePath(ctx context.Context, request RemoveProfilePathRequestObject) (RemoveProfilePathResponseObject, error)
+
+	// (POST /api/frontend/me/profile/paths)
+	AddProfilePath(ctx context.Context, request AddProfilePathRequestObject) (AddProfilePathResponseObject, error)
+
 	// (GET /api/frontend/people)
 	ListPeople(ctx context.Context, request ListPeopleRequestObject) (ListPeopleResponseObject, error)
 
@@ -4624,6 +4789,63 @@ func (sh *strictHandler) DeleteSSHKey(w http.ResponseWriter, r *http.Request, id
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(DeleteSSHKeyResponseObject); ok {
 		if err := validResponse.VisitDeleteSSHKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RemoveProfilePath operation middleware
+func (sh *strictHandler) RemoveProfilePath(w http.ResponseWriter, r *http.Request, params RemoveProfilePathParams) {
+	var request RemoveProfilePathRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RemoveProfilePath(ctx, request.(RemoveProfilePathRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RemoveProfilePath")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RemoveProfilePathResponseObject); ok {
+		if err := validResponse.VisitRemoveProfilePathResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AddProfilePath operation middleware
+func (sh *strictHandler) AddProfilePath(w http.ResponseWriter, r *http.Request) {
+	var request AddProfilePathRequestObject
+
+	var body AddProfilePathJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AddProfilePath(ctx, request.(AddProfilePathRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AddProfilePath")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AddProfilePathResponseObject); ok {
+		if err := validResponse.VisitAddProfilePathResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -7,6 +7,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -121,15 +122,18 @@ func (s *Store) files(ctx context.Context, userID string, secrets bool, after in
 
 // Put writes a file, returning it as stored.
 func (s *Store) Put(ctx context.Context, userID, path string, data []byte, mode uint32) (File, error) {
-	if !Synced(path) {
-		return File{}, fmt.Errorf("%w: %s is not part of a profile", ErrInvalid, path)
+	paths, err := s.Paths(ctx, userID)
+	if err != nil {
+		return File{}, err
+	}
+	if !paths.Synced(path) {
+		return File{}, fmt.Errorf("%w: %s is not shared", ErrInvalid, path)
 	}
 	if len(data) > MaxFileSize {
 		return File{}, fmt.Errorf("%w: %s is larger than %d bytes", ErrInvalid, path, MaxFileSize)
 	}
 	stored := data
 	if Secret(path) {
-		var err error
 		if stored, err = s.sealer.seal(data, userID+"/"+path); err != nil {
 			return File{}, err
 		}
@@ -143,8 +147,8 @@ func (s *Store) Put(ctx context.Context, userID, path string, data []byte, mode 
 
 // Delete removes a file, leaving a mark that it is gone.
 func (s *Store) Delete(ctx context.Context, userID, path string) (File, error) {
-	if !Synced(path) {
-		return File{}, fmt.Errorf("%w: %s is not part of a profile", ErrInvalid, path)
+	if !Valid(path) {
+		return File{}, fmt.Errorf("%w: %q is not a path in the home directory", ErrInvalid, path)
 	}
 	return s.write(ctx, userID, path, []byte{}, 0o644, true, nil)
 }
@@ -160,6 +164,14 @@ func (s *Store) write(ctx context.Context, userID, path string, stored []byte, m
 		// the same number.
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "profile:"+userID); err != nil {
 			return err
+		}
+		var total int64
+		if err := tx.QueryRow(ctx, `SELECT coalesce(sum(length(data)), 0) FROM profile_files
+			WHERE user_id = $1 AND path <> $2`, userID, path).Scan(&total); err != nil {
+			return err
+		}
+		if total+int64(len(stored)) > MaxProfileSize {
+			return fmt.Errorf("%w: the profile would hold more than %d MiB", ErrInvalid, MaxProfileSize>>20)
 		}
 		err := tx.QueryRow(ctx, `
 			INSERT INTO profile_files (user_id, path, data, mode, deleted, version)
@@ -352,26 +364,99 @@ func (s *Store) Unlock(ctx context.Context, userID, path, environment string) er
 	})
 }
 
-// LockHolders maps each of a user's held locks to the environment holding
-// it.
-func (s *Store) LockHolders(ctx context.Context, userID string) (map[string]string, error) {
-	out := map[string]string{}
+// Paths returns the paths a user shares: everyone's, and their own.
+func (s *Store) Paths(ctx context.Context, userID string) (Paths, error) {
+	own, err := s.OwnPaths(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return UserPaths(own), nil
+}
+
+// OwnPaths returns the paths a user has added.
+func (s *Store) OwnPaths(ctx context.Context, userID string) ([]string, error) {
+	if !db.ValidUUID(userID) {
+		return nil, ErrNotFound
+	}
+	var out []string
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		clear(out)
-		rows, err := tx.Query(ctx, `SELECT path, environment::text FROM profile_locks
-			WHERE user_id = $1 AND expires_at > now()`, userID)
+		rows, err := tx.Query(ctx, `SELECT path FROM profile_paths WHERE user_id = $1 ORDER BY path`, userID)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var p, env string
-			if err := rows.Scan(&p, &env); err != nil {
-				return err
-			}
-			out[p] = env
-		}
-		return rows.Err()
+		out, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
 	})
 	return out, err
+}
+
+// AddPath shares another path for a user: a file, or a directory, ending
+// in a slash, and everything under it.
+func (s *Store) AddPath(ctx context.Context, userID, path string) error {
+	if !db.ValidUUID(userID) {
+		return ErrNotFound
+	}
+	if err := CheckUserPath(path); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalid, err)
+	}
+	if slices.Contains(DefaultPaths, path) || (!strings.HasSuffix(path, "/") && UserPaths(nil).Synced(path)) {
+		return fmt.Errorf("%w: %s is already shared", ErrInvalid, path)
+	}
+	return s.db.Transact(ctx, func(tx db.Tx) error {
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM profile_paths WHERE user_id = $1`, userID).Scan(&n); err != nil {
+			return err
+		}
+		if n >= MaxUserPaths {
+			return fmt.Errorf("%w: a profile shares at most %d paths of its own", ErrInvalid, MaxUserPaths)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO profile_paths (user_id, path) VALUES ($1, $2)
+			ON CONFLICT DO NOTHING`, userID, path); err != nil {
+			return err
+		}
+		return db.Notify(ctx, tx, Channel, userID)
+	})
+}
+
+// RemovePath stops sharing a path the user added. The profile's copies of
+// what only it shared are dropped; environments keep theirs, as files of
+// their own.
+func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
+	if !db.ValidUUID(userID) {
+		return ErrNotFound
+	}
+	return s.db.Transact(ctx, func(tx db.Tx) error {
+		tag, err := tx.Exec(ctx, `DELETE FROM profile_paths WHERE user_id = $1 AND path = $2`, userID, path)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		rows, err := tx.Query(ctx, `SELECT path FROM profile_paths WHERE user_id = $1`, userID)
+		if err != nil {
+			return err
+		}
+		own, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		still := UserPaths(own)
+		rows, err = tx.Query(ctx, `SELECT path FROM profile_files WHERE user_id = $1`, userID)
+		if err != nil {
+			return err
+		}
+		files, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			return err
+		}
+		for _, f := range files {
+			if !still.Synced(f) {
+				if _, err := tx.Exec(ctx, `DELETE FROM profile_files WHERE user_id = $1 AND path = $2`, userID, f); err != nil {
+					return err
+				}
+			}
+		}
+		return db.Notify(ctx, tx, Channel, userID)
+	})
 }

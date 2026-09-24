@@ -77,6 +77,9 @@ export const api = {
     unwrap(client.PUT('/api/frontend/me/profile/file', { params: { query: { path } }, body: { content } })),
   deleteProfileFile: (path: string) =>
     unwrap(client.DELETE('/api/frontend/me/profile/file', { params: { query: { path } } })),
+  addProfilePath: (path: string) => unwrap(client.POST('/api/frontend/me/profile/paths', { body: { path } })),
+  removeProfilePath: (path: string) =>
+    unwrap(client.DELETE('/api/frontend/me/profile/paths', { params: { query: { path } } })),
   addSSHKey: (name: string, private_key?: string) =>
     unwrap(client.POST('/api/frontend/me/profile/keys', { body: { name, private_key } })),
   deleteSSHKey: (id: string) => unwrap(client.DELETE('/api/frontend/me/profile/keys/{id}', byID(id))),

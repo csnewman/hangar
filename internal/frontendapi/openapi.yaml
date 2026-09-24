@@ -140,6 +140,39 @@ paths:
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /api/frontend/me/profile/paths:
+    post:
+      operationId: addProfilePath
+      description: >-
+        Share another path, relative to the home directory: a file, or a
+        directory, ending in a slash, with everything under it. It is taken
+        from and given to every environment the user owns.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfilePath" }
+      responses:
+        "204":
+          description: Shared.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: removeProfilePath
+      description: >-
+        Stop sharing a path the user added. Each environment keeps its copy,
+        as a file of its own.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: No longer shared.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/frontend/me/profile/keys:
     post:
       operationId: addSSHKey
@@ -683,9 +716,15 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    ProfilePath:
+      type: object
+      required: [path]
+      properties:
+        path: { type: string }
+
     Profile:
       type: object
-      required: [files, keys, paths, secrets]
+      required: [files, keys, paths, own_paths, secrets]
       properties:
         files:
           type: array
@@ -698,6 +737,10 @@ components:
           description: >-
             What a profile holds, relative to the home directory. One ending
             in a slash holds everything under it.
+          items: { type: string }
+        own_paths:
+          type: array
+          description: The paths among them the user added, which they may remove.
           items: { type: string }
         secrets:
           type: boolean

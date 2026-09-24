@@ -185,6 +185,15 @@ CREATE TABLE profile_files (
     PRIMARY KEY (user_id, path)
 );
 
+-- Paths a user shares beyond everyone's (profile.DefaultPaths), relative
+-- to the home directory; one ending in a slash is a directory.
+CREATE TABLE profile_paths (
+    user_id    uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    path       text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, path)
+);
+
 -- A user's SSH keys. The private key is encrypted with the server's key and
 -- never leaves the server: environments are sent the public key and ask the
 -- server to sign.

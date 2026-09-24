@@ -17,7 +17,15 @@ func (h *handler) GetProfile(ctx context.Context, _ GetProfileRequestObject) (Ge
 	if err != nil {
 		return nil, err
 	}
-	out := Profile{Files: []ProfileFile{}, Keys: []SSHKey{}, Paths: profile.Paths(), Secrets: h.profiles.KeepsSecrets()}
+	own, err := h.profiles.OwnPaths(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	if own == nil {
+		own = []string{}
+	}
+	out := Profile{Files: []ProfileFile{}, Keys: []SSHKey{}, Paths: profile.UserPaths(own), OwnPaths: own,
+		Secrets: h.profiles.KeepsSecrets()}
 	for _, f := range files {
 		if f.Deleted {
 			continue
@@ -112,6 +120,28 @@ func (h *handler) DeleteSSHKey(ctx context.Context, req DeleteSSHKeyRequestObjec
 		return nil, err
 	}
 	return DeleteSSHKey204Response{}, nil
+}
+
+func (h *handler) AddProfilePath(ctx context.Context, req AddProfilePathRequestObject) (AddProfilePathResponseObject, error) {
+	err := h.profiles.AddPath(ctx, principal(ctx).UserID, req.Body.Path)
+	switch {
+	case errors.Is(err, profile.ErrInvalid):
+		return AddProfilePath400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return AddProfilePath204Response{}, nil
+}
+
+func (h *handler) RemoveProfilePath(ctx context.Context, req RemoveProfilePathRequestObject) (RemoveProfilePathResponseObject, error) {
+	err := h.profiles.RemovePath(ctx, principal(ctx).UserID, req.Params.Path)
+	switch {
+	case errors.Is(err, profile.ErrNotFound):
+		return RemoveProfilePath404JSONResponse{NotFoundJSONResponse{Error: "not a path you added"}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return RemoveProfilePath204Response{}, nil
 }
 
 func sshKey(k profile.Key) SSHKey {

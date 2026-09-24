@@ -44,7 +44,7 @@ export function ProfilePage() {
 
   if (profile.isPending) return <div className="page page-narrow" />
   if (profile.isError) return <div className="page page-narrow alert">{profile.error.message}</div>
-  const { files, keys, paths, secrets } = profile.data
+  const { files, keys, paths, own_paths, secrets } = profile.data
 
   return (
     <div className="page page-narrow">
@@ -82,6 +82,7 @@ export function ProfilePage() {
         </div>
         <AddFile paths={paths} existing={files.map((f) => f.path)} onAdded={setOpen} />
       </section>
+      <SharedPaths paths={paths} own={own_paths} />
       <SSHKeys keys={keys} disabled={!secrets} />
     </div>
   )
@@ -338,5 +339,67 @@ function KeyRow({ sshKey }: { sshKey: SSHKey }) {
         />
       </td>
     </tr>
+  )
+}
+
+// SharedPaths is what the profile shares: everyone's, and the user's own,
+// which they add and remove.
+function SharedPaths({ paths, own }: { paths: string[]; own: string[] }) {
+  const qc = useQueryClient()
+  const [path, setPath] = useState('')
+  const refresh = () => qc.invalidateQueries({ queryKey: profileKey })
+  const add = useMutation({
+    mutationFn: () => api.addProfilePath(path.trim()),
+    onSuccess: () => setPath(''),
+    onSettled: refresh,
+  })
+  const remove = useMutation({ mutationFn: (p: string) => api.removeProfilePath(p), onSettled: refresh })
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (path.trim()) add.mutate()
+  }
+  return (
+    <section className="section">
+      <h2 className="section-title">Shared paths</h2>
+      <p className="muted small">
+        Relative to your home directory. A path ending in <code>/</code> shares a directory and everything in it.
+        Removing one leaves each environment its copy.
+      </p>
+      <div className="panel">
+        <table className="table">
+          <tbody>
+            {paths.map((p) => (
+              <tr key={p}>
+                <td className="mono">{p}</td>
+                <td className="muted small">{own.includes(p) ? 'yours' : (describePath(p) ?? 'everyone')}</td>
+                <td className="num">
+                  {own.includes(p) && (
+                    <ConfirmButton
+                      label="Stop sharing"
+                      confirmLabel="Stop?"
+                      onConfirm={() => remove.mutate(p)}
+                      disabled={remove.isPending}
+                    />
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <form className="inline-form" onSubmit={submit}>
+        <input
+          className="mono grow"
+          placeholder="Share another: .config/nvim/ or .bash_aliases"
+          value={path}
+          onChange={(e) => setPath(e.target.value)}
+        />
+        <button type="submit" className="btn btn-ghost" disabled={!path.trim() || add.isPending}>
+          <Plus size={14} />
+          Share
+        </button>
+      </form>
+      {add.error && <div className="alert">{add.error.message}</div>}
+    </section>
   )
 }

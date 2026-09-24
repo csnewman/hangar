@@ -24,7 +24,15 @@ func serveProfile() {
 		time.Sleep(10 * time.Second)
 		u, err = user.Lookup("dev")
 	}
-	g := profile.NewGuest(u, slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	g := profile.NewGuest(u, log)
+	// Before anything of the user's runs: a program must never take a lock
+	// the server has not been asked about.
+	if l, err := profile.MountLockFS(u, "/var/lib/hangar/lockfs", g); err != nil {
+		log.Warn("profile: serving lock directories", "err", err)
+	} else {
+		g.SetBacking(l.Backing)
+	}
 	go func() {
 		for {
 			if err := g.ServeSSHAgent(sysuser.SSHAuthSock); err != nil {

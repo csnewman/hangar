@@ -15,6 +15,7 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,20 +26,38 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 )
 
+// stagingPrefix names the files the agent writes beside a file it is about
+// to replace. They are never shared.
+const stagingPrefix = ".hangar-sync-"
+
 // Guest is the agent's half: it keeps a user's home directory in step with
-// their profile, and serves their SSH agent.
+// their profile, answers LockFS, and serves their SSH agent.
 type Guest struct {
 	user *user.User
 	log  *slog.Logger
 
 	mu      sync.Mutex
 	current *guestSession
+	changed chan struct{} // closed and replaced when current changes
 	keys    []ssh.PublicKey
+	held    map[string]bool   // locks held here, renewed while they are
+	backing map[string]string // LockFS's backing for each directory it serves
+}
+
+// SetBacking tells the guest where LockFS keeps each directory it serves.
+// While a program takes or lets go of a lock, the directory is held by the
+// kernel, so the files in it are read and written there instead.
+func (g *Guest) SetBacking(backing map[string]string) {
+	g.mu.Lock()
+	g.backing = backing
+	g.mu.Unlock()
 }
 
 // NewGuest keeps u's home directory, and serves u's SSH agent.
 func NewGuest(u *user.User, log *slog.Logger) *Guest {
-	return &Guest{user: u, log: log}
+	g := &Guest{user: u, log: log, changed: make(chan struct{}), held: map[string]bool{}}
+	go g.renew()
+	return g
 }
 
 // Serve holds one session with the server. A new session replaces the one
@@ -50,27 +69,125 @@ func (g *Guest) Serve(conn io.ReadWriteCloser) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s := &guestSession{g: g, conn: conn, home: u.HomeDir, known: map[string]string{},
-		mirrors: map[string]bool{}, taken: map[string]bool{}, dirty: map[string]bool{},
-		pending: map[int64]chan Message{}}
+		dirty: map[string]bool{}, watched: map[string]bool{}, pending: map[int64]chan Message{},
+	}
 	s.uid, _ = strconv.Atoi(u.Uid)
 	s.gid, _ = strconv.Atoi(u.Gid)
 
-	g.mu.Lock()
-	if g.current != nil {
-		g.current.conn.Close()
-	}
-	g.current = s
-	g.mu.Unlock()
-	defer func() {
-		g.mu.Lock()
-		if g.current == s {
-			g.current = nil
-		}
-		g.mu.Unlock()
-	}()
+	g.setCurrent(s, nil)
+	defer g.setCurrent(nil, s)
 
 	if err := s.run(ctx); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && !errors.Is(err, os.ErrClosed) {
 		g.log.Warn("profile: session ended", "err", err)
+	}
+}
+
+// setCurrent makes s the session. Given was, it only replaces that one.
+func (g *Guest) setCurrent(s, was *guestSession) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if was != nil && g.current != was {
+		return
+	}
+	if s != nil && g.current != nil {
+		g.current.conn.Close()
+	}
+	g.current = s
+	close(g.changed)
+	g.changed = make(chan struct{})
+}
+
+// session returns the session once it has been sent the profile whole,
+// waiting up to wait for one.
+func (g *Guest) session(wait time.Duration) *guestSession {
+	deadline := time.After(wait)
+	for {
+		g.mu.Lock()
+		s, changed := g.current, g.changed
+		g.mu.Unlock()
+		if s != nil && s.isReady() {
+			return s
+		}
+		select {
+		case <-changed:
+		case <-deadline:
+			return nil
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// Lock asks the server for one of the Locks. It is refused while there is
+// no server to ask: the server is what knows whether another environment
+// holds it. Granted, it comes with the files in the lock's directory as the
+// profile has them, written here before the program that asked goes on.
+func (g *Guest) Lock(p string) (bool, error) {
+	s := g.session(10 * time.Second)
+	if s == nil {
+		return false, errors.New("not connected to Hangar")
+	}
+	r, err := s.ask(Message{Type: TypeLock, Path: p, Held: true})
+	if err != nil || !r.Held {
+		return false, err
+	}
+	g.mu.Lock()
+	g.held[p] = true
+	g.mu.Unlock()
+	dir := path.Dir(p)
+	for _, f := range r.Files {
+		if err := s.applyUnder(g.backingFor(dir), dir, f); err != nil {
+			g.log.Warn("profile: writing a file under a lock", "path", f.Path, "err", err)
+		}
+	}
+	return true, nil
+}
+
+// Unlock lets go of a lock, having sent what changed in its directory
+// first, so the next holder finds it.
+func (g *Guest) Unlock(p string) error {
+	g.mu.Lock()
+	delete(g.held, p)
+	g.mu.Unlock()
+	s := g.session(0)
+	if s == nil {
+		// The server lets go of a lock whose session ended.
+		return nil
+	}
+	dir := path.Dir(p)
+	if err := s.sendUnder(g.backingFor(dir), dir); err != nil {
+		return err
+	}
+	_, err := s.ask(Message{Type: TypeLock, Path: p, Held: false})
+	return err
+}
+
+// backingFor is where a directory's files are read and written while a lock
+// in it is taken or let go: LockFS's backing if it serves it.
+func (g *Guest) backingFor(dir string) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if b, ok := g.backing[dir]; ok {
+		return b
+	}
+	return filepath.Join(g.user.HomeDir, dir)
+}
+
+// renew keeps the server's lease on the locks held here while they are.
+func (g *Guest) renew() {
+	for range time.Tick(5 * time.Second) {
+		g.mu.Lock()
+		held := make([]string, 0, len(g.held))
+		for p := range g.held {
+			held = append(held, p)
+		}
+		s := g.current
+		g.mu.Unlock()
+		if s == nil {
+			continue
+		}
+		for _, p := range held {
+			s.send(Message{Type: TypeLock, Path: p, Held: true})
+		}
 	}
 }
 
@@ -84,17 +201,28 @@ type guestSession struct {
 
 	wmu sync.Mutex
 
+	// Shared with the lock handlers.
+	kmu   sync.Mutex
+	paths Paths
+	known map[string]string // path to the hash of what the profile holds; "" for removed
+
 	// Owned by run's goroutine.
-	known   map[string]string // path to the hash of what the profile holds; "" for removed
-	mirrors map[string]bool   // locks held here for another environment
-	taken   map[string]bool   // locks a program here holds
-	dirty   map[string]bool   // paths changed here, not yet looked at
-	ready   bool              // the profile has been sent whole
+	dirty   map[string]bool // paths changed here, not yet looked at
+	watched map[string]bool // directories watched
 	watcher *fsnotify.Watcher
+
+	rmu   sync.Mutex
+	ready bool // the profile has been sent whole
 
 	pmu     sync.Mutex
 	pending map[int64]chan Message
 	nextID  int64
+}
+
+func (s *guestSession) isReady() bool {
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	return s.ready
 }
 
 func (s *guestSession) send(m Message) error {
@@ -113,6 +241,33 @@ func hash(b []byte) string {
 	return string(sum[:])
 }
 
+// synced reports whether a path is shared and is not one of the agent's
+// own staging files.
+func (s *guestSession) synced(rel string) bool {
+	s.kmu.Lock()
+	defer s.kmu.Unlock()
+	return s.paths.Synced(rel) && !strings.HasPrefix(filepath.Base(rel), stagingPrefix)
+}
+
+func (s *guestSession) sharedPaths() Paths {
+	s.kmu.Lock()
+	defer s.kmu.Unlock()
+	return s.paths
+}
+
+func (s *guestSession) knownHash(rel string) (string, bool) {
+	s.kmu.Lock()
+	defer s.kmu.Unlock()
+	h, ok := s.known[rel]
+	return h, ok
+}
+
+func (s *guestSession) setKnown(rel, h string) {
+	s.kmu.Lock()
+	s.known[rel] = h
+	s.kmu.Unlock()
+}
+
 func (s *guestSession) run(ctx context.Context) error {
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -120,35 +275,11 @@ func (s *guestSession) run(ctx context.Context) error {
 	}
 	s.watcher = w
 	defer w.Close()
-	parents, trees := Dirs()
-	for _, d := range append(parents, trees...) {
-		if err := s.mkdirAll(filepath.Join(s.home, d)); err != nil {
-			return err
-		}
-	}
-	for _, d := range parents {
-		full := filepath.Join(s.home, d)
-		if err := w.Add(full); err != nil {
-			return err
-		}
-		for _, p := range synced {
-			if path.Dir(p) == d && !strings.HasSuffix(p, "/") {
-				s.dirty[p] = true
-			}
-		}
-	}
-	for _, d := range trees {
-		s.watchTree(filepath.Join(s.home, d))
-	}
-	// A lock held here for another environment must not outlive the
-	// session: nothing would let it go.
-	defer func() {
-		for p := range s.mirrors {
-			os.RemoveAll(filepath.Join(s.home, p))
-		}
-	}()
 
-	incoming := make(chan Message)
+	// Buffered well past anything a session sends at once: the reader
+	// must never wait on run, which can itself be waiting on a directory
+	// a lock handler holds, while the lock handler waits on the reader.
+	incoming := make(chan Message, 4096)
 	readErr := make(chan error, 1)
 	go func() {
 		r := bufio.NewReaderSize(s.conn, 64<<10)
@@ -163,14 +294,10 @@ func (s *guestSession) run(ctx context.Context) error {
 				readErr <- err
 				return
 			}
-			if m.Type == TypeSigned {
-				s.pmu.Lock()
-				ch := s.pending[m.ID]
-				delete(s.pending, m.ID)
-				s.pmu.Unlock()
-				if ch != nil {
-					ch <- m
-				}
+			// Answers go straight to what asked, which may be a lock
+			// handler run cannot help.
+			if m.Type == TypeSigned || m.Type == TypeLocked {
+				s.answer(m)
 				continue
 			}
 			select {
@@ -183,7 +310,7 @@ func (s *guestSession) run(ctx context.Context) error {
 	defer func() {
 		s.pmu.Lock()
 		for id, ch := range s.pending {
-			ch <- Message{Type: TypeSigned, ID: id, Error: "the profile session ended"}
+			ch <- Message{ID: id, Error: "the profile session ended"}
 			delete(s.pending, id)
 		}
 		s.pmu.Unlock()
@@ -191,8 +318,6 @@ func (s *guestSession) run(ctx context.Context) error {
 
 	debounce := time.NewTimer(time.Hour)
 	debounce.Stop()
-	renew := time.NewTicker(5 * time.Second)
-	defer renew.Stop()
 	for {
 		select {
 		case err := <-readErr:
@@ -209,13 +334,7 @@ func (s *guestSession) run(ctx context.Context) error {
 			if err != nil {
 				continue
 			}
-			if _, isLock := LockAt(rel); isLock {
-				if err := s.lockChanged(rel); err != nil {
-					return err
-				}
-				continue
-			}
-			if ev.Has(fsnotify.Create) && InTree(rel) {
+			if ev.Has(fsnotify.Create) && s.sharedPaths().InTree(rel) {
 				if st, err := os.Lstat(ev.Name); err == nil && st.IsDir() {
 					s.watchTree(ev.Name)
 				}
@@ -228,48 +347,29 @@ func (s *guestSession) run(ctx context.Context) error {
 			if err := s.flush(); err != nil {
 				return err
 			}
-		case <-renew.C:
-			now := time.Now()
-			for p := range s.mirrors {
-				os.Chtimes(filepath.Join(s.home, p), now, now)
-			}
-			for p := range s.taken {
-				if err := s.send(Message{Type: TypeLocked, Path: p, Held: true}); err != nil {
-					return err
-				}
-			}
 		}
 	}
 }
 
 func (s *guestSession) handle(m Message) error {
 	switch m.Type {
+	case TypePaths:
+		s.setPaths(Paths(m.Paths))
 	case TypeFile:
-		if !Synced(m.Path) {
+		if !s.synced(m.Path) {
 			return nil
 		}
 		if err := s.apply(m); err != nil {
 			s.g.log.Warn("profile: writing a file", "path", m.Path, "err", err)
 		}
 	case TypeSynced:
-		s.ready = true
 		// What is here and the profile has never had is this
 		// environment's to add, as when the first environment brings
 		// the settings someone already had.
-		for _, d := range synced {
-			full := filepath.Join(s.home, d)
-			filepath.WalkDir(full, func(p string, e fs.DirEntry, err error) error {
-				if err != nil || e.IsDir() {
-					return nil
-				}
-				if rel, err := filepath.Rel(s.home, p); err == nil {
-					if _, ok := s.known[rel]; !ok {
-						s.dirty[rel] = true
-					}
-				}
-				return nil
-			})
-		}
+		s.rescan()
+		s.rmu.Lock()
+		s.ready = true
+		s.rmu.Unlock()
 		return s.flush()
 	case TypeKeys:
 		var keys []ssh.PublicKey
@@ -281,78 +381,73 @@ func (s *guestSession) handle(m Message) error {
 		s.g.mu.Lock()
 		s.g.keys = keys
 		s.g.mu.Unlock()
-	case TypeLock:
-		lock, ok := LockAt(m.Path)
-		if !ok {
-			return nil
-		}
-		full := filepath.Join(s.home, lock.Path)
-		if m.Held {
-			if s.mirrors[lock.Path] || s.taken[lock.Path] {
-				return nil
-			}
-			s.mirrors[lock.Path] = true
-			var err error
-			if lock.Dir {
-				err = os.Mkdir(full, 0o755)
-			} else {
-				var f *os.File
-				if f, err = os.OpenFile(full, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644); err == nil {
-					f.Close()
-				}
-			}
-			if err != nil {
-				// A program here holds it too: both go on.
-				delete(s.mirrors, lock.Path)
-				return nil
-			}
-			os.Lchown(full, s.uid, s.gid)
-		} else if s.mirrors[lock.Path] {
-			delete(s.mirrors, lock.Path)
-			os.RemoveAll(full)
-		}
 	}
 	return nil
 }
 
-// lockChanged looks at a lock that was taken or let go here.
-func (s *guestSession) lockChanged(rel string) error {
-	if s.mirrors[rel] {
-		return nil
+// setPaths watches what the profile shares. A path the profile stops sharing is
+// left as it is, a file of this environment's own.
+func (s *guestSession) setPaths(paths Paths) {
+	if slices.Equal(paths, s.sharedPaths()) {
+		return
 	}
-	_, err := os.Lstat(filepath.Join(s.home, rel))
-	exists := err == nil
-	switch {
-	case exists && !s.taken[rel]:
-		s.taken[rel] = true
-		return s.send(Message{Type: TypeLocked, Path: rel, Held: true})
-	case !exists && s.taken[rel]:
-		delete(s.taken, rel)
-		// What the program changed under the lock goes first, so the
-		// other environments have it before they let the lock go.
-		if err := s.flush(); err != nil {
-			return err
+	s.kmu.Lock()
+	s.paths = paths
+	s.kmu.Unlock()
+	parents, trees := paths.Dirs()
+	for _, d := range append(parents, trees...) {
+		if err := s.mkdirAll(filepath.Join(s.home, d)); err != nil {
+			s.g.log.Warn("profile: making a directory", "dir", d, "err", err)
 		}
-		return s.send(Message{Type: TypeLocked, Path: rel, Held: false})
 	}
-	return nil
+	for _, d := range parents {
+		s.watch(filepath.Join(s.home, d))
+	}
+	for _, d := range trees {
+		s.watchTree(filepath.Join(s.home, d))
+	}
+	s.rescan()
+	if s.isReady() {
+		s.flush()
+	}
+}
+
+// rescan marks every shared file here to be looked at.
+func (s *guestSession) rescan() {
+	paths := s.sharedPaths()
+	_, trees := paths.Dirs()
+	for _, p := range paths {
+		if !strings.HasSuffix(p, "/") {
+			s.dirty[p] = true
+		}
+	}
+	for _, d := range trees {
+		filepath.WalkDir(filepath.Join(s.home, d), func(p string, e fs.DirEntry, err error) error {
+			if err == nil && !e.IsDir() {
+				if rel, err := filepath.Rel(s.home, p); err == nil {
+					s.dirty[rel] = true
+				}
+			}
+			return nil
+		})
+	}
 }
 
 // flush sends the changes made here since the last flush.
 func (s *guestSession) flush() error {
-	if !s.ready {
+	if !s.isReady() {
 		return nil
 	}
 	for rel := range s.dirty {
 		delete(s.dirty, rel)
-		if !Synced(rel) {
+		if !s.synced(rel) {
 			continue
 		}
 		full := filepath.Join(s.home, rel)
 		st, err := os.Lstat(full)
 		if errors.Is(err, fs.ErrNotExist) {
-			if h, ok := s.known[rel]; ok && h != "" {
-				s.known[rel] = ""
+			if h, ok := s.knownHash(rel); ok && h != "" {
+				s.setKnown(rel, "")
 				if err := s.send(Message{Type: TypeDelete, Path: rel}); err != nil {
 					return err
 				}
@@ -367,10 +462,10 @@ func (s *guestSession) flush() error {
 			continue
 		}
 		h := hash(data)
-		if s.known[rel] == h {
+		if k, _ := s.knownHash(rel); k == h {
 			continue
 		}
-		s.known[rel] = h
+		s.setKnown(rel, h)
 		if err := s.send(Message{Type: TypePut, Path: rel, Data: data, Mode: uint32(st.Mode().Perm())}); err != nil {
 			return err
 		}
@@ -378,13 +473,25 @@ func (s *guestSession) flush() error {
 	return nil
 }
 
-// apply writes a file the profile sent. It is written beside the home
-// directory and renamed into place, so a program reading it never sees it
-// half written, and one watching it sees it replaced.
+// apply writes a file the profile sent. It is written beside the file and
+// renamed into place, so a program reading it never sees it half written,
+// and one watching it sees it replaced.
 func (s *guestSession) apply(m Message) error {
-	full := filepath.Join(s.home, m.Path)
+	return s.applyAt(filepath.Join(s.home, m.Path), m)
+}
+
+// applyUnder writes a file sent with a lock into the directory's backing.
+func (s *guestSession) applyUnder(backing, dir string, m Message) error {
+	rel, err := filepath.Rel(dir, m.Path)
+	if err != nil || strings.HasPrefix(rel, "..") || !s.synced(m.Path) {
+		return nil
+	}
+	return s.applyAt(filepath.Join(backing, rel), m)
+}
+
+func (s *guestSession) applyAt(full string, m Message) error {
 	if m.Deleted {
-		s.known[m.Path] = ""
+		s.setKnown(m.Path, "")
 		err := os.Remove(full)
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
@@ -392,18 +499,15 @@ func (s *guestSession) apply(m Message) error {
 		return err
 	}
 	h := hash(m.Data)
-	s.known[m.Path] = h
+	s.setKnown(m.Path, h)
 	if cur, err := os.ReadFile(full); err == nil && hash(cur) == h {
 		return nil
 	}
-	if err := s.mkdirAll(filepath.Dir(full)); err != nil {
+	dir := filepath.Dir(full)
+	if err := s.mkdirAll(dir); err != nil {
 		return err
 	}
-	staging := filepath.Join(s.home, ".cache", "hangar-profile")
-	if err := s.mkdirAll(staging); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(staging, "file-")
+	f, err := os.CreateTemp(dir, stagingPrefix)
 	if err != nil {
 		return err
 	}
@@ -431,6 +535,60 @@ func (s *guestSession) apply(m Message) error {
 	return err
 }
 
+// sendUnder sends the shared files in a directory, read from its backing,
+// that differ from what the profile holds.
+func (s *guestSession) sendUnder(backing, dir string) error {
+	paths := s.sharedPaths()
+	seen := map[string]bool{}
+	err := filepath.WalkDir(backing, func(p string, e fs.DirEntry, err error) error {
+		if err != nil || e.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(backing, p)
+		if err != nil {
+			return nil
+		}
+		home := filepath.ToSlash(filepath.Join(dir, rel))
+		if !paths.Synced(home) || strings.HasPrefix(e.Name(), stagingPrefix) {
+			return nil
+		}
+		seen[home] = true
+		info, err := e.Info()
+		if err != nil || !info.Mode().IsRegular() || info.Size() > MaxFileSize {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		h := hash(data)
+		if k, _ := s.knownHash(home); k == h {
+			return nil
+		}
+		s.setKnown(home, h)
+		return s.send(Message{Type: TypePut, Path: home, Data: data, Mode: uint32(info.Mode().Perm())})
+	})
+	if err != nil {
+		return err
+	}
+	// Removed under the lock.
+	s.kmu.Lock()
+	var gone []string
+	for p, h := range s.known {
+		if h != "" && !seen[p] && strings.HasPrefix(p, dir+"/") {
+			gone = append(gone, p)
+			s.known[p] = ""
+		}
+	}
+	s.kmu.Unlock()
+	for _, p := range gone {
+		if err := s.send(Message{Type: TypeDelete, Path: p}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // mkdirAll makes a directory and any parents missing, owned by the user.
 func (s *guestSession) mkdirAll(dir string) error {
 	if _, err := os.Stat(dir); err == nil {
@@ -447,6 +605,17 @@ func (s *guestSession) mkdirAll(dir string) error {
 	return os.Lchown(dir, s.uid, s.gid)
 }
 
+func (s *guestSession) watch(dir string) {
+	if s.watched[dir] {
+		return
+	}
+	if err := s.watcher.Add(dir); err != nil {
+		s.g.log.Warn("profile: watching a directory", "dir", dir, "err", err)
+		return
+	}
+	s.watched[dir] = true
+}
+
 // watchTree watches a directory and every directory under it, marking what
 // is in them to be looked at.
 func (s *guestSession) watchTree(dir string) {
@@ -455,9 +624,7 @@ func (s *guestSession) watchTree(dir string) {
 			return nil
 		}
 		if e.IsDir() {
-			if err := s.watcher.Add(p); err != nil {
-				s.g.log.Warn("profile: watching a directory", "dir", p, "err", err)
-			}
+			s.watch(p)
 			return nil
 		}
 		if rel, err := filepath.Rel(s.home, p); err == nil {
@@ -467,28 +634,45 @@ func (s *guestSession) watchTree(dir string) {
 	})
 }
 
-// request sends a signing request and waits for its answer.
-func (s *guestSession) request(m Message) (Message, error) {
+// ask sends a request and waits for its answer. It does not wait on run:
+// a lock handler asks while the kernel holds a directory run may be
+// waiting on.
+func (s *guestSession) ask(m Message) (Message, error) {
 	ch := make(chan Message, 1)
 	s.pmu.Lock()
 	s.nextID++
 	m.ID = s.nextID
 	s.pending[m.ID] = ch
 	s.pmu.Unlock()
-	if err := s.send(m); err != nil {
+	forget := func() {
 		s.pmu.Lock()
 		delete(s.pending, m.ID)
 		s.pmu.Unlock()
+	}
+	if err := s.send(m); err != nil {
+		forget()
 		return Message{}, err
 	}
 	select {
 	case r := <-ch:
+		if r.Error != "" {
+			return r, errors.New(r.Error)
+		}
 		return r, nil
 	case <-time.After(30 * time.Second):
-		s.pmu.Lock()
-		delete(s.pending, m.ID)
-		s.pmu.Unlock()
+		forget()
 		return Message{}, errors.New("the server did not answer")
+	}
+}
+
+// answer hands an answer to the request waiting for it.
+func (s *guestSession) answer(m Message) {
+	s.pmu.Lock()
+	ch := s.pending[m.ID]
+	delete(s.pending, m.ID)
+	s.pmu.Unlock()
+	if ch != nil {
+		ch <- m
 	}
 }
 
@@ -545,18 +729,13 @@ func (a sshAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
 }
 
 func (a sshAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags agent.SignatureFlags) (*ssh.Signature, error) {
-	a.g.mu.Lock()
-	s := a.g.current
-	a.g.mu.Unlock()
+	s := a.g.session(5 * time.Second)
 	if s == nil {
 		return nil, errors.New("not connected to Hangar")
 	}
-	r, err := s.request(Message{Type: TypeSign, Key: key.Marshal(), Data: data, Flags: uint32(flags)})
+	r, err := s.ask(Message{Type: TypeSign, Key: key.Marshal(), Data: data, Flags: uint32(flags)})
 	if err != nil {
 		return nil, err
-	}
-	if r.Error != "" {
-		return nil, errors.New(r.Error)
 	}
 	var sig ssh.Signature
 	if err := ssh.Unmarshal(r.Signature, &sig); err != nil {
