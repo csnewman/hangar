@@ -141,8 +141,13 @@ export class Connection {
 		this.write(Buffer.concat([hdr, msg]))
 	}
 
-	private event(event: string, params: unknown) {
+	// notify sends an event to this connection.
+	notify(event: string, params: unknown) {
 		this.json({ event, params })
+	}
+
+	private event(event: string, params: unknown) {
+		this.notify(event, params)
 	}
 
 	private json(v: unknown) {

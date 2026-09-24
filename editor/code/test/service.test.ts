@@ -2,7 +2,7 @@
 // windows would: files, git, and one shared document edited from both sides
 // and from the disk.
 import { execFileSync, spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -186,6 +186,19 @@ test('files, git and a shared document', async () => {
 		assert.equal((await a.call('git.status')).changes.length, 0)
 
 		await assert.rejects(a.call('doc.open', { path: 'missing.txt' }))
+
+		// A file deleted while open is announced, and an edit afterwards does
+		// not bring it back.
+		writeFileSync(join(root, 'gone.txt'), 'soon gone\n')
+		const dg = await a.open('gone.txt')
+		await until('the file to load', () => dg.getText('text').toString() === 'soon gone\n')
+		rmSync(join(root, 'gone.txt'))
+		await until('the deletion to be announced', () =>
+			a.events.some((e) => e.event === 'doc.deleted' && e.params.path === join(root, 'gone.txt')),
+		)
+		dg.getText('text').insert(0, 'typed after: ')
+		await new Promise((r) => setTimeout(r, 1000))
+		assert.equal(existsSync(join(root, 'gone.txt')), false)
 	} finally {
 		a.close()
 		b.close()

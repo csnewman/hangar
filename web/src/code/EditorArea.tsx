@@ -82,6 +82,16 @@ function FileTab({ client, path, user }: { client: CodeClient; path: string; use
   const [file, setFile] = useState<SharedFile | null>(null)
   const [error, setError] = useState('')
 
+  // A file deleted while open is shown as deleted rather than edited, which
+  // would bring it back.
+  useEffect(
+    () =>
+      client.on('doc.deleted', ({ path: gone }) => {
+        if (gone === `${client.root}/${path}` || gone === path) setError(`${path.split('/').pop()} was deleted.`)
+      }),
+    [client, path],
+  )
+
   useEffect(() => {
     let f: SharedFile | null = null
     let live = true

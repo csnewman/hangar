@@ -53,6 +53,8 @@ type Events = {
   state: (s: ConnectionState, why: string) => void
   'fs.changed': (p: { dirs: string[] }) => void
   'git.changed': () => void
+  // An open file was deleted from disk. Its path is absolute.
+  'doc.deleted': (p: { path: string }) => void
 }
 
 // SharedFile is one file open for editing, shared with everyone who has it
@@ -143,6 +145,7 @@ export class CodeClient {
     state: new Set(),
     'fs.changed': new Set(),
     'git.changed': new Set(),
+    'doc.deleted': new Set(),
   }
   private files = new Map<string, SharedFile>()
   private byNumber = new Map<number, SharedFile>()
@@ -217,6 +220,8 @@ export class CodeClient {
         this.emit('fs.changed', m.params)
       } else if (m.event === 'git.changed') {
         this.emit('git.changed')
+      } else if (m.event === 'doc.deleted') {
+        this.emit('doc.deleted', m.params)
       }
     } else if (msg[0] === CHANNEL_YJS && msg.length >= 5) {
       const n = new DataView(msg.buffer, msg.byteOffset + 1, 4).getUint32(0)

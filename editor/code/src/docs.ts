@@ -72,6 +72,10 @@ export class SharedDoc {
 	// Whether the file used CRLF line endings. The document holds LF, which
 	// is what editors work in, and the file gets its own endings back.
 	private crlf = false
+	// Whether the file is gone from disk. A deleted file's document is not
+	// saved, which would bring the file back; it follows the file again if
+	// it reappears.
+	private deleted = false
 
 	private constructor(
 		readonly path: string,
@@ -177,6 +181,7 @@ export class SharedDoc {
 
 	async save() {
 		clearTimeout(this.saveTimer)
+		if (this.deleted) return
 		const content = this.toDisk(this.text.toString())
 		if (content === this.onDisk) return
 		this.onDisk = content
@@ -203,9 +208,15 @@ export class SharedDoc {
 		let content: string
 		try {
 			content = await readFile(this.path, 'utf8')
-		} catch {
+		} catch (e) {
+			if ((e as NodeJS.ErrnoException).code === 'ENOENT' && !this.deleted) {
+				this.deleted = true
+				clearTimeout(this.saveTimer)
+				for (const conn of this.members.keys()) conn.notify('doc.deleted', { path: this.path })
+			}
 			return
 		}
+		this.deleted = false
 		if (content === this.onDisk) return
 		this.onDisk = content
 		const next = this.fromDisk(content)
