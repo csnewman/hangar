@@ -258,7 +258,8 @@ type WorkerStats struct {
 type LocalImage struct {
 	Ref       string `json:"ref"`
 	SizeBytes int64  `json:"size_bytes"`
-	// State is "ready", or "fetching" while it is being copied in.
+	// State is "ready", or "fetching" while it is being pulled or copied
+	// in.
 	State string `json:"state"`
 	// Environments lists the environments on the worker using it.
 	Environments []string `json:"environments"`

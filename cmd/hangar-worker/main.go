@@ -54,17 +54,22 @@ func run(path string, log *slog.Logger) error {
 		for ref, img := range cfg.VM.Images {
 			images[ref] = vm.Image{Base: img.Base}
 		}
+		registries := map[string]vm.RegistryAuth{}
+		for host, a := range cfg.VM.Registries {
+			registries[host] = vm.RegistryAuth{Username: a.Username, PasswordFile: a.PasswordFile}
+		}
 		rt, err = vm.New(vm.Config{
-			StateDir:  cfg.Storage.Environments,
-			ImagesDir: cfg.Storage.Images,
-			Kernel:    cfg.VM.Kernel,
-			Agent:     cfg.VM.Agent,
-			Editor:    cfg.VM.Editor,
-			Images:    images,
-			UpperGiB:  cfg.VM.UpperGiB,
-			DockerGiB: cfg.VM.DockerGiB,
-			DaxMiB:    cfg.VM.DaxMiB,
-			Log:       log,
+			StateDir:   cfg.Storage.Environments,
+			ImagesDir:  cfg.Storage.Images,
+			Kernel:     cfg.VM.Kernel,
+			Agent:      cfg.VM.Agent,
+			Editor:     cfg.VM.Editor,
+			Images:     images,
+			Registries: registries,
+			UpperGiB:   cfg.VM.UpperGiB,
+			DockerGiB:  cfg.VM.DockerGiB,
+			DaxMiB:     cfg.VM.DaxMiB,
+			Log:        log,
 		})
 		if err != nil {
 			return err

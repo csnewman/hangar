@@ -67,10 +67,13 @@ type Config struct {
 	// the agent mounts it and runs VS Code's server from it. Empty leaves
 	// environments without an editor.
 	Editor string
-	// Images maps an image reference, as a template names it, to where the
-	// worker fetches it from into its store. A reference not listed here
-	// cannot be run on this worker.
+	// Images maps an image reference, as a template names it, to a local
+	// source the worker copies it from into its store. Any other reference
+	// is pulled from its registry.
 	Images map[string]Image
+	// Registries are the credentials pulls sign in to registries with, by
+	// registry host.
+	Registries map[string]RegistryAuth
 	// UpperGiB and DockerGiB size each environment's writable layer and
 	// Docker store. The files are sparse, so this is a ceiling rather than
 	// space spent.
@@ -126,7 +129,7 @@ func New(cfg Config) (*Runtime, error) {
 	if err := os.MkdirAll(cfg.StateDir, 0o755); err != nil {
 		return nil, err
 	}
-	st, err := newStore(cfg.ImagesDir, cfg.Images)
+	st, err := newStore(cfg.ImagesDir, cfg.Images, cfg.Registries)
 	if err != nil {
 		return nil, err
 	}

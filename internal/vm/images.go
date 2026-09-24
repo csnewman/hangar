@@ -20,19 +20,23 @@ import (
 // store is the worker's local copy of the images its environments boot
 // from.
 //
-// An image is fetched the first time an environment needs it, from the
-// source the worker's configuration names, and kept until it is removed. An
-// environment boots from the local copy, never from the source, so removing
-// a copy and fetching it again is safe whatever the source does meanwhile --
-// and the fetch is the one step a registry pull will replace.
+// An image is fetched the first time an environment needs it and kept until
+// it is removed. It is pulled from its registry, unless the worker's
+// configuration names a local source for the reference, which is copied.
+// An environment boots from the local copy, never from the source, so
+// removing a copy and fetching it again is safe whatever the source does
+// meanwhile. A tag that moves in the registry is pulled again only once the
+// copy is removed.
 //
 // Each image is a directory named for its reference, holding the base -- the
-// image's root filesystem, as rootfs/ -- and a file naming the reference. A directory being fetched is
-// named with ".fetching" and renamed into place when complete, so a copy
-// interrupted half made is fetched again rather than booted.
+// image's root filesystem, as rootfs/ -- and a file naming the reference. A
+// directory being fetched is named with ".fetching" and renamed into place
+// when complete, so a copy interrupted half made is fetched again rather
+// than booted.
 type store struct {
 	dir     string
 	sources map[string]Image
+	auth    map[string]RegistryAuth
 
 	mu       sync.Mutex
 	fetching map[string]*fetch
@@ -43,7 +47,7 @@ type fetch struct {
 	err  error
 }
 
-func newStore(dir string, sources map[string]Image) (*store, error) {
+func newStore(dir string, sources map[string]Image, auth map[string]RegistryAuth) (*store, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -58,7 +62,7 @@ func newStore(dir string, sources map[string]Image) (*store, error) {
 			os.RemoveAll(filepath.Join(dir, e.Name()))
 		}
 	}
-	return &store{dir: dir, sources: sources, fetching: map[string]*fetch{}}, nil
+	return &store{dir: dir, sources: sources, auth: auth, fetching: map[string]*fetch{}}, nil
 }
 
 var unsafeChars = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
@@ -79,10 +83,6 @@ func (s *store) path(ref string) string {
 // does not hold it. Environments asking for the same image at once share one
 // fetch.
 func (s *store) get(ctx context.Context, ref string) (Image, error) {
-	src, ok := s.sources[ref]
-	if !ok {
-		return Image{}, fmt.Errorf("the image %s is not available on this worker", ref)
-	}
 	dst := s.path(ref)
 	local := Image{Base: filepath.Join(dst, "rootfs")}
 
@@ -96,7 +96,7 @@ func (s *store) get(ctx context.Context, ref string) (Image, error) {
 			f = &fetch{done: make(chan struct{})}
 			s.fetching[ref] = f
 			s.mu.Unlock()
-			f.err = s.copyIn(ctx, ref, src, dst)
+			f.err = s.fetch(ctx, ref, dst)
 			s.mu.Lock()
 			delete(s.fetching, ref)
 			s.mu.Unlock()
@@ -118,23 +118,41 @@ func (s *store) get(ctx context.Context, ref string) (Image, error) {
 	}
 }
 
-// copyIn fetches an image from its source into the store.
-func (s *store) copyIn(ctx context.Context, ref string, src Image, dst string) error {
+// fetch brings an image into the store: copied from its local source if
+// the configuration names one, and pulled from its registry otherwise.
+func (s *store) fetch(ctx context.Context, ref, dst string) error {
 	tmp := dst + ".fetching"
 	os.RemoveAll(tmp)
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return err
 	}
-	// Owners, modes, links and extended attributes are the image, and
-	// virtio-fs passes them to the guest as they are, so the copy keeps them
-	// all.
-	out, err := exec.CommandContext(ctx, "cp", "-a", "--reflink=auto", "--", src.Base, filepath.Join(tmp, "rootfs")).
-		CombinedOutput()
+	err := func() error {
+		rootfs := filepath.Join(tmp, "rootfs")
+		if src, ok := s.sources[ref]; ok {
+			// Owners, modes, links and extended attributes are the image,
+			// and virtio-fs passes them to the guest as they are, so the
+			// copy keeps them all.
+			out, err := exec.CommandContext(ctx, "cp", "-a", "--reflink=auto", "--", src.Base, rootfs).
+				CombinedOutput()
+			if err != nil {
+				return fmt.Errorf("fetching %s: copying %s: %v: %s", ref, src.Base, err, strings.TrimSpace(string(out)))
+			}
+		} else {
+			blobs := filepath.Join(tmp, "blobs")
+			digest, err := pull(ctx, ref, rootfs, blobs, s.auth)
+			if err != nil {
+				return fmt.Errorf("pulling %s: %w", ref, err)
+			}
+			if err := os.RemoveAll(blobs); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(tmp, "digest"), []byte(digest), 0o644); err != nil {
+				return err
+			}
+		}
+		return os.WriteFile(filepath.Join(tmp, "ref"), []byte(ref), 0o644)
+	}()
 	if err != nil {
-		os.RemoveAll(tmp)
-		return fmt.Errorf("fetching %s: copying %s: %v: %s", ref, src.Base, err, strings.TrimSpace(string(out)))
-	}
-	if err := os.WriteFile(filepath.Join(tmp, "ref"), []byte(ref), 0o644); err != nil {
 		os.RemoveAll(tmp)
 		return err
 	}

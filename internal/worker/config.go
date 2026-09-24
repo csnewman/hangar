@@ -72,15 +72,27 @@ type VMConfig struct {
 	// base's files from this machine's page cache. 0 serves the base over
 	// virtio-fs without one.
 	DaxMiB int `yaml:"dax_mib"`
-	// Images maps each image reference a template may name to where this
-	// machine fetches it from into its local store.
+	// Images maps an image reference a template may name to a local copy
+	// this machine takes it from into its store. Every other reference is
+	// pulled from its registry.
 	Images map[string]VMImage `yaml:"images"`
+	// Registries signs pulls in to registries, by host (ghcr.io,
+	// registry-1.docker.io, ...). Others are pulled from anonymously.
+	Registries map[string]RegistryAuth `yaml:"registries"`
 }
 
-// VMImage is where this machine fetches one image from: its root
-// filesystem, a directory, which environments boot from over virtio-fs.
+// VMImage is a local copy of an image: its root filesystem, a directory,
+// which environments boot from over virtio-fs.
 type VMImage struct {
 	Base string `yaml:"base"`
+}
+
+// RegistryAuth is how this machine signs in to a registry.
+type RegistryAuth struct {
+	Username string `yaml:"username"`
+	// PasswordFile holds the password or token, so it stays out of this
+	// file.
+	PasswordFile string `yaml:"password_file"`
 }
 
 // LoadConfig reads and checks a worker's YAML file.
