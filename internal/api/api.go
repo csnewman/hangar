@@ -95,6 +95,9 @@ type Spec struct {
 	Repos     []Repo  `json:"repos"`
 	// EditorPath is the folder the editor opens on.
 	EditorPath string `json:"editor_path,omitempty"`
+	// Untrusted is for code the owner does not trust: the environment is
+	// never given their credentials (internal/profile).
+	Untrusted bool `json:"untrusted,omitempty"`
 	// Placement limits which workers may run the environment: each key must
 	// be a label the worker has, with this value.
 	Placement map[string]string `json:"placement"`

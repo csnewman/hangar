@@ -11,6 +11,11 @@ import (
 	"syscall"
 )
 
+// SSHAuthSock is the guest's SSH agent, which signs with the environment
+// owner's keys (internal/profile). Every process started for the user is
+// given it.
+const SSHAuthSock = "/run/hangar/ssh-agent.sock"
+
 // Credential is who a user's processes run as, with every group they are
 // in: without the supplementary groups a user in docker's group could not
 // reach Docker.

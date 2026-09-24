@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, LogOut, UserRound } from 'lucide-react'
+import { ChevronDown, LogOut, UserRound, FolderSync } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router'
 
@@ -54,6 +54,10 @@ export function UserMenu() {
           <Link to="/account" className="menu-item" role="menuitem" onClick={() => setOpen(false)}>
             <UserRound size={15} />
             Account
+          </Link>
+          <Link to="/profile" className="menu-item" role="menuitem" onClick={() => setOpen(false)}>
+            <FolderSync size={15} />
+            Profile
           </Link>
           <button type="button" className="menu-item" role="menuitem" onClick={() => logout.mutate()}>
             <LogOut size={15} />

@@ -168,3 +168,43 @@ CREATE TABLE tls_locks (
     name       text PRIMARY KEY,
     expires_at timestamptz NOT NULL
 );
+
+-- Each user's profile: the files that follow them into every environment
+-- they own (internal/profile). A removed file stays as a row marked deleted,
+-- so an environment that still has it learns to remove it rather than
+-- sending it back. A secret's data is encrypted with the server's key.
+CREATE TABLE profile_files (
+    user_id    uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    path       text NOT NULL,
+    data       bytea NOT NULL,
+    mode       integer NOT NULL,
+    -- Rises with every change, so a session sends what it has not sent.
+    version    bigint NOT NULL,
+    deleted    boolean NOT NULL DEFAULT false,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, path)
+);
+
+-- A user's SSH keys. The private key is encrypted with the server's key and
+-- never leaves the server: environments are sent the public key and ask the
+-- server to sign.
+CREATE TABLE ssh_keys (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    name        text NOT NULL,
+    public_key  text NOT NULL,
+    private_key bytea NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX ssh_keys_user ON ssh_keys (user_id);
+
+-- Lock files carried across a user's environments (profile.Locks): which
+-- environment holds each, until when unless renewed.
+CREATE TABLE profile_locks (
+    user_id     uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    path        text NOT NULL,
+    environment uuid NOT NULL,
+    expires_at  timestamptz NOT NULL,
+    PRIMARY KEY (user_id, path)
+);

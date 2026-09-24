@@ -85,6 +85,7 @@ function Editor({ existing }: { existing?: Template }) {
         ...spec,
         repos: spec.repos.map((r) => ({ ...r, ref: r.ref || undefined, branch: r.branch || undefined })),
         editor_path: spec.editor_path || undefined,
+        untrusted: spec.untrusted || undefined,
         placement: Object.fromEntries(placement.filter(([k]) => k.trim() !== '').map(([k, v]) => [k.trim(), v.trim()])),
       },
       description: form.description || undefined,
@@ -313,6 +314,20 @@ function Editor({ existing }: { existing?: Template }) {
                 onChange={(e) => setSpec({ editor_path: e.target.value })}
                 placeholder={spec.repos[0]?.path || '/workspace'}
               />
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={spec.untrusted ?? false}
+                onChange={(e) => setSpec({ untrusted: e.target.checked })}
+              />
+              <span>
+                Untrusted code
+                <small className="muted">
+                  The owner's credentials never reach it: no Claude sign-in and no SSH keys. The rest of their profile
+                  still does.
+                </small>
+              </span>
             </label>
           </Section>
 

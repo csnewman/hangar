@@ -44,6 +44,8 @@ services:
       HANGAR_DATABASE_URL: postgres://hangar:${POSTGRES_PASSWORD:-}@postgres:5432/hangar?sslmode=disable
       HANGAR_PUBLIC_URL: ${HANGAR_PUBLIC_URL:-}
       HANGAR_BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap-token
+      # Encrypts users' credentials and SSH keys in the database.
+      HANGAR_SECRET_KEY_FILE: /run/secrets/secret-key
       # The first administrator, created only while there are no users.
       HANGAR_INITIAL_ADMIN_USERNAME: ${HANGAR_ADMIN_USERNAME:-admin}
       HANGAR_INITIAL_ADMIN_PASSWORD: ${HANGAR_ADMIN_PASSWORD:-}
@@ -58,7 +60,7 @@ services:
       HANGAR_REDIRECT_LISTEN: ${HANGAR_REDIRECT_LISTEN-:80}
       HANGAR_ACME_EMAIL: ${HANGAR_ACME_EMAIL:-}
       HANGAR_ACME_CA: ${HANGAR_ACME_CA:-}
-    secrets: [bootstrap-token]
+    secrets: [bootstrap-token, secret-key]
     ports:
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/udp
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/tcp
@@ -119,6 +121,8 @@ services:
 secrets:
   bootstrap-token:
     file: ${HANGAR_BOOTSTRAP_TOKEN_FILE:-./bootstrap-token}
+  secret-key:
+    file: ${HANGAR_SECRET_KEY_FILE:-./secret-key}
 
 volumes:
   pgdata:

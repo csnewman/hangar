@@ -149,6 +149,7 @@ func (s *Server) start(ctx context.Context) (*process, error) {
 	cmd.Dir = u.HomeDir
 	cmd.Env = []string{
 		"HOME=" + u.HomeDir,
+		"SSH_AUTH_SOCK=" + sysuser.SSHAuthSock,
 		"USER=" + u.Username,
 		"LOGNAME=" + u.Username,
 		"SHELL=" + sysuser.LoginShell(u.Username),

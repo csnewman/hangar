@@ -162,6 +162,7 @@ func (s *Server) start(ctx context.Context, u *user.User, root string) (*process
 	cmd.Dir = u.HomeDir
 	cmd.Env = []string{
 		"HOME=" + u.HomeDir,
+		"SSH_AUTH_SOCK=" + sysuser.SSHAuthSock,
 		"USER=" + u.Username,
 		"LOGNAME=" + u.Username,
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",

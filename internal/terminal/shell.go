@@ -49,6 +49,7 @@ func LoginShell(fallback string) Shell {
 		cmd.Dir = dir
 		cmd.Env = []string{
 			"HOME=" + u.HomeDir,
+			"SSH_AUTH_SOCK=" + sysuser.SSHAuthSock,
 			"USER=" + u.Username,
 			"LOGNAME=" + u.Username,
 			"SHELL=" + shell,

@@ -63,6 +63,12 @@ type CodeDialer interface {
 	DialCode(ctx context.Context, environment string) (net.Conn, error)
 }
 
+// ProfileDialer is a runtime whose environments keep their owner's
+// profile.
+type ProfileDialer interface {
+	DialProfile(ctx context.Context, environment string) (net.Conn, error)
+}
+
 // DesktopDialer is a runtime whose environments may have a desktop. Each
 // connection it opens carries one VNC (RFB) connection to it.
 type DesktopDialer interface {
@@ -249,6 +255,13 @@ func (w *Worker) stream(h tunnel.Header, r io.Reader, stream net.Conn) {
 			return
 		}
 		guest, err = dialer.DialCode(ctx, h.Environment)
+	case tunnel.KindProfile:
+		dialer, ok := w.rt.(ProfileDialer)
+		if !ok {
+			cancel()
+			return
+		}
+		guest, err = dialer.DialProfile(ctx, h.Environment)
 	case tunnel.KindDesktop:
 		dialer, ok := w.rt.(DesktopDialer)
 		if !ok {

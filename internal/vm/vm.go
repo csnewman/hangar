@@ -35,6 +35,7 @@ import (
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/code"
 	"github.com/csnewman/hangar/internal/desktop"
+	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/terminal"
 	"github.com/csnewman/hangar/internal/vscode"
 )
@@ -525,6 +526,14 @@ func (r *Runtime) DialEditor(ctx context.Context, id string) (net.Conn, error) {
 
 // DialCode opens one connection to a running environment's Code tab
 // service, which its agent runs in the guest.
+func (r *Runtime) DialProfile(ctx context.Context, id string) (net.Conn, error) {
+	m, err := r.runningMachine(id)
+	if err != nil {
+		return nil, err
+	}
+	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), profile.Port)
+}
+
 func (r *Runtime) DialCode(ctx context.Context, id string) (net.Conn, error) {
 	m, err := r.runningMachine(id)
 	if err != nil {

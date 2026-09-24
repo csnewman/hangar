@@ -9,6 +9,7 @@ import { meKey, onSessionChange } from './session'
 import { Shell } from './components/Shell'
 import './index.css'
 import { AccountPage } from './pages/Account'
+import { ProfilePage } from './pages/Profile'
 import { UsersPage } from './pages/admin/Users'
 import { WorkersPage } from './pages/admin/Workers'
 import { EnvironmentPage, SummaryTab } from './pages/Environment'
@@ -94,6 +95,7 @@ const router = createBrowserRouter([
           { path: 'templates/new', element: <TemplateEditorPage /> },
           { path: 'templates/:id', element: <TemplateEditorPage /> },
           { path: 'account', element: <AccountPage /> },
+          { path: 'profile', element: <ProfilePage /> },
           {
             path: 'admin/workers',
             element: (

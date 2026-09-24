@@ -80,6 +80,98 @@ paths:
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /api/frontend/me/profile:
+    get:
+      operationId: getProfile
+      description: >-
+        The signed-in user's profile: the files that follow them into every
+        environment they own, and their SSH keys. A secret file is listed
+        without its content.
+      responses:
+        "200":
+          description: The profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Profile" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/me/profile/file:
+    parameters:
+      - name: path
+        in: query
+        required: true
+        description: The file's path, relative to the home directory.
+        schema: { type: string }
+    get:
+      operationId: getProfileFile
+      responses:
+        "200":
+          description: The file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileFileContent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: putProfileFile
+      description: >-
+        Write a file. It reaches every running environment the user owns at
+        once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PutProfileFile" }
+      responses:
+        "200":
+          description: The file as stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileFile" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    delete:
+      operationId: deleteProfileFile
+      description: Remove a file, from the profile and every environment.
+      responses:
+        "204":
+          description: Removed.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/me/profile/keys:
+    post:
+      operationId: addSSHKey
+      description: >-
+        Add an SSH key: generated, or imported from a private key without a
+        passphrase. The private key stays on the server; environments sign
+        through it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddSSHKey" }
+      responses:
+        "201":
+          description: The key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SSHKey" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/me/profile/keys/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    delete:
+      operationId: deleteSSHKey
+      responses:
+        "204":
+          description: Removed.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/frontend/people:
     get:
       operationId: listPeople
@@ -591,6 +683,79 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    Profile:
+      type: object
+      required: [files, keys, paths, secrets]
+      properties:
+        files:
+          type: array
+          items: { $ref: "#/components/schemas/ProfileFile" }
+        keys:
+          type: array
+          items: { $ref: "#/components/schemas/SSHKey" }
+        paths:
+          type: array
+          description: >-
+            What a profile holds, relative to the home directory. One ending
+            in a slash holds everything under it.
+          items: { type: string }
+        secrets:
+          type: boolean
+          description: >-
+            Whether the server can keep secrets: without its key, credentials
+            and SSH keys are refused.
+
+    ProfileFile:
+      type: object
+      required: [path, size, mode, secret, updated_at]
+      properties:
+        path: { type: string }
+        size: { type: integer }
+        mode: { type: integer }
+        secret:
+          type: boolean
+          description: A credential, whose content is never shown.
+        updated_at: { type: string, format: date-time }
+
+    ProfileFileContent:
+      type: object
+      required: [path, content, mode, updated_at]
+      properties:
+        path: { type: string }
+        content: { type: string }
+        mode: { type: integer }
+        updated_at: { type: string, format: date-time }
+
+    PutProfileFile:
+      type: object
+      required: [content]
+      properties:
+        content: { type: string }
+        mode:
+          type: integer
+          description: Permission bits. Absent keeps the file's, or 0644.
+
+    SSHKey:
+      type: object
+      required: [id, name, public_key, fingerprint, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        public_key:
+          type: string
+          description: In authorized_keys form, to add to GitHub and the like.
+        fingerprint: { type: string }
+        created_at: { type: string, format: date-time }
+
+    AddSSHKey:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        private_key:
+          type: string
+          description: A private key to import. Absent generates an ed25519 key.
+
     Error:
       type: object
       required: [error]
@@ -708,6 +873,13 @@ components:
         editor_path:
           type: string
           description: The folder the editor opens on.
+        untrusted:
+          type: boolean
+          description: >-
+            For code the owner does not trust: the environment is never given
+            their credentials -- Claude's sign-in, or signatures from their
+            SSH keys -- though the rest of their profile still follows them
+            in.
         placement:
           type: object
           description: >-

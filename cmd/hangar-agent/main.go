@@ -43,6 +43,7 @@ func main() {
 	go serveEditor()
 	go serveDesktop()
 	go serveCode()
+	go serveProfile()
 	run(uint32(*port), *retry)
 }
 

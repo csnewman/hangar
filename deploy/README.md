@@ -96,6 +96,7 @@ mkosi.
     cd deploy
     cp .env.example .env                  # then edit it
     openssl rand -hex 32 > bootstrap-token
+    openssl rand -hex 32 > secret-key     # control plane only; back it up
 
 Control plane:
 

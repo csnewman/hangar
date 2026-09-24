@@ -45,6 +45,9 @@ const (
 	// KindCode carries one connection to the environment's Code tab
 	// service.
 	KindCode = "code"
+	// KindProfile carries the environment's profile session, which the
+	// server holds open while the environment runs.
+	KindProfile = "profile"
 )
 
 // Header opens a stream.
@@ -110,6 +113,19 @@ func (r *Registry) Accept(w http.ResponseWriter, req *http.Request, workerID str
 	}
 	r.mu.Unlock()
 	r.log.Info("worker tunnel closed", "worker", workerID)
+}
+
+// Connected lists the workers whose tunnels this server holds.
+func (r *Registry) Connected() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]string, 0, len(r.tunnels))
+	for id, sess := range r.tunnels {
+		if !sess.IsClosed() {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // Open starts a stream to a worker. The caller owns the stream and closes

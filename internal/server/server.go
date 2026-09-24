@@ -25,6 +25,7 @@ import (
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/frontendapi"
 	"github.com/csnewman/hangar/internal/placement"
+	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/tunnel"
 	"github.com/csnewman/hangar/internal/users"
@@ -46,7 +47,10 @@ type Config struct {
 	// AutoSignIn, for development only, signs every visitor in as this
 	// existing user without a password. Empty requires signing in.
 	AutoSignIn string
-	Log        *slog.Logger
+	// Sealer encrypts the secrets users keep in their profiles. Nil keeps
+	// none: credentials and SSH keys are refused.
+	Sealer *profile.Sealer
+	Log    *slog.Logger
 }
 
 type Server struct {
@@ -63,6 +67,7 @@ type Server struct {
 	log       *slog.Logger
 	waits     *waiters
 	placeKick chan struct{}
+	sessions  *profile.Sessions
 }
 
 func New(cfg Config) (*Server, error) {
@@ -74,6 +79,7 @@ func New(cfg Config) (*Server, error) {
 	um := users.NewManager(cfg.DB)
 	tunnels := tunnel.NewRegistry(log)
 	edits := editor.NewManager(cfg.DB)
+	profiles := profile.NewStore(cfg.DB, cfg.Sealer)
 	var editors *editor.Gateway
 	if cfg.PublicURL != "" {
 		var err error
@@ -87,6 +93,7 @@ func New(cfg Config) (*Server, error) {
 		Templates:    templates.NewManager(cfg.DB),
 		Workers:      wm,
 		Users:        um,
+		Profiles:     profiles,
 		AutoSignIn:   cfg.AutoSignIn,
 		Log:          log,
 	}
@@ -112,6 +119,7 @@ func New(cfg Config) (*Server, error) {
 		log:       log,
 		waits:     newWaiters(),
 		placeKick: make(chan struct{}, 1),
+		sessions:  profile.NewSessions(profiles, tunnels, log),
 	}, nil
 }
 
@@ -122,6 +130,11 @@ func (s *Server) Run(ctx context.Context) {
 		switch channel {
 		case workers.Channel:
 			s.waits.wake(payload)
+			// A report may have an environment running that has no
+			// profile session yet.
+			s.sessions.Kick()
+		case profile.Channel:
+			s.sessions.Changed(payload)
 		case placement.Channel, workers.CapacityChannel:
 			s.kickPlacement()
 		case "":
@@ -129,8 +142,11 @@ func (s *Server) Run(ctx context.Context) {
 			// everything changed.
 			s.waits.wakeAll()
 			s.kickPlacement()
+			s.sessions.Changed("")
+			s.sessions.Kick()
 		}
-	}, workers.Channel, workers.CapacityChannel, placement.Channel)
+	}, workers.Channel, workers.CapacityChannel, placement.Channel, profile.Channel)
+	go s.sessions.Run(ctx)
 	go s.pruneSessions(ctx)
 	s.placementLoop(ctx)
 }

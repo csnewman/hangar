@@ -163,6 +163,7 @@ func toSpec(s api.Spec) Spec {
 		GPU:        GPU(s.GPU),
 		Repos:      repos,
 		EditorPath: optional(s.EditorPath),
+		Untrusted:  optionalBool(s.Untrusted),
 		Placement:  placement,
 	}
 }
@@ -180,8 +181,16 @@ func fromSpec(s Spec) api.Spec {
 		GPU:        api.GPU(s.GPU),
 		Repos:      repos,
 		EditorPath: deref(s.EditorPath),
+		Untrusted:  s.Untrusted != nil && *s.Untrusted,
 		Placement:  s.Placement,
 	}
+}
+
+func optionalBool(b bool) *bool {
+	if !b {
+		return nil
+	}
+	return &b
 }
 
 func deref(s *string) string {

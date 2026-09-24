@@ -23,6 +23,7 @@ import (
 
 	"github.com/csnewman/hangar/internal/certs"
 	"github.com/csnewman/hangar/internal/db"
+	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/server"
 	"github.com/csnewman/hangar/internal/webui"
 	"github.com/csnewman/hangar/internal/zone"
@@ -94,8 +95,18 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 		slog.Warn("AUTHENTICATION IS OFF: every visitor is signed in as this user (HANGAR_DEV_AUTO_SIGN_IN)", "username", autoSignIn)
 	}
 
+	// Users' credentials and SSH keys are encrypted with this key.
+	var sealer *profile.Sealer
+	if f := os.Getenv("HANGAR_SECRET_KEY_FILE"); f != "" {
+		if sealer, err = profile.LoadSealer(f); err != nil {
+			return err
+		}
+	} else {
+		slog.Warn("no secret key (HANGAR_SECRET_KEY_FILE); users cannot keep credentials or SSH keys")
+	}
+
 	srv, err := server.New(server.Config{DB: d, BootstrapToken: token, Web: web,
-		PublicURL: os.Getenv("HANGAR_PUBLIC_URL"), AutoSignIn: autoSignIn})
+		PublicURL: os.Getenv("HANGAR_PUBLIC_URL"), AutoSignIn: autoSignIn, Sealer: sealer})
 	if err != nil {
 		return err
 	}

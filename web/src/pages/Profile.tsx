@@ -1,0 +1,342 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Copy, KeyRound, Plus } from 'lucide-react'
+import { useEffect, useState, type FormEvent } from 'react'
+
+import { api, type ProfileFile, type SSHKey } from '../api'
+import { ConfirmButton } from '../components/ConfirmButton'
+import { PageHeader } from '../components/PageHeader'
+
+const profileKey = ['profile']
+
+// What each part of a profile is, for people who did not write the list.
+const describe: [string, string][] = [
+  ['.claude/.credentials.json', "Claude's sign-in"],
+  ['.claude/settings.json', "Claude's settings"],
+  ['.claude/CLAUDE.md', "Claude's instructions for every project"],
+  ['.claude/agents/', 'Claude subagents'],
+  ['.claude/commands/', 'Claude slash commands'],
+  ['.claude/skills/', 'Claude skills'],
+  ['.claude/output-styles/', 'Claude output styles'],
+  ['.gitconfig', "git's settings"],
+  ['.vscode-server-oss/data/User/settings.json', 'VS Code settings'],
+  ['.vscode-server-oss/data/User/keybindings.json', 'VS Code keybindings'],
+  ['.vscode-server-oss/data/User/snippets/', 'VS Code snippets'],
+]
+
+function describePath(path: string): string | undefined {
+  for (const [p, what] of describe) {
+    if (path === p || (p.endsWith('/') && path.startsWith(p))) return what
+  }
+  return undefined
+}
+
+// ProfilePage is the files and keys that follow the user into every
+// environment they own. Changes here reach running environments at once, and
+// changes made in an environment show up here.
+export function ProfilePage() {
+  // Refetched often: an environment changes these as much as this page does.
+  const profile = useQuery({
+    queryKey: profileKey,
+    queryFn: api.profile,
+    refetchInterval: 3000,
+  })
+  const [open, setOpen] = useState<string | null>(null)
+
+  if (profile.isPending) return <div className="page page-narrow" />
+  if (profile.isError) return <div className="page page-narrow alert">{profile.error.message}</div>
+  const { files, keys, paths, secrets } = profile.data
+
+  return (
+    <div className="page page-narrow">
+      <PageHeader
+        title="Profile"
+        subtitle="Follows you into every environment you own, and stays the same in all of them as you change it here or there."
+      />
+      {!secrets && (
+        <div className="alert">
+          This server has no secret key (HANGAR_SECRET_KEY_FILE), so it cannot keep Claude's sign-in or SSH keys.
+        </div>
+      )}
+      <section className="section">
+        <h2 className="section-title">Files</h2>
+        <div className="panel">
+          {files.length === 0 ? (
+            <div className="empty">
+              Nothing yet. Sign in to Claude or change a setting in any environment and it appears here, or add a file
+              below.
+            </div>
+          ) : (
+            <table className="table">
+              <tbody>
+                {files.map((f) => (
+                  <FileRow
+                    key={f.path}
+                    file={f}
+                    open={open === f.path}
+                    onOpen={() => setOpen(open === f.path ? null : f.path)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+        <AddFile paths={paths} existing={files.map((f) => f.path)} onAdded={setOpen} />
+      </section>
+      <SSHKeys keys={keys} disabled={!secrets} />
+    </div>
+  )
+}
+
+function FileRow({ file, open, onOpen }: { file: ProfileFile; open: boolean; onOpen: () => void }) {
+  const qc = useQueryClient()
+  const remove = useMutation({
+    mutationFn: () => api.deleteProfileFile(file.path),
+    onSettled: () => qc.invalidateQueries({ queryKey: profileKey }),
+  })
+  return (
+    <>
+      <tr>
+        <td>
+          {file.secret ? (
+            <span className="mono">{file.path}</span>
+          ) : (
+            <button type="button" className="file-link mono" onClick={onOpen}>
+              {file.path}
+            </button>
+          )}
+          <div className="muted small">{describePath(file.path)}</div>
+        </td>
+        <td className="muted nowrap">{file.secret ? 'hidden' : `${file.size} bytes`}</td>
+        <td className="muted nowrap">{new Date(file.updated_at).toLocaleString()}</td>
+        <td className="num">
+          <ConfirmButton
+            label={file.secret ? 'Sign out' : 'Remove'}
+            confirmLabel={file.secret ? 'Sign out everywhere?' : 'Remove everywhere?'}
+            onConfirm={() => remove.mutate()}
+            disabled={remove.isPending}
+          />
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td colSpan={4}>
+            <FileEditor path={file.path} updatedAt={file.updated_at} />
+          </td>
+        </tr>
+      )}
+    </>
+  )
+}
+
+// FileEditor edits one file. While it has no unsaved change it follows the
+// file as environments change it; once it has one, it says when the file has
+// changed underneath rather than overwriting what is being typed.
+function FileEditor({ path, updatedAt }: { path: string; updatedAt: string }) {
+  const qc = useQueryClient()
+  const file = useQuery({
+    queryKey: ['profile-file', path, updatedAt],
+    queryFn: () => api.profileFile(path),
+  })
+  const [text, setText] = useState<string | null>(null)
+  const [base, setBase] = useState<string | null>(null)
+  const saved = file.data?.content ?? null
+  const dirty = text !== null && text !== base
+
+  useEffect(() => {
+    if (saved !== null && !dirty) {
+      setText(saved)
+      setBase(saved)
+    }
+  }, [saved, dirty])
+
+  const save = useMutation({
+    mutationFn: () => api.putProfileFile(path, text ?? ''),
+    onSuccess: () => {
+      setBase(text)
+      qc.invalidateQueries({ queryKey: profileKey })
+    },
+  })
+
+  if (file.isPending || text === null) return <div className="muted small">Loading…</div>
+  return (
+    <div className="form">
+      <textarea
+        className="mono profile-editor"
+        spellCheck={false}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={Math.min(24, Math.max(6, text.split('\n').length + 1))}
+      />
+      {dirty && saved !== base && (
+        <div className="notice">It has changed in an environment since you started editing; saving replaces that.</div>
+      )}
+      {save.error && <div className="alert">{save.error.message}</div>}
+      <div className="form-actions">
+        <button type="button" className="btn btn-ghost" disabled={!dirty} onClick={() => setText(saved)}>
+          Discard
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary"
+          disabled={!dirty || save.isPending}
+          onClick={() => save.mutate()}
+        >
+          Save
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function AddFile({ paths, existing, onAdded }: { paths: string[]; existing: string[]; onAdded: (p: string) => void }) {
+  const qc = useQueryClient()
+  const choices = paths.filter((p) => !existing.includes(p) && !p.endsWith('.credentials.json'))
+  const [path, setPath] = useState('')
+  const add = useMutation({
+    mutationFn: () => api.putProfileFile(path, ''),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: profileKey })
+      onAdded(path)
+      setPath('')
+    },
+  })
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (path && !path.endsWith('/')) add.mutate()
+  }
+  return (
+    <form className="inline-form" onSubmit={submit}>
+      <input
+        className="mono grow"
+        list="profile-paths"
+        placeholder="Add a file: .claude/commands/review.md"
+        value={path}
+        onChange={(e) => setPath(e.target.value)}
+      />
+      <datalist id="profile-paths">
+        {choices.map((p) => (
+          <option key={p} value={p}>
+            {describePath(p)}
+          </option>
+        ))}
+      </datalist>
+      <button type="submit" className="btn btn-ghost" disabled={!path || path.endsWith('/') || add.isPending}>
+        <Plus size={14} />
+        Add
+      </button>
+      {add.error && <span className="action-error">{add.error.message}</span>}
+    </form>
+  )
+}
+
+function SSHKeys({ keys, disabled }: { keys: SSHKey[]; disabled: boolean }) {
+  const qc = useQueryClient()
+  const [name, setName] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [privateKey, setPrivateKey] = useState('')
+  const add = useMutation({
+    mutationFn: () => api.addSSHKey(name, importing ? privateKey : undefined),
+    onSuccess: () => {
+      setName('')
+      setPrivateKey('')
+      setImporting(false)
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: profileKey }),
+  })
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    add.mutate()
+  }
+
+  return (
+    <section className="section">
+      <h2 className="section-title">SSH keys</h2>
+      <p className="muted small">
+        Environments sign with these through an SSH agent; the private key stays on the server. Add the public key to
+        GitHub or wherever git pushes.
+      </p>
+      <div className="panel">
+        {keys.length === 0 ? (
+          <div className="empty">No keys.</div>
+        ) : (
+          <table className="table">
+            <tbody>
+              {keys.map((k) => (
+                <KeyRow key={k.id} sshKey={k} />
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <form className="panel form key-form" onSubmit={submit}>
+        <div className="field-row">
+          <label className="field grow">
+            <span>Name</span>
+            <input required value={name} onChange={(e) => setName(e.target.value)} placeholder="hangar" />
+          </label>
+        </div>
+        <label className="check">
+          <input type="checkbox" checked={importing} onChange={(e) => setImporting(e.target.checked)} />
+          <span>Import an existing private key rather than generate one</span>
+        </label>
+        {importing && (
+          <label className="field">
+            <span>Private key, without a passphrase</span>
+            <textarea
+              className="mono"
+              rows={6}
+              required
+              spellCheck={false}
+              value={privateKey}
+              onChange={(e) => setPrivateKey(e.target.value)}
+              placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"
+            />
+          </label>
+        )}
+        {add.error && <div className="alert">{add.error.message}</div>}
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary" disabled={disabled || add.isPending}>
+            <KeyRound size={14} />
+            {importing ? 'Import key' : 'Generate key'}
+          </button>
+        </div>
+      </form>
+    </section>
+  )
+}
+
+function KeyRow({ sshKey }: { sshKey: SSHKey }) {
+  const qc = useQueryClient()
+  const remove = useMutation({
+    mutationFn: () => api.deleteSSHKey(sshKey.id),
+    onSettled: () => qc.invalidateQueries({ queryKey: profileKey }),
+  })
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard.writeText(sshKey.public_key).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <tr>
+      <td>
+        <div className="strong">{sshKey.name}</div>
+        <div className="muted small mono">{sshKey.fingerprint}</div>
+        <code className="public-key">{sshKey.public_key}</code>
+      </td>
+      <td className="num nowrap">
+        <button type="button" className="btn btn-ghost" onClick={copy}>
+          <Copy size={13} />
+          {copied ? 'Copied' : 'Copy public key'}
+        </button>
+        <ConfirmButton
+          label="Delete"
+          confirmLabel="Delete?"
+          onConfirm={() => remove.mutate()}
+          disabled={remove.isPending}
+        />
+      </td>
+    </tr>
+  )
+}
