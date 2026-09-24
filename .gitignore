@@ -17,3 +17,6 @@ docs/
 # The built web UI, embedded by internal/webui.
 /internal/webui/dist/app/
 /web/node_modules/
+
+# dev/reset-db.sh keeps its last copy of the data here.
+/dev/.reset-db-dump.sql
