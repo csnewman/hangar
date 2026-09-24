@@ -140,3 +140,31 @@ CREATE TABLE editor_sessions (
 );
 
 CREATE INDEX editor_sessions_session ON editor_sessions (session_hash);
+
+-- Records Hangar serves in its DNS zone beyond those its configuration
+-- implies: the TXT records ACME's DNS-01 challenges look for. Every replica
+-- answers from this table, so a record one replica adds is served by all.
+CREATE TABLE dns_records (
+    -- Fully qualified, lower case, without the trailing dot.
+    name       text NOT NULL,
+    type       text NOT NULL CHECK (type IN ('TXT')),
+    value      text NOT NULL,
+    ttl        integer NOT NULL CHECK (ttl >= 0),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (name, type, value)
+);
+
+-- Certificates, their keys and the ACME account, as certmagic stores them,
+-- shared by every replica.
+CREATE TABLE tls_storage (
+    key      text PRIMARY KEY,
+    value    bytea NOT NULL,
+    modified timestamptz NOT NULL DEFAULT now()
+);
+
+-- certmagic's locks, held while a certificate is obtained or renewed so two
+-- replicas do not both do it. A lock whose holder died expires.
+CREATE TABLE tls_locks (
+    name       text PRIMARY KEY,
+    expires_at timestamptz NOT NULL
+);

@@ -26,9 +26,51 @@ A worker machine needs, before its container starts:
   or foreign filesystem that maps them.
 - Docker with Compose v2 and Buildx.
 
-The control plane needs only Docker, and a DNS name that browsers reach: each
-environment's editor is served on `e-<id>.<that name>`, so a wildcard record
-(`*.hangar.example.com` as well as `hangar.example.com`) must point at it.
+The control plane needs Docker, a public address with ports 53 (UDP and
+TCP), 443 and 80 open, and a DNS zone delegated to it (below).
+
+## DNS and TLS
+
+Each environment's editor is served on its own name, `e-<id>.<host>`, so
+Hangar needs every name under its host and a certificate for all of them. A
+wildcard certificate is only issued against ACME's DNS-01 challenge, which
+means writing TXT records into the zone, so `hangar-server` is the zone's
+authoritative DNS server: every name in it resolves to the control plane,
+and the challenge's records are served from Postgres while they exist. It is
+issued certificates from Let's Encrypt for `<host>` and `*.<host>`, keeps
+them renewed, and serves HTTPS on 443 with them, redirecting 80 to it.
+
+The zone is the host of `HANGAR_PUBLIC_URL`, say `hangar.example.com`. In the
+parent zone, `example.com` at whoever serves it, delegate it with an NS
+record and give the nameserver's address as glue:
+
+    hangar.example.com.      NS    ns1.hangar.example.com.
+    ns1.hangar.example.com.  A     203.0.113.10
+
+where `203.0.113.10` is `HANGAR_DNS_ADDRESSES`. Registrars that manage the
+parent's DNS call the second a glue record, a child nameserver, or a host
+record; with an ordinary DNS provider it is just an A record. Add AAAA as
+well if the control plane has IPv6. More than one nameserver name is fine,
+all pointing at the control plane, listed in `HANGAR_DNS_NAMESERVERS`.
+
+Check the delegation from outside once the control plane is up:
+
+    dig +trace e-test.hangar.example.com
+    dig @203.0.113.10 hangar.example.com NS
+
+A new deployment is best tried against Let's Encrypt's staging CA
+(`HANGAR_ACME_CA`), whose rate limits are generous, then switched to
+production by emptying it. Certificates and the ACME account are kept in
+Postgres.
+
+On Ubuntu, systemd-resolved listens on `127.0.0.53:53`, which stops Docker
+publishing port 53 on every address: set `HANGAR_PUBLISH_ADDRESS` to the
+public address.
+
+To use a TLS terminator and DNS of your own instead, set
+`HANGAR_DNS_LISTEN`, `HANGAR_TLS_LISTEN` and `HANGAR_REDIRECT_LISTEN` to
+empty and put it in front of `HANGAR_LISTEN`; it then needs a certificate
+for both `<host>` and `*.<host>`.
 
 ## Does the worker need `--privileged`?
 
@@ -59,10 +101,8 @@ Control plane:
 
     docker compose --profile control-plane up -d --build
 
-Put TLS in front of port 8081 for `HANGAR_PUBLIC_URL` and its wildcard: the
-`proxy` profile does it with Caddy and a certificate you supply in
-`HANGAR_TLS_DIR` (a wildcard certificate needs a DNS challenge, which is why it
-is not obtained automatically).
+Once the zone is delegated, the server is issued its certificates within a
+minute or so; `docker compose logs server` shows it happening.
 
 Each worker machine: copy `deploy/` and the same `bootstrap-token`, set
 `server.url` and `node.name` in `worker.yaml`, then build a base image and

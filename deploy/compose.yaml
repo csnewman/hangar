@@ -4,7 +4,6 @@
 #   docker compose --profile control-plane up -d          # Postgres + server
 #   docker compose --profile worker up -d                 # a worker
 #   IMAGE=ubuntu2604 docker compose --profile images run --rm build-image
-#   docker compose --profile proxy up -d                  # TLS in front
 #
 # One machine can run every profile; a worker machine runs only `worker` and
 # `images`, pointed at the control plane in worker.yaml, and needs none of
@@ -42,10 +41,25 @@ services:
       # The first administrator, created only while there are no users.
       HANGAR_INITIAL_ADMIN_USERNAME: ${HANGAR_ADMIN_USERNAME:-admin}
       HANGAR_INITIAL_ADMIN_PASSWORD: ${HANGAR_ADMIN_PASSWORD:-}
+      # The server is the authoritative DNS server for HANGAR_PUBLIC_URL's
+      # host and everything under it, and serves HTTPS with certificates it
+      # is issued for them by ACME. Setting a listen address to empty in
+      # .env turns that part off, for a TLS terminator of your own.
+      HANGAR_DNS_LISTEN: ${HANGAR_DNS_LISTEN-:53}
+      HANGAR_DNS_ADDRESSES: ${HANGAR_DNS_ADDRESSES:-}
+      HANGAR_DNS_NAMESERVERS: ${HANGAR_DNS_NAMESERVERS:-}
+      HANGAR_TLS_LISTEN: ${HANGAR_TLS_LISTEN-:443}
+      HANGAR_REDIRECT_LISTEN: ${HANGAR_REDIRECT_LISTEN-:80}
+      HANGAR_ACME_EMAIL: ${HANGAR_ACME_EMAIL:-}
+      HANGAR_ACME_CA: ${HANGAR_ACME_CA:-}
     secrets: [bootstrap-token]
     ports:
-      # Behind the proxy profile, or another TLS terminator, this need not be
-      # published beyond the machine.
+      - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/udp
+      - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/tcp
+      - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:443:443
+      - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:80:80
+      # Plain HTTP, for a TLS terminator of your own. Workers and browsers
+      # use HANGAR_PUBLIC_URL.
       - ${HANGAR_LISTEN:-127.0.0.1:8081}:8081
     depends_on:
       postgres:
@@ -95,26 +109,9 @@ services:
     volumes:
       - /var/lib/hangar/image-src/${IMAGE:-ubuntu2604}:/out
 
-  proxy:
-    profiles: [proxy]
-    image: caddy:2
-    restart: unless-stopped
-    environment:
-      HANGAR_DOMAIN: ${HANGAR_DOMAIN:-}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ${HANGAR_TLS_DIR:-./tls}:/tls:ro
-      - caddy:/data
-    ports:
-      - 443:443
-      - 80:80
-    depends_on:
-      - server
-
 secrets:
   bootstrap-token:
     file: ${HANGAR_BOOTSTRAP_TOKEN_FILE:-./bootstrap-token}
 
 volumes:
   pgdata:
-  caddy:
