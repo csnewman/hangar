@@ -18,9 +18,10 @@ import (
 
 // Defines values for DesiredState.
 const (
-	DesiredStateDeleted DesiredState = "deleted"
-	DesiredStateRunning DesiredState = "running"
-	DesiredStateStopped DesiredState = "stopped"
+	DesiredStateDeleted   DesiredState = "deleted"
+	DesiredStateRunning   DesiredState = "running"
+	DesiredStateStopped   DesiredState = "stopped"
+	DesiredStateSuspended DesiredState = "suspended"
 )
 
 // Valid indicates whether the value is a known member of the DesiredState enum.
@@ -31,6 +32,8 @@ func (e DesiredState) Valid() bool {
 	case DesiredStateRunning:
 		return true
 	case DesiredStateStopped:
+		return true
+	case DesiredStateSuspended:
 		return true
 	default:
 		return false
@@ -96,13 +99,15 @@ func (e LocalImageState) Valid() bool {
 
 // Defines values for Phase.
 const (
-	PhaseDeleting Phase = "deleting"
-	PhaseFailed   Phase = "failed"
-	PhasePending  Phase = "pending"
-	PhaseRunning  Phase = "running"
-	PhaseStarting Phase = "starting"
-	PhaseStopped  Phase = "stopped"
-	PhaseStopping Phase = "stopping"
+	PhaseDeleting   Phase = "deleting"
+	PhaseFailed     Phase = "failed"
+	PhasePending    Phase = "pending"
+	PhaseRunning    Phase = "running"
+	PhaseStarting   Phase = "starting"
+	PhaseStopped    Phase = "stopped"
+	PhaseStopping   Phase = "stopping"
+	PhaseSuspended  Phase = "suspended"
+	PhaseSuspending Phase = "suspending"
 )
 
 // Valid indicates whether the value is a known member of the Phase enum.
@@ -121,6 +126,10 @@ func (e Phase) Valid() bool {
 	case PhaseStopped:
 		return true
 	case PhaseStopping:
+		return true
+	case PhaseSuspended:
+		return true
+	case PhaseSuspending:
 		return true
 	default:
 		return false
@@ -534,6 +543,9 @@ type ServerInterface interface {
 	// (POST /api/frontend/environments/{id}/stop)
 	StopEnvironment(w http.ResponseWriter, r *http.Request, id ID)
 
+	// (POST /api/frontend/environments/{id}/suspend)
+	SuspendEnvironment(w http.ResponseWriter, r *http.Request, id ID)
+
 	// (GET /api/frontend/environments/{id}/terminals)
 	ListTerminals(w http.ResponseWriter, r *http.Request, id ID)
 
@@ -807,6 +819,32 @@ func (siw *ServerInterfaceWrapper) StopEnvironment(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.StopEnvironment(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SuspendEnvironment operation middleware
+func (siw *ServerInterfaceWrapper) SuspendEnvironment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SuspendEnvironment(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1390,6 +1428,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}", wrapper.GetEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/start", wrapper.StartEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/stop", wrapper.StopEnvironment)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/suspend", wrapper.SuspendEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/terminals", wrapper.ListTerminals)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/editor", wrapper.OpenEditor)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/desktop/size", wrapper.ResizeDesktop)
@@ -1987,6 +2026,70 @@ func (response StopEnvironment404JSONResponse) VisitStopEnvironmentResponse(w ht
 type StopEnvironment409JSONResponse struct{ ConflictJSONResponse }
 
 func (response StopEnvironment409JSONResponse) VisitStopEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SuspendEnvironmentRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type SuspendEnvironmentResponseObject interface {
+	VisitSuspendEnvironmentResponse(w http.ResponseWriter) error
+}
+
+type SuspendEnvironment200JSONResponse Environment
+
+func (response SuspendEnvironment200JSONResponse) VisitSuspendEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SuspendEnvironment401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SuspendEnvironment401JSONResponse) VisitSuspendEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SuspendEnvironment404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SuspendEnvironment404JSONResponse) VisitSuspendEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SuspendEnvironment409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SuspendEnvironment409JSONResponse) VisitSuspendEnvironmentResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -3283,6 +3386,9 @@ type StrictServerInterface interface {
 	// (POST /api/frontend/environments/{id}/stop)
 	StopEnvironment(ctx context.Context, request StopEnvironmentRequestObject) (StopEnvironmentResponseObject, error)
 
+	// (POST /api/frontend/environments/{id}/suspend)
+	SuspendEnvironment(ctx context.Context, request SuspendEnvironmentRequestObject) (SuspendEnvironmentResponseObject, error)
+
 	// (GET /api/frontend/environments/{id}/terminals)
 	ListTerminals(ctx context.Context, request ListTerminalsRequestObject) (ListTerminalsResponseObject, error)
 
@@ -3649,6 +3755,32 @@ func (sh *strictHandler) StopEnvironment(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(StopEnvironmentResponseObject); ok {
 		if err := validResponse.VisitStopEnvironmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SuspendEnvironment operation middleware
+func (sh *strictHandler) SuspendEnvironment(w http.ResponseWriter, r *http.Request, id ID) {
+	var request SuspendEnvironmentRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SuspendEnvironment(ctx, request.(SuspendEnvironmentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SuspendEnvironment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SuspendEnvironmentResponseObject); ok {
+		if err := validResponse.VisitSuspendEnvironmentResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

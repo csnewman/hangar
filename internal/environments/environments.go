@@ -184,6 +184,12 @@ func (m *Manager) SetDesired(ctx context.Context, p users.Principal, id string, 
 		if current == api.DesiredDeleted {
 			return fmt.Errorf("%w: the environment is being deleted", ErrConflict)
 		}
+		// Only a machine that is running has memory to keep. A stopped
+		// environment stays stopped; one no worker holds has nothing to
+		// suspend.
+		if desired == api.DesiredSuspended && (current != api.DesiredRunning || workerID == nil) {
+			return fmt.Errorf("%w: only a running environment can be suspended", ErrConflict)
+		}
 
 		if workerID != nil {
 			if _, err := tx.Exec(ctx, `UPDATE environments SET desired = $2, updated_at = now() WHERE id = $1`,

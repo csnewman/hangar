@@ -6,6 +6,8 @@ const tone: Record<Phase, string> = {
   running: 'good',
   stopping: 'busy',
   stopped: 'idle',
+  suspending: 'busy',
+  suspended: 'idle',
   failed: 'bad',
   deleting: 'busy',
 }
@@ -15,6 +17,8 @@ const tone: Record<Phase, string> = {
 const settled: Record<DesiredState, Phase[]> = {
   running: ['running', 'failed'],
   stopped: ['stopped'],
+  // A worker that was not running it leaves it stopped.
+  suspended: ['suspended', 'stopped'],
   deleted: [],
 }
 

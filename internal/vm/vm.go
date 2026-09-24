@@ -191,11 +191,16 @@ func (r *Runtime) Apply(spec api.EnvironmentSpec) {
 	m.want(spec)
 }
 
-// adopt takes on an environment found on disk.
+// adopt takes on an environment found on disk: suspended if it was
+// suspended, and otherwise stopped.
 func (r *Runtime) adopt(id string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.newMachine(id, api.PhaseStopped)
+	phase := api.PhaseStopped
+	if _, err := os.Stat(filepath.Join(r.cfg.StateDir, id, suspendedMark)); err == nil {
+		phase = api.PhaseSuspended
+	}
+	r.newMachine(id, phase)
 }
 
 func (r *Runtime) newMachine(id string, phase api.Phase) *machine {
@@ -260,6 +265,9 @@ type machine struct {
 	cancelBoot context.CancelFunc
 	// stats is the latest measurement of the running machine.
 	stats *api.EnvironmentStats
+	// suspendFailed is set when suspending failed, so it is not tried
+	// again until something else is asked for.
+	suspendFailed bool
 
 	nudge chan struct{}
 }
@@ -285,6 +293,9 @@ func (m *machine) set(phase api.Phase, reason string) {
 // controller. A boot in progress is interrupted if it stops being wanted.
 func (m *machine) want(spec api.EnvironmentSpec) {
 	m.mu.Lock()
+	if m.spec == nil || m.spec.Desired != spec.Desired {
+		m.suspendFailed = false
+	}
 	m.spec = &spec
 	if spec.Desired != api.DesiredRunning && m.cancelBoot != nil {
 		m.cancelBoot()
@@ -334,11 +345,26 @@ func (m *machine) control(ctx context.Context) {
 			if !running && !failed {
 				m.boot(ctx, *spec)
 			}
+		case api.DesiredSuspended:
+			// Only a running machine has memory to keep. One that is not
+			// stays as it is: stopped, failed, or already suspended.
+			if running && !m.suspendFailed {
+				if err := m.suspend(); err != nil {
+					// Tried once per request: the guest runs on, saying
+					// why, until it is asked for something else.
+					m.log.Warn("suspending", "err", err)
+					m.suspendFailed = true
+					m.set(api.PhaseRunning, "could not suspend: "+err.Error())
+				} else {
+					m.set(api.PhaseSuspended, "")
+				}
+			}
 		case api.DesiredStopped:
 			if running {
 				m.set(api.PhaseStopping, "")
 				m.powerOff()
 			}
+			m.discardSuspend()
 			m.set(api.PhaseStopped, "")
 		case api.DesiredDeleted:
 			m.set(api.PhaseDeleting, "")

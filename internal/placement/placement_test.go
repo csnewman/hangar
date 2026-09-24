@@ -119,6 +119,21 @@ func TestLifecycle(t *testing.T) {
 		t.Fatalf("after report: %s on %q", got.Phase, got.Worker)
 	}
 
+	// Suspending a placed environment is the worker's to do, and a
+	// suspended one keeps its place.
+	v1 := set.Version
+	if _, err := p.envs.SetDesired(ctx, p.owner, e.ID, api.DesiredSuspended); err != nil {
+		t.Fatal(err)
+	}
+	set, _ = p.workers.DesiredSet(ctx, w)
+	if set.Version <= v1 || set.Environments[0].Desired != api.DesiredSuspended {
+		t.Fatalf("desired set after suspending: %+v", set)
+	}
+	p.report(t, w, 4, 8192, api.ObservedEnvironment{ID: e.ID, Phase: api.PhaseSuspended})
+	if got := p.get(t, e.ID); got.Phase != api.PhaseSuspended || got.Worker != "w" {
+		t.Fatalf("after suspending: %s on %q", got.Phase, got.Worker)
+	}
+
 	if _, err := p.envs.SetDesired(ctx, p.owner, e.ID, api.DesiredDeleted); err != nil {
 		t.Fatal(err)
 	}
@@ -151,6 +166,10 @@ func TestUnplacedEnvironmentsChangeAtOnce(t *testing.T) {
 	p, _ := newPlane(t)
 	e := p.env(t, "e", 1, 1024)
 
+	// Nothing runs it, so nothing can be suspended.
+	if _, err := p.envs.SetDesired(ctx, p.owner, e.ID, api.DesiredSuspended); !errors.Is(err, environments.ErrConflict) {
+		t.Fatalf("suspending an unplaced environment: %v", err)
+	}
 	if _, err := p.envs.SetDesired(ctx, p.owner, e.ID, api.DesiredStopped); err != nil {
 		t.Fatal(err)
 	}

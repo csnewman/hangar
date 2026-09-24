@@ -72,6 +72,7 @@ export const api = {
   createEnvironment: (body: CreateEnvironment) => unwrap(client.POST('/api/frontend/environments', { body })),
   startEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/start', byID(id))),
   stopEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/stop', byID(id))),
+  suspendEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/suspend', byID(id))),
   resizeDesktop: (id: string, width: number, height: number) =>
     unwrap(
       client.PUT('/api/frontend/environments/{id}/desktop/size', { params: { path: { id } }, body: { width, height } }),

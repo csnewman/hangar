@@ -359,6 +359,25 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/frontend/environments/{id}/suspend:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: suspendEnvironment
+      description: >-
+        Write a running environment's memory to its worker's disk and stop
+        it. Starting it again resumes it where it was. Stopping it discards
+        the memory.
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: The environment, desired suspended.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/frontend/environments/{id}/terminals:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -581,14 +600,14 @@ components:
     DesiredState:
       type: string
       description: What the environment's owner has asked for.
-      enum: [running, stopped, deleted]
+      enum: [running, stopped, suspended, deleted]
 
     Phase:
       type: string
       description: >-
         What the environment is doing, as its worker last reported.
         "pending" means no worker has reported on it yet.
-      enum: [pending, starting, running, stopping, stopped, failed, deleting]
+      enum: [pending, starting, running, stopping, stopped, suspending, suspended, failed, deleting]
 
     Environment:
       type: object

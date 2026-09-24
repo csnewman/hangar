@@ -337,12 +337,14 @@ func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredS
 }
 
 var validPhases = map[api.Phase]bool{
-	api.PhaseStarting: true,
-	api.PhaseRunning:  true,
-	api.PhaseStopping: true,
-	api.PhaseStopped:  true,
-	api.PhaseFailed:   true,
-	api.PhaseDeleting: true,
+	api.PhaseStarting:   true,
+	api.PhaseRunning:    true,
+	api.PhaseStopping:   true,
+	api.PhaseStopped:    true,
+	api.PhaseSuspending: true,
+	api.PhaseSuspended:  true,
+	api.PhaseFailed:     true,
+	api.PhaseDeleting:   true,
 }
 
 // ValidateStatus checks a report before anything is written, so a malformed

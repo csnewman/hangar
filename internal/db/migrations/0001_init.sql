@@ -94,7 +94,7 @@ CREATE TABLE environments (
     image       text NOT NULL,
     cpus        integer NOT NULL CHECK (cpus > 0),
     memory_mib  integer NOT NULL CHECK (memory_mib > 0),
-    desired     text NOT NULL CHECK (desired IN ('running', 'stopped', 'deleted')),
+    desired     text NOT NULL CHECK (desired IN ('running', 'stopped', 'suspended', 'deleted')),
     -- An environment's disks are local to the worker it was placed on, so
     -- placement is permanent. Moving it would lose them.
     worker_id   uuid REFERENCES workers (id),

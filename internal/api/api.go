@@ -15,6 +15,12 @@ type DesiredState string
 const (
 	DesiredRunning DesiredState = "running"
 	DesiredStopped DesiredState = "stopped"
+	// DesiredSuspended keeps a running environment's memory on its worker's
+	// disk, and its processes with it, until it is started again. It stops
+	// using memory and CPU as a stopped one does, and resumes where it was
+	// rather than booting. Stopping a suspended environment discards the
+	// memory; its disks stay as they were, as after a power cut.
+	DesiredSuspended DesiredState = "suspended"
 	// DesiredDeleted is held until the worker reports the environment gone,
 	// and the row is removed then. An environment absent from a desired set is
 	// one the server does not know, which a worker must leave alone.
@@ -32,8 +38,13 @@ const (
 	PhaseRunning  Phase = "running"
 	PhaseStopping Phase = "stopping"
 	PhaseStopped  Phase = "stopped"
-	PhaseFailed   Phase = "failed"
-	PhaseDeleting Phase = "deleting"
+	// PhaseSuspending and PhaseSuspended are an environment being written to
+	// disk and held there. A start resumes a suspended environment; its
+	// phase is starting while it does.
+	PhaseSuspending Phase = "suspending"
+	PhaseSuspended  Phase = "suspended"
+	PhaseFailed     Phase = "failed"
+	PhaseDeleting   Phase = "deleting"
 )
 
 // Display is whether an environment has a graphical desktop.

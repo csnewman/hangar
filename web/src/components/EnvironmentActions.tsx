@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Play, Square } from 'lucide-react'
+import { Pause, Play, Square } from 'lucide-react'
 import { useNavigate } from 'react-router'
 
 import { api, type Environment } from '../api'
@@ -14,28 +14,55 @@ export function EnvironmentActions({ env, afterDelete }: { env: Environment; aft
   const refresh = () => qc.invalidateQueries({ queryKey: environmentsKey })
   const start = useMutation({ mutationFn: () => api.startEnvironment(env.id), onSettled: refresh })
   const stop = useMutation({ mutationFn: () => api.stopEnvironment(env.id), onSettled: refresh })
+  const suspend = useMutation({ mutationFn: () => api.suspendEnvironment(env.id), onSettled: refresh })
   const remove = useMutation({
     mutationFn: () => api.deleteEnvironment(env.id),
     onSuccess: () => afterDelete && navigate(afterDelete),
     onSettled: refresh,
   })
-  const busy = start.isPending || stop.isPending || remove.isPending
+  const busy = start.isPending || stop.isPending || suspend.isPending || remove.isPending
   const deleting = env.desired === 'deleted'
-  const error = start.error ?? stop.error ?? remove.error
+  const error = start.error ?? stop.error ?? suspend.error ?? remove.error
 
   return (
     <div className="actions">
       {error && <span className="action-error">{error.message}</span>}
       {env.desired === 'running' ? (
-        <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => stop.mutate()}>
-          <Square size={13} />
-          Stop
-        </button>
+        <>
+          <button
+            type="button"
+            className="btn btn-ghost"
+            disabled={busy || env.phase !== 'running'}
+            title="Keep its memory on disk and stop it; starting it again resumes where it was"
+            onClick={() => suspend.mutate()}
+          >
+            <Pause size={13} />
+            Suspend
+          </button>
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => stop.mutate()}>
+            <Square size={13} />
+            Stop
+          </button>
+        </>
       ) : (
-        <button type="button" className="btn btn-ghost" disabled={busy || deleting} onClick={() => start.mutate()}>
-          <Play size={13} />
-          Start
-        </button>
+        <>
+          <button type="button" className="btn btn-ghost" disabled={busy || deleting} onClick={() => start.mutate()}>
+            <Play size={13} />
+            {env.phase === 'suspended' ? 'Resume' : 'Start'}
+          </button>
+          {env.desired === 'suspended' && (
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={busy}
+              title="Discard its memory; its disks stay as they are"
+              onClick={() => stop.mutate()}
+            >
+              <Square size={13} />
+              Stop
+            </button>
+          )}
+        </>
       )}
       <ConfirmButton label="Delete" confirmLabel="Delete?" disabled={busy || deleting} onConfirm={() => remove.mutate()} />
     </div>

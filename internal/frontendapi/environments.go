@@ -73,6 +73,19 @@ func (h *handler) StopEnvironment(ctx context.Context, req StopEnvironmentReques
 	return StopEnvironment200JSONResponse(environment(*e)), nil
 }
 
+func (h *handler) SuspendEnvironment(ctx context.Context, req SuspendEnvironmentRequestObject) (SuspendEnvironmentResponseObject, error) {
+	e, err := h.setDesired(ctx, req.ID, api.DesiredSuspended)
+	switch {
+	case errors.Is(err, environments.ErrNotFound):
+		return SuspendEnvironment404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
+	case errors.Is(err, environments.ErrConflict):
+		return SuspendEnvironment409JSONResponse{ConflictJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return SuspendEnvironment200JSONResponse(environment(*e)), nil
+}
+
 func (h *handler) DeleteEnvironment(ctx context.Context, req DeleteEnvironmentRequestObject) (DeleteEnvironmentResponseObject, error) {
 	e, err := h.setDesired(ctx, req.ID, api.DesiredDeleted)
 	switch {

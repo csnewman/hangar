@@ -80,6 +80,12 @@ type instance struct {
 	cancel   context.CancelFunc
 	backends []interface{ Close() error }
 	exited   chan struct{}
+	// fs and gpu are the backends that keep guest state a suspend must
+	// save; gpu is nil without a GPU.
+	fs  *ch.FsBackend
+	gpu *ch.GpuBackend
+	// image is what the machine booted from.
+	image Image
 
 	mu  sync.Mutex
 	err error
@@ -135,8 +141,8 @@ func (i *instance) shutdown(log *slog.Logger) {
 	i.close()
 }
 
-// start boots the environment and provisions it. On error, everything it
-// started has been stopped again.
+// start boots the environment and provisions it, or resumes it if it is
+// suspended. On error, everything it started has been stopped again.
 func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *instance, err error) {
 	m.set(api.PhaseStarting, "preparing its disks")
 
@@ -147,6 +153,20 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 	img, err := m.resolve(ctx, spec)
 	if err != nil {
 		return nil, err
+	}
+	resuming := false
+	if rec := m.suspendedRecord(); rec != nil {
+		if *rec == m.currentRecord(img) {
+			resuming = true
+		} else {
+			// The guest would find files it holds open replaced. Its
+			// memory is given up and it boots from its disks.
+			m.log.Warn("the image or editor changed while the environment was suspended; booting it afresh")
+			m.discardSuspend()
+		}
+	}
+	if !resuming {
+		m.clearBackendState()
 	}
 	caps, err := host.Detect()
 	if err != nil {
@@ -171,7 +191,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 	// Everything below lives as long as the instance. The monitor has its
 	// own context so it can be stopped before its backends.
 	procCtx, cancelProcs := context.WithCancel(context.Background())
-	inst := &instance{exited: make(chan struct{})}
+	inst := &instance{exited: make(chan struct{}), image: img}
 	monCtx, cancelMon := context.WithCancel(procCtx)
 	inst.cancel = cancelMon
 	defer func() {
@@ -223,6 +243,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 		return nil, err
 	}
 	inst.backends = append(inst.backends, fs)
+	inst.fs = fs
 	cfg.VirtiofsSocket = fs.Socket()
 	cfg.VirtiofsDaxMiB = m.rt.cfg.DaxMiB
 	if m.rt.cfg.Editor != "" {
@@ -250,6 +271,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 			return nil, err
 		}
 		inst.backends = append(inst.backends, gpu)
+		inst.gpu = gpu
 		cfg.GpuSocket = gpu.Socket()
 		cfg.GpuShmMiB = 512
 	}
@@ -264,11 +286,18 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 		return nil, fmt.Errorf("listening for the agent: %w", err)
 	}
 
-	m.set(api.PhaseStarting, "booting")
-	if err := m.launch(monCtx, cfg, inst); err != nil {
-		return nil, err
+	if resuming {
+		m.set(api.PhaseStarting, "resuming")
+		if err := m.restore(ctx, monCtx, cfg, inst); err != nil {
+			return nil, err
+		}
+	} else {
+		m.set(api.PhaseStarting, "booting")
+		if err := m.launch(monCtx, cfg, inst); err != nil {
+			return nil, err
+		}
+		inst.api = ch.NewAPI(cfg.APISocket)
 	}
-	inst.api = ch.NewAPI(cfg.APISocket)
 
 	sess, err := m.awaitAgent(ctx, inst)
 	if err != nil {
@@ -284,6 +313,11 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 	if err := m.provision(ctx, sess, spec); err != nil {
 		return nil, err
 	}
+	if resuming {
+		// Running again, so the snapshot is spent: resuming from it a
+		// second time would roll the guest back under its own disks.
+		m.discardSuspend()
+	}
 	return inst, nil
 }
 
@@ -294,11 +328,16 @@ func (c closer) Close() error { c(); return nil }
 // launch starts the monitor, with its output in the environment's
 // directory, and watches for it to exit.
 func (m *machine) launch(ctx context.Context, cfg *ch.Config, inst *instance) error {
-	bin, err := ch.Find()
+	args, err := cfg.Args()
 	if err != nil {
 		return err
 	}
-	args, err := cfg.Args()
+	return m.launchArgs(ctx, args, inst)
+}
+
+// launchArgs starts the monitor with the given arguments.
+func (m *machine) launchArgs(ctx context.Context, args []string, inst *instance) error {
+	bin, err := ch.Find()
 	if err != nil {
 		return err
 	}

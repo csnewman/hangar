@@ -248,6 +248,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/environments/{id}/suspend": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Write a running environment's memory to its worker's disk and stop it. Starting it again resumes it where it was. Stopping it discards the memory. */
+        post: operations["suspendEnvironment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/environments/{id}/terminals": {
         parameters: {
             query?: never;
@@ -409,12 +428,12 @@ export interface components {
          * @description What the environment's owner has asked for.
          * @enum {string}
          */
-        DesiredState: "running" | "stopped" | "deleted";
+        DesiredState: "running" | "stopped" | "suspended" | "deleted";
         /**
          * @description What the environment is doing, as its worker last reported. "pending" means no worker has reported on it yet.
          * @enum {string}
          */
-        Phase: "pending" | "starting" | "running" | "stopping" | "stopped" | "failed" | "deleting";
+        Phase: "pending" | "starting" | "running" | "stopping" | "stopped" | "suspending" | "suspended" | "failed" | "deleting";
         Environment: {
             id: string;
             owner_id: string;
@@ -1230,6 +1249,31 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description The environment, now desired stopped. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Environment"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    suspendEnvironment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The environment, desired suspended. */
             200: {
                 headers: {
                     [name: string]: unknown;

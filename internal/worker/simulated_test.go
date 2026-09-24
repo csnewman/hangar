@@ -42,6 +42,13 @@ func TestSimulatedLifecycle(t *testing.T) {
 	s.Apply(spec)
 	eventually(t, s, "a", api.PhaseRunning, false)
 
+	spec.Desired = api.DesiredSuspended
+	s.Apply(spec)
+	eventually(t, s, "a", api.PhaseSuspended, false)
+	spec.Desired = api.DesiredRunning
+	s.Apply(spec)
+	eventually(t, s, "a", api.PhaseRunning, false)
+
 	spec.Desired = api.DesiredStopped
 	s.Apply(spec)
 	eventually(t, s, "a", api.PhaseStopped, false)

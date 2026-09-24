@@ -121,6 +121,20 @@ func (s *Simulated) Apply(spec api.EnvironmentSpec) {
 			e.phase, e.reason = api.PhaseStopped, ""
 		})
 
+	case api.DesiredSuspended:
+		if !held {
+			// Nothing running here, so there is nothing to keep.
+			s.envs[spec.ID] = &simEnv{phase: api.PhaseStopped, target: api.DesiredStopped}
+			s.notify()
+			return
+		}
+		if e.target == api.DesiredSuspended || e.phase != api.PhaseRunning {
+			return
+		}
+		s.transition(spec.ID, e, api.DesiredSuspended, api.PhaseSuspending, func(e *simEnv) {
+			e.phase, e.reason = api.PhaseSuspended, ""
+		})
+
 	case api.DesiredDeleted:
 		if !held || e.target == api.DesiredDeleted {
 			return
