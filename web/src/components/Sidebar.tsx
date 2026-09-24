@@ -1,4 +1,4 @@
-import { ChevronRight, LayoutGrid, LayoutTemplate, Plus, Server, Users } from 'lucide-react'
+import { ChevronRight, FolderSync, LayoutGrid, LayoutTemplate, Plus, Server, UserRound, Users } from 'lucide-react'
 import { useState } from 'react'
 import { Link, NavLink } from 'react-router'
 
@@ -8,7 +8,7 @@ import { splitByOwner, useEnvironments } from '../environments'
 import { PhaseDot } from './Status'
 
 // Sidebar is the inventory: every environment the user can reach, as a tree,
-// with administration beneath it for administrators.
+// then the user's own settings, and administration for administrators.
 export function Sidebar() {
   const me = useMe()
   const envs = useEnvironments()
@@ -45,6 +45,20 @@ export function Sidebar() {
           <TreeItems environments={mine} />
         )}
         {envs.isSuccess && envs.data.length === 0 && <div className="side-empty">No environments yet.</div>}
+      </div>
+
+      <div className="side-section">
+        <div className="side-heading">
+          <span>You</span>
+        </div>
+        <NavLink to="/profile" className="side-link">
+          <FolderSync size={16} />
+          <span>Profile</span>
+        </NavLink>
+        <NavLink to="/account" className="side-link">
+          <UserRound size={16} />
+          <span>Account</span>
+        </NavLink>
       </div>
 
       {me.admin && (
