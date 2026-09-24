@@ -17,6 +17,30 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for AuditActorKind.
+const (
+	AuditActorKindAnonymous AuditActorKind = "anonymous"
+	AuditActorKindPerson    AuditActorKind = "person"
+	AuditActorKindSystem    AuditActorKind = "system"
+	AuditActorKindWorker    AuditActorKind = "worker"
+)
+
+// Valid indicates whether the value is a known member of the AuditActorKind enum.
+func (e AuditActorKind) Valid() bool {
+	switch e {
+	case AuditActorKindAnonymous:
+		return true
+	case AuditActorKindPerson:
+		return true
+	case AuditActorKindSystem:
+		return true
+	case AuditActorKindWorker:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DesiredState.
 const (
 	DesiredStateDeleted   DesiredState = "deleted"
@@ -161,6 +185,38 @@ type AddSSHKey struct {
 
 	// PrivateKey A private key to import. Absent generates an ed25519 key.
 	PrivateKey *string `json:"private_key,omitempty"`
+}
+
+// AuditActor defines model for AuditActor.
+type AuditActor struct {
+	ID   *string        `json:"id,omitempty"`
+	Kind AuditActorKind `json:"kind"`
+	Name string         `json:"name"`
+}
+
+// AuditActorKind defines model for AuditActor.Kind.
+type AuditActorKind string
+
+// AuditEvent defines model for AuditEvent.
+type AuditEvent struct {
+	// Action What happened, as noun.verb.
+	Action  string                 `json:"action"`
+	Actor   AuditActor             `json:"actor"`
+	At      time.Time              `json:"at"`
+	Details map[string]interface{} `json:"details"`
+	ID      int64                  `json:"id"`
+
+	// IP Where the request came from. Shown to administrators only.
+	IP       *string  `json:"ip,omitempty"`
+	Subjects []string `json:"subjects"`
+	Target   AuditRef `json:"target"`
+}
+
+// AuditRef defines model for AuditRef.
+type AuditRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 // ChangePassword defines model for ChangePassword.
@@ -555,6 +611,15 @@ type Unauthorized = Error
 // Unavailable defines model for Unavailable.
 type Unavailable = Error
 
+// ListAuditParams defines parameters for ListAudit.
+type ListAuditParams struct {
+	Subject *[]string `form:"subject,omitempty" json:"subject,omitempty"`
+
+	// Before An event ID; only older events are returned, for the next page.
+	Before *int64 `form:"before,omitempty" json:"before,omitempty"`
+	Limit  *int   `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // DeleteProfileFileParams defines parameters for DeleteProfileFile.
 type DeleteProfileFileParams struct {
 	// Path The file's path, relative to the home directory.
@@ -622,6 +687,9 @@ type RemoveUnknownEnvironmentsJSONRequestBody = RemoveUnknownEnvironments
 
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
+
+	// (GET /api/frontend/audit)
+	ListAudit(w http.ResponseWriter, r *http.Request, params ListAuditParams)
 
 	// (POST /api/frontend/auth/login)
 	Login(w http.ResponseWriter, r *http.Request)
@@ -752,6 +820,65 @@ type ServerInterfaceWrapper struct {
 }
 
 type MiddlewareFunc func(http.Handler) http.Handler
+
+// ListAudit operation middleware
+func (siw *ServerInterfaceWrapper) ListAudit(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAuditParams
+
+	// ------------- Optional query parameter "subject" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "subject", r.URL.Query(), &params.Subject, runtime.BindQueryParameterOptions{Type: "array", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "subject"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "subject", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "before" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "before", r.URL.Query(), &params.Before, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "before"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "before", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListAudit(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
 
 // Login operation middleware
 func (siw *ServerInterfaceWrapper) Login(w http.ResponseWriter, r *http.Request) {
@@ -1782,6 +1909,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.AddProfilePath)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/keys", wrapper.AddSSHKey)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/keys/{id}", wrapper.DeleteSSHKey)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/audit", wrapper.ListAudit)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/people", wrapper.ListPeople)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/templates", wrapper.ListTemplates)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/templates", wrapper.CreateTemplate)
@@ -1825,6 +1953,42 @@ type NotFoundJSONResponse Error
 type UnauthorizedJSONResponse Error
 
 type UnavailableJSONResponse Error
+
+type ListAuditRequestObject struct {
+	Params ListAuditParams
+}
+
+type ListAuditResponseObject interface {
+	VisitListAuditResponse(w http.ResponseWriter) error
+}
+
+type ListAudit200JSONResponse []AuditEvent
+
+func (response ListAudit200JSONResponse) VisitListAuditResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAudit401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListAudit401JSONResponse) VisitListAuditResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
 
 type LoginRequestObject struct {
 	Body *LoginJSONRequestBody
@@ -4177,6 +4341,9 @@ func (response RemoveUnknownEnvironments404JSONResponse) VisitRemoveUnknownEnvir
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
+	// (GET /api/frontend/audit)
+	ListAudit(ctx context.Context, request ListAuditRequestObject) (ListAuditResponseObject, error)
+
 	// (POST /api/frontend/auth/login)
 	Login(ctx context.Context, request LoginRequestObject) (LoginResponseObject, error)
 
@@ -4335,6 +4502,32 @@ type strictHandler struct {
 	ssi         StrictServerInterface
 	middlewares []StrictMiddlewareFunc
 	options     StrictHTTPServerOptions
+}
+
+// ListAudit operation middleware
+func (sh *strictHandler) ListAudit(w http.ResponseWriter, r *http.Request, params ListAuditParams) {
+	var request ListAuditRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListAudit(ctx, request.(ListAuditRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListAudit")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListAuditResponseObject); ok {
+		if err := validResponse.VisitListAuditResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
 }
 
 // Login operation middleware

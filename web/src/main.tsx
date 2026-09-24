@@ -10,9 +10,10 @@ import { Shell } from './components/Shell'
 import './index.css'
 import { AccountPage } from './pages/Account'
 import { ProfilePage } from './pages/Profile'
+import { AuditPage } from './pages/admin/Audit'
 import { UsersPage } from './pages/admin/Users'
 import { WorkersPage } from './pages/admin/Workers'
-import { EnvironmentPage, SummaryTab } from './pages/Environment'
+import { EnvironmentPage, SummaryTab, ActivityTab } from './pages/Environment'
 import { LoginPage } from './pages/Login'
 import { MetricsTab } from './pages/Metrics'
 import { WorkerDetailPage } from './pages/admin/WorkerDetail'
@@ -84,6 +85,7 @@ const router = createBrowserRouter([
                 lazy: async () => ({ Component: (await import('./code/CodeTab')).CodeTab }),
               },
               { path: 'editor', element: <EditorTab /> },
+              { path: 'activity', element: <ActivityTab /> },
               {
                 path: 'desktop',
                 // noVNC is fetched when a desktop is first opened.
@@ -96,6 +98,14 @@ const router = createBrowserRouter([
           { path: 'templates/:id', element: <TemplateEditorPage /> },
           { path: 'account', element: <AccountPage /> },
           { path: 'profile', element: <ProfilePage /> },
+          {
+            path: 'admin/audit',
+            element: (
+              <RequireAdmin>
+                <AuditPage />
+              </RequireAdmin>
+            ),
+          },
           {
             path: 'admin/workers',
             element: (

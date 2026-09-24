@@ -4,6 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { api } from '../api'
 import { useMe } from '../session'
 import { PageHeader } from '../components/PageHeader'
+import { Activity } from '../components/Activity'
 
 export function AccountPage() {
   const me = useMe()
@@ -27,6 +28,10 @@ export function AccountPage() {
         </dl>
       </div>
       {me.has_password && <ChangePassword />}
+      <section className="section">
+        <h2 className="section-title">Your activity</h2>
+        <Activity subjects={[`actor:${me.id}`]} />
+      </section>
     </div>
   )
 }

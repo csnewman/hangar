@@ -29,4 +29,3 @@ func (l *Listener) Accept(timeout time.Duration) (*os.File, uint32, error) {
 
 // Close is a no-op here.
 func (l *Listener) Close() error { return nil }
-

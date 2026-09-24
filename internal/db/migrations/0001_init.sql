@@ -6,11 +6,19 @@ CREATE TABLE users (
     -- through an external identity provider and has no local password.
     password_hash text,
     is_admin      boolean NOT NULL DEFAULT false,
+    -- A system user is Hangar itself acting (internal/audit): nobody signs
+    -- in as one, and it is listed nowhere a person is.
+    kind          text NOT NULL DEFAULT 'person' CHECK (kind IN ('person', 'system')),
     -- A disabled user cannot sign in, and their sessions stop working. Their
     -- environments are kept, so disabling is reversible.
     disabled_at   timestamptz,
     created_at    timestamptz NOT NULL DEFAULT now()
 );
+
+-- Hangar's system users, with the IDs internal/audit knows them by.
+INSERT INTO users (id, username, display_name, kind) VALUES
+    ('00000000-0000-4000-8000-000000000001', 'hangar', 'Hangar', 'system'),
+    ('00000000-0000-4000-8000-000000000002', 'hangar:placement', 'Hangar placement', 'system');
 
 -- Usernames compare case-insensitively, so "Alice" and "alice" are one user.
 CREATE UNIQUE INDEX users_username ON users (lower(username));
@@ -227,3 +235,24 @@ CREATE TABLE profile_locks (
     expires_at  timestamptz NOT NULL,
     PRIMARY KEY (user_id, path)
 );
+
+-- Who did what (internal/audit). Actors and subjects are kept as they were:
+-- an event outlives what it names.
+CREATE TABLE audit_events (
+    id           bigserial PRIMARY KEY,
+    at           timestamptz NOT NULL DEFAULT now(),
+    actor_user   uuid REFERENCES users (id) ON DELETE SET NULL,
+    actor_worker uuid REFERENCES workers (id) ON DELETE SET NULL,
+    actor_name   text NOT NULL,
+    source_ip    text NOT NULL DEFAULT '',
+    action       text NOT NULL,
+    target_type  text NOT NULL,
+    target_id    text NOT NULL,
+    target_name  text NOT NULL DEFAULT '',
+    -- type:id tags for everything the event concerns, which each view of
+    -- the log filters on.
+    subjects     text[] NOT NULL,
+    details      jsonb NOT NULL DEFAULT '{}'
+);
+
+CREATE INDEX audit_events_subjects ON audit_events USING gin (subjects);

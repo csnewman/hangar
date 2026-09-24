@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/ssh"
 
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 )
 
@@ -184,6 +185,16 @@ func (s *Store) write(ctx context.Context, userID, path string, stored []byte, m
 		if err != nil {
 			return err
 		}
+		action := "profile.file_write"
+		if deleted {
+			action = "profile.file_delete"
+		}
+		if err := audit.Record(ctx, tx, audit.Event{Action: action,
+			Target:  audit.Ref{Type: audit.KindFile, ID: userID + ":" + path, Name: path},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}},
+			Details: map[string]any{"size": len(plain), "secret": Secret(path)}}); err != nil {
+			return err
+		}
 		return db.Notify(ctx, tx, Channel, userID)
 	})
 	return f, err
@@ -263,6 +274,12 @@ func (s *Store) addKey(ctx context.Context, userID, name string, private []byte)
 			VALUES ($1, $2, $3, $4) RETURNING id, created_at`, userID, name, pub, sealed).Scan(&k.ID, &k.CreatedAt); err != nil {
 			return err
 		}
+		if err := audit.Record(ctx, tx, audit.Event{Action: "ssh_key.add",
+			Target:  audit.Ref{Type: audit.KindSSHKey, ID: k.ID, Name: name},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}},
+			Details: map[string]any{"fingerprint": k.Fingerprint}}); err != nil {
+			return err
+		}
 		return db.Notify(ctx, tx, Channel, userID)
 	})
 	return k, err
@@ -274,12 +291,18 @@ func (s *Store) DeleteKey(ctx context.Context, userID, id string) error {
 		return ErrNotFound
 	}
 	return s.db.Transact(ctx, func(tx db.Tx) error {
-		tag, err := tx.Exec(ctx, `DELETE FROM ssh_keys WHERE user_id = $1 AND id = $2`, userID, id)
+		var name string
+		err := tx.QueryRow(ctx, `DELETE FROM ssh_keys WHERE user_id = $1 AND id = $2 RETURNING name`, userID, id).Scan(&name)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		if err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrNotFound
+		if err := audit.Record(ctx, tx, audit.Event{Action: "ssh_key.delete",
+			Target:  audit.Ref{Type: audit.KindSSHKey, ID: id, Name: name},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}}}); err != nil {
+			return err
 		}
 		return db.Notify(ctx, tx, Channel, userID)
 	})
@@ -414,6 +437,11 @@ func (s *Store) AddPath(ctx context.Context, userID, path string) error {
 			ON CONFLICT DO NOTHING`, userID, path); err != nil {
 			return err
 		}
+		if err := audit.Record(ctx, tx, audit.Event{Action: "profile.share",
+			Target:  audit.Ref{Type: audit.KindPath, ID: userID + ":" + path, Name: path},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}}}); err != nil {
+			return err
+		}
 		return db.Notify(ctx, tx, Channel, userID)
 	})
 }
@@ -432,6 +460,11 @@ func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
 		}
 		if tag.RowsAffected() == 0 {
 			return ErrNotFound
+		}
+		if err := audit.Record(ctx, tx, audit.Event{Action: "profile.unshare",
+			Target:  audit.Ref{Type: audit.KindPath, ID: userID + ":" + path, Name: path},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}}}); err != nil {
+			return err
 		}
 		rows, err := tx.Query(ctx, `SELECT path FROM profile_paths WHERE user_id = $1`, userID)
 		if err != nil {
@@ -458,5 +491,19 @@ func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
 			}
 		}
 		return db.Notify(ctx, tx, Channel, userID)
+	})
+}
+
+// RecordSignature records that a user's key signed something on their
+// behalf: every signature is a use of the key.
+func (s *Store) RecordSignature(ctx context.Context, userID, fingerprint string, err error) {
+	s.db.Transact(ctx, func(tx db.Tx) error {
+		details := map[string]any{"fingerprint": fingerprint}
+		if err != nil {
+			details["error"] = err.Error()
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "ssh_key.sign",
+			Target:  audit.Ref{Type: audit.KindSSHKey, ID: fingerprint, Name: fingerprint},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}}, Details: details})
 	})
 }

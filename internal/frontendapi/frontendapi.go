@@ -25,6 +25,7 @@ import (
 	"github.com/getkin/kin-openapi/openapi3filter"
 	middleware "github.com/oapi-codegen/nethttp-middleware"
 
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/templates"
@@ -45,6 +46,7 @@ type Config struct {
 	Workers      *workers.Manager
 	Users        *users.Manager
 	Profiles     *profile.Store
+	Audit        *audit.Log
 	// Tunnels reaches workers, for terminals. Nil leaves terminals
 	// unavailable.
 	Tunnels Tunnels
@@ -63,6 +65,7 @@ type handler struct {
 	workers   *workers.Manager
 	users     *users.Manager
 	profiles  *profile.Store
+	audit     *audit.Log
 	tunnels   Tunnels
 	editors   Editors
 	// autoSignIn is Config.AutoSignIn.
@@ -88,7 +91,7 @@ func New(cfg Config) (http.Handler, error) {
 	}
 
 	h := &handler{envs: cfg.Environments, templates: cfg.Templates, workers: cfg.Workers, users: cfg.Users,
-		profiles: cfg.Profiles, tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, log: cfg.Log}
+		profiles: cfg.Profiles, audit: cfg.Audit, tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, log: cfg.Log}
 	strict := NewStrictHandlerWithOptions(h, []StrictMiddlewareFunc{rules.enforce}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			writeError(w, http.StatusBadRequest, err.Error())

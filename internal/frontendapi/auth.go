@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/getkin/kin-openapi/openapi3"
 
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/users"
 )
 
@@ -58,7 +60,7 @@ func (h *handler) session(next http.Handler) http.Handler {
 			}
 		}
 		if !s.ok && h.autoSignIn != "" {
-			token, p, err := h.users.SignInAs(r.Context(), h.autoSignIn)
+			token, p, err := h.users.SignInAs(audit.WithActor(r.Context(), audit.Actor{IP: clientIP(r)}), h.autoSignIn)
 			if err != nil {
 				h.log.Error("signing in automatically", "user", h.autoSignIn, "err", err)
 				writeError(w, http.StatusInternalServerError, "automatic sign-in failed")
@@ -67,8 +69,29 @@ func (h *handler) session(next http.Handler) http.Handler {
 			s.principal, s.token, s.ok = p, token, true
 			w.Header().Add("Set-Cookie", sessionCookie(token, s.secure, int(users.SessionLifetime.Seconds())))
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionKey{}, s)))
+		// Whatever the request goes on to change is recorded as by whoever
+		// it is from.
+		actor := audit.Actor{IP: clientIP(r)}
+		if s.ok {
+			actor.UserID, actor.Name = s.principal.UserID, s.principal.Username
+		}
+		ctx := audit.WithActor(context.WithValue(r.Context(), sessionKey{}, s), actor)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// clientIP is the address a request came from: the first a proxy in front
+// names, or the connection's.
+func clientIP(r *http.Request) string {
+	if f := r.Header.Get("X-Forwarded-For"); f != "" {
+		first, _, _ := strings.Cut(f, ",")
+		return strings.TrimSpace(first)
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // sameOrigin refuses a state-changing request that a browser says came from

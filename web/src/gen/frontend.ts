@@ -160,6 +160,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The audit log, newest first. Each subject narrows it to events concerning that thing, as type:id -- environment:<id>, template:<id>, worker:<id>, image:<ref>, user:<id>, owner:<id>, actor:<id>. An administrator sees every event; anyone else sees only events about what they own, about them, or by them. */
+        get: operations["listAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/people": {
         parameters: {
             query?: never;
@@ -533,6 +550,33 @@ export interface components {
     schemas: {
         RemoveUnknownEnvironments: {
             environments: string[];
+        };
+        AuditEvent: {
+            /** Format: int64 */
+            id: number;
+            /** Format: date-time */
+            at: string;
+            actor: components["schemas"]["AuditActor"];
+            /** @description What happened, as noun.verb. */
+            action: string;
+            target: components["schemas"]["AuditRef"];
+            subjects: string[];
+            details: {
+                [key: string]: unknown;
+            };
+            /** @description Where the request came from. Shown to administrators only. */
+            ip?: string;
+        };
+        AuditActor: {
+            /** @enum {string} */
+            kind: "person" | "system" | "worker" | "anonymous";
+            id?: string;
+            name: string;
+        };
+        AuditRef: {
+            type: string;
+            id: string;
+            name: string;
         };
         ProfilePath: {
             path: string;
@@ -1181,6 +1225,32 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
+        };
+    };
+    listAudit: {
+        parameters: {
+            query?: {
+                subject?: string[];
+                /** @description An event ID; only older events are returned, for the next page. */
+                before?: number;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Events. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AuditEvent"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
         };
     };
     listPeople: {

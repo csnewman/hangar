@@ -21,6 +21,7 @@ export type UpdateUser = Schemas['UpdateUser']
 export type Profile = Schemas['Profile']
 export type ProfileFile = Schemas['ProfileFile']
 export type SSHKey = Schemas['SSHKey']
+export type AuditEvent = Schemas['AuditEvent']
 export type Spec = Schemas['Spec']
 export type Repo = Schemas['Repo']
 export type Display = Schemas['Display']
@@ -71,6 +72,8 @@ export const api = {
   changePassword: (current_password: string, new_password: string) =>
     unwrap(client.POST('/api/frontend/me/password', { body: { current_password, new_password } })),
 
+  audit: (subject: string[], before?: number, limit = 50) =>
+    unwrap(client.GET('/api/frontend/audit', { params: { query: { subject, before, limit } } })),
   profile: () => unwrap(client.GET('/api/frontend/me/profile')),
   profileFile: (path: string) => unwrap(client.GET('/api/frontend/me/profile/file', { params: { query: { path } } })),
   putProfileFile: (path: string, content: string) =>

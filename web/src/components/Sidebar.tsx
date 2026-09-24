@@ -1,4 +1,4 @@
-import { ChevronRight, FolderSync, LayoutGrid, LayoutTemplate, Plus, Server, UserRound, Users } from 'lucide-react'
+import { ChevronRight, FolderSync, History, LayoutGrid, LayoutTemplate, Plus, Server, UserRound, Users } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, NavLink } from 'react-router'
 
@@ -31,6 +31,7 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
           <nav className="side-nav side-group">
             <SideIcon to="/admin/workers" icon={<Server size={17} />} label="Workers" />
             <SideIcon to="/admin/users" icon={<Users size={17} />} label="Users" />
+            <SideIcon to="/admin/audit" icon={<History size={17} />} label="Audit log" />
           </nav>
         )}
       </aside>
@@ -96,6 +97,10 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
           <NavLink to="/admin/users" className="side-link">
             <Users size={16} />
             <span>Users</span>
+          </NavLink>
+          <NavLink to="/admin/audit" className="side-link">
+            <History size={16} />
+            <span>Audit log</span>
           </NavLink>
         </div>
       )}

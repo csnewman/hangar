@@ -28,6 +28,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 )
 
@@ -96,7 +97,12 @@ func (m *Manager) Register(ctx context.Context, req api.RegisterWorker) (api.Wor
 		if db.IsUniqueViolation(err) {
 			return fmt.Errorf("%w: a worker named %s is already registered", ErrConflict, req.Name)
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		// Admitted on the bootstrap token: Hangar's own decision.
+		return audit.Record(audit.WithActor(ctx, audit.System(audit.SystemHangar)), tx, audit.Event{
+			Action: "worker.register", Target: workerRef(id, req.Name), Details: map[string]any{"labels": req.Labels}})
 	})
 	if err != nil {
 		return api.WorkerCredential{}, err
@@ -143,12 +149,17 @@ func (m *Manager) Revoke(ctx context.Context, id string) error {
 		return ErrNotFound
 	}
 	return m.db.Transact(ctx, func(tx db.Tx) error {
-		tag, err := tx.Exec(ctx, `UPDATE workers SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL`, id)
+		var name string
+		err := tx.QueryRow(ctx, `UPDATE workers SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL
+			RETURNING name`, id).Scan(&name)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		if err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrNotFound
+		if err := audit.Record(ctx, tx, audit.Event{Action: "worker.revoke", Target: workerRef(id, name)}); err != nil {
+			return err
 		}
 		// Wakes the worker's held request, so its next one is refused at
 		// once rather than when the hold expires.
@@ -182,9 +193,16 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		if held > 0 {
 			return fmt.Errorf("%w: the worker still holds %d environments", ErrConflict, held)
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM workers WHERE id = $1`, id)
-		return err
+		var name string
+		if err := tx.QueryRow(ctx, `DELETE FROM workers WHERE id = $1 RETURNING name`, id).Scan(&name); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "worker.delete", Target: workerRef(id, name)})
 	})
+}
+
+func workerRef(id, name string) audit.Ref {
+	return audit.Ref{Type: audit.KindWorker, ID: id, Name: name}
 }
 
 func (m *Manager) List(ctx context.Context) ([]api.Worker, error) {
@@ -386,22 +404,23 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 		return err
 	}
 	return m.db.Transact(ctx, func(tx db.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id, desired FROM environments WHERE worker_id = $1
+		rows, err := tx.Query(ctx, `SELECT id, desired, name, owner_id::text, phase FROM environments WHERE worker_id = $1
 			ORDER BY id FOR UPDATE`, workerID)
 		if err != nil {
 			return err
 		}
 		assigned, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (placed, error) {
 			var p placed
-			return p, r.Scan(&p.id, &p.desired)
+			return p, r.Scan(&p.id, &p.desired, &p.name, &p.owner, &p.phase)
 		})
 		if err != nil {
 			return err
 		}
 
 		var oldCPUs, oldMem int
-		err = tx.QueryRow(ctx, `SELECT cpus, memory_mib FROM workers WHERE id = $1 FOR UPDATE`, workerID).
-			Scan(&oldCPUs, &oldMem)
+		var workerName string
+		err = tx.QueryRow(ctx, `SELECT cpus, memory_mib, name FROM workers WHERE id = $1 FOR UPDATE`, workerID).
+			Scan(&oldCPUs, &oldMem, &workerName)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -409,9 +428,14 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 			return err
 		}
 		desired := map[string]api.DesiredState{}
+		byID := map[string]placed{}
 		for _, p := range assigned {
 			desired[p.id] = p.desired
+			byID[p.id] = p
 		}
+		// What the worker reports its environments doing is its own
+		// account of them.
+		wctx := audit.WithActor(ctx, audit.Worker(workerID, workerName))
 
 		unknown := []string{}
 		reported := map[string]bool{}
@@ -421,6 +445,14 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 				continue
 			}
 			reported[o.ID] = true
+			if p := byID[o.ID]; p.phase != o.Phase {
+				if err := audit.Record(wctx, tx, audit.Event{Action: "environment.phase",
+					Target:  audit.Ref{Type: audit.KindEnvironment, ID: p.id, Name: p.name},
+					Related: []audit.Ref{{Type: audit.KindOwner, ID: p.owner}},
+					Details: map[string]any{"from": p.phase, "to": o.Phase, "reason": o.Reason}}); err != nil {
+					return err
+				}
+			}
 			var stats []byte
 			if o.Stats != nil {
 				if stats, err = json.Marshal(o.Stats); err != nil {
@@ -439,6 +471,12 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 		for id, d := range desired {
 			if d == api.DesiredDeleted && !reported[id] {
 				if _, err := tx.Exec(ctx, `DELETE FROM environments WHERE id = $1`, id); err != nil {
+					return err
+				}
+				p := byID[id]
+				if err := audit.Record(wctx, tx, audit.Event{Action: "environment.deleted",
+					Target:  audit.Ref{Type: audit.KindEnvironment, ID: id, Name: p.name},
+					Related: []audit.Ref{{Type: audit.KindOwner, ID: p.owner}}}); err != nil {
 					return err
 				}
 				removed = true
@@ -540,6 +578,11 @@ func (m *Manager) RemoveImage(ctx context.Context, workerID, ref string) error {
 			ON CONFLICT DO NOTHING`, workerID, ref); err != nil {
 			return err
 		}
+		if err := audit.Record(ctx, tx, audit.Event{Action: "image.remove",
+			Target:  audit.Ref{Type: audit.KindImage, ID: ref, Name: ref},
+			Related: []audit.Ref{{Type: audit.KindWorker, ID: workerID}}}); err != nil {
+			return err
+		}
 		return Bump(ctx, tx, workerID)
 	})
 }
@@ -581,6 +624,11 @@ func (m *Manager) RemoveUnknown(ctx context.Context, workerID string, ids []stri
 				VALUES ($1, $2) ON CONFLICT DO NOTHING`, workerID, id); err != nil {
 				return err
 			}
+			if err := audit.Record(ctx, tx, audit.Event{Action: "environment.remove_unknown",
+				Target:  audit.Ref{Type: audit.KindEnvironment, ID: id},
+				Related: []audit.Ref{{Type: audit.KindWorker, ID: workerID}}}); err != nil {
+				return err
+			}
 		}
 		return Bump(ctx, tx, workerID)
 	})
@@ -589,6 +637,9 @@ func (m *Manager) RemoveUnknown(ctx context.Context, workerID string, ids []stri
 type placed struct {
 	id      string
 	desired api.DesiredState
+	name    string
+	owner   string
+	phase   api.Phase
 }
 
 // Touch records that a worker is alive without a full report.

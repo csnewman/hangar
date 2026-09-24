@@ -2014,3 +2014,46 @@ a.reason {
 .sidebar-toggle {
   margin-right: 6px;
 }
+
+.activity td {
+  vertical-align: top;
+}
+
+.actor {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.actor svg {
+  color: var(--muted);
+}
+
+.actor-system,
+.actor-worker {
+  color: var(--muted);
+}
+
+.actor-anonymous {
+  color: var(--bad);
+}
+
+.detail + .detail::before {
+  content: ' · ';
+}
+
+.activity-more {
+  padding: 8px;
+}
+
+.audit-filters {
+  margin: 0 0 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.audit-filters .label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

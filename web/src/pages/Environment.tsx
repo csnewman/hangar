@@ -1,4 +1,4 @@
-import { Activity, Code2, FileCode2, GitBranch, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
+import { Activity, Code2, FileCode2, GitBranch, History, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router'
 
 import type { Environment } from '../api'
@@ -9,6 +9,7 @@ import { PageHeader, type Crumb } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
 import { PhaseBadge } from '../components/Status'
 import { useEnvironments } from '../environments'
+import { Activity as AuditActivity } from '../components/Activity'
 
 const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: '', label: 'Summary', icon: LayoutDashboard, end: true },
@@ -17,6 +18,7 @@ const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: 'code', label: 'Code', icon: FileCode2 },
   { to: 'editor', label: 'VS Code', icon: Code2 },
   { to: 'desktop', label: 'Desktop', icon: Monitor },
+  { to: 'activity', label: 'Activity', icon: History },
 ]
 
 // EnvironmentPage is one environment: its header and actions, and a tab for
@@ -141,6 +143,17 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
     <div className="prop">
       <dt>{label}</dt>
       <dd>{children}</dd>
+    </div>
+  )
+}
+
+// ActivityTab is everything recorded about the environment: who asked for
+// what, where Hangar placed it, what its worker reported, who opened it.
+export function ActivityTab() {
+  const env = useEnv()
+  return (
+    <div className="page-pad">
+      <AuditActivity subjects={[`environment:${env.id}`]} />
     </div>
   )
 }

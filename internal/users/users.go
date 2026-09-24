@@ -21,6 +21,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 )
 
@@ -50,8 +51,9 @@ var validUsername = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._@-]{0,62}$`)
 // Principal is the signed-in user a request acts as. Every permission check
 // in Hangar is made against one.
 type Principal struct {
-	UserID string
-	Admin  bool
+	UserID   string
+	Username string
+	Admin    bool
 }
 
 // User is one account.
@@ -126,10 +128,17 @@ func (m *Manager) Create(ctx context.Context, nu NewUser) (User, error) {
 		if err != nil {
 			return err
 		}
-		u, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM users u WHERE u.id = $1`, id))
-		return err
+		if u, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM users u WHERE u.id = $1`, id)); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "user.create", Target: userRef(u),
+			Details: map[string]any{"admin": nu.Admin}})
 	})
 	return u, err
+}
+
+func userRef(u User) audit.Ref {
+	return audit.Ref{Type: audit.KindUser, ID: u.ID, Name: u.Username}
 }
 
 // EnsureAdmin creates an administrator if there are no users at all, and
@@ -138,7 +147,7 @@ func (m *Manager) Create(ctx context.Context, nu NewUser) (User, error) {
 func (m *Manager) EnsureAdmin(ctx context.Context, username, password string) (bool, error) {
 	var n int
 	if err := m.db.Transact(ctx, func(tx db.Tx) error {
-		return tx.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&n)
+		return tx.QueryRow(ctx, `SELECT count(*) FROM users WHERE kind = 'person'`).Scan(&n)
 	}); err != nil {
 		return false, err
 	}
@@ -156,7 +165,7 @@ func (m *Manager) EnsureAdmin(ctx context.Context, username, password string) (b
 func (m *Manager) List(ctx context.Context) ([]User, error) {
 	var out []User
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT `+columns+` FROM users u ORDER BY lower(u.username)`)
+		rows, err := tx.Query(ctx, `SELECT `+columns+` FROM users u WHERE u.kind = 'person' ORDER BY lower(u.username)`)
 		if err != nil {
 			return err
 		}
@@ -175,7 +184,7 @@ func (m *Manager) Directory(ctx context.Context) ([]User, error) {
 	var out []User
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT `+columns+` FROM users u WHERE u.disabled_at IS NULL
-			ORDER BY lower(u.username)`)
+			AND u.kind = 'person' ORDER BY lower(u.username)`)
 		if err != nil {
 			return err
 		}
@@ -242,7 +251,7 @@ func (m *Manager) Update(ctx context.Context, id string, up Update) (User, error
 				                   WHEN $4 THEN coalesce(disabled_at, now())
 				                   ELSE NULL END,
 				password_hash = coalesce($5, password_hash)
-			WHERE id = $1`,
+			WHERE id = $1 AND kind = 'person'`,
 			id, trimmed(up.DisplayName), up.Admin, up.Disabled, hash)
 		if err != nil {
 			return err
@@ -258,8 +267,23 @@ func (m *Manager) Update(ctx context.Context, id string, up Update) (User, error
 				return err
 			}
 		}
-		u, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM users u WHERE u.id = $1`, id))
-		return err
+		if u, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM users u WHERE u.id = $1`, id)); err != nil {
+			return err
+		}
+		changed := map[string]any{}
+		if up.DisplayName != nil {
+			changed["display_name"] = *up.DisplayName
+		}
+		if up.Admin != nil {
+			changed["admin"] = *up.Admin
+		}
+		if up.Disabled != nil {
+			changed["disabled"] = *up.Disabled
+		}
+		if up.Password != nil {
+			changed["password"] = "reset"
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "user.update", Target: userRef(u), Details: changed})
 	})
 	return u, err
 }
@@ -296,14 +320,19 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 			return fmt.Errorf("%w: the user owns %d environments; delete them or disable the user instead",
 				ErrConflict, owned)
 		}
-		tag, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
+		var name string
+		err = tx.QueryRow(ctx, `DELETE FROM users WHERE id = $1 AND kind = 'person' RETURNING username`, id).Scan(&name)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
 		if err != nil {
 			return err
 		}
-		if tag.RowsAffected() == 0 {
-			return ErrNotFound
+		if err := requireAdmin(ctx, tx); err != nil {
+			return err
 		}
-		return requireAdmin(ctx, tx)
+		return audit.Record(ctx, tx, audit.Event{Action: "user.delete",
+			Target: audit.Ref{Type: audit.KindUser, ID: id, Name: name}})
 	})
 }
 
@@ -315,7 +344,7 @@ func (m *Manager) Login(ctx context.Context, username, password string) (string,
 	var disabled bool
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
 		return tx.QueryRow(ctx, `SELECT id, password_hash, disabled_at IS NOT NULL FROM users
-			WHERE lower(username) = lower($1)`, username).Scan(&id, &hash, &disabled)
+			WHERE lower(username) = lower($1) AND kind = 'person'`, username).Scan(&id, &hash, &disabled)
 	})
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return "", User{}, err
@@ -330,10 +359,22 @@ func (m *Manager) Login(ctx context.Context, username, password string) (string,
 		return "", User{}, err
 	}
 	if !ok || hash == nil || disabled {
+		// Whoever tried is nobody yet: the name is only what they gave.
+		failed := audit.ActorFrom(ctx)
+		failed.UserID, failed.Name = "", username
+		reason := "bad credentials"
+		if ok && disabled {
+			reason = "disabled"
+		}
+		m.db.Transact(audit.WithActor(ctx, failed), func(tx db.Tx) error {
+			return audit.Record(audit.WithActor(ctx, failed), tx, audit.Event{Action: "auth.login_failed",
+				Target:  audit.Ref{Type: audit.KindUser, ID: id, Name: username},
+				Details: map[string]any{"reason": reason}})
+		})
 		return "", User{}, ErrBadCredentials
 	}
 
-	token, err := m.openSession(ctx, id)
+	token, err := m.openSession(ctx, id, username, "auth.login")
 	if err != nil {
 		return "", User{}, err
 	}
@@ -347,8 +388,8 @@ func (m *Manager) Login(ctx context.Context, username, password string) (string,
 func (m *Manager) SignInAs(ctx context.Context, username string) (string, Principal, error) {
 	var p Principal
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		return tx.QueryRow(ctx, `SELECT id, is_admin FROM users
-			WHERE lower(username) = lower($1) AND disabled_at IS NULL`, username).Scan(&p.UserID, &p.Admin)
+		return tx.QueryRow(ctx, `SELECT id, username, is_admin FROM users
+			WHERE lower(username) = lower($1) AND disabled_at IS NULL AND kind = 'person'`, username).Scan(&p.UserID, &p.Username, &p.Admin)
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", Principal{}, ErrNotFound
@@ -356,11 +397,13 @@ func (m *Manager) SignInAs(ctx context.Context, username string) (string, Princi
 	if err != nil {
 		return "", Principal{}, err
 	}
-	token, err := m.openSession(ctx, p.UserID)
+	token, err := m.openSession(ctx, p.UserID, username, "auth.login_automatic")
 	return token, p, err
 }
 
-func (m *Manager) openSession(ctx context.Context, userID string) (string, error) {
+// openSession opens a session for a user who has just signed in, recording
+// it as action, by them.
+func (m *Manager) openSession(ctx context.Context, userID, username, action string) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
@@ -370,7 +413,13 @@ func (m *Manager) openSession(ctx context.Context, userID string) (string, error
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
 		_, err := tx.Exec(ctx, `INSERT INTO sessions (token_hash, user_id, expires_at) VALUES ($1, $2, $3)`,
 			sum[:], userID, time.Now().Add(SessionLifetime))
-		return err
+		if err != nil {
+			return err
+		}
+		as := audit.ActorFrom(ctx)
+		as.UserID, as.WorkerID, as.Name = userID, "", username
+		return audit.Record(audit.WithActor(ctx, as), tx, audit.Event{Action: action,
+			Target: audit.Ref{Type: audit.KindUser, ID: userID, Name: username}})
 	})
 	return token, err
 }
@@ -385,10 +434,10 @@ func (m *Manager) Authenticate(ctx context.Context, token string) (Principal, er
 	var p Principal
 	var lastSeen time.Time
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT u.id, u.is_admin, s.last_seen_at
+		err := tx.QueryRow(ctx, `SELECT u.id, u.username, u.is_admin, s.last_seen_at
 			FROM sessions s JOIN users u ON u.id = s.user_id
 			WHERE s.token_hash = $1 AND s.expires_at > now() AND u.disabled_at IS NULL`, sum[:]).
-			Scan(&p.UserID, &p.Admin, &lastSeen)
+			Scan(&p.UserID, &p.Username, &p.Admin, &lastSeen)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNoSession
 		}
@@ -408,8 +457,16 @@ func (m *Manager) Authenticate(ctx context.Context, token string) (Principal, er
 func (m *Manager) Logout(ctx context.Context, token string) error {
 	sum := sha256.Sum256([]byte(token))
 	return m.db.Transact(ctx, func(tx db.Tx) error {
-		_, err := tx.Exec(ctx, `DELETE FROM sessions WHERE token_hash = $1`, sum[:])
-		return err
+		var userID string
+		err := tx.QueryRow(ctx, `DELETE FROM sessions WHERE token_hash = $1 RETURNING user_id::text`, sum[:]).Scan(&userID)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "auth.logout",
+			Target: audit.Ref{Type: audit.KindUser, ID: userID, Name: audit.ActorFrom(ctx).Name}})
 	})
 }
 
@@ -445,8 +502,11 @@ func (m *Manager) ChangePassword(ctx context.Context, userID, currentToken, curr
 		if _, err := tx.Exec(ctx, `UPDATE users SET password_hash = $2 WHERE id = $1`, userID, newHash); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2`, userID, keep[:])
-		return err
+		if _, err := tx.Exec(ctx, `DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2`, userID, keep[:]); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "user.change_password",
+			Target: audit.Ref{Type: audit.KindUser, ID: userID, Name: audit.ActorFrom(ctx).Name}})
 	})
 }
 
@@ -455,8 +515,15 @@ func (m *Manager) PruneSessions(ctx context.Context) (int64, error) {
 	var n int64
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM sessions WHERE expires_at <= now()`)
-		n = tag.RowsAffected()
-		return err
+		if err != nil {
+			return err
+		}
+		if n = tag.RowsAffected(); n == 0 {
+			return nil
+		}
+		return audit.Record(audit.WithActor(ctx, audit.System(audit.SystemHangar)), tx, audit.Event{
+			Action: "session.prune", Target: audit.Ref{Type: "session", ID: "expired"},
+			Details: map[string]any{"count": n}})
 	})
 	return n, err
 }

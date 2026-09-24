@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/tunnel"
 )
@@ -49,8 +50,8 @@ func NewSessions(store *Store, tunnels Tunnels, log *slog.Logger) *Sessions {
 
 // target is an environment a session is held with.
 type target struct {
-	env, owner, worker string
-	trusted            bool
+	env, name, owner, ownerName, worker string
+	trusted                             bool
 }
 
 // Run keeps sessions with the environments that should have them until
@@ -95,9 +96,10 @@ func (s *Sessions) reconcile(ctx context.Context) {
 	if len(workers) > 0 {
 		err := s.store.db.Transact(ctx, func(tx db.Tx) error {
 			clear(want)
-			rows, err := tx.Query(ctx, `SELECT id::text, owner_id::text, worker_id::text,
-					coalesce((spec->>'untrusted')::boolean, false)
-				FROM environments WHERE phase = 'running' AND desired = 'running' AND worker_id = ANY($1::uuid[])`, workers)
+			rows, err := tx.Query(ctx, `SELECT e.id::text, e.name, e.owner_id::text, u.username, e.worker_id::text,
+					coalesce((e.spec->>'untrusted')::boolean, false)
+				FROM environments e JOIN users u ON u.id = e.owner_id
+				WHERE e.phase = 'running' AND e.desired = 'running' AND e.worker_id = ANY($1::uuid[])`, workers)
 			if err != nil {
 				return err
 			}
@@ -105,7 +107,7 @@ func (s *Sessions) reconcile(ctx context.Context) {
 			for rows.Next() {
 				var t target
 				var untrusted bool
-				if err := rows.Scan(&t.env, &t.owner, &t.worker, &untrusted); err != nil {
+				if err := rows.Scan(&t.env, &t.name, &t.owner, &t.ownerName, &t.worker, &untrusted); err != nil {
 					return err
 				}
 				t.trusted = !untrusted
@@ -211,6 +213,8 @@ func (x *session) run(ctx context.Context) {
 }
 
 func (x *session) serve(ctx context.Context) error {
+	// What arrives from the environment is its owner's doing, through it.
+	ctx = audit.WithActor(ctx, audit.Actor{UserID: x.owner, Name: x.ownerName, Via: "environment:" + x.env + " (" + x.name + ")"})
 	conn, err := x.s.tunnels.Open(x.worker, tunnel.Header{Kind: tunnel.KindProfile, Environment: x.env})
 	if err != nil {
 		return err
@@ -405,6 +409,11 @@ func (x *session) handle(ctx context.Context, m Message) error {
 	case TypeSign:
 		reply := Message{Type: TypeSigned, ID: m.ID}
 		sig, err := x.sign(ctx, m)
+		fingerprint := ""
+		if pub, perr := ssh.ParsePublicKey(m.Key); perr == nil {
+			fingerprint = ssh.FingerprintSHA256(pub)
+		}
+		x.s.store.RecordSignature(ctx, x.owner, fingerprint, err)
 		if err != nil {
 			reply.Error = err.Error()
 		} else {

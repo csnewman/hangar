@@ -7,6 +7,7 @@ import { useMe } from '../../session'
 import { ConfirmButton } from '../../components/ConfirmButton'
 import { formatAgo } from '../../components/format'
 import { PageHeader } from '../../components/PageHeader'
+import { Link } from 'react-router'
 
 const usersKey = ['users'] as const
 
@@ -133,6 +134,9 @@ function UserRow({ user: u }: { user: User }) {
               {u.disabled ? 'Enable' : 'Disable'}
             </button>
           )}
+          <Link to={`/admin/audit?subject=${encodeURIComponent(`user:${u.id}`)}`} className="btn btn-ghost">
+            Activity
+          </Link>
           {!self && (
             <ConfirmButton
               label="Delete"

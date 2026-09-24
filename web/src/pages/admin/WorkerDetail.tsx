@@ -9,6 +9,7 @@ import { PageHeader } from '../../components/PageHeader'
 import { OnlineBadge, PhaseBadge } from '../../components/Status'
 import { useEnvironments } from '../../environments'
 import { useHistory } from '../../history'
+import { Activity } from '../../components/Activity'
 
 // WorkerDetailPage is one worker: how loaded its machine is, what it holds,
 // and the images in its local store.
@@ -51,6 +52,10 @@ export function WorkerDetailPage() {
       <Machine worker={w} />
       <Environments worker={w} />
       <Images worker={w} />
+      <section className="section">
+        <h2 className="section-title">Activity</h2>
+        <Activity subjects={[`worker:${w.id}`]} />
+      </section>
     </div>
   )
 }
@@ -224,7 +229,10 @@ function ImageRow({
   return (
     <tr>
       <td>
-        <span className="mono">{img.ref}</span>
+        <span className="mono">{img.ref}</span>{' '}
+        <Link to={`/admin/audit?subject=${encodeURIComponent(`image:${img.ref}`)}`} className="muted small">
+          history
+        </Link>
         {img.state === 'fetching' && (
           <div className="reason">
             <span className="badge badge-busy">

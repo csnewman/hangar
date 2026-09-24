@@ -54,6 +54,7 @@ func (h *handler) codeSocket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, errUnreachable.Error())
 		return
 	}
+	h.access(ctx, env, "environment.open_code", nil)
 	stream, err := h.tunnels.Open(env.WorkerID, tunnel.Header{Kind: tunnel.KindCode, Environment: env.ID})
 	if err != nil {
 		h.log.Warn("opening a code stream", "environment", env.ID, "err", err)

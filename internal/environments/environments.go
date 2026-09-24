@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/placement"
 	"github.com/csnewman/hangar/internal/templates"
@@ -148,10 +149,20 @@ func (m *Manager) Create(ctx context.Context, p users.Principal, req api.CreateE
 		if err := db.Notify(ctx, tx, placement.Channel, ""); err != nil {
 			return err
 		}
-		e, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM `+from+` WHERE e.id = $1`, id))
-		return err
+		if e, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM `+from+` WHERE e.id = $1`, id)); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "environment.create", Target: Ref(e.ID, e.Name),
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: e.OwnerID},
+				{Type: audit.KindTemplate, ID: req.TemplateID, Name: tname}, {Type: audit.KindImage, ID: spec.Image}},
+			Details: map[string]any{"cpus": spec.CPUs, "memory_mib": spec.MemoryMiB, "untrusted": spec.Untrusted}})
 	})
 	return e, err
+}
+
+// Ref names an environment in the audit log.
+func Ref(id, name string) audit.Ref {
+	return audit.Ref{Type: audit.KindEnvironment, ID: id, Name: name}
 }
 
 // SetDesired changes what an environment should be doing, and reports
@@ -169,9 +180,10 @@ func (m *Manager) SetDesired(ctx context.Context, p users.Principal, id string, 
 		exists = true
 		var workerID *string
 		var current api.DesiredState
-		err := tx.QueryRow(ctx, `SELECT e.worker_id::text, e.desired FROM environments e
+		var name, owner, image string
+		err := tx.QueryRow(ctx, `SELECT e.worker_id::text, e.desired, e.name, e.owner_id::text, e.image FROM environments e
 			WHERE `+visible+` AND e.id = $3 FOR UPDATE`, p.Admin, p.UserID, id).
-			Scan(&workerID, &current)
+			Scan(&workerID, &current, &name, &owner, &image)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -180,6 +192,14 @@ func (m *Manager) SetDesired(ctx context.Context, p users.Principal, id string, 
 		}
 		if current == desired {
 			return nil
+		}
+		related := []audit.Ref{{Type: audit.KindOwner, ID: owner}, {Type: audit.KindImage, ID: image}}
+		if workerID != nil {
+			related = append(related, audit.Ref{Type: audit.KindWorker, ID: *workerID})
+		}
+		record := func() error {
+			return audit.Record(ctx, tx, audit.Event{Action: "environment." + verb(desired), Target: Ref(id, name),
+				Related: related, Details: map[string]any{"from": current}})
 		}
 		if current == api.DesiredDeleted {
 			return fmt.Errorf("%w: the environment is being deleted", ErrConflict)
@@ -196,26 +216,49 @@ func (m *Manager) SetDesired(ctx context.Context, p users.Principal, id string, 
 				id, desired); err != nil {
 				return err
 			}
-			return workers.Bump(ctx, tx, *workerID)
+			if err := workers.Bump(ctx, tx, *workerID); err != nil {
+				return err
+			}
+			return record()
 		}
 
 		switch desired {
 		case api.DesiredDeleted:
 			exists = false
-			_, err = tx.Exec(ctx, `DELETE FROM environments WHERE id = $1`, id)
-			return err
+			if _, err = tx.Exec(ctx, `DELETE FROM environments WHERE id = $1`, id); err != nil {
+				return err
+			}
 		case api.DesiredStopped:
-			_, err = tx.Exec(ctx, `UPDATE environments SET desired = $2, phase = 'stopped', reason = '',
-				updated_at = now() WHERE id = $1`, id, desired)
-			return err
+			if _, err = tx.Exec(ctx, `UPDATE environments SET desired = $2, phase = 'stopped', reason = '',
+				updated_at = now() WHERE id = $1`, id, desired); err != nil {
+				return err
+			}
 		default:
 			_, err = tx.Exec(ctx, `UPDATE environments SET desired = $2, phase = 'pending', reason = '',
 				updated_at = now() WHERE id = $1`, id, desired)
 			if err != nil {
 				return err
 			}
-			return db.Notify(ctx, tx, placement.Channel, "")
+			if err := db.Notify(ctx, tx, placement.Channel, ""); err != nil {
+				return err
+			}
 		}
+		return record()
 	})
 	return exists, err
+}
+
+// verb is the audit action for asking an environment to be in a state.
+func verb(d api.DesiredState) string {
+	switch d {
+	case api.DesiredRunning:
+		return "start"
+	case api.DesiredStopped:
+		return "stop"
+	case api.DesiredSuspended:
+		return "suspend"
+	case api.DesiredDeleted:
+		return "delete"
+	}
+	return string(d)
 }

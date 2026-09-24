@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/workers"
 )
@@ -39,6 +40,8 @@ func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
 type env struct {
 	id        string
+	name      string
+	owner     string
 	cpus      int
 	mem       int
 	reason    string
@@ -75,9 +78,11 @@ func (w *worker) matches(selector map[string]string) bool {
 // started again.
 func (m *Manager) Place(ctx context.Context) (int, error) {
 	var placed int
+	// Placement is Hangar's decision, whoever's change prompted it.
+	actor := audit.WithActor(ctx, audit.System(audit.SystemPlacement))
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
 		placed = 0
-		rows, err := tx.Query(ctx, `SELECT id, cpus, memory_mib, reason, coalesce(spec->'placement', '{}')
+		rows, err := tx.Query(ctx, `SELECT id, name, owner_id::text, cpus, memory_mib, reason, coalesce(spec->'placement', '{}')
 			FROM environments
 			WHERE worker_id IS NULL AND desired = 'running'
 			ORDER BY created_at LIMIT $1 FOR UPDATE SKIP LOCKED`, batch)
@@ -87,7 +92,7 @@ func (m *Manager) Place(ctx context.Context) (int, error) {
 		queue, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (env, error) {
 			var e env
 			var sel []byte
-			if err := r.Scan(&e.id, &e.cpus, &e.mem, &e.reason, &sel); err != nil {
+			if err := r.Scan(&e.id, &e.name, &e.owner, &e.cpus, &e.mem, &e.reason, &sel); err != nil {
 				return e, err
 			}
 			return e, json.Unmarshal(sel, &e.placement)
@@ -144,6 +149,12 @@ func (m *Manager) Place(ctx context.Context) (int, error) {
 						e.id, reason); err != nil {
 						return err
 					}
+					if err := audit.Record(actor, tx, audit.Event{Action: "environment.unplaceable",
+						Target:  audit.Ref{Type: audit.KindEnvironment, ID: e.id, Name: e.name},
+						Related: []audit.Ref{{Type: audit.KindOwner, ID: e.owner}},
+						Details: map[string]any{"reason": reason}}); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -151,6 +162,12 @@ func (m *Manager) Place(ctx context.Context) (int, error) {
 			best.mem -= e.mem
 			if _, err := tx.Exec(ctx, `UPDATE environments SET worker_id = $2, phase = 'pending', reason = '',
 				updated_at = now() WHERE id = $1`, e.id, best.id); err != nil {
+				return err
+			}
+			if err := audit.Record(actor, tx, audit.Event{Action: "environment.place",
+				Target:  audit.Ref{Type: audit.KindEnvironment, ID: e.id, Name: e.name},
+				Related: []audit.Ref{{Type: audit.KindOwner, ID: e.owner}, {Type: audit.KindWorker, ID: best.id}},
+				Details: map[string]any{"cpus": e.cpus, "memory_mib": e.mem}}); err != nil {
 				return err
 			}
 			bumped[best.id] = true

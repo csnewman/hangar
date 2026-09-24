@@ -38,6 +38,7 @@ func (h *handler) desktopSocket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, code, msg)
 		return
 	}
+	h.access(ctx, env, "environment.open_desktop", nil)
 	stream, err := h.tunnels.Open(env.WorkerID, tunnel.Header{Kind: tunnel.KindDesktop, Environment: env.ID})
 	if err != nil {
 		h.log.Warn("opening a desktop stream", "environment", env.ID, "err", err)

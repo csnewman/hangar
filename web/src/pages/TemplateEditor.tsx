@@ -9,6 +9,7 @@ import { PageHeader } from '../components/PageHeader'
 import { useMe } from '../session'
 import { blankSpec, templatesKey } from '../templates'
 import { VisibilityBadge } from './Templates'
+import { Activity } from '../components/Activity'
 
 const blank: TemplateInput = { name: '', description: '', visibility: 'private', spec: blankSpec }
 
@@ -405,6 +406,12 @@ function Editor({ existing }: { existing?: Template }) {
       </form>
 
       {existing && <Collaborators template={existing} />}
+      {existing && (
+        <section className="section">
+          <h2 className="section-title">Activity</h2>
+          <Activity subjects={[`template:${existing.id}`]} />
+        </section>
+      )}
     </div>
   )
 }

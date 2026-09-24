@@ -24,6 +24,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/users"
 )
@@ -214,10 +215,18 @@ func (m *Manager) Create(ctx context.Context, p users.Principal, in Input) (Temp
 		if err != nil {
 			return err
 		}
-		t, err = get(ctx, tx, p, id)
-		return err
+		if t, err = get(ctx, tx, p, id); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "template.create", Target: templateRef(t),
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: t.Owner.ID}, {Type: audit.KindImage, ID: t.Spec.Image}},
+			Details: map[string]any{"visibility": t.Visibility}})
 	})
 	return t, err
+}
+
+func templateRef(t Template) audit.Ref {
+	return audit.Ref{Type: audit.KindTemplate, ID: t.ID, Name: t.Name}
 }
 
 // Update replaces a template's content. A collaborator may change the recipe
@@ -254,8 +263,25 @@ func (m *Manager) Update(ctx context.Context, p users.Principal, id string, in I
 		if err != nil {
 			return err
 		}
-		t, err = get(ctx, tx, p, id)
-		return err
+		if t, err = get(ctx, tx, p, id); err != nil {
+			return err
+		}
+		details := map[string]any{}
+		if cur.Name != t.Name {
+			details["name"] = map[string]string{"from": cur.Name, "to": t.Name}
+		}
+		if cur.Visibility != t.Visibility {
+			details["visibility"] = map[string]string{"from": string(cur.Visibility), "to": string(t.Visibility)}
+		}
+		if cur.Spec.Image != t.Spec.Image {
+			details["image"] = map[string]string{"from": cur.Spec.Image, "to": t.Spec.Image}
+		}
+		if cur.Spec.Untrusted != t.Spec.Untrusted {
+			details["untrusted"] = t.Spec.Untrusted
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "template.update", Target: templateRef(t),
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: t.Owner.ID}, {Type: audit.KindImage, ID: t.Spec.Image}},
+			Details: details})
 	})
 	return t, err
 }
@@ -283,8 +309,11 @@ func (m *Manager) Delete(ctx context.Context, p users.Principal, id string) erro
 		if !cur.CanManage {
 			return fmt.Errorf("%w: only the owner may delete this template", ErrForbidden)
 		}
-		_, err = tx.Exec(ctx, `DELETE FROM templates WHERE id = $1`, id)
-		return err
+		if _, err = tx.Exec(ctx, `DELETE FROM templates WHERE id = $1`, id); err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "template.delete", Target: templateRef(cur),
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: cur.Owner.ID}}})
 	})
 }
 
@@ -313,7 +342,7 @@ func (m *Manager) SetCollaborators(ctx context.Context, p users.Principal, id st
 		slices.Sort(want)
 		want = slices.Compact(want)
 		var known int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM users WHERE id = ANY($1::uuid[])`, want).Scan(&known); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM users WHERE id = ANY($1::uuid[]) AND kind = 'person'`, want).Scan(&known); err != nil {
 			return err
 		}
 		if known != len(want) {
@@ -337,7 +366,12 @@ func (m *Manager) SetCollaborators(ctx context.Context, p users.Principal, id st
 			t, err = get(ctx, tx, users.Principal{UserID: cur.Owner.ID, Admin: true}, id)
 			t.CanEdit, t.CanManage = false, false
 		}
-		return err
+		if err != nil {
+			return err
+		}
+		return audit.Record(ctx, tx, audit.Event{Action: "template.set_collaborators", Target: templateRef(t),
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: t.Owner.ID}},
+			Details: map[string]any{"collaborators": want}})
 	})
 	return t, err
 }

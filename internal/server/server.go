@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/editor"
 	"github.com/csnewman/hangar/internal/environments"
@@ -94,6 +95,7 @@ func New(cfg Config) (*Server, error) {
 		Workers:      wm,
 		Users:        um,
 		Profiles:     profiles,
+		Audit:        audit.NewLog(cfg.DB),
 		AutoSignIn:   cfg.AutoSignIn,
 		Log:          log,
 	}

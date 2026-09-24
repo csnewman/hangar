@@ -33,5 +33,6 @@ func (h *handler) OpenEditor(ctx context.Context, req OpenEditorRequestObject) (
 	if err != nil {
 		return nil, err
 	}
+	h.access(ctx, env, "environment.open_editor", nil)
 	return OpenEditor200JSONResponse{URL: url}, nil
 }

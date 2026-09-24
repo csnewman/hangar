@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/terminal"
 	"github.com/csnewman/hangar/internal/tunnel"
@@ -22,6 +23,23 @@ import (
 // Tunnels opens streams to workers.
 type Tunnels interface {
 	Open(workerID string, h tunnel.Header) (net.Conn, error)
+}
+
+// access records someone reaching into an environment: a terminal, an
+// editor, its desktop. It changes nothing, so it is recorded on its own, and
+// a failure to record it is logged rather than refusing them.
+func (h *handler) access(ctx context.Context, env api.Environment, action string, details map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	err := h.audit.Record(ctx, audit.Event{Action: action,
+		Target: environments.Ref(env.ID, env.Name),
+		Related: []audit.Ref{{Type: audit.KindOwner, ID: env.OwnerID}, {Type: audit.KindWorker, ID: env.WorkerID},
+			{Type: audit.KindImage, ID: env.Image}},
+		Details: details})
+	if err != nil {
+		h.log.Error("recording access to an environment", "action", action, "err", err)
+	}
 }
 
 var (
@@ -68,6 +86,12 @@ func (h *handler) terminalStream(ctx context.Context, id string, req terminal.Re
 	if err := json.Unmarshal(line, &reply); err != nil {
 		stream.Close()
 		return nil, nil, terminal.Reply{}, fmt.Errorf("reading the terminal's reply: %w", err)
+	}
+	switch req.Op {
+	case terminal.OpAttach:
+		h.access(ctx, env, "environment.terminal_attach", map[string]any{"session": reply.Session, "asked": req.Session})
+	case terminal.OpClose:
+		h.access(ctx, env, "environment.terminal_close", map[string]any{"session": req.Session})
 	}
 	return stream, br, reply, nil
 }
