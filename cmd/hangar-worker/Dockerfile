@@ -13,13 +13,14 @@
 #   /usr/local/bin/hangar-gpu         virtio-gpu backend (gpu/), with the patched
 #                                     virglrenderer in /usr/local/lib
 #   /usr/share/hangar/vmlinuz         the guest kernel (internal/kernel)
-#   /usr/share/hangar/hangar-agent    the guest agent, added to every boot
+#   /usr/share/hangar/hangar-agent    the guest agent, each boot's initramfs
+#                                     (as init) and then the agent
 #   /usr/share/hangar/editor.ext4     VS Code's server (editor/), attached to
 #                                     every environment
 #
-# Base images are not in it: they are built by the imagebuilder target (see
-# deploy/compose.yaml), which needs mount and namespace permissions that
-# `docker build` does not have.
+# Base images are not in it: an image is a root filesystem, built by the
+# imagebuilder target (see deploy/compose.yaml), which needs mount and
+# namespace permissions that `docker build` does not have.
 #
 # The editor stage builds VS Code and wants 8 GiB of memory and some time.
 
@@ -123,21 +124,19 @@ ENTRYPOINT ["hangar-worker"]
 CMD ["-config", "/etc/hangar/worker.yaml"]
 
 # ---------------------------------------------------------------- imagebuilder
-# Builds a base image the way `hangar build` does, for a worker to boot:
-# base.ext4 and initrd.img, with this image's agent in it. Run it with
-# CAP_SYS_ADMIN and seccomp and AppArmor unconfined, IMAGE=<images/ subdir>
-# and /out mounted.
+# Builds a base image the way `hangar build` does: /out/rootfs, the image's
+# root filesystem, which a worker serves to its environments over virtio-fs.
+# Run it with CAP_SYS_ADMIN and seccomp and AppArmor unconfined,
+# IMAGE=<images/ subdir>, and /out mounted from a Linux filesystem: the tree
+# keeps the image's owners.
 FROM ${UBUNTU} AS imagebuilder
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
       mkosi ubuntu-keyring dpkg-dev apt-utils uidmap dnf rpm ca-certificates \
-      e2fsprogs zstd gzip python3-minimal busybox-static cpio >/dev/null
+      zstd gzip python3-minimal >/dev/null
 COPY internal/image/scripts/ /scripts/
 COPY images/ /cfg/
-COPY --from=go /out/hangar-agent /agent/hangar-agent
-# The sizes `hangar build` uses: the base's filesystem, and the empty upper
-# and Docker disks built beside it.
-ENV IMAGE=ubuntu2604 SIZE_GB=8 UPPER_GB=16 DOCKER_GB=24
+ENV IMAGE=ubuntu2604
 CMD ["sh", "/scripts/mkosi.sh"]
 
 FROM worker

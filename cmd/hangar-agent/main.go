@@ -30,6 +30,11 @@ import (
 )
 
 func main() {
+	// In the initramfs the kernel starts the agent as init.
+	if os.Getpid() == 1 {
+		initRoot()
+		return
+	}
 	port := flag.Uint("port", uint(agent.Port), "vsock port on the host")
 	retry := flag.Duration("retry", 500*time.Millisecond, "delay between connection attempts")
 	flag.Parse()

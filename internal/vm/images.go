@@ -26,8 +26,8 @@ import (
 // a copy and fetching it again is safe whatever the source does meanwhile --
 // and the fetch is the one step a registry pull will replace.
 //
-// Each image is a directory named for its reference, holding the base, the
-// initramfs and a file naming the reference. A directory being fetched is
+// Each image is a directory named for its reference, holding the base -- the
+// image's root filesystem, as rootfs/ -- and a file naming the reference. A directory being fetched is
 // named with ".fetching" and renamed into place when complete, so a copy
 // interrupted half made is fetched again rather than booted.
 type store struct {
@@ -84,7 +84,7 @@ func (s *store) get(ctx context.Context, ref string) (Image, error) {
 		return Image{}, fmt.Errorf("the image %s is not available on this worker", ref)
 	}
 	dst := s.path(ref)
-	local := Image{Base: filepath.Join(dst, filepath.Base(src.Base)), Initrd: filepath.Join(dst, "initrd.img")}
+	local := Image{Base: filepath.Join(dst, "rootfs")}
 
 	for {
 		if _, err := os.Stat(filepath.Join(dst, "ref")); err == nil {
@@ -125,23 +125,14 @@ func (s *store) copyIn(ctx context.Context, ref string, src Image, dst string) e
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
 		return err
 	}
-	copyFile := func(from, to string) error {
-		// Sparse-aware and preserving: the base is an ext4 image mostly
-		// empty, or a directory tree whose owners and modes are the image.
-		out, err := exec.CommandContext(ctx, "cp", "-a", "--sparse=always", "--reflink=auto", "--", from, to).
-			CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("fetching %s: copying %s: %v: %s", ref, from, err, strings.TrimSpace(string(out)))
-		}
-		return nil
-	}
-	if err := copyFile(src.Base, filepath.Join(tmp, filepath.Base(src.Base))); err != nil {
+	// Owners, modes, links and extended attributes are the image, and
+	// virtio-fs passes them to the guest as they are, so the copy keeps them
+	// all.
+	out, err := exec.CommandContext(ctx, "cp", "-a", "--reflink=auto", "--", src.Base, filepath.Join(tmp, "rootfs")).
+		CombinedOutput()
+	if err != nil {
 		os.RemoveAll(tmp)
-		return err
-	}
-	if err := copyFile(src.Initrd, filepath.Join(tmp, "initrd.img")); err != nil {
-		os.RemoveAll(tmp)
-		return err
+		return fmt.Errorf("fetching %s: copying %s: %v: %s", ref, src.Base, err, strings.TrimSpace(string(out)))
 	}
 	if err := os.WriteFile(filepath.Join(tmp, "ref"), []byte(ref), 0o644); err != nil {
 		os.RemoveAll(tmp)

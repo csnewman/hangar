@@ -8,18 +8,16 @@ import (
 	"strings"
 )
 
-// buildAgent compiles hangar-agent for the guest and returns a directory
-// holding it, for the builder container to mount at /agent.
+// BuildAgent compiles hangar-agent for the guest and returns a directory
+// holding it, as hangar-agent. The caller removes the directory.
 //
-// The agent is compiled here rather than installed from a package because it
-// belongs to the node, not to the image: an environment built from an
-// arbitrary Dockerfile gets the same agent as a Hangar base, and shipping a
-// new agent does not mean rebuilding every image.
+// The agent belongs to the node, not to the image: it is each boot's
+// initramfs, as init, and then the environment's agent.
 //
 // CGO is off so the result is static and depends on nothing in the guest --
-// no libc version to match, and it runs in an image that has no shared
-// libraries at all.
-func buildAgent(ctx context.Context, platform string, verbose bool) (string, error) {
+// no libc version to match, and it runs as init before there is a root
+// filesystem at all.
+func BuildAgent(ctx context.Context, platform string, verbose bool) (string, error) {
 	goos, goarch, ok := strings.Cut(platform, "/")
 	if !ok {
 		return "", fmt.Errorf("cannot read a GOOS/GOARCH from platform %q", platform)

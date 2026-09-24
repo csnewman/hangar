@@ -49,17 +49,22 @@ func preflight(cfg *Config) error {
 	if _, err := os.Stat(cfg.Kernel); err != nil {
 		return fmt.Errorf("guest kernel: %w", err)
 	}
-	if cfg.Agent != "" {
-		if _, err := os.Stat(cfg.Agent); err != nil {
-			return fmt.Errorf("agent: %w", err)
-		}
+	if cfg.Agent == "" {
+		return errors.New("no agent: every environment boots with the worker's (vm.agent)")
+	}
+	if _, err := os.Stat(cfg.Agent); err != nil {
+		return fmt.Errorf("agent: %w", err)
+	}
+	if _, err := ch.FindFsBackend(); err != nil {
+		return err
 	}
 	for ref, img := range cfg.Images {
-		if _, err := os.Stat(img.Base); err != nil {
+		st, err := os.Stat(img.Base)
+		if err != nil {
 			return fmt.Errorf("image %s: base: %w", ref, err)
 		}
-		if _, err := os.Stat(img.Initrd); err != nil {
-			return fmt.Errorf("image %s: initrd: %w", ref, err)
+		if !st.IsDir() {
+			return fmt.Errorf("image %s: base %s is not a directory: an image is its root filesystem, served over virtio-fs", ref, img.Base)
 		}
 	}
 	return nil
@@ -156,10 +161,10 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 	}
 	upper := filepath.Join(m.dir, "upper.ext4")
 	docker := filepath.Join(m.dir, "docker.ext4")
-	if err := ensureDisk(ctx, upper, "hangar-upper", m.rt.cfg.UpperGiB); err != nil {
+	if err := EnsureDisk(ctx, upper, "hangar-upper", m.rt.cfg.UpperGiB); err != nil {
 		return nil, err
 	}
-	if err := ensureDisk(ctx, docker, "hangar-docker", m.rt.cfg.DockerGiB); err != nil {
+	if err := EnsureDisk(ctx, docker, "hangar-docker", m.rt.cfg.DockerGiB); err != nil {
 		return nil, err
 	}
 
@@ -180,8 +185,8 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 	}()
 	inst.backends = append(inst.backends, closer(cancelProcs))
 
-	initrd, err := bootInitrd(img.Initrd, m.rt.cfg.Agent, run)
-	if err != nil {
+	initrd := filepath.Join(run, "initrd.img")
+	if err := WriteInitrd(m.rt.cfg.Agent, initrd); err != nil {
 		return nil, err
 	}
 	cfg := &ch.Config{
@@ -201,31 +206,25 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 		// simply never starts it.
 		cfg.ExtraCmdline = "systemd.mask=hangar-desktop.service"
 	}
+	// The writable layer is the first disk: the agent, as init, mounts
+	// /dev/vda. The Docker disk is mounted by label.
 	disks := []ch.Disk{{Path: upper}, {Path: docker}}
 
-	st, err := os.Stat(img.Base)
+	// The base is the image's root filesystem, exported read-only over
+	// virtio-fs. With a DAX window its files are mapped from the host's page
+	// cache, which every environment on the base shares.
+	var minSize uint64
+	if m.rt.cfg.DaxMiB > 0 {
+		minSize = ch.DefaultDaxMinFileSize
+	}
+	fs, err := ch.StartFsBackend(procCtx, img.Base, filepath.Join(run, "fs.sock"), ch.DefaultVirtiofsTag,
+		minSize, filepath.Join(m.dir, "fs.json"), false)
 	if err != nil {
 		return nil, err
 	}
-	if st.IsDir() {
-		var minSize uint64
-		if m.rt.cfg.DaxMiB > 0 {
-			minSize = ch.DefaultDaxMinFileSize
-		}
-		fs, err := ch.StartFsBackend(procCtx, img.Base, filepath.Join(run, "fs.sock"), ch.DefaultVirtiofsTag,
-			minSize, filepath.Join(m.dir, "fs.json"), false)
-		if err != nil {
-			return nil, err
-		}
-		inst.backends = append(inst.backends, fs)
-		cfg.VirtiofsSocket = fs.Socket()
-		cfg.VirtiofsDaxMiB = m.rt.cfg.DaxMiB
-	} else {
-		// A base on a block device is shared read-only between every
-		// environment using it, and comes first so the initramfs finds it
-		// at /dev/vda.
-		disks = append([]ch.Disk{{Path: img.Base, ReadOnly: true}}, disks...)
-	}
+	inst.backends = append(inst.backends, fs)
+	cfg.VirtiofsSocket = fs.Socket()
+	cfg.VirtiofsDaxMiB = m.rt.cfg.DaxMiB
 	if m.rt.cfg.Editor != "" {
 		// Shared read-only by every environment; the agent finds it by its
 		// label, wherever it lands among the devices.
@@ -478,10 +477,10 @@ func passtDir(id string) (string, error) {
 	return dir, os.MkdirAll(dir, 0o700)
 }
 
-// ensureDisk creates an empty ext4 filesystem of the given size at path,
+// EnsureDisk creates an empty ext4 filesystem of the given size at path,
 // unless one is already there. The file is sparse: it takes space only as
 // the guest writes.
-func ensureDisk(ctx context.Context, path, label string, gib int) error {
+func EnsureDisk(ctx context.Context, path, label string, gib int) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
 	}

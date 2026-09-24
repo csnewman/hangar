@@ -33,9 +33,12 @@ vm:
   editor: /usr/share/hangar/editor.ext4
   upper_gib: 32
   docker_gib: 64
+  # Environments map their base's files from this machine's page cache
+  # through a DAX window of this size, rather than each keeping a copy.
+  dax_mib: 1024
   images:
-    # Built by the compose file's build-image service:
+    # An image is its root filesystem, a directory, served to environments
+    # over virtio-fs. Built by the compose file's build-image service:
     #   IMAGE=ubuntu2604 docker compose --profile images run --rm build-image
     ghcr.io/csnewman/hangar/base-ubuntu2604:latest:
-      base: /var/lib/hangar/image-src/ubuntu2604/base.ext4
-      initrd: /var/lib/hangar/image-src/ubuntu2604/initrd.img
+      base: /var/lib/hangar/image-src/ubuntu2604/rootfs

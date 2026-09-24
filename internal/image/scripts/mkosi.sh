@@ -13,7 +13,7 @@ apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
         mkosi ubuntu-keyring dpkg-dev apt-utils uidmap \
         dnf rpm ca-certificates \
-        e2fsprogs zstd gzip python3-minimal busybox-static cpio >/dev/null
+        zstd gzip python3-minimal >/dev/null
 
 # mkosi needs a 65536-UID range to build unprivileged inside its own namespace.
 printf 'root:100000:65536\n' > /etc/subuid

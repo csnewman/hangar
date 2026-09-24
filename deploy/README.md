@@ -19,8 +19,11 @@ A worker machine needs, before its container starts:
       echo 'w /sys/kernel/mm/transparent_hugepage/shmem_enabled - - - - advise' \
           | sudo tee /etc/tmpfiles.d/hangar-thp.conf    # across reboots
 
-- **`/var/lib/hangar`** on a fast local filesystem with room for every
-  environment's disks (each is sparse, up to `upper_gib + docker_gib`).
+- **`/var/lib/hangar`** on a fast local Linux filesystem with room for every
+  environment's disks (each is sparse, up to `upper_gib + docker_gib`) and
+  the base images. An image is a root filesystem kept as a directory, served
+  to its environments over virtio-fs, and must keep its owners: not a network
+  or foreign filesystem that maps them.
 - Docker with Compose v2 and Buildx.
 
 The control plane needs only Docker, and a DNS name that browsers reach: each

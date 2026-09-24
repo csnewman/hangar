@@ -1,15 +1,13 @@
-// Package image turns an mkosi configuration into the artefacts a VM needs:
-// a read-only ext4 base, an empty writable layer, a filesystem for the Docker
-// image store, and an initramfs that stacks them.
+// Package image turns an mkosi configuration into an image: its root
+// filesystem, as a directory, which a worker exports to its environments over
+// virtio-fs.
 //
-// This flattens the rootfs to raw disks. The eventual design (see
-// docs/image-runtime-format.md) reuses containerd's snapshotter and shares the
-// result over virtiofs, which needs a Linux host; raw disks prove the boot path
-// and nested Docker on any host.
+// An image carries nothing else. The kernel, the initramfs and the agent are
+// the node's; an environment's writable layer and Docker disk are made by the
+// worker that runs it.
 //
-// Everything needing a Linux userspace -- untar with ownership preserved,
-// mke2fs -- happens inside a throwaway builder container, so the host needs no
-// privileged operations or loop mounts.
+// The build runs in a throwaway builder container, and its output keeps the
+// image's owners and modes, so it must be written to a Linux filesystem.
 package image
 
 import (
@@ -22,20 +20,14 @@ import (
 
 // Artifacts are the outputs of a build.
 type Artifacts struct {
-	Base   string // read-only lower layer
-	Upper  string // empty writable upper layer, one per environment
-	Docker string // docker image store, kept off the overlay
-	Initrd string // assembles the overlay root and switch_roots
-	Tag    string // the OCI tag that was built
+	Rootfs string // the image's root filesystem
+	Tag    string // what was built
 }
 
 // Options controls a build.
 type Options struct {
 	ContextDir string // directory containing mkosi.conf
 	OutDir     string
-	SizeGB     int
-	UpperGB    int
-	DockerGB   int
 	Platform   string // e.g. "linux/arm64"; empty means the daemon default
 	Verbose    bool
 }

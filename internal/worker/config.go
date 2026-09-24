@@ -55,12 +55,12 @@ type Config struct {
 }
 
 // VMConfig is how this machine runs environments as virtual machines. The
-// files named here are the node's, not the environment's: one kernel serves
-// every environment, whatever its image.
+// files named here are the node's, not the environment's: one kernel and one
+// agent serve every environment, whatever its image.
 type VMConfig struct {
 	Kernel string `yaml:"kernel"`
-	// Agent is a hangar-agent built for the guest's architecture, which
-	// every environment here boots with whatever its image carries.
+	// Agent is a hangar-agent built for the guest's architecture. It is each
+	// environment's initramfs, as init, and then its agent.
 	Agent string `yaml:"agent"`
 	// Editor is the editor disk editor/build.sh makes for the guest's
 	// architecture, attached read-only to every environment here. Without
@@ -68,17 +68,19 @@ type VMConfig struct {
 	Editor    string `yaml:"editor"`
 	UpperGiB  int    `yaml:"upper_gib"`
 	DockerGiB int    `yaml:"docker_gib"`
-	DaxMiB    int    `yaml:"dax_mib"`
+	// DaxMiB sizes the DAX window through which environments map their
+	// base's files from this machine's page cache. 0 serves the base over
+	// virtio-fs without one.
+	DaxMiB int `yaml:"dax_mib"`
 	// Images maps each image reference a template may name to where this
 	// machine fetches it from into its local store.
 	Images map[string]VMImage `yaml:"images"`
 }
 
-// VMImage is one image as this machine holds it: its base, a directory for
-// virtio-fs or an ext4 image, and the initramfs that stacks it.
+// VMImage is where this machine fetches one image from: its root
+// filesystem, a directory, which environments boot from over virtio-fs.
 type VMImage struct {
-	Base   string `yaml:"base"`
-	Initrd string `yaml:"initrd"`
+	Base string `yaml:"base"`
 }
 
 // LoadConfig reads and checks a worker's YAML file.

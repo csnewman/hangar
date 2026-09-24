@@ -52,7 +52,7 @@ func run(path string, log *slog.Logger) error {
 	case "cloud-hypervisor":
 		images := map[string]vm.Image{}
 		for ref, img := range cfg.VM.Images {
-			images[ref] = vm.Image{Base: img.Base, Initrd: img.Initrd}
+			images[ref] = vm.Image{Base: img.Base}
 		}
 		rt, err = vm.New(vm.Config{
 			StateDir:  cfg.Storage.Environments,

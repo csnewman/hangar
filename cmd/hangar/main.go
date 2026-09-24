@@ -20,6 +20,7 @@ import (
 	"github.com/csnewman/hangar/internal/image"
 	"github.com/csnewman/hangar/internal/kernel"
 	"github.com/csnewman/hangar/internal/snapshot"
+	"github.com/csnewman/hangar/internal/vm"
 	"github.com/csnewman/hangar/internal/vsock"
 )
 
@@ -113,10 +114,7 @@ func doctor() error {
 func build(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
 	dir := fs.String("C", "images/ubuntu2604", "image directory containing mkosi.conf")
-	out := fs.String("o", "out", "output directory for the rootfs")
-	size := fs.Int("size", 8, "base image size in GiB")
-	upper := fs.Int("upper", 16, "writable layer size in GiB")
-	dockerSz := fs.Int("docker", 24, "docker image store size in GiB")
+	out := fs.String("o", "out", "output directory, on a Linux filesystem; the image is <o>/rootfs")
 	verbose := fs.Bool("v", false, "show build output")
 	if err := fs.Parse(argv); err != nil {
 		return err
@@ -128,9 +126,6 @@ func build(ctx context.Context, argv []string) error {
 	opts := image.Options{
 		ContextDir: *dir,
 		OutDir:     *out,
-		SizeGB:     *size,
-		UpperGB:    *upper,
-		DockerGB:   *dockerSz,
 		Platform:   platform,
 		Verbose:    *verbose,
 	}
@@ -141,12 +136,7 @@ func build(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	fmt.Fprintln(os.Stderr, "\nbuilt:")
-	for _, p := range []string{a.Initrd, a.Base, a.Upper, a.Docker} {
-		if st, err := os.Stat(p); err == nil {
-			fmt.Fprintf(os.Stderr, "  %-24s %s\n", filepath.Base(p), humanSize(st.Size()))
-		}
-	}
+	fmt.Fprintf(os.Stderr, "\nbuilt %s\n", a.Rootfs)
 	fmt.Fprintf(os.Stderr, "\nboot it with:  hangar run -o %s\n", *out)
 	return nil
 }
@@ -242,7 +232,7 @@ func pullImage(ctx context.Context, argv []string) error {
 
 func runVM(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	out := fs.String("o", "out", "directory holding the rootfs and kernel")
+	out := fs.String("o", "out", "directory holding the image (rootfs/) and the environment's disks")
 	mem := fs.Int("m", 4096, "memory in MiB")
 	cpus := fs.Int("c", 2, "vCPUs")
 	name := fs.String("name", "hangar-env", "environment name")
@@ -256,7 +246,10 @@ func runVM(ctx context.Context, argv []string) error {
 	exec := fs.String("exec", "", "run this shell command in the guest once its agent answers, print the output, and stop")
 	append_ := fs.String("append", "", "extra words for the guest kernel command line")
 	execWait := fs.Duration("exec-timeout", 2*time.Minute, "how long to let -exec run")
-	virtiofs := fs.String("virtiofs", "", "export this directory to the guest over virtiofs")
+	baseDir := fs.String("base", "", "the image's root filesystem (default: <o>/rootfs)")
+	agentPath := fs.String("agent", "", "hangar-agent for the guest, its init (default: one built for the guest)")
+	upperGiB := fs.Int("upper", 16, "size of a new writable layer in GiB")
+	dockerGiB := fs.Int("docker", 24, "size of a new Docker disk in GiB")
 	dax := fs.Int("dax", 1024, "MiB of DAX window for the virtiofs root; 0 turns mapping off")
 	network := fs.Bool("net", true, "give the guest outbound networking")
 	gpu := fs.Bool("gpu", false, "give the guest a virtio-gpu device")
@@ -273,8 +266,9 @@ func runVM(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	// vda is the read-only base, vdb the writable upper layer. The initramfs
-	// stacks them with overlayfs and switch_roots into the result.
+	// The base goes over virtio-fs, vda is the writable upper layer, and the
+	// agent -- the initramfs, as init -- stacks them with overlayfs and hands
+	// over to the image's init.
 	//
 	// The kernel is Hangar's own and comes from `hangar kernel`, never from the
 	// image: images are root filesystems, and one kernel serves all of them.
@@ -286,24 +280,42 @@ func runVM(ctx context.Context, argv []string) error {
 		}
 	}
 
-	// The base layer reaches the guest one of two ways, never both. Giving it
-	// the same filesystem as a virtiofs export and as a block device is not
-	// merely redundant: the host and guest would both mount one ext4, and the
-	// guest hangs on it.
+	base := *baseDir
+	if base == "" {
+		base = filepath.Join(*out, "rootfs")
+	}
+	if st, err := os.Stat(base); err != nil || !st.IsDir() {
+		return fmt.Errorf("no image at %s - run \"hangar build -o %s\" first", base, *out)
+	}
 	disks := []ch.Disk{
 		{Path: filepath.Join(*out, "upper.ext4")},
 		{Path: filepath.Join(*out, "docker.ext4")},
 	}
-	if *virtiofs == "" {
-		disks = append([]ch.Disk{
-			{Path: filepath.Join(*out, "base.ext4"), ReadOnly: true},
-		}, disks...)
+	if err := vm.EnsureDisk(ctx, disks[0].Path, "hangar-upper", *upperGiB); err != nil {
+		return err
+	}
+	if err := vm.EnsureDisk(ctx, disks[1].Path, "hangar-docker", *dockerGiB); err != nil {
+		return err
+	}
+
+	agentBin := *agentPath
+	if agentBin == "" {
+		dir, err := image.BuildAgent(ctx, "linux/"+runtime.GOARCH, false)
+		if err != nil {
+			return fmt.Errorf("building the agent: %w", err)
+		}
+		defer os.RemoveAll(dir)
+		agentBin = filepath.Join(dir, "hangar-agent")
+	}
+	initrd := filepath.Join(os.TempDir(), "hangar-"+*name+"-initrd.img")
+	if err := vm.WriteInitrd(agentBin, initrd); err != nil {
+		return err
 	}
 
 	ccfg := &ch.Config{
 		Name:        *name,
 		Kernel:      kpath,
-		Initrd:      filepath.Join(*out, "initrd.img"),
+		Initrd:      initrd,
 		Disks:       disks,
 		MemoryMB:    *mem,
 		CPUs:        *cpus,
@@ -336,7 +348,7 @@ func runVM(ctx context.Context, argv []string) error {
 	}
 	for _, p := range required {
 		if _, err := os.Stat(p); err != nil {
-			return fmt.Errorf("%s not found - run \"hangar build\" first", p)
+			return fmt.Errorf("%s not found", p)
 		}
 	}
 
@@ -354,10 +366,8 @@ func runVM(ctx context.Context, argv []string) error {
 	}
 
 	if *printOnly {
-		if *virtiofs != "" {
-			ccfg.VirtiofsSocket = run + "-virtiofs.sock"
-			ccfg.VirtiofsDaxMiB = *dax
-		}
+		ccfg.VirtiofsSocket = run + "-virtiofs.sock"
+		ccfg.VirtiofsDaxMiB = *dax
 		if *network {
 			ccfg.NetSocket = run + "-net.sock"
 		}
@@ -375,7 +385,7 @@ func runVM(ctx context.Context, argv []string) error {
 	}
 	rec := &envRecord{
 		Name:            ccfg.Name,
-		Virtiofs:        *virtiofs,
+		Virtiofs:        base,
 		Dax:             *dax,
 		Net:             *network,
 		GPU:             *gpu,

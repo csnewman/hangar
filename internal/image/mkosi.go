@@ -25,15 +25,6 @@ import (
 const mkosiBuilderImage = "ubuntu:26.04"
 
 func BuildWithMkosi(ctx context.Context, o Options) (*Artifacts, error) {
-	if o.SizeGB == 0 {
-		o.SizeGB = 8
-	}
-	if o.UpperGB == 0 {
-		o.UpperGB = 16
-	}
-	if o.DockerGB == 0 {
-		o.DockerGB = 24
-	}
 	if err := os.MkdirAll(o.OutDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -63,12 +54,6 @@ func BuildWithMkosi(ctx context.Context, o Options) (*Artifacts, error) {
 	}
 	defer os.RemoveAll(scripts)
 
-	agentDir, err := buildAgent(ctx, o.Platform, o.Verbose)
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(agentDir)
-
 	args := []string{
 		"run", "--rm",
 		// mkosi creates user namespaces and mounts; this is the narrowest set
@@ -76,18 +61,10 @@ func BuildWithMkosi(ctx context.Context, o Options) (*Artifacts, error) {
 		"--cap-add", "SYS_ADMIN",
 		"--security-opt", "seccomp=unconfined",
 		"--security-opt", "apparmor=unconfined",
-		"-e", fmt.Sprintf("SIZE_GB=%d", o.SizeGB),
-		"-e", fmt.Sprintf("UPPER_GB=%d", o.UpperGB),
-		"-e", fmt.Sprintf("DOCKER_GB=%d", o.DockerGB),
-		// The builder runs as root, so it must be told who to hand the
-		// results to; otherwise they come back root-owned and unusable.
-		"-e", fmt.Sprintf("OUT_UID=%d", os.Getuid()),
-		"-e", fmt.Sprintf("OUT_GID=%d", os.Getgid()),
 		"-e", "IMAGE=" + imageName,
 		"-v", absOut + ":/out",
 		"-v", imagesDir + ":/cfg:ro",
 		"-v", scripts + ":/scripts:ro",
-		"-v", agentDir + ":/agent:ro",
 	}
 	if o.Platform != "" {
 		args = append(args, "--platform", o.Platform)
@@ -98,17 +75,9 @@ func BuildWithMkosi(ctx context.Context, o Options) (*Artifacts, error) {
 		return nil, fmt.Errorf("mkosi build: %w", err)
 	}
 
-	a := &Artifacts{
-		Base:   filepath.Join(o.OutDir, "base.ext4"),
-		Upper:  filepath.Join(o.OutDir, "upper.ext4"),
-		Docker: filepath.Join(o.OutDir, "docker.ext4"),
-		Initrd: filepath.Join(o.OutDir, "initrd.img"),
-		Tag:    "mkosi:" + filepath.Base(absCfg),
-	}
-	for _, p := range []string{a.Base, a.Upper, a.Docker, a.Initrd} {
-		if _, err := os.Stat(p); err != nil {
-			return nil, fmt.Errorf("expected artefact missing: %s", p)
-		}
+	a := &Artifacts{Rootfs: filepath.Join(o.OutDir, "rootfs"), Tag: "mkosi:" + filepath.Base(absCfg)}
+	if st, err := os.Stat(a.Rootfs); err != nil || !st.IsDir() {
+		return nil, fmt.Errorf("expected artefact missing: %s", a.Rootfs)
 	}
 	return a, nil
 }

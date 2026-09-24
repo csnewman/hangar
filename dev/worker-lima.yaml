@@ -25,14 +25,16 @@ runtime: cloud-hypervisor
 
 vm:
   kernel: /Users/csnewman/Projects/hangar/out/kernel/vmlinuz
-  # Built by dev/lima-worker.sh for the guest, and added to every boot.
+  # Built by dev/lima-worker.sh for the guest: each boot's initramfs, as
+  # init, and then the agent.
   agent: /var/tmp/hangar-agent-guest
   # VS Code's server, built by `editor/build.sh` in this VM.
   editor: /Users/csnewman/Projects/hangar/out/editor/editor-arm64.ext4
   dax_mib: 1024
   images:
-    # Built by `hangar build -C images/ubuntu2604 -o out/worker`, agent
-    # included.
+    # The image's root filesystem, served over virtio-fs. Built in this VM by
+    #   sudo /var/tmp/hangar build -C images/ubuntu2604 -o /var/lib/hangar/image-src/ubuntu2604
+    # It lives on the VM's own disk, not the Mac's mount: the tree must keep
+    # its root owners.
     ghcr.io/csnewman/hangar/base-ubuntu2604:latest:
-      base: /Users/csnewman/Projects/hangar/out/worker/base.ext4
-      initrd: /Users/csnewman/Projects/hangar/out/worker/initrd.img
+      base: /var/lib/hangar/image-src/ubuntu2604/rootfs

@@ -4,56 +4,32 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 )
 
-// bootInitrd writes the initramfs an environment boots: its image's, with
-// the worker's agent appended at /hangar/hangar-agent, where the image's
-// init installs it into the root. It returns the image's own initramfs when
-// the worker has no agent to supply.
-//
-// The kernel unpacks an initramfs made of several archives one after
-// another, compressed or not, so appending an uncompressed archive to a
-// compressed one needs nothing else changed.
-func bootInitrd(imageInitrd, agent, dir string) (string, error) {
-	if agent == "" {
-		return imageInitrd, nil
-	}
+// WriteInitrd writes the initramfs an environment boots: the agent, as its
+// init. Nothing else is needed: the agent assembles the root from the base
+// over virtiofs and the writable disk, installs itself there, and hands over
+// to the image's own init (cmd/hangar-agent/init.go). So an image is a root
+// filesystem and nothing else, and every environment runs the agent of the
+// worker that boots it.
+func WriteInitrd(agent, path string) error {
 	bin, err := os.ReadFile(agent)
 	if err != nil {
-		return "", fmt.Errorf("reading the agent: %w", err)
+		return fmt.Errorf("reading the agent: %w", err)
 	}
-	base, err := os.Open(imageInitrd)
-	if err != nil {
-		return "", err
-	}
-	defer base.Close()
-
-	path := filepath.Join(dir, "initrd.img")
 	out, err := os.Create(path + ".new")
 	if err != nil {
-		return "", err
+		return err
 	}
-	n, err := io.Copy(out, base)
-	if err == nil {
-		// Archives start on a four-byte boundary; the kernel skips the
-		// zeros between them.
-		_, err = out.Write(make([]byte, (4-n%4)%4))
-	}
-	if err == nil {
-		err = writeCpio(out, []cpioEntry{
-			{name: "hangar", mode: 0o040755},
-			{name: "hangar/hangar-agent", mode: 0o100755, data: bin},
-		})
-	}
+	err = writeCpio(out, []cpioEntry{{name: "init", mode: 0o100755, data: bin}})
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
 	if err != nil {
 		os.Remove(path + ".new")
-		return "", err
+		return err
 	}
-	return path, os.Rename(path+".new", path)
+	return os.Rename(path+".new", path)
 }
 
 type cpioEntry struct {

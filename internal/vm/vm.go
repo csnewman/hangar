@@ -41,12 +41,12 @@ import (
 
 // Image is how a worker finds the base an environment's image names.
 //
-// Base is a directory, exported to the guest over virtio-fs as the read-only
-// lower layer, or an ext4 image attached as a read-only disk. Initrd is the
-// initramfs that stacks the base with the environment's writable layer.
+// Base is the image's root filesystem, a directory, exported to the guest
+// over virtio-fs as the read-only lower layer; every environment on the
+// worker using the image shares it, and its page cache. An image carries
+// nothing else: the kernel and the initramfs are the node's.
 type Image struct {
-	Base   string `yaml:"base"`
-	Initrd string `yaml:"initrd"`
+	Base string `yaml:"base"`
 }
 
 // Config is what the runtime needs from the worker's configuration.
@@ -59,9 +59,9 @@ type Config struct {
 	// Kernel is the guest kernel every environment boots.
 	Kernel string
 	// Agent is the hangar-agent every environment runs, built for the
-	// guest's architecture. It is the node's, not the image's: the worker
-	// adds it to each boot, so it always matches the worker that talks to
-	// it. Empty boots the agent each image carries.
+	// guest's architecture. It is the node's, not the image's: each boot's
+	// initramfs is the agent, as init, so it always matches the worker that
+	// talks to it.
 	Agent string
 	// Editor is the editor disk, attached read-only to every environment;
 	// the agent mounts it and runs VS Code's server from it. Empty leaves
