@@ -67,6 +67,24 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
+  code:
+    # The Code tab's service, which runs in the guest. Its tests start it
+    # against a scratch repository and drive it as the browser does.
+    runs-on: ubuntu-26.04
+    defaults:
+      run:
+        working-directory: editor/code
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: editor/code/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
   fs:
     # hangar-fs needs nothing from the host at build time; running it needs a
     # monitor to connect to, which is not done here.

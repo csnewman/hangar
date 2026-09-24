@@ -99,23 +99,36 @@ mkosi.
 
 Control plane:
 
-    docker compose --profile control-plane up -d --build
+    docker compose --profile control-plane up -d
 
 Once the zone is delegated, the server is issued its certificates within a
 minute or so; `docker compose logs server` shows it happening.
 
 Each worker machine: copy `deploy/` and the same `bootstrap-token`, set
-`server.url` and `node.name` in `worker.yaml`, then build a base image and
-start the worker:
+`server.url` and `node.name` in `worker.yaml`, then start the worker:
+
+    docker compose --profile worker up -d
+
+The server and worker images are pulled from `HANGAR_REGISTRY` at
+`HANGAR_VERSION`: CI publishes both for arm64 and amd64, as `latest` and as
+each commit on master. `up -d --build` builds them from this checkout
+instead. The worker image holds everything a node supplies, built from
+source -- Cloud Hypervisor with Hangar's patches, the virtio-fs and
+virtio-gpu backends, the guest kernel, the guest agent and VS Code's server
+-- so building it takes a while and wants about 8 GiB of memory.
+
+Base images are pulled too, by the worker, the first time an environment
+needs one: a template names an image reference, such as
+`ghcr.io/csnewman/hangar/base-ubuntu2604:latest`, and the worker pulls its
+own platform and unpacks it into `/var/lib/hangar/images`. It keeps that
+copy until it is removed (Workers, then the worker's images), so a tag that
+moves is pulled again only then. Private registries need credentials under
+`vm.registries` in `worker.yaml`. To build a base image on the machine
+instead, and have the worker use that for a reference:
 
     IMAGE=ubuntu2604 docker compose --profile images run --rm --build build-image
-    docker compose --profile worker up -d --build
 
-The worker image builds everything a node supplies from source -- Cloud
-Hypervisor with Hangar's patches, the virtio-fs and virtio-gpu backends, the
-guest kernel, the guest agent and VS Code's server -- so its first build takes
-a while and wants about 8 GiB of memory. Build it once and push it to a
-registry for the rest of a fleet.
+and name it under `vm.images` in `worker.yaml`.
 
-Finally, in Hangar, create a template for the image reference in
-`worker.yaml` with the placement rule `runtime=cloud-hypervisor`.
+Finally, in Hangar, create a template for an image with the placement rule
+`runtime=cloud-hypervisor`.

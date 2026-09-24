@@ -3,6 +3,12 @@
 #
 #   docker compose --profile control-plane up -d          # Postgres + server
 #   docker compose --profile worker up -d                 # a worker
+#
+# The server and worker images are pulled from HANGAR_REGISTRY, where CI
+# publishes them; `up --build` builds them from this checkout instead. The
+# images profile builds a base image locally, for a worker.yaml that names a
+# local copy rather than pulling it:
+#
 #   IMAGE=ubuntu2604 docker compose --profile images run --rm build-image
 #
 # One machine can run every profile; a worker machine runs only `worker` and
@@ -32,7 +38,7 @@ services:
     build:
       context: ..
       dockerfile: cmd/hangar-server/Dockerfile
-    image: hangar-server
+    image: ${HANGAR_REGISTRY:-ghcr.io/csnewman/hangar}/server:${HANGAR_VERSION:-latest}
     restart: unless-stopped
     environment:
       HANGAR_DATABASE_URL: postgres://hangar:${POSTGRES_PASSWORD:-}@postgres:5432/hangar?sslmode=disable
@@ -70,7 +76,8 @@ services:
     build:
       context: ..
       dockerfile: cmd/hangar-worker/Dockerfile
-    image: hangar-worker
+      target: worker
+    image: ${HANGAR_REGISTRY:-ghcr.io/csnewman/hangar}/worker:${HANGAR_VERSION:-latest}
     restart: unless-stopped
     # Not --privileged. The worker needs KVM, and the backends it starts
     # (passt, hangar-fs) sandbox themselves in namespaces, which needs

@@ -36,9 +36,18 @@ vm:
   # Environments map their base's files from this machine's page cache
   # through a DAX window of this size, rather than each keeping a copy.
   dax_mib: 1024
-  images:
-    # An image is its root filesystem, a directory, served to environments
-    # over virtio-fs. Built by the compose file's build-image service:
-    #   IMAGE=ubuntu2604 docker compose --profile images run --rm build-image
-    ghcr.io/csnewman/hangar/base-ubuntu2604:latest:
-      base: /var/lib/hangar/image-src/ubuntu2604/rootfs
+  # Images are pulled from their registries the first time an environment
+  # needs them, and unpacked into storage.images as a root filesystem, which
+  # environments are served over virtio-fs. A private registry needs
+  # credentials:
+  # registries:
+  #   ghcr.io:
+  #     username: someone
+  #     password_file: /run/secrets/ghcr-token
+  #
+  # A reference can instead name a local copy, such as one the compose file's
+  # build-image service built:
+  #   IMAGE=ubuntu2604 docker compose --profile images run --rm build-image
+  # images:
+  #   ghcr.io/csnewman/hangar/base-ubuntu2604:latest:
+  #     base: /var/lib/hangar/image-src/ubuntu2604/rootfs
