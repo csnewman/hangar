@@ -106,6 +106,43 @@ func TestReportCannotTouchAnotherWorkersEnvironment(t *testing.T) {
 			t.Fatalf("worker b's unknown list is %v, want [%s]", w.Unknown, env.ID)
 		}
 	}
+
+	// Worker b cannot be told to delete it either: the server knows it.
+	if err := wm.RemoveUnknown(ctx, b.ID, []string{env.ID}); !errors.Is(err, workers.ErrInvalid) {
+		t.Fatalf("removing a known environment as unknown: %v", err)
+	}
+}
+
+// An environment a worker runs that the server has no record of is deleted
+// on request, and the request stands until the worker stops reporting it.
+func TestRemoveUnknownEnvironments(t *testing.T) {
+	d := dbtest.Open(t)
+	wm := workers.NewManager(d)
+	w, _ := wm.Register(ctx, api.RegisterWorker{Name: "w"})
+	const orphan = "2a04a86a-260e-4fdf-9d94-d1b5a1ce8a7c"
+	report(t, wm, w.ID, 4, 8192, api.ObservedEnvironment{ID: orphan, Phase: api.PhaseRunning})
+
+	if err := wm.RemoveUnknown(ctx, w.ID, []string{"3e6a1ccd-778e-43c1-a5fb-1fc91fd5a8b4"}); !errors.Is(err, workers.ErrInvalid) {
+		t.Fatalf("removing one the worker does not report: %v", err)
+	}
+	before, _ := wm.DesiredSet(ctx, w.ID)
+	if err := wm.RemoveUnknown(ctx, w.ID, []string{orphan}); err != nil {
+		t.Fatal(err)
+	}
+	set, _ := wm.DesiredSet(ctx, w.ID)
+	if set.Version <= before.Version || len(set.RemoveEnvironments) != 1 || set.RemoveEnvironments[0] != orphan {
+		t.Fatalf("desired set after asking: %+v", set)
+	}
+
+	// Still running: still asked for. Gone: done.
+	report(t, wm, w.ID, 4, 8192, api.ObservedEnvironment{ID: orphan, Phase: api.PhaseDeleting})
+	if set, _ := wm.DesiredSet(ctx, w.ID); len(set.RemoveEnvironments) != 1 {
+		t.Fatalf("the request went while the worker still runs it: %+v", set)
+	}
+	report(t, wm, w.ID, 4, 8192)
+	if set, _ := wm.DesiredSet(ctx, w.ID); len(set.RemoveEnvironments) != 0 {
+		t.Fatalf("the request stayed after the worker let it go: %+v", set)
+	}
 }
 
 func TestReportRejectsUnknownPhase(t *testing.T) {

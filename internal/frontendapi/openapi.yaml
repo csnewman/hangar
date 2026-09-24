@@ -653,6 +653,29 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/frontend/workers/{id}/unknown/remove:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: removeUnknownEnvironments
+      x-hangar-admin: true
+      description: >-
+        Asks the worker to power off and delete environments it runs that
+        the server has no record of, disks and all. Each must be one the
+        worker reports as unknown.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RemoveUnknownEnvironments" }
+      responses:
+        "202":
+          description: Asked for.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/frontend/workers/{id}/revoke:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -716,6 +739,15 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
 
   schemas:
+    RemoveUnknownEnvironments:
+      type: object
+      required: [environments]
+      properties:
+        environments:
+          type: array
+          minItems: 1
+          items: { type: string }
+
     ProfilePath:
       type: object
       required: [path]

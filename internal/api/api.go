@@ -202,6 +202,10 @@ type DesiredSet struct {
 	// RemoveImages are images the worker should delete from its store. One
 	// an environment still uses is kept, and stays asked for.
 	RemoveImages []string `json:"remove_images"`
+	// RemoveEnvironments are environments the worker runs that the server
+	// has no record of, which it should power off and delete, disks and
+	// all.
+	RemoveEnvironments []string `json:"remove_environments"`
 }
 
 // EnvironmentSpec is one environment as a worker needs to see it.

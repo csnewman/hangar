@@ -1942,3 +1942,14 @@ code {
 .key-form {
   margin-top: 12px;
 }
+
+.notice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+a.reason {
+  display: block;
+}

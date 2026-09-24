@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -286,7 +287,7 @@ func (m *Manager) DesiredVersion(ctx context.Context, workerID string) (int64, e
 func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredSet, error) {
 	var set api.DesiredSet
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		set = api.DesiredSet{Environments: []api.EnvironmentSpec{}, RemoveImages: []string{}}
+		set = api.DesiredSet{Environments: []api.EnvironmentSpec{}, RemoveImages: []string{}, RemoveEnvironments: []string{}}
 		// Every row repeats the version. A worker with no environments
 		// still has its row, with the environment columns NULL.
 		rows, err := tx.Query(ctx, `
@@ -330,7 +331,15 @@ func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredS
 		if err != nil {
 			return err
 		}
-		set.RemoveImages, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		if set.RemoveImages, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+			return err
+		}
+		rows, err = tx.Query(ctx, `SELECT environment FROM worker_environment_removals WHERE worker_id = $1
+			ORDER BY environment`, workerID)
+		if err != nil {
+			return err
+		}
+		set.RemoveEnvironments, err = pgx.CollectRows(rows, pgx.RowTo[string])
 		return err
 	})
 	return set, err
@@ -474,6 +483,11 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 			WHERE worker_id = $1 AND NOT (ref = ANY($2::text[]))`, workerID, held); err != nil {
 			return err
 		}
+		// And a deletion once it stops reporting the environment.
+		if _, err := tx.Exec(ctx, `DELETE FROM worker_environment_removals
+			WHERE worker_id = $1 AND NOT (environment = ANY($2::text[]))`, workerID, unknown); err != nil {
+			return err
+		}
 		if st.Capacity.CPUs != oldCPUs || st.Capacity.MemoryMiB != oldMem {
 			return db.Notify(ctx, tx, CapacityChannel, workerID)
 		}
@@ -525,6 +539,48 @@ func (m *Manager) RemoveImage(ctx context.Context, workerID, ref string) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO worker_image_removals (worker_id, ref) VALUES ($1, $2)
 			ON CONFLICT DO NOTHING`, workerID, ref); err != nil {
 			return err
+		}
+		return Bump(ctx, tx, workerID)
+	})
+}
+
+// RemoveUnknown asks a worker to delete environments it runs that the
+// server has no record of. Each must be one the worker reports as such; an
+// environment the server knows is deleted through the environment instead.
+func (m *Manager) RemoveUnknown(ctx context.Context, workerID string, ids []string) error {
+	if !db.ValidUUID(workerID) {
+		return ErrNotFound
+	}
+	return m.db.Transact(ctx, func(tx db.Tx) error {
+		var unknown []string
+		var raw []byte
+		err := tx.QueryRow(ctx, `SELECT unknown FROM workers WHERE id = $1 FOR UPDATE`, workerID).Scan(&raw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(raw, &unknown); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if !slices.Contains(unknown, id) {
+				return fmt.Errorf("%w: the worker does not report %s as unknown to the server", ErrInvalid, id)
+			}
+			var known bool
+			if db.ValidUUID(id) {
+				if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM environments WHERE id = $1)`, id).Scan(&known); err != nil {
+					return err
+				}
+			}
+			if known {
+				return fmt.Errorf("%w: %s is an environment the server knows", ErrInvalid, id)
+			}
+			if _, err := tx.Exec(ctx, `INSERT INTO worker_environment_removals (worker_id, environment)
+				VALUES ($1, $2) ON CONFLICT DO NOTHING`, workerID, id); err != nil {
+				return err
+			}
 		}
 		return Bump(ctx, tx, workerID)
 	})

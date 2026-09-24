@@ -158,6 +158,11 @@ func (w *Worker) desiredLoop(ctx context.Context) error {
 		for _, spec := range set.Environments {
 			w.rt.Apply(spec)
 		}
+		// What the server has no record of, and an administrator asked
+		// to be rid of, goes as a deleted environment would.
+		for _, id := range set.RemoveEnvironments {
+			w.rt.Apply(api.EnvironmentSpec{ID: id, Desired: api.DesiredDeleted})
+		}
 		if store, ok := w.rt.(ImageStore); ok {
 			for _, ref := range set.RemoveImages {
 				store.RemoveImage(ref)

@@ -125,6 +125,16 @@ CREATE TABLE worker_image_removals (
     PRIMARY KEY (worker_id, ref)
 );
 
+-- Environments a worker runs that the server has no record of, which an
+-- administrator has asked it to delete, disks and all. A row stays until the
+-- worker stops reporting the environment.
+CREATE TABLE worker_environment_removals (
+    worker_id    uuid NOT NULL REFERENCES workers (id) ON DELETE CASCADE,
+    environment  text NOT NULL,
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (worker_id, environment)
+);
+
 -- Sign-ins to one environment's editor, which is served on an origin of its
 -- own and so cannot see the Hangar session cookie. A row starts as a ticket,
 -- handed to the browser once and good for a minute, and is replaced by the

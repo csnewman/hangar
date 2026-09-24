@@ -155,12 +155,7 @@ function Environments({ worker: w }: { worker: Worker }) {
           </tbody>
         </table>
       </div>
-      {w.unknown.length > 0 && (
-        <div className="notice">
-          It is also running {w.unknown.length} environment{w.unknown.length === 1 ? '' : 's'} the server has no
-          record of: <span className="mono">{w.unknown.join(', ')}</span>
-        </div>
-      )}
+      {w.unknown.length > 0 && <Unknown worker={w} />}
     </section>
   )
 }
@@ -274,5 +269,34 @@ function ImageRow({
         </div>
       </td>
     </tr>
+  )
+}
+
+// Unknown is what the worker runs that the server has no record of: left
+// behind by a lost database, or a worker moved between control planes. It is
+// never deleted without being asked.
+function Unknown({ worker: w }: { worker: Worker }) {
+  const qc = useQueryClient()
+  const remove = useMutation({
+    mutationFn: () => api.removeUnknownEnvironments(w.id, w.unknown),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['workers', w.id] }),
+  })
+  const n = w.unknown.length
+  return (
+    <div className="notice notice-row">
+      <div>
+        It is also running {n} environment{n === 1 ? '' : 's'} the server has no record of:{' '}
+        <span className="mono">{w.unknown.join(', ')}</span>
+        {remove.isSuccess && <div className="muted small">Asked for; they go when the worker next syncs.</div>}
+        {remove.error && <div className="action-error">{remove.error.message}</div>}
+      </div>
+      <ConfirmButton
+        label={n === 1 ? 'Delete it' : 'Delete them'}
+        confirmLabel="Delete, disks and all?"
+        title="Power off and delete, with their disks"
+        onConfirm={() => remove.mutate()}
+        disabled={remove.isPending}
+      />
+    </div>
   )
 }

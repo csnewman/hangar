@@ -362,6 +362,11 @@ type RemoveImage struct {
 	Ref string `json:"ref"`
 }
 
+// RemoveUnknownEnvironments defines model for RemoveUnknownEnvironments.
+type RemoveUnknownEnvironments struct {
+	Environments []string `json:"environments"`
+}
+
 // Repo defines model for Repo.
 type Repo struct {
 	// Branch A new branch to create after cloning. In a template, {name} is replaced by the environment's name.
@@ -612,6 +617,9 @@ type UpdateUserJSONRequestBody = UpdateUser
 // RemoveWorkerImageJSONRequestBody defines body for RemoveWorkerImage for application/json ContentType.
 type RemoveWorkerImageJSONRequestBody = RemoveImage
 
+// RemoveUnknownEnvironmentsJSONRequestBody defines body for RemoveUnknownEnvironments for application/json ContentType.
+type RemoveUnknownEnvironmentsJSONRequestBody = RemoveUnknownEnvironments
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 
@@ -731,6 +739,9 @@ type ServerInterface interface {
 
 	// (POST /api/frontend/workers/{id}/revoke)
 	RevokeWorker(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (POST /api/frontend/workers/{id}/unknown/remove)
+	RemoveUnknownEnvironments(w http.ResponseWriter, r *http.Request, id ID)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -1613,6 +1624,32 @@ func (siw *ServerInterfaceWrapper) RevokeWorker(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// RemoveUnknownEnvironments operation middleware
+func (siw *ServerInterfaceWrapper) RemoveUnknownEnvironments(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemoveUnknownEnvironments(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1771,6 +1808,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.DeleteWorker)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.GetWorker)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/workers/{id}/images/remove", wrapper.RemoveWorkerImage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/workers/{id}/unknown/remove", wrapper.RemoveUnknownEnvironments)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/workers/{id}/revoke", wrapper.RevokeWorker)
 
 	return m
@@ -4063,6 +4101,79 @@ func (response RevokeWorker404JSONResponse) VisitRevokeWorkerResponse(w http.Res
 	return err
 }
 
+type RemoveUnknownEnvironmentsRequestObject struct {
+	ID   ID `json:"id"`
+	Body *RemoveUnknownEnvironmentsJSONRequestBody
+}
+
+type RemoveUnknownEnvironmentsResponseObject interface {
+	VisitRemoveUnknownEnvironmentsResponse(w http.ResponseWriter) error
+}
+
+type RemoveUnknownEnvironments202Response struct {
+}
+
+func (response RemoveUnknownEnvironments202Response) VisitRemoveUnknownEnvironmentsResponse(w http.ResponseWriter) error {
+	w.WriteHeader(202)
+	return nil
+}
+
+type RemoveUnknownEnvironments400JSONResponse struct{ InvalidJSONResponse }
+
+func (response RemoveUnknownEnvironments400JSONResponse) VisitRemoveUnknownEnvironmentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveUnknownEnvironments401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RemoveUnknownEnvironments401JSONResponse) VisitRemoveUnknownEnvironmentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveUnknownEnvironments403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RemoveUnknownEnvironments403JSONResponse) VisitRemoveUnknownEnvironmentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveUnknownEnvironments404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RemoveUnknownEnvironments404JSONResponse) VisitRemoveUnknownEnvironmentsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 
@@ -4182,6 +4293,9 @@ type StrictServerInterface interface {
 
 	// (POST /api/frontend/workers/{id}/revoke)
 	RevokeWorker(ctx context.Context, request RevokeWorkerRequestObject) (RevokeWorkerResponseObject, error)
+
+	// (POST /api/frontend/workers/{id}/unknown/remove)
+	RemoveUnknownEnvironments(ctx context.Context, request RemoveUnknownEnvironmentsRequestObject) (RemoveUnknownEnvironmentsResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -5292,6 +5406,39 @@ func (sh *strictHandler) RevokeWorker(w http.ResponseWriter, r *http.Request, id
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RevokeWorkerResponseObject); ok {
 		if err := validResponse.VisitRevokeWorkerResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RemoveUnknownEnvironments operation middleware
+func (sh *strictHandler) RemoveUnknownEnvironments(w http.ResponseWriter, r *http.Request, id ID) {
+	var request RemoveUnknownEnvironmentsRequestObject
+
+	request.ID = id
+
+	var body RemoveUnknownEnvironmentsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RemoveUnknownEnvironments(ctx, request.(RemoveUnknownEnvironmentsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RemoveUnknownEnvironments")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RemoveUnknownEnvironmentsResponseObject); ok {
+		if err := validResponse.VisitRemoveUnknownEnvironmentsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

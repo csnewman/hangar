@@ -31,6 +31,19 @@ func (h *handler) GetWorker(ctx context.Context, req GetWorkerRequestObject) (Ge
 	return GetWorker200JSONResponse(worker(w)), nil
 }
 
+func (h *handler) RemoveUnknownEnvironments(ctx context.Context, req RemoveUnknownEnvironmentsRequestObject) (RemoveUnknownEnvironmentsResponseObject, error) {
+	err := h.workers.RemoveUnknown(ctx, req.ID, req.Body.Environments)
+	switch {
+	case errors.Is(err, workers.ErrNotFound):
+		return RemoveUnknownEnvironments404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
+	case errors.Is(err, workers.ErrInvalid):
+		return RemoveUnknownEnvironments400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return RemoveUnknownEnvironments202Response{}, nil
+}
+
 func (h *handler) RemoveWorkerImage(ctx context.Context, req RemoveWorkerImageRequestObject) (RemoveWorkerImageResponseObject, error) {
 	err := h.workers.RemoveImage(ctx, req.ID, req.Body.Ref)
 	switch {

@@ -77,9 +77,9 @@ function WorkerRow({ worker: w }: { worker: Worker }) {
       <td>
         <OnlineBadge online={w.online} revoked={w.revoked} />
         {w.unknown.length > 0 && (
-          <div className="reason reason-bad">
+          <Link to={`/admin/workers/${w.id}`} className="reason reason-bad">
             running {w.unknown.length} environment{w.unknown.length === 1 ? '' : 's'} the server has no record of
-          </div>
+          </Link>
         )}
         {error && <div className="reason reason-bad">{error.message}</div>}
       </td>
