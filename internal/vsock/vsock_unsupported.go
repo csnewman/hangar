@@ -30,8 +30,3 @@ func (l *Listener) Accept(timeout time.Duration) (*os.File, uint32, error) {
 // Close is a no-op here.
 func (l *Listener) Close() error { return nil }
 
-// LocalCID always fails here.
-func LocalCID() (uint32, error) { return 0, errNotLinux }
-
-// SuggestGuestCID returns the first non-reserved CID here.
-func SuggestGuestCID() uint32 { return FirstGuestCID }

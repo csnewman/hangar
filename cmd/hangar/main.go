@@ -240,7 +240,7 @@ func runVM(ctx context.Context, argv []string) error {
 	smoke := fs.Bool("smoke", false, "run the in-guest smoke test, then power off")
 	console := fs.String("console", "", "write the guest console to this file instead of stdio")
 	kernelPath := fs.String("kernel", "", "kernel to boot (default: "+defaultKernel+")")
-	cid := fs.Uint("cid", 0, "guest vsock context ID (default: the first free one)")
+	cid := fs.Uint("cid", 0, "guest vsock context ID (default: the first guest one; each guest has its own socket)")
 	noAgent := fs.Bool("no-agent", false, "boot without an agent channel")
 	agentWait := fs.Duration("agent-wait", 90*time.Second, "how long to wait for the agent")
 	exec := fs.String("exec", "", "run this shell command in the guest once its agent answers, print the output, and stop")
@@ -331,9 +331,12 @@ func runVM(ctx context.Context, argv []string) error {
 		ccfg.ExtraCmdline = strings.TrimSpace(ccfg.ExtraCmdline + " " + *append_)
 	}
 	if !*noAgent {
+		// Cloud Hypervisor carries each guest's vsock on a unix socket of
+		// its own, so the number is local to that socket and any guest CID
+		// will do.
 		ccfg.GuestCID = uint32(*cid)
 		if ccfg.GuestCID == 0 {
-			ccfg.GuestCID = vsock.SuggestGuestCID()
+			ccfg.GuestCID = vsock.FirstGuestCID
 		}
 	}
 

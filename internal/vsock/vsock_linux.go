@@ -73,44 +73,6 @@ func Dial(cid, port uint32) (*os.File, error) {
 	return os.NewFile(uintptr(fd), fmt.Sprintf("vsock:%d:%d", cid, port)), nil
 }
 
-// ioctlGetLocalCID is IOCTL_VM_SOCKETS_GET_LOCAL_CID from vm_sockets.h,
-// _IO(7, 0xb9). It asks the vsock driver which CID this machine itself has.
-const ioctlGetLocalCID = 0x7b9
-
-// LocalCID reports this machine's own context ID.
-//
-// A host that is itself a guest -- a Linux VM with nested virtualisation, which
-// is how Hangar is developed on macOS -- already owns a CID in its parent's
-// numbering. Handing that same number to a guest is rejected, so callers use
-// this to choose one that cannot collide.
-func LocalCID() (uint32, error) {
-	f, err := os.Open("/dev/vsock")
-	if err != nil {
-		return 0, fmt.Errorf("opening /dev/vsock: %w", err)
-	}
-	defer f.Close()
-
-	var cid uint32
-	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL,
-		f.Fd(), uintptr(ioctlGetLocalCID), uintptr(unsafe.Pointer(&cid))); errno != 0 {
-		return 0, fmt.Errorf("reading the local cid: %w", errno)
-	}
-	return cid, nil
-}
-
-// SuggestGuestCID returns a context ID that a guest on this host can use.
-//
-// It skips the reserved range and this machine's own CID. It does not know
-// about other running guests, so a caller starting several environments must
-// track what it has handed out; allocation belongs to the control plane.
-func SuggestGuestCID() uint32 {
-	local, err := LocalCID()
-	if err != nil || local < FirstGuestCID {
-		return FirstGuestCID
-	}
-	return local + 1
-}
-
 // Listener accepts vsock connections.
 type Listener struct {
 	fd   int
