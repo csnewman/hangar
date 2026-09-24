@@ -1870,8 +1870,12 @@ code {
 
 @media (max-width: 760px) {
   .app-body {
-    grid-template-columns: minmax(0, 1fr);
+    /* Over the width the sidebar was dragged to. */
+    grid-template-columns: minmax(0, 1fr) !important;
     grid-template-rows: auto minmax(0, 1fr);
+  }
+  .sidebar-handle {
+    display: none;
   }
   .sidebar {
     border-right: none;
@@ -1952,4 +1956,61 @@ code {
 
 a.reason {
   display: block;
+}
+
+/* The sidebar's frame holds its drag handle. */
+.sidebar-frame {
+  position: relative;
+  display: flex;
+  min-height: 0;
+}
+
+.sidebar-frame > .sidebar {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar-handle {
+  position: absolute;
+  top: 0;
+  right: -3px;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  z-index: 5;
+}
+
+.sidebar-handle:hover,
+.app-dragging .sidebar-handle {
+  background: var(--accent);
+  opacity: 0.35;
+}
+
+.app-dragging {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.app-dragging iframe {
+  pointer-events: none;
+}
+
+.sidebar-collapsed {
+  padding: 10px 6px;
+  overflow-x: hidden;
+}
+
+.side-icon {
+  justify-content: center;
+  padding: 7px 0;
+}
+
+.side-group {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sidebar-toggle {
+  margin-right: 6px;
 }

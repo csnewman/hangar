@@ -1,5 +1,5 @@
 import { ChevronRight, FolderSync, LayoutGrid, LayoutTemplate, Plus, Server, UserRound, Users } from 'lucide-react'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, NavLink } from 'react-router'
 
 import type { Environment } from '../api'
@@ -9,10 +9,33 @@ import { PhaseDot } from './Status'
 
 // Sidebar is the inventory: every environment the user can reach, as a tree,
 // then the user's own settings, and administration for administrators.
-export function Sidebar() {
+export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
   const me = useMe()
   const envs = useEnvironments()
   const { mine, others } = splitByOwner(envs.data ?? [], me)
+
+  if (collapsed) {
+    // Folded to its icons: the environments are on the Overview.
+    return (
+      <aside className="sidebar sidebar-collapsed">
+        <nav className="side-nav">
+          <SideIcon to="/environments" end icon={<LayoutGrid size={17} />} label="Overview" />
+          <SideIcon to="/templates" icon={<LayoutTemplate size={17} />} label="Templates" />
+          <SideIcon to="/environments/new" icon={<Plus size={17} />} label="New environment" />
+        </nav>
+        <nav className="side-nav side-group">
+          <SideIcon to="/profile" icon={<FolderSync size={17} />} label="Profile" />
+          <SideIcon to="/account" icon={<UserRound size={17} />} label="Account" />
+        </nav>
+        {me.admin && (
+          <nav className="side-nav side-group">
+            <SideIcon to="/admin/workers" icon={<Server size={17} />} label="Workers" />
+            <SideIcon to="/admin/users" icon={<Users size={17} />} label="Users" />
+          </nav>
+        )}
+      </aside>
+    )
+  }
 
   return (
     <aside className="sidebar">
@@ -77,6 +100,14 @@ export function Sidebar() {
         </div>
       )}
     </aside>
+  )
+}
+
+function SideIcon({ to, icon, label, end }: { to: string; icon: ReactNode; label: string; end?: boolean }) {
+  return (
+    <NavLink to={to} end={end} className="side-link side-icon" title={label} aria-label={label}>
+      {icon}
+    </NavLink>
   )
 }
 
