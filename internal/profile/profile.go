@@ -138,9 +138,35 @@ var DefaultPaths = []string{
 	".claude/skills/",
 	".claude/output-styles/",
 	".gitconfig",
+	".config/gh/config.yml",
+	".aws/config",
+	".config/gcloud/configurations/",
+	".config/gcloud/active_config",
 	vscodeUser + "settings.json",
 	vscodeUser + "keybindings.json",
 	vscodeUser + "snippets/",
+}
+
+// secretPaths are the shared paths that hold credentials. Each is a whole
+// file a tool writes and reads: tools that keep credentials in a database
+// (gcloud's own sign-in) or in a cache they rewrite on every use (Azure's)
+// cannot be shared this way.
+var secretPaths = []string{
+	CredentialsPath,
+	".git-credentials",
+	".netrc",
+	".config/gh/hosts.yml",
+	".config/glab-cli/config.yml",
+	".docker/config.json",
+	".npmrc",
+	".pypirc",
+	".aws/credentials",
+	".kube/config",
+	".config/gcloud/application_default_credentials.json",
+}
+
+func init() {
+	DefaultPaths = append(DefaultPaths, secretPaths[1:]...)
 }
 
 // vscodeUser is VS Code's user settings folder: its server's data folder
@@ -241,7 +267,7 @@ func (ps Paths) InTree(dir string) bool {
 // Secret reports whether a path holds a credential: kept encrypted, never
 // shown back in the web UI, and not sent to environments that are not
 // trusted with the owner's credentials.
-func Secret(p string) bool { return p == CredentialsPath }
+func Secret(p string) bool { return slices.Contains(secretPaths, p) }
 
 // Valid reports whether p is a clean relative path that stays inside the
 // home directory.
