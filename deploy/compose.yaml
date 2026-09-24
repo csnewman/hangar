@@ -1,0 +1,120 @@
+# Hangar on real machines. From this directory, with .env beside it (see
+# .env.example):
+#
+#   docker compose --profile control-plane up -d          # Postgres + server
+#   docker compose --profile worker up -d                 # a worker
+#   IMAGE=ubuntu2604 docker compose --profile images run --rm build-image
+#   docker compose --profile proxy up -d                  # TLS in front
+#
+# One machine can run every profile; a worker machine runs only `worker` and
+# `images`, pointed at the control plane in worker.yaml, and needs none of
+# the control plane's settings. See README.md for what the host needs first.
+name: hangar
+
+services:
+  postgres:
+    profiles: [control-plane]
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: hangar
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+      POSTGRES_DB: hangar
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: [CMD, pg_isready, -U, hangar]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  server:
+    profiles: [control-plane]
+    build:
+      context: ..
+      dockerfile: cmd/hangar-server/Dockerfile
+    image: hangar-server
+    restart: unless-stopped
+    environment:
+      HANGAR_DATABASE_URL: postgres://hangar:${POSTGRES_PASSWORD:-}@postgres:5432/hangar?sslmode=disable
+      HANGAR_PUBLIC_URL: ${HANGAR_PUBLIC_URL:-}
+      HANGAR_BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap-token
+      # The first administrator, created only while there are no users.
+      HANGAR_INITIAL_ADMIN_USERNAME: ${HANGAR_ADMIN_USERNAME:-admin}
+      HANGAR_INITIAL_ADMIN_PASSWORD: ${HANGAR_ADMIN_PASSWORD:-}
+    secrets: [bootstrap-token]
+    ports:
+      # Behind the proxy profile, or another TLS terminator, this need not be
+      # published beyond the machine.
+      - ${HANGAR_LISTEN:-127.0.0.1:8081}:8081
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    profiles: [worker]
+    build:
+      context: ..
+      dockerfile: cmd/hangar-worker/Dockerfile
+    image: hangar-worker
+    restart: unless-stopped
+    # Not --privileged. The worker needs KVM, and the backends it starts
+    # (passt, hangar-fs) sandbox themselves in namespaces, which needs
+    # CAP_SYS_ADMIN and Docker's seccomp and AppArmor profiles out of the
+    # way. Everything else is ordinary root in a container.
+    devices:
+      - /dev/kvm
+      # For environments with a GPU backed by a real host GPU; without it
+      # they render on the CPU.
+      # - /dev/dri
+    cap_add: [SYS_ADMIN]
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    volumes:
+      - ./worker.yaml:/etc/hangar/worker.yaml:ro
+      # Environments' disks. A host path, not a volume, so they sit on the
+      # host's own filesystem and survive the container.
+      - /var/lib/hangar:/var/lib/hangar
+    secrets: [bootstrap-token]
+
+  build-image:
+    profiles: [images]
+    build:
+      context: ..
+      dockerfile: cmd/hangar-worker/Dockerfile
+      target: imagebuilder
+    image: hangar-imagebuilder
+    # mkosi creates user namespaces and mounts, as `hangar build` allows it.
+    cap_add: [SYS_ADMIN]
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    environment:
+      IMAGE: ${IMAGE:-ubuntu2604}
+    volumes:
+      - /var/lib/hangar/image-src/${IMAGE:-ubuntu2604}:/out
+
+  proxy:
+    profiles: [proxy]
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      HANGAR_DOMAIN: ${HANGAR_DOMAIN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${HANGAR_TLS_DIR:-./tls}:/tls:ro
+      - caddy:/data
+    ports:
+      - 443:443
+      - 80:80
+    depends_on:
+      - server
+
+secrets:
+  bootstrap-token:
+    file: ${HANGAR_BOOTSTRAP_TOKEN_FILE:-./bootstrap-token}
+
+volumes:
+  pgdata:
+  caddy:

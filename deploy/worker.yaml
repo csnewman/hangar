@@ -1,0 +1,41 @@
+# The worker's configuration, as deploy/compose.yaml mounts it at
+# /etc/hangar/worker.yaml. Paths are inside the worker container: /var/lib/hangar
+# is the host's /var/lib/hangar, and /usr/share/hangar is the worker image's own.
+server:
+  # The control plane, as this machine reaches it. On a machine running both,
+  # the compose network reaches the server by its service name.
+  url: http://server:8081
+  # The shared secret a new worker presents once, to be issued a credential.
+  token_file: /run/secrets/bootstrap-token
+  credential_file: /var/lib/hangar/worker-credential
+
+node:
+  # Unique per machine.
+  name: worker-1
+  labels:
+    runtime: cloud-hypervisor
+
+storage:
+  images: /var/lib/hangar/images
+  environments: /var/lib/hangar/env
+  caches: /var/lib/hangar/caches
+
+# Kept back for the host itself; environments are placed in the rest.
+reserved:
+  cpus: 1
+  memory: 2GiB
+
+runtime: cloud-hypervisor
+
+vm:
+  kernel: /usr/share/hangar/vmlinuz
+  agent: /usr/share/hangar/hangar-agent
+  editor: /usr/share/hangar/editor.ext4
+  upper_gib: 32
+  docker_gib: 64
+  images:
+    # Built by the compose file's build-image service:
+    #   IMAGE=ubuntu2604 docker compose --profile images run --rm build-image
+    ghcr.io/csnewman/hangar/base-ubuntu2604:latest:
+      base: /var/lib/hangar/image-src/ubuntu2604/base.ext4
+      initrd: /var/lib/hangar/image-src/ubuntu2604/initrd.img

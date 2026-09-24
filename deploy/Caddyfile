@@ -1,0 +1,8 @@
+# TLS in front of hangar-server, for Hangar itself and every environment's
+# editor, which is served on e-<id>.<domain>. One certificate must cover both
+# names: a wildcard for *.<domain> plus <domain>, in /tls/cert.pem and
+# /tls/key.pem (HANGAR_TLS_DIR). HANGAR_PUBLIC_URL is then https://<domain>.
+{$HANGAR_DOMAIN}, *.{$HANGAR_DOMAIN} {
+	tls /tls/cert.pem /tls/key.pem
+	reverse_proxy server:8081
+}

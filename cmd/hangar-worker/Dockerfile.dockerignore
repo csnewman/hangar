@@ -1,0 +1,19 @@
+# Only what cmd/hangar-worker/Dockerfile copies. Rust targets and build output
+# elsewhere in the tree are gigabytes it never reads.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
+!fs/Cargo.toml
+!fs/Cargo.lock
+!fs/src/
+!gpu/Cargo.toml
+!gpu/Cargo.lock
+!gpu/src/
+!gpu/virglrenderer/
+!editor/
+!images/
+internal/webui/dist/app
+editor/code/node_modules
+editor/code/dist
