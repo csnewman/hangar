@@ -69,11 +69,12 @@ export class SharedFile {
   synced = false
   private syncedWaiters: (() => void)[] = []
   refs = 0
+  readonly path: string
+  private client: CodeClient
 
-  constructor(
-    readonly path: string,
-    private client: CodeClient,
-  ) {
+  constructor(path: string, client: CodeClient) {
+    this.path = path
+    this.client = client
     this.doc.on('update', (update: Uint8Array, origin: unknown) => {
       if (origin === this.client) return
       const enc = encoding.createEncoder()
@@ -156,8 +157,10 @@ export class CodeClient {
   private markReady!: () => void
   state: ConnectionState = 'connecting'
   root = ''
+  private env: string
 
-  constructor(private env: string) {
+  constructor(env: string) {
+    this.env = env
     this.ready = new Promise((r) => (this.markReady = r))
     this.connect()
   }
@@ -230,7 +233,7 @@ export class CodeClient {
   }
 
   private write(frame: Uint8Array) {
-    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(frame)
+    if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(frame as Uint8Array<ArrayBuffer>)
   }
 
   sendYjs(n: number, msg: Uint8Array) {
