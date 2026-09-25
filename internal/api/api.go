@@ -282,8 +282,8 @@ const (
 	StepDisks Step = "disks"
 	// StepBoot boots or resumes the machine, until its agent answers.
 	StepBoot Step = "boot"
-	// StepServices waits for the guest's own services to start.
-	StepServices Step = "services"
+	// StepNetwork waits for the guest's network and name resolver.
+	StepNetwork Step = "network"
 	// StepWorkspace applies the template: the hostname and the clones.
 	StepWorkspace Step = "workspace"
 )

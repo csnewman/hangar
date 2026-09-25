@@ -134,6 +134,9 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if err := writeEditorTrust(inst.Session(), s); err != nil {
 		m.log.Warn("could not tell the editor which folders to trust", "err", err)
 	}
+	if err := m.waitNetwork(ctx, inst.Session()); err != nil {
+		return nil, err
+	}
 	if err := m.provision(ctx, inst.Session(), spec); err != nil {
 		return nil, err
 	}
@@ -161,20 +164,6 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 			return fmt.Errorf("%s: exit %d: %s", what, out.Code, firstLine(out.Stderr, out.Stdout))
 		}
 		return nil
-	}
-
-	// The agent answers early in the boot, before the network and the name
-	// resolver are up. Provisioning needs both, so it waits for systemd to
-	// finish starting the machine. "degraded" is finished too -- some unit
-	// failed -- and exits non-zero, so the answer is read, not the status.
-	m.step(api.StepServices, "waiting for the guest to finish booting")
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if out, err := sess.Exec(3*time.Minute, "systemctl", "is-system-running", "--wait"); err != nil {
-		return fmt.Errorf("waiting for the guest to finish booting: %w", err)
-	} else if state := strings.TrimSpace(out.Stdout); state != "running" && state != "degraded" {
-		return fmt.Errorf("the guest did not finish booting: it is %s", firstLine(state, out.Stderr))
 	}
 
 	m.step(api.StepWorkspace, "setting up the workspace")
@@ -241,6 +230,34 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 		}
 	}
 	return os.WriteFile(mark, nil, 0o644)
+}
+
+// waitNetwork waits for the guest's network and name resolver, on every
+// boot: an environment is running only once it can reach the outside, and
+// its workspace's clones need both. The agent answers early in the boot,
+// before either is up.
+//
+// It waits for those targets alone, not for the whole machine: the rest of
+// the boot -- Docker, the desktop -- carries on starting in the guest
+// without holding the environment back.
+func (m *machine) waitNetwork(ctx context.Context, sess *agent.Session) error {
+	m.step(api.StepNetwork, "waiting for the network")
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	// Starting a unit waits until it is up, and systemctl reaches systemd
+	// without the system bus, which is not up this early. nss-lookup.target
+	// cannot be started by hand, so the resolver is waited for as itself,
+	// on the bases that have it.
+	out, err := sess.Exec(3*time.Minute, "sh", "-c", `systemctl start network-online.target &&
+		{ ! systemctl cat systemd-resolved.service >/dev/null 2>&1 || systemctl start systemd-resolved.service; }`)
+	if err != nil {
+		return fmt.Errorf("waiting for the network: %w", err)
+	}
+	if out.Code != 0 {
+		return fmt.Errorf("the network did not come up: %s", firstLine(out.Stderr, out.Stdout))
+	}
+	return nil
 }
 
 // cloneLog is where a clone's progress and errors are written in the guest,

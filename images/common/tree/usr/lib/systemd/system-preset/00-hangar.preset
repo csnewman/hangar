@@ -21,7 +21,8 @@ enable systemd-networkd.service
 enable systemd-resolved.service
 enable NetworkManager.service
 
-# Nothing in an environment needs to block on the network being up, and these
-# add several seconds to every boot.
-disable systemd-networkd-wait-online.service
-disable NetworkManager-wait-online.service
+# Hangar calls an environment running once network-online.target is reached,
+# which means something only when these decide it: without them the target
+# is reached at once, network or not. Nothing else in the boot waits on it.
+enable systemd-networkd-wait-online.service
+enable NetworkManager-wait-online.service

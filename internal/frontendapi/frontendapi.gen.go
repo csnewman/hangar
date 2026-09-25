@@ -184,7 +184,7 @@ const (
 	Boot      StartProgressStep = "boot"
 	Disks     StartProgressStep = "disks"
 	Download  StartProgressStep = "download"
-	Services  StartProgressStep = "services"
+	Network   StartProgressStep = "network"
 	Unpack    StartProgressStep = "unpack"
 	Workspace StartProgressStep = "workspace"
 )
@@ -198,7 +198,7 @@ func (e StartProgressStep) Valid() bool {
 		return true
 	case Download:
 		return true
-	case Services:
+	case Network:
 		return true
 	case Unpack:
 		return true

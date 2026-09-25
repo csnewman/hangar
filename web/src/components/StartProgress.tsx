@@ -12,7 +12,7 @@ const steps: { step: Step; label: string }[] = [
   { step: 'unpack', label: 'Unpack image' },
   { step: 'disks', label: 'Prepare disks' },
   { step: 'boot', label: 'Boot' },
-  { step: 'services', label: 'Start services' },
+  { step: 'network', label: 'Connect network' },
   { step: 'workspace', label: 'Set up workspace' },
 ]
 
