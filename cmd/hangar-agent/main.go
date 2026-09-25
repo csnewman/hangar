@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/agent"
+	"github.com/csnewman/hangar/internal/sshd"
 	"github.com/csnewman/hangar/internal/vsock"
 )
 
@@ -33,6 +34,14 @@ func main() {
 	// In the initramfs the kernel starts the agent as init.
 	if os.Getpid() == 1 {
 		initRoot()
+		return
+	}
+	// The sftp subsystem of the agent's own SSH server, run as the user.
+	if len(os.Args) == 2 && os.Args[1] == "sftp-server" {
+		if err := sshd.ServeSFTP(); err != nil {
+			fmt.Fprintf(os.Stderr, "hangar-agent: sftp: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 	port := flag.Uint("port", uint(agent.Port), "vsock port on the host")
@@ -45,6 +54,7 @@ func main() {
 	go serveCode()
 	go serveProfile()
 	go serveProcs()
+	go serveSSH()
 	run(uint32(*port), *retry)
 }
 

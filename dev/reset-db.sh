@@ -42,6 +42,8 @@ docker compose run --rm -T \
     server go run ./cmd/hangar-server -migrate-only 2>&1 | grep -v '^go: \|Container' || true
 
 echo "reset-db: loading the data into it"
+# The schema makes Hangar's system users; the data brings them too.
+psql -d hangar_new -c "DELETE FROM users WHERE kind = 'system'" > /dev/null
 failed=$(psql -d hangar_new -v ON_ERROR_STOP=0 < "$dump" 2>&1 >/dev/null | grep 'ERROR' || true)
 if [ -n "$failed" ]; then
     echo "reset-db: $(printf '%s\n' "$failed" | wc -l | tr -d ' ') rows do not fit the new schema:"

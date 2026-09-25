@@ -35,6 +35,8 @@ type session struct {
 	// secure is whether the browser reached the server over HTTPS, and so
 	// whether a cookie set in reply may be marked Secure.
 	secure bool
+	// bearer is whether the caller signed in with an access token.
+	bearer bool
 }
 
 func sessionFrom(ctx context.Context) session {
@@ -48,7 +50,24 @@ func sessionFrom(ctx context.Context) session {
 func (h *handler) session(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		s := session{secure: r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")}
-		if c, err := r.Cookie(CookieName); err == nil && c.Value != "" {
+		via := ""
+		if bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+			// A tool outside the browser, with an access token. No cookie
+			// comes with it, so there is no request forgery to guard.
+			p, name, err := h.users.AuthenticateToken(r.Context(), strings.TrimSpace(bearer))
+			switch {
+			case err == nil:
+				s.principal, s.ok, s.bearer = p, true, true
+				via = "access token " + name
+			case errors.Is(err, users.ErrNoSession):
+				writeError(w, http.StatusUnauthorized, "that access token is not valid")
+				return
+			default:
+				h.log.Error("resolving an access token", "err", err)
+				writeError(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+		} else if c, err := r.Cookie(CookieName); err == nil && c.Value != "" {
 			p, err := h.users.Authenticate(r.Context(), c.Value)
 			switch {
 			case err == nil:
@@ -71,7 +90,7 @@ func (h *handler) session(next http.Handler) http.Handler {
 		}
 		// Whatever the request goes on to change is recorded as by whoever
 		// it is from.
-		actor := audit.Actor{IP: clientIP(r)}
+		actor := audit.Actor{IP: clientIP(r), Via: via}
 		if s.ok {
 			actor.UserID, actor.Name = s.principal.UserID, s.principal.Username
 		}
@@ -241,7 +260,9 @@ func (h *handler) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeRespons
 	if err != nil {
 		return nil, err
 	}
-	return GetMe200JSONResponse(me(u)), nil
+	m := me(u)
+	m.SSH = h.ssh
+	return GetMe200JSONResponse(m), nil
 }
 
 func (h *handler) ChangePassword(ctx context.Context, req ChangePasswordRequestObject) (ChangePasswordResponseObject, error) {

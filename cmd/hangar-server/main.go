@@ -106,7 +106,8 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 	}
 
 	srv, err := server.New(server.Config{DB: d, BootstrapToken: token, Web: web,
-		PublicURL: os.Getenv("HANGAR_PUBLIC_URL"), AutoSignIn: autoSignIn, Sealer: sealer})
+		PublicURL: os.Getenv("HANGAR_PUBLIC_URL"), AutoSignIn: autoSignIn, Sealer: sealer,
+		SSHListen: os.Getenv("HANGAR_SSH_LISTEN"), SSHAddress: os.Getenv("HANGAR_SSH_ADDRESS")})
 	if err != nil {
 		return err
 	}

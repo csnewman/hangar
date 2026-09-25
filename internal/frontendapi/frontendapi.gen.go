@@ -197,6 +197,24 @@ func (e Visibility) Valid() bool {
 	}
 }
 
+// AccessToken defines model for AccessToken.
+type AccessToken struct {
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	ID         string     `json:"id"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Name       string     `json:"name"`
+}
+
+// AddLoginKey defines model for AddLoginKey.
+type AddLoginKey struct {
+	// Name Absent takes the key's own comment.
+	Name *string `json:"name,omitempty"`
+
+	// PublicKey In authorized_keys form, as in ~/.ssh/id_ed25519.pub.
+	PublicKey string `json:"public_key"`
+}
+
 // AddSSHKey defines model for AddSSHKey.
 type AddSSHKey struct {
 	Name string `json:"name"`
@@ -253,6 +271,13 @@ type CreateEnvironment struct {
 	// Name A DNS label, since it becomes a hostname, and whatever else the template's name pattern demands.
 	Name       string `json:"name"`
 	TemplateID string `json:"template_id"`
+}
+
+// CreateToken defines model for CreateToken.
+type CreateToken struct {
+	// ExpiresInDays Absent never expires.
+	ExpiresInDays *int   `json:"expires_in_days,omitempty"`
+	Name          string `json:"name"`
 }
 
 // CreateUser defines model for CreateUser.
@@ -363,6 +388,15 @@ type Login struct {
 	Username string `json:"username"`
 }
 
+// LoginKey defines model for LoginKey.
+type LoginKey struct {
+	CreatedAt   time.Time `json:"created_at"`
+	Fingerprint string    `json:"fingerprint"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	PublicKey   string    `json:"public_key"`
+}
+
 // Me defines model for Me.
 type Me struct {
 	Admin       bool   `json:"admin"`
@@ -371,7 +405,18 @@ type Me struct {
 	// HasPassword Whether the user has a local password that they can change.
 	HasPassword bool   `json:"has_password"`
 	ID          string `json:"id"`
-	Username    string `json:"username"`
+
+	// SSH Where the SSH gateway is reached: ssh <environment>@<host> -p <port>, with a sign-in key. Absent when the server runs none.
+	SSH      *SSHGateway `json:"ssh,omitempty"`
+	Username string      `json:"username"`
+}
+
+// NewAccessToken defines model for NewAccessToken.
+type NewAccessToken struct {
+	Info AccessToken `json:"info"`
+
+	// Token The token itself, shown this once.
+	Token string `json:"token"`
 }
 
 // Person defines model for Person.
@@ -414,6 +459,9 @@ type ProcessList struct {
 type Profile struct {
 	Files []ProfileFile `json:"files"`
 	Keys  []SSHKey      `json:"keys"`
+
+	// LoginKeys Public keys that sign the user in to their environments over SSH.
+	LoginKeys []LoginKey `json:"login_keys"`
 
 	// OwnPaths The paths among them the user added, which they may remove.
 	OwnPaths []string `json:"own_paths"`
@@ -484,6 +532,12 @@ type Repo struct {
 type Resources struct {
 	CPUs      int `json:"cpus"`
 	MemoryMiB int `json:"memory_mib"`
+}
+
+// SSHGateway Where the SSH gateway is reached: ssh <environment>@<host> -p <port>, with a sign-in key. Absent when the server runs none.
+type SSHGateway struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
 }
 
 // SSHKey defines model for SSHKey.
@@ -719,8 +773,14 @@ type PutProfileFileJSONRequestBody = PutProfileFile
 // AddSSHKeyJSONRequestBody defines body for AddSSHKey for application/json ContentType.
 type AddSSHKeyJSONRequestBody = AddSSHKey
 
+// AddLoginKeyJSONRequestBody defines body for AddLoginKey for application/json ContentType.
+type AddLoginKeyJSONRequestBody = AddLoginKey
+
 // AddProfilePathJSONRequestBody defines body for AddProfilePath for application/json ContentType.
 type AddProfilePathJSONRequestBody = ProfilePath
+
+// CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
+type CreateTokenJSONRequestBody = CreateToken
 
 // CreateTemplateJSONRequestBody defines body for CreateTemplate for application/json ContentType.
 type CreateTemplateJSONRequestBody = TemplateInput
@@ -818,11 +878,26 @@ type ServerInterface interface {
 	// (DELETE /api/frontend/me/profile/keys/{id})
 	DeleteSSHKey(w http.ResponseWriter, r *http.Request, id ID)
 
+	// (POST /api/frontend/me/profile/login-keys)
+	AddLoginKey(w http.ResponseWriter, r *http.Request)
+
+	// (DELETE /api/frontend/me/profile/login-keys/{id})
+	DeleteLoginKey(w http.ResponseWriter, r *http.Request, id ID)
+
 	// (DELETE /api/frontend/me/profile/paths)
 	RemoveProfilePath(w http.ResponseWriter, r *http.Request, params RemoveProfilePathParams)
 
 	// (POST /api/frontend/me/profile/paths)
 	AddProfilePath(w http.ResponseWriter, r *http.Request)
+
+	// (GET /api/frontend/me/tokens)
+	ListTokens(w http.ResponseWriter, r *http.Request)
+
+	// (POST /api/frontend/me/tokens)
+	CreateToken(w http.ResponseWriter, r *http.Request)
+
+	// (DELETE /api/frontend/me/tokens/{id})
+	RevokeToken(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (GET /api/frontend/people)
 	ListPeople(w http.ResponseWriter, r *http.Request)
@@ -1485,6 +1560,46 @@ func (siw *ServerInterfaceWrapper) DeleteSSHKey(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// AddLoginKey operation middleware
+func (siw *ServerInterfaceWrapper) AddLoginKey(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AddLoginKey(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteLoginKey operation middleware
+func (siw *ServerInterfaceWrapper) DeleteLoginKey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteLoginKey(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // RemoveProfilePath operation middleware
 func (siw *ServerInterfaceWrapper) RemoveProfilePath(w http.ResponseWriter, r *http.Request) {
 
@@ -1523,6 +1638,60 @@ func (siw *ServerInterfaceWrapper) AddProfilePath(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.AddProfilePath(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTokens operation middleware
+func (siw *ServerInterfaceWrapper) ListTokens(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTokens(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateToken operation middleware
+func (siw *ServerInterfaceWrapper) CreateToken(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateToken(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeToken operation middleware
+func (siw *ServerInterfaceWrapper) RevokeToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeToken(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2026,12 +2195,17 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/auth/logout", wrapper.Logout)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/password", wrapper.ChangePassword)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/tokens", wrapper.ListTokens)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/tokens", wrapper.CreateToken)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/tokens/{id}", wrapper.RevokeToken)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/profile", wrapper.GetProfile)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.DeleteProfileFile)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.GetProfileFile)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.PutProfileFile)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.RemoveProfilePath)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.AddProfilePath)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/login-keys", wrapper.AddLoginKey)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/login-keys/{id}", wrapper.DeleteLoginKey)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/keys", wrapper.AddSSHKey)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/keys/{id}", wrapper.DeleteSSHKey)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/audit", wrapper.ListAudit)
@@ -3448,6 +3622,100 @@ func (response DeleteSSHKey404JSONResponse) VisitDeleteSSHKeyResponse(w http.Res
 	return err
 }
 
+type AddLoginKeyRequestObject struct {
+	Body *AddLoginKeyJSONRequestBody
+}
+
+type AddLoginKeyResponseObject interface {
+	VisitAddLoginKeyResponse(w http.ResponseWriter) error
+}
+
+type AddLoginKey201JSONResponse LoginKey
+
+func (response AddLoginKey201JSONResponse) VisitAddLoginKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddLoginKey400JSONResponse struct{ InvalidJSONResponse }
+
+func (response AddLoginKey400JSONResponse) VisitAddLoginKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddLoginKey401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response AddLoginKey401JSONResponse) VisitAddLoginKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteLoginKeyRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type DeleteLoginKeyResponseObject interface {
+	VisitDeleteLoginKeyResponse(w http.ResponseWriter) error
+}
+
+type DeleteLoginKey204Response struct {
+}
+
+func (response DeleteLoginKey204Response) VisitDeleteLoginKeyResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteLoginKey401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteLoginKey401JSONResponse) VisitDeleteLoginKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteLoginKey404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteLoginKey404JSONResponse) VisitDeleteLoginKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RemoveProfilePathRequestObject struct {
 	Params RemoveProfilePathParams
 }
@@ -3532,6 +3800,135 @@ func (response AddProfilePath401JSONResponse) VisitAddProfilePathResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTokensRequestObject struct {
+}
+
+type ListTokensResponseObject interface {
+	VisitListTokensResponse(w http.ResponseWriter) error
+}
+
+type ListTokens200JSONResponse []AccessToken
+
+func (response ListTokens200JSONResponse) VisitListTokensResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTokens401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListTokens401JSONResponse) VisitListTokensResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateTokenRequestObject struct {
+	Body *CreateTokenJSONRequestBody
+}
+
+type CreateTokenResponseObject interface {
+	VisitCreateTokenResponse(w http.ResponseWriter) error
+}
+
+type CreateToken201JSONResponse NewAccessToken
+
+func (response CreateToken201JSONResponse) VisitCreateTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateToken400JSONResponse struct{ InvalidJSONResponse }
+
+func (response CreateToken400JSONResponse) VisitCreateTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateToken401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateToken401JSONResponse) VisitCreateTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeTokenRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type RevokeTokenResponseObject interface {
+	VisitRevokeTokenResponse(w http.ResponseWriter) error
+}
+
+type RevokeToken204Response struct {
+}
+
+func (response RevokeToken204Response) VisitRevokeTokenResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RevokeToken401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RevokeToken401JSONResponse) VisitRevokeTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeToken404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RevokeToken404JSONResponse) VisitRevokeTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4706,11 +5103,26 @@ type StrictServerInterface interface {
 	// (DELETE /api/frontend/me/profile/keys/{id})
 	DeleteSSHKey(ctx context.Context, request DeleteSSHKeyRequestObject) (DeleteSSHKeyResponseObject, error)
 
+	// (POST /api/frontend/me/profile/login-keys)
+	AddLoginKey(ctx context.Context, request AddLoginKeyRequestObject) (AddLoginKeyResponseObject, error)
+
+	// (DELETE /api/frontend/me/profile/login-keys/{id})
+	DeleteLoginKey(ctx context.Context, request DeleteLoginKeyRequestObject) (DeleteLoginKeyResponseObject, error)
+
 	// (DELETE /api/frontend/me/profile/paths)
 	RemoveProfilePath(ctx context.Context, request RemoveProfilePathRequestObject) (RemoveProfilePathResponseObject, error)
 
 	// (POST /api/frontend/me/profile/paths)
 	AddProfilePath(ctx context.Context, request AddProfilePathRequestObject) (AddProfilePathResponseObject, error)
+
+	// (GET /api/frontend/me/tokens)
+	ListTokens(ctx context.Context, request ListTokensRequestObject) (ListTokensResponseObject, error)
+
+	// (POST /api/frontend/me/tokens)
+	CreateToken(ctx context.Context, request CreateTokenRequestObject) (CreateTokenResponseObject, error)
+
+	// (DELETE /api/frontend/me/tokens/{id})
+	RevokeToken(ctx context.Context, request RevokeTokenRequestObject) (RevokeTokenResponseObject, error)
 
 	// (GET /api/frontend/people)
 	ListPeople(ctx context.Context, request ListPeopleRequestObject) (ListPeopleResponseObject, error)
@@ -5462,6 +5874,63 @@ func (sh *strictHandler) DeleteSSHKey(w http.ResponseWriter, r *http.Request, id
 	}
 }
 
+// AddLoginKey operation middleware
+func (sh *strictHandler) AddLoginKey(w http.ResponseWriter, r *http.Request) {
+	var request AddLoginKeyRequestObject
+
+	var body AddLoginKeyJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AddLoginKey(ctx, request.(AddLoginKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AddLoginKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AddLoginKeyResponseObject); ok {
+		if err := validResponse.VisitAddLoginKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteLoginKey operation middleware
+func (sh *strictHandler) DeleteLoginKey(w http.ResponseWriter, r *http.Request, id ID) {
+	var request DeleteLoginKeyRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteLoginKey(ctx, request.(DeleteLoginKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteLoginKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteLoginKeyResponseObject); ok {
+		if err := validResponse.VisitDeleteLoginKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // RemoveProfilePath operation middleware
 func (sh *strictHandler) RemoveProfilePath(w http.ResponseWriter, r *http.Request, params RemoveProfilePathParams) {
 	var request RemoveProfilePathRequestObject
@@ -5512,6 +5981,87 @@ func (sh *strictHandler) AddProfilePath(w http.ResponseWriter, r *http.Request) 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(AddProfilePathResponseObject); ok {
 		if err := validResponse.VisitAddProfilePathResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListTokens operation middleware
+func (sh *strictHandler) ListTokens(w http.ResponseWriter, r *http.Request) {
+	var request ListTokensRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTokens(ctx, request.(ListTokensRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTokens")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListTokensResponseObject); ok {
+		if err := validResponse.VisitListTokensResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateToken operation middleware
+func (sh *strictHandler) CreateToken(w http.ResponseWriter, r *http.Request) {
+	var request CreateTokenRequestObject
+
+	var body CreateTokenJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateToken(ctx, request.(CreateTokenRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateToken")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateTokenResponseObject); ok {
+		if err := validResponse.VisitCreateTokenResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RevokeToken operation middleware
+func (sh *strictHandler) RevokeToken(w http.ResponseWriter, r *http.Request, id ID) {
+	var request RevokeTokenRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RevokeToken(ctx, request.(RevokeTokenRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RevokeToken")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RevokeTokenResponseObject); ok {
+		if err := validResponse.VisitRevokeTokenResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

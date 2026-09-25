@@ -507,3 +507,126 @@ func (s *Store) RecordSignature(ctx context.Context, userID, fingerprint string,
 			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}}, Details: details})
 	})
 }
+
+// LoginKey is a public key its owner signs in to their environments with.
+type LoginKey struct {
+	ID          string
+	Name        string
+	PublicKey   string
+	Fingerprint string
+	CreatedAt   time.Time
+}
+
+// AddLoginKey lets a user sign in to their environments with a public key,
+// in authorized_keys form.
+func (s *Store) AddLoginKey(ctx context.Context, userID, name, public string) (LoginKey, error) {
+	if !db.ValidUUID(userID) {
+		return LoginKey{}, ErrNotFound
+	}
+	pub, comment, _, _, err := ssh.ParseAuthorizedKey([]byte(strings.TrimSpace(public)))
+	if err != nil {
+		return LoginKey{}, fmt.Errorf("%w: not a public key in authorized_keys form (ssh-ed25519 AAAA...): %v", ErrInvalid, err)
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = comment
+	}
+	if name == "" || len(name) > 100 {
+		return LoginKey{}, fmt.Errorf("%w: a key needs a name of up to 100 characters", ErrInvalid)
+	}
+	k := LoginKey{Name: name, PublicKey: strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), Fingerprint: ssh.FingerprintSHA256(pub)}
+	err = s.db.Transact(ctx, func(tx db.Tx) error {
+		err := tx.QueryRow(ctx, `INSERT INTO ssh_login_keys (user_id, name, public_key, fingerprint) VALUES ($1, $2, $3, $4)
+			RETURNING id, created_at`, userID, name, k.PublicKey, k.Fingerprint).Scan(&k.ID, &k.CreatedAt)
+		if db.IsUniqueViolation(err) {
+			return fmt.Errorf("%w: that key is already added", ErrInvalid)
+		}
+		if err != nil {
+			return err
+		}
+		if err := audit.Record(ctx, tx, audit.Event{Action: "login_key.add",
+			Target:  audit.Ref{Type: audit.KindSSHKey, ID: k.ID, Name: name},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}},
+			Details: map[string]any{"fingerprint": k.Fingerprint}}); err != nil {
+			return err
+		}
+		return db.Notify(ctx, tx, Channel, userID)
+	})
+	return k, err
+}
+
+// LoginKeys returns the keys a user signs in with.
+func (s *Store) LoginKeys(ctx context.Context, userID string) ([]LoginKey, error) {
+	if !db.ValidUUID(userID) {
+		return nil, ErrNotFound
+	}
+	var out []LoginKey
+	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id, name, public_key, fingerprint, created_at FROM ssh_login_keys
+			WHERE user_id = $1 ORDER BY created_at`, userID)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (LoginKey, error) {
+			var k LoginKey
+			return k, r.Scan(&k.ID, &k.Name, &k.PublicKey, &k.Fingerprint, &k.CreatedAt)
+		})
+		return err
+	})
+	if out == nil {
+		out = []LoginKey{}
+	}
+	return out, err
+}
+
+// DeleteLoginKey stops a key signing its owner in.
+func (s *Store) DeleteLoginKey(ctx context.Context, userID, id string) error {
+	if !db.ValidUUID(userID) || !db.ValidUUID(id) {
+		return ErrNotFound
+	}
+	return s.db.Transact(ctx, func(tx db.Tx) error {
+		var name string
+		err := tx.QueryRow(ctx, `DELETE FROM ssh_login_keys WHERE user_id = $1 AND id = $2 RETURNING name`, userID, id).Scan(&name)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if err := audit.Record(ctx, tx, audit.Event{Action: "login_key.delete",
+			Target:  audit.Ref{Type: audit.KindSSHKey, ID: id, Name: name},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}}}); err != nil {
+			return err
+		}
+		return db.Notify(ctx, tx, Channel, userID)
+	})
+}
+
+// KeyOwner is a person a sign-in key belongs to.
+type KeyOwner struct {
+	UserID   string
+	Username string
+	Admin    bool
+}
+
+// LoginKeyOwners are the enabled people who sign in with the key of this
+// fingerprint: nearly always one, though nothing stops two people adding
+// the same public key.
+func (s *Store) LoginKeyOwners(ctx context.Context, fingerprint string) ([]KeyOwner, error) {
+	var out []KeyOwner
+	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT u.id::text, u.username, u.is_admin FROM ssh_login_keys k
+			JOIN users u ON u.id = k.user_id
+			WHERE k.fingerprint = $1 AND u.disabled_at IS NULL AND u.kind = 'person'
+			ORDER BY k.created_at`, fingerprint)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (KeyOwner, error) {
+			var o KeyOwner
+			return o, r.Scan(&o.UserID, &o.Username, &o.Admin)
+		})
+		return err
+	})
+	return out, err
+}

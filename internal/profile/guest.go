@@ -753,3 +753,6 @@ func (a sshAgent) Signers() ([]ssh.Signer, error) { return nil, errReadOnly }
 func (a sshAgent) Extension(string, []byte) ([]byte, error) {
 	return nil, agent.ErrExtensionUnsupported
 }
+
+// User is whom the guest keeps the profile of.
+func (g *Guest) User() *user.User { return g.user }

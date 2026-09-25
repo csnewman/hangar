@@ -51,6 +51,9 @@ const (
 	// KindProcesses carries requests about the processes running in the
 	// environment.
 	KindProcesses = "processes"
+	// KindSSH carries one SSH connection from the gateway to the
+	// environment's SSH server.
+	KindSSH = "ssh"
 )
 
 // Header opens a stream.

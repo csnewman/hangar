@@ -1,4 +1,17 @@
-import { Activity, Code2, Cpu, FileCode2, GitBranch, History, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
+import {
+  Activity,
+  Code2,
+  Copy,
+  Cpu,
+  FileCode2,
+  GitBranch,
+  History,
+  LayoutDashboard,
+  Monitor,
+  SquareTerminal,
+  type LucideIcon,
+} from 'lucide-react'
+import { useState } from 'react'
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router'
 
 import type { Environment } from '../api'
@@ -78,6 +91,7 @@ export function useEnv() {
 
 export function SummaryTab() {
   const env = useEnv()
+  const me = useMe()
   return (
     <div className="page-pad">
       <div className="panel">
@@ -121,6 +135,11 @@ export function SummaryTab() {
               )}
             </Prop>
           ))}
+          {me.ssh && (
+            <Prop label="SSH">
+              <SSHCommand command={sshCommand(me.ssh, env, env.owner_id === me.id)} />
+            </Prop>
+          )}
           {env.spec.editor_path && (
             <Prop label="Editor opens">
               <span className="mono">{env.spec.editor_path}</span>
@@ -136,6 +155,35 @@ export function SummaryTab() {
         </dl>
       </div>
     </div>
+  )
+}
+
+// sshCommand reaches the environment through the SSH gateway: by its name
+// alone for its owner, and by owner/name for anyone else who can see it.
+function sshCommand(gw: { host: string; port: number }, env: Environment, own: boolean) {
+  const user = own ? env.name : `${env.owner}/${env.name}`
+  return `ssh ${user}@${gw.host}` + (gw.port === 22 ? '' : ` -p ${gw.port}`)
+}
+
+function SSHCommand({ command }: { command: string }) {
+  const [copied, setCopied] = useState(false)
+  const copy = () => {
+    navigator.clipboard.writeText(command).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <span className="ssh-command">
+      <code className="mono">{command}</code>
+      <button type="button" className="btn btn-ghost" onClick={copy} title="Copy">
+        <Copy size={13} />
+        {copied ? 'Copied' : 'Copy'}
+      </button>
+      <Link to="/profile#sign-in-keys" className="muted small">
+        with a sign-in key
+      </Link>
+    </span>
   )
 }
 

@@ -63,6 +63,11 @@ type CodeDialer interface {
 	DialCode(ctx context.Context, environment string) (net.Conn, error)
 }
 
+// SSHDialer is a runtime whose environments serve SSH to the gateway.
+type SSHDialer interface {
+	DialSSH(ctx context.Context, environment string) (net.Conn, error)
+}
+
 // ProcessDialer is a runtime whose environments list their processes.
 type ProcessDialer interface {
 	DialProcesses(ctx context.Context, environment string) (net.Conn, error)
@@ -265,6 +270,13 @@ func (w *Worker) stream(h tunnel.Header, r io.Reader, stream net.Conn) {
 			return
 		}
 		guest, err = dialer.DialCode(ctx, h.Environment)
+	case tunnel.KindSSH:
+		dialer, ok := w.rt.(SSHDialer)
+		if !ok {
+			cancel()
+			return
+		}
+		guest, err = dialer.DialSSH(ctx, h.Environment)
 	case tunnel.KindProcesses:
 		dialer, ok := w.rt.(ProcessDialer)
 		if !ok {

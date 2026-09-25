@@ -33,6 +33,21 @@ CREATE TABLE sessions (
     expires_at   timestamptz NOT NULL
 );
 
+-- Tokens a person makes for tools outside the browser: the VS Code
+-- extension, hangar-connect, scripts. Like a session's, only the hash is
+-- kept; unlike one, it lasts until revoked or it expires.
+CREATE TABLE access_tokens (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    name         text NOT NULL,
+    token_hash   bytea NOT NULL UNIQUE,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    last_used_at timestamptz,
+    expires_at   timestamptz
+);
+
+CREATE INDEX access_tokens_user ON access_tokens (user_id);
+
 CREATE INDEX sessions_user ON sessions (user_id);
 
 CREATE TABLE workers (
@@ -226,6 +241,18 @@ CREATE TABLE ssh_keys (
 
 CREATE INDEX ssh_keys_user ON ssh_keys (user_id);
 
+-- Public keys a user signs in to their environments with, over SSH. Only
+-- the public half is ever given to Hangar.
+CREATE TABLE ssh_login_keys (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    name        text NOT NULL,
+    public_key  text NOT NULL,
+    fingerprint text NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (user_id, fingerprint)
+);
+
 -- Lock files carried across a user's environments (profile.Locks): which
 -- environment holds each, until when unless renewed.
 CREATE TABLE profile_locks (
@@ -234,6 +261,16 @@ CREATE TABLE profile_locks (
     environment uuid NOT NULL,
     expires_at  timestamptz NOT NULL,
     PRIMARY KEY (user_id, path)
+);
+
+-- Keys the server itself holds, such as the SSH gateway's host key, sealed
+-- with the server's secret key where it has one: every replica presents
+-- the same.
+CREATE TABLE server_keys (
+    name       text PRIMARY KEY,
+    value      bytea NOT NULL,
+    sealed     boolean NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- Who did what (internal/audit). Actors and subjects are kept as they were:

@@ -163,6 +163,9 @@ type session struct {
 	// paths.
 	sent  int64
 	paths Paths
+	// keys are the keys last sent.
+	keys     []string
+	keysSent bool
 }
 
 func (x *session) nudge() {
@@ -325,8 +328,9 @@ func (x *session) sendFiles(ctx context.Context) error {
 	return nil
 }
 
-// sendKeys sends the public keys the environment's SSH agent offers. It is
-// sent every time: it is short, and keys change without a version.
+// sendKeys sends the public keys the environment's SSH agent offers, when
+// they are not what was last sent. Keys change without a version, so they
+// are read each time.
 func (x *session) sendKeys(ctx context.Context) error {
 	keys := []string{}
 	if x.trusted {
@@ -338,6 +342,10 @@ func (x *session) sendKeys(ctx context.Context) error {
 			keys = append(keys, k.PublicKey)
 		}
 	}
+	if x.keysSent && slices.Equal(keys, x.keys) {
+		return nil
+	}
+	x.keys, x.keysSent = keys, true
 	return x.send(Message{Type: TypeKeys, Keys: keys})
 }
 

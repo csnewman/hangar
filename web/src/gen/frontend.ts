@@ -69,6 +69,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/me/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["listTokens"];
+        put?: never;
+        /** @description Make an access token, for tools outside the browser such as the VS Code extension. The token is in this reply and nowhere else, ever. */
+        post: operations["createToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/me/tokens/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["revokeToken"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/me/profile": {
         parameters: {
             query?: never;
@@ -120,6 +155,41 @@ export interface paths {
         post: operations["addProfilePath"];
         /** @description Stop sharing a path the user added. Each environment keeps its copy, as a file of its own. */
         delete: operations["removeProfilePath"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/me/profile/login-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Add a public key to sign in to one's environments with over SSH: through the VS Code extension, or hangar-connect. */
+        post: operations["addLoginKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/me/profile/login-keys/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete: operations["deleteLoginKey"];
         options?: never;
         head?: never;
         patch?: never;
@@ -644,12 +714,48 @@ export interface components {
             /** @enum {string} */
             signal: "TERM" | "KILL";
         };
+        LoginKey: {
+            id: string;
+            name: string;
+            public_key: string;
+            fingerprint: string;
+            /** Format: date-time */
+            created_at: string;
+        };
+        AddLoginKey: {
+            /** @description Absent takes the key's own comment. */
+            name?: string;
+            /** @description In authorized_keys form, as in ~/.ssh/id_ed25519.pub. */
+            public_key: string;
+        };
+        AccessToken: {
+            id: string;
+            name: string;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            last_used_at?: string;
+            /** Format: date-time */
+            expires_at?: string;
+        };
+        NewAccessToken: {
+            /** @description The token itself, shown this once. */
+            token: string;
+            info: components["schemas"]["AccessToken"];
+        };
+        CreateToken: {
+            name: string;
+            /** @description Absent never expires. */
+            expires_in_days?: number;
+        };
         ProfilePath: {
             path: string;
         };
         Profile: {
             files: components["schemas"]["ProfileFile"][];
             keys: components["schemas"]["SSHKey"][];
+            /** @description Public keys that sign the user in to their environments over SSH. */
+            login_keys: components["schemas"]["LoginKey"][];
             /** @description What a profile holds, relative to the home directory. One ending in a slash holds everything under it. */
             paths: string[];
             /** @description The paths among them the user added, which they may remove. */
@@ -913,6 +1019,12 @@ export interface components {
             admin: boolean;
             /** @description Whether the user has a local password that they can change. */
             has_password: boolean;
+            ssh?: components["schemas"]["SSHGateway"];
+        };
+        /** @description Where the SSH gateway is reached: ssh <environment>@<host> -p <port>, with a sign-in key. Absent when the server runs none. */
+        SSHGateway: {
+            host: string;
+            port: number;
         };
         ChangePassword: {
             current_password: string;
@@ -1102,6 +1214,75 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
+    listTokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The signed-in user's access tokens. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AccessToken"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateToken"];
+            };
+        };
+        responses: {
+            /** @description The token. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NewAccessToken"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    revokeToken: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
     getProfile: {
         parameters: {
             query?: never;
@@ -1237,6 +1418,54 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description No longer shared. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    addLoginKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddLoginKey"];
+            };
+        };
+        responses: {
+            /** @description The key. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LoginKey"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    deleteLoginKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
             204: {
                 headers: {
                     [name: string]: unknown;

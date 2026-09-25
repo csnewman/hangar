@@ -13,10 +13,13 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,6 +30,7 @@ import (
 	"github.com/csnewman/hangar/internal/frontendapi"
 	"github.com/csnewman/hangar/internal/placement"
 	"github.com/csnewman/hangar/internal/profile"
+	"github.com/csnewman/hangar/internal/sshgw"
 	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/tunnel"
 	"github.com/csnewman/hangar/internal/users"
@@ -51,7 +55,12 @@ type Config struct {
 	// Sealer encrypts the secrets users keep in their profiles. Nil keeps
 	// none: credentials and SSH keys are refused.
 	Sealer *profile.Sealer
-	Log    *slog.Logger
+	// SSHListen, if set, is where the SSH gateway listens (internal/sshgw).
+	SSHListen string
+	// SSHAddress is where people reach the gateway, as host:port, for the
+	// UI to show. Empty is PublicURL's host at SSHListen's port.
+	SSHAddress string
+	Log        *slog.Logger
 }
 
 type Server struct {
@@ -69,6 +78,10 @@ type Server struct {
 	waits     *waiters
 	placeKick chan struct{}
 	sessions  *profile.Sessions
+	profiles  *profile.Store
+	auditLog  *audit.Log
+	sealer    *profile.Sealer
+	sshListen string
 }
 
 func New(cfg Config) (*Server, error) {
@@ -81,6 +94,7 @@ func New(cfg Config) (*Server, error) {
 	tunnels := tunnel.NewRegistry(log)
 	edits := editor.NewManager(cfg.DB)
 	profiles := profile.NewStore(cfg.DB, cfg.Sealer)
+	auditLog := audit.NewLog(cfg.DB)
 	var editors *editor.Gateway
 	if cfg.PublicURL != "" {
 		var err error
@@ -95,9 +109,16 @@ func New(cfg Config) (*Server, error) {
 		Workers:      wm,
 		Users:        um,
 		Profiles:     profiles,
-		Audit:        audit.NewLog(cfg.DB),
+		Audit:        auditLog,
 		AutoSignIn:   cfg.AutoSignIn,
 		Log:          log,
+	}
+	if cfg.SSHListen != "" {
+		ssh, err := sshAddress(cfg.SSHAddress, cfg.SSHListen, cfg.PublicURL)
+		if err != nil {
+			return nil, err
+		}
+		cfgAPI.SSH = ssh
 	}
 	// A nil Gateway would be a non-nil interface.
 	if editors != nil {
@@ -122,6 +143,10 @@ func New(cfg Config) (*Server, error) {
 		waits:     newWaiters(),
 		placeKick: make(chan struct{}, 1),
 		sessions:  profile.NewSessions(profiles, tunnels, log),
+		profiles:  profiles,
+		auditLog:  auditLog,
+		sealer:    cfg.Sealer,
+		sshListen: cfg.SSHListen,
 	}, nil
 }
 
@@ -149,6 +174,9 @@ func (s *Server) Run(ctx context.Context) {
 		}
 	}, workers.Channel, workers.CapacityChannel, placement.Channel, profile.Channel)
 	go s.sessions.Run(ctx)
+	if s.sshListen != "" {
+		go s.serveSSH(ctx)
+	}
 	go s.pruneSessions(ctx)
 	s.placementLoop(ctx)
 }
@@ -384,4 +412,42 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		s.log.Error("request failed", "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")
 	}
+}
+
+// serveSSH runs the SSH gateway until ctx ends.
+func (s *Server) serveSSH(ctx context.Context) {
+	key, err := sshgw.HostKey(ctx, s.db, s.sealer)
+	if err != nil {
+		s.log.Error("the SSH gateway has no host key", "err", err)
+		return
+	}
+	gw := sshgw.New(key, environments.NewManager(s.db), s.profiles, s.tunnels, s.auditLog, s.log)
+	if err := gw.Serve(ctx, s.sshListen); err != nil {
+		s.log.Error("serving SSH", "err", err)
+	}
+}
+
+// sshAddress is where people reach the SSH gateway: the address given, or
+// the public URL's host at the port the gateway listens on.
+func sshAddress(address, listen, publicURL string) (*frontendapi.SSHGateway, error) {
+	if address == "" {
+		_, port, err := net.SplitHostPort(listen)
+		if err != nil {
+			return nil, fmt.Errorf("the SSH listen address %q: %w", listen, err)
+		}
+		host := "localhost"
+		if u, err := url.Parse(publicURL); err == nil && u.Hostname() != "" {
+			host = u.Hostname()
+		}
+		address = net.JoinHostPort(host, port)
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, fmt.Errorf("the SSH address %q: %w", address, err)
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return nil, fmt.Errorf("the SSH address %q has no valid port", address)
+	}
+	return &frontendapi.SSHGateway{Host: host, Port: n}, nil
 }

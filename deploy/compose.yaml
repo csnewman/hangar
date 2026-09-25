@@ -60,12 +60,17 @@ services:
       HANGAR_REDIRECT_LISTEN: ${HANGAR_REDIRECT_LISTEN-:80}
       HANGAR_ACME_EMAIL: ${HANGAR_ACME_EMAIL:-}
       HANGAR_ACME_CA: ${HANGAR_ACME_CA:-}
+      # The SSH gateway, in front of every environment: ssh
+      # <environment>@<host> -p 2222. Empty turns it off.
+      HANGAR_SSH_LISTEN: ${HANGAR_SSH_LISTEN-:2222}
+      HANGAR_SSH_ADDRESS: ${HANGAR_SSH_ADDRESS:-}
     secrets: [bootstrap-token, secret-key]
     ports:
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/udp
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/tcp
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:443:443
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:80:80
+      - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:2222:2222
       # Plain HTTP, for a TLS terminator of your own. Workers and browsers
       # use HANGAR_PUBLIC_URL.
       - ${HANGAR_LISTEN:-127.0.0.1:8081}:8081

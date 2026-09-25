@@ -27,7 +27,7 @@ A worker machine needs, before its container starts:
 - Docker with Compose v2 and Buildx.
 
 The control plane needs Docker, a public address with ports 53 (UDP and
-TCP), 443 and 80 open, and a DNS zone delegated to it (below).
+TCP), 443, 80 and 2222 open, and a DNS zone delegated to it (below).
 
 ## DNS and TLS
 
@@ -71,6 +71,28 @@ To use a TLS terminator and DNS of your own instead, set
 `HANGAR_DNS_LISTEN`, `HANGAR_TLS_LISTEN` and `HANGAR_REDIRECT_LISTEN` to
 empty and put it in front of `HANGAR_LISTEN`; it then needs a certificate
 for both `<host>` and `*.<host>`.
+
+## SSH
+
+The control plane is also an SSH gateway, on port 2222, in front of every
+environment:
+
+    ssh <environment>@<host> -p 2222
+
+It signs people in with the public keys they add under Profile, then
+Sign-in keys, and reaches the environment over the worker's own connection:
+no environment is reachable from the network, and the workers need no
+ports open for it. A person reaches their own environments by name, and
+anyone else's they can see as `<owner>/<environment>`. Shells, commands,
+port forwarding, `scp` and `sftp` all work, and so does VS Code's
+Remote-SSH. The gateway's host key is made on first start and kept in
+Postgres, sealed with the secret key, so every replica presents the same
+one.
+
+`HANGAR_SSH_LISTEN` moves it, or turns it off when empty.
+`HANGAR_SSH_ADDRESS` is the `host:port` the UI shows people, when that is not
+the public URL's host at the listen port -- behind a load balancer on port
+22, say.
 
 ## Does the worker need `--privileged`?
 

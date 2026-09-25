@@ -107,6 +107,19 @@ func (m *Manager) Get(ctx context.Context, p users.Principal, id string) (api.En
 	return e, err
 }
 
+// ByName finds an environment p may reach by its owner's username and its
+// name.
+func (m *Manager) ByName(ctx context.Context, p users.Principal, owner, name string) (api.Environment, error) {
+	var e api.Environment
+	err := m.db.Transact(ctx, func(tx db.Tx) error {
+		var err error
+		e, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM `+from+` WHERE `+visible+`
+			AND lower(u.username) = lower($3) AND e.name = $4 AND e.desired <> 'deleted'`, p.Admin, p.UserID, owner, name))
+		return err
+	})
+	return e, err
+}
+
 // Create makes an environment, owned by p, from a template p may see, and
 // asks for it to run. Placement picks it up from there.
 //

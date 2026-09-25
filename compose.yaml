@@ -63,6 +63,11 @@ services:
       # Sign in as admin / hangar-dev. Only used while there are no users.
       HANGAR_INITIAL_ADMIN_USERNAME: admin
       HANGAR_INITIAL_ADMIN_PASSWORD: hangar-dev
+      # The SSH gateway: ssh <environment>@hangar.localhost -p 2222, with a key
+      # added on the Profile page.
+      HANGAR_SSH_LISTEN: ":2222"
+    ports:
+      - 127.0.0.1:2222:2222
     depends_on:
       postgres:
         condition: service_healthy

@@ -82,3 +82,9 @@ func (s *Sealer) open(sealed []byte, bound string) ([]byte, error) {
 	}
 	return plain, nil
 }
+
+// Seal encrypts a secret, bound to what it is, for keeping at rest.
+func (s *Sealer) Seal(plain []byte, bound string) ([]byte, error) { return s.seal(plain, bound) }
+
+// Open decrypts what Seal made with the same binding.
+func (s *Sealer) Open(sealed []byte, bound string) ([]byte, error) { return s.open(sealed, bound) }

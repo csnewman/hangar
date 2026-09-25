@@ -56,7 +56,9 @@ type Config struct {
 	// AutoSignIn, for development only, signs every request that has no
 	// session in as this user. Empty requires signing in.
 	AutoSignIn string
-	Log        *slog.Logger
+	// SSH is where people reach the SSH gateway. Nil when there is none.
+	SSH *SSHGateway
+	Log *slog.Logger
 }
 
 type handler struct {
@@ -70,6 +72,7 @@ type handler struct {
 	editors   Editors
 	// autoSignIn is Config.AutoSignIn.
 	autoSignIn string
+	ssh        *SSHGateway
 	log        *slog.Logger
 }
 
@@ -91,7 +94,7 @@ func New(cfg Config) (http.Handler, error) {
 	}
 
 	h := &handler{envs: cfg.Environments, templates: cfg.Templates, workers: cfg.Workers, users: cfg.Users,
-		profiles: cfg.Profiles, audit: cfg.Audit, tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, log: cfg.Log}
+		profiles: cfg.Profiles, audit: cfg.Audit, tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, ssh: cfg.SSH, log: cfg.Log}
 	strict := NewStrictHandlerWithOptions(h, []StrictMiddlewareFunc{rules.enforce}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			writeError(w, http.StatusBadRequest, err.Error())

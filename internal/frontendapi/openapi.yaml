@@ -18,6 +18,7 @@ info:
 
 security:
   - session: []
+  - token: []
 
 paths:
   /api/frontend/auth/login:
@@ -79,6 +80,48 @@ paths:
           description: Changed.
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/me/tokens:
+    get:
+      operationId: listTokens
+      responses:
+        "200":
+          description: The signed-in user's access tokens.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AccessToken" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createToken
+      description: >-
+        Make an access token, for tools outside the browser such as the VS
+        Code extension. The token is in this reply and nowhere else, ever.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateToken" }
+      responses:
+        "201":
+          description: The token.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/NewAccessToken" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/me/tokens/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    delete:
+      operationId: revokeToken
+      responses:
+        "204":
+          description: Revoked.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
 
   /api/frontend/me/profile:
     get:
@@ -170,6 +213,37 @@ paths:
       responses:
         "204":
           description: No longer shared.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/me/profile/login-keys:
+    post:
+      operationId: addLoginKey
+      description: >-
+        Add a public key to sign in to one's environments with over SSH:
+        through the VS Code extension, or hangar-connect.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddLoginKey" }
+      responses:
+        "201":
+          description: The key.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginKey" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /api/frontend/me/profile/login-keys/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    delete:
+      operationId: deleteLoginKey
+      responses:
+        "204":
+          description: Removed.
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -776,6 +850,10 @@ components:
       type: apiKey
       in: cookie
       name: hangar_session
+    token:
+      type: http
+      scheme: bearer
+      description: An access token (hgr_...) from the Account page, for tools outside the browser.
 
   parameters:
     ID:
@@ -903,6 +981,57 @@ components:
           type: string
           enum: [TERM, KILL]
 
+    LoginKey:
+      type: object
+      required: [id, name, public_key, fingerprint, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        public_key: { type: string }
+        fingerprint: { type: string }
+        created_at: { type: string, format: date-time }
+
+    AddLoginKey:
+      type: object
+      required: [public_key]
+      properties:
+        name:
+          type: string
+          description: Absent takes the key's own comment.
+        public_key:
+          type: string
+          description: In authorized_keys form, as in ~/.ssh/id_ed25519.pub.
+
+    AccessToken:
+      type: object
+      required: [id, name, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+
+    NewAccessToken:
+      type: object
+      required: [token, info]
+      properties:
+        token:
+          type: string
+          description: The token itself, shown this once.
+        info: { $ref: "#/components/schemas/AccessToken" }
+
+    CreateToken:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+        expires_in_days:
+          type: integer
+          minimum: 1
+          maximum: 3650
+          description: Absent never expires.
+
     ProfilePath:
       type: object
       required: [path]
@@ -911,7 +1040,7 @@ components:
 
     Profile:
       type: object
-      required: [files, keys, paths, own_paths, secrets]
+      required: [files, keys, login_keys, paths, own_paths, secrets]
       properties:
         files:
           type: array
@@ -919,6 +1048,10 @@ components:
         keys:
           type: array
           items: { $ref: "#/components/schemas/SSHKey" }
+        login_keys:
+          type: array
+          description: Public keys that sign the user in to their environments over SSH.
+          items: { $ref: "#/components/schemas/LoginKey" }
         paths:
           type: array
           description: >-
@@ -1334,6 +1467,18 @@ components:
         has_password:
           type: boolean
           description: Whether the user has a local password that they can change.
+        ssh:
+          $ref: "#/components/schemas/SSHGateway"
+
+    SSHGateway:
+      type: object
+      description: >-
+        Where the SSH gateway is reached: ssh <environment>@<host> -p <port>,
+        with a sign-in key. Absent when the server runs none.
+      required: [host, port]
+      properties:
+        host: { type: string }
+        port: { type: integer }
 
     ChangePassword:
       type: object

@@ -2126,3 +2126,19 @@ a.reason {
 .sort-on {
   color: var(--text);
 }
+
+.ssh-command {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.token-reveal {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  overflow-wrap: anywhere;
+  user-select: all;
+}

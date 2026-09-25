@@ -24,8 +24,15 @@ func (h *handler) GetProfile(ctx context.Context, _ GetProfileRequestObject) (Ge
 	if own == nil {
 		own = []string{}
 	}
-	out := Profile{Files: []ProfileFile{}, Keys: []SSHKey{}, Paths: profile.UserPaths(own), OwnPaths: own,
-		Secrets: h.profiles.KeepsSecrets()}
+	logins, err := h.profiles.LoginKeys(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	out := Profile{Files: []ProfileFile{}, Keys: []SSHKey{}, LoginKeys: []LoginKey{}, Paths: profile.UserPaths(own),
+		OwnPaths: own, Secrets: h.profiles.KeepsSecrets()}
+	for _, k := range logins {
+		out.LoginKeys = append(out.LoginKeys, loginKey(k))
+	}
 	for _, f := range files {
 		if f.Deleted {
 			continue
@@ -146,4 +153,34 @@ func (h *handler) RemoveProfilePath(ctx context.Context, req RemoveProfilePathRe
 
 func sshKey(k profile.Key) SSHKey {
 	return SSHKey{ID: k.ID, Name: k.Name, PublicKey: k.PublicKey, Fingerprint: k.Fingerprint, CreatedAt: k.CreatedAt}
+}
+
+func (h *handler) AddLoginKey(ctx context.Context, req AddLoginKeyRequestObject) (AddLoginKeyResponseObject, error) {
+	name := ""
+	if req.Body.Name != nil {
+		name = *req.Body.Name
+	}
+	k, err := h.profiles.AddLoginKey(ctx, principal(ctx).UserID, name, req.Body.PublicKey)
+	switch {
+	case errors.Is(err, profile.ErrInvalid):
+		return AddLoginKey400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return AddLoginKey201JSONResponse(loginKey(k)), nil
+}
+
+func (h *handler) DeleteLoginKey(ctx context.Context, req DeleteLoginKeyRequestObject) (DeleteLoginKeyResponseObject, error) {
+	err := h.profiles.DeleteLoginKey(ctx, principal(ctx).UserID, req.ID)
+	switch {
+	case errors.Is(err, profile.ErrNotFound):
+		return DeleteLoginKey404JSONResponse{NotFoundJSONResponse{Error: "no such key"}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return DeleteLoginKey204Response{}, nil
+}
+
+func loginKey(k profile.LoginKey) LoginKey {
+	return LoginKey{ID: k.ID, Name: k.Name, PublicKey: k.PublicKey, Fingerprint: k.Fingerprint, CreatedAt: k.CreatedAt}
 }

@@ -2,9 +2,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, KeyRound, Plus } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 
-import { api, type ProfileFile, type SSHKey } from '../api'
+import { api, type LoginKey, type ProfileFile, type SSHKey } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { PageHeader } from '../components/PageHeader'
+import { useMe } from '../session'
 
 const profileKey = ['profile']
 
@@ -58,7 +59,7 @@ export function ProfilePage() {
 
   if (profile.isPending) return <div className="page page-narrow" />
   if (profile.isError) return <div className="page page-narrow alert">{profile.error.message}</div>
-  const { files, keys, paths, own_paths, secrets } = profile.data
+  const { files, keys, login_keys, paths, own_paths, secrets } = profile.data
 
   return (
     <div className="page page-narrow">
@@ -98,6 +99,7 @@ export function ProfilePage() {
       </section>
       <SharedPaths paths={paths} own={own_paths} />
       <SSHKeys keys={keys} disabled={!secrets} />
+      <LoginKeys keys={login_keys} />
     </div>
   )
 }
@@ -414,6 +416,93 @@ function SharedPaths({ paths, own }: { paths: string[]; own: string[] }) {
         </button>
       </form>
       {add.error && <div className="alert">{add.error.message}</div>}
+    </section>
+  )
+}
+
+// LoginKeys are the user's own public keys, which sign them in to their
+// environments through the SSH gateway.
+function LoginKeys({ keys }: { keys: LoginKey[] }) {
+  const me = useMe()
+  const qc = useQueryClient()
+  const [publicKey, setPublicKey] = useState('')
+  const refresh = () => qc.invalidateQueries({ queryKey: profileKey })
+  const add = useMutation({
+    mutationFn: () => api.addLoginKey(publicKey.trim()),
+    onSuccess: () => setPublicKey(''),
+    onSettled: refresh,
+  })
+  const remove = useMutation({ mutationFn: (id: string) => api.deleteLoginKey(id), onSettled: refresh })
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (publicKey.trim()) add.mutate()
+  }
+  const gw = me.ssh
+  return (
+    <section className="section" id="sign-in-keys">
+      <h2 className="section-title">Sign-in keys</h2>
+      <p className="muted small">
+        Your own public keys, from the machines you work on. With one of them,{' '}
+        {gw ? (
+          <code>
+            ssh &lt;environment&gt;@{gw.host}
+            {gw.port === 22 ? '' : ` -p ${gw.port}`}
+          </code>
+        ) : (
+          'SSH'
+        )}{' '}
+        reaches any environment of yours, and VS Code's Remote-SSH does the same.
+        {!gw && ' This server runs no SSH gateway (HANGAR_SSH_LISTEN).'}
+      </p>
+      <div className="panel">
+        {keys.length === 0 ? (
+          <div className="empty">No keys.</div>
+        ) : (
+          <table className="table">
+            <tbody>
+              {keys.map((k) => (
+                <tr key={k.id}>
+                  <td>
+                    <div className="strong">{k.name}</div>
+                    <div className="muted small mono public-key">{k.fingerprint}</div>
+                    <div className="muted small">added {new Date(k.created_at).toLocaleString()}</div>
+                  </td>
+                  <td className="num">
+                    <ConfirmButton
+                      label="Remove"
+                      confirmLabel="Remove?"
+                      onConfirm={() => remove.mutate(k.id)}
+                      disabled={remove.isPending}
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+      <form className="panel form key-form" onSubmit={submit}>
+        <label className="field">
+          <span>Public key, as in ~/.ssh/id_ed25519.pub</span>
+          <textarea
+            className="mono"
+            rows={3}
+            required
+            spellCheck={false}
+            value={publicKey}
+            onChange={(e) => setPublicKey(e.target.value)}
+            placeholder="ssh-ed25519 AAAA… you@laptop"
+          />
+        </label>
+        {add.error && <div className="alert">{add.error.message}</div>}
+        {remove.error && <div className="alert">{remove.error.message}</div>}
+        <div className="form-actions">
+          <button type="submit" className="btn btn-primary" disabled={!publicKey.trim() || add.isPending}>
+            <Plus size={14} />
+            Add key
+          </button>
+        </div>
+      </form>
     </section>
   )
 }

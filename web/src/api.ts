@@ -21,6 +21,8 @@ export type UpdateUser = Schemas['UpdateUser']
 export type Profile = Schemas['Profile']
 export type ProfileFile = Schemas['ProfileFile']
 export type SSHKey = Schemas['SSHKey']
+export type LoginKey = Schemas['LoginKey']
+export type AccessToken = Schemas['AccessToken']
 export type AuditEvent = Schemas['AuditEvent']
 export type ProcessInfo = Schemas['Process']
 export type Spec = Schemas['Spec']
@@ -87,6 +89,13 @@ export const api = {
   addSSHKey: (name: string, private_key?: string) =>
     unwrap(client.POST('/api/frontend/me/profile/keys', { body: { name, private_key } })),
   deleteSSHKey: (id: string) => unwrap(client.DELETE('/api/frontend/me/profile/keys/{id}', byID(id))),
+  addLoginKey: (public_key: string, name?: string) =>
+    unwrap(client.POST('/api/frontend/me/profile/login-keys', { body: { public_key, name } })),
+  deleteLoginKey: (id: string) => unwrap(client.DELETE('/api/frontend/me/profile/login-keys/{id}', byID(id))),
+  tokens: () => unwrap(client.GET('/api/frontend/me/tokens')),
+  createToken: (name: string, expires_in_days?: number) =>
+    unwrap(client.POST('/api/frontend/me/tokens', { body: { name, expires_in_days } })),
+  revokeToken: (id: string) => unwrap(client.DELETE('/api/frontend/me/tokens/{id}', byID(id))),
 
   environments: () => unwrap(client.GET('/api/frontend/environments')),
   createEnvironment: (body: CreateEnvironment) => unwrap(client.POST('/api/frontend/environments', { body })),
