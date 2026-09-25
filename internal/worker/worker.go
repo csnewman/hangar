@@ -63,6 +63,11 @@ type CodeDialer interface {
 	DialCode(ctx context.Context, environment string) (net.Conn, error)
 }
 
+// ProcessDialer is a runtime whose environments list their processes.
+type ProcessDialer interface {
+	DialProcesses(ctx context.Context, environment string) (net.Conn, error)
+}
+
 // ProfileDialer is a runtime whose environments keep their owner's
 // profile.
 type ProfileDialer interface {
@@ -260,6 +265,13 @@ func (w *Worker) stream(h tunnel.Header, r io.Reader, stream net.Conn) {
 			return
 		}
 		guest, err = dialer.DialCode(ctx, h.Environment)
+	case tunnel.KindProcesses:
+		dialer, ok := w.rt.(ProcessDialer)
+		if !ok {
+			cancel()
+			return
+		}
+		guest, err = dialer.DialProcesses(ctx, h.Environment)
 	case tunnel.KindProfile:
 		dialer, ok := w.rt.(ProfileDialer)
 		if !ok {

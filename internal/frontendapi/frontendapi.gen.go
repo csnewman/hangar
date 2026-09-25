@@ -161,6 +161,24 @@ func (e Phase) Valid() bool {
 	}
 }
 
+// Defines values for SignalProcessSignal.
+const (
+	KILL SignalProcessSignal = "KILL"
+	TERM SignalProcessSignal = "TERM"
+)
+
+// Valid indicates whether the value is a known member of the SignalProcessSignal enum.
+func (e SignalProcessSignal) Valid() bool {
+	switch e {
+	case KILL:
+		return true
+	case TERM:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Visibility.
 const (
 	Private Visibility = "private"
@@ -366,6 +384,32 @@ type Person struct {
 // Phase What the environment is doing, as its worker last reported. "pending" means no worker has reported on it yet.
 type Phase string
 
+// Process defines model for Process.
+type Process struct {
+	Command    string  `json:"command"`
+	CPUPercent float32 `json:"cpu_percent"`
+	Name       string  `json:"name"`
+	Pid        int     `json:"pid"`
+	Ppid       int     `json:"ppid"`
+
+	// Protected The guest's init or its agent, which cannot be stopped from here.
+	Protected *bool     `json:"protected,omitempty"`
+	RssBytes  int64     `json:"rss_bytes"`
+	Started   time.Time `json:"started"`
+
+	// State As /proc gives it -- R running, S sleeping, D waiting on I/O, Z a zombie.
+	State   string `json:"state"`
+	Threads int    `json:"threads"`
+	User    string `json:"user"`
+}
+
+// ProcessList defines model for ProcessList.
+type ProcessList struct {
+	CPUs        int       `json:"cpus"`
+	MemoryBytes int64     `json:"memory_bytes"`
+	Processes   []Process `json:"processes"`
+}
+
 // Profile defines model for Profile.
 type Profile struct {
 	Files []ProfileFile `json:"files"`
@@ -452,6 +496,14 @@ type SSHKey struct {
 	// PublicKey In authorized_keys form, to add to GitHub and the like.
 	PublicKey string `json:"public_key"`
 }
+
+// SignalProcess defines model for SignalProcess.
+type SignalProcess struct {
+	Signal SignalProcessSignal `json:"signal"`
+}
+
+// SignalProcessSignal defines model for SignalProcess.Signal.
+type SignalProcessSignal string
 
 // Spec defines model for Spec.
 type Spec struct {
@@ -655,6 +707,9 @@ type CreateEnvironmentJSONRequestBody = CreateEnvironment
 // ResizeDesktopJSONRequestBody defines body for ResizeDesktop for application/json ContentType.
 type ResizeDesktopJSONRequestBody = DesktopSize
 
+// SignalProcessJSONRequestBody defines body for SignalProcess for application/json ContentType.
+type SignalProcessJSONRequestBody = SignalProcess
+
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePassword
 
@@ -717,6 +772,12 @@ type ServerInterface interface {
 
 	// (POST /api/frontend/environments/{id}/editor)
 	OpenEditor(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/environments/{id}/processes)
+	ListProcesses(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (POST /api/frontend/environments/{id}/processes/{pid}/signal)
+	SignalProcess(w http.ResponseWriter, r *http.Request, id ID, pid int)
 
 	// (POST /api/frontend/environments/{id}/start)
 	StartEnvironment(w http.ResponseWriter, r *http.Request, id ID)
@@ -1034,6 +1095,67 @@ func (siw *ServerInterfaceWrapper) OpenEditor(w http.ResponseWriter, r *http.Req
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.OpenEditor(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListProcesses operation middleware
+func (siw *ServerInterfaceWrapper) ListProcesses(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListProcesses(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SignalProcess operation middleware
+func (siw *ServerInterfaceWrapper) SignalProcess(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pid" -------------
+	var pid int
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pid", r.PathValue("pid"), &pid, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pid", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SignalProcess(w, r, id, pid)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1931,6 +2053,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/start", wrapper.StartEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/stop", wrapper.StopEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/suspend", wrapper.SuspendEnvironment)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/processes", wrapper.ListProcesses)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/processes/{pid}/signal", wrapper.SignalProcess)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/terminals", wrapper.ListTerminals)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/editor", wrapper.OpenEditor)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/desktop/size", wrapper.ResizeDesktop)
@@ -2437,6 +2561,172 @@ func (response OpenEditor409JSONResponse) VisitOpenEditorResponse(w http.Respons
 type OpenEditor503JSONResponse struct{ UnavailableJSONResponse }
 
 func (response OpenEditor503JSONResponse) VisitOpenEditorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListProcessesRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type ListProcessesResponseObject interface {
+	VisitListProcessesResponse(w http.ResponseWriter) error
+}
+
+type ListProcesses200JSONResponse ProcessList
+
+func (response ListProcesses200JSONResponse) VisitListProcessesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListProcesses401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListProcesses401JSONResponse) VisitListProcessesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListProcesses404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListProcesses404JSONResponse) VisitListProcessesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListProcesses409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ListProcesses409JSONResponse) VisitListProcessesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListProcesses503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response ListProcesses503JSONResponse) VisitListProcessesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignalProcessRequestObject struct {
+	ID   ID  `json:"id"`
+	Pid  int `json:"pid"`
+	Body *SignalProcessJSONRequestBody
+}
+
+type SignalProcessResponseObject interface {
+	VisitSignalProcessResponse(w http.ResponseWriter) error
+}
+
+type SignalProcess204Response struct {
+}
+
+func (response SignalProcess204Response) VisitSignalProcessResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type SignalProcess400JSONResponse struct{ InvalidJSONResponse }
+
+func (response SignalProcess400JSONResponse) VisitSignalProcessResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignalProcess401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SignalProcess401JSONResponse) VisitSignalProcessResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignalProcess404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SignalProcess404JSONResponse) VisitSignalProcessResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignalProcess409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SignalProcess409JSONResponse) VisitSignalProcessResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignalProcess503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response SignalProcess503JSONResponse) VisitSignalProcessResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -4371,6 +4661,12 @@ type StrictServerInterface interface {
 	// (POST /api/frontend/environments/{id}/editor)
 	OpenEditor(ctx context.Context, request OpenEditorRequestObject) (OpenEditorResponseObject, error)
 
+	// (GET /api/frontend/environments/{id}/processes)
+	ListProcesses(ctx context.Context, request ListProcessesRequestObject) (ListProcessesResponseObject, error)
+
+	// (POST /api/frontend/environments/{id}/processes/{pid}/signal)
+	SignalProcess(ctx context.Context, request SignalProcessRequestObject) (SignalProcessResponseObject, error)
+
 	// (POST /api/frontend/environments/{id}/start)
 	StartEnvironment(ctx context.Context, request StartEnvironmentRequestObject) (StartEnvironmentResponseObject, error)
 
@@ -4747,6 +5043,66 @@ func (sh *strictHandler) OpenEditor(w http.ResponseWriter, r *http.Request, id I
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(OpenEditorResponseObject); ok {
 		if err := validResponse.VisitOpenEditorResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListProcesses operation middleware
+func (sh *strictHandler) ListProcesses(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ListProcessesRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListProcesses(ctx, request.(ListProcessesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListProcesses")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListProcessesResponseObject); ok {
+		if err := validResponse.VisitListProcessesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SignalProcess operation middleware
+func (sh *strictHandler) SignalProcess(w http.ResponseWriter, r *http.Request, id ID, pid int) {
+	var request SignalProcessRequestObject
+
+	request.ID = id
+	request.Pid = pid
+
+	var body SignalProcessJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SignalProcess(ctx, request.(SignalProcessRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SignalProcess")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SignalProcessResponseObject); ok {
+		if err := validResponse.VisitSignalProcessResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

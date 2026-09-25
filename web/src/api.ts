@@ -22,6 +22,7 @@ export type Profile = Schemas['Profile']
 export type ProfileFile = Schemas['ProfileFile']
 export type SSHKey = Schemas['SSHKey']
 export type AuditEvent = Schemas['AuditEvent']
+export type ProcessInfo = Schemas['Process']
 export type Spec = Schemas['Spec']
 export type Repo = Schemas['Repo']
 export type Display = Schemas['Display']
@@ -97,6 +98,14 @@ export const api = {
       client.PUT('/api/frontend/environments/{id}/desktop/size', { params: { path: { id } }, body: { width, height } }),
     ),
   openEditor: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/editor', byID(id))),
+  processes: (id: string) => unwrap(client.GET('/api/frontend/environments/{id}/processes', byID(id))),
+  signalProcess: (id: string, pid: number, signal: 'TERM' | 'KILL') =>
+    unwrap(
+      client.POST('/api/frontend/environments/{id}/processes/{pid}/signal', {
+        params: { path: { id, pid } },
+        body: { signal },
+      }),
+    ),
   terminals: (id: string) => unwrap(client.GET('/api/frontend/environments/{id}/terminals', byID(id))),
   closeTerminal: (id: string, session: string) =>
     unwrap(

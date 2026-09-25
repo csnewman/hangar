@@ -44,6 +44,7 @@ func main() {
 	go serveDesktop()
 	go serveCode()
 	go serveProfile()
+	go serveProcs()
 	run(uint32(*port), *retry)
 }
 

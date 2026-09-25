@@ -535,6 +535,52 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/frontend/environments/{id}/processes:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listProcesses
+      description: >-
+        What runs in the environment. CPU use is each process's share of one
+        CPU since the previous listing, so a first listing shows none;
+        asking every few seconds gives a live view.
+      responses:
+        "200":
+          description: The processes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /api/frontend/environments/{id}/processes/{pid}/signal:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: pid
+        in: path
+        required: true
+        schema: { type: integer }
+    post:
+      operationId: signalProcess
+      description: >-
+        Stop a process: TERM asks it to, KILL does not ask. The environment's
+        init and agent are refused.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SignalProcess" }
+      responses:
+        "204":
+          description: Sent.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
   /api/frontend/environments/{id}/terminals:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -818,6 +864,44 @@ components:
         type: { type: string }
         id: { type: string }
         name: { type: string }
+
+    ProcessList:
+      type: object
+      required: [processes, cpus, memory_bytes]
+      properties:
+        cpus: { type: integer }
+        memory_bytes: { type: integer, format: int64 }
+        processes:
+          type: array
+          items: { $ref: "#/components/schemas/Process" }
+
+    Process:
+      type: object
+      required: [pid, ppid, user, name, command, state, cpu_percent, rss_bytes, threads, started]
+      properties:
+        pid: { type: integer }
+        ppid: { type: integer }
+        user: { type: string }
+        name: { type: string }
+        command: { type: string }
+        state:
+          type: string
+          description: As /proc gives it -- R running, S sleeping, D waiting on I/O, Z a zombie.
+        cpu_percent: { type: number }
+        rss_bytes: { type: integer, format: int64 }
+        threads: { type: integer }
+        started: { type: string, format: date-time }
+        protected:
+          type: boolean
+          description: The guest's init or its agent, which cannot be stopped from here.
+
+    SignalProcess:
+      type: object
+      required: [signal]
+      properties:
+        signal:
+          type: string
+          enum: [TERM, KILL]
 
     ProfilePath:
       type: object

@@ -48,6 +48,9 @@ const (
 	// KindProfile carries the environment's profile session, which the
 	// server holds open while the environment runs.
 	KindProfile = "profile"
+	// KindProcesses carries requests about the processes running in the
+	// environment.
+	KindProcesses = "processes"
 )
 
 // Header opens a stream.

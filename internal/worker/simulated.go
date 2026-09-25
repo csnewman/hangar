@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/procs"
 	"github.com/csnewman/hangar/internal/terminal"
 )
 
@@ -36,6 +37,8 @@ type Simulated struct {
 	// same manager the guest agent uses, so a terminal behaves the same in
 	// development as against a real environment.
 	terminals map[string]*terminal.Manager
+	// procs lists this machine's processes for every environment.
+	procs *procs.Server
 }
 
 type simEnv struct {

@@ -2057,3 +2057,72 @@ a.reason {
   align-items: center;
   gap: 4px;
 }
+
+.procs-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.procs-totals {
+  display: flex;
+  gap: 18px;
+  font-size: 13px;
+  flex: 1;
+}
+
+.procs-filter {
+  width: 260px;
+}
+
+.procs td {
+  vertical-align: top;
+}
+
+.procs-command {
+  max-width: 420px;
+}
+
+.procs-command .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.procs-bar-cell {
+  position: relative;
+  display: inline-block;
+  min-width: 64px;
+}
+
+.procs-meter {
+  position: absolute;
+  left: 0;
+  bottom: -3px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+
+.procs-actions {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.sort-on {
+  color: var(--text);
+}

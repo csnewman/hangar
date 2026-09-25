@@ -11,6 +11,7 @@ import './index.css'
 import { AccountPage } from './pages/Account'
 import { ProfilePage } from './pages/Profile'
 import { AuditPage } from './pages/admin/Audit'
+import { ProcessesTab } from './pages/Processes'
 import { UsersPage } from './pages/admin/Users'
 import { WorkersPage } from './pages/admin/Workers'
 import { EnvironmentPage, SummaryTab, ActivityTab } from './pages/Environment'
@@ -86,6 +87,7 @@ const router = createBrowserRouter([
               },
               { path: 'editor', element: <EditorTab /> },
               { path: 'activity', element: <ActivityTab /> },
+              { path: 'processes', element: <ProcessesTab /> },
               {
                 path: 'desktop',
                 // noVNC is fetched when a desktop is first opened.

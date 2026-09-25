@@ -1,4 +1,4 @@
-import { Activity, Code2, FileCode2, GitBranch, History, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
+import { Activity, Code2, Cpu, FileCode2, GitBranch, History, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router'
 
 import type { Environment } from '../api'
@@ -14,6 +14,7 @@ import { Activity as AuditActivity } from '../components/Activity'
 const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: '', label: 'Summary', icon: LayoutDashboard, end: true },
   { to: 'metrics', label: 'Metrics', icon: Activity },
+  { to: 'processes', label: 'Processes', icon: Cpu },
   { to: 'terminal', label: 'Terminal', icon: SquareTerminal },
   { to: 'code', label: 'Code', icon: FileCode2 },
   { to: 'editor', label: 'VS Code', icon: Code2 },

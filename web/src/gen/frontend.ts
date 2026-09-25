@@ -375,6 +375,45 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/environments/{id}/processes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description What runs in the environment. CPU use is each process's share of one CPU since the previous listing, so a first listing shows none; asking every few seconds gives a live view. */
+        get: operations["listProcesses"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/environments/{id}/processes/{pid}/signal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                pid: number;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Stop a process: TERM asks it to, KILL does not ask. The environment's init and agent are refused. */
+        post: operations["signalProcess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/environments/{id}/terminals": {
         parameters: {
             query?: never;
@@ -577,6 +616,33 @@ export interface components {
             type: string;
             id: string;
             name: string;
+        };
+        ProcessList: {
+            cpus: number;
+            /** Format: int64 */
+            memory_bytes: number;
+            processes: components["schemas"]["Process"][];
+        };
+        Process: {
+            pid: number;
+            ppid: number;
+            user: string;
+            name: string;
+            command: string;
+            /** @description As /proc gives it -- R running, S sleeping, D waiting on I/O, Z a zombie. */
+            state: string;
+            cpu_percent: number;
+            /** Format: int64 */
+            rss_bytes: number;
+            threads: number;
+            /** Format: date-time */
+            started: string;
+            /** @description The guest's init or its agent, which cannot be stopped from here. */
+            protected?: boolean;
+        };
+        SignalProcess: {
+            /** @enum {string} */
+            signal: "TERM" | "KILL";
         };
         ProfilePath: {
             path: string;
@@ -1713,6 +1779,62 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    listProcesses: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The processes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProcessList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
+    signalProcess: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                pid: number;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SignalProcess"];
+            };
+        };
+        responses: {
+            /** @description Sent. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
         };
     };
     listTerminals: {
