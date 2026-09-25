@@ -15,9 +15,6 @@
   flex: 1;
   display: flex;
   min-height: 520px;
-  margin: 10px 28px 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   overflow: hidden;
   background: var(--surface-2);
   font-size: 13px;

@@ -1,8 +1,6 @@
-import { PanelLeftClose, PanelLeftOpen } from 'lucide-react'
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { Outlet } from 'react-router'
 
-import { Logo } from './Logo'
 import { Sidebar } from './Sidebar'
 
 const widthKey = 'hangar.sidebar.width'
@@ -28,9 +26,9 @@ function store(key: string, value: string) {
   }
 }
 
-// Shell is the frame every signed-in page sits in: a bar across the top, the
-// inventory down the left, and the page beside it. The inventory is as wide
-// as it is dragged, or folded to its icons, and this browser remembers which.
+// Shell is the frame every signed-in page sits in: the inventory down the
+// left, and the page beside it. The inventory is as wide as it is dragged,
+// or folded to its icons, and this browser remembers which.
 export function Shell() {
   const [width, setWidth] = useState(() => {
     const w = Number(stored(widthKey))
@@ -86,27 +84,12 @@ export function Shell() {
 
   return (
     <div className={dragging ? 'app app-dragging' : 'app'}>
-      <header className="topbar">
-        <button
-          type="button"
-          className="icon-btn sidebar-toggle"
-          onClick={toggle}
-          title={collapsed ? 'Show the sidebar (Ctrl+B)' : 'Fold the sidebar (Ctrl+B)'}
-          aria-label={collapsed ? 'Show the sidebar' : 'Fold the sidebar'}
-        >
-          {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
-        </button>
-        <div className="brand">
-          <Logo />
-          <span>Hangar</span>
-        </div>
-      </header>
       <div
         className="app-body"
         style={{ gridTemplateColumns: `${collapsed ? collapsedWidth : width}px minmax(0, 1fr)` }}
       >
         <div className="sidebar-frame">
-          <Sidebar collapsed={collapsed} />
+          <Sidebar collapsed={collapsed} onToggle={toggle} />
           {!collapsed && (
             <div
               className="sidebar-handle"

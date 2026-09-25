@@ -4,6 +4,8 @@ import {
   History,
   LayoutGrid,
   LayoutTemplate,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Server,
   UserRound,
@@ -15,13 +17,14 @@ import { Link, NavLink } from 'react-router'
 import type { Environment } from '../api'
 import { useMe } from '../session'
 import { splitByOwner, useEnvironments } from '../environments'
+import { Logo } from './Logo'
 import { PhaseDot } from './Status'
 import { UserMenu } from './UserMenu'
 
 // Sidebar is the inventory: every environment the user can reach, as a tree,
 // then the user's own settings, and administration for administrators. Who
 // is signed in sits at its foot, below whatever scrolls.
-export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
+export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle: () => void }) {
   const me = useMe()
   const envs = useEnvironments()
   const { mine, others } = splitByOwner(envs.data ?? [], me)
@@ -30,6 +33,7 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
     // Folded to its icons: the environments are on the Overview.
     return (
       <aside className="sidebar sidebar-collapsed">
+        <SidebarHead collapsed onToggle={onToggle} />
         <div className="sidebar-scroll">
           <nav className="side-nav">
             <SideIcon to="/environments" end icon={<LayoutGrid size={17} />} label="Overview" />
@@ -57,6 +61,7 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
 
   return (
     <aside className="sidebar">
+      <SidebarHead onToggle={onToggle} />
       <div className="sidebar-scroll">
         <nav className="side-nav">
           <NavLink to="/environments" end className="side-link">
@@ -127,6 +132,30 @@ export function Sidebar({ collapsed = false }: { collapsed?: boolean }) {
         <UserMenu />
       </div>
     </aside>
+  )
+}
+
+// SidebarHead is the brand, and the button that folds the sidebar to its
+// icons and back (Ctrl+B).
+function SidebarHead({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle: () => void }) {
+  return (
+    <div className={collapsed ? 'sidebar-head sidebar-head-collapsed' : 'sidebar-head'}>
+      {!collapsed && (
+        <Link to="/environments" className="brand">
+          <Logo />
+          <span>Hangar</span>
+        </Link>
+      )}
+      <button
+        type="button"
+        className="icon-btn sidebar-toggle"
+        onClick={onToggle}
+        title={collapsed ? 'Show the sidebar (Ctrl+B)' : 'Fold the sidebar (Ctrl+B)'}
+        aria-label={collapsed ? 'Show the sidebar' : 'Fold the sidebar'}
+      >
+        {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+      </button>
+    </div>
   )
 }
 

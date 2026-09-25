@@ -7,9 +7,6 @@
   --sidebar: #f3f5f8;
   --sidebar-hover: #e6eaf0;
   --sidebar-active: #dbe6f3;
-  --topbar: #16222e;
-  --topbar-text: #e8edf2;
-  --topbar-muted: #93a3b3;
   --border: #e1e5ea;
   --border-strong: #cfd5dd;
   --text: #17202a;
@@ -47,9 +44,6 @@
     --sidebar: #12171d;
     --sidebar-hover: #1c232c;
     --sidebar-active: #1d2b3b;
-    --topbar: #0a0e12;
-    --topbar-text: #e6ebf0;
-    --topbar-muted: #8391a1;
     --border: #262d37;
     --border-strong: #333c48;
     --text: #e4e8ee;
@@ -130,31 +124,45 @@ h1 {
 /* Shell */
 
 /* Every track is minmax(0, ...) so wide content -- a table with many
-   columns -- scrolls inside its panel instead of widening the page past the
-   window and pushing the top bar's user menu off the edge. */
+   columns -- scrolls inside its panel rather than widening the page past
+   the window. */
 .app {
   display: grid;
-  grid-template-rows: 48px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   grid-template-columns: minmax(0, 1fr);
   height: 100%;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 14px 0 16px;
-  background: var(--topbar);
-  color: var(--topbar-text);
 }
 
 .brand {
   display: flex;
   align-items: center;
   gap: 9px;
+  min-width: 0;
+  color: var(--text);
   font-weight: 650;
   font-size: 15px;
   letter-spacing: 0.01em;
+  text-decoration: none;
+}
+
+.brand:hover {
+  text-decoration: none;
+}
+
+.sidebar-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  height: 46px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.sidebar-head-collapsed {
+  justify-content: center;
+  padding: 0;
 }
 
 .app-body {
@@ -586,22 +594,23 @@ h1 {
   border-bottom-color: var(--accent);
 }
 
+/* A tab that reads as a page is padded like one; a console -- VS Code, a
+   terminal, the desktop, the Code tab -- fills the tab edge to edge. */
 .tab-body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  padding-bottom: 28px;
 }
 
 .tab-body > .page-pad {
-  padding-top: 20px;
+  padding: 20px 28px 28px;
 }
 
 .console {
   flex: 1;
   display: grid;
   place-items: center;
-  margin: 20px 28px 0;
+  margin: 20px 28px 28px;
   min-height: 360px;
   border: 1px dashed var(--border-strong);
   border-radius: var(--radius);
@@ -1617,9 +1626,6 @@ code {
   display: flex;
   flex-direction: column;
   min-height: 420px;
-  margin: 14px 28px 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
   overflow: hidden;
   background: var(--surface-2);
 }
@@ -1690,14 +1696,12 @@ code {
   flex: 1;
   display: flex;
   min-height: 420px;
-  margin: 14px 28px 0;
 }
 
 .editor-frame {
   flex: 1;
   width: 100%;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border: none;
   background: var(--surface-2);
 }
 
@@ -1706,14 +1710,14 @@ code {
   display: flex;
   flex-direction: column;
   min-height: 420px;
-  margin: 14px 28px 0;
 }
 
 .term-sessions {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding-bottom: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border);
   overflow-x: auto;
 }
 
@@ -1824,8 +1828,6 @@ code {
   position: relative;
   flex: 1;
   min-height: 360px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
   overflow: hidden;
   background: #ffffff;
 }
@@ -2113,7 +2115,8 @@ a.reason {
 }
 
 .sidebar-toggle {
-  margin-right: 6px;
+  width: 28px;
+  height: 28px;
 }
 
 .activity td {
