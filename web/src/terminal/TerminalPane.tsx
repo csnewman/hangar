@@ -35,10 +35,13 @@ export interface PaneEvents {
 export function TerminalPane({
   env,
   session,
+  dir,
   events,
 }: {
   env: string
   session: string | undefined
+  // dir is where a new session's shell starts; absent, the home directory.
+  dir?: string
   events: PaneEvents
 }) {
   const host = useRef<HTMLDivElement>(null)
@@ -53,6 +56,7 @@ export function TerminalPane({
   // session has its ID the parent records it, and the pane carries on
   // rather than attaching again. Starting another forgets it.
   const initial = useRef(session)
+  const initialDir = useRef(dir)
 
   useEffect(() => {
     const el = host.current
@@ -116,7 +120,7 @@ export function TerminalPane({
     let disposed = false
 
     const connect = () => {
-      conn = new Connection(env, current, term.cols, term.rows, {
+      conn = new Connection(env, current, initialDir.current, term.cols, term.rows, {
         attached: (s) => {
           current = s.id
           initial.current = s.id

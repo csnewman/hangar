@@ -1,8 +1,9 @@
 import { File, GitCompare, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
-import type { CodeClient, SharedFile } from './client'
+import type { CodeClient, GitStatus, SharedFile } from './client'
 import { CodeEditor } from './CodeEditor'
+import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { DiffView } from './DiffView'
 
 export type Tab = { kind: 'file' | 'diff'; path: string }
@@ -16,17 +17,60 @@ export function EditorArea({
   tabs,
   active,
   user,
+  status,
+  canReopen,
   onActivate,
+  onOpen,
   onClose,
+  onCloseMany,
+  onReopen,
+  onReveal,
 }: {
   client: CodeClient
   tabs: Tab[]
   active: string | null
   user: { name: string; color: string }
+  status: GitStatus | null
+  canReopen: boolean
   onActivate: (key: string) => void
+  onOpen: (tab: Tab) => void
   onClose: (key: string) => void
+  onCloseMany: (keys: string[]) => void
+  onReopen: () => void
+  onReveal: (path: string) => void
 }) {
   const current = tabs.find((t) => tabKey(t) === active) ?? null
+  const menu = useContextMenu()
+
+  // tabMenu is IntelliJ's and VS Code's tab menu, less what an editor
+  // that saves as it goes has no use for.
+  const tabMenu = (t: Tab): MenuItem[] => {
+    const key = tabKey(t)
+    const i = tabs.findIndex((o) => tabKey(o) === key)
+    const keys = tabs.map(tabKey)
+    const changed = status?.changes.some((c) => c.path === t.path) ?? false
+    return [
+      { label: 'Close', shortcut: shortcut('Alt+W'), onSelect: () => onClose(key) },
+      { label: 'Close Others', disabled: tabs.length < 2, onSelect: () => onCloseMany(keys.filter((k) => k !== key)) },
+      { label: 'Close Tabs to the Left', disabled: i === 0, onSelect: () => onCloseMany(keys.slice(0, i)) },
+      {
+        label: 'Close Tabs to the Right',
+        disabled: i === tabs.length - 1,
+        onSelect: () => onCloseMany(keys.slice(i + 1)),
+      },
+      { label: 'Close All', onSelect: () => onCloseMany(keys) },
+      'separator',
+      { label: 'Copy Path', onSelect: () => copyText(`${client.root}/${t.path}`) },
+      { label: 'Copy Relative Path', onSelect: () => copyText(t.path) },
+      'separator',
+      { label: 'Reveal in Project', onSelect: () => onReveal(t.path) },
+      t.kind === 'file'
+        ? { label: 'Show Changes', disabled: !changed, onSelect: () => onOpen({ kind: 'diff', path: t.path }) }
+        : { label: 'Open File', onSelect: () => onOpen({ kind: 'file', path: t.path }) },
+      'separator',
+      { label: 'Reopen Closed Tab', shortcut: shortcut('Alt+Shift+T'), disabled: !canReopen, onSelect: onReopen },
+    ]
+  }
   return (
     <div className="code-editors">
       {tabs.length > 0 && (
@@ -42,6 +86,7 @@ export function EditorArea({
                 className={key === active ? 'code-tab code-tab-on' : 'code-tab'}
                 title={t.kind === 'diff' ? `Changes to ${t.path}` : t.path}
                 onClick={() => onActivate(key)}
+                onContextMenu={(e) => menu.open(e, tabMenu(t))}
                 onAuxClick={(e) => {
                   if (e.button === 1) onClose(key)
                 }}
@@ -65,7 +110,9 @@ export function EditorArea({
         </div>
       )}
       <div className="code-editor-body">
-        {current?.kind === 'file' && <FileTab key={tabKey(current)} client={client} path={current.path} user={user} />}
+        {current?.kind === 'file' && (
+          <FileTab key={tabKey(current)} client={client} path={current.path} user={user} onReveal={onReveal} />
+        )}
         {current?.kind === 'diff' && <DiffView key={tabKey(current)} client={client} path={current.path} />}
         {!current && (
           <div className="code-empty">
@@ -74,11 +121,22 @@ export function EditorArea({
           </div>
         )}
       </div>
+      {menu.menu}
     </div>
   )
 }
 
-function FileTab({ client, path, user }: { client: CodeClient; path: string; user: { name: string; color: string } }) {
+function FileTab({
+  client,
+  path,
+  user,
+  onReveal,
+}: {
+  client: CodeClient
+  path: string
+  user: { name: string; color: string }
+  onReveal: (path: string) => void
+}) {
   const [file, setFile] = useState<SharedFile | null>(null)
   const [error, setError] = useState('')
 
@@ -117,5 +175,5 @@ function FileTab({ client, path, user }: { client: CodeClient; path: string; use
 
   if (error) return <div className="code-empty"><p className="code-note-error">{error}</p></div>
   if (!file) return <div className="code-empty"><p className="muted">Opening {path}…</p></div>
-  return <CodeEditor file={file} user={user} />
+  return <CodeEditor file={file} user={user} client={client} path={path} onReveal={onReveal} />
 }

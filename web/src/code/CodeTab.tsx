@@ -1,7 +1,7 @@
 import './code.css'
 
 import { FolderTree, GitCompare, SquareTerminal } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Group,
   Panel,
@@ -91,6 +91,11 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
     }
   }, [client, reloadStatus])
 
+  // Tool windows.
+  const project = usePanelRef()
+  const changes = usePanelRef()
+  const terminal = usePanelRef()
+
   // Open tabs, remembered per environment.
   const storeKey = `hangar.code.${env}.tabs`
   const [store, setStore] = useState<Store>(() => {
@@ -114,19 +119,85 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
       tabs: s.tabs.some((t) => tabKey(t) === tabKey(tab)) ? s.tabs : [...s.tabs, tab],
       active: tabKey(tab),
     }))
-  const close = (key: string) =>
+  // Closed tabs, most recent last, for reopening.
+  const closed = useRef<Tab[]>([])
+  const [canReopen, setCanReopen] = useState(false)
+  // closeTabs closes several tabs at once. When the active one goes, the
+  // nearest survivor to its right, else its left, takes its place.
+  const closeTabs = (keys: string[]) => {
+    const gone = new Set(keys)
     setStore((s) => {
-      const i = s.tabs.findIndex((t) => tabKey(t) === key)
-      const tabs = s.tabs.filter((t) => tabKey(t) !== key)
-      const active = s.active === key ? (tabs[Math.min(i, tabs.length - 1)] ? tabKey(tabs[Math.min(i, tabs.length - 1)]) : null) : s.active
+      const tabs = s.tabs.filter((t) => !gone.has(tabKey(t)))
+      if (tabs.length === s.tabs.length) return s
+      closed.current.push(...s.tabs.filter((t) => gone.has(tabKey(t))).reverse())
+      closed.current = closed.current.slice(-30)
+      let active = s.active
+      if (active && gone.has(active)) {
+        const i = s.tabs.findIndex((t) => tabKey(t) === active)
+        const next = s.tabs.slice(i + 1).find((t) => !gone.has(tabKey(t))) ?? s.tabs.slice(0, i).reverse().find((t) => !gone.has(tabKey(t)))
+        active = next ? tabKey(next) : null
+      }
       return { tabs, active }
+    })
+    setCanReopen(true)
+  }
+  const close = (key: string) => closeTabs([key])
+  const reopen = () => {
+    const tab = closed.current.pop()
+    setCanReopen(closed.current.length > 0)
+    if (tab) open(tab)
+  }
+  const cycle = (by: number) =>
+    setStore((s) => {
+      if (s.tabs.length === 0) return s
+      const i = s.tabs.findIndex((t) => tabKey(t) === s.active)
+      return { ...s, active: tabKey(s.tabs[(i + by + s.tabs.length) % s.tabs.length]) }
     })
   const activeTab = store.tabs.find((t) => tabKey(t) === store.active)
 
-  // Tool windows.
-  const project = usePanelRef()
-  const changes = usePanelRef()
-  const terminal = usePanelRef()
+  // Reveal in Project: the tree opens the folders to a path and selects it.
+  const [reveal, setReveal] = useState<{ path: string; n: number } | null>(null)
+  const revealInProject = (path: string) => {
+    project.current?.expand()
+    setReveal((r) => ({ path, n: (r?.n ?? 0) + 1 }))
+  }
+
+  // Open in Terminal: a new session in a folder.
+  const [termIn, setTermIn] = useState<{ dir: string; n: number } | null>(null)
+  const openTerminal = (dir: string) => {
+    terminal.current?.expand()
+    setTermIn((t) => ({ dir, n: (t?.n ?? 0) + 1 }))
+  }
+
+  // Keys for tabs, chosen from those a browser leaves to the page: Alt+W
+  // closes, Alt+Shift+T reopens, Alt+[ and Alt+] step through them. They
+  // work wherever focus is while the Code tab shows -- it is on the page
+  // itself between one editor closing and the next opening -- except in the
+  // terminal, which keeps its own keys.
+  const onKey = (e: KeyboardEvent) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey) return
+    if ((e.target as HTMLElement).closest('.code-term')) return
+    const act = {
+      KeyW: !e.shiftKey && (() => store.active && close(store.active)),
+      KeyT: e.shiftKey && reopen,
+      BracketLeft: !e.shiftKey && (() => cycle(-1)),
+      BracketRight: !e.shiftKey && (() => cycle(1)),
+    }[e.code]
+    if (!act) return
+    e.preventDefault()
+    e.stopPropagation()
+    act()
+  }
+  const onKeyRef = useRef(onKey)
+  useEffect(() => {
+    onKeyRef.current = onKey
+  })
+  useEffect(() => {
+    const listen = (e: KeyboardEvent) => onKeyRef.current(e)
+    document.addEventListener('keydown', listen, true)
+    return () => document.removeEventListener('keydown', listen, true)
+  }, [])
+
   const [shown, setShown] = useState({ project: true, changes: true, terminal: true })
   const track = (name: keyof typeof shown) => (size: { asPercentage: number }) =>
     setShown((s) => (s[name] === size.asPercentage > 0 ? s : { ...s, [name]: size.asPercentage > 0 }))
@@ -168,7 +239,10 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
                   env={env}
                   status={status}
                   selected={activeTab?.path ?? null}
+                  reveal={reveal}
                   onOpen={(path) => open({ kind: 'file', path })}
+                  onDiff={(path) => open({ kind: 'diff', path })}
+                  onTerminal={openTerminal}
                   onHide={() => project.current?.collapse()}
                 />
               </Panel>
@@ -179,8 +253,14 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
                   tabs={store.tabs}
                   active={store.active}
                   user={user}
+                  status={status}
+                  canReopen={canReopen}
                   onActivate={(key) => setStore((s) => ({ ...s, active: key }))}
+                  onOpen={open}
                   onClose={close}
+                  onCloseMany={closeTabs}
+                  onReopen={reopen}
+                  onReveal={revealInProject}
                 />
               </Panel>
               <Separator className="code-split code-split-v" />
@@ -198,6 +278,7 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
                   status={status}
                   reload={reloadStatus}
                   onDiff={(path) => open({ kind: 'diff', path })}
+                  onOpen={(path) => open({ kind: 'file', path })}
                   onHide={() => changes.current?.collapse()}
                 />
               </Panel>
@@ -213,7 +294,7 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
             collapsedSize={0}
             onResize={track('terminal')}
           >
-            <CodeTerminal env={env} onHide={() => terminal.current?.collapse()} />
+            <CodeTerminal env={env} openIn={termIn} onHide={() => terminal.current?.collapse()} />
           </Panel>
         </Group>
         {state !== 'live' && (

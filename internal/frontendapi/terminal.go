@@ -137,7 +137,9 @@ func (h *handler) CloseTerminal(ctx context.Context, req CloseTerminalRequestObj
 }
 
 // terminalSocket attaches a browser to a terminal session over a WebSocket:
-// GET /api/frontend/environments/{id}/terminal?session=&cols=&rows=
+// GET /api/frontend/environments/{id}/terminal?session=&dir=&cols=&rows=
+//
+// With no session, a new one starts, in dir if given.
 //
 // The first message to the browser is the attach's JSON reply, as text.
 // After it every message is binary, one frame each: the frame type byte
@@ -158,6 +160,7 @@ func (h *handler) terminalSocket(w http.ResponseWriter, r *http.Request) {
 	req := terminal.Request{
 		Op:      terminal.OpAttach,
 		Session: q.Get("session"),
+		Dir:     q.Get("dir"),
 		Cols:    uint16(min(max(cols, 0), 1000)),
 		Rows:    uint16(min(max(rows, 0), 1000)),
 	}

@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, SquareTerminal, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { api } from '../api'
 import { TerminalPane } from '../terminal/TerminalPane'
@@ -8,15 +8,27 @@ import { ToolWindow } from './ToolWindow'
 
 // CodeTerminal is the Terminal tool window: the environment's terminal
 // sessions, the same ones the Terminal tab and VS Code show.
-export function CodeTerminal({ env, onHide }: { env: string; onHide: () => void }) {
+export function CodeTerminal({
+  env,
+  openIn,
+  onHide,
+}: {
+  env: string
+  // openIn asks for a new session in a folder; n changes with each ask.
+  openIn: { dir: string; n: number } | null
+  onHide: () => void
+}) {
   const qc = useQueryClient()
   const key = ['terminals', env]
   const sessions = useQuery({ queryKey: key, queryFn: () => api.terminals(env), refetchInterval: 3000 })
-  const [pane, setPane] = useState<{ key: number; session: string | undefined; chosen: boolean }>({
+  const [pane, setPane] = useState<{ key: number; session: string | undefined; chosen: boolean; dir?: string }>({
     key: 0,
     session: undefined,
     chosen: false,
   })
+  useEffect(() => {
+    if (openIn) setPane((p) => ({ key: p.key + 1, session: undefined, chosen: true, dir: openIn.dir }))
+  }, [openIn])
   const [titles, setTitles] = useState<Record<string, string>>({})
 
   const list = sessions.data ?? []
@@ -65,6 +77,7 @@ export function CodeTerminal({ env, onHide }: { env: string; onHide: () => void 
             key={pane.key}
             env={env}
             session={attachTo}
+            dir={pane.dir}
             events={{
               attached: (s) => {
                 setPane((p) => (p.session === s.id ? p : { ...p, session: s.id }))

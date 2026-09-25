@@ -42,9 +42,17 @@ export class Connection {
   private done = false
   private encoder = new TextEncoder()
 
-  constructor(env: string, session: string | undefined, cols: number, rows: number, events: ConnectionEvents) {
+  constructor(
+    env: string,
+    session: string | undefined,
+    dir: string | undefined,
+    cols: number,
+    rows: number,
+    events: ConnectionEvents,
+  ) {
     const q = new URLSearchParams({ cols: String(cols), rows: String(rows) })
     if (session) q.set('session', session)
+    else if (dir) q.set('dir', dir)
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
     this.ws = new WebSocket(`${scheme}://${location.host}/api/frontend/environments/${env}/terminal?${q}`)
     this.ws.binaryType = 'arraybuffer'

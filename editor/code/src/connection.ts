@@ -108,7 +108,25 @@ export class Connection {
 			case 'git.rollback':
 				return this.s.git.rollback(str('path'))
 			case 'git.commit':
-				return this.s.git.commit(str('message'))
+				return this.s.git.commit(str('message'), p.amend === true)
+			case 'git.lastMessage':
+				return this.s.git.lastMessage()
+			case 'git.show':
+				return this.s.git.show(str('path'), p.from === 'HEAD' ? 'HEAD' : 'index')
+			case 'git.setIndex':
+				return this.s.git.setIndex(str('path'), str('content'))
+			case 'git.branches':
+				return this.s.git.branches()
+			case 'git.checkout':
+				return this.s.git.checkout(str('name'))
+			case 'git.createBranch':
+				return this.s.git.createBranch(str('name'))
+			case 'git.push':
+				return this.s.git.push()
+			case 'git.pull':
+				return this.s.git.pull()
+			case 'git.fetch':
+				return this.s.git.fetch()
 			case 'doc.open':
 				return this.openDoc(str('path'))
 			case 'doc.close':

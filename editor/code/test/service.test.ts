@@ -204,3 +204,82 @@ test('files, git and a shared document', async () => {
 		b.close()
 	}
 })
+
+test('partial staging, amending, branches, push and pull', async () => {
+	const a = new Client()
+	try {
+		// Stage part of a file: the index takes the content given, the
+		// working tree keeps the rest.
+		writeFileSync(join(root, 'p.txt'), 'one\ntwo\n')
+		git('add', 'p.txt')
+		git('commit', '-q', '-m', 'p')
+		writeFileSync(join(root, 'p.txt'), 'ONE\ntwo\nthree\n')
+		assert.deepEqual(await a.call('git.show', { path: 'p.txt', from: 'index' }), { text: 'one\ntwo\n' })
+		await a.call('git.setIndex', { path: 'p.txt', content: 'ONE\ntwo\n' })
+		assert.equal(git('show', ':p.txt').toString(), 'ONE\ntwo\n')
+		assert.equal(readFileSync(join(root, 'p.txt'), 'utf8'), 'ONE\ntwo\nthree\n')
+		assert.deepEqual(await a.call('git.show', { path: 'nothing.txt', from: 'HEAD' }), { text: null })
+
+		// Amend with no message keeps the last one.
+		await a.call('git.commit', { message: 'partial' })
+		await a.call('git.stage', { path: 'p.txt' })
+		await a.call('git.commit', { message: '', amend: true })
+		assert.equal(await a.call('git.lastMessage'), 'partial')
+		assert.equal(git('show', 'HEAD:p.txt').toString(), 'ONE\ntwo\nthree\n')
+		await assert.rejects(a.call('git.commit', { message: ' ' }))
+
+		// A branch, pushed to a remote it then tracks.
+		const remote = join(dir, 'remote.git')
+		execFileSync('git', ['init', '-q', '--bare', remote])
+		git('remote', 'add', 'origin', remote)
+		await a.call('git.createBranch', { name: 'feature' })
+		await assert.rejects(a.call('git.createBranch', { name: 'bad..name' }))
+		await a.call('git.push')
+		let br = await a.call('git.branches')
+		assert.equal(br.current, 'feature')
+		assert.deepEqual(br.local.find((b: any) => b.name === 'feature'), { name: 'feature', upstream: 'origin/feature', ahead: 0, behind: 0 })
+		assert.ok(br.remote.includes('origin/feature'))
+
+		// Someone else pushes; fetch sees it, pull fast-forwards to it.
+		const other = join(dir, 'other')
+		execFileSync('git', ['clone', '-q', '-b', 'feature', remote, other])
+		writeFileSync(join(other, 'theirs.txt'), 'theirs\n')
+		execFileSync('git', ['-C', other, 'add', '.'])
+		execFileSync('git', ['-C', other, 'commit', '-q', '-m', 'theirs'])
+		execFileSync('git', ['-C', other, 'push', '-q'])
+		await a.call('git.fetch')
+		br = await a.call('git.branches')
+		assert.equal(br.local.find((b: any) => b.name === 'feature').behind, 1)
+		await a.call('git.pull')
+		assert.equal(readFileSync(join(root, 'theirs.txt'), 'utf8'), 'theirs\n')
+
+		// Back to main, and to a remote branch with no local one.
+		await a.call('git.checkout', { name: 'main' })
+		assert.equal((await a.call('git.status')).branch, 'main')
+		execFileSync('git', ['-C', other, 'checkout', '-q', '-b', 'only-remote'])
+		execFileSync('git', ['-C', other, 'push', '-q', 'origin', 'only-remote'])
+		await a.call('git.fetch')
+		await a.call('git.checkout', { name: 'origin/only-remote' })
+		br = await a.call('git.branches')
+		assert.equal(br.current, 'only-remote')
+		assert.equal(br.local.find((b: any) => b.name === 'only-remote').upstream, 'origin/only-remote')
+	} finally {
+		a.close()
+	}
+})
+
+test('reading git state is not announced as a change to it', async () => {
+	const a = new Client()
+	try {
+		writeFileSync(join(root, 'touched.txt'), 'x\n')
+		git('add', 'touched.txt')
+		await new Promise((r) => setTimeout(r, 600))
+		a.events.length = 0
+		for (let i = 0; i < 3; i++) await a.call('git.status')
+		await a.call('git.show', { path: 'touched.txt', from: 'index' })
+		await new Promise((r) => setTimeout(r, 600))
+		assert.deepEqual(a.events.filter((e) => e.event === 'git.changed'), [])
+	} finally {
+		a.close()
+	}
+})

@@ -2,12 +2,11 @@ import { ChevronRight, File, FilePlus, Folder, FolderOpen, FolderPlus, ListColla
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { CodeClient, Entry, GitStatus } from './client'
+import { copyText, useContextMenu, type MenuItem } from './ContextMenu'
 import { ToolWindow } from './ToolWindow'
 
 // Where a pending new entry or rename is typed.
 type Editing = { kind: 'file' | 'dir'; parent: string } | { kind: 'rename'; path: string } | null
-
-type Menu = { x: number; y: number; path: string; dir: boolean } | null
 
 // ProjectView is the Project tool window: the files under the root, loaded a
 // folder at a time as they are opened, kept current as they change on disk,
@@ -17,14 +16,22 @@ export function ProjectView({
   env,
   status,
   selected,
+  reveal,
   onOpen,
+  onDiff,
+  onTerminal,
   onHide,
 }: {
   client: CodeClient
   env: string
   status: GitStatus | null
   selected: string | null
+  // reveal asks for a path to be shown: its folders opened, it selected
+  // and scrolled to. n changes with each ask.
+  reveal: { path: string; n: number } | null
   onOpen: (path: string) => void
+  onDiff: (path: string) => void
+  onTerminal: (dir: string) => void
   onHide: () => void
 }) {
   const storeKey = `hangar.code.${env}.expanded`
@@ -38,10 +45,16 @@ export function ProjectView({
     }
   })
   const [editing, setEditing] = useState<Editing>(null)
-  const [menu, setMenu] = useState<Menu>(null)
+  const menu = useContextMenu()
+  // The revealed path is highlighted until another tab is chosen.
+  const [revealed, setRevealed] = useState<{ path: string; over: string | null } | null>(null)
+  const highlighted = revealed && revealed.over === selected ? revealed.path : selected
+  const tree = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
   const expandedRef = useRef(expanded)
   expandedRef.current = expanded
+  const selectedRef = useRef(selected)
+  selectedRef.current = selected
 
   const load = useCallback(
     async (dir: string) => {
@@ -95,16 +108,28 @@ export function ProjectView({
     }
   }, [expanded, storeKey])
 
+  // Reveal: open each folder above the path, loading it, then scroll to
+  // the path once it is drawn.
   useEffect(() => {
-    if (!menu) return
-    const close = () => setMenu(null)
-    window.addEventListener('click', close)
-    window.addEventListener('blur', close)
+    if (!reveal) return
+    let live = true
+    const parts = reveal.path.split('/')
+    const dirs = parts.slice(0, -1).map((_, i) => parts.slice(0, i + 1).join('/'))
+    ;(async () => {
+      for (const d of dirs) await load(d)
+      if (!live) return
+      setExpanded((e) => new Set([...e, ...dirs]))
+      setRevealed({ path: reveal.path, over: selectedRef.current })
+      requestAnimationFrame(() =>
+        tree.current
+          ?.querySelector(`[data-path="${CSS.escape(reveal.path)}"]`)
+          ?.scrollIntoView({ block: 'center' }),
+      )
+    })()
     return () => {
-      window.removeEventListener('click', close)
-      window.removeEventListener('blur', close)
+      live = false
     }
-  }, [menu])
+  }, [reveal, load])
 
   const toggle = (dir: string) => {
     setExpanded((e) => {
@@ -168,6 +193,51 @@ export function ProjectView({
     setEditing({ kind, parent })
   }
 
+  // entryMenu is what a right-click on an entry offers; path '' is the
+  // root, from a click on the tree's empty space.
+  const entryMenu = (path: string, dir: boolean): MenuItem[] => {
+    const name = path.split('/').pop() || root.split('/').pop() || root
+    const abs = path ? `${root}/${path}` : root
+    const folder = dir ? path : path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
+    const change = !dir && status?.changes.find((c) => c.path === path)
+    const items: MenuItem[] = []
+    if (!dir) {
+      items.push({ label: 'Open', onSelect: () => onOpen(path) })
+      if (change) items.push({ label: 'Show Changes', onSelect: () => onDiff(path) })
+      items.push('separator')
+    }
+    items.push(
+      { label: 'New File…', onSelect: () => startNew('file', folder) },
+      { label: 'New Folder…', onSelect: () => startNew('dir', folder) },
+      'separator',
+      { label: 'Copy Path', onSelect: () => copyText(abs) },
+      { label: 'Copy Relative Path', disabled: !path, onSelect: () => copyText(path) },
+      { label: 'Copy Name', onSelect: () => copyText(name) },
+      'separator',
+      { label: 'Open in Terminal', onSelect: () => onTerminal(folder ? `${root}/${folder}` : root) },
+    )
+    if (change) {
+      items.push(
+        'separator',
+        { label: 'Stage', disabled: change.worktree === '.', onSelect: () => act(() => client.stage(path)) },
+        {
+          label: change.index === '?' ? 'Delete Unversioned File' : 'Rollback',
+          confirm: change.index === '?' ? `Delete ${name}?` : `Discard all changes to ${name}?`,
+          danger: true,
+          onSelect: () => act(() => client.rollback(path)),
+        },
+      )
+    }
+    if (path) {
+      items.push(
+        'separator',
+        { label: 'Rename…', onSelect: () => setEditing({ kind: 'rename', path }) },
+        { label: 'Delete', danger: true, confirm: `Delete ${name}?`, onSelect: () => act(() => client.remove(path)) },
+      )
+    }
+    return items
+  }
+
   const renderDir = (dir: string, depth: number): React.ReactNode => {
     const list = children[dir]
     const pending = editing && editing.kind !== 'rename' && editing.parent === dir
@@ -185,13 +255,15 @@ export function ProjectView({
           return (
             <div key={path}>
               <div
-                className={`code-tree-row ${selected === path ? 'code-tree-row-on' : ''}`}
+                className={`code-tree-row ${highlighted === path ? 'code-tree-row-on' : ''}`}
+                data-path={path}
                 style={{ paddingLeft: 6 + depth * 14 }}
-                onClick={() => (e.dir ? toggle(path) : onOpen(path))}
-                onContextMenu={(ev) => {
-                  ev.preventDefault()
-                  setMenu({ x: ev.clientX, y: ev.clientY, path, dir: e.dir })
+                onClick={() => {
+                  setRevealed(null)
+                  if (e.dir) toggle(path)
+                  else onOpen(path)
                 }}
+                onContextMenu={(ev) => menu.open(ev, entryMenu(path, e.dir))}
                 title={path}
               >
                 {e.dir ? (
@@ -244,12 +316,15 @@ export function ProjectView({
         </>
       }
     >
-      <div className="code-tree" onContextMenu={(ev) => {
-        if (ev.target === ev.currentTarget) {
-          ev.preventDefault()
-          setMenu({ x: ev.clientX, y: ev.clientY, path: '', dir: true })
-        }
-      }}>
+      <div
+        className="code-tree"
+        ref={tree}
+        onContextMenu={(ev) => {
+          if (ev.target === ev.currentTarget || (ev.target as HTMLElement).closest('.code-tree-root')) {
+            menu.open(ev, entryMenu('', true))
+          }
+        }}
+      >
         <div className="code-tree-root" title={root}>
           <FolderOpen size={14} className="code-icon-dir" />
           <span className="strong">{rootName}</span>
@@ -258,46 +333,8 @@ export function ProjectView({
         {renderDir('', 1)}
         {error && <div className="code-note code-note-error">{error}</div>}
       </div>
-      {menu && (
-        <div className="code-menu" style={{ left: menu.x, top: menu.y }} onClick={(e) => e.stopPropagation()}>
-          {menu.dir && (
-            <>
-              <button type="button" onClick={() => { setMenu(null); startNew('file', menu.path) }}>New file</button>
-              <button type="button" onClick={() => { setMenu(null); startNew('dir', menu.path) }}>New folder</button>
-            </>
-          )}
-          {menu.path && (
-            <>
-              <button type="button" onClick={() => { setMenu(null); setEditing({ kind: 'rename', path: menu.path }) }}>Rename…</button>
-              <DeleteItem
-                name={menu.path.split('/').pop() ?? menu.path}
-                onDelete={() => {
-                  setMenu(null)
-                  act(() => client.remove(menu.path))
-                }}
-              />
-            </>
-          )}
-        </div>
-      )}
+      {menu.menu}
     </ToolWindow>
-  )
-}
-
-// DeleteItem asks once, in place, before deleting.
-function DeleteItem({ name, onDelete }: { name: string; onDelete: () => void }) {
-  const [confirm, setConfirm] = useState(false)
-  if (!confirm) {
-    return (
-      <button type="button" className="code-menu-danger" onClick={() => setConfirm(true)}>
-        Delete…
-      </button>
-    )
-  }
-  return (
-    <button type="button" className="code-menu-danger" onClick={onDelete}>
-      Delete {name}? Click to confirm
-    </button>
   )
 }
 

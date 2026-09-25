@@ -21,15 +21,54 @@ export type Status = {
 	changes: Change[]
 }
 
-function run(cwd: string, args: string[], input?: string): Promise<string> {
+export type Branch = {
+	name: string
+	// The branch it tracks, and how far apart the two are.
+	upstream?: string
+	ahead?: number
+	behind?: number
+}
+
+export type Branches = {
+	current?: string
+	local: Branch[]
+	remote: string[]
+}
+
+// Network commands answer or fail: nothing may wait on a prompt nobody
+// sees. A host seen for the first time is trusted, as a first clone is.
+// Reading takes no optional locks: a status that locked the index would be
+// seen by the watcher below as a change, and answered with another status.
+const quiet = {
+	...process.env,
+	GIT_OPTIONAL_LOCKS: '0',
+	GIT_TERMINAL_PROMPT: '0',
+	GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new',
+}
+
+function run(cwd: string, args: string[], input?: string, timeout = 0): Promise<string> {
 	return new Promise((resolvePromise, reject) => {
-		const child = execFile('git', args, { cwd, maxBuffer: 64 << 20, encoding: 'utf8' }, (err, stdout, stderr) => {
-			if (err) reject(new Error((stderr || err.message).trim()))
-			else resolvePromise(stdout)
-		})
+		const child = execFile(
+			'git',
+			args,
+			{ cwd, maxBuffer: 64 << 20, encoding: 'utf8', env: quiet, timeout },
+			(err, stdout, stderr) => {
+				// git's advice ("hint: ...") is for a terminal; what went wrong
+				// is the rest.
+				const why = (stderr || err?.message || '')
+					.split('\n')
+					.filter((l) => !l.startsWith('hint:'))
+					.join('\n')
+					.trim()
+				if (err) reject(new Error(why || err.message))
+				else resolvePromise(stdout)
+			},
+		)
 		if (input !== undefined) child.stdin?.end(input)
 	})
 }
+
+const network = 120_000
 
 // Git answers for the repository at the root.
 export class Git {
@@ -116,9 +155,118 @@ export class Git {
 		this.changed()
 	}
 
-	async commit(message: string) {
-		if (!message.trim()) throw new Error('a commit needs a message')
-		await run(this.root, ['commit', '-F', '-'], message)
+	// show returns a file as HEAD or the index has it, or null where it
+	// has none.
+	async show(path: string, from: 'HEAD' | 'index'): Promise<{ text: string | null }> {
+		const rel = this.rel(path)
+		try {
+			return { text: await run(this.root, ['show', `${from === 'HEAD' ? 'HEAD' : ''}:${rel}`]) }
+		} catch {
+			return { text: null }
+		}
+	}
+
+	// setIndex stages a file's content as given, whatever the working tree
+	// holds: how part of a file's changes is staged.
+	async setIndex(path: string, content: string) {
+		const rel = this.rel(path)
+		const staged = (await run(this.root, ['ls-files', '--stage', '--', rel])).split(' ')[0]
+		const mode = /^1[0-7]{5}$/.test(staged) ? staged : '100644'
+		const sha = (await run(this.root, ['hash-object', '-w', '--stdin'], content)).trim()
+		await run(this.root, ['update-index', '--add', '--cacheinfo', `${mode},${sha},${rel}`])
+		this.changed()
+	}
+
+	// commit records the index. Amending replaces the last commit, keeping
+	// its message when none is given.
+	async commit(message: string, amend = false) {
+		if (!message.trim() && !amend) throw new Error('a commit needs a message')
+		const args = ['commit']
+		if (amend) args.push('--amend')
+		if (message.trim()) args.push('-F', '-')
+		else args.push('--no-edit')
+		await run(this.root, args, message.trim() ? message : undefined)
+		this.changed()
+	}
+
+	// lastMessage is the last commit's message, for amending it.
+	async lastMessage(): Promise<string> {
+		try {
+			return (await run(this.root, ['log', '-1', '--format=%B'])).trimEnd()
+		} catch {
+			return ''
+		}
+	}
+
+	async branches(): Promise<Branches> {
+		const local: Branch[] = []
+		const out = await run(this.root, [
+			'for-each-ref',
+			'--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)%09%(HEAD)',
+			'refs/heads',
+		])
+		let current: string | undefined
+		for (const line of out.split('\n')) {
+			if (!line) continue
+			const [name, upstream, track, head] = line.split('\t')
+			const b: Branch = { name }
+			if (upstream) {
+				b.upstream = upstream
+				b.ahead = Number(/ahead (\d+)/.exec(track)?.[1] ?? 0)
+				b.behind = Number(/behind (\d+)/.exec(track)?.[1] ?? 0)
+			}
+			if (head === '*') current = name
+			local.push(b)
+		}
+		const remote = (await run(this.root, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes']))
+			.split('\n')
+			.filter((r) => r && !r.endsWith('/HEAD') && r.includes('/'))
+		return { current, local, remote }
+	}
+
+	// checkout switches to a branch. A remote branch with no local one of
+	// its name gets one, tracking it.
+	async checkout(name: string) {
+		const { local, remote } = await this.branches()
+		if (local.some((b) => b.name === name)) await run(this.root, ['checkout', name])
+		else if (remote.includes(name)) {
+			const short = name.slice(name.indexOf('/') + 1)
+			if (local.some((b) => b.name === short)) await run(this.root, ['checkout', short])
+			else await run(this.root, ['checkout', '--track', name])
+		} else throw new Error(`no branch ${name}`)
+		this.changed()
+	}
+
+	async createBranch(name: string) {
+		await run(this.root, ['check-ref-format', '--branch', name])
+		await run(this.root, ['checkout', '-b', name])
+		this.changed()
+	}
+
+	// push sends the current branch to what it tracks, or else to origin
+	// (or the only remote) under its own name, which it then tracks.
+	async push() {
+		const { current, local } = await this.branches()
+		if (!current) throw new Error('not on a branch')
+		if (local.find((b) => b.name === current)?.upstream) await run(this.root, ['push'], undefined, network)
+		else {
+			const remotes = (await run(this.root, ['remote'])).split('\n').filter(Boolean)
+			const remote = remotes.includes('origin') ? 'origin' : remotes[0]
+			if (!remote) throw new Error('the repository has no remote')
+			await run(this.root, ['push', '--set-upstream', remote, current], undefined, network)
+		}
+		this.changed()
+	}
+
+	// pull takes what the branch tracks, where that fast-forwards; anything
+	// needing a merge is left for the terminal.
+	async pull() {
+		await run(this.root, ['pull', '--ff-only'], undefined, network)
+		this.changed()
+	}
+
+	async fetch() {
+		await run(this.root, ['fetch', '--all', '--prune'], undefined, network)
 		this.changed()
 	}
 
@@ -137,9 +285,17 @@ export class Git {
 	}
 
 	private start() {
-		for (const target of [join(this.root, '.git'), join(this.root, '.git', 'refs', 'heads')]) {
+		for (const target of [
+			join(this.root, '.git'),
+			join(this.root, '.git', 'refs', 'heads'),
+			join(this.root, '.git', 'refs', 'remotes'),
+		]) {
 			try {
-				const w = watch(target, () => this.changed())
+				// A lock file comes and goes around every write, which is
+				// seen when the file it guards changes.
+				const w = watch(target, (_, name) => {
+					if (!name?.toString().endsWith('.lock')) this.changed()
+				})
 				w.on('error', () => w.close())
 				this.watchers.push(w)
 			} catch {

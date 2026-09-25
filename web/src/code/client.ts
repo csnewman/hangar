@@ -47,6 +47,19 @@ export interface Diff {
   working: string
 }
 
+export interface Branch {
+  name: string
+  upstream?: string
+  ahead?: number
+  behind?: number
+}
+
+export interface Branches {
+  current?: string
+  local: Branch[]
+  remote: string[]
+}
+
 export type ConnectionState = 'connecting' | 'live' | 'reconnecting'
 
 type Events = {
@@ -296,8 +309,37 @@ export class CodeClient {
   rollback(path: string) {
     return this.request<void>('git.rollback', { path })
   }
-  commit(message: string) {
-    return this.request<void>('git.commit', { message })
+  commit(message: string, amend = false) {
+    return this.request<void>('git.commit', { message, amend })
+  }
+  lastMessage() {
+    return this.request<string>('git.lastMessage')
+  }
+  // show is a file as HEAD or the index has it; null where it has none.
+  async show(path: string, from: 'HEAD' | 'index') {
+    return (await this.request<{ text: string | null }>('git.show', { path, from })).text
+  }
+  // setIndex stages exactly this content for a file.
+  setIndex(path: string, content: string) {
+    return this.request<void>('git.setIndex', { path, content })
+  }
+  branches() {
+    return this.request<Branches>('git.branches')
+  }
+  checkout(name: string) {
+    return this.request<void>('git.checkout', { name })
+  }
+  createBranch(name: string) {
+    return this.request<void>('git.createBranch', { name })
+  }
+  push() {
+    return this.request<void>('git.push')
+  }
+  pull() {
+    return this.request<void>('git.pull')
+  }
+  fetch() {
+    return this.request<void>('git.fetch')
   }
 
   // open returns the shared document for a file, opening it on the service
