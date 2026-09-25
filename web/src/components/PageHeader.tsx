@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react'
 import { Link } from 'react-router'
 
+import { useTitle } from '../title'
+
 export interface Crumb {
   label: string
   to?: string
@@ -17,6 +19,7 @@ export function PageHeader({
   subtitle?: ReactNode
   actions?: ReactNode
 }) {
+  useTitle(typeof title === 'string' && title)
   return (
     <div className="page-head">
       <div className="page-title">

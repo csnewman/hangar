@@ -12,7 +12,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useState } from 'react'
-import { Link, NavLink, Outlet, useOutletContext, useParams } from 'react-router'
+import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from 'react-router'
 
 import type { Environment } from '../api'
 import { useMe } from '../session'
@@ -22,6 +22,7 @@ import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
 import { PhaseBadge } from '../components/Status'
 import { useEnvironments } from '../environments'
+import { useTitle } from '../title'
 import { Activity as AuditActivity } from '../components/Activity'
 
 const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
@@ -43,6 +44,10 @@ export function EnvironmentPage() {
   const me = useMe()
   const envs = useEnvironments()
   const env = envs.data?.find((e) => e.id === id)
+  // The tab is the path's segment after the environment's ID.
+  const segment = useLocation().pathname.split('/')[3] ?? ''
+  const tab = tabs.find((t) => t.to === segment) ?? tabs[0]
+  useTitle(env?.name, env && tab.label)
 
   if (envs.isPending) return <div className="page" />
   if (!env) {
