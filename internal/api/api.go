@@ -7,7 +7,10 @@
 // Either side can drop any number of messages and the next one repairs it.
 package api
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // DesiredState is what the owner of an environment has asked for.
 type DesiredState string
@@ -96,11 +99,39 @@ type Spec struct {
 	// EditorPath is the folder the editor opens on.
 	EditorPath string `json:"editor_path,omitempty"`
 	// Untrusted is for code the owner does not trust: the environment is
-	// never given their credentials (internal/profile).
+	// never given their credentials (internal/profile), and its editor
+	// trusts no folder.
 	Untrusted bool `json:"untrusted,omitempty"`
+	// TrustedFolders are trusted by the editor without asking, beyond the
+	// repositories and the editor's folder, which a trusted environment's
+	// editor trusts anyway. Ignored for an untrusted one.
+	TrustedFolders []string `json:"trusted_folders,omitempty"`
 	// Placement limits which workers may run the environment: each key must
 	// be a label the worker has, with this value.
 	Placement map[string]string `json:"placement"`
+}
+
+// EditorTrust is the folders an environment's editor trusts without asking:
+// none for one that is untrusted; otherwise its repositories, its editor's
+// folder, and whatever else its template names.
+func (s Spec) EditorTrust() []string {
+	out := []string{}
+	if s.Untrusted {
+		return out
+	}
+	add := func(p string) {
+		if p != "" && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	for _, r := range s.Repos {
+		add(r.Path)
+	}
+	add(s.EditorPath)
+	for _, f := range s.TrustedFolders {
+		add(f)
+	}
+	return out
 }
 
 // TemplateSpec is a Spec with the rules for naming the environments made

@@ -156,15 +156,16 @@ func toSpec(s api.Spec) Spec {
 		placement = map[string]string{}
 	}
 	return Spec{
-		Image:      s.Image,
-		CPUs:       s.CPUs,
-		MemoryMiB:  s.MemoryMiB,
-		Display:    Display(s.Display),
-		GPU:        GPU(s.GPU),
-		Repos:      repos,
-		EditorPath: optional(s.EditorPath),
-		Untrusted:  optionalBool(s.Untrusted),
-		Placement:  placement,
+		Image:          s.Image,
+		CPUs:           s.CPUs,
+		MemoryMiB:      s.MemoryMiB,
+		Display:        Display(s.Display),
+		GPU:            GPU(s.GPU),
+		Repos:          repos,
+		EditorPath:     optional(s.EditorPath),
+		Untrusted:      optionalBool(s.Untrusted),
+		TrustedFolders: optionalSlice(s.TrustedFolders),
+		Placement:      placement,
 	}
 }
 
@@ -174,16 +175,31 @@ func fromSpec(s Spec) api.Spec {
 		repos[i] = api.Repo{URL: r.URL, Ref: deref(r.Ref), Path: r.Path, Branch: deref(r.Branch)}
 	}
 	return api.Spec{
-		Image:      s.Image,
-		CPUs:       s.CPUs,
-		MemoryMiB:  s.MemoryMiB,
-		Display:    api.Display(s.Display),
-		GPU:        api.GPU(s.GPU),
-		Repos:      repos,
-		EditorPath: deref(s.EditorPath),
-		Untrusted:  s.Untrusted != nil && *s.Untrusted,
-		Placement:  s.Placement,
+		Image:          s.Image,
+		CPUs:           s.CPUs,
+		MemoryMiB:      s.MemoryMiB,
+		Display:        api.Display(s.Display),
+		GPU:            api.GPU(s.GPU),
+		Repos:          repos,
+		EditorPath:     deref(s.EditorPath),
+		Untrusted:      s.Untrusted != nil && *s.Untrusted,
+		TrustedFolders: derefSlice(s.TrustedFolders),
+		Placement:      s.Placement,
 	}
+}
+
+func optionalSlice(s []string) *[]string {
+	if len(s) == 0 {
+		return nil
+	}
+	return &s
+}
+
+func derefSlice(s *[]string) []string {
+	if s == nil {
+		return nil
+	}
+	return *s
 }
 
 func optionalBool(b bool) *bool {

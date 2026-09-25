@@ -1019,6 +1019,13 @@ components:
         editor_path:
           type: string
           description: The folder the editor opens on.
+        trusted_folders:
+          type: array
+          description: >-
+            Folders VS Code trusts without asking, beyond the repositories and
+            the editor's folder, which it trusts anyway. Ignored when
+            untrusted, where it trusts nothing.
+          items: { type: string }
         untrusted:
           type: boolean
           description: >-

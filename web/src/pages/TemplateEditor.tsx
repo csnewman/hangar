@@ -87,6 +87,9 @@ function Editor({ existing }: { existing?: Template }) {
         repos: spec.repos.map((r) => ({ ...r, ref: r.ref || undefined, branch: r.branch || undefined })),
         editor_path: spec.editor_path || undefined,
         untrusted: spec.untrusted || undefined,
+        trusted_folders: spec.untrusted
+          ? undefined
+          : (spec.trusted_folders ?? []).map((f) => f.trim()).filter((f) => f !== '') || undefined,
         placement: Object.fromEntries(placement.filter(([k]) => k.trim() !== '').map(([k, v]) => [k.trim(), v.trim()])),
       },
       description: form.description || undefined,
@@ -325,11 +328,26 @@ function Editor({ existing }: { existing?: Template }) {
               <span>
                 Untrusted code
                 <small className="muted">
-                  The owner's credentials never reach it: no Claude sign-in and no SSH keys. The rest of their profile
-                  still does.
+                  The owner's credentials never reach it -- no Claude or git sign-ins, no SSH keys -- and VS Code trusts
+                  no folder, so it opens in Restricted Mode. The rest of their profile still arrives.
                 </small>
               </span>
             </label>
+            {!spec.untrusted && (
+              <label className="field">
+                <span>VS Code also trusts</span>
+                <textarea
+                  className="mono"
+                  rows={2}
+                  value={(spec.trusted_folders ?? []).join('\n')}
+                  onChange={(e) => setSpec({ trusted_folders: e.target.value.split('\n') })}
+                  placeholder="/workspace/shared"
+                />
+                <small className="muted">
+                  One folder per line. The repositories and the editor's folder are trusted without being listed.
+                </small>
+              </label>
+            )}
           </Section>
 
           <Section title="Naming" hint="Leave empty to allow any name.">

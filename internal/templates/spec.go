@@ -101,6 +101,14 @@ func Validate(s api.TemplateSpec) (api.TemplateSpec, error) {
 		s.EditorPath = path.Clean(s.EditorPath)
 	}
 
+	for i, f := range s.TrustedFolders {
+		f = strings.TrimSpace(f)
+		if !absPath(f) {
+			return bad("trusted folder %d must be an absolute path", i+1)
+		}
+		s.TrustedFolders[i] = path.Clean(f)
+	}
+
 	s.NamePattern = strings.TrimSpace(s.NamePattern)
 	s.NameHint = strings.TrimSpace(s.NameHint)
 	if s.NamePattern != "" {
@@ -158,6 +166,10 @@ func Resolve(t api.TemplateSpec, name string) (api.Spec, error) {
 			return api.Spec{}, fmt.Errorf("%w: the name %q makes an invalid branch name %q", ErrInvalid, name, r.Branch)
 		}
 		s.Repos[i] = r
+	}
+	if s.EditorPath == "" && len(s.Repos) > 0 {
+		// The editor opens on what the environment is for.
+		s.EditorPath = s.Repos[0].Path
 	}
 	s.Placement = maps.Clone(t.Placement)
 	if s.Placement == nil {

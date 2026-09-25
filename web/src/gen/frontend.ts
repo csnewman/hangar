@@ -701,6 +701,8 @@ export interface components {
             repos: components["schemas"]["Repo"][];
             /** @description The folder the editor opens on. */
             editor_path?: string;
+            /** @description Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored when untrusted, where it trusts nothing. */
+            trusted_folders?: string[];
             /** @description For code the owner does not trust: the environment is never given their credentials -- Claude's sign-in, or signatures from their SSH keys -- though the rest of their profile still follows them in. */
             untrusted?: boolean;
             /** @description Worker labels the environment requires: it runs only on a worker with every one of these labels, with these values. */

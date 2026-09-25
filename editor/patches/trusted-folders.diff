@@ -1,0 +1,64 @@
+diff --git a/src/vs/server/node/webClientServer.ts b/src/vs/server/node/webClientServer.ts
+--- a/src/vs/server/node/webClientServer.ts
++++ b/src/vs/server/node/webClientServer.ts
+@@ -413,10 +413,22 @@
+ 			} catch (err) {/* Ignore Error */ }
+ 		}
+ 
++		// Hangar: the folders this environment's template trusts, as the
++		// agent wrote them when it booted. Read on every page, so a folder
++		// the agent adds is trusted from the next load.
++		let trustedFolders: string[] = [];
++		try {
++			const listed = JSON.parse((await promises.readFile(process.env['HANGAR_TRUSTED_FOLDERS_FILE'] || '/run/hangar/trusted-folders.json')).toString());
++			if (Array.isArray(listed)) {
++				trustedFolders = listed.filter((f): f is string => typeof f === 'string' && f.startsWith('/'));
++			}
++		} catch (err) {/* None trusted: every folder opens in Restricted Mode */ }
++
+ 		const workbenchWebConfiguration = {
+ 			remoteAuthority,
+ 			serverBasePath: basePath,
+ 			userDataPath: this._environmentService.userDataPath,
++			trustedFolders,
+ 			_wrapWebWorkerExtHostInIframe,
+ 			developmentOptions: { enableSmokeTestDriver: this._environmentService.args['enable-smoke-test-driver'] ? true : undefined, logLevel: this._logService.getLevel() },
+ 			settingsSyncOptions: !this._environmentService.isBuilt && this._environmentService.args['enable-sync'] ? { enabled: true } : undefined,
+diff --git a/src/vs/workbench/browser/web.api.ts b/src/vs/workbench/browser/web.api.ts
+--- a/src/vs/workbench/browser/web.api.ts
++++ b/src/vs/workbench/browser/web.api.ts
+@@ -322,6 +322,14 @@
+ 	 */
+ 	readonly userDataPath?: string;
+ 
++	/**
++	 * Hangar: folders on the remote that are trusted without asking, and
++	 * everything under them. The environment's template decides them: its
++	 * repositories for a trusted one, nothing for one that runs code nobody
++	 * vouches for.
++	 */
++	readonly trustedFolders?: readonly string[];
++
+ 	//#endregion
+ 
+ 	//#region Profile options
+diff --git a/src/vs/workbench/services/workspaces/common/workspaceTrust.ts b/src/vs/workbench/services/workspaces/common/workspaceTrust.ts
+--- a/src/vs/workbench/services/workspaces/common/workspaceTrust.ts
++++ b/src/vs/workbench/services/workspaces/common/workspaceTrust.ts
+@@ -459,6 +459,16 @@
+ 			return false;
+ 		}
+ 
++		// Hangar: folders the remote's embedder names as trusted.
++		const trustedFolders = (this.environmentService as unknown as { options?: { trustedFolders?: readonly string[] } }).options?.trustedFolders;
++		if (trustedFolders && uri.scheme === Schemas.vscodeRemote && isEqualAuthority(getRemoteAuthority(uri), this.environmentService.remoteAuthority)) {
++			for (const folder of trustedFolders) {
++				if (this.uriIdentityService.extUri.isEqualOrParent(uri, uri.with({ path: folder }))) {
++					return true;
++				}
++			}
++		}
++
+ 		if (!this._remoteAuthority) {
+ 			return false;
+ 		}

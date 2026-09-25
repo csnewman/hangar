@@ -2,3 +2,4 @@ proposed-api.diff
 signature-verification.diff
 user-data-on-remote.diff
 no-builtin-copilot.diff
+trusted-folders.diff

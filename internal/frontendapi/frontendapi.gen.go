@@ -472,6 +472,9 @@ type Spec struct {
 	Placement map[string]string `json:"placement"`
 	Repos     []Repo            `json:"repos"`
 
+	// TrustedFolders Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored when untrusted, where it trusts nothing.
+	TrustedFolders *[]string `json:"trusted_folders,omitempty"`
+
 	// Untrusted For code the owner does not trust: the environment is never given their credentials -- Claude's sign-in, or signatures from their SSH keys -- though the rest of their profile still follows them in.
 	Untrusted *bool `json:"untrusted,omitempty"`
 }
