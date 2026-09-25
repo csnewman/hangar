@@ -21,6 +21,8 @@ const hangarConfig = path.join(hangarDir, 'config')
 const hangarKnownHosts = path.join(hangarDir, 'known_hosts')
 const includeLine = 'Include ~/.ssh/hangar/config'
 const remoteSSH = ['ms-vscode-remote.remote-ssh', 'jeanp413.open-remote-ssh']
+// apiVersion is the version of Hangar's client API this extension speaks.
+const apiVersion = 'v1'
 
 // Phases an environment passes through on its own; while any is showing,
 // the list is refreshed more often.
@@ -40,7 +42,29 @@ class HTTPError extends Error {
   }
 }
 
-// Client calls the server's API as the signed-in user.
+// checkServer asks a server which API versions it serves, before anything
+// is signed in, and explains a mismatch either way.
+async function checkServer(server) {
+  let res
+  try {
+    res = await fetch(`${server}/api/${apiVersion}/version`)
+  } catch (err) {
+    throw new Error(`Hangar at ${server} cannot be reached: ${err.cause?.message ?? err.message}`)
+  }
+  if (res.status === 404) {
+    throw new Error(`${new URL(server).host} is too old for this extension: it serves no /api/${apiVersion}. Update the server.`)
+  }
+  if (!res.ok) throw new Error(`${new URL(server).host} answered ${res.status}`)
+  const v = await res.json()
+  if (!v.versions?.includes(apiVersion)) {
+    throw new Error(
+      `${new URL(server).host} no longer serves the API this extension speaks (${apiVersion}; it serves ${v.versions?.join(', ')}). Update the extension.`,
+    )
+  }
+  return v
+}
+
+// Client calls the server's client API (/api/v1) as the signed-in user.
 class Client {
   constructor(server, token) {
     this.server = server
@@ -50,7 +74,7 @@ class Client {
   async call(method, apiPath, body) {
     let res
     try {
-      res = await fetch(this.server + '/api/frontend' + apiPath, {
+      res = await fetch(`${this.server}/api/${apiVersion}${apiPath}`, {
         method,
         headers: {
           Authorization: 'Bearer ' + this.token,
@@ -79,11 +103,11 @@ class Client {
   environments() {
     return this.call('GET', '/environments')
   }
-  profile() {
-    return this.call('GET', '/me/profile')
+  loginKeys() {
+    return this.call('GET', '/me/login-keys')
   }
   addLoginKey(publicKey) {
-    return this.call('POST', '/me/profile/login-keys', { public_key: publicKey })
+    return this.call('POST', '/me/login-keys', { public_key: publicKey })
   }
   act(id, action) {
     return this.call('POST', `/environments/${encodeURIComponent(id)}/${action}`)
@@ -184,7 +208,7 @@ class Tree {
     tip.appendMarkdown(`**${env.name}**${own ? '' : ` — ${env.owner}`}\n\n`)
     tip.appendMarkdown(`${env.phase}${env.reason ? `: ${env.reason}` : ''}\n\n`)
     tip.appendMarkdown(`${env.template} · ${env.cpus} vCPU · ${Math.round(env.memory_mib / 1024)} GiB`)
-    for (const r of env.spec?.repos ?? []) tip.appendMarkdown(`\n\n\`${r.url}\` in \`${r.path}\``)
+    if (env.editor_path) tip.appendMarkdown(`\n\nOpens \`${env.editor_path}\``)
     item.tooltip = tip
     return { item, env }
   }
@@ -334,8 +358,8 @@ function localKeys() {
 // ensureLoginKey has a key of this machine's among the user's sign-in keys,
 // offering to add one when none is.
 async function ensureLoginKey(c) {
-  const profile = await c.profile()
-  const registered = new Set(profile.login_keys.map((k) => k.fingerprint))
+  const loginKeys = await c.loginKeys()
+  const registered = new Set(loginKeys.map((k) => k.fingerprint))
   const local = localKeys()
   const match = local.find((k) => registered.has(k.fingerprint))
   if (match) {
@@ -343,7 +367,7 @@ async function ensureLoginKey(c) {
     return true
   }
   const answer = await vscode.window.showWarningMessage(
-    profile.login_keys.length === 0
+    loginKeys.length === 0
       ? 'You have no SSH sign-in keys in Hangar, so SSH cannot sign you in.'
       : 'None of the SSH keys in ~/.ssh is one of your Hangar sign-in keys.',
     { modal: true, detail: 'Add one of this machine\'s public keys to your Hangar profile?' },
@@ -468,10 +492,43 @@ async function open(node, newWindow) {
     if (platforms[host] !== 'linux') {
       await remote.update('remotePlatform', { ...platforms, [host]: 'linux' }, vscode.ConfigurationTarget.Global)
     }
-    const folder = env.spec?.editor_path || '/home/dev'
+    const folder = env.editor_path || '/home/dev'
     const uri = vscode.Uri.from({ scheme: 'vscode-remote', authority: `ssh-remote+${host}`, path: folder })
     log.appendLine(`opening ${uri.toString()}`)
     await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: newWindow })
+  } catch (err) {
+    vscode.window.showErrorMessage(`Hangar: ${err.message}`)
+  }
+}
+
+// openFromLink opens an environment another app asked for, such as the
+// Hangar desktop app: vscode://hangar.hangar-remote/open?server=<origin>&env=<id>.
+// It asks to sign in first when this window is signed in elsewhere or not
+// at all.
+async function openFromLink(q) {
+  const env = q.get('env')
+  let server
+  try {
+    server = normaliseServer(q.get('server') ?? '')
+  } catch {
+    return
+  }
+  if (!env) return
+  let c = await client()
+  if (!c || c.server !== server) {
+    const answer = await vscode.window.showInformationMessage(
+      `Open an environment on ${new URL(server).host}? Sign in to it first.`,
+      { modal: true },
+      'Sign In',
+    )
+    if (answer !== 'Sign In') return
+    await ctx.globalState.update(serverKey, server)
+    await signIn()
+    c = await client()
+    if (!c || c.server !== server) return
+  }
+  try {
+    await open({ env: await c.call('GET', `/environments/${encodeURIComponent(env)}`) }, true)
   } catch (err) {
     vscode.window.showErrorMessage(`Hangar: ${err.message}`)
   }
@@ -567,6 +624,7 @@ async function signInWithToken(server) {
 async function finishSignIn(server, token) {
   let me
   try {
+    await checkServer(server)
     me = await new Client(server, token).me()
   } catch (err) {
     vscode.window.showErrorMessage(`Hangar: ${err.message}`)
@@ -597,6 +655,7 @@ function activate(context) {
     vscode.window.registerTreeDataProvider('hangar.environments', tree),
     vscode.window.registerUriHandler({
       handleUri(uri) {
+        if (uri.path === '/open') return openFromLink(new URLSearchParams(uri.query))
         if (uri.path !== '/signed-in' || !pending) return
         const q = new URLSearchParams(uri.query)
         if (q.get('state') !== pending.state || !q.get('token')) {
