@@ -21,6 +21,7 @@ import { formatAgo } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
 import { StartProgress } from '../components/StartProgress'
+import { desktop } from '../desktop'
 import { PhaseBadge } from '../components/Status'
 import { useEnvironments } from '../environments'
 import { useTitle } from '../title'
@@ -86,6 +87,7 @@ export function EnvironmentPage() {
           ))}
         </nav>
         <div className="env-actions">
+          {desktop && env.phase === 'running' && <DesktopActions env={env.id} />}
           <EnvironmentActions env={env} afterDelete="/environments" />
         </div>
       </div>
@@ -97,6 +99,30 @@ export function EnvironmentPage() {
       <div className="tab-body">
         <Outlet context={env} />
       </div>
+    </div>
+  )
+}
+
+// DesktopActions are what the desktop app adds: the environment opened in
+// desktop VS Code, or in a terminal.
+function DesktopActions({ env }: { env: string }) {
+  const [error, setError] = useState('')
+  return (
+    <div className="actions">
+      {error && <span className="action-error">{error}</span>}
+      <button type="button" className="btn btn-ghost" title="Open in desktop VS Code" onClick={() => desktop?.openInVSCode(env)}>
+        <Code2 size={13} />
+        VS Code
+      </button>
+      <button
+        type="button"
+        className="btn btn-ghost"
+        title="Open a terminal on this machine, over SSH"
+        onClick={async () => setError((await desktop?.openTerminal(env)) ?? '')}
+      >
+        <SquareTerminal size={13} />
+        Terminal
+      </button>
     </div>
   )
 }
