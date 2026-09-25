@@ -1,0 +1,24 @@
+{
+  "name": "hangar-desktop",
+  "productName": "Hangar",
+  "version": "0.1.0",
+  "description": "Hangar's control panel as a desktop app: tabs that keep their state, several servers, notifications and a menu bar.",
+  "license": "MIT",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "node scripts/icons.mjs && node scripts/build.mjs",
+    "icons": "node scripts/icons.mjs",
+    "typecheck": "tsc --noEmit",
+    "start": "npm run build && electron .",
+    "dist": "npm run build && electron-builder --publish never"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^26.6.3",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}

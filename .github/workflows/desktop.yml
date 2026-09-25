@@ -1,0 +1,88 @@
+name: desktop
+
+on:
+  push:
+    branches: [master]
+    paths: [desktop/**, .github/workflows/desktop.yml]
+    tags: ['desktop-v*']
+  pull_request:
+    paths: [desktop/**, .github/workflows/desktop.yml]
+
+jobs:
+  check:
+    runs-on: ubuntu-26.04
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+
+  # Installers for each platform, built on it, for a release tag.
+  package:
+    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    needs: check
+    strategy:
+      matrix:
+        include:
+          - os: macos-15
+            args: --mac
+          - os: ubuntu-26.04
+            args: --linux
+          - os: windows-2025
+            args: --win
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci
+      # The tag names the version, desktop-v1.2.3 being 1.2.3.
+      - run: npm version --no-git-tag-version "${GITHUB_REF_NAME#desktop-v}"
+        shell: bash
+      - run: npm run dist -- ${{ matrix.args }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ runner.os }}
+          path: |
+            desktop/release/*.dmg
+            desktop/release/*.zip
+            desktop/release/*.AppImage
+            desktop/release/*.deb
+            desktop/release/*.exe
+
+  release:
+    needs: package
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      # The Homebrew cask for this release, with its checksums.
+      - run: |
+          version="${GITHUB_REF_NAME#desktop-v}"
+          sed -e "s/@VERSION@/$version/" \
+              -e "s/@SHA_ARM64@/$(sha256sum out/Hangar-$version-mac-arm64.zip | cut -d' ' -f1)/" \
+              -e "s/@SHA_X64@/$(sha256sum out/Hangar-$version-mac-x64.zip | cut -d' ' -f1)/" \
+              desktop/packaging/homebrew/hangar.rb.in > out/hangar.rb
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Hangar desktop ${{ github.ref_name }}
+          files: out/*

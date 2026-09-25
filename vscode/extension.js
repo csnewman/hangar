@@ -58,7 +58,7 @@ async function checkServer(server) {
   const v = await res.json()
   if (!v.versions?.includes(apiVersion)) {
     throw new Error(
-      `${new URL(server).host} no longer serves the API this extension speaks (${apiVersion}; it serves ${v.versions?.join(', ')}). Update the extension.`,
+      `${new URL(server).host} does not serve the API this extension speaks (${apiVersion}; it serves ${v.versions?.join(', ')}). Update the extension.`,
     )
   }
   return v

@@ -1,0 +1,38 @@
+# Installers for the desktop app. They are unsigned: macOS builds are
+# ad-hoc signed ("-"), which Apple Silicon needs to run them at all, and
+# Gatekeeper still asks on first open unless the quarantine flag is cleared
+# (the Homebrew cask does; see packaging/).
+appId: dev.hangar.desktop
+productName: Hangar
+copyright: Copyright © Hangar contributors
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**
+  - package.json
+asar: true
+protocols:
+  - name: Hangar
+    schemes: [hangar]
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  category: public.app-category.developer-tools
+  identity: "-"
+  hardenedRuntime: false
+  artifactName: Hangar-${version}-mac-${arch}.${ext}
+linux:
+  target: [AppImage, deb]
+  category: Development
+  maintainer: Hangar contributors <hangar@users.noreply.github.com>
+  artifactName: Hangar-${version}-linux-${arch}.${ext}
+win:
+  target: [nsis]
+  artifactName: Hangar-${version}-windows-${arch}.${ext}
+nsis:
+  oneClick: true
+  perMachine: false
