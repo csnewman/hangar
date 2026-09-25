@@ -29,7 +29,7 @@ type counters struct {
 // vCPUs cost. Memory, disk and network come from inside the guest through
 // its agent: the guest knows what it has free, and sees its own devices
 // whichever backend serves them.
-func (m *machine) sample(inst *instance, cpus int) {
+func (m *machine) sample(inst *Instance, cpus int) {
 	var prev *counters
 	t := time.NewTicker(sampleEvery)
 	defer t.Stop()
@@ -38,10 +38,10 @@ func (m *machine) sample(inst *instance, cpus int) {
 		st := &api.EnvironmentStats{DiskUsedBytes: allocated(filepath.Join(m.dir, "upper.ext4")) +
 			allocated(filepath.Join(m.dir, "docker.ext4"))}
 
-		if inst.cmd != nil && inst.cmd.Process != nil {
-			now.cpuTicks = processTicks(inst.cmd.Process.Pid)
+		if pid := inst.Pid(); pid != 0 {
+			now.cpuTicks = processTicks(pid)
 		}
-		if out, err := inst.session.Exec(10*time.Second, "cat", "/proc/meminfo", "/proc/net/dev", "/proc/diskstats"); err == nil && out.Code == 0 {
+		if out, err := inst.Session().Exec(10*time.Second, "cat", "/proc/meminfo", "/proc/net/dev", "/proc/diskstats"); err == nil && out.Code == 0 {
 			guest(out.Stdout, st, &now)
 		}
 
@@ -67,7 +67,7 @@ func (m *machine) sample(inst *instance, cpus int) {
 		prev = &now
 
 		select {
-		case <-inst.exited:
+		case <-inst.Exited():
 			m.mu.Lock()
 			m.stats = nil
 			m.mu.Unlock()

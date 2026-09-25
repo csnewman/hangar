@@ -14,14 +14,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/csnewman/hangar/internal/agent"
 	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/host"
 	"github.com/csnewman/hangar/internal/image"
 	"github.com/csnewman/hangar/internal/kernel"
 	"github.com/csnewman/hangar/internal/snapshot"
 	"github.com/csnewman/hangar/internal/vm"
-	"github.com/csnewman/hangar/internal/vsock"
 )
 
 // defaultKernel is where `hangar kernel` leaves its build, and so where `hangar
@@ -240,8 +238,6 @@ func runVM(ctx context.Context, argv []string) error {
 	smoke := fs.Bool("smoke", false, "run the in-guest smoke test, then power off")
 	console := fs.String("console", "", "write the guest console to this file instead of stdio")
 	kernelPath := fs.String("kernel", "", "kernel to boot (default: "+defaultKernel+")")
-	cid := fs.Uint("cid", 0, "guest vsock context ID (default: the first guest one; each guest has its own socket)")
-	noAgent := fs.Bool("no-agent", false, "boot without an agent channel")
 	agentWait := fs.Duration("agent-wait", 90*time.Second, "how long to wait for the agent")
 	exec := fs.String("exec", "", "run this shell command in the guest once its agent answers, print the output, and stop")
 	append_ := fs.String("append", "", "extra words for the guest kernel command line")
@@ -261,11 +257,6 @@ func runVM(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	caps, err := host.Detect()
-	if err != nil {
-		return err
-	}
-
 	// The base goes over virtio-fs, vda is the writable upper layer, and the
 	// agent -- the initramfs, as init -- stacks them with overlayfs and hands
 	// over to the image's init.
@@ -279,7 +270,6 @@ func runVM(ctx context.Context, argv []string) error {
 			return fmt.Errorf("no guest kernel at %s - run \"hangar kernel\" first, or pass -kernel", kpath)
 		}
 	}
-
 	base := *baseDir
 	if base == "" {
 		base = filepath.Join(*out, "rootfs")
@@ -298,61 +288,47 @@ func runVM(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	agentBin := *agentPath
-	if agentBin == "" {
-		dir, err := image.BuildAgent(ctx, "linux/"+runtime.GOARCH, false)
+	dir, err := stateDir(*name)
+	if err != nil {
+		return err
+	}
+	cfg := vm.InstanceConfig{
+		ID: *name, Name: *name, Dir: dir,
+		Kernel: kpath, Base: base, Disks: disks,
+		MemoryMiB: *mem, CPUs: *cpus, DaxMiB: *dax, Net: *network,
+		GPU: *gpu, GPUVenus: *gpuVenus, GPUVenusRestore: *gpuVenusRestore, GPUWindowMiB: *gpuShm,
+		ConsoleFile: *console, Seccomp: *seccomp,
+	}
+	if *smoke {
+		cfg.ExtraCmdline = "hangar.smoketest"
+	}
+	if *append_ != "" {
+		cfg.ExtraCmdline = strings.TrimSpace(cfg.ExtraCmdline + " " + *append_)
+	}
+	if *printOnly {
+		out, err := cfg.Command()
+		if err != nil {
+			return err
+		}
+		fmt.Println(out)
+		return nil
+	}
+
+	cfg.Agent = *agentPath
+	if cfg.Agent == "" {
+		built, err := image.BuildAgent(ctx, "linux/"+runtime.GOARCH, false)
 		if err != nil {
 			return fmt.Errorf("building the agent: %w", err)
 		}
-		defer os.RemoveAll(dir)
-		agentBin = filepath.Join(dir, "hangar-agent")
-	}
-	initrd := filepath.Join(os.TempDir(), "hangar-"+*name+"-initrd.img")
-	if err := vm.WriteInitrd(agentBin, initrd); err != nil {
-		return err
-	}
-
-	ccfg := &ch.Config{
-		Name:        *name,
-		Kernel:      kpath,
-		Initrd:      initrd,
-		Disks:       disks,
-		MemoryMB:    *mem,
-		CPUs:        *cpus,
-		ConsoleFile: *console,
-		ConsoleTTY:  caps.ConsoleTTY,
-		Seccomp:     *seccomp,
-	}
-
-	if *smoke {
-		ccfg.ExtraCmdline = "hangar.smoketest"
-	}
-	if *append_ != "" {
-		ccfg.ExtraCmdline = strings.TrimSpace(ccfg.ExtraCmdline + " " + *append_)
-	}
-	if !*noAgent {
-		// Cloud Hypervisor carries each guest's vsock on a unix socket of
-		// its own, so the number is local to that socket and any guest CID
-		// will do.
-		ccfg.GuestCID = uint32(*cid)
-		if ccfg.GuestCID == 0 {
-			ccfg.GuestCID = vsock.FirstGuestCID
+		// Kept with the machine: a resume boots with the same agent.
+		cfg.Agent = filepath.Join(dir, "hangar-agent")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
 		}
-	}
-
-	var probe *probeCmd
-	if *exec != "" {
-		probe = &probeCmd{cmd: *exec, timeout: *execWait}
-	}
-
-	required := []string{ccfg.Kernel, ccfg.Initrd}
-	for _, d := range ccfg.Disks {
-		required = append(required, d.Path)
-	}
-	for _, p := range required {
-		if _, err := os.Stat(p); err != nil {
-			return fmt.Errorf("%s not found", p)
+		if err := os.Rename(filepath.Join(built, "hangar-agent"), cfg.Agent); err != nil {
+			return err
 		}
+		os.RemoveAll(built)
 	}
 
 	// Guest memory has to be shared for virtio-fs, and shared memory gets
@@ -362,50 +338,25 @@ func runVM(ctx context.Context, argv []string) error {
 	if err := ch.CheckHugePages(); err != nil {
 		return err
 	}
-
-	run := filepath.Join(os.TempDir(), "hangar-"+ccfg.Name)
-	if ccfg.GuestCID != 0 {
-		ccfg.VsockSocket = run + "-vsock.sock"
-	}
-
-	if *printOnly {
-		ccfg.VirtiofsSocket = run + "-virtiofs.sock"
-		ccfg.VirtiofsDaxMiB = *dax
-		if *network {
-			ccfg.NetSocket = run + "-net.sock"
-		}
-		out, err := ch.PrintCommand(ccfg)
-		if err != nil {
-			return err
-		}
-		fmt.Println(out)
-		return nil
-	}
-
-	dir, err := stateDir(ccfg.Name)
-	if err != nil {
+	// A run boots afresh: a snapshot left from an earlier suspend is resumed
+	// by "hangar resume", not here.
+	vm.DiscardSuspend(dir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	rec := &envRecord{
-		Name:            ccfg.Name,
-		Virtiofs:        base,
-		Dax:             *dax,
-		Net:             *network,
-		GPU:             *gpu,
-		GPUVenus:        *gpuVenus,
-		GPUVenusRestore: *gpuVenusRestore,
-		GPUWindow:       *gpuShm,
-		CID:             ccfg.GuestCID,
-		Seccomp:         *seccomp,
+	if err := cfg.Save(); err != nil {
+		return err
 	}
-	ccfg.APISocket = run + "-api.sock"
 
-	fmt.Fprintf(os.Stderr, "booting %s under cloud-hypervisor (%d MiB, %d vCPU)\n",
-		ccfg.Name, ccfg.MemoryMB, ccfg.CPUs)
-	if ccfg.ConsoleFile != "" {
-		fmt.Fprintf(os.Stderr, "console -> %s\n\n", ccfg.ConsoleFile)
+	var probe *probeCmd
+	if *exec != "" {
+		probe = &probeCmd{cmd: *exec, timeout: *execWait}
 	}
-	return runEnv(ctx, rec, dir, false, ccfg, *agentWait, probe)
+	fmt.Fprintf(os.Stderr, "booting %s under cloud-hypervisor (%d MiB, %d vCPU)\n", cfg.Name, cfg.MemoryMiB, cfg.CPUs)
+	if cfg.ConsoleFile != "" {
+		fmt.Fprintf(os.Stderr, "console -> %s\n\n", cfg.ConsoleFile)
+	}
+	return holdMachine(ctx, cfg, *agentWait, probe)
 }
 
 // resumeVM brings a suspended environment back.
@@ -422,12 +373,12 @@ func resumeVM(ctx context.Context, argv []string) error {
 	if err != nil {
 		return err
 	}
-	rec, err := loadEnv(dir)
-	if err != nil {
-		return fmt.Errorf("%s has no saved state: %w", *name, err)
+	if !vm.Suspended(dir) {
+		return fmt.Errorf("%s is not suspended: %s holds no snapshot of it", *name, dir)
 	}
-	if !rec.Suspended {
-		return fmt.Errorf("%s was not suspended; its state in %s is not a snapshot", *name, dir)
+	cfg, err := vm.LoadInstanceConfig(dir)
+	if err != nil {
+		return fmt.Errorf("%s has no saved machine: %w", *name, err)
 	}
 	if err := ch.CheckHugePages(); err != nil {
 		return err
@@ -436,246 +387,8 @@ func resumeVM(ctx context.Context, argv []string) error {
 	if *exec != "" {
 		probe = &probeCmd{cmd: *exec, timeout: *execWait}
 	}
-	fmt.Fprintf(os.Stderr, "resuming %s from %s\n", rec.Name, dir)
-	return runEnv(ctx, rec, dir, true, nil, *agentWait, probe)
-}
-
-// runEnv starts an environment's backends and its monitor, and holds them
-// until the guest stops or is suspended.
-//
-// The same path serves a fresh boot and a resume, because the backends are
-// the same either way: they are told where their state lives, and if it is
-// there they start by restoring it. What differs is the monitor, which either
-// builds a machine from cfg or rebuilds one from the snapshot in dir.
-func runEnv(ctx context.Context, rec *envRecord, dir string, restoring bool, cfg *ch.Config, agentWait time.Duration, probe *probeCmd) error {
-	run := runBase(rec.Name)
-	live := &liveEnv{rec: rec, dir: dir, api: ch.NewAPI(run + "-api.sock")}
-
-	// The control socket goes last of all, after the monitor and every
-	// backend have stopped, so its disappearing tells a waiting suspend that
-	// the environment has let go of everything -- the next process to start
-	// it would otherwise find the monitor's API socket still held.
-	var closeControl func()
-	defer func() {
-		if closeControl != nil {
-			closeControl()
-		}
-	}()
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	fsState := filepath.Join(dir, "fs.json")
-	gpuState := filepath.Join(dir, "gpu.json")
-	if !restoring {
-		// State left by an earlier run of an environment with this name
-		// would otherwise be restored into a guest that never held it.
-		for _, p := range []string{fsState, gpuState, filepath.Join(dir, "fs.ready")} {
-			_ = os.Remove(p)
-		}
-	}
-
-	// Every backend owns its socket and must be listening before the
-	// monitor starts: it connects to them as a client and gives up if
-	// nothing is there.
-	if rec.Virtiofs != "" {
-		// The backend only offers mappings if the monitor gave it a window,
-		// so the threshold is meaningless without one.
-		var minSize uint64
-		if rec.Dax > 0 {
-			minSize = ch.DefaultDaxMinFileSize
-		}
-		vfs, err := ch.StartFsBackend(ctx, rec.Virtiofs, run+"-virtiofs.sock", ch.DefaultVirtiofsTag, minSize, fsState, true)
-		if err != nil {
-			return err
-		}
-		defer vfs.Close()
-		live.fs = vfs
-		if cfg != nil {
-			cfg.VirtiofsSocket = vfs.Socket()
-			cfg.VirtiofsDaxMiB = rec.Dax
-		}
-		if rec.Dax > 0 {
-			fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, %d MiB dax window\n",
-				rec.Virtiofs, ch.DefaultVirtiofsTag, rec.Dax)
-		} else {
-			fmt.Fprintf(os.Stderr, "virtiofs    %s -> tag %s, no dax\n", rec.Virtiofs, ch.DefaultVirtiofsTag)
-		}
-	}
-	if rec.Net {
-		pst, err := ch.StartPasst(ctx, run+"-net.sock", false)
-		if err != nil {
-			return err
-		}
-		defer pst.Close()
-		if cfg != nil {
-			cfg.NetSocket = pst.Socket()
-		}
-	}
-	if rec.GPU {
-		gpud, err := ch.StartGpuBackend(ctx, run+"-gpu.sock", rec.GPUVenus, rec.GPUVenusRestore, gpuState, false)
-		if err != nil {
-			return err
-		}
-		defer gpud.Close()
-		live.gpu = gpud
-		if cfg != nil {
-			cfg.GpuSocket = gpud.Socket()
-			cfg.GpuShmMiB = rec.GPUWindow
-		}
-		fmt.Fprintf(os.Stderr, "gpu         rendered by hangar-gpu, %d MiB window\n", rec.GPUWindow)
-	}
-
-	// Cloud Hypervisor carries vsock over a unix socket rather than the
-	// host kernel, so the agent is waited for on that socket instead of
-	// on AF_VSOCK.
-	var srv *agent.Server
-	if rec.CID != 0 {
-		vsockSocket := run + "-vsock.sock"
-		if cfg != nil {
-			cfg.VsockSocket = vsockSocket
-		}
-		// The monitor binds this path itself, so a socket left by one
-		// that was killed rather than stopped would keep it from
-		// starting. The agent's own socket is a different path and is
-		// cleaned up by the listener.
-		_ = os.Remove(vsockSocket)
-		var err error
-		srv, err = agent.ListenHybrid(vsockSocket, rec.CID)
-		if err != nil {
-			return fmt.Errorf("starting the agent channel: %w", err)
-		}
-	}
-
-	if !restoring {
-		rec.Suspended = false
-		if err := rec.save(dir); err != nil {
-			return err
-		}
-	}
-
-	// The monitor has to go before its backends do. -exec returns as soon
-	// as the command has run, with the guest still up, and tearing
-	// a backend or passt out from under a live vhost-user connection makes
-	// the monitor report a broken device on the way out. Deferred calls
-	// run last-registered first, so this one precedes the Closes above.
-	vmCtx, stopVM := context.WithCancel(ctx)
-	live.stopVM = stopVM
-	vmDone := make(chan struct{})
-	defer func() {
-		stopVM()
-		<-vmDone
-	}()
-
-	stopControl, err := serveControl(ctx, run+"-control.sock", live)
-	if err != nil {
-		return err
-	}
-	closeControl = stopControl
-
-	return withAgent(ctx, srv, agentWait, probe, live.setSession, func() error {
-		defer close(vmDone)
-		if !restoring {
-			return ch.Run(vmCtx, cfg)
-		}
-		start := time.Now()
-		return ch.Restore(vmCtx, run+"-api.sock", filepath.Join(dir, "snapshot"), rec.Seccomp,
-			func(ctx context.Context) error {
-				if live.fs != nil {
-					if err := live.fs.WaitRestored(ctx, 2*time.Minute); err != nil {
-						return err
-					}
-				}
-				if live.gpu != nil {
-					if err := live.gpu.WaitRestored(ctx, 2*time.Minute); err != nil {
-						return err
-					}
-				}
-				fmt.Fprintf(os.Stderr, "restored    %s in %.2fs, resuming\n", rec.Name, time.Since(start).Seconds())
-				return nil
-			})
-	})
-}
-
-// withAgent boots a guest and proves its agent channel works.
-//
-// The listener is opened by the caller, before the guest starts. The agent
-// dials out early in the boot, so a listener opened afterwards would miss its
-// first attempts and only succeed once it retried.
-//
-// A nil server means the guest has no agent channel.
-func withAgent(ctx context.Context, srv *agent.Server, agentWait time.Duration, probe *probeCmd, onSession func(*agent.Session), boot func() error) error {
-	if srv == nil {
-		return boot()
-	}
-	defer srv.Close()
-
-	vmDone := make(chan error, 1)
-	go func() { vmDone <- boot() }()
-
-	sess, err := srv.Accept(agentWait)
-	if err != nil {
-		// A VM that died explains the missing agent better than a timeout
-		// does, so prefer that error if one is waiting.
-		select {
-		case verr := <-vmDone:
-			if verr != nil {
-				return verr
-			}
-			return fmt.Errorf("the environment exited before its agent connected: %w", err)
-		default:
-		}
-		return err
-	}
-	defer sess.Close()
-	if onSession != nil {
-		onSession(sess)
-		defer onSession(nil)
-	}
-
-	// BootMicros is the guest's uptime when it said hello: on a fresh boot
-	// that is how long it took to be ready, and after a resume it is how long
-	// the guest has been running in total, suspensions aside.
-	fmt.Fprintf(os.Stderr, "\nagent       cid %d, %s, kernel %s, guest up %.2fs\n",
-		sess.CID, sess.Hello.Hostname, sess.Hello.Kernel,
-		float64(sess.Hello.BootMicros)/1e6)
-
-	// The guest's clock is wrong on arrival: a fresh boot starts from the
-	// image's build time and a resume from the moment of the suspend. It is
-	// set as soon as the agent connects. A guest whose clock cannot be set
-	// keeps running with the wrong time, and this says so.
-	if err := sess.SetClock(time.Now(), 5*time.Second); err != nil {
-		fmt.Fprintf(os.Stderr, "agent       could not set the guest clock: %v\n", err)
-	}
-
-	// Prove the channel end to end rather than just that something connected:
-	// a ping exercises the request path, and running a command exercises the
-	// half an environment is actually for.
-	if err := sess.Ping(5 * time.Second); err != nil {
-		return fmt.Errorf("agent did not answer a ping: %w", err)
-	}
-	who, err := sess.Exec(10*time.Second, "id", "-un")
-	if err != nil {
-		return fmt.Errorf("agent could not run a command: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "agent       ping ok, exec ok (runs as %s)\n",
-		strings.TrimSpace(who.Stdout))
-
-	// A command to run inside the environment is a diagnostic: it reports
-	// what the guest sees rather than what the console shows, which is the
-	// only way to ask systemd about its own startup.
-	if probe != nil {
-		out, err := sess.Exec(probe.timeout, "sh", "-c", probe.cmd)
-		if err != nil {
-			return err
-		}
-		fmt.Print(out.Stdout)
-		if out.Stderr != "" {
-			fmt.Fprint(os.Stderr, out.Stderr)
-		}
-		return nil
-	}
-
-	return <-vmDone
+	fmt.Fprintf(os.Stderr, "resuming %s from %s\n", cfg.Name, dir)
+	return holdMachine(ctx, cfg, *agentWait, probe)
 }
 
 // probeCmd is a command to run in the guest once it answers.

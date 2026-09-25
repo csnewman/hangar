@@ -264,7 +264,7 @@ type machine struct {
 	phase  api.Phase
 	reason string
 	// running is the booted machine, while there is one.
-	running *instance
+	running *Instance
 	// cancelBoot interrupts a boot in progress when what is wanted changes.
 	cancelBoot context.CancelFunc
 	// stats is the latest measurement of the running machine.
@@ -353,7 +353,7 @@ func (m *machine) control(ctx context.Context) {
 			// Only a running machine has memory to keep. One that is not
 			// stays as it is: stopped, failed, or already suspended.
 			if running && !m.suspendFailed {
-				if err := m.suspend(); err != nil {
+				if err := m.suspend(ctx); err != nil {
 					// Tried once per request: the guest runs on, saying
 					// why, until it is asked for something else.
 					m.log.Warn("suspending", "err", err)
@@ -368,7 +368,7 @@ func (m *machine) control(ctx context.Context) {
 				m.set(api.PhaseStopping, "")
 				m.powerOff()
 			}
-			m.discardSuspend()
+			DiscardSuspend(m.dir)
 			m.set(api.PhaseStopped, "")
 		case api.DesiredDeleted:
 			m.set(api.PhaseDeleting, "")
@@ -431,10 +431,10 @@ func (m *machine) lost() {
 		return
 	}
 	reason := "the machine stopped on its own"
-	if err := inst.exitErr(); err != nil {
+	if err := inst.Err(); err != nil {
 		reason = err.Error()
 	}
-	inst.close()
+	inst.Close()
 	m.set(api.PhaseFailed, reason)
 }
 
@@ -445,7 +445,7 @@ func (m *machine) powerOff() {
 	m.running = nil
 	m.mu.Unlock()
 	if inst != nil {
-		inst.shutdown(m.log)
+		inst.Shutdown(m.log)
 	}
 }
 
@@ -607,3 +607,31 @@ type bufferedConn struct {
 }
 
 func (c *bufferedConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// suspend writes the running machine to disk and stops it. If it cannot,
+// the guest carries on running as it was.
+func (m *machine) suspend(ctx context.Context) error {
+	m.mu.Lock()
+	inst := m.running
+	m.mu.Unlock()
+	if inst == nil {
+		return errors.New("the machine is not running")
+	}
+	m.set(api.PhaseSuspending, "")
+	start := time.Now()
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
+	defer cancel()
+	// Taken from the controller before it goes, so its exit is not seen
+	// as the machine stopping on its own.
+	m.mu.Lock()
+	m.running = nil
+	m.mu.Unlock()
+	if err := inst.Suspend(sctx); err != nil {
+		m.mu.Lock()
+		m.running = inst
+		m.mu.Unlock()
+		return err
+	}
+	m.log.Info("suspended", "seconds", time.Since(start).Seconds())
+	return nil
+}

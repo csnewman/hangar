@@ -7,42 +7,22 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
-	"github.com/csnewman/hangar/internal/agent"
-	"github.com/csnewman/hangar/internal/ch"
+	"github.com/csnewman/hangar/internal/vm"
 )
 
-// envRecord is how an environment was started.
-//
-// A suspended environment is a snapshot of the guest plus the state its
-// backends wrote, but the backends themselves are processes, and resuming
-// has to start them again with the same arguments before the monitor can
-// reconnect to them. This is those arguments. It lives in the state
-// directory, which survives a host restart; the sockets live in the temporary
-// directory, which does not need to, since resuming creates them afresh at
-// the same paths the snapshot names.
-type envRecord struct {
-	Name     string `json:"name"`
-	Virtiofs string `json:"virtiofs,omitempty"`
-	Dax      int    `json:"dax"`
-	Net      bool   `json:"net"`
-	GPU      bool   `json:"gpu"`
-	GPUVenus bool   `json:"gpu_venus"`
-	// GPUVenusRestore carries Vulkan state across a suspend; see
-	// ch.StartGpuBackend.
-	GPUVenusRestore bool   `json:"gpu_venus_restore,omitempty"`
-	GPUWindow       int    `json:"gpu_window"`
-	CID             uint32 `json:"cid"`
-	Seccomp         string `json:"seccomp,omitempty"`
-	Suspended       bool   `json:"suspended"`
-}
-
-// stateDir is where an environment's suspended state is kept.
+// stateDir is where an environment's machine keeps what outlives a boot:
+// its saved configuration, backend state, and a suspend's snapshot. It
+// survives a host restart.
 func stateDir(name string) (string, error) {
 	base := os.Getenv("HANGAR_STATE_DIR")
 	if base == "" {
@@ -59,61 +39,108 @@ func stateDir(name string) (string, error) {
 	return filepath.Join(base, name), nil
 }
 
-func (e *envRecord) save(dir string) error {
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
+// controlSocket is where the process holding an environment answers other
+// hangar processes about it.
+func controlSocket(name string) string {
+	return filepath.Join(os.TempDir(), "hangar-"+name+"-control.sock")
+}
+
+// holdMachine boots or resumes a machine, proves its agent answers, and
+// holds it until the guest stops, it is suspended, or ctx ends -- or, given
+// a probe, runs that and powers it off.
+func holdMachine(ctx context.Context, cfg vm.InstanceConfig, agentWait time.Duration, probe *probeCmd) error {
+	// Ctrl-C, or a SIGTERM, powers the guest off rather than orphaning it.
+	ctx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	cfg.AgentWait = agentWait
+	cfg.Log = slog.New(slog.NewTextHandler(os.Stderr, nil))
+	cfg.Verbose = true
+	if cfg.ConsoleFile == "" {
+		// The console is the monitor's stdio, and so this terminal.
+		cfg.Monitor, cfg.Stdin = os.Stdout, os.Stdin
+	} else {
+		cfg.Monitor = os.Stderr
 	}
-	b, err := json.MarshalIndent(e, "", "  ")
+	inst, err := vm.Boot(ctx, cfg)
 	if err != nil {
 		return err
 	}
-	tmp := filepath.Join(dir, "env.json.tmp")
-	if err := os.WriteFile(tmp, b, 0o644); err != nil {
+	sess := inst.Session()
+	fmt.Fprintf(os.Stderr, "\nagent       %s, kernel %s, guest up %.2fs\n",
+		sess.Hello.Hostname, sess.Hello.Kernel, float64(sess.Hello.BootMicros)/1e6)
+
+	// Prove the channel end to end rather than just that something
+	// connected: a ping exercises the request path, and running a command
+	// exercises the half an environment is actually for.
+	if err := sess.Ping(5 * time.Second); err != nil {
+		inst.Shutdown(cfg.Log)
+		return fmt.Errorf("agent did not answer a ping: %w", err)
+	}
+	who, err := sess.Exec(10*time.Second, "id", "-un")
+	if err != nil {
+		inst.Shutdown(cfg.Log)
+		return fmt.Errorf("agent could not run a command: %w", err)
+	}
+	fmt.Fprintf(os.Stderr, "agent       ping ok, exec ok (runs as %s)\n", strings.TrimSpace(who.Stdout))
+
+	// A command to run inside the environment is a diagnostic: it reports
+	// what the guest sees rather than what the console shows.
+	if probe != nil {
+		out, err := sess.Exec(probe.timeout, "sh", "-c", probe.cmd)
+		if err == nil {
+			fmt.Print(out.Stdout)
+			fmt.Fprint(os.Stderr, out.Stderr)
+		}
+		inst.Shutdown(cfg.Log)
 		return err
 	}
-	return os.Rename(tmp, filepath.Join(dir, "env.json"))
-}
 
-func loadEnv(dir string) (*envRecord, error) {
-	b, err := os.ReadFile(filepath.Join(dir, "env.json"))
+	h := &holder{inst: inst, suspended: make(chan struct{})}
+	stop, err := serveControl(ctx, controlSocket(cfg.ID), h)
 	if err != nil {
-		return nil, err
+		inst.Shutdown(cfg.Log)
+		return err
 	}
-	var e envRecord
-	if err := json.Unmarshal(b, &e); err != nil {
-		return nil, fmt.Errorf("reading %s: %w", filepath.Join(dir, "env.json"), err)
+	// The control socket goes last of all, once the monitor and every
+	// backend have stopped, so its disappearing tells a waiting suspend
+	// that the machine has let go of everything.
+	defer stop()
+
+	select {
+	case <-h.suspended:
+	case <-inst.Exited():
+		// A suspend stops the monitor too; that is not the guest stopping.
+		h.mu.Lock()
+		suspending := h.suspending
+		h.mu.Unlock()
+		if !suspending {
+			inst.Close()
+			return inst.Err()
+		}
+		<-h.suspended
+	case <-ctx.Done():
+		inst.Shutdown(cfg.Log)
+		return nil
 	}
-	return &e, nil
+	h.mu.Lock()
+	err = h.suspendErr
+	h.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "suspended   %s -> %s\n", cfg.Name, cfg.Dir)
+	return nil
 }
 
-// runBase is the prefix every socket of an environment shares.
-func runBase(name string) string {
-	return filepath.Join(os.TempDir(), "hangar-"+name)
-}
+// holder is the machine the process holds, and whether it is being
+// suspended.
+type holder struct {
+	inst      *vm.Instance
+	suspended chan struct{} // closed once a suspend has finished, and answered
 
-// liveEnv is a running environment, held by the process that owns it.
-type liveEnv struct {
-	rec    *envRecord
-	dir    string
-	api    *ch.API
-	fs     *ch.FsBackend
-	gpu    *ch.GpuBackend
-	stopVM context.CancelFunc
-
-	mu   sync.Mutex
-	sess *agent.Session
-}
-
-func (l *liveEnv) setSession(s *agent.Session) {
-	l.mu.Lock()
-	l.sess = s
-	l.mu.Unlock()
-}
-
-func (l *liveEnv) session() *agent.Session {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.sess
+	mu         sync.Mutex
+	suspending bool
+	suspendErr error
 }
 
 // controlRequest is one request on the control socket, a JSON line.
@@ -131,49 +158,10 @@ type controlReply struct {
 	Code   int    `json:"code"`
 }
 
-// suspend writes the environment to disk and stops it.
-//
-// The order matters. The guest is paused first so nothing it holds changes
-// while it is written down; each backend then records what the guest is
-// holding, and only then is the snapshot taken, so the two describe the same
-// instant.
-func (l *liveEnv) suspend(ctx context.Context) error {
-	start := time.Now()
-	if err := l.api.Pause(ctx); err != nil {
-		return err
-	}
-	if l.fs != nil {
-		if err := l.fs.SaveState(30 * time.Second); err != nil {
-			return err
-		}
-	}
-	if l.gpu != nil {
-		if err := l.gpu.SaveState(30 * time.Second); err != nil {
-			return err
-		}
-	}
-	snap := filepath.Join(l.dir, "snapshot")
-	if err := os.RemoveAll(snap); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(snap, 0o755); err != nil {
-		return err
-	}
-	if err := l.api.Snapshot(ctx, snap); err != nil {
-		return err
-	}
-	l.rec.Suspended = true
-	if err := l.rec.save(l.dir); err != nil {
-		return err
-	}
-	fmt.Fprintf(os.Stderr, "suspended   %s -> %s in %.2fs\n", l.rec.Name, l.dir, time.Since(start).Seconds())
-	return nil
-}
-
-// serveControl answers requests from other hangar processes about this
-// environment. They have to be answered by the process holding it: only it can
-// reach the backends to suspend them, and only it holds the agent's session.
-func serveControl(ctx context.Context, path string, l *liveEnv) (func(), error) {
+// serveControl answers requests from other hangar processes about the
+// machine. They have to be answered by the process holding it: only it
+// holds the backends and the agent's session.
+func serveControl(ctx context.Context, path string, h *holder) (func(), error) {
 	_ = os.Remove(path)
 	ln, err := net.Listen("unix", path)
 	if err != nil {
@@ -185,13 +173,13 @@ func serveControl(ctx context.Context, path string, l *liveEnv) (func(), error) 
 			if err != nil {
 				return
 			}
-			go l.answer(ctx, conn)
+			go answer(ctx, conn, h)
 		}
 	}()
 	return func() { ln.Close(); os.Remove(path) }, nil
 }
 
-func (l *liveEnv) answer(ctx context.Context, conn net.Conn) {
+func answer(ctx context.Context, conn net.Conn, h *holder) {
 	defer conn.Close()
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
 	if err != nil {
@@ -199,28 +187,37 @@ func (l *liveEnv) answer(ctx context.Context, conn net.Conn) {
 	}
 	var req controlRequest
 	var reply controlReply
-	stop := false
+	done := false
 	if err := json.Unmarshal(line, &req); err != nil {
 		reply.Error = fmt.Sprintf("malformed request: %v", err)
 	} else {
 		switch req.Op {
 		case "suspend":
-			if err := l.suspend(ctx); err != nil {
-				reply.Error = err.Error()
-			} else {
-				stop = true
-			}
-		case "exec":
-			sess := l.session()
-			if sess == nil {
-				reply.Error = "the environment's agent is not connected"
+			h.mu.Lock()
+			already := h.suspending
+			h.suspending = true
+			h.mu.Unlock()
+			if already {
+				reply.Error = "already being suspended"
 				break
 			}
+			start := time.Now()
+			if err := h.inst.Suspend(ctx); err != nil {
+				// The guest runs on.
+				reply.Error = err.Error()
+				h.mu.Lock()
+				h.suspending = false
+				h.mu.Unlock()
+			} else {
+				fmt.Fprintf(os.Stderr, "suspended in %.2fs\n", time.Since(start).Seconds())
+				done = true
+			}
+		case "exec":
 			timeout := time.Duration(req.TimeoutMS) * time.Millisecond
 			if timeout <= 0 {
 				timeout = 2 * time.Minute
 			}
-			resp, err := sess.Exec(timeout, req.Cmd...)
+			resp, err := h.inst.Session().Exec(timeout, req.Cmd...)
 			if err != nil {
 				reply.Error = err.Error()
 			} else {
@@ -232,17 +229,15 @@ func (l *liveEnv) answer(ctx context.Context, conn net.Conn) {
 	}
 	b, _ := json.Marshal(reply)
 	_, _ = conn.Write(append(b, '\n'))
-	if stop {
-		// With the state on disk the monitor has nothing left to do, and
-		// stopping it ends the process that owns it.
-		_ = l.api.Shutdown(ctx)
-		l.stopVM()
+	if done {
+		// Answered first: the process ends once this is closed.
+		close(h.suspended)
 	}
 }
 
 // control sends one request to the process running an environment.
 func control(name string, req controlRequest, wait time.Duration) (*controlReply, error) {
-	conn, err := net.Dial("unix", runBase(name)+"-control.sock")
+	conn, err := net.Dial("unix", controlSocket(name))
 	if err != nil {
 		return nil, fmt.Errorf("%s is not running here: %w", name, err)
 	}
@@ -306,7 +301,7 @@ func suspendEnv(ctx context.Context, argv []string) error {
 	// The state is on disk once the reply comes, but the environment is only
 	// stopped when its process has let go of the monitor and backends, which
 	// it marks by removing its control socket.
-	sock := runBase(*name) + "-control.sock"
+	sock := controlSocket(*name)
 	deadline := time.Now().Add(time.Minute)
 	for {
 		if _, err := os.Stat(sock); os.IsNotExist(err) {

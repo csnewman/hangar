@@ -2,15 +2,13 @@ package vm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
 	"github.com/csnewman/hangar/internal/agent"
@@ -70,80 +68,9 @@ func preflight(cfg *Config) error {
 	return nil
 }
 
-// instance is a booted machine: the monitor, its backends, and the agent's
-// session.
-type instance struct {
-	cmd      *exec.Cmd
-	api      *ch.API
-	session  *agent.Session
-	server   *agent.Server
-	cancel   context.CancelFunc
-	backends []interface{ Close() error }
-	exited   chan struct{}
-	// fs and gpu are the backends that keep guest state a suspend must
-	// save; gpu is nil without a GPU.
-	fs  *ch.FsBackend
-	gpu *ch.GpuBackend
-	// image is what the machine booted from.
-	image Image
-
-	mu  sync.Mutex
-	err error
-}
-
-func (i *instance) exitErr() error {
-	i.mu.Lock()
-	defer i.mu.Unlock()
-	return i.err
-}
-
-// close releases everything the instance holds. The monitor must already
-// have exited, or be about to: backends are closed under it otherwise.
-func (i *instance) close() {
-	if i.session != nil {
-		i.session.Close()
-	}
-	if i.server != nil {
-		i.server.Close()
-	}
-	// The monitor goes before its backends: tearing a vhost-user backend
-	// out from under a live monitor makes it report a broken device.
-	i.cancel()
-	<-i.exited
-	for j := len(i.backends) - 1; j >= 0; j-- {
-		i.backends[j].Close()
-	}
-}
-
-// shutdown powers the guest off so it flushes its disks, and forces the
-// matter if it does not go in time.
-func (i *instance) shutdown(log *slog.Logger) {
-	if i.session != nil {
-		// poweroff does not return once it has worked: the connection
-		// goes with the guest. Its answer is not waited for.
-		go i.session.Exec(time.Minute, "systemctl", "poweroff")
-	}
-	select {
-	case <-i.exited:
-	case <-time.After(90 * time.Second):
-		log.Warn("the guest did not power off; stopping the monitor")
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := i.api.Shutdown(ctx); err != nil {
-			i.cmd.Process.Signal(syscall.SIGTERM)
-		}
-		cancel()
-		select {
-		case <-i.exited:
-		case <-time.After(10 * time.Second):
-			i.cmd.Process.Kill()
-		}
-	}
-	i.close()
-}
-
 // start boots the environment and provisions it, or resumes it if it is
 // suspended. On error, everything it started has been stopped again.
-func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *instance, err error) {
+func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Instance, err error) {
 	m.set(api.PhaseStarting, "preparing its disks")
 
 	s := spec.Spec
@@ -154,29 +81,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 	if err != nil {
 		return nil, err
 	}
-	resuming := false
-	if rec := m.suspendedRecord(); rec != nil {
-		if *rec == m.currentRecord(img) {
-			resuming = true
-		} else {
-			// The guest would find files it holds open replaced. Its
-			// memory is given up and it boots from its disks.
-			m.log.Warn("the image or editor changed while the environment was suspended; booting it afresh")
-			m.discardSuspend()
-		}
-	}
-	if !resuming {
-		m.clearBackendState()
-	}
-	caps, err := host.Detect()
-	if err != nil {
-		return nil, err
-	}
 	if err := os.MkdirAll(m.dir, 0o755); err != nil {
-		return nil, err
-	}
-	run, err := socketDir(m.dir)
-	if err != nil {
 		return nil, err
 	}
 	upper := filepath.Join(m.dir, "upper.ext4")
@@ -187,215 +92,52 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *insta
 	if err := EnsureDisk(ctx, docker, "hangar-docker", m.rt.cfg.DockerGiB); err != nil {
 		return nil, err
 	}
-
-	// Everything below lives as long as the instance. The monitor has its
-	// own context so it can be stopped before its backends.
-	procCtx, cancelProcs := context.WithCancel(context.Background())
-	inst := &instance{exited: make(chan struct{}), image: img}
-	monCtx, cancelMon := context.WithCancel(procCtx)
-	inst.cancel = cancelMon
-	defer func() {
-		if err != nil {
-			if inst.cmd == nil {
-				close(inst.exited)
-			}
-			inst.close()
-			cancelProcs()
-		}
-	}()
-	inst.backends = append(inst.backends, closer(cancelProcs))
-
-	initrd := filepath.Join(run, "initrd.img")
-	if err := WriteInitrd(m.rt.cfg.Agent, initrd); err != nil {
-		return nil, err
+	// The writable layer is the first disk: the agent, as init, mounts
+	// /dev/vda. The Docker disk is mounted by label, and so is the editor
+	// disk, shared read-only by every environment.
+	disks := []ch.Disk{{Path: upper}, {Path: docker}}
+	if m.rt.cfg.Editor != "" {
+		disks = append(disks, ch.Disk{Path: m.rt.cfg.Editor, ReadOnly: true})
 	}
-	cfg := &ch.Config{
+	cfg := InstanceConfig{
+		ID:          m.id,
 		Name:        spec.Name,
+		Dir:         m.dir,
 		Kernel:      m.rt.cfg.Kernel,
-		Initrd:      initrd,
-		MemoryMB:    s.MemoryMiB,
+		Agent:       m.rt.cfg.Agent,
+		Base:        img.Base,
+		Disks:       disks,
+		MemoryMiB:   s.MemoryMiB,
 		CPUs:        s.CPUs,
+		DaxMiB:      m.rt.cfg.DaxMiB,
+		Net:         true,
+		GPU:         s.GPU == api.GPUVirtual,
 		ConsoleFile: filepath.Join(m.dir, "console.log"),
-		ConsoleTTY:  caps.ConsoleTTY,
-		GuestCID:    guestCID,
-		VsockSocket: filepath.Join(run, "vsock.sock"),
-		APISocket:   filepath.Join(run, "api.sock"),
+		AgentWait:   m.rt.cfg.BootTimeout,
+		Progress:    func(step string) { m.set(api.PhaseStarting, step) },
+		Log:         m.log,
 	}
 	if s.Display == api.DisplayNone {
 		// The desktop is a unit in the image; a headless environment
 		// simply never starts it.
 		cfg.ExtraCmdline = "systemd.mask=hangar-desktop.service"
 	}
-	// The writable layer is the first disk: the agent, as init, mounts
-	// /dev/vda. The Docker disk is mounted by label.
-	disks := []ch.Disk{{Path: upper}, {Path: docker}}
-
-	// The base is the image's root filesystem, exported read-only over
-	// virtio-fs. With a DAX window its files are mapped from the host's page
-	// cache, which every environment on the base shares.
-	var minSize uint64
-	if m.rt.cfg.DaxMiB > 0 {
-		minSize = ch.DefaultDaxMinFileSize
-	}
-	fs, err := ch.StartFsBackend(procCtx, img.Base, filepath.Join(run, "fs.sock"), ch.DefaultVirtiofsTag,
-		minSize, filepath.Join(m.dir, "fs.json"), false)
+	inst, err := Boot(ctx, cfg)
 	if err != nil {
 		return nil, err
 	}
-	inst.backends = append(inst.backends, fs)
-	inst.fs = fs
-	cfg.VirtiofsSocket = fs.Socket()
-	cfg.VirtiofsDaxMiB = m.rt.cfg.DaxMiB
-	if m.rt.cfg.Editor != "" {
-		// Shared read-only by every environment; the agent finds it by its
-		// label, wherever it lands among the devices.
-		disks = append(disks, ch.Disk{Path: m.rt.cfg.Editor, ReadOnly: true})
-	}
-	cfg.Disks = disks
-
-	pdir, err := passtDir(m.id)
-	if err != nil {
-		return nil, err
-	}
-	net, err := ch.StartPasst(procCtx, filepath.Join(pdir, "net.sock"), false)
-	if err != nil {
-		return nil, err
-	}
-	inst.backends = append(inst.backends, net)
-	cfg.NetSocket = net.Socket()
-
-	if s.GPU == api.GPUVirtual {
-		gpu, err := ch.StartGpuBackend(procCtx, filepath.Join(run, "gpu.sock"), false, false,
-			filepath.Join(m.dir, "gpu.json"), false)
+	defer func() {
 		if err != nil {
-			return nil, err
+			inst.Shutdown(m.log)
 		}
-		inst.backends = append(inst.backends, gpu)
-		inst.gpu = gpu
-		cfg.GpuSocket = gpu.Socket()
-		cfg.GpuShmMiB = 512
+	}()
+	if err := writeEditorTrust(inst.Session(), s); err != nil {
+		m.log.Warn("could not tell the editor which folders to trust", "err", err)
 	}
-
-	// The agent dials early in the boot, so it is listened for before the
-	// monitor starts. The monitor binds the vsock path itself, and one left
-	// by a monitor that was killed would stop it starting.
-	_ = os.Remove(cfg.VsockSocket)
-	_ = os.Remove(cfg.APISocket)
-	inst.server, err = agent.ListenHybrid(cfg.VsockSocket, guestCID)
-	if err != nil {
-		return nil, fmt.Errorf("listening for the agent: %w", err)
-	}
-
-	if resuming {
-		m.set(api.PhaseStarting, "resuming")
-		if err := m.restore(ctx, monCtx, cfg, inst); err != nil {
-			return nil, err
-		}
-	} else {
-		m.set(api.PhaseStarting, "booting")
-		if err := m.launch(monCtx, cfg, inst); err != nil {
-			return nil, err
-		}
-		inst.api = ch.NewAPI(cfg.APISocket)
-	}
-
-	sess, err := m.awaitAgent(ctx, inst)
-	if err != nil {
+	if err := m.provision(ctx, inst.Session(), spec); err != nil {
 		return nil, err
-	}
-	inst.session = sess
-	m.log.Info("agent connected", "hostname", sess.Hello.Hostname, "kernel", sess.Hello.Kernel,
-		"boot_seconds", float64(sess.Hello.BootMicros)/1e6)
-
-	if err := sess.SetClock(time.Now(), 5*time.Second); err != nil {
-		m.log.Warn("could not set the guest clock", "err", err)
-	}
-	if err := m.provision(ctx, sess, spec); err != nil {
-		return nil, err
-	}
-	if resuming {
-		// Running again, so the snapshot is spent: resuming from it a
-		// second time would roll the guest back under its own disks.
-		m.discardSuspend()
 	}
 	return inst, nil
-}
-
-type closer func()
-
-func (c closer) Close() error { c(); return nil }
-
-// launch starts the monitor, with its output in the environment's
-// directory, and watches for it to exit.
-func (m *machine) launch(ctx context.Context, cfg *ch.Config, inst *instance) error {
-	args, err := cfg.Args()
-	if err != nil {
-		return err
-	}
-	return m.launchArgs(ctx, args, inst)
-}
-
-// launchArgs starts the monitor with the given arguments.
-func (m *machine) launchArgs(ctx context.Context, args []string, inst *instance) error {
-	bin, err := ch.Find()
-	if err != nil {
-		return err
-	}
-	logFile, err := os.OpenFile(filepath.Join(m.dir, "monitor.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-	if err != nil {
-		return err
-	}
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
-	cmd.SysProcAttr = sysProcAttr()
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-	cmd.WaitDelay = 15 * time.Second
-	if err := cmd.Start(); err != nil {
-		logFile.Close()
-		return fmt.Errorf("starting cloud-hypervisor: %w", err)
-	}
-	inst.cmd = cmd
-	go func() {
-		err := cmd.Wait()
-		logFile.Close()
-		if err != nil && ctx.Err() == nil {
-			inst.mu.Lock()
-			inst.err = fmt.Errorf("cloud-hypervisor exited: %v%s", err, lastLine(filepath.Join(m.dir, "monitor.log")))
-			inst.mu.Unlock()
-		}
-		close(inst.exited)
-	}()
-	return nil
-}
-
-// awaitAgent waits for the guest's agent to dial back, and gives up early if
-// the monitor exits or the boot stops being wanted.
-func (m *machine) awaitAgent(ctx context.Context, inst *instance) (*agent.Session, error) {
-	type result struct {
-		s   *agent.Session
-		err error
-	}
-	got := make(chan result, 1)
-	go func() {
-		s, err := inst.server.Accept(m.rt.cfg.BootTimeout)
-		got <- result{s, err}
-	}()
-	select {
-	case r := <-got:
-		if r.err != nil {
-			return nil, fmt.Errorf("the agent did not connect within %s: %v", m.rt.cfg.BootTimeout, r.err)
-		}
-		return r.s, nil
-	case <-inst.exited:
-		if err := inst.exitErr(); err != nil {
-			return nil, err
-		}
-		return nil, errors.New("the machine stopped before its agent connected")
-	case <-ctx.Done():
-		inst.server.Close()
-		return nil, ctx.Err()
-	}
 }
 
 // provision applies an environment's template the first time it boots: its
@@ -501,13 +243,6 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 	return os.WriteFile(mark, nil, 0o644)
 }
 
-// socketDir makes the directory an environment's sockets live in, readable
-// only by the worker.
-func socketDir(envDir string) (string, error) {
-	dir := filepath.Join(envDir, "run")
-	return dir, os.MkdirAll(dir, 0o700)
-}
-
 // passtDir is where passt's socket goes. Distributions confine passt with an
 // AppArmor profile that lets it create files under /tmp and nowhere Hangar
 // keeps state, so its socket cannot sit with the others.
@@ -567,4 +302,26 @@ func lastLine(path string) string {
 		return ""
 	}
 	return ": " + line
+}
+
+// writeEditorTrust writes the folders the editor trusts without asking,
+// which VS Code's server reads on every page it serves. It is written at
+// each boot, into /run, so it is always the environment's own and never
+// outlives it.
+func writeEditorTrust(sess *agent.Session, spec api.Spec) error {
+	b, err := json.Marshal(spec.EditorTrust())
+	if err != nil {
+		return err
+	}
+	out, err := sess.Exec(10*time.Second, "sh", "-c",
+		`mkdir -p /run/hangar && printf '%s' "$1" > /run/hangar/trusted-folders.json.new && `+
+			`chmod 644 /run/hangar/trusted-folders.json.new && mv /run/hangar/trusted-folders.json.new /run/hangar/trusted-folders.json`,
+		"sh", string(b))
+	if err != nil {
+		return err
+	}
+	if out.Code != 0 {
+		return fmt.Errorf("exit %d: %s", out.Code, firstLine(out.Stderr, out.Stdout))
+	}
+	return nil
 }
