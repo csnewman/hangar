@@ -51,6 +51,7 @@ jobs:
         with:
           context: .
           file: cmd/hangar-server/Dockerfile
+          build-args: VERSION=${{ github.sha }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
@@ -91,6 +92,7 @@ jobs:
           context: .
           file: cmd/hangar-worker/Dockerfile
           target: worker
+          build-args: VERSION=${{ github.sha }}
           platforms: linux/${{ matrix.arch }}
           push: true
           tags: |

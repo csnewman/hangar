@@ -1,0 +1,322 @@
+openapi: 3.0.3
+info:
+  title: Hangar client API
+  version: "1"
+  description: >-
+    The API for clients that ship apart from the server: the desktop app,
+    the VS Code extension, scripts. It is small on purpose, and stable.
+
+
+    Compatibility. Within v1 a change only adds: a new endpoint, a new
+    optional field in a request, a new field in a response, a new value
+    where a field's description says more may come. A client ignores
+    fields it does not know, and treats an enum value it does not know as
+    the description says. Anything else -- removing or renaming a field,
+    changing its meaning or type, requiring more of a request -- is a new
+    version, /api/v2, served beside v1 for as long as the server lists v1
+    in /api/v1/version.
+
+
+    A client asks /api/v1/version first. It needs no sign-in, and says which
+    versions the server serves and which build it is, so a client can tell
+    "this server is too old for me" from "I am too old for this server".
+
+
+    Sign in with an access token (Authorization: Bearer hgr_...) or the web
+    UI's session cookie. A request that changes something and carries the
+    cookie must come from the server's own origin, or from no browser page
+    at all.
+
+servers:
+  - url: /api/v1
+
+security:
+  - token: []
+  - session: []
+
+paths:
+  /version:
+    get:
+      operationId: getVersion
+      summary: Which versions of this API the server serves, and its build
+      security: []
+      responses:
+        "200":
+          description: The server's versions.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Version" }
+
+  /me:
+    get:
+      operationId: getMe
+      summary: The signed-in user, and how to reach their environments over SSH
+      responses:
+        "200":
+          description: The signed-in user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /me/login-keys:
+    get:
+      operationId: listLoginKeys
+      summary: The public keys that sign the user in over SSH
+      responses:
+        "200":
+          description: The keys.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LoginKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: addLoginKey
+      summary: Add a public key that signs the user in over SSH
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddLoginKey" }
+      responses:
+        "201":
+          description: The key was added.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginKey" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /environments:
+    get:
+      operationId: listEnvironments
+      summary: Every environment the user can reach, oldest first
+      responses:
+        "200":
+          description: The environments.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /environments/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getEnvironment
+      summary: One environment
+      responses:
+        "200":
+          description: The environment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /environments/{id}/start:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: startEnvironment
+      summary: Ask for an environment to run
+      responses:
+        "200": { $ref: "#/components/responses/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /environments/{id}/stop:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: stopEnvironment
+      summary: Ask for an environment to stop, keeping its disks
+      responses:
+        "200": { $ref: "#/components/responses/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /environments/{id}/suspend:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: suspendEnvironment
+      summary: Ask for an environment to suspend, keeping its memory on disk
+      responses:
+        "200": { $ref: "#/components/responses/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+components:
+  securitySchemes:
+    token:
+      type: http
+      scheme: bearer
+    session:
+      type: apiKey
+      in: cookie
+      name: hangar_session
+
+  parameters:
+    ID:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Environment:
+      description: The environment, as it is after the request.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Environment" }
+    Unauthorized:
+      description: Not signed in.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: No such thing, or not one the user can reach.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Conflict:
+      description: Not possible in the state it is in.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Invalid:
+      description: The request is not valid.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string }
+
+    Version:
+      type: object
+      required: [versions, server]
+      properties:
+        versions:
+          type: array
+          description: >-
+            The API versions this server serves, oldest first: "v1", and in
+            time more. A client uses the newest it knows.
+          items: { type: string }
+        server:
+          type: string
+          description: The server's build, for display.
+
+    Me:
+      type: object
+      required: [id, username, display_name, admin]
+      properties:
+        id: { type: string }
+        username: { type: string }
+        display_name: { type: string }
+        admin: { type: boolean }
+        ssh: { $ref: "#/components/schemas/SSHGateway" }
+
+    SSHGateway:
+      type: object
+      description: >-
+        Where the SSH gateway is: ssh <environment>@<host> -p <port>, or
+        <owner>/<environment> for someone else's. Absent when the server runs
+        none.
+      required: [host, port, host_key]
+      properties:
+        host: { type: string }
+        port: { type: integer }
+        host_key:
+          type: string
+          description: The gateway's public host key, in known_hosts form without the host name.
+
+    LoginKey:
+      type: object
+      required: [id, name, fingerprint, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        fingerprint:
+          type: string
+          description: SHA256:..., as ssh-keygen -l prints it.
+        created_at: { type: string, format: date-time }
+
+    AddLoginKey:
+      type: object
+      required: [public_key]
+      properties:
+        public_key:
+          type: string
+          description: In authorized_keys form, as in ~/.ssh/id_ed25519.pub.
+        name:
+          type: string
+          description: Absent takes the key's own comment.
+
+    Environment:
+      type: object
+      required: [id, name, owner_id, owner, template, phase, desired, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        owner_id: { type: string }
+        owner:
+          type: string
+          description: The owner's username.
+        template: { type: string }
+        phase:
+          type: string
+          description: >-
+            What it is doing, as its worker last reported: pending, starting,
+            running, stopping, stopped, suspending, suspended, failed,
+            deleting. More may come; treat one you do not know as busy.
+        desired:
+          type: string
+          description: What its owner asked for -- running, stopped, suspended or deleted. More may come.
+        reason:
+          type: string
+          description: Why it is in its phase, when there is more to say.
+        progress: { $ref: "#/components/schemas/StartProgress" }
+        worker:
+          type: string
+          description: The worker it runs on, once placed.
+        editor_path:
+          type: string
+          description: The folder an editor opens in it.
+        display:
+          type: string
+          description: Its display -- none or desktop. More may come.
+        cpus: { type: integer }
+        memory_mib: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at:
+          type: string
+          format: date-time
+          description: When its phase last changed.
+
+    StartProgress:
+      type: object
+      description: >-
+        How far a start has got: its step -- download, unpack, disks, boot,
+        network, workspace, in that order, more may come -- and, where the
+        step can be measured, done of total in unit (bytes or objects), at
+        rate a second lately.
+      required: [step]
+      properties:
+        step: { type: string }
+        done: { type: integer, format: int64 }
+        total: { type: integer, format: int64 }
+        unit: { type: string }
+        rate: { type: number }

@@ -41,8 +41,8 @@ jobs:
       # a spec change without a regenerate fails here.
       - name: Check generated code
         run: |
-          go generate ./internal/frontendapi
-          git diff --exit-code -- internal/frontendapi
+          go generate ./internal/frontendapi ./internal/clientapi
+          git diff --exit-code -- internal/frontendapi internal/clientapi
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race ./...

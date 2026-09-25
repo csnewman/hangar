@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/audit"
+	"github.com/csnewman/hangar/internal/clientapi"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/editor"
 	"github.com/csnewman/hangar/internal/environments"
@@ -67,6 +68,7 @@ type Config struct {
 type Server struct {
 	db        *db.DB
 	frontend  http.Handler
+	client    http.Handler
 	editors   *editor.Gateway
 	edits     *editor.Manager
 	tunnels   *tunnel.Registry
@@ -133,6 +135,15 @@ func New(cfg Config) (*Server, error) {
 	if editors != nil {
 		cfgAPI.Editors = editors
 	}
+	client := clientapi.Config{
+		Environments: cfgAPI.Environments,
+		Users:        um,
+		Profiles:     profiles,
+		Log:          log,
+	}
+	if gw := cfgAPI.SSH; gw != nil {
+		client.SSH = &clientapi.SSHGateway{Host: gw.Host, Port: gw.Port, HostKey: gw.HostKey}
+	}
 	frontend, err := frontendapi.New(cfgAPI)
 	if err != nil {
 		return nil, err
@@ -140,6 +151,7 @@ func New(cfg Config) (*Server, error) {
 	return &Server{
 		db:        cfg.DB,
 		frontend:  frontend,
+		client:    clientapi.New(client),
 		editors:   editors,
 		edits:     edits,
 		tunnels:   tunnels,
@@ -252,18 +264,20 @@ func (s *Server) placementLoop(ctx context.Context) {
 }
 
 // Handler serves the whole server: /api/frontend for the web UI's API,
-// /api/worker/v1 for workers, and everything outside /api/ for the UI itself.
+// /api/v1 for clients that ship apart from it, /api/worker/v1 for workers,
+// and everything outside /api/ for the UI itself.
 //
-// The worker API is versioned and the frontend API is not. A worker and the
-// server are upgraded separately, so the protocol between them has to say
-// which version it speaks; the UI ships inside this binary with the API it
-// calls.
+// The worker and client APIs are versioned and the frontend API is not. A
+// worker, the desktop app and the VS Code extension are each upgraded apart
+// from the server, so what passes between them has to say which version it
+// speaks; the UI ships inside this binary with the API it calls.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /api/healthz", s.healthz)
 
 	mux.Handle("/api/frontend/", s.frontend)
+	mux.Handle("/api/v1/", s.client)
 
 	mux.HandleFunc("POST /api/worker/v1/register", s.registerWorker)
 	mux.Handle("GET /api/worker/v1/desired", s.workerAuth(s.workerDesired))

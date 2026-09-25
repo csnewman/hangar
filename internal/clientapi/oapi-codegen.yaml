@@ -1,0 +1,9 @@
+package: clientapi
+output: clientapi.gen.go
+generate:
+  models: true
+  std-http-server: true
+  strict-server: true
+output-options:
+  name-normalizer: ToCamelCaseWithInitialisms
+  additional-initialisms: [CPUs, MiB, SSH]

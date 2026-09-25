@@ -28,12 +28,14 @@ ARG UBUNTU=ubuntu:26.04
 
 # ---------------------------------------------------------------- Go
 FROM golang:1.27 AS go
+# VERSION names the build.
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/hangar-worker ./cmd/hangar-worker \
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/csnewman/hangar/internal/version.Version=$VERSION" -o /out/hangar-worker ./cmd/hangar-worker \
  && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/hangar-agent ./cmd/hangar-agent
 
 # ---------------------------------------------------------------- guest kernel
