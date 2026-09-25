@@ -48,7 +48,9 @@ type simEnv struct {
 	// transition whose target is stale when it lands is dropped.
 	target api.DesiredState
 	gen    int
-	spec   api.Spec
+	// since is when the pending transition began.
+	since time.Time
+	spec  api.Spec
 	// usage is the pretend measurement, wandering from one Observe to the
 	// next.
 	usage api.EnvironmentStats
@@ -67,6 +69,20 @@ func (s *Simulated) Observe() []api.ObservedEnvironment {
 	out := make([]api.ObservedEnvironment, 0, len(s.envs))
 	for id, e := range s.envs {
 		o := api.ObservedEnvironment{ID: id, Phase: e.phase, Reason: e.reason}
+		if e.phase == api.PhaseStarting {
+			// A start pretends to download its image over the Step it
+			// takes.
+			total := s.images[e.spec.Image]
+			done := total
+			if s.Step > 0 {
+				done = min(total, int64(float64(total)*float64(time.Since(e.since))/float64(s.Step)))
+			}
+			o.Reason = "downloading the image"
+			o.Progress = &api.Progress{Step: api.StepDownload, Done: done, Total: total, Unit: "bytes"}
+			if s.Step > 0 {
+				o.Progress.Rate = float64(total) / s.Step.Seconds()
+			}
+		}
 		if e.phase == api.PhaseRunning {
 			e.wander()
 			u := e.usage
@@ -151,7 +167,7 @@ func (s *Simulated) Apply(spec api.EnvironmentSpec) {
 func (s *Simulated) transition(id string, e *simEnv, target api.DesiredState, during api.Phase, done func(*simEnv)) {
 	e.gen++
 	gen := e.gen
-	e.target, e.phase, e.reason = target, during, ""
+	e.target, e.phase, e.reason, e.since = target, during, "", time.Now()
 	s.notify()
 	time.AfterFunc(s.Step, func() {
 		s.mu.Lock()

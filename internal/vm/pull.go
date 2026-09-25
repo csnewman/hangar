@@ -3,9 +3,12 @@ package vm
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"runtime"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/containerd/containerd/v2/core/content"
 	"github.com/containerd/containerd/v2/core/images"
@@ -46,7 +49,12 @@ func guestPlatform() platforms.MatchComparer {
 // Blobs are fetched into a content store in scratch, which verifies each
 // against its digest, and are removed once unpacked: the directory is the
 // image from then on. It returns the digest pulled.
-func pull(ctx context.Context, ref, dir, scratch string, auth map[string]RegistryAuth) (string, error) {
+//
+// report is told, a few times a second, how many bytes have been
+// downloaded of those known to be needed -- the total grows once the
+// manifest names the layers -- and then how many of the layers' bytes have
+// been unpacked.
+func pull(ctx context.Context, ref, dir, scratch string, auth map[string]RegistryAuth, report func(fetchProgress)) (string, error) {
 	named, err := reference.ParseDockerRef(ref)
 	if err != nil {
 		return "", fmt.Errorf("parsing the image reference: %w", err)
@@ -82,13 +90,24 @@ func pull(ctx context.Context, ref, dir, scratch string, auth map[string]Registr
 	}
 
 	// Only this platform's manifest, config and layers are fetched out of
-	// a multi-platform index.
+	// a multi-platform index. Each is counted into the total as it is
+	// dispatched, and its bytes as they arrive.
+	var downloaded, needed atomic.Int64
 	platform := guestPlatform()
 	handler := images.Handlers(
-		remotes.FetchHandler(cs, fetcher),
+		images.HandlerFunc(func(_ context.Context, d ocispec.Descriptor) ([]ocispec.Descriptor, error) {
+			needed.Add(d.Size)
+			return nil, nil
+		}),
+		remotes.FetchHandler(cs, countingFetcher{fetcher, &downloaded}),
 		images.LimitManifests(images.FilterPlatforms(images.ChildrenHandler(cs), platform), platform, 1),
 	)
-	if err := images.Dispatch(ctx, handler, nil, desc); err != nil {
+	stop := every(250*time.Millisecond, func() {
+		report(fetchProgress{stage: stageDownload, done: min(downloaded.Load(), needed.Load()), total: needed.Load()})
+	})
+	err = images.Dispatch(ctx, handler, nil, desc)
+	stop()
+	if err != nil {
 		return "", fmt.Errorf("fetching %s: %w", full, err)
 	}
 	manifest, err := images.Manifest(ctx, cs, desc, platform)
@@ -102,21 +121,83 @@ func pull(ctx context.Context, ref, dir, scratch string, auth map[string]Registr
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
+	var layersSize int64
+	for _, l := range manifest.Layers {
+		layersSize += l.Size
+	}
+	var unpacked atomic.Int64
+	var current atomic.Int32
+	stop = every(250*time.Millisecond, func() {
+		report(fetchProgress{stage: stageUnpack, done: unpacked.Load(), total: layersSize,
+			layer: int(current.Load()), layers: len(manifest.Layers)})
+	})
+	defer stop()
 	for i, layer := range manifest.Layers {
-		if err := applyLayer(ctx, cs, layer, dir); err != nil {
+		current.Store(int32(i + 1))
+		if err := applyLayer(ctx, cs, layer, dir, &unpacked); err != nil {
 			return "", fmt.Errorf("unpacking layer %d of %s: %w", i+1, full, err)
 		}
 	}
 	return desc.Digest.String(), nil
 }
 
-func applyLayer(ctx context.Context, cs content.Store, layer ocispec.Descriptor, dir string) error {
+// every calls fn at once, then at each interval until the returned stop is
+// called, and once more then, so the last word is the final count.
+func every(interval time.Duration, fn func()) (stop func()) {
+	done := make(chan struct{})
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			fn()
+			select {
+			case <-t.C:
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() {
+		close(done)
+		<-finished
+		fn()
+	}
+}
+
+// countingFetcher counts the bytes a fetch reads as they arrive.
+type countingFetcher struct {
+	remotes.Fetcher
+	n *atomic.Int64
+}
+
+func (c countingFetcher) Fetch(ctx context.Context, d ocispec.Descriptor) (io.ReadCloser, error) {
+	rc, err := c.Fetcher.Fetch(ctx, d)
+	if err != nil {
+		return nil, err
+	}
+	return countingReadCloser{rc, c.n}, nil
+}
+
+type countingReadCloser struct {
+	io.ReadCloser
+	n *atomic.Int64
+}
+
+func (c countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	c.n.Add(int64(n))
+	return n, err
+}
+
+func applyLayer(ctx context.Context, cs content.Store, layer ocispec.Descriptor, dir string, unpacked *atomic.Int64) error {
 	ra, err := cs.ReaderAt(ctx, layer)
 	if err != nil {
 		return err
 	}
 	defer ra.Close()
-	rd, err := compression.DecompressStream(content.NewReader(ra))
+	rd, err := compression.DecompressStream(countingReadCloser{io.NopCloser(content.NewReader(ra)), unpacked})
 	if err != nil {
 		return err
 	}

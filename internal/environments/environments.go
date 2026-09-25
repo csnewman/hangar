@@ -43,7 +43,7 @@ func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
 const columns = `e.id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
 	e.spec, e.image, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
-	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats`
+	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress`
 
 const from = `environments e
 	JOIN users u ON u.id = e.owner_id
@@ -55,9 +55,10 @@ const visible = `($1 OR e.owner_id = $2)`
 
 func scan(row pgx.Row) (api.Environment, error) {
 	var e api.Environment
-	var spec, stats []byte
+	var spec, stats, progress []byte
 	err := row.Scan(&e.ID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.CPUs,
-		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats)
+		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats,
+		&progress)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}
@@ -69,6 +70,12 @@ func scan(row pgx.Row) (api.Environment, error) {
 	if stats != nil && e.Phase == api.PhaseRunning {
 		e.Stats = &api.EnvironmentStats{}
 		if err := json.Unmarshal(stats, e.Stats); err != nil {
+			return e, err
+		}
+	}
+	if progress != nil && e.Phase == api.PhaseStarting {
+		e.Progress = &api.Progress{}
+		if err := json.Unmarshal(progress, e.Progress); err != nil {
 			return e, err
 		}
 	}

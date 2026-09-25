@@ -179,6 +179,54 @@ func (e SignalProcessSignal) Valid() bool {
 	}
 }
 
+// Defines values for StartProgressStep.
+const (
+	Boot      StartProgressStep = "boot"
+	Disks     StartProgressStep = "disks"
+	Download  StartProgressStep = "download"
+	Services  StartProgressStep = "services"
+	Unpack    StartProgressStep = "unpack"
+	Workspace StartProgressStep = "workspace"
+)
+
+// Valid indicates whether the value is a known member of the StartProgressStep enum.
+func (e StartProgressStep) Valid() bool {
+	switch e {
+	case Boot:
+		return true
+	case Disks:
+		return true
+	case Download:
+		return true
+	case Services:
+		return true
+	case Unpack:
+		return true
+	case Workspace:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for StartProgressUnit.
+const (
+	Bytes   StartProgressUnit = "bytes"
+	Objects StartProgressUnit = "objects"
+)
+
+// Valid indicates whether the value is a known member of the StartProgressUnit enum.
+func (e StartProgressUnit) Valid() bool {
+	switch e {
+	case Bytes:
+		return true
+	case Objects:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Visibility.
 const (
 	Private Visibility = "private"
@@ -325,6 +373,9 @@ type Environment struct {
 
 	// Phase What the environment is doing, as its worker last reported. "pending" means no worker has reported on it yet.
 	Phase Phase `json:"phase"`
+
+	// Progress How far a starting environment has got. Steps happen in the order of the enum; one with nothing to do is passed over. total, where a step can be measured, is in unit: bytes, or a clone's objects.
+	Progress *StartProgress `json:"progress,omitempty"`
 
 	// Reason Why the environment is in its phase, when there is more to say.
 	Reason *string `json:"reason,omitempty"`
@@ -587,6 +638,23 @@ type Spec struct {
 	// Untrusted For code the owner does not trust: the environment is never given their credentials -- Claude's sign-in, or signatures from their SSH keys -- though the rest of their profile still follows them in.
 	Untrusted *bool `json:"untrusted,omitempty"`
 }
+
+// StartProgress How far a starting environment has got. Steps happen in the order of the enum; one with nothing to do is passed over. total, where a step can be measured, is in unit: bytes, or a clone's objects.
+type StartProgress struct {
+	Done *int64 `json:"done,omitempty"`
+
+	// Rate How fast it is going lately, in unit a second.
+	Rate  *float32           `json:"rate,omitempty"`
+	Step  StartProgressStep  `json:"step"`
+	Total *int64             `json:"total,omitempty"`
+	Unit  *StartProgressUnit `json:"unit,omitempty"`
+}
+
+// StartProgressStep defines model for StartProgress.Step.
+type StartProgressStep string
+
+// StartProgressUnit defines model for StartProgress.Unit.
+type StartProgressUnit string
 
 // Template defines model for Template.
 type Template struct {

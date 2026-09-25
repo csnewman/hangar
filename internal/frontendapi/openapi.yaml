@@ -1165,6 +1165,8 @@ components:
         reason:
           type: string
           description: Why the environment is in its phase, when there is more to say.
+        progress:
+          $ref: "#/components/schemas/StartProgress"
         worker_id:
           type: string
           description: The worker it is placed on. Absent until placed.
@@ -1376,6 +1378,26 @@ components:
         memory_total_mib: { type: integer }
         disk_used_bytes: { type: integer, format: int64 }
         disk_total_bytes: { type: integer, format: int64 }
+
+    StartProgress:
+      type: object
+      description: >-
+        How far a starting environment has got. Steps happen in the order
+        of the enum; one with nothing to do is passed over. total, where a
+        step can be measured, is in unit: bytes, or a clone's objects.
+      required: [step]
+      properties:
+        step:
+          type: string
+          enum: [download, unpack, disks, boot, services, workspace]
+        done: { type: integer, format: int64 }
+        total: { type: integer, format: int64 }
+        unit:
+          type: string
+          enum: [bytes, objects]
+        rate:
+          type: number
+          description: How fast it is going lately, in unit a second.
 
     EnvironmentStats:
       type: object

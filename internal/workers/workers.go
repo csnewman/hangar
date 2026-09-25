@@ -453,16 +453,21 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 					return err
 				}
 			}
-			var stats []byte
+			var stats, progress []byte
 			if o.Stats != nil {
 				if stats, err = json.Marshal(o.Stats); err != nil {
 					return err
 				}
 			}
+			if o.Progress != nil {
+				if progress, err = json.Marshal(o.Progress); err != nil {
+					return err
+				}
+			}
 			// updated_at marks a change of phase, not every measurement.
-			if _, err := tx.Exec(ctx, `UPDATE environments SET phase = $2, reason = $3, stats = $4,
+			if _, err := tx.Exec(ctx, `UPDATE environments SET phase = $2, reason = $3, stats = $4, progress = $5,
 				updated_at = CASE WHEN (phase, reason) IS DISTINCT FROM ($2, $3) THEN now() ELSE updated_at END
-				WHERE id = $1`, o.ID, o.Phase, o.Reason, stats); err != nil {
+				WHERE id = $1`, o.ID, o.Phase, o.Reason, stats, progress); err != nil {
 				return err
 			}
 		}

@@ -125,6 +125,8 @@ CREATE TABLE environments (
     reason      text NOT NULL DEFAULT '',
     -- Usage as its worker last measured it. Only the latest is kept.
     stats       jsonb,
+    -- How far a start has got, while it is starting.
+    progress    jsonb,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );

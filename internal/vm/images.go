@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/csnewman/hangar/internal/api"
 )
@@ -45,6 +46,60 @@ type store struct {
 type fetch struct {
 	done chan struct{}
 	err  error
+
+	mu       sync.Mutex
+	progress fetchProgress
+}
+
+// A fetch goes through these stages: a pull downloads, then unpacks; an
+// image with a local source is copied.
+const (
+	stageCopy     = "copy"
+	stageDownload = "download"
+	stageUnpack   = "unpack"
+)
+
+// fetchProgress is how far a fetch has got: its stage, and bytes done of
+// the stage's total, where it has one. Unpacking counts the compressed
+// bytes of the layers read so far, layer being the one in hand.
+type fetchProgress struct {
+	stage         string
+	done, total   int64
+	layer, layers int
+}
+
+func (f *fetch) report(p fetchProgress) {
+	f.mu.Lock()
+	f.progress = p
+	f.mu.Unlock()
+}
+
+func (f *fetch) snapshot() fetchProgress {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.progress
+}
+
+// watchEvery is how often a caller waiting on a fetch is told how far it
+// has got.
+const watchEvery = 500 * time.Millisecond
+
+// watch tells fn how far f has got until it is done or stop closes.
+func (f *fetch) watch(fn func(fetchProgress), stop <-chan struct{}) {
+	t := time.NewTicker(watchEvery)
+	defer t.Stop()
+	for {
+		if p := f.snapshot(); p.stage != "" {
+			fn(p)
+		}
+		select {
+		case <-t.C:
+		case <-f.done:
+			return
+		case <-stop:
+			return
+		}
+	}
 }
 
 func newStore(dir string, sources map[string]Image, auth map[string]RegistryAuth) (*store, error) {
@@ -81,8 +136,8 @@ func (s *store) path(ref string) string {
 
 // get returns the local copy of an image, fetching it first if the store
 // does not hold it. Environments asking for the same image at once share one
-// fetch.
-func (s *store) get(ctx context.Context, ref string) (Image, error) {
+// fetch, and each is told how far it has got through watch.
+func (s *store) get(ctx context.Context, ref string, watch func(fetchProgress)) (Image, error) {
 	dst := s.path(ref)
 	local := Image{Base: filepath.Join(dst, "rootfs")}
 
@@ -96,7 +151,10 @@ func (s *store) get(ctx context.Context, ref string) (Image, error) {
 			f = &fetch{done: make(chan struct{})}
 			s.fetching[ref] = f
 			s.mu.Unlock()
-			f.err = s.fetch(ctx, ref, dst)
+			stop := make(chan struct{})
+			go f.watch(watch, stop)
+			f.err = s.fetch(ctx, ref, dst, f.report)
+			close(stop)
 			s.mu.Lock()
 			delete(s.fetching, ref)
 			s.mu.Unlock()
@@ -107,20 +165,24 @@ func (s *store) get(ctx context.Context, ref string) (Image, error) {
 			continue
 		}
 		s.mu.Unlock()
+		stop := make(chan struct{})
+		go f.watch(watch, stop)
 		select {
 		case <-f.done:
 			if f.err != nil {
 				return Image{}, f.err
 			}
 		case <-ctx.Done():
+			close(stop)
 			return Image{}, ctx.Err()
 		}
+		close(stop)
 	}
 }
 
 // fetch brings an image into the store: copied from its local source if
 // the configuration names one, and pulled from its registry otherwise.
-func (s *store) fetch(ctx context.Context, ref, dst string) error {
+func (s *store) fetch(ctx context.Context, ref, dst string, report func(fetchProgress)) error {
 	tmp := dst + ".fetching"
 	os.RemoveAll(tmp)
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
@@ -129,6 +191,7 @@ func (s *store) fetch(ctx context.Context, ref, dst string) error {
 	err := func() error {
 		rootfs := filepath.Join(tmp, "rootfs")
 		if src, ok := s.sources[ref]; ok {
+			report(fetchProgress{stage: stageCopy})
 			// Owners, modes, links and extended attributes are the image,
 			// and virtio-fs passes them to the guest as they are, so the
 			// copy keeps them all.
@@ -139,7 +202,7 @@ func (s *store) fetch(ctx context.Context, ref, dst string) error {
 			}
 		} else {
 			blobs := filepath.Join(tmp, "blobs")
-			digest, err := pull(ctx, ref, rootfs, blobs, s.auth)
+			digest, err := pull(ctx, ref, rootfs, blobs, s.auth, report)
 			if err != nil {
 				return fmt.Errorf("pulling %s: %w", ref, err)
 			}

@@ -283,3 +283,43 @@ func TestStats(t *testing.T) {
 		t.Fatalf("a stopped environment reports usage: %+v", got.Stats)
 	}
 }
+
+// How far a start has got reaches the environment while it starts, and
+// goes once it is running.
+func TestStartProgress(t *testing.T) {
+	d := dbtest.Open(t)
+	wm := workers.NewManager(d)
+	em := environments.NewManager(d)
+	w, _ := wm.Register(ctx, api.RegisterWorker{Name: "w"})
+	owner, _ := users.NewManager(d).Create(ctx, users.NewUser{Username: "owner", Password: "password1"})
+	p := users.Principal{UserID: owner.ID}
+	if err := wm.ReportStatus(ctx, w.ID, api.WorkerStatus{Capacity: api.Resources{CPUs: 4, MemoryMiB: 8192}}); err != nil {
+		t.Fatal(err)
+	}
+	tmpl, _ := templates.NewManager(d).Create(ctx, p, templates.Input{
+		Name: "t", Spec: api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 1, MemoryMiB: 1024}},
+	})
+	env, _ := em.Create(ctx, p, api.CreateEnvironment{TemplateID: tmpl.ID, Name: "e"})
+	placement.NewManager(d).Place(ctx)
+
+	report := func(o api.ObservedEnvironment) {
+		t.Helper()
+		o.ID = env.ID
+		if err := wm.ReportStatus(ctx, w.ID, api.WorkerStatus{
+			Capacity: api.Resources{CPUs: 4, MemoryMiB: 8192}, Environments: []api.ObservedEnvironment{o},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	report(api.ObservedEnvironment{Phase: api.PhaseStarting, Reason: "downloading the image",
+		Progress: &api.Progress{Step: api.StepDownload, Done: 300 << 20, Total: 900 << 20, Unit: "bytes"}})
+	got, _ := em.Get(ctx, p, env.ID)
+	want := api.Progress{Step: api.StepDownload, Done: 300 << 20, Total: 900 << 20, Unit: "bytes"}
+	if got.Progress == nil || *got.Progress != want || got.Reason != "downloading the image" {
+		t.Fatalf("a starting environment's progress: %+v (%q)", got.Progress, got.Reason)
+	}
+	report(api.ObservedEnvironment{Phase: api.PhaseRunning})
+	if got, _ := em.Get(ctx, p, env.ID); got.Progress != nil {
+		t.Fatalf("a running environment reports progress: %+v", got.Progress)
+	}
+}

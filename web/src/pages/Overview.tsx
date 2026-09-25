@@ -6,6 +6,7 @@ import { useMe } from '../session'
 import { EnvironmentActions } from '../components/EnvironmentActions'
 import { formatAgo, formatMemory } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
+import { StartLine } from '../components/StartProgress'
 import { PhaseBadge } from '../components/Status'
 import { splitByOwner, useEnvironments } from '../environments'
 
@@ -98,7 +99,7 @@ function EnvironmentTable({
               {showOwner && <td>{e.owner}</td>}
               <td>
                 <PhaseBadge phase={e.phase} desired={e.desired} />
-                {e.reason && <div className="reason">{e.reason}</div>}
+                {e.phase === 'starting' ? <StartLine env={e} /> : e.reason && <div className="reason">{e.reason}</div>}
               </td>
               <td className="num nowrap">
                 {e.cpus} vCPU · {formatMemory(e.memory_mib)}

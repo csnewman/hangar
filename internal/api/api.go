@@ -162,6 +162,7 @@ type Environment struct {
 	Desired    DesiredState      `json:"desired"`
 	Phase      Phase             `json:"phase"`
 	Reason     string            `json:"reason,omitempty"`
+	Progress   *Progress         `json:"progress,omitempty"`
 	WorkerID   string            `json:"worker_id,omitempty"`
 	Worker     string            `json:"worker,omitempty"`
 	Stats      *EnvironmentStats `json:"stats,omitempty"`
@@ -258,10 +259,45 @@ type WorkerStatus struct {
 
 // ObservedEnvironment is one environment as the worker finds it.
 type ObservedEnvironment struct {
-	ID     string            `json:"id"`
-	Phase  Phase             `json:"phase"`
-	Reason string            `json:"reason,omitempty"`
-	Stats  *EnvironmentStats `json:"stats,omitempty"`
+	ID     string `json:"id"`
+	Phase  Phase  `json:"phase"`
+	Reason string `json:"reason,omitempty"`
+	// Progress is how far a starting environment has got.
+	Progress *Progress         `json:"progress,omitempty"`
+	Stats    *EnvironmentStats `json:"stats,omitempty"`
+}
+
+// Step is one step of starting an environment. They happen in the order
+// declared; one with nothing to do -- an image the worker already holds, a
+// workspace set up on an earlier boot -- is passed over.
+type Step string
+
+const (
+	// StepDownload fetches the image from its registry, or copies it from
+	// the worker's own source for it.
+	StepDownload Step = "download"
+	// StepUnpack applies the image's layers into its root filesystem.
+	StepUnpack Step = "unpack"
+	// StepDisks makes the environment's disks, the first time.
+	StepDisks Step = "disks"
+	// StepBoot boots or resumes the machine, until its agent answers.
+	StepBoot Step = "boot"
+	// StepServices waits for the guest's own services to start.
+	StepServices Step = "services"
+	// StepWorkspace applies the template: the hostname and the clones.
+	StepWorkspace Step = "workspace"
+)
+
+// Progress is the step a starting environment is on and, where the step
+// can be measured, how much of it is done: Done of Total in Unit, "bytes"
+// or "objects", going at Rate a second lately. A zero Total is a step that
+// cannot be measured.
+type Progress struct {
+	Step  Step    `json:"step"`
+	Done  int64   `json:"done,omitempty"`
+	Total int64   `json:"total,omitempty"`
+	Unit  string  `json:"unit,omitempty"`
+	Rate  float64 `json:"rate,omitempty"`
 }
 
 // EnvironmentStats is what an environment is using, measured by its worker.

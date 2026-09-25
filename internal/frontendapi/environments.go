@@ -132,9 +132,26 @@ func environment(e api.Environment) Environment {
 		WorkerID:   optional(e.WorkerID),
 		Worker:     optional(e.Worker),
 		Stats:      environmentStats(e.Stats),
+		Progress:   startProgress(e.Progress),
 		CreatedAt:  e.CreatedAt,
 		UpdatedAt:  e.UpdatedAt,
 	}
+}
+
+func startProgress(p *api.Progress) *StartProgress {
+	if p == nil {
+		return nil
+	}
+	out := &StartProgress{Step: StartProgressStep(p.Step)}
+	if p.Total > 0 {
+		unit := StartProgressUnit(p.Unit)
+		out.Done, out.Total, out.Unit = &p.Done, &p.Total, &unit
+		if p.Rate > 0 {
+			rate := float32(p.Rate)
+			out.Rate = &rate
+		}
+	}
+	return out
 }
 
 func environmentStats(s *api.EnvironmentStats) *EnvironmentStats {

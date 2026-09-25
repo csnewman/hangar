@@ -14,6 +14,7 @@ import (
 	"github.com/csnewman/hangar/internal/agent"
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/ch"
+	"github.com/csnewman/hangar/internal/gitout"
 	"github.com/csnewman/hangar/internal/host"
 )
 
@@ -71,8 +72,6 @@ func preflight(cfg *Config) error {
 // start boots the environment and provisions it, or resumes it if it is
 // suspended. On error, everything it started has been stopped again.
 func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Instance, err error) {
-	m.set(api.PhaseStarting, "preparing its disks")
-
 	s := spec.Spec
 	if s.GPU == api.GPUPassthrough {
 		return nil, fmt.Errorf("GPU passthrough is %w", errUnsupported)
@@ -81,6 +80,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if err != nil {
 		return nil, err
 	}
+	m.step(api.StepDisks, "preparing its disks")
 	if err := os.MkdirAll(m.dir, 0o755); err != nil {
 		return nil, err
 	}
@@ -114,7 +114,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		GPU:         s.GPU == api.GPUVirtual,
 		ConsoleFile: filepath.Join(m.dir, "console.log"),
 		AgentWait:   m.rt.cfg.BootTimeout,
-		Progress:    func(step string) { m.set(api.PhaseStarting, step) },
+		Progress:    func(step string) { m.step(api.StepBoot, step) },
 		Log:         m.log,
 	}
 	if s.Display == api.DisplayNone {
@@ -167,7 +167,7 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 	// resolver are up. Provisioning needs both, so it waits for systemd to
 	// finish starting the machine. "degraded" is finished too -- some unit
 	// failed -- and exits non-zero, so the answer is read, not the status.
-	m.set(api.PhaseStarting, "waiting for the guest to finish booting")
+	m.step(api.StepServices, "waiting for the guest to finish booting")
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -177,7 +177,7 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 		return fmt.Errorf("the guest did not finish booting: it is %s", firstLine(state, out.Stderr))
 	}
 
-	m.set(api.PhaseStarting, "setting up the workspace")
+	m.step(api.StepWorkspace, "setting up the workspace")
 	// Written directly rather than through hostnamectl: the agent is up
 	// early in the boot, before the bus hostnamectl talks to. The name is a
 	// DNS label, and reaches the shell as an argument, never as script.
@@ -207,7 +207,7 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 		return err == nil && out.Code == 0
 	}
 	for _, r := range spec.Spec.Repos {
-		m.set(api.PhaseStarting, "cloning "+r.URL)
+		m.step(api.StepWorkspace, "cloning "+r.URL)
 		if err := run(time.Minute, "creating "+filepath.Dir(r.Path),
 			"install", "-d", "-o", owner, "-g", owner, filepath.Dir(r.Path)); err != nil {
 			return err
@@ -221,7 +221,7 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 			if err := run(time.Minute, "clearing an earlier attempt", "rm", "-rf", "--", partial); err != nil {
 				return err
 			}
-			if err := run(15*time.Minute, "cloning "+r.URL, git("clone", "--", r.URL, partial)...); err != nil {
+			if err := m.clone(ctx, sess, r.URL, git("clone", "--progress", "--", r.URL, partial)); err != nil {
 				return err
 			}
 			if r.Ref != "" {
@@ -241,6 +241,62 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 		}
 	}
 	return os.WriteFile(mark, nil, 0o644)
+}
+
+// cloneLog is where a clone's progress and errors are written in the guest,
+// for the host to read while it runs.
+const cloneLog = "/run/hangar-clone.log"
+
+// clone runs a clone, reporting git's progress as it goes. git writes its
+// progress to the log rather than to the reply, which comes only when the
+// command exits; the log is read once a second meanwhile. A failure is
+// explained by the line that names what went wrong, not by git's closing
+// advice.
+func (m *machine) clone(ctx context.Context, sess *agent.Session, url string, cmd []string) error {
+	what := "cloning " + url
+	stop := make(chan struct{})
+	watched := make(chan struct{})
+	go func() {
+		defer close(watched)
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-t.C:
+			}
+			out, err := sess.Exec(5*time.Second, "tail", "-c", "512", cloneLog)
+			if err != nil || out.Code != 0 {
+				continue
+			}
+			if stage, done, total, ok := gitout.Progress(out.Stdout); ok {
+				m.step(api.StepWorkspace, what+": "+strings.ToLower(stage))
+				m.measure(done, total, "objects")
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-watched
+	}()
+
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	out, err := sess.Exec(15*time.Minute, append([]string{"sh", "-c", `log=$1; shift; "$@" 2>"$log"`, "sh", cloneLog}, cmd...)...)
+	if err != nil {
+		return fmt.Errorf("%s: %w", what, err)
+	}
+	if out.Code != 0 {
+		log, _ := sess.Exec(5*time.Second, "cat", cloneLog)
+		why := "no output"
+		if log != nil {
+			why = gitout.Failure(log.Stdout)
+		}
+		return fmt.Errorf("%s: %s", what, why)
+	}
+	return nil
 }
 
 // passtDir is where passt's socket goes. Distributions confine passt with an

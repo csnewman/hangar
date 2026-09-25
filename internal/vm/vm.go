@@ -169,6 +169,10 @@ func (r *Runtime) Observe() []api.ObservedEnvironment {
 		phase, reason := m.status()
 		o := api.ObservedEnvironment{ID: id, Phase: phase, Reason: reason}
 		m.mu.Lock()
+		if m.progress != nil && phase == api.PhaseStarting {
+			p := *m.progress
+			o.Progress = &p
+		}
 		if m.stats != nil && phase == api.PhaseRunning {
 			s := *m.stats
 			o.Stats = &s
@@ -265,6 +269,12 @@ type machine struct {
 	spec   *api.EnvironmentSpec
 	phase  api.Phase
 	reason string
+	// progress is the step a start is on, and how much of it is done.
+	progress *api.Progress
+	// measured is when a measurement of progress was last announced, and
+	// measuredDone how much was done then, for the rate.
+	measured     time.Time
+	measuredDone int64
 	// running is the booted machine, while there is one.
 	running *Instance
 	// cancelBoot interrupts a boot in progress when what is wanted changes.
@@ -288,9 +298,63 @@ func (m *machine) set(phase api.Phase, reason string) {
 	m.mu.Lock()
 	changed := m.phase != phase || m.reason != reason
 	m.phase, m.reason = phase, reason
+	if phase != api.PhaseStarting {
+		m.progress = nil
+	}
 	m.mu.Unlock()
 	if changed {
 		m.log.Info("environment", "phase", phase, "reason", reason)
+		m.rt.notify()
+	}
+}
+
+// step records the step a start is on, with the reason to show for it. A
+// new step, or a new part of one -- a clone going from receiving objects to
+// resolving deltas -- is measured afresh.
+func (m *machine) step(step api.Step, reason string) {
+	m.mu.Lock()
+	if m.progress == nil || m.progress.Step != step || m.reason != reason {
+		m.progress = &api.Progress{Step: step}
+		m.measured, m.measuredDone = time.Time{}, 0
+	}
+	m.mu.Unlock()
+	m.set(api.PhaseStarting, reason)
+}
+
+// measureEvery is how often a step's measurement is announced: each one
+// is a report to the server.
+const measureEvery = time.Second
+
+// measure records how much of the current step is done. It is announced
+// at most every measureEvery, and when the step completes.
+func (m *machine) measure(done, total int64, unit string) {
+	m.mu.Lock()
+	if m.progress == nil || m.phase != api.PhaseStarting {
+		m.mu.Unlock()
+		return
+	}
+	p := m.progress
+	// The first measurement of a step is where its rate is measured from.
+	fresh := m.measured.IsZero()
+	p.Done, p.Total, p.Unit = done, total, unit
+	now := time.Now()
+	since := now.Sub(m.measured)
+	announce := since >= measureEvery || (total > 0 && done >= total)
+	if announce {
+		// The rate is smoothed over the last few announcements, so it
+		// follows a download that speeds up or stalls without jumping.
+		if !fresh && since > 0 && done >= m.measuredDone {
+			latest := float64(done-m.measuredDone) / since.Seconds()
+			if p.Rate == 0 {
+				p.Rate = latest
+			} else {
+				p.Rate = 0.7*p.Rate + 0.3*latest
+			}
+		}
+		m.measured, m.measuredDone = now, done
+	}
+	m.mu.Unlock()
+	if announce {
 		m.rt.notify()
 	}
 }
@@ -456,10 +520,22 @@ var errUnsupported = errors.New("not supported by this worker")
 // resolve returns the local copy of an environment's image, fetching it
 // into the store first if need be.
 func (m *machine) resolve(ctx context.Context, spec api.EnvironmentSpec) (Image, error) {
-	if _, err := os.Stat(m.rt.store.path(spec.Spec.Image)); err != nil {
-		m.set(api.PhaseStarting, "fetching the image")
-	}
-	return m.rt.store.get(ctx, spec.Spec.Image)
+	return m.rt.store.get(ctx, spec.Spec.Image, func(p fetchProgress) {
+		switch p.stage {
+		case stageCopy:
+			m.step(api.StepDownload, "copying the image")
+		case stageDownload:
+			m.step(api.StepDownload, "downloading the image")
+			m.measure(p.done, p.total, "bytes")
+		case stageUnpack:
+			reason := "unpacking the image"
+			if p.layers > 1 {
+				reason += fmt.Sprintf(": layer %d of %d", p.layer, p.layers)
+			}
+			m.step(api.StepUnpack, reason)
+			m.measure(p.done, p.total, "bytes")
+		}
+	})
 }
 
 // Images reports the local store, with the environments using each image.

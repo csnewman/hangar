@@ -830,6 +830,7 @@ export interface components {
             phase: components["schemas"]["Phase"];
             /** @description Why the environment is in its phase, when there is more to say. */
             reason?: string;
+            progress?: components["schemas"]["StartProgress"];
             /** @description The worker it is placed on. Absent until placed. */
             worker_id?: string;
             /** @description That worker's name. */
@@ -961,6 +962,19 @@ export interface components {
             disk_used_bytes: number;
             /** Format: int64 */
             disk_total_bytes: number;
+        };
+        /** @description How far a starting environment has got. Steps happen in the order of the enum; one with nothing to do is passed over. total, where a step can be measured, is in unit: bytes, or a clone's objects. */
+        StartProgress: {
+            /** @enum {string} */
+            step: "download" | "unpack" | "disks" | "boot" | "services" | "workspace";
+            /** Format: int64 */
+            done?: number;
+            /** Format: int64 */
+            total?: number;
+            /** @enum {string} */
+            unit?: "bytes" | "objects";
+            /** @description How fast it is going lately, in unit a second. */
+            rate?: number;
         };
         /** @description What a running environment uses, as its worker last measured it. Rates are per second. */
         EnvironmentStats: {

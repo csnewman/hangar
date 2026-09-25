@@ -20,6 +20,7 @@ import { EnvironmentActions } from '../components/EnvironmentActions'
 import { formatAgo } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
+import { StartProgress } from '../components/StartProgress'
 import { PhaseBadge } from '../components/Status'
 import { useEnvironments } from '../environments'
 import { useTitle } from '../title'
@@ -88,7 +89,11 @@ export function EnvironmentPage() {
           <EnvironmentActions env={env} afterDelete="/environments" />
         </div>
       </div>
-      {env.reason && <div className="notice env-reason">{env.reason}</div>}
+      {env.phase === 'starting' ? (
+        <StartProgress env={env} />
+      ) : (
+        env.reason && <div className="notice env-reason">{env.reason}</div>
+      )}
       <div className="tab-body">
         <Outlet context={env} />
       </div>
