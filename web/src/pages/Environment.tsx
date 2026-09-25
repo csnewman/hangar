@@ -18,7 +18,7 @@ import type { Environment } from '../api'
 import { useMe } from '../session'
 import { EnvironmentActions } from '../components/EnvironmentActions'
 import { formatAgo } from '../components/format'
-import { PageHeader, type Crumb } from '../components/PageHeader'
+import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
 import { PhaseBadge } from '../components/Status'
 import { useEnvironments } from '../environments'
@@ -56,28 +56,34 @@ export function EnvironmentPage() {
     )
   }
 
-  const crumbs: Crumb[] = [{ label: 'Environments', to: '/environments' }]
-  if (env.owner_id !== me.id) crumbs.push({ label: env.owner })
-
   return (
     <div className="page page-flush">
-      <div className="page-pad">
-        <PageHeader
-          crumbs={crumbs}
-          title={env.name}
-          subtitle={<PhaseBadge phase={env.phase} desired={env.desired} />}
-          actions={<EnvironmentActions env={env} afterDelete="/environments" />}
-        />
-        {env.reason && <div className="notice">{env.reason}</div>}
-        <nav className="tabs">
+      <div className="env-bar">
+        <div className="env-ident">
+          {env.owner_id !== me.id && (
+            <>
+              <span className="env-owner">{env.owner}</span>
+              <span className="crumb-sep">/</span>
+            </>
+          )}
+          <h1 className="env-name" title={env.name}>
+            {env.name}
+          </h1>
+          <PhaseBadge phase={env.phase} desired={env.desired} />
+        </div>
+        <nav className="tabs env-tabs">
           {tabs.map((t) => (
-            <NavLink key={t.label} to={t.to} end={t.end} className="tab">
+            <NavLink key={t.label} to={t.to} end={t.end} className="tab" title={t.label}>
               <t.icon size={15} />
-              {t.label}
+              <span className="tab-label">{t.label}</span>
             </NavLink>
           ))}
         </nav>
+        <div className="env-actions">
+          <EnvironmentActions env={env} afterDelete="/environments" />
+        </div>
       </div>
+      {env.reason && <div className="notice env-reason">{env.reason}</div>}
       <div className="tab-body">
         <Outlet context={env} />
       </div>

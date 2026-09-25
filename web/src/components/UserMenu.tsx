@@ -1,12 +1,14 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, LogOut } from 'lucide-react'
+import { ChevronsUpDown, FolderSync, LogOut, UserRound } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { Link, useNavigate } from 'react-router'
 
 import { api } from '../api'
 import { announceSessionChange, useMe } from '../session'
 
-export function UserMenu() {
+// UserMenu is who is signed in, at the foot of the sidebar, with their own
+// pages and signing out. Folded, it is their initials alone.
+export function UserMenu({ collapsed = false }: { collapsed?: boolean }) {
   const me = useMe()
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -39,18 +41,37 @@ export function UserMenu() {
   const name = me.display_name || me.username
   return (
     <div className="user-menu" ref={ref}>
-      <button type="button" className="user-button" onClick={() => setOpen(!open)} aria-expanded={open}>
+      <button
+        type="button"
+        className={collapsed ? 'user-button user-button-collapsed' : 'user-button'}
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        title={collapsed ? name : undefined}
+        aria-label={collapsed ? name : undefined}
+      >
         <span className="avatar">{initials(name)}</span>
-        <span className="user-name">{name}</span>
-        {me.admin && <span className="role">admin</span>}
-        <ChevronDown size={14} />
+        {!collapsed && (
+          <>
+            <span className="user-name">{name}</span>
+            {me.admin && <span className="role">admin</span>}
+            <ChevronsUpDown size={14} />
+          </>
+        )}
       </button>
       {open && (
-        <div className="menu" role="menu">
+        <div className="menu menu-up" role="menu">
           <div className="menu-header">
             <div className="strong">{name}</div>
             <div className="muted small">{me.username}</div>
           </div>
+          <Link to="/profile" className="menu-item" role="menuitem" onClick={() => setOpen(false)}>
+            <FolderSync size={15} />
+            Profile
+          </Link>
+          <Link to="/account" className="menu-item" role="menuitem" onClick={() => setOpen(false)}>
+            <UserRound size={15} />
+            Account
+          </Link>
           <button type="button" className="menu-item" role="menuitem" onClick={() => logout.mutate()}>
             <LogOut size={15} />
             Sign out

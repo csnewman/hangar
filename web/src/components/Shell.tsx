@@ -4,7 +4,6 @@ import { Outlet } from 'react-router'
 
 import { Logo } from './Logo'
 import { Sidebar } from './Sidebar'
-import { UserMenu } from './UserMenu'
 
 const widthKey = 'hangar.sidebar.width'
 const collapsedKey = 'hangar.sidebar.collapsed'
@@ -101,8 +100,6 @@ export function Shell() {
           <Logo />
           <span>Hangar</span>
         </div>
-        <div className="topbar-spacer" />
-        <UserMenu />
       </header>
       <div
         className="app-body"
