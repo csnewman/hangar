@@ -1,0 +1,238 @@
+{
+	"name": "hangar-remote",
+	"displayName": "Hangar",
+	"description": "Open Hangar environments in VS Code, over SSH through the Hangar server.",
+	"version": "0.1.0",
+	"publisher": "hangar",
+	"license": "MIT",
+	"private": true,
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/csnewman/hangar"
+	},
+	"engines": {
+		"vscode": "^1.90.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"keywords": [
+		"remote",
+		"ssh",
+		"development environments"
+	],
+	"extensionKind": [
+		"ui"
+	],
+	"main": "./extension.js",
+	"activationEvents": [
+		"onUri"
+	],
+	"contributes": {
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "hangar",
+					"title": "Hangar",
+					"icon": "media/hangar.svg"
+				}
+			]
+		},
+		"views": {
+			"hangar": [
+				{
+					"id": "hangar.environments",
+					"name": "Environments"
+				}
+			]
+		},
+		"viewsWelcome": [
+			{
+				"view": "hangar.environments",
+				"contents": "Sign in to a Hangar server to open its environments here.\n[Sign In](command:hangar.signIn)",
+				"when": "!hangar.signedIn"
+			},
+			{
+				"view": "hangar.environments",
+				"contents": "You have no environments.\n[Create One](command:hangar.createInBrowser)",
+				"when": "hangar.signedIn"
+			}
+		],
+		"commands": [
+			{
+				"command": "hangar.signIn",
+				"title": "Sign In",
+				"category": "Hangar",
+				"icon": "$(account)"
+			},
+			{
+				"command": "hangar.signInWithToken",
+				"title": "Sign In with an Access Token",
+				"category": "Hangar"
+			},
+			{
+				"command": "hangar.signOut",
+				"title": "Sign Out",
+				"category": "Hangar"
+			},
+			{
+				"command": "hangar.refresh",
+				"title": "Refresh",
+				"category": "Hangar",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "hangar.addKey",
+				"title": "Add an SSH Key to My Profile",
+				"category": "Hangar",
+				"icon": "$(key)"
+			},
+			{
+				"command": "hangar.createInBrowser",
+				"title": "Create an Environment in the Browser",
+				"category": "Hangar",
+				"icon": "$(add)"
+			},
+			{
+				"command": "hangar.open",
+				"title": "Open Environment",
+				"category": "Hangar",
+				"icon": "$(remote)"
+			},
+			{
+				"command": "hangar.openInNewWindow",
+				"title": "Open in New Window",
+				"category": "Hangar",
+				"icon": "$(empty-window)"
+			},
+			{
+				"command": "hangar.openInBrowser",
+				"title": "Open in the Browser",
+				"category": "Hangar",
+				"icon": "$(globe)"
+			},
+			{
+				"command": "hangar.start",
+				"title": "Start",
+				"category": "Hangar",
+				"icon": "$(debug-start)"
+			},
+			{
+				"command": "hangar.stop",
+				"title": "Stop",
+				"category": "Hangar",
+				"icon": "$(debug-stop)"
+			},
+			{
+				"command": "hangar.suspend",
+				"title": "Suspend",
+				"category": "Hangar",
+				"icon": "$(debug-pause)"
+			},
+			{
+				"command": "hangar.copySSH",
+				"title": "Copy SSH Command",
+				"category": "Hangar"
+			}
+		],
+		"menus": {
+			"view/title": [
+				{
+					"command": "hangar.createInBrowser",
+					"when": "view == hangar.environments && hangar.signedIn",
+					"group": "navigation@1"
+				},
+				{
+					"command": "hangar.refresh",
+					"when": "view == hangar.environments && hangar.signedIn",
+					"group": "navigation@2"
+				},
+				{
+					"command": "hangar.addKey",
+					"when": "view == hangar.environments && hangar.signedIn"
+				},
+				{
+					"command": "hangar.signIn",
+					"when": "view == hangar.environments && hangar.signedIn"
+				},
+				{
+					"command": "hangar.signOut",
+					"when": "view == hangar.environments && hangar.signedIn"
+				}
+			],
+			"view/item/context": [
+				{
+					"command": "hangar.open",
+					"when": "view == hangar.environments && viewItem =~ /^env/",
+					"group": "inline@1"
+				},
+				{
+					"command": "hangar.openInNewWindow",
+					"when": "view == hangar.environments && viewItem =~ /^env/",
+					"group": "inline@2"
+				},
+				{
+					"command": "hangar.open",
+					"when": "view == hangar.environments && viewItem =~ /^env/",
+					"group": "1_open@1"
+				},
+				{
+					"command": "hangar.openInNewWindow",
+					"when": "view == hangar.environments && viewItem =~ /^env/",
+					"group": "1_open@2"
+				},
+				{
+					"command": "hangar.openInBrowser",
+					"when": "view == hangar.environments && viewItem =~ /^env/",
+					"group": "1_open@3"
+				},
+				{
+					"command": "hangar.start",
+					"when": "view == hangar.environments && viewItem =~ /^env-(stopped|suspended|failed)/",
+					"group": "2_power@1"
+				},
+				{
+					"command": "hangar.suspend",
+					"when": "view == hangar.environments && viewItem =~ /^env-running/",
+					"group": "2_power@2"
+				},
+				{
+					"command": "hangar.stop",
+					"when": "view == hangar.environments && viewItem =~ /^env-(running|starting|suspended|failed)/",
+					"group": "2_power@3"
+				},
+				{
+					"command": "hangar.copySSH",
+					"when": "view == hangar.environments && viewItem =~ /^env/",
+					"group": "3_copy@1"
+				}
+			],
+			"commandPalette": [
+				{
+					"command": "hangar.openInNewWindow",
+					"when": "false"
+				},
+				{
+					"command": "hangar.openInBrowser",
+					"when": "false"
+				},
+				{
+					"command": "hangar.start",
+					"when": "false"
+				},
+				{
+					"command": "hangar.stop",
+					"when": "false"
+				},
+				{
+					"command": "hangar.suspend",
+					"when": "false"
+				},
+				{
+					"command": "hangar.copySSH",
+					"when": "false"
+				}
+			]
+		}
+	}
+}

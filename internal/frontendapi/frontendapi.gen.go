@@ -537,7 +537,10 @@ type Resources struct {
 // SSHGateway Where the SSH gateway is reached: ssh <environment>@<host> -p <port>, with a sign-in key. Absent when the server runs none.
 type SSHGateway struct {
 	Host string `json:"host"`
-	Port int    `json:"port"`
+
+	// HostKey The gateway's public host key, in known_hosts form without the host name, for clients to trust without asking.
+	HostKey string `json:"host_key"`
+	Port    int    `json:"port"`
 }
 
 // SSHKey defines model for SSHKey.

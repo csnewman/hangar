@@ -18,5 +18,8 @@ docs/
 /internal/webui/dist/app/
 /web/node_modules/
 
+# The packaged VS Code extension.
+/vscode/*.vsix
+
 # dev/reset-db.sh keeps its last copy of the data here.
 /dev/.reset-db-dump.sql

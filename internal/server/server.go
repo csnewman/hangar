@@ -35,6 +35,7 @@ import (
 	"github.com/csnewman/hangar/internal/tunnel"
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/workers"
+	"golang.org/x/crypto/ssh"
 )
 
 // Config is what a server needs to run.
@@ -80,8 +81,8 @@ type Server struct {
 	sessions  *profile.Sessions
 	profiles  *profile.Store
 	auditLog  *audit.Log
-	sealer    *profile.Sealer
 	sshListen string
+	sshKey    ssh.Signer
 }
 
 func New(cfg Config) (*Server, error) {
@@ -113,12 +114,20 @@ func New(cfg Config) (*Server, error) {
 		AutoSignIn:   cfg.AutoSignIn,
 		Log:          log,
 	}
+	var sshKey ssh.Signer
 	if cfg.SSHListen != "" {
-		ssh, err := sshAddress(cfg.SSHAddress, cfg.SSHListen, cfg.PublicURL)
+		gw, err := sshAddress(cfg.SSHAddress, cfg.SSHListen, cfg.PublicURL)
 		if err != nil {
 			return nil, err
 		}
-		cfgAPI.SSH = ssh
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		sshKey, err = sshgw.HostKey(ctx, cfg.DB, cfg.Sealer)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("the SSH gateway's host key: %w", err)
+		}
+		gw.HostKey = strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshKey.PublicKey())))
+		cfgAPI.SSH = gw
 	}
 	// A nil Gateway would be a non-nil interface.
 	if editors != nil {
@@ -145,8 +154,8 @@ func New(cfg Config) (*Server, error) {
 		sessions:  profile.NewSessions(profiles, tunnels, log),
 		profiles:  profiles,
 		auditLog:  auditLog,
-		sealer:    cfg.Sealer,
 		sshListen: cfg.SSHListen,
+		sshKey:    sshKey,
 	}, nil
 }
 
@@ -416,12 +425,7 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 
 // serveSSH runs the SSH gateway until ctx ends.
 func (s *Server) serveSSH(ctx context.Context) {
-	key, err := sshgw.HostKey(ctx, s.db, s.sealer)
-	if err != nil {
-		s.log.Error("the SSH gateway has no host key", "err", err)
-		return
-	}
-	gw := sshgw.New(key, environments.NewManager(s.db), s.profiles, s.tunnels, s.auditLog, s.log)
+	gw := sshgw.New(s.sshKey, environments.NewManager(s.db), s.profiles, s.tunnels, s.auditLog, s.log)
 	if err := gw.Serve(ctx, s.sshListen); err != nil {
 		s.log.Error("serving SSH", "err", err)
 	}

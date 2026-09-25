@@ -9,6 +9,7 @@ import { meKey, onSessionChange } from './session'
 import { Shell } from './components/Shell'
 import './index.css'
 import { AccountPage } from './pages/Account'
+import { ConnectVSCodePage } from './pages/ConnectVSCode'
 import { ProfilePage } from './pages/Profile'
 import { AuditPage } from './pages/admin/Audit'
 import { ProcessesTab } from './pages/Processes'
@@ -62,6 +63,7 @@ const router = createBrowserRouter([
   {
     element: <RequireAuth />,
     children: [
+      { path: '/connect/vscode', element: <ConnectVSCodePage /> },
       {
         element: <Shell />,
         children: [

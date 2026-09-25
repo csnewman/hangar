@@ -1475,10 +1475,15 @@ components:
       description: >-
         Where the SSH gateway is reached: ssh <environment>@<host> -p <port>,
         with a sign-in key. Absent when the server runs none.
-      required: [host, port]
+      required: [host, port, host_key]
       properties:
         host: { type: string }
         port: { type: integer }
+        host_key:
+          type: string
+          description: >-
+            The gateway's public host key, in known_hosts form without the
+            host name, for clients to trust without asking.
 
     ChangePassword:
       type: object

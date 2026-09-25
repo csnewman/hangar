@@ -85,6 +85,24 @@ jobs:
       - run: npm run typecheck
       - run: npm test
 
+  vscode:
+    # The desktop extension, packaged as a .vsix to install by hand.
+    runs-on: ubuntu-26.04
+    defaults:
+      run:
+        working-directory: vscode
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --check extension.js
+      - run: npx --yes @vscode/vsce package --skip-license
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hangar-vscode
+          path: vscode/*.vsix
+
   fs:
     # hangar-fs needs nothing from the host at build time; running it needs a
     # monitor to connect to, which is not done here.

@@ -1025,6 +1025,8 @@ export interface components {
         SSHGateway: {
             host: string;
             port: number;
+            /** @description The gateway's public host key, in known_hosts form without the host name, for clients to trust without asking. */
+            host_key: string;
         };
         ChangePassword: {
             current_password: string;
