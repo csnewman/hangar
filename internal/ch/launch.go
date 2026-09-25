@@ -39,6 +39,9 @@ func launch(cmd *exec.Cmd, name, socket, logPath string, timeout time.Duration, 
 	if verbose {
 		cmd.Stdout = os.Stderr
 	}
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = childAttrs()
+	}
 	if err := cmd.Start(); err != nil {
 		if logFile != nil {
 			logFile.Close()

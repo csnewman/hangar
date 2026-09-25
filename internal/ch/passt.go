@@ -49,6 +49,12 @@ func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error
 		// Stay in the foreground so this process supervises it rather than
 		// losing track of a daemon that forked away.
 		"--foreground",
+		// Exit when the monitor disconnects. passt clears the parent-death
+		// signal as it drops its privileges, so this is what ends it when
+		// the process that started it dies uncleanly: the monitor dies with
+		// that process, and passt follows. Every boot and resume starts a
+		// passt of its own, so one monitor is all it ever serves.
+		"--one-off",
 		"--quiet",
 	)
 	if err := launch(cmd, "passt", socket, "", 10*time.Second, verbose); err != nil {
