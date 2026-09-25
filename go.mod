@@ -5,7 +5,7 @@ go 1.27
 require (
 	github.com/caddyserver/certmagic v0.25.4
 	github.com/coder/websocket v1.8.15
-	github.com/containerd/containerd/v2 v2.4.0
+	github.com/containerd/containerd/v2 v2.4.1
 	github.com/containerd/platforms v1.0.0-rc.5
 	github.com/creack/pty v1.1.24
 	github.com/distribution/reference v0.6.0
