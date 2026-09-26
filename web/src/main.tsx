@@ -75,9 +75,6 @@ const router = createBrowserRouter([
             children: [
               { index: true, element: <SummaryTab /> },
               { path: 'performance', element: <PerformanceTab /> },
-              // The sections Performance brings together, for links made to
-              // them.
-              { path: 'metrics', element: <Navigate to="../performance" replace /> },
               {
                 path: 'terminal',
                 // The terminal emulator is most of the UI's weight, so it is
@@ -91,7 +88,6 @@ const router = createBrowserRouter([
               },
               { path: 'editor', element: <EditorTab /> },
               { path: 'activity', element: <ActivityTab /> },
-              { path: 'processes', element: <Navigate to="../performance" replace /> },
               {
                 path: 'desktop',
                 // noVNC is fetched when a desktop is first opened.
