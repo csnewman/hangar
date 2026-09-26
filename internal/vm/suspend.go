@@ -79,11 +79,6 @@ func (c InstanceConfig) suspended() *suspendRecord {
 	return &r
 }
 
-// Suspended reports whether dir holds a suspended machine.
-func Suspended(dir string) bool {
-	return InstanceConfig{Dir: dir}.suspended() != nil
-}
-
 // DiscardSuspend forgets a suspended machine's memory. Its disks are left
 // as the guest had them, which is what a power cut leaves.
 func DiscardSuspend(dir string) { InstanceConfig{Dir: dir}.discardSuspend() }

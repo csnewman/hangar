@@ -2,7 +2,6 @@ package vm
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -450,45 +449,3 @@ func (i *Instance) Shutdown(log *slog.Logger) {
 type closer func()
 
 func (c closer) Close() error { c(); return nil }
-
-// Save writes cfg beside the machine's state, so a later Boot of a
-// suspended machine is given the same backends it was suspended with.
-func (c InstanceConfig) Save() error {
-	b, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return err
-	}
-	return writeFileAtomic(filepath.Join(c.Dir, "machine.json"), b)
-}
-
-// LoadInstanceConfig reads what Save wrote.
-func LoadInstanceConfig(dir string) (InstanceConfig, error) {
-	var c InstanceConfig
-	b, err := os.ReadFile(filepath.Join(dir, "machine.json"))
-	if err != nil {
-		return c, err
-	}
-	err = json.Unmarshal(b, &c)
-	return c, err
-}
-
-// Command is the monitor's command line for a fresh boot of cfg, one
-// argument per line, for reading and editing by hand.
-func (c InstanceConfig) Command() (string, error) {
-	run := c.runDir()
-	ccfg := &ch.Config{
-		Name: c.Name, Kernel: c.Kernel, Initrd: filepath.Join(run, "initrd.img"), Disks: c.Disks,
-		MemoryMB: c.MemoryMiB, CPUs: c.CPUs, ConsoleFile: c.ConsoleFile, ExtraCmdline: c.ExtraCmdline,
-		Seccomp: c.Seccomp, GuestCID: guestCID, VsockSocket: filepath.Join(run, "vsock.sock"),
-		APISocket: filepath.Join(run, "api.sock"), VirtiofsSocket: filepath.Join(run, "fs.sock"),
-		VirtiofsDaxMiB: c.DaxMiB,
-	}
-	if c.Net {
-		ccfg.NetSocket = filepath.Join(os.TempDir(), "hangar-"+c.ID, "net.sock")
-	}
-	if c.GPU {
-		ccfg.GpuSocket = filepath.Join(run, "gpu.sock")
-		ccfg.GpuShmMiB = c.GPUWindowMiB
-	}
-	return ch.PrintCommand(ccfg)
-}
