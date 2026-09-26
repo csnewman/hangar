@@ -1,0 +1,37 @@
+diff --git a/src/vs/workbench/contrib/terminal/browser/terminalProfileService.ts b/src/vs/workbench/contrib/terminal/browser/terminalProfileService.ts
+index c098f31d..32950585 100644
+--- a/src/vs/workbench/contrib/terminal/browser/terminalProfileService.ts
++++ b/src/vs/workbench/contrib/terminal/browser/terminalProfileService.ts
+@@ -85,7 +85,12 @@ export class TerminalProfileService extends Disposable implements ITerminalProfi
+ 				// this long.
+ 				this._profilesReadyBarrier = new AutoOpenBarrier(20000);
+ 				return this._profilesReadyBarrier.wait().then(() => { });
+-			});
++			})
++			// Hangar: the default profile can be an extension's, contributed
++			// with its default setting, so profiles are ready only once
++			// extensions are registered and their profiles counted.
++			.then(() => this._extensionService.whenInstalledExtensionsRegistered())
++			.then(() => this._refreshAvailableProfilesNow());
+ 		this.refreshAvailableProfiles();
+ 		this._setupConfigListener();
+ 	}
+diff --git a/src/vs/workbench/contrib/terminal/browser/terminalView.ts b/src/vs/workbench/contrib/terminal/browser/terminalView.ts
+index d845f788..bf8371e3 100644
+--- a/src/vs/workbench/contrib/terminal/browser/terminalView.ts
++++ b/src/vs/workbench/contrib/terminal/browser/terminalView.ts
+@@ -166,8 +166,13 @@ export class TerminalViewPane extends ViewPane {
+ 			if (!wasInitialized) {
+ 				switch (hideOnStartup) {
+ 					case 'never':
++						// Hangar: the first terminal waits for the default profile,
++						// which may be an extension's, and is not made if an
++						// extension has opened terminals meanwhile.
+ 						this._isTerminalBeingCreated = true;
+-						this._terminalService.createTerminal({ location: TerminalLocation.Panel }).finally(() => this._isTerminalBeingCreated = false);
++						this._terminalProfileService.profilesReady
++							.then(() => this._terminalGroupService.groups.length === 0 ? this._terminalService.createTerminal({ location: TerminalLocation.Panel }) : undefined)
++							.finally(() => this._isTerminalBeingCreated = false);
+ 						break;
+ 					case 'whenEmpty':
+ 						if (this._terminalService.restoredGroupCount === 0) {

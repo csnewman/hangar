@@ -27,6 +27,14 @@ const SYNC_MS = 4000;
 
 /** @type {Map<string, HangarPty>} sessions shown in this window, by ID */
 const shown = new Map();
+/** @type {Map<string, vscode.Terminal>} terminals sync made while the window opened, by session */
+const synced = new Map();
+// How long after the extension starts a terminal VS Code asks for is the one
+// it opens with the window, rather than one the user asked for.
+const OPENING_MS = 5000;
+let activatedAt = 0;
+/** sync and the profile provider take turns, so each sees what the other claimed */
+let turn = Promise.resolve();
 /** @type {Set<string>} sessions whose tab was closed here, being ended */
 const closing = new Set();
 /** new sessions this window has asked for and not yet been told the ID of */
@@ -79,6 +87,7 @@ class HangarPty {
 		this.exited = false;
 		this.done = false;
 		this.counted = false;
+		this.handedOver = false;
 	}
 
 	open(dims) {
@@ -176,6 +185,7 @@ class HangarPty {
 	// window is going away. The session is ended only if this extension host
 	// is still here a moment later, which it is not after a reload.
 	close() {
+		if (this.handedOver) return;
 		const session = this.session;
 		this.detach();
 		if (!session || this.exited || deactivating) return;
@@ -203,9 +213,62 @@ function show(session, title) {
 	return vscode.window.createTerminal({ name: title || 'Hangar', pty, iconPath: new vscode.ThemeIcon('terminal') });
 }
 
+function inTurn(fn) {
+	const next = turn.then(fn, fn);
+	turn = next.catch(() => {});
+	return next;
+}
+
+const opening = () => Date.now() - activatedAt < OPENING_MS;
+
+// adoptable picks the session a terminal VS Code asks for attaches to. As a
+// window opens with its terminal panel showing, VS Code asks for one, and the
+// sessions already running are what belongs there: one not shown yet, or one
+// sync has shown meanwhile, whose tab is closed to leave the one VS Code asked
+// for. Otherwise, and whenever the user asks, the terminal is a new session.
+async function adoptable() {
+	if (!opening() || !vscode.workspace.getConfiguration('hangar.terminal').get('showAllSessions')) return undefined;
+	let reply;
+	try {
+		reply = await request({ op: 'list' });
+	} catch {
+		return undefined;
+	}
+	const sessions = (reply.sessions || []).filter((s) => !closing.has(s.id));
+	const fresh = sessions.find((s) => !shown.has(s.id));
+	if (fresh) return fresh.id;
+	for (const s of sessions) {
+		const terminal = synced.get(s.id);
+		if (!terminal) continue;
+		synced.delete(s.id);
+		const pty = shown.get(s.id);
+		if (pty) {
+			pty.handedOver = true;
+			pty.detach();
+		}
+		terminal.dispose();
+		return s.id;
+	}
+	return undefined;
+}
+
+function provide() {
+	return inTurn(async () => {
+		const session = await adoptable();
+		log.info(`providing a terminal on ${session ?? 'a new session'}`);
+		const pty = new HangarPty(session);
+		if (session) shown.set(session, pty);
+		return new vscode.TerminalProfile({ name: 'Hangar', pty });
+	});
+}
+
 // sync shows every session not yet shown here: those that were open before
 // a reload, and those opened since in Hangar or in another window.
-async function sync() {
+function sync() {
+	return inTurn(syncNow);
+}
+
+async function syncNow() {
 	if (!vscode.workspace.getConfiguration('hangar.terminal').get('showAllSessions')) return;
 	let reply;
 	try {
@@ -216,19 +279,19 @@ async function sync() {
 	// A session this window is starting would otherwise be shown twice.
 	if (starting > 0) return;
 	for (const s of reply.sessions || []) {
-		if (!shown.has(s.id) && !closing.has(s.id)) show(s.id, s.title);
+		if (shown.has(s.id) || closing.has(s.id)) continue;
+		const terminal = show(s.id, s.title);
+		if (opening()) synced.set(s.id, terminal);
 	}
 }
 
 function activate(context) {
+	activatedAt = Date.now();
 	log = vscode.window.createOutputChannel('Hangar', { log: true });
 	context.subscriptions.push(log);
 	context.subscriptions.push(
 		vscode.window.registerTerminalProfileProvider('hangar.terminal', {
-			provideTerminalProfile() {
-				log.info('providing a terminal');
-				return new vscode.TerminalProfile({ name: 'Hangar', pty: new HangarPty(undefined) });
-			},
+			provideTerminalProfile: provide,
 		}),
 		vscode.commands.registerCommand('hangar.terminal.new', () => show(undefined).show()),
 		vscode.commands.registerCommand('hangar.terminal.attachAll', () => sync()),
