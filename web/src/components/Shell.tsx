@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { Outlet } from 'react-router'
 
+import { desktop } from '../desktop'
 import { Sidebar } from './Sidebar'
 
 const widthKey = 'hangar.sidebar.width'
@@ -80,6 +81,19 @@ export function Shell() {
   const reset = () => {
     setWidth(defaultWidth)
     store(widthKey, String(defaultWidth))
+  }
+
+  // An environment's tab in the desktop app is that environment and nothing
+  // else: the app's own tabs move between environments, and the control
+  // panel's tab keeps the sidebar.
+  if (desktop?.tab === 'environment') {
+    return (
+      <div className="app">
+        <main className="main">
+          <Outlet />
+        </main>
+      </div>
+    )
   }
 
   return (

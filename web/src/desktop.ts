@@ -4,6 +4,9 @@
 
 interface DesktopBridge {
   version: number
+  // tab is what the page's tab is for, where the app says: the server's
+  // control panel, or one environment.
+  tab?: 'panel' | 'environment'
   openInVSCode(env: string): Promise<void>
   openTerminal(env: string): Promise<string | null>
 }
