@@ -2,12 +2,18 @@
 // environments, and open any of them through Remote-SSH.
 //
 // Every environment is reached through the server's SSH gateway, which names
-// the environment in the username. The extension keeps an SSH config file of
-// its own, ~/.ssh/hangar/config, with a host per environment (hangar-<name>),
-// and a known_hosts file holding the gateway's key as the server's API gives
-// it, so neither ssh nor Remote-SSH has anything to ask.
+// the environment in the username. Remote-SSH is given the gateway's address
+// and that username in the remote's own address, so the user's SSH config
+// needs nothing; the gateway's key, as the server's API gives it, goes into
+// ~/.ssh/known_hosts, so ssh has no fingerprint to ask about.
+//
+// An SSH config of the extension's own, ~/.ssh/hangar/config, with a host
+// per environment (hangar-<name>), is written only when the user asks for
+// it: to reach environments with ssh from a terminal, or to name a sign-in
+// key that ssh would not otherwise offer.
 
 const vscode = require('vscode')
+const { execFile } = require('child_process')
 const crypto = require('crypto')
 const fs = require('fs')
 const os = require('os')
@@ -21,6 +27,8 @@ const hangarConfig = path.join(hangarDir, 'config')
 const hangarKnownHosts = path.join(hangarDir, 'known_hosts')
 const includeLine = 'Include ~/.ssh/hangar/config'
 const remoteSSH = ['ms-vscode-remote.remote-ssh', 'jeanp413.open-remote-ssh']
+// The private keys ssh offers when nothing names one.
+const defaultIdentities = ['id_rsa', 'id_ecdsa', 'id_ecdsa_sk', 'id_ed25519', 'id_ed25519_sk', 'id_xmss', 'id_dsa']
 // apiVersion is the version of Hangar's client API this extension speaks.
 const apiVersion = 'v1'
 
@@ -148,7 +156,7 @@ class Tree {
       this.me = me
       this.envs = envs.filter((e) => e.desired !== 'deleted')
       this.error = null
-      writeSSHConfig(c.server, me, this.envs)
+      if (useSSHConfig()) writeSSHConfig(c.server, me, this.envs)
     } catch (err) {
       if (err instanceof HTTPError && err.status === 401) {
         await ctx.secrets.delete(tokenKey)
@@ -282,6 +290,144 @@ function replaceFile(file, content) {
   fs.renameSync(tmp, file)
 }
 
+function useSSHConfig() {
+  return vscode.workspace.getConfiguration('hangar').get('sshConfig') === true
+}
+
+// run runs a program and gives its exit code and output; a program that
+// cannot be run gives code null.
+function run(file, args) {
+  return new Promise((resolve) => {
+    execFile(file, args, { timeout: 10000, windowsHide: true }, (err, stdout) => {
+      if (err && typeof err.code !== 'number') resolve({ code: null, stdout: '' })
+      else resolve({ code: err ? err.code : 0, stdout: String(stdout) })
+    })
+  })
+}
+
+// sshTool is one of OpenSSH's programs: beside the ssh Remote-SSH is told
+// to use, or from PATH.
+function sshTool(name) {
+  const configured = vscode.workspace.getConfiguration('remote.SSH').get('path')
+  if (!configured) return name
+  if (name === 'ssh') return configured
+  const ext = path.extname(configured)
+  return path.join(path.dirname(configured), name + ext)
+}
+
+function knownHostName(gw) {
+  return gw.port === 22 ? gw.host : `[${gw.host}]:${gw.port}`
+}
+
+// ensureKnownHost has ~/.ssh/known_hosts hold the gateway's key, as the
+// server gives it over its API, so ssh connects without asking to trust a
+// fingerprint. A different key already there for the gateway is left for
+// the user to settle: ssh refuses it, and so does this.
+async function ensureKnownHost(gw) {
+  const file = path.join(os.homedir(), '.ssh', 'known_hosts')
+  const name = knownHostName(gw)
+  const [type, blob] = gw.host_key.trim().split(/\s+/)
+  let entries
+  const found = await run(sshTool('ssh-keygen'), ['-F', name, '-f', file])
+  if (found.code !== null) {
+    entries = found.stdout.split(/\r?\n/).filter((l) => l && !l.startsWith('#'))
+  } else {
+    // No ssh-keygen: only entries naming the host in the clear are found.
+    let text = ''
+    try {
+      text = fs.readFileSync(file, 'utf8')
+    } catch {
+      // No known hosts yet.
+    }
+    entries = text.split(/\r?\n/).filter((l) => {
+      const f = l.trim().split(/\s+/)
+      const hosts = f[0]?.startsWith('@') ? f[1] : f[0]
+      return hosts?.split(',').includes(name)
+    })
+  }
+  const keys = entries.map((l) => {
+    const f = l.trim().split(/\s+/)
+    return f[0].startsWith('@') ? f.slice(2, 4) : f.slice(1, 3)
+  })
+  if (keys.some(([t, b]) => t === type && b === blob)) return true
+  if (keys.length > 0) {
+    vscode.window.showErrorMessage(
+      `Hangar: ${file} holds a different key for the gateway at ${name} than the server gives, so ssh would refuse it.`,
+      { modal: true, detail: `If the server's key has changed, remove the old one with: ssh-keygen -R "${name}"` },
+    )
+    return false
+  }
+  let current = ''
+  try {
+    current = fs.readFileSync(file, 'utf8')
+  } catch {
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+  }
+  const sep = current && !current.endsWith('\n') ? '\n' : ''
+  fs.appendFileSync(file, `${sep}${name} ${type} ${blob}\n`, { mode: 0o600 })
+  log.appendLine(`added the Hangar gateway's key for ${name} to ${file}`)
+  return true
+}
+
+// sshOffers reports whether ssh, with the user's own configuration, offers
+// the key when connecting as user to the gateway: as an identity file it
+// tries, or one the SSH agent holds.
+async function sshOffers(gw, user, key) {
+  const priv = path.resolve(key.file.replace(/\.pub$/, ''))
+  const g = await run(sshTool('ssh'), ['-G', '-p', String(gw.port), '-l', user, gw.host])
+  let files
+  if (g.code === 0) {
+    files = g.stdout
+      .split(/\r?\n/)
+      .filter((l) => l.toLowerCase().startsWith('identityfile '))
+      .map((l) => l.slice('identityfile '.length).trim().replace(/^~(?=$|[\\/])/, os.homedir()))
+  } else {
+    files = defaultIdentities.map((n) => path.join(os.homedir(), '.ssh', n))
+  }
+  if (files.some((f) => path.resolve(f) === priv)) return true
+  const agent = await run(sshTool('ssh-add'), ['-L'])
+  const blob = key.line.split(/\s+/)[1]
+  return agent.code === 0 && agent.stdout.split(/\r?\n/).some((l) => l.split(/\s+/)[1] === blob)
+}
+
+// offerSSHConfig asks to name a key ssh would not offer by itself in the
+// extension's SSH config, which then carries every connection. It gives
+// whether to go on, and how.
+async function offerSSHConfig(key) {
+  const priv = key.file.replace(/\.pub$/, '')
+  const answer = await vscode.window.showWarningMessage(
+    `ssh would not offer ${priv}, the key Hangar knows you by.`,
+    {
+      modal: true,
+      detail:
+        'Hangar can name it in an SSH config of its own, ~/.ssh/hangar/config, included from your SSH config. ' +
+        'Or add the key to your SSH agent and continue.',
+    },
+    "Use Hangar's SSH Config",
+    'Continue Anyway',
+  )
+  if (answer === "Use Hangar's SSH Config") {
+    await vscode.workspace.getConfiguration('hangar').update('sshConfig', true, vscode.ConfigurationTarget.Global)
+    return 'config'
+  }
+  return answer === 'Continue Anyway' ? 'direct' : null
+}
+
+// addToSSHConfig writes the extension's SSH config and includes it from the
+// user's, for ssh from a terminal.
+async function addToSSHConfig() {
+  const c = await client()
+  if (!c) return signIn()
+  await vscode.workspace.getConfiguration('hangar').update('sshConfig', true, vscode.ConfigurationTarget.Global)
+  if (!(await ensureInclude())) return
+  await ensureLoginKey(c)
+  await tree.refresh()
+  const env = tree.envs.find((e) => e.owner_id === tree.me?.id)
+  vscode.window.showInformationMessage(
+    `Hangar: your environments are in ${hangarConfig}${env ? `, as ${alias(tree.me, env)} and so on` : ''}.`,
+  )
+}
+
 // userSSHConfig is the SSH config Remote-SSH reads.
 function userSSHConfig() {
   const configured = vscode.workspace.getConfiguration('remote.SSH').get('configFile')
@@ -356,7 +502,8 @@ function localKeys() {
 }
 
 // ensureLoginKey has a key of this machine's among the user's sign-in keys,
-// offering to add one when none is.
+// offering to add one when none is. It gives the key, whose key is null when
+// the user goes on without one of ~/.ssh's, or null to stop.
 async function ensureLoginKey(c) {
   const loginKeys = await c.loginKeys()
   const registered = new Set(loginKeys.map((k) => k.fingerprint))
@@ -364,7 +511,7 @@ async function ensureLoginKey(c) {
   const match = local.find((k) => registered.has(k.fingerprint))
   if (match) {
     rememberIdentity(match.file)
-    return true
+    return { key: match }
   }
   const answer = await vscode.window.showWarningMessage(
     loginKeys.length === 0
@@ -374,9 +521,11 @@ async function ensureLoginKey(c) {
     'Add a Key',
     'Continue Anyway',
   )
-  if (answer === 'Continue Anyway') return true
-  if (answer === 'Add a Key') return addKey()
-  return false
+  if (answer === 'Continue Anyway') return { key: null }
+  if (answer !== 'Add a Key') return null
+  const added = await addKey()
+  if (!added) return null
+  return { key: added === true ? null : added }
 }
 
 function rememberIdentity(pubFile) {
@@ -389,6 +538,8 @@ function rememberIdentity(pubFile) {
   }
 }
 
+// addKey adds a public key to the user's Hangar profile, and gives the key
+// from ~/.ssh it was, true for a pasted one, or false for none.
 async function addKey() {
   const c = await client()
   if (!c) return false
@@ -417,7 +568,7 @@ async function addKey() {
   }
   if (pick.key) rememberIdentity(pick.key.file)
   vscode.window.showInformationMessage('Hangar: the key signs you in to your environments.')
-  return true
+  return pick.key ?? true
 }
 
 // waitRunning starts an environment if it is not running, and waits until
@@ -480,12 +631,31 @@ async function open(node, newWindow) {
       return
     }
     if (!(await ensureRemoteSSH())) return
-    if (!(await ensureLoginKey(c))) return
-    if (!(await ensureInclude())) return
+    const login = await ensureLoginKey(c)
+    if (!login) return
+    const user = sshUser(me, env)
+    let route = useSSHConfig() ? 'config' : 'direct'
+    if (route === 'direct' && login.key && !(await sshOffers(me.ssh, user, login.key))) {
+      route = await offerSSHConfig(login.key)
+      if (!route) return
+    }
+    if (route === 'config' && !(await ensureInclude())) return
+    if (route === 'direct' && !(await ensureKnownHost(me.ssh))) return
     env = await waitRunning(c, env)
     if (!env) return
-    writeSSHConfig(c.server, me, tree.envs.some((e) => e.id === env.id) ? tree.envs : [...tree.envs, env])
-    const host = alias(me, env)
+    // Through the extension's SSH config, the environment is a host of its
+    // own; otherwise Remote-SSH is given the gateway and the username, as
+    // hex-encoded JSON in place of a host.
+    let host, authority
+    if (route === 'config') {
+      writeSSHConfig(c.server, me, tree.envs.some((e) => e.id === env.id) ? tree.envs : [...tree.envs, env])
+      host = alias(me, env)
+      authority = `ssh-remote+${host}`
+    } else {
+      host = me.ssh.host
+      const target = JSON.stringify({ hostName: me.ssh.host, port: me.ssh.port, user })
+      authority = `ssh-remote+${Buffer.from(target).toString('hex')}`
+    }
     // Remote-SSH asks for a host's platform unless it is told.
     const remote = vscode.workspace.getConfiguration('remote.SSH')
     const platforms = remote.get('remotePlatform') ?? {}
@@ -493,7 +663,7 @@ async function open(node, newWindow) {
       await remote.update('remotePlatform', { ...platforms, [host]: 'linux' }, vscode.ConfigurationTarget.Global)
     }
     const folder = env.editor_path || '/home/dev'
-    const uri = vscode.Uri.from({ scheme: 'vscode-remote', authority: `ssh-remote+${host}`, path: folder })
+    const uri = vscode.Uri.from({ scheme: 'vscode-remote', authority, path: folder })
     log.appendLine(`opening ${uri.toString()}`)
     await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: newWindow })
   } catch (err) {
@@ -670,6 +840,7 @@ function activate(context) {
     vscode.commands.registerCommand('hangar.signOut', signOut),
     vscode.commands.registerCommand('hangar.refresh', () => tree.refresh()),
     vscode.commands.registerCommand('hangar.addKey', addKey),
+    vscode.commands.registerCommand('hangar.addToSSHConfig', addToSSHConfig),
     vscode.commands.registerCommand('hangar.createInBrowser', () => openInBrowser('/environments/new')),
     vscode.commands.registerCommand('hangar.open', (node) => open(node, false)),
     vscode.commands.registerCommand('hangar.openInNewWindow', (node) => open(node, true)),
@@ -684,6 +855,9 @@ function activate(context) {
       if (!me.ssh) return
       const port = me.ssh.port === 22 ? '' : ` -p ${me.ssh.port}`
       await vscode.env.clipboard.writeText(`ssh ${sshUser(me, node.env)}@${me.ssh.host}${port}`)
+    }),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('hangar.sshConfig')) tree.refresh()
     }),
     vscode.window.onDidChangeWindowState((s) => {
       if (s.focused) tree.refresh()

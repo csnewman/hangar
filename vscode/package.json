@@ -94,6 +94,11 @@
 				"icon": "$(key)"
 			},
 			{
+				"command": "hangar.addToSSHConfig",
+				"title": "Add Environments to SSH Config",
+				"category": "Hangar"
+			},
+			{
 				"command": "hangar.createInBrowser",
 				"title": "Create an Environment in the Browser",
 				"category": "Hangar",
@@ -155,6 +160,10 @@
 				},
 				{
 					"command": "hangar.addKey",
+					"when": "view == hangar.environments && hangar.signedIn"
+				},
+				{
+					"command": "hangar.addToSSHConfig",
 					"when": "view == hangar.environments && hangar.signedIn"
 				},
 				{
@@ -239,6 +248,16 @@
 					"when": "false"
 				}
 			]
+		},
+		"configuration": {
+			"title": "Hangar",
+			"properties": {
+				"hangar.sshConfig": {
+					"type": "boolean",
+					"default": false,
+					"markdownDescription": "Keep `~/.ssh/hangar/config`, a host per environment (`hangar-<name>`) included from your SSH config, and connect through it. For `ssh` from a terminal, or a sign-in key that `ssh` would not offer by itself. Otherwise environments are opened without touching your SSH config."
+				}
+			}
 		}
 	}
 }
