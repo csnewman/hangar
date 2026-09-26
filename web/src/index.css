@@ -474,12 +474,20 @@ h1 {
   max-width: 720px;
 }
 
+/* An environment's page fills the height: its bar stays at the top and
+   only the section under it scrolls. */
 .page-flush {
   max-width: none;
   padding: 0;
   display: flex;
   flex-direction: column;
-  min-height: 100%;
+  height: 100%;
+}
+
+.page-flush > .env-bar,
+.page-flush > .env-reason,
+.page-flush > .start-progress {
+  flex: none;
 }
 
 .page-pad {
@@ -598,6 +606,8 @@ h1 {
    terminal, the desktop, the Code tab -- fills the tab edge to edge. */
 .tab-body {
   flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
@@ -2010,12 +2020,14 @@ a.reason {
   background: var(--surface);
 }
 
+/* The name keeps its place; the section tabs give way first. */
 .env-ident {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex: none;
+  max-width: 34%;
   min-width: 0;
-  flex-shrink: 1;
 }
 
 .env-owner {
@@ -2031,7 +2043,10 @@ a.reason {
 }
 
 .env-tabs {
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
   border-bottom: none;
 }
 
@@ -2048,7 +2063,7 @@ a.reason {
   flex: none;
 }
 
-@container (max-width: 1180px) {
+@container (max-width: 1380px) {
   .env-tabs .tab-label {
     display: none;
   }
