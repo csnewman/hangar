@@ -39,7 +39,9 @@ export interface TabInfo {
 }
 
 export interface AppState {
-  // server is the window's server, for a window's bar; null for the picker.
+  // window and server are the bar's window and its server; null for the
+  // picker.
+  window: string | null
   server: string | null
   tabs: TabInfo[]
   servers: ServerInfo[]
@@ -52,6 +54,9 @@ export interface Bridge {
   activate(id: number): Promise<void>
   close(id: number): Promise<void>
   move(id: number, to: number): Promise<void>
+  menu(id: number): Promise<void>
+  adopt(fromWindow: string, id: number, at: number): Promise<void>
+  dropped(id: number): Promise<void>
   overlay(open: boolean): Promise<void>
   onOverlay(fn: () => void): void
   addServer(url: string): Promise<{ ok?: boolean; error?: string; warning?: string }>

@@ -8,7 +8,7 @@ const message = document.getElementById('message')!
 const form = document.getElementById('add') as HTMLFormElement
 const input = document.getElementById('url') as HTMLInputElement
 
-let state: AppState = { server: null, tabs: [], servers: [] }
+let state: AppState = { window: null, server: null, tabs: [], servers: [] }
 
 const count = (n: number) => `${n} environment${n === 1 ? '' : 's'}`
 

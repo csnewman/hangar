@@ -1,6 +1,6 @@
-// What the app remembers between runs: the servers it knows, and for each
-// server whose window was open, that window's environment tabs and where it
-// was on screen. It is a JSON file in the app's data directory, written
+// What the app remembers between runs: the servers it knows, and each
+// window that was open -- its server, its environment tabs and where it was
+// on screen. It is a JSON file in the app's data directory, written
 // whole whenever it changes.
 
 import { app } from 'electron'
@@ -23,10 +23,13 @@ export interface Bounds {
   height: number
 }
 
-// SavedWindow is a server's window: the URL of each environment tab, in
-// order, which tab was in hand (0 is the control panel), and whether it was
-// closed rather than left open when the app quit.
+// SavedWindow is one window of a server: the URL of each environment tab,
+// in order, which tab was in hand (0 is the control panel), and whether it
+// was closed rather than left open when the app quit. A server's last
+// window is kept when closed, so opening the server again brings its tabs
+// back.
 export interface SavedWindow {
+  id: string
   server: string
   tabs: string[]
   active: number
@@ -95,19 +98,26 @@ export function removeServer(id: string) {
 }
 
 export function savedWindows(): SavedWindow[] {
-  return state.windows.filter((w) => server(w.server))
+  return state.windows.filter((w) => w.id && server(w.server))
 }
 
-export function savedWindow(serverId: string): SavedWindow | undefined {
-  return state.windows.find((w) => w.server === serverId)
+// closedWindow is the window a server was last left with, to open it as it
+// was.
+export function closedWindow(serverId: string): SavedWindow | undefined {
+  return state.windows.find((w) => w.server === serverId && w.closed)
 }
 
-// saveWindow records a server's window as it is. open says whether it is
-// to be reopened next run; its tabs and place are kept either way, for the
-// next time it is opened.
+// saveWindow records a window as it is: to reopen next run when open, and
+// as its server's closed window otherwise.
 export function saveWindow(w: SavedWindow, open: boolean) {
-  state.windows = state.windows.filter((x) => x.server !== w.server)
+  state.windows = state.windows.filter((x) => x.id !== w.id && !(!open && x.server === w.server && x.closed))
   state.windows.push({ ...w, closed: !open })
+  save()
+}
+
+// forgetWindow drops a window that closed while its server has another.
+export function forgetWindow(id: string) {
+  state.windows = state.windows.filter((x) => x.id !== id)
   save()
 }
 

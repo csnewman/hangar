@@ -25,9 +25,17 @@ already has. Pages go where they belong -- an environment's pages to its
 tab, templates, profile and administration to the control panel -- so a
 link in either lands in the right tab.
 
+Right-click a tab for its menu: duplicate it, move it to a new window,
+open its environment in VS Code, a terminal or the browser, copy its link,
+reload it, or close it, the others, or those to its left or right. Drag a
+tab to reorder it, onto another window of the same server to move it
+there, or out of the window to give it a window of its own. A server can
+have as many windows as you like; a window only ever holds one server.
+
 Every tab is a view of its own and stays alive while another is shown: VS
 Code, terminals and desktops keep everything when you move between tabs,
-and a tab moved to another of its environment's pages is not reloaded. A
+when a tab is dragged to another window, and when it is moved to another
+of its environment's pages. A
 server's tabs share its session, so signing in once, on its own login
 page, signs in the whole window; there is no token to paste. Windows and
 their tabs are restored when the app starts.

@@ -1,8 +1,9 @@
 // Hangar for the desktop.
 //
-// Each window is one server: its control panel in the first tab and each of
-// its environments in a tab of its own. Another server is another window,
-// and ⌘N picks or adds one.
+// Each window is one server: its control panel in the first tab and its
+// environments in tabs of their own. Another server is another window, and
+// ⌘N picks or adds one; a tab dragged out of a window makes another window
+// of its server, and one dragged onto another window of it moves there.
 //
 // The app is two things. Its own parts -- the tab bar, the environment
 // switcher, the server picker, the menu bar icon, notifications, opening VS
@@ -15,6 +16,9 @@ import {
   app,
   BaseWindow,
   BrowserWindow,
+  clipboard,
+  shell,
+  screen,
   dialog,
   ipcMain,
   Menu,
@@ -32,9 +36,10 @@ import { openInVSCode, openTerminal } from './launch'
 import * as store from './store'
 import type { Server } from './store'
 import { watch, type ServerState } from './watch'
-import { roleFor, ServerWindow } from './window'
+import { barHeight, roleFor, ServerWindow, type Tab } from './window'
 
-const windows = new Map<string, ServerWindow>()
+// windows are the open server windows, the most recently in front first.
+let windows: ServerWindow[] = []
 let picker: BrowserWindow | null = null
 let tray: Tray | null = null
 let quitting = false
@@ -51,7 +56,7 @@ function serverInfo(st: ServerState) {
     username: st.me?.display_name || st.me?.username,
     ssh: !!st.me?.ssh,
     error: st.error,
-    open: windows.has(st.server.id),
+    open: windows.some((w) => w.server.id === st.server.id),
     environments: st.environments.map((e) => ({ ...e, own: e.owner_id === st.me?.id })),
   }
 }
@@ -59,7 +64,12 @@ function serverInfo(st: ServerState) {
 // summary is what one of the app's pages is shown: every server, and for a
 // window's bar, which server is its and its tabs.
 function summary(w?: ServerWindow) {
-  return { server: w?.server.id ?? null, tabs: w?.info() ?? [], servers: watch.all().map(serverInfo) }
+  return {
+    window: w?.id ?? null,
+    server: w?.server.id ?? null,
+    tabs: w?.info() ?? [],
+    servers: watch.all().map(serverInfo),
+  }
 }
 
 let pending: NodeJS.Timeout | undefined
@@ -67,7 +77,7 @@ let pending: NodeJS.Timeout | undefined
 function changed() {
   clearTimeout(pending)
   pending = setTimeout(() => {
-    for (const w of windows.values()) w.bar.webContents.send('app:state', summary(w))
+    for (const w of windows) w.bar.webContents.send('app:state', summary(w))
     picker?.webContents.send('app:state', summary())
     updateTray()
   }, 30)
@@ -75,22 +85,49 @@ function changed() {
 
 // ---- Windows ----
 
-function openServer(s: Server): ServerWindow {
-  let w = windows.get(s.id)
-  if (!w) {
-    const made = new ServerWindow(s, changed)
-    windows.set(s.id, made)
-    made.win.on('close', () => made.save(quitting))
-    made.win.on('closed', () => {
-      windows.delete(s.id)
-      changed()
-    })
-    w = made
+// newWindow opens a window of a server: restoring one, or a fresh one
+// where bounds say.
+function newWindow(s: Server, opts: ConstructorParameters<typeof ServerWindow>[2] = {}): ServerWindow {
+  const w = new ServerWindow(s, changed, opts)
+  windows.unshift(w)
+  w.win.on('focus', () => {
+    windows = [w, ...windows.filter((x) => x !== w)]
+  })
+  w.win.on('close', () => {
+    // A server's last window is kept when closed, to open again as it was;
+    // one of several is forgotten.
+    const others = windows.some((x) => x !== w && x.server.id === s.id)
+    if (quitting) w.save(true)
+    else if (others) store.forgetWindow(w.id)
+    else w.save(false)
+  })
+  w.win.on('closed', () => {
+    windows = windows.filter((x) => x !== w)
     changed()
-  }
+  })
+  changed()
+  return w
+}
+
+// openServer brings a server's window forward: the one last in front, or
+// the one it was last left with, or a new one.
+function openServer(s: Server): ServerWindow {
+  const w = windows.find((x) => x.server.id === s.id) ?? newWindow(s, { saved: store.closedWindow(s.id) })
   w.win.show()
   w.win.focus()
   return w
+}
+
+// detach moves a tab to a window of its own, placed at a point on the
+// screen, or beside its window.
+function detach(from: ServerWindow, tab: Tab, at?: { x: number; y: number }) {
+  if (tab === from.panel) return
+  const [width, height] = from.win.getSize()
+  const [fx, fy] = from.win.getPosition()
+  const bounds = at ? { x: at.x - 120, y: at.y - 16, width, height } : { x: fx + 40, y: fy + 40, width, height }
+  const w = newWindow(from.server, { bounds })
+  w.adopt(tab)
+  w.win.focus()
 }
 
 // showPicker opens the window that picks or adds a server.
@@ -115,15 +152,16 @@ function showPicker() {
   })
 }
 
-// focused is the server window in front, if it is one.
+// focused is the server window the menus act on: the one in front, or the
+// one last in front while the app has no window focused.
 function focused(): ServerWindow | undefined {
   const bw = BaseWindow.getFocusedWindow()
-  return [...windows.values()].find((w) => w.win === bw)
+  return bw ? windows.find((w) => w.win === bw) : windows[0]
 }
 
 // windowFor is the server window a page belongs to: its bar or a tab.
 function windowFor(wc: WebContents): ServerWindow | undefined {
-  return [...windows.values()].find((w) => w.bar.webContents === wc || w.tabFor(wc))
+  return windows.find((w) => w.bar.webContents === wc || w.tabFor(wc))
 }
 
 // ---- Calls from the app's own pages ----
@@ -154,6 +192,36 @@ ipcMain.handle('tab:close', (e, id: number) => {
   if (t) w!.close(t)
 })
 ipcMain.handle('tab:move', (e, id: number, to: number) => own(e)?.move(id, to))
+ipcMain.handle('tab:menu', (e, id: number) => {
+  const w = own(e)
+  const t = w?.tab(id)
+  if (w && t) Menu.buildFromTemplate(tabMenu(w, t)).popup({ window: w.win })
+})
+// tab:adopt is a tab dropped on this window's bar from another window of
+// the same server.
+ipcMain.handle('tab:adopt', (e, fromWindow: string, id: number, at: number) => {
+  const w = own(e)
+  const from = windows.find((x) => x.id === fromWindow)
+  const t = from?.tab(id)
+  if (w && from && t && from.server.id === w.server.id) w.adopt(t, at)
+})
+// tab:dropped is a tab dragged from its bar and dropped where nothing took
+// it. Over another window of its server it moves there; back on its own
+// bar it stays; anywhere else it becomes a window of its own.
+ipcMain.handle('tab:dropped', (e, id: number) => {
+  const w = own(e)
+  const t = w?.tab(id)
+  if (!w || !t || t === w.panel) return
+  const at = screen.getCursorScreenPoint()
+  const inside = (b: Electron.Rectangle) => at.x >= b.x && at.x < b.x + b.width && at.y >= b.y && at.y < b.y + b.height
+  const bar = w.win.getContentBounds()
+  if (inside({ ...bar, height: barHeight })) return
+  const into = windows.find((x) => x !== w && x.server.id === w.server.id && inside(x.win.getBounds()))
+  if (into) {
+    into.adopt(t)
+    into.win.focus()
+  } else detach(w, t, at)
+})
 ipcMain.handle('overlay', (e, open: boolean) => own(e)?.setOverlay(open))
 ipcMain.handle('server:add', async (e, input: string) => {
   own(e)
@@ -173,7 +241,7 @@ ipcMain.handle('server:add', async (e, input: string) => {
 })
 ipcMain.handle('server:remove', (e, id: string) => {
   own(e)
-  windows.get(id)?.win.close()
+  for (const w of windows.filter((x) => x.server.id === id)) w.win.close()
   store.removeServer(id)
   watch.refresh()
 })
@@ -234,6 +302,53 @@ ipcMain.handle('page:terminal', (e, envId: string) => {
   return st.me ? openTerminal(st.me, x) : 'not signed in'
 })
 
+// ---- A tab's menu ----
+
+function tabMenu(w: ServerWindow, tab: Tab): Electron.MenuItemConstructorOptions[] {
+  const i = w.tabs.indexOf(tab)
+  const url = tab.view.webContents.getURL()
+  const common: Electron.MenuItemConstructorOptions[] = [
+    { label: 'Reload Tab', click: () => tab.view.webContents.reload() },
+    { label: 'Copy Link', click: () => clipboard.writeText(url) },
+    { label: 'Open in Browser', click: () => shell.openExternal(url) },
+  ]
+  const closing: Electron.MenuItemConstructorOptions[] = [
+    { label: 'Close Other Tabs', enabled: w.tabs.length > 2 || (tab === w.panel && w.tabs.length > 1), click: () => w.closeMany(tab, 'others') },
+    { label: 'Close Tabs to the Left', enabled: i > 1, click: () => w.closeMany(tab, 'left') },
+    { label: 'Close Tabs to the Right', enabled: i < w.tabs.length - 1, click: () => w.closeMany(tab, 'right') },
+    { type: 'separator' },
+    { label: 'Reopen Closed Tab', click: () => w.reopen() },
+  ]
+  if (tab === w.panel) {
+    return [
+      { label: 'New Window', click: () => newWindow(w.server).win.focus() },
+      { type: 'separator' },
+      ...common,
+      { type: 'separator' },
+      ...closing,
+    ]
+  }
+  const st = watch.all().find((s) => s.server.id === w.server.id)
+  const env = tab.role.kind === 'env' ? st?.environments.find((e) => tab.role.kind === 'env' && e.id === tab.role.env) : undefined
+  const running = env?.phase === 'running'
+  return [
+    { label: 'Duplicate Tab', click: () => w.duplicate(tab) },
+    { label: 'Move Tab to New Window', click: () => detach(w, tab) },
+    { type: 'separator' },
+    { label: 'Open in VS Code', enabled: !!env && running, click: () => env && openInVSCode(w.server, env) },
+    {
+      label: 'Open Terminal',
+      enabled: !!env && running && !!st?.me?.ssh,
+      click: () => env && st?.me && openTerminal(st.me, env),
+    },
+    { type: 'separator' },
+    ...common,
+    { type: 'separator' },
+    { label: 'Close Tab', click: () => w.close(tab) },
+    ...closing,
+  ]
+}
+
 // ---- Notifications ----
 
 watch.on('phase', (st: ServerState, e: api.Environment, was: api.Environment) => {
@@ -252,11 +367,9 @@ watch.on('phase', (st: ServerState, e: api.Environment, was: api.Environment) =>
 watch.on('change', () => {
   // A deleted environment's tab goes with it.
   for (const st of watch.all()) {
-    const w = windows.get(st.server.id)
-    if (w && st.signedIn && !st.error) {
-      const ids = new Set(st.environments.map((e) => e.id))
-      w.prune((env) => ids.has(env))
-    }
+    if (!st.signedIn || st.error) continue
+    const ids = new Set(st.environments.map((e) => e.id))
+    for (const w of windows.filter((x) => x.server.id === st.server.id)) w.prune((env) => ids.has(env))
   }
   changed()
 })
@@ -332,6 +445,20 @@ function menu() {
         { label: 'New Tab…', accelerator: 'CmdOrCtrl+T', click: () => focused()?.setOverlay(true, true) },
         { label: 'Go to Environment…', accelerator: 'CmdOrCtrl+L', click: () => focused()?.setOverlay(true, true) },
         { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => focused()?.reopen() },
+        {
+          label: 'Duplicate Tab',
+          click: () => {
+            const w = focused()
+            if (w) w.duplicate(w.active)
+          },
+        },
+        {
+          label: 'Move Tab to New Window',
+          click: () => {
+            const w = focused()
+            if (w && w.active !== w.panel) detach(w, w.active)
+          },
+        },
         { type: 'separator' },
         {
           label: 'Close Tab',
@@ -435,8 +562,8 @@ if (!app.requestSingleInstanceLock()) {
   app.on('second-instance', (_, argv) => {
     const link = argv.find((a) => a.startsWith('hangar://'))
     if (link) openLink(link)
-    else if (windows.size === 0) showPicker()
-    else [...windows.values()][0].win.focus()
+    else if (windows.length === 0) showPicker()
+    else windows[0].win.focus()
   })
   app.on('open-url', (e, link) => {
     e.preventDefault()
@@ -452,7 +579,7 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform !== 'darwin') app.quit()
   })
   app.on('activate', () => {
-    if (windows.size === 0 && !picker) showPicker()
+    if (windows.length === 0 && !picker) showPicker()
   })
 
   app.whenReady().then(() => {
@@ -460,9 +587,9 @@ if (!app.requestSingleInstanceLock()) {
     menu()
     for (const saved of store.reopenable()) {
       const s = store.server(saved.server)
-      if (s) openServer(s)
+      if (s) newWindow(s, { saved })
     }
-    if (windows.size === 0) showPicker()
+    if (windows.length === 0) showPicker()
     tray = new Tray(trayIcon())
     tray.setToolTip('Hangar')
     updateTray()

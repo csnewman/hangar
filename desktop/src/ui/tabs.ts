@@ -8,14 +8,37 @@ const overlay = document.getElementById('overlay')!
 const query = document.getElementById('query') as HTMLInputElement
 const results = document.getElementById('results')!
 
-let state: AppState = { server: null, tabs: [], servers: [] }
+let state: AppState = { window: null, server: null, tabs: [], servers: [] }
 if (h.platform === 'darwin') strip.classList.add('mac')
 
 const mine = () => state.servers.find((s) => s.id === state.server)
 
 // ---- Tabs ----
+//
+// A tab is dragged as data only a bar of the same server accepts, so it can
+// move between that server's windows and nowhere else.
 
-let dragging: number | null = null
+const dragType = () => `application/x-hangar-tab-${state.server}`
+const carries = (e: DragEvent) => !!e.dataTransfer?.types.includes(dragType())
+
+function dropAt(e: DragEvent, at: number) {
+  e.preventDefault()
+  const raw = e.dataTransfer?.getData(dragType())
+  if (!raw) return
+  const { window: from, id } = JSON.parse(raw) as { window: string; id: number }
+  if (from === state.window) h.move(id, at)
+  else h.adopt(from, id, at)
+}
+
+strip.addEventListener('dragover', (e) => {
+  if (carries(e)) {
+    e.preventDefault()
+    e.dataTransfer!.dropEffect = 'move'
+  }
+})
+strip.addEventListener('drop', (e) => {
+  if (carries(e)) dropAt(e, state.tabs.length)
+})
 
 function renderTabs() {
   const server = mine()
@@ -41,6 +64,10 @@ function renderTabs() {
     el.addEventListener('mousedown', (e) => {
       if (e.button === 0 && !(e.target as HTMLElement).closest('.x')) h.activate(t.id)
     })
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault()
+      h.menu(t.id)
+    })
     if (!t.panel) {
       el.addEventListener('auxclick', (e) => {
         if (e.button === 1) h.close(t.id)
@@ -50,12 +77,26 @@ function renderTabs() {
         h.close(t.id)
       })
       el.draggable = true
-      el.addEventListener('dragstart', () => (dragging = t.id))
+      el.addEventListener('dragstart', (e) => {
+        e.dataTransfer!.setData(dragType(), JSON.stringify({ window: state.window, id: t.id }))
+        e.dataTransfer!.effectAllowed = 'move'
+      })
+      el.addEventListener('dragend', (e) => {
+        // Nothing took it: the app decides by where the pointer is.
+        if (e.dataTransfer?.dropEffect === 'none') h.dropped(t.id)
+      })
     }
-    el.addEventListener('dragover', (e) => e.preventDefault())
-    el.addEventListener('drop', () => {
-      if (dragging !== null && dragging !== t.id) h.move(dragging, Math.max(1, i))
-      dragging = null
+    el.addEventListener('dragover', (e) => {
+      if (carries(e)) {
+        e.preventDefault()
+        e.stopPropagation()
+        e.dataTransfer!.dropEffect = 'move'
+      }
+    })
+    el.addEventListener('drop', (e) => {
+      if (!carries(e)) return
+      e.stopPropagation()
+      dropAt(e, Math.max(1, i))
     })
     strip.appendChild(el)
   })

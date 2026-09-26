@@ -1,12 +1,14 @@
-// A server's window: a bar of tabs across the top, and under it the tab in
-// hand. The first tab is the server's control panel and stays; every other
-// tab is one environment.
+// A window of one server: a bar of tabs across the top, and under it the
+// tab in hand. The first tab is the server's control panel and stays; every
+// other tab is an environment. A server may have several windows, and an
+// environment several tabs.
 //
 // Every tab is a view of its own, kept alive while another is shown. An
 // environment's tab keeps all of it -- VS Code's state, terminal sessions,
 // the desktop, scroll positions -- however often the user moves between
-// tabs; nothing reloads. The tabs share the server's session, so one sign-in
-// covers them all. Another server is another window.
+// tabs, and when it is dragged to another window of its server: the view
+// moves, the page in it does not reload. A server's tabs share its
+// session, so one sign-in covers them all.
 //
 // Pages are routed to the tab they belong in: an environment's pages to its
 // tab, everything else to the control panel. A link is caught in the page
@@ -15,14 +17,15 @@
 // caught here once made, and taken back where it happened.
 
 import { BaseWindow, clipboard, Menu, WebContentsView, shell, type WebContents } from 'electron'
+import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
 
 import { partition } from './api'
 import * as store from './store'
-import type { Server } from './store'
+import type { Bounds, SavedWindow, Server } from './store'
 
 // The bar's height, in the page's CSS pixels.
-const barHeight = 40
+export const barHeight = 40
 
 // Role is what a tab is for: the control panel, or one environment.
 export type Role = { kind: 'panel' } | { kind: 'env'; env: string }
@@ -50,6 +53,9 @@ export interface Tab {
   id: number
   role: Role
   view: WebContentsView
+  // owner is the window the tab is in; a tab dragged to another window
+  // changes it.
+  owner: ServerWindow
   title: string
   favicon?: string
   loading: boolean
@@ -69,7 +75,15 @@ const ui = (page: string) => `file://${join(__dirname, 'ui', page)}`
 
 let nextTab = 1
 
+export interface WindowOptions {
+  // saved is the window to restore: its tabs and place.
+  saved?: SavedWindow
+  // bounds is where to put a new window, such as under a tab dragged out.
+  bounds?: Partial<Bounds>
+}
+
 export class ServerWindow {
+  readonly id: string
   readonly server: Server
   readonly win: BaseWindow
   // bar is the tab strip, and the switcher when it is open over the tabs.
@@ -81,16 +95,16 @@ export class ServerWindow {
   private overlay = false
   private onChange: () => void
 
-  constructor(server: Server, onChange: () => void) {
+  constructor(server: Server, onChange: () => void, opts: WindowOptions = {}) {
+    this.id = opts.saved?.id ?? randomUUID()
     this.server = server
     this.onChange = onChange
-    const saved = store.savedWindow(server.id)
-    const b = saved?.bounds
+    const b = { ...opts.saved?.bounds, ...opts.bounds }
     this.win = new BaseWindow({
-      width: b?.width ?? 1400,
-      height: b?.height ?? 900,
-      x: b?.x,
-      y: b?.y,
+      width: b.width ?? 1400,
+      height: b.height ?? 900,
+      x: b.x,
+      y: b.y,
       minWidth: 640,
       minHeight: 400,
       title: server.name,
@@ -108,11 +122,11 @@ export class ServerWindow {
     this.panel = this.make({ kind: 'panel' }, server.url)
     this.tabs.push(this.panel)
     this.active = this.panel
-    for (const url of saved?.tabs ?? []) {
+    for (const url of opts.saved?.tabs ?? []) {
       const role = roleFor(server, url)
-      if (role?.kind === 'env' && !this.envTab(role.env)) this.tabs.push(this.make(role, url))
+      if (role?.kind === 'env') this.tabs.push(this.make(role, url))
     }
-    this.activate(this.tabs[Math.min(Math.max(saved?.active ?? 0, 0), this.tabs.length - 1)])
+    this.activate(this.tabs[Math.min(Math.max(opts.saved?.active ?? 0, 0), this.tabs.length - 1)])
   }
 
   // layout puts the bar across the top and the tab in hand under it. With
@@ -155,11 +169,20 @@ export class ServerWindow {
     return this.tabs.find((t) => t.view.webContents === wc)
   }
 
+  tab(id: number): Tab | undefined {
+    return this.tabs.find((t) => t.id === id)
+  }
+
+  // envTab is the tab a link to an environment goes to: the one in hand if
+  // it shows that environment, else the first that does.
   envTab(env: string): Tab | undefined {
-    return this.tabs.find((t) => t.role.kind === 'env' && t.role.env === env)
+    const shows = (t: Tab) => t.role.kind === 'env' && t.role.env === env
+    return shows(this.active) ? this.active : this.tabs.find(shows)
   }
 
   // make builds a tab's view and wires its events; the caller places it.
+  // The events find the tab's window through the tab, which a drag to
+  // another window changes.
   private make(role: Role, url: string): Tab {
     const view = new WebContentsView({
       webPreferences: {
@@ -172,50 +195,59 @@ export class ServerWindow {
         backgroundThrottling: false,
       },
     })
-    const tab: Tab = { id: nextTab++, role, view, title: role.kind === 'panel' ? this.server.name : '…', loading: true }
+    const tab: Tab = {
+      id: nextTab++,
+      role,
+      view,
+      owner: this,
+      title: role.kind === 'panel' ? this.server.name : '…',
+      loading: true,
+    }
+    const server = this.server
     const wc = view.webContents
+    const changed = () => tab.owner.onChange()
     wc.on('page-title-updated', (_, title) => {
       // The web UI ends every title with "· Hangar", which the app says
       // already.
       tab.title = title.replace(/ · Hangar$/, '')
-      this.onChange()
+      changed()
     })
     wc.on('page-favicon-updated', (_, icons) => {
       tab.favicon = icons[0]
-      this.onChange()
+      changed()
     })
     wc.on('did-start-loading', () => {
       tab.loading = true
-      this.onChange()
+      changed()
     })
     wc.on('did-stop-loading', () => {
       tab.loading = false
-      this.onChange()
+      changed()
     })
     wc.setWindowOpenHandler(({ url: target, disposition }) => {
       // A link opened as a new tab or window -- a middle-click, a ⌘-click
       // -- goes to its tab here; the rest of the web to the browser.
-      if (roleFor(this.server, target)) this.route(target, { activate: disposition !== 'background-tab' })
+      if (roleFor(server, target)) tab.owner.route(target, { activate: disposition !== 'background-tab' })
       else if (/^https?:/.test(target)) shell.openExternal(target)
       return { action: 'deny' }
     })
     wc.on('will-navigate', (e, target) => {
-      const to = roleFor(this.server, target)
+      const to = roleFor(server, target)
       if (!to) {
         e.preventDefault()
         if (/^https?:/.test(target)) shell.openExternal(target)
       } else if (!same(tab.role, to)) {
         e.preventDefault()
-        this.route(target)
+        tab.owner.route(target)
       }
     })
     wc.on('did-navigate-in-page', (_, target, isMainFrame) => {
       // The web UI moved by itself to a page that belongs in another tab:
       // it goes there, and this tab goes back to where it was.
       if (!isMainFrame) return
-      const to = roleFor(this.server, target)
+      const to = roleFor(server, target)
       if (to && !same(tab.role, to)) {
-        this.route(target)
+        tab.owner.route(target)
         if (wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
       }
     })
@@ -234,6 +266,12 @@ export class ServerWindow {
     return tab
   }
 
+  // place puts a tab after the one in hand, never before the control panel.
+  private place(tab: Tab, at?: number) {
+    const i = at ?? this.tabs.indexOf(this.active) + 1
+    this.tabs.splice(Math.max(1, Math.min(i, this.tabs.length)), 0, tab)
+  }
+
   // route shows a page of this server in the tab it belongs in: its
   // environment's -- made if there is none -- or the control panel.
   route(url: string, opts: { activate?: boolean } = {}) {
@@ -242,8 +280,7 @@ export class ServerWindow {
     let tab = role.kind === 'panel' ? this.panel : this.envTab(role.env)
     if (!tab) {
       tab = this.make(role, url)
-      const at = this.tabs.indexOf(this.active)
-      this.tabs.splice(Math.max(at + 1, 1), 0, tab)
+      this.place(tab)
     } else {
       this.go(tab, url)
     }
@@ -280,18 +317,61 @@ export class ServerWindow {
     this.onChange()
   }
 
+  // duplicate opens another tab on what a tab shows, loaded afresh: a page
+  // cannot be copied with what it holds.
+  duplicate(tab: Tab) {
+    if (tab === this.panel) return
+    const copy = this.make(tab.role, tab.view.webContents.getURL())
+    this.place(copy, this.tabs.indexOf(tab) + 1)
+    this.activate(copy)
+  }
+
   // close closes an environment's tab. The control panel stays.
   close(tab: Tab) {
     if (tab === this.panel) return
-    const i = this.tabs.indexOf(tab)
-    if (i < 0) return
+    if (!this.release(tab)) return
     this.closed.push(tab.view.webContents.getURL())
     this.closed = this.closed.slice(-20)
+    tab.view.webContents.close()
+  }
+
+  // closeMany closes environment tabs by where they are: every other one,
+  // or those left or right of a tab.
+  closeMany(tab: Tab, which: 'others' | 'left' | 'right') {
+    const i = this.tabs.indexOf(tab)
+    const doomed = this.tabs.filter((t, j) => {
+      if (t === this.panel || t === tab) return false
+      return which === 'others' || (which === 'left' ? j < i : j > i)
+    })
+    for (const t of doomed) this.close(t)
+    if (!this.tabs.includes(this.active)) this.activate(tab)
+  }
+
+  // release takes a tab out of the window, alive, for closing or for
+  // another window to adopt.
+  release(tab: Tab): boolean {
+    const i = this.tabs.indexOf(tab)
+    if (i < 1) return false
     this.tabs.splice(i, 1)
     this.win.contentView.removeChildView(tab.view)
-    tab.view.webContents.close()
     if (this.active === tab) this.activate(this.tabs[Math.min(i, this.tabs.length - 1)])
     this.onChange()
+    return true
+  }
+
+  // adopt takes a tab from another window of the same server, at index.
+  // The page in it carries on as it was.
+  adopt(tab: Tab, at?: number) {
+    if (tab.owner === this) {
+      if (at !== undefined) this.move(tab.id, at)
+      return
+    }
+    if (!tab.owner.release(tab)) return
+    tab.owner = this
+    this.place(tab, at)
+    this.win.contentView.addChildView(tab.view)
+    this.win.contentView.addChildView(this.bar)
+    this.activate(tab)
   }
 
   reopen() {
@@ -328,17 +408,19 @@ export class ServerWindow {
     }
   }
 
-  save(open: boolean) {
+  saved(): SavedWindow {
     const [x, y] = this.win.getPosition()
     const [width, height] = this.win.getSize()
-    store.saveWindow(
-      {
-        server: this.server.id,
-        tabs: this.tabs.filter((t) => t !== this.panel).map((t) => t.view.webContents.getURL()),
-        active: this.tabs.indexOf(this.active),
-        bounds: { x, y, width, height },
-      },
-      open,
-    )
+    return {
+      id: this.id,
+      server: this.server.id,
+      tabs: this.tabs.filter((t) => t !== this.panel).map((t) => t.view.webContents.getURL()),
+      active: this.tabs.indexOf(this.active),
+      bounds: { x, y, width, height },
+    }
+  }
+
+  save(open: boolean) {
+    store.saveWindow(this.saved(), open)
   }
 }
