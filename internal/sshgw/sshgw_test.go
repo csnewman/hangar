@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -120,6 +121,7 @@ func TestGateway(t *testing.T) {
 	}
 	gw := sshgw.New(host, environments.NewManager(d), store, guests{worker}, audit.NewLog(d),
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	gw.KeepAlive = 50 * time.Millisecond
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -230,6 +232,39 @@ func TestGateway(t *testing.T) {
 	s.Stderr = &errOut
 	if err := s.Run("true"); err == nil || !strings.Contains(errOut.String(), "not running") {
 		t.Errorf("a stopped environment: %v, %q", err, errOut.String())
+	}
+
+	// A client that answers keepalives stays connected however long it
+	// is quiet; one that does not is let go.
+	time.Sleep(10 * gw.KeepAlive)
+	s, _ = c.NewSession()
+	if b, err := s.Output("echo still here"); err != nil || string(b) != "still here\n" {
+		t.Fatalf("a quiet client that answers keepalives: %q, %v", b, err)
+	}
+	raw, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	silent, _, reqs, err := ssh.NewClientConn(raw, addr, &ssh.ClientConfig{User: "dev",
+		Auth: []ssh.AuthMethod{ssh.PublicKeys(aliceKey)}, HostKeyCallback: ssh.FixedHostKey(host.PublicKey())})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var asked atomic.Int32
+	go func() {
+		for range reqs {
+			asked.Add(1)
+		}
+	}()
+	gone := make(chan error, 1)
+	go func() { gone <- silent.Wait() }()
+	select {
+	case <-gone:
+		if asked.Load() == 0 {
+			t.Error("a client was let go without being asked for an answer")
+		}
+	case <-time.After(20 * gw.KeepAlive):
+		t.Error("a client that never answers keepalives is still connected")
 	}
 
 	entries, _ := audit.NewLog(d).List(ctx, audit.Query{Subjects: []string{"environment:" + running}})

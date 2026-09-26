@@ -52,12 +52,18 @@ type Gateway struct {
 	audit    *audit.Log
 	log      *slog.Logger
 	config   *ssh.ServerConfig
+
+	// KeepAlive is how often each client is asked for an answer, so that
+	// an idle connection stays open through NATs and proxies that drop
+	// quiet ones. A client that has not answered in three times this long
+	// is gone, and its connection is closed.
+	KeepAlive time.Duration
 }
 
 // New prepares a gateway presenting hostKey.
 func New(hostKey ssh.Signer, envs *environments.Manager, profiles *profile.Store, tunnels Tunnels,
 	log *audit.Log, logger *slog.Logger) *Gateway {
-	g := &Gateway{envs: envs, profiles: profiles, tunnels: tunnels, audit: log, log: logger}
+	g := &Gateway{envs: envs, profiles: profiles, tunnels: tunnels, audit: log, log: logger, KeepAlive: 30 * time.Second}
 	g.config = &ssh.ServerConfig{
 		ServerVersion:     "SSH-2.0-hangar",
 		PublicKeyCallback: g.authenticate,
@@ -134,6 +140,9 @@ func (g *Gateway) serve(ctx context.Context, conn net.Conn) {
 	}
 	defer down.Close()
 	conn.SetDeadline(time.Time{})
+	done := make(chan struct{})
+	defer close(done)
+	go keepAlive(down, g.KeepAlive, done)
 	ext := down.Permissions.Extensions
 	ip, _, _ := net.SplitHostPort(conn.RemoteAddr().String())
 	actx := audit.WithActor(ctx, audit.Actor{UserID: ext["user"], Name: ext["username"], IP: ip, Via: "ssh key " + ext["key"]})
@@ -161,6 +170,34 @@ func (g *Gateway) serve(ctx context.Context, conn net.Conn) {
 	go forwardRequests(reqs, up)
 	for nc := range chans {
 		go proxyChannel(nc, up)
+	}
+}
+
+// keepAlive asks the client for an answer every interval until done, and
+// closes the connection when one has not come in three intervals.
+func keepAlive(c ssh.Conn, interval time.Duration, done <-chan struct{}) {
+	for {
+		select {
+		case <-done:
+			return
+		case <-time.After(interval):
+		}
+		answered := make(chan error, 1)
+		go func() {
+			_, _, err := c.SendRequest("keepalive@openssh.com", true, nil)
+			answered <- err
+		}()
+		select {
+		case <-done:
+			return
+		case err := <-answered:
+			if err != nil {
+				return
+			}
+		case <-time.After(3 * interval):
+			c.Close()
+			return
+		}
 	}
 }
 
