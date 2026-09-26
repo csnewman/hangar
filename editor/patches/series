@@ -4,3 +4,4 @@ user-data-on-remote.diff
 no-builtin-copilot.diff
 trusted-folders.diff
 terminal-default-profile.diff
+no-remote-indicator.diff
