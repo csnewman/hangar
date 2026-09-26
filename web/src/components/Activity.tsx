@@ -7,13 +7,22 @@ import { useMe } from '../session'
 import { formatAgo } from './format'
 
 // Activity is the audit log narrowed to what concerns the subjects given,
-// newest first, a page at a time.
-export function Activity({ subjects, empty = 'Nothing recorded yet.' }: { subjects: string[]; empty?: string }) {
+// newest first: pageSize events, and pageSize more each time Load more is
+// pressed.
+export function Activity({
+  subjects,
+  empty = 'Nothing recorded yet.',
+  pageSize = 50,
+}: {
+  subjects: string[]
+  empty?: string
+  pageSize?: number
+}) {
   const log = useInfiniteQuery({
-    queryKey: ['audit', ...subjects],
-    queryFn: ({ pageParam }) => api.audit(subjects, pageParam),
+    queryKey: ['audit', ...subjects, pageSize],
+    queryFn: ({ pageParam }) => api.audit(subjects, pageParam, pageSize),
     initialPageParam: undefined as number | undefined,
-    getNextPageParam: (last) => (last.length === 50 ? last[last.length - 1].id : undefined),
+    getNextPageParam: (last) => (last.length === pageSize ? last[last.length - 1].id : undefined),
     refetchInterval: 10000,
   })
   if (log.isPending) return <div className="panel empty muted">Loading…</div>
@@ -40,7 +49,7 @@ export function Activity({ subjects, empty = 'Nothing recorded yet.' }: { subjec
             onClick={() => log.fetchNextPage()}
             disabled={log.isFetchingNextPage}
           >
-            Older
+            {log.isFetchingNextPage ? 'Loading…' : 'Load more'}
           </button>
         </div>
       )}

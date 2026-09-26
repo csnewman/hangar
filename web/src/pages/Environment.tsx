@@ -4,7 +4,6 @@ import {
   Copy,
   FileCode2,
   GitBranch,
-  History,
   LayoutDashboard,
   Monitor,
   SquareTerminal,
@@ -33,7 +32,6 @@ const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: 'code', label: 'Code', icon: FileCode2 },
   { to: 'editor', label: 'VS Code', icon: Code2 },
   { to: 'desktop', label: 'Desktop', icon: Monitor },
-  { to: 'activity', label: 'Activity', icon: History },
 ]
 
 // EnvironmentPage is one environment: its header and actions, and a tab for
@@ -194,6 +192,10 @@ export function SummaryTab() {
           </Prop>
         </dl>
       </div>
+      <section className="section">
+        <h2 className="section-title">Activity</h2>
+        <AuditActivity subjects={[`environment:${env.id}`]} pageSize={5} />
+      </section>
     </div>
   )
 }
@@ -232,17 +234,6 @@ function Prop({ label, children }: { label: string; children: React.ReactNode })
     <div className="prop">
       <dt>{label}</dt>
       <dd>{children}</dd>
-    </div>
-  )
-}
-
-// ActivityTab is everything recorded about the environment: who asked for
-// what, where Hangar placed it, what its worker reported, who opened it.
-export function ActivityTab() {
-  const env = useEnv()
-  return (
-    <div className="page-pad">
-      <AuditActivity subjects={[`environment:${env.id}`]} />
     </div>
   )
 }

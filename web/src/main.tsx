@@ -15,7 +15,7 @@ import { AuditPage } from './pages/admin/Audit'
 import { PerformanceTab } from './pages/Performance'
 import { UsersPage } from './pages/admin/Users'
 import { WorkersPage } from './pages/admin/Workers'
-import { EnvironmentPage, SummaryTab, ActivityTab } from './pages/Environment'
+import { EnvironmentPage, SummaryTab } from './pages/Environment'
 import { LoginPage } from './pages/Login'
 import { WorkerDetailPage } from './pages/admin/WorkerDetail'
 import { NewEnvironmentPage } from './pages/NewEnvironment'
@@ -87,7 +87,6 @@ const router = createBrowserRouter([
                 lazy: async () => ({ Component: (await import('./code/CodeTab')).CodeTab }),
               },
               { path: 'editor', element: <EditorTab /> },
-              { path: 'activity', element: <ActivityTab /> },
               {
                 path: 'desktop',
                 // noVNC is fetched when a desktop is first opened.
