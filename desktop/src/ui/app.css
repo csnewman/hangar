@@ -5,8 +5,9 @@
   --bg: #f7f8fa;
   --surface: #ffffff;
   --surface-2: #f1f3f6;
-  --bar: #e9edf2;
-  --hover: #dde3ea;
+  --bar: #e3e8ee;
+  --hover: #d8dee6;
+  --tab-on: #ffffff;
   --border: #e1e5ea;
   --border-strong: #cfd5dd;
   --text: #17202a;
@@ -28,7 +29,8 @@
     --surface: #161b22;
     --surface-2: #1c222b;
     --bar: #0b0f13;
-    --hover: #1c232c;
+    --hover: #1a2029;
+    --tab-on: #262e3a;
     --border: #262d37;
     --border-strong: #333c48;
     --text: #e4e8ee;
@@ -138,7 +140,14 @@ body.bar {
   -webkit-app-region: no-drag;
 }
 .tab:hover { background: var(--hover); }
-.tab.on { background: var(--bg); color: var(--text); }
+/* The tab in hand stands out: its own surface, an accent line along its
+   top, and full-strength text where the rest are muted. */
+.tab.on {
+  background: var(--tab-on);
+  color: var(--text);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+.tab.on .title { font-weight: 600; }
 .tab img, .tab .ph { width: 14px; height: 14px; flex: none; border-radius: 3px; }
 .tab .ph { background: var(--accent); opacity: 0.8; }
 .tab .dot { margin: 0 3px; }
