@@ -1,0 +1,7 @@
+#!/bin/sh
+# Runs inside the image after base's packages are installed on minimal's tree.
+set -eu
+
+# docker lets dev run containers without sudo; render and video open the
+# GPU's device nodes, which the desktop and anything it runs draw through.
+usermod -a -G docker,render,video dev

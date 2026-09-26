@@ -1,0 +1,6 @@
+# Sourced by Debian's chromium launcher. Chromium picks X11 unless told
+# otherwise, and its "auto" hint does not follow WAYLAND_DISPLAY, so on a
+# Wayland desktop it is told outright, as Rocky's launcher does itself.
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+	export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --ozone-platform=wayland"
+fi

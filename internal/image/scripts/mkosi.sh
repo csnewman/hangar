@@ -19,22 +19,30 @@ apt-get install -y -qq --no-install-recommends \
 printf 'root:100000:65536\n' > /etc/subuid
 printf 'root:100000:65536\n' > /etc/subgid
 
-# Build on the container filesystem rather than the bind mount: mkosi's tar
-# extraction needs to set ownership the mount may not be able to represent.
-# /cfg is the whole images/ directory, not just one image, so that a config can
-# reference a sibling with a relative path -- ../common/tree is shared by every
-# base. IMAGE names the subdirectory to build.
+# Build in /work, a volume on the Docker host's own filesystem, rather than
+# the bind mount or the container's overlay: mkosi's tar extraction needs to
+# set ownership the mount may not be able to represent, and the overlay it
+# stacks for build packages cannot have its upper layer on another overlay.
+# /cfg is the whole images/ directory, not just one distribution, so that a
+# config can reference a sibling with a relative path -- ../../common is
+# shared by every tier. IMAGE names the distribution to build.
+#
+# Its tiers are built in order, each on the tree of the one before:
+# base/mkosi.conf names ../minimal/rootfs as its BaseTrees.
 : "${IMAGE:?}"
-cp -a /cfg /build
-cd "/build/$IMAGE"
-mkosi --force build
+cp -a /cfg /work/src
+mkdir -p /work/workspace
+for tier in minimal base; do
+	(cd "/work/src/$IMAGE/$tier" && mkosi --force --workspace-directory=/work/workspace build)
+done
+cd "/work/src/$IMAGE/base"
 
 # --- guest programs ---------------------------------------------------------
 # Native programs Hangar ships in an image are compiled here rather than in the
 # image, so the image carries no toolchain. The builder is the same
 # distribution and release as the Ubuntu base, so what links here runs there.
-# A base without Mesa -- Rocky, today -- has nothing for these to link against
-# and goes without.
+# They go into base, the tier with Mesa; a base whose libraries live elsewhere
+# -- Rocky's, in /usr/lib64 -- goes without.
 if ls rootfs/usr/lib/*/libEGL.so.1 >/dev/null 2>&1; then
     apt-get install -y -qq --no-install-recommends gcc libc6-dev libegl-dev libgles-dev >/dev/null
     install -d rootfs/usr/local/bin
@@ -53,5 +61,6 @@ if ls rootfs/usr/lib/*/libvulkan.so.1 >/dev/null 2>&1; then
     echo "vkcheck: installed" >&2
 fi
 
-ln -s "/build/$IMAGE/rootfs" /r
-exec sh /scripts/postprocess.sh
+for tier in minimal base; do
+	sh /scripts/postprocess.sh "/work/src/$IMAGE/$tier/rootfs" "/out/$tier"
+done

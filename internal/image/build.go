@@ -18,15 +18,20 @@ import (
 	"os/exec"
 )
 
+// Tiers are the images built for each distribution, in build order: each is
+// built on the tree of the one before it.
+var Tiers = []string{"minimal", "base"}
+
 // Artifacts are the outputs of a build.
 type Artifacts struct {
-	Rootfs string // the image's root filesystem
+	// Rootfs is each tier's root filesystem, by tier.
+	Rootfs map[string]string
 	Tag    string // what was built
 }
 
 // Options controls a build.
 type Options struct {
-	ContextDir string // directory containing mkosi.conf
+	ContextDir string // a distribution's directory, holding a directory per tier
 	OutDir     string
 	Platform   string // e.g. "linux/arm64"; empty means the daemon default
 	Verbose    bool

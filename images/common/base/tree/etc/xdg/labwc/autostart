@@ -1,0 +1,6 @@
+# Run by labwc as the session starts.
+#
+# The desktop is empty until something opens a window, so it opens with a
+# terminal: a first look at the desktop shows something to use, and where to
+# go next is in the menu a right-click brings up.
+hangar-terminal >/dev/null 2>&1 &

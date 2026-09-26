@@ -40,12 +40,14 @@ func BuildWithMkosi(ctx context.Context, o Options) (*Artifacts, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(filepath.Join(absCfg, "mkosi.conf")); err != nil {
-		return nil, fmt.Errorf("no mkosi.conf in %s", absCfg)
+	for _, tier := range Tiers {
+		if _, err := os.Stat(filepath.Join(absCfg, tier, "mkosi.conf")); err != nil {
+			return nil, fmt.Errorf("no %s/mkosi.conf in %s", tier, absCfg)
+		}
 	}
-	// Mount the images/ directory rather than the single image, so a config can
-	// reach a sibling: every base overlays ../common/tree. IMAGE picks which
-	// subdirectory to build.
+	// Mount the images/ directory rather than the one distribution, so a
+	// config can reach a sibling: every tier overlays ../../common. IMAGE picks
+	// which distribution to build.
 	imagesDir, imageName := filepath.Dir(absCfg), filepath.Base(absCfg)
 
 	scripts, err := materialiseScripts()
@@ -62,6 +64,11 @@ func BuildWithMkosi(ctx context.Context, o Options) (*Artifacts, error) {
 		"--security-opt", "seccomp=unconfined",
 		"--security-opt", "apparmor=unconfined",
 		"-e", "IMAGE=" + imageName,
+		// Somewhere to build that is not the container's own overlay: mkosi
+		// stacks an overlay of build packages on the tree, and an overlay's
+		// upper layer cannot itself be on overlayfs. An anonymous volume is
+		// on the Docker host's filesystem and goes with the container.
+		"-v", "/work",
 		"-v", absOut + ":/out",
 		"-v", imagesDir + ":/cfg:ro",
 		"-v", scripts + ":/scripts:ro",
@@ -75,9 +82,13 @@ func BuildWithMkosi(ctx context.Context, o Options) (*Artifacts, error) {
 		return nil, fmt.Errorf("mkosi build: %w", err)
 	}
 
-	a := &Artifacts{Rootfs: filepath.Join(o.OutDir, "rootfs"), Tag: "mkosi:" + filepath.Base(absCfg)}
-	if st, err := os.Stat(a.Rootfs); err != nil || !st.IsDir() {
-		return nil, fmt.Errorf("expected artefact missing: %s", a.Rootfs)
+	a := &Artifacts{Rootfs: map[string]string{}, Tag: "mkosi:" + filepath.Base(absCfg)}
+	for _, tier := range Tiers {
+		rootfs := filepath.Join(o.OutDir, tier, "rootfs")
+		if st, err := os.Stat(rootfs); err != nil || !st.IsDir() {
+			return nil, fmt.Errorf("expected artefact missing: %s", rootfs)
+		}
+		a.Rootfs[tier] = rootfs
 	}
 	return a, nil
 }

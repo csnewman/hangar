@@ -30,7 +30,8 @@ const usage = `hangar - development environments for coding agents
 
 Usage:
   hangar doctor              check this machine can run environments
-  hangar build [flags]       build a VM image with mkosi
+  hangar build [flags]       build a distribution's images with mkosi
+  hangar oci   [flags]       write built images as an OCI layout, to push
   hangar kernel [flags]      build the guest kernel
   hangar pull  <ref>         pull an OCI image and unpack it for virtiofs
   hangar run   [flags]       boot an environment and attach to its console
@@ -55,6 +56,8 @@ func main() {
 		err = doctor()
 	case "build":
 		err = build(ctx, os.Args[2:])
+	case "oci":
+		err = writeOCI(ctx, os.Args[2:])
 	case "kernel":
 		err = buildKernel(ctx, os.Args[2:])
 	case "pull":
@@ -109,10 +112,29 @@ func doctor() error {
 	return nil
 }
 
+func writeOCI(ctx context.Context, argv []string) error {
+	fs := flag.NewFlagSet("oci", flag.ExitOnError)
+	in := fs.String("i", "out", "what `hangar build -o` wrote: <i>/<tier>/rootfs")
+	out := fs.String("o", "out/oci", "OCI layout to write, with an image per tier named by its tier")
+	arch := fs.String("arch", runtime.GOARCH, "the images' architecture")
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	rootfs := map[string]string{}
+	for _, tier := range image.Tiers {
+		rootfs[tier] = filepath.Join(*in, tier, "rootfs")
+	}
+	if err := image.WriteOCI(ctx, *out, image.OCIOptions{Rootfs: rootfs, Arch: *arch, Created: time.Now().UTC()}); err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "wrote %s: %v, each named by its tier\n", *out, image.Tiers)
+	return nil
+}
+
 func build(ctx context.Context, argv []string) error {
 	fs := flag.NewFlagSet("build", flag.ExitOnError)
-	dir := fs.String("C", "images/ubuntu2604", "image directory containing mkosi.conf")
-	out := fs.String("o", "out", "output directory, on a Linux filesystem; the image is <o>/rootfs")
+	dir := fs.String("C", "images/ubuntu-26.04", "distribution directory, holding minimal/ and base/")
+	out := fs.String("o", "out", "output directory, on a Linux filesystem; each tier's image is <o>/<tier>/rootfs")
 	verbose := fs.Bool("v", false, "show build output")
 	if err := fs.Parse(argv); err != nil {
 		return err
@@ -134,8 +156,11 @@ func build(ctx context.Context, argv []string) error {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "\nbuilt %s\n", a.Rootfs)
-	fmt.Fprintf(os.Stderr, "\nboot it with:  hangar run -o %s\n", *out)
+	fmt.Fprintln(os.Stderr)
+	for _, tier := range image.Tiers {
+		fmt.Fprintf(os.Stderr, "built %s\n", a.Rootfs[tier])
+	}
+	fmt.Fprintf(os.Stderr, "\nboot one with:  hangar run -o %s\n", filepath.Join(*out, "base"))
 	return nil
 }
 

@@ -1,6 +1,6 @@
 // Package desktop serves an environment's desktop to the host as VNC.
 //
-// The desktop is the image's own: a sway session, headless, that draws into
+// The desktop is the image's own: a labwc session, headless, that draws into
 // memory whether or not anyone is looking (hangar-desktop.service). The VNC
 // server is wayvnc, which attaches to that session as another Wayland client
 // -- it copies the screen with the screencopy protocol and injects input
@@ -18,9 +18,10 @@
 // carries RFB without reading it. For OpResize the desktop is resized and one
 // JSON line, a Reply, answers.
 //
-// The size is set here rather than by a viewer through RFB: wayvnc's own
-// resizing asks sway for a custom mode sway refuses, and wayvnc exits when it
-// does. sway sets a headless output's resolution without complaint.
+// The size is set here rather than by a viewer through RFB, so that one
+// desktop shared by several viewers has one owner of its size. It is set with
+// wlr-randr, through the wlroots output management protocol, which any
+// wlroots compositor serves.
 package desktop
 
 import (
@@ -87,9 +88,9 @@ var ErrNoDesktop = errors.New("this environment has no desktop running")
 const (
 	socketDir = "/run/hangar/desktop"
 	logFile   = "/var/log/hangar-desktop-vnc.log"
-	// waylandDisplay is the socket sway's session listens on, in the user's
-	// runtime directory; see images/*/tree/etc/hangar/sway.conf.
-	waylandDisplay = "wayland-1"
+	// output is the one output a wlroots compositor's headless backend
+	// makes.
+	output = "HEADLESS-1"
 	// startTimeout covers the compositor still coming up just after boot.
 	startTimeout = 30 * time.Second
 )
@@ -173,15 +174,15 @@ func (s *Server) resize(width, height int) error {
 		return err
 	}
 	runtimeDir := "/run/user/" + u.Uid
-	socks, _ := filepath.Glob(filepath.Join(runtimeDir, "sway-ipc.*.sock"))
-	if len(socks) == 0 {
+	display := waylandDisplay(runtimeDir)
+	if display == "" {
 		return ErrNoDesktop
 	}
-	cmd := exec.Command("swaymsg", "output", "HEADLESS-1", "resolution", fmt.Sprintf("%dx%d", width, height))
+	cmd := exec.Command("wlr-randr", "--output", output, "--custom-mode", fmt.Sprintf("%dx%d", width, height))
 	cmd.Env = []string{
 		"HOME=" + u.HomeDir,
 		"XDG_RUNTIME_DIR=" + runtimeDir,
-		"SWAYSOCK=" + socks[len(socks)-1],
+		"WAYLAND_DISPLAY=" + display,
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
 	if err := sysuser.RunAs(cmd, u); err != nil {
@@ -191,6 +192,22 @@ func (s *Server) resize(width, height int) error {
 		return fmt.Errorf("resizing the desktop: %v: %s", err, out)
 	}
 	return nil
+}
+
+// waylandDisplay names the compositor's socket in the user's runtime
+// directory, or gives "" when there is none. The compositor takes the first
+// free name, wayland-0 on a desktop nothing else has started.
+func waylandDisplay(runtimeDir string) string {
+	socks, _ := filepath.Glob(filepath.Join(runtimeDir, "wayland-*"))
+	for _, p := range socks {
+		if filepath.Ext(p) == ".lock" {
+			continue
+		}
+		if st, err := os.Stat(p); err == nil && st.Mode()&os.ModeSocket != 0 {
+			return filepath.Base(p)
+		}
+	}
+	return ""
 }
 
 func (s *Server) ensure(ctx context.Context) (string, error) {
@@ -221,11 +238,11 @@ func (s *Server) start(ctx context.Context) (*process, error) {
 		return nil, err
 	}
 	runtimeDir := "/run/user/" + u.Uid
-	wayland := filepath.Join(runtimeDir, waylandDisplay)
 	// The compositor may still be starting just after boot; a headless
 	// environment never starts it at all.
+	var display string
 	for {
-		if _, err := os.Stat(wayland); err == nil {
+		if display = waylandDisplay(runtimeDir); display != "" {
 			break
 		}
 		select {
@@ -277,7 +294,7 @@ func (s *Server) start(ctx context.Context) (*process, error) {
 		"HOME=" + u.HomeDir,
 		"USER=" + u.Username,
 		"XDG_RUNTIME_DIR=" + runtimeDir,
-		"WAYLAND_DISPLAY=" + waylandDisplay,
+		"WAYLAND_DISPLAY=" + display,
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
 	cmd.Stdout = logOut

@@ -140,18 +140,24 @@ source -- Cloud Hypervisor with Hangar's patches, the virtio-fs and
 virtio-gpu backends, the guest kernel, the guest agent and VS Code's server
 -- so building it takes a while and wants about 8 GiB of memory.
 
-Base images are pulled too, by the worker, the first time an environment
-needs one: a template names an image reference, such as
-`ghcr.io/csnewman/hangar/base-ubuntu2604:latest`, and the worker pulls its
-own platform and unpacks it into `/var/lib/hangar/images`. It keeps that
+Images are pulled too, by the worker, the first time an environment needs
+one: a template names an image reference, such as
+`ghcr.io/csnewman/hangar/base:ubuntu-26.04`, and the worker pulls its own
+platform and unpacks it into `/var/lib/hangar/images`. Each distribution
+(`ubuntu-26.04`, `rocky-10`) comes in two tiers: `minimal`, which boots,
+clones repositories and has the package manager to add the rest, and
+`base`, which adds Docker, the GPU's drivers, a desktop, a browser and the
+everyday tools. `base` is `minimal` plus one layer, so a worker that has
+one fetches only the difference for the other. `:ubuntu` and `:rocky`
+follow the newest release of each. It keeps that
 copy until it is removed (Workers, then the worker's images), so a tag that
 moves is pulled again only then. Private registries need credentials under
-`vm.registries` in `worker.yaml`. To build a base image on the machine
-instead, and have the worker use that for a reference:
+`vm.registries` in `worker.yaml`. To build a distribution's images on the
+machine instead, and have the worker use them for a reference:
 
-    IMAGE=ubuntu2604 docker compose --profile images run --rm --build build-image
+    IMAGE=ubuntu-26.04 docker compose --profile images run --rm --build build-image
 
-and name it under `vm.images` in `worker.yaml`.
+and name them under `vm.images` in `worker.yaml`.
 
 Finally, in Hangar, create a template for an image with the placement rule
 `runtime=cloud-hypervisor`.

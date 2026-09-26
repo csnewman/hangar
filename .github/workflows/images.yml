@@ -1,5 +1,11 @@
-# Builds the Hangar base images with mkosi and publishes them so template
-# authors can FROM them. mkosi emits an OCI layout; skopeo pushes it directly.
+# Builds Hangar's images with mkosi and publishes them for templates to name.
+# Each distribution has two tiers, built the way `hangar build` builds them
+# locally: minimal, and base on top of it. `hangar oci` writes both as one OCI
+# layout -- base is minimal's layer plus one -- and skopeo pushes each tier.
+#
+#   ghcr.io/<repository>/<tier>:<distro>          e.g. base:ubuntu-26.04
+#   ghcr.io/<repository>/<tier>:<family>          the newest release built: base:ubuntu
+#   ghcr.io/<repository>/<tier>:<distro>-<sha>    one build, for pinning
 name: images
 
 on:
@@ -23,22 +29,16 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  base:
+  build:
     strategy:
       fail-fast: false
       matrix:
+        distro: [ubuntu-26.04, rocky-10]
+        arch: [arm64, amd64]
         include:
-          - base: ubuntu2604
-            arch: arm64
+          - arch: arm64
             runner: ubuntu-26.04-arm
-          - base: ubuntu2604
-            arch: amd64
-            runner: ubuntu-26.04
-          - base: rocky9
-            arch: arm64
-            runner: ubuntu-26.04-arm
-          - base: rocky9
-            arch: amd64
+          - arch: amd64
             runner: ubuntu-26.04
     runs-on: ${{ matrix.runner }}
     permissions:
@@ -46,23 +46,18 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
 
-      # mkosi runs directly on the runner here, with no container wrapper --
-      # the runner is already the Linux host mkosi needs.
-      #
-      # 26.04 packages mkosi 26, which is what SandboxTrees= needs and what the
-      # builder image in internal/image/mkosi.go uses. Keep the two in step so
-      # a config that builds locally builds here.
-      - name: Install mkosi and tooling
+      # mkosi runs in the same builder container as a local `hangar build`,
+      # so a config that builds on a laptop builds here. It builds for the
+      # machine it runs on, hence a runner per architecture.
+      - name: Build the images
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            mkosi dnf rpm ca-certificates skopeo
-
-      - name: Build base image
-        run: |
-          cd images/${{ matrix.base }}
-          sudo mkosi --force --format oci --output hangar-base build
+          go build -o hangar ./cmd/hangar
+          sudo ./hangar build -C images/${{ matrix.distro }} -o out/${{ matrix.distro }} -v
+          sudo ./hangar oci -i out/${{ matrix.distro }} -o out/oci -arch ${{ matrix.arch }}
 
       - uses: docker/login-action@v3
         if: github.event_name != 'pull_request'
@@ -71,27 +66,28 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Push OCI layout
+      - name: Push each tier
         if: github.event_name != 'pull_request'
         run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends skopeo
           repo=$(echo "${{ github.repository }}" | tr 'A-Z' 'a-z')
-          dest="docker://${{ env.REGISTRY }}/${repo}/base-${{ matrix.base }}"
-          cd images/${{ matrix.base }}
-          skopeo copy --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
-            "oci:hangar-base" "${dest}:${{ github.sha }}-${{ matrix.arch }}"
-          skopeo copy --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
-            "oci:hangar-base" "${dest}:latest-${{ matrix.arch }}"
+          for tier in minimal base; do
+            sudo skopeo copy --dest-creds "${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}" \
+              "oci:out/oci:${tier}" \
+              "docker://${{ env.REGISTRY }}/${repo}/${tier}:${{ matrix.distro }}-${{ github.sha }}-${{ matrix.arch }}"
+          done
 
-  # Each architecture is built on a runner of its own, since mkosi builds for
-  # the machine it runs on. This joins them into one multi-platform index, so
-  # a template names one reference and each worker pulls its own platform.
+  # One index per tier over both architectures, so a template names one
+  # reference and each worker pulls its own platform.
   index:
-    needs: base
+    needs: build
     if: github.event_name != 'pull_request'
     strategy:
       fail-fast: false
       matrix:
-        base: [ubuntu2604, rocky9]
+        distro: [ubuntu-26.04, rocky-10]
+        tier: [minimal, base]
     runs-on: ubuntu-26.04
     permissions:
       contents: read
@@ -106,8 +102,9 @@ jobs:
       - name: Publish the multi-platform index
         run: |
           repo=$(echo "${{ github.repository }}" | tr 'A-Z' 'a-z')
-          ref="${{ env.REGISTRY }}/${repo}/base-${{ matrix.base }}"
-          for tag in ${{ github.sha }} latest; do
-            docker buildx imagetools create -t "${ref}:${tag}" \
-              "${ref}:${tag}-arm64" "${ref}:${tag}-amd64"
-          done
+          ref="${{ env.REGISTRY }}/${repo}/${{ matrix.tier }}"
+          build="${ref}:${{ matrix.distro }}-${{ github.sha }}"
+          family=$(echo "${{ matrix.distro }}" | cut -d- -f1)
+          docker buildx imagetools create \
+            -t "${build}" -t "${ref}:${{ matrix.distro }}" -t "${ref}:${family}" \
+            "${build}-arm64" "${build}-amd64"

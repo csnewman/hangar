@@ -1,0 +1,31 @@
+[Unit]
+Description=Hangar desktop
+# The desktop is a Wayland session with no display attached: labwc draws into
+# memory, and anything that wants to see it -- a screenshot, a remote viewer
+# -- reads it from there.
+After=systemd-user-sessions.service
+
+[Service]
+Type=simple
+User=dev
+# A logind session, so dev gets a runtime directory and XDG_RUNTIME_DIR, as a
+# user logging in would.
+PAMName=login
+Environment=WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1
+# The renderer is left to wlroots: GLES2 on the GPU when the environment has
+# one, so clients hand labwc their frames as GPU buffers, and pixman on the
+# CPU when it does not.
+# The GPU's device nodes are created root-only and handed to the render and
+# video groups by udev. This unit is ordered after udev has been triggered
+# (sysinit.target), but not after it has finished processing what that
+# queued, and a client that opens the render node before then is refused.
+# Settling waits for exactly that.
+ExecStartPre=/usr/bin/udevadm settle --timeout=30
+# By name rather than path: a distribution's package puts labwc in /usr/bin,
+# one built with the image in /usr/local/bin, and systemd searches both.
+ExecStart=labwc
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=graphical.target

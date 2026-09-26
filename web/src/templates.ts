@@ -53,8 +53,16 @@ export function groupTemplates(list: Template[], me: Me): TemplateGroups {
   return groups
 }
 
+// Hangar's own images, which the template editor suggests.
+export const hangarImages = [
+  { ref: 'ghcr.io/csnewman/hangar/base:ubuntu-26.04', label: 'Ubuntu 26.04, with desktop' },
+  { ref: 'ghcr.io/csnewman/hangar/minimal:ubuntu-26.04', label: 'Ubuntu 26.04, minimal' },
+  { ref: 'ghcr.io/csnewman/hangar/base:rocky-10', label: 'Rocky Linux 10, with desktop' },
+  { ref: 'ghcr.io/csnewman/hangar/minimal:rocky-10', label: 'Rocky Linux 10, minimal' },
+]
+
 export const blankSpec: Spec = {
-  image: 'ghcr.io/csnewman/hangar/base-ubuntu2604:latest',
+  image: 'ghcr.io/csnewman/hangar/base:ubuntu-26.04',
   cpus: 2,
   memory_mib: 4096,
   display: 'desktop',

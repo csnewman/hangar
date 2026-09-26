@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs inside the image last, after mkosi has applied the presets, which on
+# the RHEL family reset the default target to the vendor's.
+set -eu
+
+# Boots to a console; base/ sets the graphical target. The worker picks the
+# target at each boot from the template's display either way.
+systemctl set-default multi-user.target

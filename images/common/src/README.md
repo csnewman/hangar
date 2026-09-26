@@ -1,6 +1,6 @@
 # Guest programs
 
-Native programs installed into every base that can run them. They are compiled
+Native programs installed into every `base` image that can run them. They are compiled
 by the image builder (`internal/image/scripts/mkosi.sh`), not in the image, so
 no base carries a toolchain.
 

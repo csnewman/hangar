@@ -32,9 +32,16 @@ vm:
   editor: /Users/csnewman/Projects/hangar/out/editor/editor-arm64.ext4
   dax_mib: 1024
   images:
-    # The image's root filesystem, served over virtio-fs. Built in this VM by
-    #   sudo /var/tmp/hangar build -C images/ubuntu2604 -o /var/lib/hangar/image-src/ubuntu2604
-    # It lives on the VM's own disk, not the Mac's mount: the tree must keep
-    # its root owners.
-    ghcr.io/csnewman/hangar/base-ubuntu2604:latest:
-      base: /var/lib/hangar/image-src/ubuntu2604/rootfs
+    # Each image's root filesystem, served over virtio-fs. Built in this VM,
+    # both tiers of a distribution at once, by
+    #   sudo /var/tmp/hangar build -C images/ubuntu-26.04 -o /var/lib/hangar/image-src/ubuntu-26.04
+    # They live on the VM's own disk, not the Mac's mount: the trees must keep
+    # their root owners.
+    ghcr.io/csnewman/hangar/base:ubuntu-26.04:
+      base: /var/lib/hangar/image-src/ubuntu-26.04/base/rootfs
+    ghcr.io/csnewman/hangar/minimal:ubuntu-26.04:
+      base: /var/lib/hangar/image-src/ubuntu-26.04/minimal/rootfs
+    ghcr.io/csnewman/hangar/base:rocky-10:
+      base: /var/lib/hangar/image-src/rocky-10/base/rootfs
+    ghcr.io/csnewman/hangar/minimal:rocky-10:
+      base: /var/lib/hangar/image-src/rocky-10/minimal/rootfs

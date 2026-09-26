@@ -9,7 +9,7 @@
 # images profile builds a base image locally, for a worker.yaml that names a
 # local copy rather than pulling it:
 #
-#   IMAGE=ubuntu2604 docker compose --profile images run --rm build-image
+#   IMAGE=ubuntu-26.04 docker compose --profile images run --rm build-image
 #
 # One machine can run every profile; a worker machine runs only `worker` and
 # `images`, pointed at the control plane in worker.yaml, and needs none of
@@ -119,9 +119,9 @@ services:
       - seccomp=unconfined
       - apparmor=unconfined
     environment:
-      IMAGE: ${IMAGE:-ubuntu2604}
+      IMAGE: ${IMAGE:-ubuntu-26.04}
     volumes:
-      - /var/lib/hangar/image-src/${IMAGE:-ubuntu2604}:/out
+      - /var/lib/hangar/image-src/${IMAGE:-ubuntu-26.04}:/out
 
 secrets:
   bootstrap-token:

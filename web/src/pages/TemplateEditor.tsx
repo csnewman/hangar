@@ -7,7 +7,7 @@ import { api, type Display, type GPU, type Repo, type Template, type TemplateInp
 import { ConfirmButton } from '../components/ConfirmButton'
 import { PageHeader } from '../components/PageHeader'
 import { useMe } from '../session'
-import { blankSpec, templatesKey } from '../templates'
+import { blankSpec, hangarImages, templatesKey } from '../templates'
 import { VisibilityBadge } from './Templates'
 import { Activity } from '../components/Activity'
 
@@ -186,10 +186,22 @@ function Editor({ existing }: { existing?: Template }) {
               <input
                 required
                 className="mono"
+                list="hangar-images"
                 value={spec.image}
                 onChange={(e) => setSpec({ image: e.target.value })}
               />
-              <small>Any OCI image built on a Hangar base.</small>
+              <datalist id="hangar-images">
+                {hangarImages.map((i) => (
+                  <option key={i.ref} value={i.ref}>
+                    {i.label}
+                  </option>
+                ))}
+              </datalist>
+              <small>
+                One of Hangar's images, or an OCI image built on one. <code>base</code> has Docker, GPU drivers, a
+                desktop and a browser; <code>minimal</code> has what an environment needs and a package manager for
+                the rest.
+              </small>
             </label>
             <div className="field-row">
               <label className="field">
@@ -223,6 +235,7 @@ function Editor({ existing }: { existing?: Template }) {
                   <option value="desktop">Desktop</option>
                   <option value="none">Headless — lighter, no desktop</option>
                 </select>
+                {spec.display === 'desktop' && <small>Needs an image with a desktop, such as a base image.</small>}
               </label>
               <label className="field">
                 <span>GPU</span>

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Opens the image's terminal emulator: foot where the distribution has it,
+# ptyxis on the RHEL family, which ships no lighter one.
+for t in foot ptyxis xterm; do
+	if command -v "$t" >/dev/null 2>&1; then
+		exec "$t" "$@"
+	fi
+done
+echo "hangar-terminal: no terminal emulator is installed" >&2
+exit 1

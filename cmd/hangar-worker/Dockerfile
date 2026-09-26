@@ -18,7 +18,7 @@
 #   /usr/share/hangar/editor.ext4     VS Code's server (editor/), attached to
 #                                     every environment
 #
-# Base images are not in it: an image is a root filesystem, built by the
+# Environment images are not in it: an image is a root filesystem, built by the
 # imagebuilder target (see deploy/compose.yaml), which needs mount and
 # namespace permissions that `docker build` does not have.
 #
@@ -129,11 +129,11 @@ ENTRYPOINT ["hangar-worker"]
 CMD ["-config", "/etc/hangar/worker.yaml"]
 
 # ---------------------------------------------------------------- imagebuilder
-# Builds a base image the way `hangar build` does: /out/rootfs, the image's
-# root filesystem, which a worker serves to its environments over virtio-fs.
-# Run it with CAP_SYS_ADMIN and seccomp and AppArmor unconfined,
-# IMAGE=<images/ subdir>, and /out mounted from a Linux filesystem: the tree
-# keeps the image's owners.
+# Builds a distribution's images the way `hangar build` does: /out/minimal
+# and /out/base, each holding rootfs, the image's root filesystem, which a
+# worker serves to its environments over virtio-fs. Run it with
+# CAP_SYS_ADMIN and seccomp and AppArmor unconfined, IMAGE=<images/ subdir>,
+# and /out mounted from a Linux filesystem: the trees keep the images' owners.
 FROM ${UBUNTU} AS imagebuilder
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
@@ -141,7 +141,7 @@ RUN apt-get update -qq \
       zstd gzip python3-minimal >/dev/null
 COPY internal/image/scripts/ /scripts/
 COPY images/ /cfg/
-ENV IMAGE=ubuntu2604
+ENV IMAGE=ubuntu-26.04
 CMD ["sh", "/scripts/mkosi.sh"]
 
 FROM worker

@@ -1,0 +1,10 @@
+#!/bin/sh
+# Opens the image's web browser, under whichever name its distribution gives
+# Chromium.
+for b in chromium chromium-browser google-chrome firefox; do
+	if command -v "$b" >/dev/null 2>&1; then
+		exec "$b" "$@"
+	fi
+done
+echo "hangar-browser: no web browser is installed" >&2
+exit 1

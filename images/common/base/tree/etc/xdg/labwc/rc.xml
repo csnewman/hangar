@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<!--
+  The environment's desktop: labwc's defaults, which already put the menu on a
+  right-click on the desktop, with shortcuts that work through a browser's
+  remote viewer. Viewers and host systems keep the Super key for themselves, so
+  nothing here needs it.
+-->
+<labwc_config>
+  <theme>
+    <cornerRadius>6</cornerRadius>
+    <font place="">
+      <name>DejaVu Sans</name>
+      <size>10</size>
+    </font>
+  </theme>
+  <keyboard>
+    <default />
+    <keybind key="C-A-t">
+      <action name="Execute" command="hangar-terminal" />
+    </keybind>
+    <keybind key="C-A-b">
+      <action name="Execute" command="hangar-browser" />
+    </keybind>
+    <keybind key="C-A-m">
+      <action name="ShowMenu" menu="root-menu" />
+    </keybind>
+  </keyboard>
+</labwc_config>

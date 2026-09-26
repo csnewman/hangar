@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!-- What a right-click on the desktop, or Ctrl+Alt+M, offers. -->
+<openbox_menu>
+  <menu id="root-menu" label="">
+    <item label="Terminal (Ctrl+Alt+T)">
+      <action name="Execute" command="hangar-terminal" />
+    </item>
+    <item label="Web browser (Ctrl+Alt+B)">
+      <action name="Execute" command="hangar-browser" />
+    </item>
+    <separator />
+    <menu id="client-list-combined-menu" />
+  </menu>
+</openbox_menu>

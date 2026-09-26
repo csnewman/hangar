@@ -46,8 +46,10 @@ vm:
   #     password_file: /run/secrets/ghcr-token
   #
   # A reference can instead name a local copy, such as one the compose file's
-  # build-image service built:
-  #   IMAGE=ubuntu2604 docker compose --profile images run --rm build-image
+  # build-image service built, which builds both of a distribution's tiers:
+  #   IMAGE=ubuntu-26.04 docker compose --profile images run --rm build-image
   # images:
-  #   ghcr.io/csnewman/hangar/base-ubuntu2604:latest:
-  #     base: /var/lib/hangar/image-src/ubuntu2604/rootfs
+  #   ghcr.io/csnewman/hangar/base:ubuntu-26.04:
+  #     base: /var/lib/hangar/image-src/ubuntu-26.04/base/rootfs
+  #   ghcr.io/csnewman/hangar/minimal:ubuntu-26.04:
+  #     base: /var/lib/hangar/image-src/ubuntu-26.04/minimal/rootfs

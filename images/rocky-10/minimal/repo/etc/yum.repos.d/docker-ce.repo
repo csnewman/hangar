@@ -1,0 +1,14 @@
+# Docker's own rpm repository.
+#
+# Used twice: as a SandboxTree so dnf can see it while the image is being
+# built, and as an ExtraTree so it ships in the image and `dnf install`
+# inside an environment resolves against the same source.
+#
+# Docker builds for RHEL 10, which Rocky 10 rebuilds; there is no separate
+# Rocky channel.
+[docker-ce-stable]
+name=Docker CE Stable
+baseurl=https://download.docker.com/linux/rhel/10/$basearch/stable
+enabled=1
+gpgcheck=1
+gpgkey=file:///etc/pki/rpm-gpg/RPM-GPG-KEY-Docker-CE

@@ -1,0 +1,46 @@
+#!/bin/sh
+# Compiles the desktop programs Rocky's repositories lack -- labwc, wlr-randr
+# and grim -- into $DESTDIR, which mkosi copies into the image. It runs inside
+# the image's tree (.chroot), where the compilers and headers are, as
+# BuildPackages, so none of them reach the image.
+#
+# Each source is a pinned release, checked against its digest. labwc stays on
+# the 0.8 series, the last to build against wlroots 0.18, which is what EPEL
+# ships.
+set -eu
+
+fetch() {
+	url=$1 sum=$2 out=$3
+	curl -fsSL -o "$out" "$url"
+	echo "$sum  $out" | sha256sum -c -
+}
+
+work=$(mktemp -d)
+cd "$work"
+
+fetch https://github.com/labwc/labwc/archive/refs/tags/0.8.4.tar.gz \
+	2d3ded90f78efb5060f7057ea802c78a79dc9b2e82ae7a2ad902af957b8b9797 labwc.tar.gz
+fetch https://gitlab.freedesktop.org/emersion/wlr-randr/-/archive/v0.4.1/wlr-randr-v0.4.1.tar.gz \
+	8af085aeed3132f7442a05bafeadfd0ea30e9a4818af1a91e161f7d560f2cd93 wlr-randr.tar.gz
+fetch https://gitlab.freedesktop.org/emersion/grim/-/archive/v1.5.0/grim-v1.5.0.tar.gz \
+	9e72a98f7621b1f5741b405b8dbd447acf7d300ddb12667ec526db1ce6154eaa grim.tar.gz
+
+for name in labwc wlr-randr grim; do
+	mkdir "$name"
+	tar -xzf "$name.tar.gz" -C "$name" --strip-components=1
+done
+
+# System libraries only: --wrap-mode=nodownload stops meson fetching a
+# subproject in place of one the build is meant to use.
+build() {
+	dir=$1
+	shift
+	meson setup "$dir/build" "$dir" --prefix=/usr/local --buildtype=release \
+		--wrap-mode=nodownload "$@"
+	meson compile -C "$dir/build"
+	meson install -C "$dir/build" --destdir "$DESTDIR"
+}
+
+build labwc -Dman-pages=disabled -Dxwayland=enabled -Dsvg=enabled -Dicon=enabled -Dnls=disabled
+build wlr-randr
+build grim -Dman-pages=disabled -Djpeg=enabled

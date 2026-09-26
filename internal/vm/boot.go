@@ -80,6 +80,17 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if err != nil {
 		return nil, err
 	}
+	if s.Display == api.DisplayDesktop {
+		// An image that says it has no desktop would boot to one that never
+		// appears; one that does not say is taken at its word.
+		info, known, err := ReadImageInfo(img.Base)
+		if err != nil {
+			return nil, fmt.Errorf("image %s: %w", s.Image, err)
+		}
+		if known && !info.Desktop {
+			return nil, fmt.Errorf("image %s has no desktop, and the template asks for one: use an image with a desktop, or set the display to none", s.Image)
+		}
+	}
 	m.step(api.StepDisks, "preparing its disks")
 	if err := os.MkdirAll(m.dir, 0o755); err != nil {
 		return nil, err
@@ -117,10 +128,14 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		Progress:    func(step string) { m.step(api.StepBoot, step) },
 		Log:         m.log,
 	}
+	// An image may have a desktop; the template decides whether it runs. A
+	// headless environment boots to multi-user.target, which leaves out
+	// everything graphical whatever the image holds, and masks the desktop
+	// so nothing can pull it in.
 	if s.Display == api.DisplayNone {
-		// The desktop is a unit in the image; a headless environment
-		// simply never starts it.
-		cfg.ExtraCmdline = "systemd.mask=hangar-desktop.service"
+		cfg.ExtraCmdline = "systemd.unit=multi-user.target systemd.mask=hangar-desktop.service"
+	} else {
+		cfg.ExtraCmdline = "systemd.unit=graphical.target"
 	}
 	inst, err := Boot(ctx, cfg)
 	if err != nil {
