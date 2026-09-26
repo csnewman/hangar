@@ -13,16 +13,12 @@
 package ch
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"syscall"
-	"time"
 )
 
 // QUEUE_SIZE is the depth of each of the GPU's two virtqueues, and has to
@@ -273,110 +269,4 @@ func Find() (string, error) {
 	}
 	return "", fmt.Errorf("cloud-hypervisor not found on PATH or in %s",
 		strings.Join(searchPath, " or "))
-}
-
-// Run launches the VM and blocks until it exits.
-func Run(ctx context.Context, cfg *Config) error {
-	args, err := cfg.Args()
-	if err != nil {
-		return err
-	}
-	return monitor(ctx, args, nil)
-}
-
-// Restore brings a suspended guest back from the snapshot in dir.
-//
-// The monitor is started with nothing but its API socket, since everything
-// else -- the machine, its devices, their sockets -- is in the snapshot. The
-// backends those devices connect to must already be listening, as for Run.
-//
-// The guest comes back paused, and ready is called before it is resumed. That
-// gap is the only moment a backend can rebuild state the guest is already
-// relying on without the guest racing it, so ready should return only once
-// every backend has.
-func Restore(ctx context.Context, apiSocket, dir, seccomp string, ready func(context.Context) error) error {
-	_ = os.Remove(apiSocket)
-	args := []string{"--api-socket", apiSocket}
-	if seccomp != "" {
-		args = append(args, "--seccomp", seccomp)
-	}
-	return monitor(ctx, args, func(ctx context.Context) error {
-		api := NewAPI(apiSocket)
-		if err := api.WaitReady(ctx, 10*time.Second); err != nil {
-			return err
-		}
-		if err := api.Restore(ctx, dir); err != nil {
-			return err
-		}
-		if ready != nil {
-			if err := ready(ctx); err != nil {
-				return fmt.Errorf("waiting for the backends to restore: %w", err)
-			}
-		}
-		return api.Resume(ctx)
-	})
-}
-
-// monitor runs the monitor in the foreground until it exits.
-//
-// started, if given, runs once the process is up; an error from it stops the
-// monitor and is returned.
-func monitor(ctx context.Context, args []string, started func(context.Context) error) error {
-	bin, err := Find()
-	if err != nil {
-		return err
-	}
-
-	// Ctrl-C should shut the VM down rather than kill us and orphan it.
-	ctx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("starting cloud-hypervisor: %w", err)
-	}
-	if started != nil {
-		if err := started(ctx); err != nil {
-			_ = cmd.Process.Signal(syscall.SIGTERM)
-			_ = cmd.Wait()
-			return err
-		}
-	}
-	if err := cmd.Wait(); err != nil {
-		if ctx.Err() != nil {
-			return nil // we asked it to stop
-		}
-		return fmt.Errorf("cloud-hypervisor exited: %w", err)
-	}
-	return nil
-}
-
-// PrintCommand renders the command line for debugging, one argument per line
-// so it can be copied and edited by hand.
-func PrintCommand(cfg *Config) (string, error) {
-	args, err := cfg.Args()
-	if err != nil {
-		return "", err
-	}
-	bin, err := Find()
-	if err != nil {
-		bin = "cloud-hypervisor"
-	}
-	out := bin
-	for i := 0; i < len(args); i++ {
-		line := args[i]
-		// --disk takes one value per disk, so a flag's values run until the
-		// next flag rather than stopping at the first.
-		for i+1 < len(args) && !strings.HasPrefix(args[i+1], "--") {
-			line += " " + args[i+1]
-			i++
-		}
-		out += " \\\n    " + line
-	}
-	return out, nil
 }

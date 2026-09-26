@@ -94,13 +94,6 @@ func MountLockFS(u *user.User, backingRoot string, gate Gate) (*LockFS, error) {
 	return l, nil
 }
 
-// Unmount takes the mounts down.
-func (l *LockFS) Unmount() {
-	for _, s := range l.servers {
-		s.Unmount()
-	}
-}
-
 // lockNode is a passthrough node whose directory may have locks made in it.
 type lockNode struct {
 	fs.LoopbackNode

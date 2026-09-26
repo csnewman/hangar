@@ -12,7 +12,6 @@ package clientapi
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -28,12 +27,6 @@ import (
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/version"
 )
-
-//go:embed openapi.yaml
-var spec []byte
-
-// Document is the API's OpenAPI description.
-func Document() []byte { return spec }
 
 // Versions are the versions of this API the server serves, oldest first.
 var Versions = []string{"v1"}

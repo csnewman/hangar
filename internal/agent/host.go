@@ -17,26 +17,13 @@ type Server struct {
 	ln vsock.Acceptor
 }
 
-// Listen starts accepting agent connections on Port over AF_VSOCK.
-//
-// The listener binds CIDAny, so one server serves every environment on the
-// node rather than one per guest. This is the right form for a monitor whose
-// vsock is the host kernel's vhost-vsock.
-func Listen() (*Server, error) {
-	ln, err := vsock.Listen(vsock.CIDAny, Port)
-	if err != nil {
-		return nil, err
-	}
-	return &Server{ln: ln}, nil
-}
-
 // ListenHybrid starts accepting agent connections from a monitor that carries
 // vsock over a unix socket instead of the host kernel, which is what Cloud
 // Hypervisor does.
 //
 // base is the monitor's vsock socket path and cid is the context ID the host
-// allocated for that guest. Unlike Listen, one server serves one environment,
-// because the socket belongs to one monitor.
+// allocated for that guest. One server serves one environment, because the
+// socket belongs to one monitor.
 func ListenHybrid(base string, cid uint32) (*Server, error) {
 	ln, err := vsock.ListenHybrid(base, Port, cid)
 	if err != nil {

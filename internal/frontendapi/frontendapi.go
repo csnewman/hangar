@@ -36,9 +36,6 @@ import (
 //go:embed openapi.yaml
 var spec []byte
 
-// Document returns the API's OpenAPI document.
-func Document() []byte { return spec }
-
 // Config is what the API is served from.
 type Config struct {
 	Environments *environments.Manager

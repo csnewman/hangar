@@ -46,6 +46,15 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race ./...
+      # A function no program or test reaches is one a refactor left behind.
+      # deadcode reports them and exits 0 either way, so any output fails.
+      - name: Check for unreachable code
+        run: |
+          go install golang.org/x/tools/cmd/deadcode@v0.50.0
+          unreachable=$(deadcode -test ./...)
+          if [ -n "$unreachable" ]; then
+            echo "Unreachable, and so to be removed:"; echo "$unreachable"; exit 1
+          fi
 
   web:
     runs-on: ubuntu-26.04
