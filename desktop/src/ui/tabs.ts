@@ -1,4 +1,5 @@
-// The tab bar, and the switcher that opens over the window from it.
+// A server window's tab bar -- its control panel, then one tab per
+// environment -- and the switcher that opens over the window from it.
 import { esc, tone, type AppState, type Env, type ServerInfo } from './types'
 
 const h = window.hangar
@@ -7,89 +8,69 @@ const overlay = document.getElementById('overlay')!
 const query = document.getElementById('query') as HTMLInputElement
 const results = document.getElementById('results')!
 
-let state: AppState = { tabs: [], servers: [] }
+let state: AppState = { server: null, tabs: [], servers: [] }
 if (h.platform === 'darwin') strip.classList.add('mac')
+
+const mine = () => state.servers.find((s) => s.id === state.server)
 
 // ---- Tabs ----
 
 let dragging: number | null = null
 
 function renderTabs() {
+  const server = mine()
+  const envs = new Map((server?.environments ?? []).map((e) => [e.id, e]))
   strip.innerHTML = ''
   state.tabs.forEach((t, i) => {
     const el = document.createElement('div')
-    el.className = `tab${t.active ? ' on' : ''}${t.loading ? ' loading' : ''}`
-    el.title = t.serverName ? `${t.title} — ${t.serverName}` : t.title
-    el.draggable = true
-    const icon = t.favicon ? `<img src="${esc(t.favicon)}" alt="">` : '<span class="ph"></span>'
-    const server = t.serverName && state.servers.length > 1 ? `<span class="server">${esc(t.serverName)}</span>` : ''
-    el.innerHTML = `${icon}<span class="title">${esc(t.title)}</span>${server}<button class="x" aria-label="Close tab">✕</button>`
+    const env = t.env ? envs.get(t.env) : undefined
+    el.className = `tab${t.panel ? ' panel' : ''}${t.active ? ' on' : ''}${t.loading ? ' loading' : ''}`
+    let icon: string
+    let label: string
+    if (t.panel) {
+      icon = t.favicon ? `<img src="${esc(t.favicon)}" alt="">` : '<span class="ph"></span>'
+      label = esc(server?.name ?? t.title)
+      el.title = `${server?.name ?? ''} — ${t.title}`
+    } else {
+      icon = `<span class="dot ${tone(env?.phase ?? '')}"></span>`
+      label = esc(env ? env.name : t.title)
+      el.title = env ? `${env.name} — ${env.phase}${env.reason ? ': ' + env.reason : ''}` : t.title
+    }
+    const close = t.panel ? '' : '<button class="x" aria-label="Close tab">✕</button>'
+    el.innerHTML = `${icon}<span class="title">${label}</span>${close}`
     el.addEventListener('mousedown', (e) => {
       if (e.button === 0 && !(e.target as HTMLElement).closest('.x')) h.activate(t.id)
     })
-    el.addEventListener('auxclick', (e) => {
-      if (e.button === 1) h.close(t.id)
-    })
-    el.querySelector('.x')!.addEventListener('click', (e) => {
-      e.stopPropagation()
-      h.close(t.id)
-    })
-    el.addEventListener('dragstart', () => (dragging = t.id))
+    if (!t.panel) {
+      el.addEventListener('auxclick', (e) => {
+        if (e.button === 1) h.close(t.id)
+      })
+      el.querySelector('.x')!.addEventListener('click', (e) => {
+        e.stopPropagation()
+        h.close(t.id)
+      })
+      el.draggable = true
+      el.addEventListener('dragstart', () => (dragging = t.id))
+    }
     el.addEventListener('dragover', (e) => e.preventDefault())
     el.addEventListener('drop', () => {
-      if (dragging !== null && dragging !== t.id) h.move(dragging, i)
+      if (dragging !== null && dragging !== t.id) h.move(dragging, Math.max(1, i))
       dragging = null
     })
     strip.appendChild(el)
   })
   const add = document.createElement('button')
   add.className = 'icon-btn'
-  add.title = 'New tab (⌘T)'
+  add.title = 'Open an environment in a new tab (⌘T)'
   add.textContent = '+'
   add.style.fontSize = '18px'
-  add.addEventListener('click', () => newTabMenu(add))
+  add.addEventListener('click', () => h.overlay(true).then(openSwitcher))
   strip.appendChild(add)
-  const spacer = document.createElement('div')
-  spacer.className = 'spacer'
-  strip.appendChild(spacer)
-  const go = document.createElement('button')
-  go.className = 'icon-btn'
-  go.title = 'Go to an environment (⌘L)'
-  go.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
-  go.addEventListener('click', () => h.overlay(true).then(openSwitcher))
-  strip.appendChild(go)
-}
-
-// newTabMenu is a new tab for one of the servers, or the home page.
-function newTabMenu(anchor: HTMLElement) {
-  if (state.servers.length === 0) return h.newTab(null)
-  const menu = document.createElement('div')
-  menu.className = 'switcher'
-  menu.style.cssText = `position:fixed;top:40px;left:${anchor.getBoundingClientRect().left}px;width:240px;padding:6px`
-  const items: [string, string | null][] = [['Home', null], ...state.servers.map((s): [string, string] => [s.name, s.id])]
-  for (const [label, id] of items) {
-    const r = document.createElement('div')
-    r.className = 'result'
-    r.textContent = label
-    r.addEventListener('click', () => {
-      close()
-      h.newTab(id)
-    })
-    menu.appendChild(r)
-  }
-  const close = () => {
-    menu.remove()
-    h.overlay(false)
-  }
-  overlay.classList.remove('open')
-  document.body.appendChild(menu)
-  h.overlay(true)
-  setTimeout(() => document.addEventListener('mousedown', (e) => !menu.contains(e.target as Node) && close(), { once: true }))
 }
 
 // ---- The switcher ----
 
-type Hit = { server: ServerInfo; env: Env; score: number }
+type Hit = { server: ServerInfo; env: Env; here: boolean; score: number }
 let hits: Hit[] = []
 let sel = 0
 
@@ -113,22 +94,28 @@ function renderResults() {
   const q = query.value.trim().toLowerCase()
   hits = []
   for (const s of state.servers) {
+    const here = s.id === state.server
     for (const e of s.environments) {
-      const sc = Math.max(score(q, e.name), score(q, `${e.owner}/${e.name}`) - 0.5, score(q, s.name) - 1)
-      if (sc > 0) hits.push({ server: s, env: e, score: sc + (e.own ? 0.25 : 0) + (e.phase === 'running' ? 0.1 : 0) })
+      const sc = Math.max(score(q, e.name), score(q, `${e.owner}/${e.name}`) - 0.5)
+      // This window's server comes first; another's opens in its window.
+      if (sc > 0) hits.push({ server: s, env: e, here, score: sc + (here ? 10 : 0) + (e.own ? 0.25 : 0) + (e.phase === 'running' ? 0.1 : 0) })
     }
   }
   hits.sort((a, b) => b.score - a.score || a.env.name.localeCompare(b.env.name))
   sel = Math.min(sel, Math.max(0, hits.length - 1))
-  results.innerHTML = hits.length
-    ? ''
-    : `<div class="result muted">${state.servers.length ? 'No environments match.' : 'Add a server from the home page first.'}</div>`
+  results.innerHTML = hits.length ? '' : '<div class="result muted">No environments match.</div>'
+  let shownOther = false
   hits.slice(0, 50).forEach((hit, i) => {
+    if (!hit.here && !shownOther) {
+      shownOther = true
+      results.insertAdjacentHTML('beforeend', '<div class="heading">Other servers — open in their windows</div>')
+    }
     const r = document.createElement('div')
     r.className = `result${i === sel ? ' sel' : ''}`
     const who = hit.env.own ? '' : `${esc(hit.env.owner)}/`
+    const where = hit.here ? '' : `<span class="where">${esc(hit.server.name)}</span>`
     r.innerHTML = `<span class="dot ${tone(hit.env.phase)}"></span><span class="name">${who}${esc(hit.env.name)}</span>
-      <span class="muted small">${esc(hit.env.phase)}</span><span class="where">${esc(hit.server.name)}</span>`
+      <span class="muted small">${esc(hit.env.phase)}</span>${where}`
     r.addEventListener('mousemove', () => {
       if (sel !== i) {
         sel = i

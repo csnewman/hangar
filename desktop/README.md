@@ -1,35 +1,44 @@
 # Hangar for the desktop
 
-Hangar's control panel as an app: every server you use in one window, in
-tabs that keep their state.
+Hangar's control panel as an app. A window is one server: its control
+panel in the first tab and each environment in a tab of its own, keeping
+its state. Another server is another window.
 
 ## What it is
 
 The app is two things:
 
-- **Its own parts**, built into the app: the tab bar, the home page across
-  servers, the environment switcher (⌘L), the menu bar icon, notifications
+- **Its own parts**, built into the app: the tab bar, the server picker
+  (⌘N), the environment switcher (⌘T, ⌘L), the menu bar icon, notifications
   when an environment is ready or fails, and opening an environment in
   desktop VS Code or a terminal. These call each server's **client API**,
   `/api/v1`, which is versioned: the app checks `/api/v1/version` first and
   says whether the server or the app needs updating when they do not agree.
-- **Each server's own control panel**, its web UI, shown in a tab. It is
-  always the panel that server ships, so it never falls out of step with it.
+- **Each server's own control panel**, its web UI, shown in the tabs. It
+  is always the panel that server ships, so it never falls out of step
+  with it.
+
+The first tab of a window is the server's control panel and stays. Every
+other tab is one environment: open one from the control panel, the
+switcher or the menu bar, and it gets a tab of its own, or the one it
+already has. Pages go where they belong -- an environment's pages to its
+tab, templates, profile and administration to the control panel -- so a
+link in either lands in the right tab.
 
 Every tab is a view of its own and stays alive while another is shown: VS
-Code, terminals and desktops keep everything when you move between tabs. A
-server's tabs share its session, so signing in once, on its own login page,
-signs in the whole app; there is no token to paste.
-
-Middle-click or ⌘-click an environment in a control panel to open it in a
-new tab.
+Code, terminals and desktops keep everything when you move between tabs,
+and a tab moved to another of its environment's pages is not reloaded. A
+server's tabs share its session, so signing in once, on its own login
+page, signs in the whole window; there is no token to paste. Windows and
+their tabs are restored when the app starts.
 
 | Keys | |
 | --- | --- |
-| ⌘T / ⌘W | New tab / close tab |
+| ⌘N | Open another server's window, or add a server |
+| ⌘T, ⌘L | Go to an environment (↵ open, ⌘↵ VS Code, ⌥↵ terminal) |
+| ⌘W | Close the tab; on the control panel, the window |
 | ⌘⇧T | Reopen the last closed tab |
 | ⌃Tab / ⌃⇧Tab, ⌘1…9 | Move between tabs |
-| ⌘L | Go to an environment (↵ open, ⌘↵ VS Code, ⌥↵ terminal) |
 
 Links of the form `hangar://open?server=https://hangar.example.com&path=/environments/<id>`
 open in the app.

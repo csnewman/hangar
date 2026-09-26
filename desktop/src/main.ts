@@ -1,43 +1,65 @@
 // Hangar for the desktop.
 //
-// The app is two things. Its own parts -- the tab bar, the home page across
-// servers, the environment switcher, the menu bar icon, notifications,
-// opening VS Code or a terminal -- are built into the app and talk to each
-// server through the client API (/api/v1), which is versioned so an app
-// and a server of different releases still agree. Each server's control
-// panel is the server's own web UI, shown in a tab, so it is always the
-// panel that server ships.
+// Each window is one server: its control panel in the first tab and each of
+// its environments in a tab of its own. Another server is another window,
+// and ⌘N picks or adds one.
+//
+// The app is two things. Its own parts -- the tab bar, the environment
+// switcher, the server picker, the menu bar icon, notifications, opening VS
+// Code or a terminal -- are built into the app and talk to each server
+// through the client API (/api/v1), which is versioned so an app and a
+// server of different releases still agree. What the tabs show is the
+// server's own web UI, so it is always the panel that server ships.
 
-import { app, dialog, ipcMain, Menu, nativeImage, Notification, Tray, type IpcMainInvokeEvent } from 'electron'
+import {
+  app,
+  BaseWindow,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  nativeImage,
+  Notification,
+  Tray,
+  type IpcMainEvent,
+  type IpcMainInvokeEvent,
+  type WebContents,
+} from 'electron'
 import { join } from 'node:path'
 
 import * as api from './api'
 import { openInVSCode, openTerminal } from './launch'
 import * as store from './store'
+import type { Server } from './store'
 import { watch, type ServerState } from './watch'
-import { AppWindow, homeURL } from './window'
+import { roleFor, ServerWindow } from './window'
 
-let win: AppWindow | null = null
+const windows = new Map<string, ServerWindow>()
+let picker: BrowserWindow | null = null
 let tray: Tray | null = null
 let quitting = false
 
 // ---- What the app's own pages are shown ----
 
-function summary() {
+function serverInfo(st: ServerState) {
   return {
-    tabs: win?.info() ?? [],
-    servers: watch.all().map((st) => ({
-      id: st.server.id,
-      name: st.server.name,
-      url: st.server.url,
-      compatibility: st.compatibility,
-      signedIn: st.signedIn,
-      username: st.me?.display_name || st.me?.username,
-      ssh: !!st.me?.ssh,
-      error: st.error,
-      environments: st.environments.map((e) => ({ ...e, own: e.owner_id === st.me?.id })),
-    })),
+    id: st.server.id,
+    name: st.server.name,
+    url: st.server.url,
+    compatibility: st.compatibility,
+    signedIn: st.signedIn,
+    username: st.me?.display_name || st.me?.username,
+    ssh: !!st.me?.ssh,
+    error: st.error,
+    open: windows.has(st.server.id),
+    environments: st.environments.map((e) => ({ ...e, own: e.owner_id === st.me?.id })),
   }
+}
+
+// summary is what one of the app's pages is shown: every server, and for a
+// window's bar, which server is its and its tabs.
+function summary(w?: ServerWindow) {
+  return { server: w?.server.id ?? null, tabs: w?.info() ?? [], servers: watch.all().map(serverInfo) }
 }
 
 let pending: NodeJS.Timeout | undefined
@@ -45,45 +67,72 @@ let pending: NodeJS.Timeout | undefined
 function changed() {
   clearTimeout(pending)
   pending = setTimeout(() => {
-    const s = summary()
-    win?.bar.webContents.send('app:state', s)
-    for (const t of win?.tabs ?? []) {
-      if (t.server === null) t.view.webContents.send('app:state', s)
-    }
+    for (const w of windows.values()) w.bar.webContents.send('app:state', summary(w))
+    picker?.webContents.send('app:state', summary())
     updateTray()
   }, 30)
 }
 
-// ---- The window ----
+// ---- Windows ----
 
-function createWindow() {
-  win = new AppWindow(changed)
-  win.restore()
-  win.win.on('closed', () => {
-    win = null
+function openServer(s: Server): ServerWindow {
+  let w = windows.get(s.id)
+  if (!w) {
+    const made = new ServerWindow(s, changed)
+    windows.set(s.id, made)
+    made.win.on('close', () => made.save(quitting))
+    made.win.on('closed', () => {
+      windows.delete(s.id)
+      changed()
+    })
+    w = made
+    changed()
+  }
+  w.win.show()
+  w.win.focus()
+  return w
+}
+
+// showPicker opens the window that picks or adds a server.
+function showPicker() {
+  if (picker) {
+    picker.show()
+    picker.focus()
+    return
+  }
+  picker = new BrowserWindow({
+    width: 560,
+    height: 600,
+    minWidth: 420,
+    minHeight: 400,
+    title: 'Hangar',
+    backgroundColor: '#0f1419',
+    webPreferences: { preload: join(__dirname, 'preload-app.js'), contextIsolation: true, sandbox: true },
   })
-  win.win.on('close', (e) => {
-    // On macOS closing the window leaves the app in the menu bar, as Mail
-    // and Slack do; quitting is ⌘Q.
-    if (process.platform === 'darwin' && !quitting) {
-      e.preventDefault()
-      win?.win.hide()
-    }
+  picker.loadURL(`file://${join(__dirname, 'ui', 'home.html')}`)
+  picker.on('closed', () => {
+    picker = null
   })
 }
 
-function showWindow() {
-  if (!win) createWindow()
-  win!.win.show()
-  win!.win.focus()
-  return win!
+// focused is the server window in front, if it is one.
+function focused(): ServerWindow | undefined {
+  const bw = BaseWindow.getFocusedWindow()
+  return [...windows.values()].find((w) => w.win === bw)
+}
+
+// windowFor is the server window a page belongs to: its bar or a tab.
+function windowFor(wc: WebContents): ServerWindow | undefined {
+  return [...windows.values()].find((w) => w.bar.webContents === wc || w.tabFor(wc))
 }
 
 // ---- Calls from the app's own pages ----
 
 // own refuses an app call from anything but the app's own pages.
 function own(e: IpcMainInvokeEvent) {
-  if (!win?.isOwn(e.sender)) throw new Error('not allowed')
+  const w = windowFor(e.sender)
+  if (!(w && w.bar.webContents === e.sender) && e.sender !== picker?.webContents) throw new Error('not allowed')
+  return w
 }
 
 function env(serverId: string, envId: string) {
@@ -93,69 +142,52 @@ function env(serverId: string, envId: string) {
   return { st, e }
 }
 
-ipcMain.handle('app:get', (e) => {
-  own(e)
-  return summary()
-})
+ipcMain.handle('app:get', (e) => summary(own(e)))
 ipcMain.handle('tab:activate', (e, id: number) => {
-  own(e)
-  const t = win?.tabs.find((x) => x.id === id)
-  if (t) win!.activate(t)
+  const w = own(e)
+  const t = w?.tabs.find((x) => x.id === id)
+  if (t) w!.activate(t)
 })
 ipcMain.handle('tab:close', (e, id: number) => {
-  own(e)
-  const t = win?.tabs.find((x) => x.id === id)
-  if (t) win!.close(t)
+  const w = own(e)
+  const t = w?.tabs.find((x) => x.id === id)
+  if (t) w!.close(t)
 })
-ipcMain.handle('tab:move', (e, id: number, to: number) => {
-  own(e)
-  win?.move(id, to)
-})
-ipcMain.handle('tab:new', (e, serverId: string | null) => {
-  own(e)
-  const s = serverId ? store.server(serverId) : undefined
-  win?.open(s ?? null, s ? s.url : homeURL)
-})
-ipcMain.handle('overlay', (e, open: boolean) => {
-  own(e)
-  win?.setOverlay(open)
-})
+ipcMain.handle('tab:move', (e, id: number, to: number) => own(e)?.move(id, to))
+ipcMain.handle('overlay', (e, open: boolean) => own(e)?.setOverlay(open))
 ipcMain.handle('server:add', async (e, input: string) => {
   own(e)
   let url: string
   try {
-    const u = new URL(/^https?:\/\//i.test(input.trim()) ? input.trim() : `https://${input.trim()}`)
-    url = u.origin
+    url = new URL(/^https?:\/\//i.test(input.trim()) ? input.trim() : `https://${input.trim()}`).origin
   } catch {
     return { error: 'That is not an address.' }
   }
   const c = await api.checkServer(url)
   if (!c.ok && c.update !== 'server') return { error: `${new URL(url).host} ${c.why}` }
   const s = store.addServer(url, new URL(url).host)
-  win?.open(s, s.url)
   await watch.refresh()
+  openServer(s)
+  picker?.close()
   return { ok: true, warning: c.ok ? undefined : `${new URL(url).host} ${c.why}` }
 })
 ipcMain.handle('server:remove', (e, id: string) => {
   own(e)
-  for (const t of [...(win?.tabs ?? [])]) if (t.server?.id === id) win!.close(t)
+  windows.get(id)?.win.close()
   store.removeServer(id)
   watch.refresh()
-})
-ipcMain.handle('server:rename', (e, id: string, name: string) => {
-  own(e)
-  if (name.trim()) store.renameServer(id, name.trim())
-  changed()
 })
 ipcMain.handle('server:open', (e, id: string) => {
   own(e)
   const s = store.server(id)
-  if (s) win?.open(s, s.url)
+  if (!s) return
+  openServer(s)
+  if (e.sender === picker?.webContents) picker.close()
 })
 ipcMain.handle('env:open', (e, serverId: string, envId: string) => {
   own(e)
   const { st } = env(serverId, envId)
-  win?.openEnvironment(st.server, envId)
+  openServer(st.server).openEnvironment(envId)
 })
 ipcMain.handle('env:act', async (e, serverId: string, envId: string, action: 'start' | 'stop' | 'suspend') => {
   own(e)
@@ -176,14 +208,21 @@ ipcMain.handle('env:terminal', (e, serverId: string, envId: string) => {
 
 // ---- Calls from a server's own pages ----
 //
-// A server's web UI, shown in a tab, may ask the app to open one of that
-// server's environments elsewhere. The server is the tab's, never one the
-// page names.
+// The tab's server is the one a page speaks for, never one the page names.
+
+ipcMain.on('page:role', (e: IpcMainEvent) => {
+  const w = windowFor(e.sender)
+  e.returnValue = w?.tabFor(e.sender)?.role ?? null
+})
+ipcMain.handle('page:route', (e, url: string) => {
+  const w = windowFor(e.sender)
+  if (w && roleFor(w.server, url)) w.route(url)
+})
 
 function pageEnv(e: IpcMainInvokeEvent, envId: string) {
-  const tab = win?.tabFor(e.sender)
-  if (!tab?.server) throw new Error('not allowed')
-  return env(tab.server.id, envId)
+  const w = windowFor(e.sender)
+  if (!w?.tabFor(e.sender)) throw new Error('not allowed')
+  return env(w.server.id, envId)
 }
 
 ipcMain.handle('page:vscode', async (e, envId: string) => {
@@ -206,10 +245,21 @@ watch.on('phase', (st: ServerState, e: api.Environment, was: api.Environment) =>
   } else if (e.phase === 'failed') {
     n = new Notification({ title: `${e.name} failed`, body: e.reason ?? `On ${st.server.name}` })
   }
-  n?.on('click', () => showWindow().openEnvironment(st.server, e.id))
+  n?.on('click', () => openServer(st.server).openEnvironment(e.id))
   n?.show()
 })
-watch.on('change', changed)
+
+watch.on('change', () => {
+  // A deleted environment's tab goes with it.
+  for (const st of watch.all()) {
+    const w = windows.get(st.server.id)
+    if (w && st.signedIn && !st.error) {
+      const ids = new Set(st.environments.map((e) => e.id))
+      w.prune((env) => ids.has(env))
+    }
+  }
+  changed()
+})
 
 // ---- The menu bar icon ----
 
@@ -222,15 +272,15 @@ function trayIcon() {
 
 function updateTray() {
   if (!tray) return
-  const items: Electron.MenuItemConstructorOptions[] = [{ label: 'Show Hangar', click: () => showWindow() }]
+  const items: Electron.MenuItemConstructorOptions[] = []
   for (const st of watch.all()) {
-    items.push({ type: 'separator' }, { label: st.server.name, enabled: false })
-    if (!st.compatibility?.ok && st.compatibility) {
-      items.push({ label: `  ${st.compatibility.why}`, enabled: false })
+    items.push({ label: st.server.name, click: () => openServer(st.server) })
+    if (st.compatibility && !st.compatibility.ok) {
+      items.push({ label: `  ${st.compatibility.why}`, enabled: false }, { type: 'separator' })
       continue
     }
     if (!st.signedIn) {
-      items.push({ label: '  Sign in…', click: () => showWindow().open(st.server, st.server.url) })
+      items.push({ label: '  Sign in…', click: () => openServer(st.server) }, { type: 'separator' })
       continue
     }
     const mine = st.environments.filter((e) => e.owner_id === st.me?.id)
@@ -239,9 +289,9 @@ function updateTray() {
       const running = e.phase === 'running'
       const busy = !['running', 'stopped', 'suspended', 'failed'].includes(e.phase)
       items.push({
-        label: `${e.name} — ${e.phase}`,
+        label: `  ${e.name} — ${e.phase}`,
         submenu: [
-          { label: 'Open', click: () => showWindow().openEnvironment(st.server, e.id) },
+          { label: 'Open', click: () => openServer(st.server).openEnvironment(e.id) },
           { label: 'Open in VS Code', enabled: running, click: () => openInVSCode(st.server, e) },
           { label: 'Open Terminal', enabled: running && !!st.me?.ssh, click: () => openTerminal(st.me!, e) },
           { type: 'separator' },
@@ -263,8 +313,9 @@ function updateTray() {
         ],
       })
     }
+    items.push({ type: 'separator' })
   }
-  items.push({ type: 'separator' }, { label: 'Quit Hangar', role: 'quit' })
+  items.push({ label: 'Open a Server…', click: showPicker }, { type: 'separator' }, { label: 'Quit Hangar', role: 'quit' })
   tray.setContextMenu(Menu.buildFromTemplate(items))
 }
 
@@ -272,17 +323,27 @@ function updateTray() {
 
 function menu() {
   const mac = process.platform === 'darwin'
-  const w = () => showWindow()
   const template: Electron.MenuItemConstructorOptions[] = [
     ...(mac ? [{ role: 'appMenu' as const }] : []),
     {
       label: 'File',
       submenu: [
-        { label: 'New Tab', accelerator: 'CmdOrCtrl+T', click: () => w().open(null, homeURL) },
-        { label: 'Go to Environment…', accelerator: 'CmdOrCtrl+L', click: () => w().setOverlay(true, true) },
-        { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => w().reopen() },
+        { label: 'New Window…', accelerator: 'CmdOrCtrl+N', click: showPicker },
+        { label: 'New Tab…', accelerator: 'CmdOrCtrl+T', click: () => focused()?.setOverlay(true, true) },
+        { label: 'Go to Environment…', accelerator: 'CmdOrCtrl+L', click: () => focused()?.setOverlay(true, true) },
+        { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => focused()?.reopen() },
         { type: 'separator' },
-        { label: 'Close Tab', accelerator: 'CmdOrCtrl+W', click: () => win?.active && win.close(win.active) },
+        {
+          label: 'Close Tab',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => {
+            const w = focused()
+            // The control panel does not close; ⌘W on it closes the window.
+            if (w && w.active !== w.panel) w.close(w.active)
+            else BaseWindow.getFocusedWindow()?.close()
+          },
+        },
+        { label: 'Close Window', accelerator: 'CmdOrCtrl+Shift+W', click: () => BaseWindow.getFocusedWindow()?.close() },
         ...(mac ? [] : [{ type: 'separator' as const }, { role: 'quit' as const }]),
       ],
     },
@@ -290,11 +351,11 @@ function menu() {
     {
       label: 'View',
       submenu: [
-        { label: 'Reload Tab', accelerator: 'CmdOrCtrl+R', click: () => win?.active?.view.webContents.reload() },
+        { label: 'Reload Tab', accelerator: 'CmdOrCtrl+R', click: () => focused()?.active.view.webContents.reload() },
         {
           label: 'Developer Tools for Tab',
           accelerator: mac ? 'Alt+Cmd+I' : 'Ctrl+Shift+I',
-          click: () => win?.active?.view.webContents.toggleDevTools(),
+          click: () => focused()?.active.view.webContents.toggleDevTools(),
         },
         { type: 'separator' },
         { role: 'resetZoom' },
@@ -307,15 +368,16 @@ function menu() {
     {
       label: 'Window',
       submenu: [
-        { label: 'Next Tab', accelerator: 'Ctrl+Tab', click: () => win?.cycle(1) },
-        { label: 'Previous Tab', accelerator: 'Ctrl+Shift+Tab', click: () => win?.cycle(-1) },
+        { label: 'Next Tab', accelerator: 'Ctrl+Tab', click: () => focused()?.cycle(1) },
+        { label: 'Previous Tab', accelerator: 'Ctrl+Shift+Tab', click: () => focused()?.cycle(-1) },
         ...Array.from({ length: 9 }, (_, i) => ({
           label: `Tab ${i + 1}`,
           accelerator: `CmdOrCtrl+${i + 1}`,
           visible: false,
           click: () => {
-            const t = i === 8 ? win?.tabs.at(-1) : win?.tabs[i]
-            if (t) win!.activate(t)
+            const w = focused()
+            const t = i === 8 ? w?.tabs.at(-1) : w?.tabs[i]
+            if (t) w!.activate(t)
           },
         })),
         { type: 'separator' },
@@ -358,7 +420,8 @@ async function openLink(link: string) {
     s = store.addServer(origin, new URL(origin).host)
     watch.refresh()
   }
-  showWindow().open(s, s.url + (path.startsWith('/') ? path : '/'))
+  const w = openServer(s)
+  if (path !== '/') w.route(s.url + (path.startsWith('/') ? path : '/' + path))
 }
 
 // ---- Start ----
@@ -366,11 +429,14 @@ async function openLink(link: string) {
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
-  app.setAsDefaultProtocolClient('hangar')
+  // Only an installed app claims hangar:// links: one run from a checkout
+  // would register the bare Electron binary as their handler.
+  if (app.isPackaged) app.setAsDefaultProtocolClient('hangar')
   app.on('second-instance', (_, argv) => {
     const link = argv.find((a) => a.startsWith('hangar://'))
     if (link) openLink(link)
-    else showWindow()
+    else if (windows.size === 0) showPicker()
+    else [...windows.values()][0].win.focus()
   })
   app.on('open-url', (e, link) => {
     e.preventDefault()
@@ -379,17 +445,24 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.on('before-quit', () => {
     quitting = true
-    win?.save()
   })
   app.on('window-all-closed', () => {
+    // On macOS the app stays in the menu bar with no window open, as Mail
+    // and Slack do; quitting is ⌘Q.
     if (process.platform !== 'darwin') app.quit()
   })
-  app.on('activate', () => showWindow())
+  app.on('activate', () => {
+    if (windows.size === 0 && !picker) showPicker()
+  })
 
   app.whenReady().then(() => {
     store.load()
     menu()
-    createWindow()
+    for (const saved of store.reopenable()) {
+      const s = store.server(saved.server)
+      if (s) openServer(s)
+    }
+    if (windows.size === 0) showPicker()
     tray = new Tray(trayIcon())
     tray.setToolTip('Hangar')
     updateTray()

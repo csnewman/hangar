@@ -141,6 +141,9 @@ body.bar {
 .tab.on { background: var(--bg); color: var(--text); }
 .tab img, .tab .ph { width: 14px; height: 14px; flex: none; border-radius: 3px; }
 .tab .ph { background: var(--accent); opacity: 0.8; }
+.tab .dot { margin: 0 3px; }
+/* The control panel is pinned first: as wide as its name, never closed. */
+.tab.panel { flex: 0 0 auto; min-width: 0; max-width: 200px; padding-right: 12px; font-weight: 600; }
 .tab .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab .server { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .tab .x {
@@ -218,6 +221,7 @@ body.bar {
 .result .name { font-weight: 600; }
 .result .where { margin-left: auto; font-size: 12px; color: var(--muted); }
 .result kbd { font: 11px ui-monospace, monospace; color: var(--muted); }
+.heading { padding: 10px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.03em; text-transform: uppercase; color: var(--muted); }
 .hint { padding: 6px 16px 10px; font-size: 11.5px; color: var(--muted); border-top: 1px solid var(--border); }
 
 /* ---- The home page ---- */
@@ -226,7 +230,7 @@ body.home {
   min-height: 100vh;
   background: var(--bg);
 }
-.home main { max-width: 980px; margin: 0 auto; padding: 28px 28px 64px; }
+.home main { max-width: 640px; margin: 0 auto; padding: 28px 28px 64px; }
 .home h1 { margin: 0 0 4px; font-size: 20px; }
 .home h2 { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 15px; }
 .home section { margin-top: 22px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
@@ -255,3 +259,16 @@ body.home {
 .error { margin-top: 8px; color: var(--bad); }
 .warning { margin-top: 8px; color: var(--busy); }
 .empty { padding: 40px 20px; text-align: center; }
+
+.server {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid var(--border);
+}
+.server:first-child { border-top: 0; }
+.server .who { flex: 1; min-width: 0; }
+.server .name { font-weight: 600; cursor: pointer; }
+.server .name:hover { color: var(--accent); }
+.server .buttons { display: flex; gap: 6px; }

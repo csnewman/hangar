@@ -1,5 +1,6 @@
-// What the app remembers between runs: the servers it knows and the tabs
-// that were open. It is a JSON file in the app's data directory, written
+// What the app remembers between runs: the servers it knows, and for each
+// server whose window was open, that window's environment tabs and where it
+// was on screen. It is a JSON file in the app's data directory, written
 // whole whenever it changes.
 
 import { app } from 'electron'
@@ -15,32 +16,39 @@ export interface Server {
   name: string
 }
 
-export interface SavedTab {
-  // server is the id of the server the tab shows, or null for the app's own
-  // home page.
-  server: string | null
-  url: string
+export interface Bounds {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+// SavedWindow is a server's window: the URL of each environment tab, in
+// order, which tab was in hand (0 is the control panel), and whether it was
+// closed rather than left open when the app quit.
+export interface SavedWindow {
+  server: string
+  tabs: string[]
+  active: number
+  bounds?: Bounds
+  closed?: boolean
 }
 
 interface State {
   servers: Server[]
-  tabs: SavedTab[]
-  active: number
-  bounds?: { x: number; y: number; width: number; height: number }
+  windows: SavedWindow[]
 }
 
 const file = () => join(app.getPath('userData'), 'state.json')
 
-let state: State = { servers: [], tabs: [], active: 0 }
+let state: State = { servers: [], windows: [] }
 
 export function load() {
   try {
     const s = JSON.parse(readFileSync(file(), 'utf8')) as Partial<State>
     state = {
       servers: Array.isArray(s.servers) ? s.servers : [],
-      tabs: Array.isArray(s.tabs) ? s.tabs : [],
-      active: typeof s.active === 'number' ? s.active : 0,
-      bounds: s.bounds,
+      windows: Array.isArray(s.windows) ? s.windows : [],
     }
   } catch {
     // First run, or a file that cannot be read: start empty.
@@ -58,7 +66,7 @@ export function servers(): Server[] {
   return state.servers
 }
 
-export function server(id: string | null): Server | undefined {
+export function server(id: string | null | undefined): Server | undefined {
   return state.servers.find((s) => s.id === id)
 }
 
@@ -80,35 +88,29 @@ export function addServer(url: string, name: string): Server {
   return s
 }
 
-export function renameServer(id: string, name: string) {
-  const s = server(id)
-  if (s) {
-    s.name = name
-    save()
-  }
-}
-
 export function removeServer(id: string) {
   state.servers = state.servers.filter((s) => s.id !== id)
-  state.tabs = state.tabs.filter((t) => t.server !== id)
+  state.windows = state.windows.filter((w) => w.server !== id)
   save()
 }
 
-export function savedTabs(): { tabs: SavedTab[]; active: number } {
-  return { tabs: state.tabs, active: state.active }
+export function savedWindows(): SavedWindow[] {
+  return state.windows.filter((w) => server(w.server))
 }
 
-export function saveTabs(tabs: SavedTab[], active: number) {
-  state.tabs = tabs
-  state.active = active
+export function savedWindow(serverId: string): SavedWindow | undefined {
+  return state.windows.find((w) => w.server === serverId)
+}
+
+// saveWindow records a server's window as it is. open says whether it is
+// to be reopened next run; its tabs and place are kept either way, for the
+// next time it is opened.
+export function saveWindow(w: SavedWindow, open: boolean) {
+  state.windows = state.windows.filter((x) => x.server !== w.server)
+  state.windows.push({ ...w, closed: !open })
   save()
 }
 
-export function bounds() {
-  return state.bounds
-}
-
-export function saveBounds(b: State['bounds']) {
-  state.bounds = b
-  save()
+export function reopenable(): SavedWindow[] {
+  return savedWindows().filter((w) => !w.closed)
 }

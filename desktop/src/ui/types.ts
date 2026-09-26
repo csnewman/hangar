@@ -22,13 +22,16 @@ export interface ServerInfo {
   username?: string
   ssh: boolean
   error?: string
+  // open is whether the server has a window open.
+  open: boolean
   environments: Env[]
 }
 
 export interface TabInfo {
   id: number
-  server: string | null
-  serverName: string | null
+  // panel is the server's control panel, the window's first tab.
+  panel: boolean
+  env?: string
   title: string
   favicon?: string
   loading: boolean
@@ -36,6 +39,8 @@ export interface TabInfo {
 }
 
 export interface AppState {
+  // server is the window's server, for a window's bar; null for the picker.
+  server: string | null
   tabs: TabInfo[]
   servers: ServerInfo[]
 }
@@ -47,12 +52,10 @@ export interface Bridge {
   activate(id: number): Promise<void>
   close(id: number): Promise<void>
   move(id: number, to: number): Promise<void>
-  newTab(server: string | null): Promise<void>
   overlay(open: boolean): Promise<void>
   onOverlay(fn: () => void): void
   addServer(url: string): Promise<{ ok?: boolean; error?: string; warning?: string }>
   removeServer(id: string): Promise<void>
-  renameServer(id: string, name: string): Promise<void>
   openServer(id: string): Promise<void>
   openEnv(server: string, env: string): Promise<void>
   act(server: string, env: string, action: 'start' | 'stop' | 'suspend'): Promise<void>
