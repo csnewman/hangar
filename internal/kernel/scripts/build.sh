@@ -3,7 +3,9 @@
 #
 # Inputs:  /cfg/hangar.config          the committed config fragment
 #          /cfg/hangar-$KARCH.config   its architecture-specific half
-#          KERNEL_VERSION KARCH JOBS
+#          /cfg/version                 the kernel version, unless
+#                                       KERNEL_VERSION names another
+#          KARCH JOBS
 # Outputs: /out/vmlinuz         raw Image (arm64) or bzImage (x86_64)
 #          /out/config          the resolved .config, for the record
 #
@@ -20,7 +22,7 @@ apt-get install -y -qq --no-install-recommends \
         build-essential flex bison libssl-dev libelf-dev bc kmod cpio rsync \
         zstd xz-utils curl ca-certificates python3-minimal patch >/dev/null
 
-: "${KERNEL_VERSION:?}"
+KERNEL_VERSION="${KERNEL_VERSION:-$(cat /cfg/version)}"
 : "${KARCH:?}"
 JOBS="${JOBS:-$(nproc)}"
 

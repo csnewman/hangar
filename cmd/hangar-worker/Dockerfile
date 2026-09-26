@@ -40,8 +40,11 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/csnewman/hang
 
 # ---------------------------------------------------------------- guest kernel
 FROM ${UBUNTU} AS kernel
-ARG KERNEL_VERSION=6.18.52
+# KERNEL_VERSION overrides internal/kernel/version, the version `hangar kernel`
+# builds too.
+ARG KERNEL_VERSION
 COPY internal/kernel/scripts/build.sh /scripts/build.sh
+COPY internal/kernel/version /cfg/version
 COPY internal/kernel/hangar.config internal/kernel/hangar-arm64.config internal/kernel/hangar-x86_64.config /cfg/
 COPY internal/kernel/patches/ /cfg/patches/
 RUN case "$(uname -m)" in aarch64) KARCH=arm64 ;; *) KARCH=x86_64 ;; esac \

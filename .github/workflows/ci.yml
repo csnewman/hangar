@@ -103,6 +103,22 @@ jobs:
           name: hangar-vscode
           path: vscode/*.vsix
 
+  kernel:
+    # Resolves the guest kernel's config on each architecture and checks every
+    # option the fragments ask for is built in. Compiling it takes the best
+    # part of an hour and happens in the worker image's build.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-26.04-arm, ubuntu-26.04]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - run: go run ./cmd/hangar kernel --config-only -o out/kernel -v
+
   fs:
     # hangar-fs needs nothing from the host at build time; running it needs a
     # monitor to connect to, which is not done here.

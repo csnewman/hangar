@@ -16,6 +16,7 @@ package kernel
 import (
 	"cmp"
 	"context"
+	_ "embed"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,8 +27,13 @@ import (
 
 // DefaultVersion is a longterm release, chosen over latest-stable because
 // environments are long lived and a kernel CVE should be a point release
-// rather than a series bump.
-const DefaultVersion = "6.18.52"
+// rather than a series bump. It is the file version beside this one, which
+// the worker image's build reads too, so the kernel `hangar kernel` builds
+// and the one the worker ships are the same.
+var DefaultVersion = strings.TrimSpace(versionFile)
+
+//go:embed version
+var versionFile string
 
 const builderImage = "ubuntu:26.04"
 
