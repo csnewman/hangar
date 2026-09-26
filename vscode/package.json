@@ -25,6 +25,12 @@
 		"ui"
 	],
 	"main": "./extension.js",
+	"capabilities": {
+		"untrustedWorkspaces": {
+			"supported": true
+		},
+		"virtualWorkspaces": true
+	},
 	"activationEvents": [
 		"onUri"
 	],
