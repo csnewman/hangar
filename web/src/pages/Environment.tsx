@@ -2,7 +2,6 @@ import {
   Activity,
   Code2,
   Copy,
-  Cpu,
   FileCode2,
   GitBranch,
   History,
@@ -29,8 +28,7 @@ import { Activity as AuditActivity } from '../components/Activity'
 
 const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: '', label: 'Summary', icon: LayoutDashboard, end: true },
-  { to: 'metrics', label: 'Metrics', icon: Activity },
-  { to: 'processes', label: 'Processes', icon: Cpu },
+  { to: 'performance', label: 'Performance', icon: Activity },
   { to: 'terminal', label: 'Terminal', icon: SquareTerminal },
   { to: 'code', label: 'Code', icon: FileCode2 },
   { to: 'editor', label: 'VS Code', icon: Code2 },

@@ -12,12 +12,11 @@ import { AccountPage } from './pages/Account'
 import { ConnectVSCodePage } from './pages/ConnectVSCode'
 import { ProfilePage } from './pages/Profile'
 import { AuditPage } from './pages/admin/Audit'
-import { ProcessesTab } from './pages/Processes'
+import { PerformanceTab } from './pages/Performance'
 import { UsersPage } from './pages/admin/Users'
 import { WorkersPage } from './pages/admin/Workers'
 import { EnvironmentPage, SummaryTab, ActivityTab } from './pages/Environment'
 import { LoginPage } from './pages/Login'
-import { MetricsTab } from './pages/Metrics'
 import { WorkerDetailPage } from './pages/admin/WorkerDetail'
 import { NewEnvironmentPage } from './pages/NewEnvironment'
 import { OverviewPage } from './pages/Overview'
@@ -75,7 +74,10 @@ const router = createBrowserRouter([
             element: <EnvironmentPage />,
             children: [
               { index: true, element: <SummaryTab /> },
-              { path: 'metrics', element: <MetricsTab /> },
+              { path: 'performance', element: <PerformanceTab /> },
+              // The sections Performance brings together, for links made to
+              // them.
+              { path: 'metrics', element: <Navigate to="../performance" replace /> },
               {
                 path: 'terminal',
                 // The terminal emulator is most of the UI's weight, so it is
@@ -89,7 +91,7 @@ const router = createBrowserRouter([
               },
               { path: 'editor', element: <EditorTab /> },
               { path: 'activity', element: <ActivityTab /> },
-              { path: 'processes', element: <ProcessesTab /> },
+              { path: 'processes', element: <Navigate to="../performance" replace /> },
               {
                 path: 'desktop',
                 // noVNC is fetched when a desktop is first opened.

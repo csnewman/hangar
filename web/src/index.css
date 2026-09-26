@@ -2364,3 +2364,8 @@ a.reason {
     transform: rotate(360deg);
   }
 }
+
+/* Performance: the charts and the process list, one under the other. */
+.metrics + .page-pad {
+  padding-top: 0;
+}
