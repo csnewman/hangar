@@ -316,19 +316,14 @@ func runVM(ctx context.Context, argv []string) error {
 
 	cfg.Agent = *agentPath
 	if cfg.Agent == "" {
-		built, err := image.BuildAgent(ctx, "linux/"+runtime.GOARCH, false)
-		if err != nil {
-			return fmt.Errorf("building the agent: %w", err)
-		}
 		// Kept with the machine: a resume boots with the same agent.
 		cfg.Agent = filepath.Join(dir, "hangar-agent")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
-		if err := os.Rename(filepath.Join(built, "hangar-agent"), cfg.Agent); err != nil {
-			return err
+		if err := image.BuildAgent(ctx, "linux/"+runtime.GOARCH, cfg.Agent, false); err != nil {
+			return fmt.Errorf("building the agent: %w", err)
 		}
-		os.RemoveAll(built)
 	}
 
 	// Guest memory has to be shared for virtio-fs, and shared memory gets
