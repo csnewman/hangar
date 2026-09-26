@@ -65,8 +65,10 @@ func pull(ctx context.Context, ref, dir, scratch string, auth map[string]Registr
 	if err != nil {
 		return "", err
 	}
+	// A registry on this machine is spoken to over plain HTTP, as one run
+	// for testing images before they are published is; any other over TLS.
 	resolver := docker.NewResolver(docker.ResolverOptions{
-		Hosts: docker.ConfigureDefaultRegistries(docker.WithAuthorizer(docker.NewDockerAuthorizer(
+		Hosts: docker.ConfigureDefaultRegistries(docker.WithPlainHTTP(docker.MatchLocalhost), docker.WithAuthorizer(docker.NewDockerAuthorizer(
 			docker.WithAuthCreds(func(host string) (string, string, error) {
 				a, ok := auth[host]
 				if !ok {
