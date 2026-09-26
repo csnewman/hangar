@@ -118,6 +118,13 @@ export class ServerWindow {
     this.bar.webContents.loadURL(ui('tabs.html'))
     this.win.contentView.addChildView(this.bar)
     this.win.on('resize', () => this.layout())
+    // Closing a window leaves the pages in its views running; they are
+    // ended with it. A tab moved to another window is not among them.
+    this.win.on('closed', () => {
+      for (const wc of [this.bar.webContents, ...this.tabs.map((t) => t.view.webContents)]) {
+        if (!wc.isDestroyed()) wc.close()
+      }
+    })
 
     this.panel = this.make({ kind: 'panel' }, server.url)
     this.tabs.push(this.panel)

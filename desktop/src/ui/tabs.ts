@@ -15,30 +15,52 @@ const mine = () => state.servers.find((s) => s.id === state.server)
 
 // ---- Tabs ----
 //
-// A tab is dragged as data only a bar of the same server accepts, so it can
-// move between that server's windows and nowhere else.
+// A tab is dragged by the pointer, not the browser's drag and drop: along
+// the bar it reorders as it goes, and off the bar it tears off into a window
+// of its own that follows the pointer, which the app places when it is let
+// go. The strip keeps the pointer for the whole drag, wherever it goes.
 
-const dragType = () => `application/x-hangar-tab-${state.server}`
-const carries = (e: DragEvent) => !!e.dataTransfer?.types.includes(dragType())
+type Drag = { id: number; x: number; y: number; moving: boolean; torn: boolean }
+let drag: Drag | null = null
 
-function dropAt(e: DragEvent, at: number) {
-  e.preventDefault()
-  const raw = e.dataTransfer?.getData(dragType())
-  if (!raw) return
-  const { window: from, id } = JSON.parse(raw) as { window: string; id: number }
-  if (from === state.window) h.move(id, at)
-  else h.adopt(from, id, at)
-}
+// How far the pointer moves before a press is a drag, and how far off the
+// bar a drag tears the tab off, in CSS pixels.
+const dragStart = 5
+const tearAway = 28
 
-strip.addEventListener('dragover', (e) => {
-  if (carries(e)) {
-    e.preventDefault()
-    e.dataTransfer!.dropEffect = 'move'
+strip.addEventListener('pointermove', (e) => {
+  if (!drag) return
+  if (!drag.moving) {
+    if (Math.hypot(e.clientX - drag.x, e.clientY - drag.y) < dragStart) return
+    drag.moving = true
+    document.body.classList.add('dragging')
   }
+  if (drag.torn) return
+  const bar = strip.getBoundingClientRect()
+  if (e.clientY < bar.top - tearAway || e.clientY > bar.bottom + tearAway) {
+    drag.torn = true
+    h.tear(drag.id)
+    return
+  }
+  // Along the bar: the tab takes the place of the one under the pointer.
+  const els = [...strip.querySelectorAll<HTMLElement>('.tab')]
+  const over = els.findIndex((el) => {
+    const r = el.getBoundingClientRect()
+    return e.clientX >= r.left && e.clientX < r.right
+  })
+  const from = state.tabs.findIndex((t) => t.id === drag!.id)
+  if (over >= 1 && over !== from) h.move(drag.id, over)
 })
-strip.addEventListener('drop', (e) => {
-  if (carries(e)) dropAt(e, state.tabs.length)
-})
+
+const endDrag = () => {
+  if (!drag) return
+  if (drag.torn) h.release()
+  drag = null
+  document.body.classList.remove('dragging')
+}
+strip.addEventListener('pointerup', endDrag)
+strip.addEventListener('pointercancel', endDrag)
+strip.addEventListener('lostpointercapture', endDrag)
 
 function renderTabs() {
   const server = mine()
@@ -55,14 +77,21 @@ function renderTabs() {
       label = esc(server?.name ?? t.title)
       el.title = `${server?.name ?? ''} — ${t.title}`
     } else {
+      // The page's title is "<environment> · <section>": the tab shows both,
+      // so tabs on the same environment tell apart.
+      const section = t.title.split(' · ')[1] ?? ''
       icon = `<span class="dot ${tone(env?.phase ?? '')}"></span>`
-      label = esc(env ? env.name : t.title)
-      el.title = env ? `${env.name} — ${env.phase}${env.reason ? ': ' + env.reason : ''}` : t.title
+      label = `${esc(env ? env.name : t.title.split(' · ')[0])}${section ? `<span class="section">${esc(section)}</span>` : ''}`
+      el.title = `${env ? env.name : t.title}${section ? ' · ' + section : ''}${env ? ` — ${env.phase}${env.reason ? ': ' + env.reason : ''}` : ''}`
     }
     const close = t.panel ? '' : '<button class="x" aria-label="Close tab">✕</button>'
     el.innerHTML = `${icon}<span class="title">${label}</span>${close}`
-    el.addEventListener('mousedown', (e) => {
-      if (e.button === 0 && !(e.target as HTMLElement).closest('.x')) h.activate(t.id)
+    el.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0 || (e.target as HTMLElement).closest('.x')) return
+      h.activate(t.id)
+      if (t.panel) return
+      drag = { id: t.id, x: e.clientX, y: e.clientY, moving: false, torn: false }
+      strip.setPointerCapture(e.pointerId)
     })
     el.addEventListener('contextmenu', (e) => {
       e.preventDefault()
@@ -76,28 +105,7 @@ function renderTabs() {
         e.stopPropagation()
         h.close(t.id)
       })
-      el.draggable = true
-      el.addEventListener('dragstart', (e) => {
-        e.dataTransfer!.setData(dragType(), JSON.stringify({ window: state.window, id: t.id }))
-        e.dataTransfer!.effectAllowed = 'move'
-      })
-      el.addEventListener('dragend', (e) => {
-        // Nothing took it: the app decides by where the pointer is.
-        if (e.dataTransfer?.dropEffect === 'none') h.dropped(t.id)
-      })
     }
-    el.addEventListener('dragover', (e) => {
-      if (carries(e)) {
-        e.preventDefault()
-        e.stopPropagation()
-        e.dataTransfer!.dropEffect = 'move'
-      }
-    })
-    el.addEventListener('drop', (e) => {
-      if (!carries(e)) return
-      e.stopPropagation()
-      dropAt(e, Math.max(1, i))
-    })
     strip.appendChild(el)
   })
   const add = document.createElement('button')

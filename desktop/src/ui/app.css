@@ -281,3 +281,10 @@ body.home {
 .server .name { font-weight: 600; cursor: pointer; }
 .server .name:hover { color: var(--accent); }
 .server .buttons { display: flex; gap: 6px; }
+
+/* While a tab is dragged. */
+body.dragging, body.dragging .tab { cursor: grabbing; }
+
+/* An environment tab's section, after its name: "proj-3 · Desktop". */
+.tab .section { margin-left: 6px; font-weight: 400; color: var(--muted); }
+.tab .section::before { content: '· '; }

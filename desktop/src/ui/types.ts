@@ -55,8 +55,8 @@ export interface Bridge {
   close(id: number): Promise<void>
   move(id: number, to: number): Promise<void>
   menu(id: number): Promise<void>
-  adopt(fromWindow: string, id: number, at: number): Promise<void>
-  dropped(id: number): Promise<void>
+  tear(id: number): Promise<void>
+  release(): Promise<void>
   overlay(open: boolean): Promise<void>
   onOverlay(fn: () => void): void
   addServer(url: string): Promise<{ ok?: boolean; error?: string; warning?: string }>

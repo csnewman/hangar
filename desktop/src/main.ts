@@ -128,6 +128,7 @@ function detach(from: ServerWindow, tab: Tab, at?: { x: number; y: number }) {
   const w = newWindow(from.server, { bounds })
   w.adopt(tab)
   w.win.focus()
+  closeIfEmptied(from)
 }
 
 // showPicker opens the window that picks or adds a server.
@@ -197,31 +198,60 @@ ipcMain.handle('tab:menu', (e, id: number) => {
   const t = w?.tab(id)
   if (w && t) Menu.buildFromTemplate(tabMenu(w, t)).popup({ window: w.win })
 })
-// tab:adopt is a tab dropped on this window's bar from another window of
-// the same server.
-ipcMain.handle('tab:adopt', (e, fromWindow: string, id: number, at: number) => {
-  const w = own(e)
-  const from = windows.find((x) => x.id === fromWindow)
-  const t = from?.tab(id)
-  if (w && from && t && from.server.id === w.server.id) w.adopt(t, at)
-})
-// tab:dropped is a tab dragged from its bar and dropped where nothing took
-// it. Over another window of its server it moves there; back on its own
-// bar it stays; anywhere else it becomes a window of its own.
-ipcMain.handle('tab:dropped', (e, id: number) => {
+// A tab dragged off its bar tears off into a window of its own at once,
+// and the window follows the pointer until it is let go: over another
+// window's bar of the same server the tab joins that window, and anywhere
+// else its new window stays where it was dropped. The bar that started the
+// drag keeps the pointer throughout, and says when it is let go.
+let tearing: { tab: Tab; win: ServerWindow; from: ServerWindow; timer: NodeJS.Timeout } | null = null
+
+ipcMain.handle('tab:tear', (e, id: number) => {
   const w = own(e)
   const t = w?.tab(id)
-  if (!w || !t || t === w.panel) return
+  if (!w || !t || t === w.panel || tearing) return
   const at = screen.getCursorScreenPoint()
-  const inside = (b: Electron.Rectangle) => at.x >= b.x && at.x < b.x + b.width && at.y >= b.y && at.y < b.y + b.height
-  const bar = w.win.getContentBounds()
-  if (inside({ ...bar, height: barHeight })) return
-  const into = windows.find((x) => x !== w && x.server.id === w.server.id && inside(x.win.getBounds()))
-  if (into) {
-    into.adopt(t)
-    into.win.focus()
-  } else detach(w, t, at)
+  const [width, height] = w.win.getSize()
+  // The tab sits under the pointer in its new window's bar.
+  const dx = 150
+  const dy = barHeight / 2
+  const win = newWindow(w.server, { bounds: { x: at.x - dx, y: at.y - dy, width, height } })
+  win.adopt(t)
+  const timer = setInterval(() => {
+    const p = screen.getCursorScreenPoint()
+    win.win.setPosition(Math.round(p.x - dx), Math.round(p.y - dy))
+  }, 16)
+  tearing = { tab: t, win, from: w, timer }
 })
+
+ipcMain.handle('tab:release', (e) => {
+  own(e)
+  if (!tearing) return
+  const { tab, win, from, timer } = tearing
+  tearing = null
+  clearInterval(timer)
+  const at = screen.getCursorScreenPoint()
+  const onBar = (x: ServerWindow) => {
+    const b = x.win.getContentBounds()
+    return at.x >= b.x && at.x < b.x + b.width && at.y >= b.y - 8 && at.y < b.y + barHeight + 16
+  }
+  const into = windows.find((x) => x !== win && x.server.id === win.server.id && onBar(x))
+  if (into) {
+    into.adopt(tab)
+    into.win.focus()
+  } else {
+    win.win.focus()
+  }
+  closeIfEmptied(win)
+  closeIfEmptied(from)
+})
+
+// closeIfEmptied closes a window whose environment tabs have all gone
+// elsewhere, when its server has another window: it has nothing left the
+// other does not.
+function closeIfEmptied(w: ServerWindow) {
+  if (w.tabs.length === 1 && windows.some((x) => x !== w && x.server.id === w.server.id)) w.win.close()
+}
+
 ipcMain.handle('overlay', (e, open: boolean) => own(e)?.setOverlay(open))
 ipcMain.handle('server:add', async (e, input: string) => {
   own(e)
