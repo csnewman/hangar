@@ -47,8 +47,11 @@ export function ConnectVSCodePage() {
       return api.createToken(`${target!.editor}, ${day}`, 365)
     },
     onSuccess: (t) => {
+      // The editor's own parameters stay: windowId sends the link to the
+      // window that asked to sign in.
       const url = new URL(target!.url)
-      url.search = new URLSearchParams({ token: t.token, state }).toString()
+      url.searchParams.set('token', t.token)
+      url.searchParams.set('state', state)
       window.location.assign(url.toString())
     },
   })
