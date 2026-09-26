@@ -210,6 +210,11 @@ h1 {
   border-top: 1px solid var(--border);
 }
 
+.sidebar-foot > .side-link {
+  margin-bottom: 4px;
+  color: var(--muted);
+}
+
 .side-nav {
   margin-bottom: 6px;
 }

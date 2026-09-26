@@ -4,6 +4,7 @@ import {
   History,
   LayoutGrid,
   LayoutTemplate,
+  MonitorUp,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -12,9 +13,10 @@ import {
   Users,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
-import { Link, NavLink } from 'react-router'
+import { Link, NavLink, useLocation } from 'react-router'
 
 import type { Environment } from '../api'
+import { desktop } from '../desktop'
 import { useMe } from '../session'
 import { splitByOwner, useEnvironments } from '../environments'
 import { Logo } from './Logo'
@@ -53,6 +55,7 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
           )}
         </div>
         <div className="sidebar-foot">
+          <OpenInDesktop collapsed />
           <UserMenu collapsed />
         </div>
       </aside>
@@ -129,6 +132,7 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
         )}
       </div>
       <div className="sidebar-foot">
+        <OpenInDesktop />
         <UserMenu />
       </div>
     </aside>
@@ -156,6 +160,28 @@ function SidebarHead({ collapsed = false, onToggle }: { collapsed?: boolean; onT
         {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
       </button>
     </div>
+  )
+}
+
+// OpenInDesktop opens this page in the Hangar desktop app: a hangar:// link
+// naming this server and page, which the app opens in this server's window
+// -- an environment's page in that environment's tab. It is not shown
+// inside the app.
+function OpenInDesktop({ collapsed = false }: { collapsed?: boolean }) {
+  const { pathname, search } = useLocation()
+  if (desktop) return null
+  const q = new URLSearchParams({ server: window.location.origin, path: pathname + search })
+  const label = 'Open in desktop app'
+  return (
+    <a
+      href={`hangar://open?${q}`}
+      className={collapsed ? 'side-link side-icon' : 'side-link'}
+      title={collapsed ? label : 'Opens this page in the Hangar desktop app, if it is installed'}
+      aria-label={label}
+    >
+      <MonitorUp size={collapsed ? 17 : 16} />
+      {!collapsed && <span>{label}</span>}
+    </a>
   )
 }
 
