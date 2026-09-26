@@ -5,3 +5,4 @@ no-builtin-copilot.diff
 trusted-folders.diff
 terminal-default-profile.diff
 no-remote-indicator.diff
+revalidate-static.diff

@@ -1,0 +1,35 @@
+diff --git a/src/vs/server/node/remoteExtensionHostAgentServer.ts b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+index 72273fb..27a0545 100644
+--- a/src/vs/server/node/remoteExtensionHostAgentServer.ts
++++ b/src/vs/server/node/remoteExtensionHostAgentServer.ts
+@@ -177,10 +177,11 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
+ 
+ 			const requestOrigin = req.headers['origin'];
+ 			const responseHeaders = getRemoteResourceResponseHeaders(requestOrigin, origin => this._webEndpointOriginChecker.matches(origin));
++			// Hangar: built-in extensions, Hangar's among them, change with
++			// the build under the same path, so only installed extensions,
++			// whose path names their version, are kept for a year.
+ 			if (this._environmentService.isBuilt) {
+-				if (isEqualOrParent(filePath, this._environmentService.builtinExtensionsPath, !platform.isLinux)
+-					|| isEqualOrParent(filePath, this._environmentService.extensionsPath, !platform.isLinux)
+-				) {
++				if (isEqualOrParent(filePath, this._environmentService.extensionsPath, !platform.isLinux)) {
+ 					responseHeaders['Cache-Control'] = 'public, max-age=31536000';
+ 				}
+ 			}
+diff --git a/src/vs/server/node/webClientServer.ts b/src/vs/server/node/webClientServer.ts
+index 2d860ab..1bb31cb 100644
+--- a/src/vs/server/node/webClientServer.ts
++++ b/src/vs/server/node/webClientServer.ts
+@@ -221,7 +221,10 @@ export class WebClientServer {
+ 			return serveError(req, res, 400, `Bad request.`);
+ 		}
+ 
+-		return serveFile(filePath, this._environmentService.isBuilt ? CacheControl.NO_EXPIRY : CacheControl.ETAG, this._logService, req, res, headers);
++		// Hangar: the static route is named after the upstream commit, which
++		// stays the same when Hangar's build of it changes, so browsers
++		// revalidate rather than keep a file for a year.
++		return serveFile(filePath, CacheControl.ETAG, this._logService, req, res, headers);
+ 	}
+ 
+ 	private _getResourceURLTemplateAuthority(uri: URI): string | undefined {
