@@ -36,6 +36,15 @@ vm:
   # Environments map their base's files from this machine's page cache
   # through a DAX window of this size, rather than each keeping a copy.
   dax_mib: 1024
+  # Environments whose template asks for a virtual GPU get OpenGL; with
+  # venus, Vulkan too, which the worker image's virglrenderer supports.
+  # venus_restore carries a Vulkan program across a suspend (experimental;
+  # without it the program ends on resume, as on losing a real GPU).
+  # window_mib sizes the window GPU resources are mapped through.
+  # gpu:
+  #   venus: true
+  #   venus_restore: false
+  #   window_mib: 512
   # Images are pulled from their registries the first time an environment
   # needs them, and unpacked into storage.images as a root filesystem, which
   # environments are served over virtio-fs. A private registry needs

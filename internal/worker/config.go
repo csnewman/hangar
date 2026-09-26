@@ -72,6 +72,8 @@ type VMConfig struct {
 	// base's files from this machine's page cache. 0 serves the base over
 	// virtio-fs without one.
 	DaxMiB int `yaml:"dax_mib"`
+	// GPU is what an environment with a virtual GPU gets on this machine.
+	GPU VMGPU `yaml:"gpu"`
 	// Images maps an image reference a template may name to a local copy
 	// this machine takes it from into its store. Every other reference is
 	// pulled from its registry.
@@ -79,6 +81,22 @@ type VMConfig struct {
 	// Registries signs pulls in to registries, by host (ghcr.io,
 	// registry-1.docker.io, ...). Others are pulled from anonymously.
 	Registries map[string]RegistryAuth `yaml:"registries"`
+}
+
+// VMGPU is how this machine gives environments a virtual GPU. Which of them
+// can be offered depends on the host's renderer, so it is the machine's to
+// say rather than a template's.
+type VMGPU struct {
+	// Venus offers Vulkan through the host's renderer as well as OpenGL. It
+	// needs a virglrenderer built with Venus.
+	Venus bool `yaml:"venus"`
+	// VenusRestore carries a program's Vulkan state across a suspend, by
+	// recording what replaying it takes. Without it a Vulkan program ends
+	// on resume, as it would on losing a real GPU. Experimental.
+	VenusRestore bool `yaml:"venus_restore"`
+	// WindowMiB sizes the window the guest maps GPU resources into, which
+	// Venus and zero-copy buffers need. 0 is 512.
+	WindowMiB int `yaml:"window_mib"`
 }
 
 // VMImage is a local copy of an image: its root filesystem, a directory,

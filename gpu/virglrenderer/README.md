@@ -34,8 +34,8 @@ the replay is proven only on lavapipe, so nothing is recorded unless
 `VKR_RECORD` is set in the environment the render server inherits. Without it
 every command is dispatched untouched and a snapshot is refused.
 
-`hangar-gpu --venus-restore` sets it, and `hangar run -gpu-venus-restore`
-passes that flag. Without it a suspended Venus context is not carried: on
+`hangar-gpu --venus-restore` sets it, and a worker passes that flag when its
+configuration has `vm.gpu.venus_restore`. Without it a suspended Venus context is not carried: on
 resume `hangar-gpu` marks the context's rings fatal and the guest's Vulkan
 driver ends the program, which is the device-lost behaviour a real GPU gives.
 

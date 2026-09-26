@@ -31,6 +31,12 @@ vm:
   # VS Code's server, built by `editor/build.sh` in this VM.
   editor: /Users/csnewman/Projects/hangar/out/editor/editor-arm64.ext4
   dax_mib: 1024
+  # Environments with a virtual GPU get Vulkan too: this VM's virglrenderer
+  # is built with Venus (AGENTS.md). venus_restore carries a Vulkan program
+  # across a suspend, and is experimental.
+  gpu:
+    venus: true
+    venus_restore: false
   images:
     # Each image's root filesystem, served over virtio-fs. Built in this VM,
     # both tiers of a distribution at once, by

@@ -85,6 +85,12 @@ type Config struct {
 	// DaxMiB sizes the window a virtio-fs base is mapped through. Zero
 	// reads every file through the backend instead.
 	DaxMiB int
+	// GPUVenus offers an environment with a virtual GPU Vulkan as well as
+	// OpenGL, and GPUVenusRestore carries its Vulkan state across a suspend.
+	GPUVenus, GPUVenusRestore bool
+	// GPUWindowMiB sizes the window such an environment maps GPU resources
+	// into.
+	GPUWindowMiB int
 	// BootTimeout is how long an agent has to dial back after the monitor
 	// starts.
 	BootTimeout time.Duration
@@ -97,6 +103,9 @@ func (c *Config) defaults() {
 	}
 	if c.DockerGiB == 0 {
 		c.DockerGiB = 24
+	}
+	if c.GPUWindowMiB == 0 {
+		c.GPUWindowMiB = 512
 	}
 	if c.BootTimeout == 0 {
 		c.BootTimeout = 3 * time.Minute
