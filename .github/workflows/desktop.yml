@@ -50,8 +50,9 @@ jobs:
           cache: npm
           cache-dependency-path: desktop/package-lock.json
       - run: npm ci
-      # The tag names the version, desktop-v1.2.3 being 1.2.3.
-      - run: npm version --no-git-tag-version "${GITHUB_REF_NAME#desktop-v}"
+      # The tag names the version, desktop-v1.2.3 being 1.2.3, which may be
+      # the one package.json already has.
+      - run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#desktop-v}"
         shell: bash
       - run: npm run dist -- ${{ matrix.args }}
       - uses: actions/upload-artifact@v4
