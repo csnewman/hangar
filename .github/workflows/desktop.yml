@@ -86,3 +86,35 @@ jobs:
         with:
           name: Hangar desktop ${{ github.ref_name }}
           files: out/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cask
+          path: out/hangar.rb
+
+  # The release's cask, into the tap (csnewman/homebrew-hangar) that
+  # `brew tap csnewman/hangar` reads. The token writes to that repository
+  # alone, and is an environment secret: only a job naming the homebrew
+  # environment, run from a desktop-v* tag, is given it. It commits through
+  # the API, so GitHub signs the commit.
+  tap:
+    needs: release
+    runs-on: ubuntu-26.04
+    environment: homebrew
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cask
+      - env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -eu
+          path=repos/csnewman/homebrew-hangar/contents/Casks/hangar.rb
+          # Updating a file names the blob it replaces; the first release
+          # creates it.
+          sha=$(gh api "$path" --jq .sha 2>/dev/null || true)
+          gh api -X PUT "$path" \
+            -f message="hangar ${GITHUB_REF_NAME#desktop-v}" \
+            -f content="$(base64 -w0 hangar.rb)" \
+            ${sha:+-f sha="$sha"} \
+            --jq '.commit.html_url'

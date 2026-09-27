@@ -77,9 +77,16 @@ Homebrew cask does itself.
 
 Pushing a tag `desktop-v<version>` builds installers for macOS (arm64 and
 x64), Linux (AppImage, deb) and Windows, and attaches them to a GitHub
-release with `hangar.rb`, the Homebrew cask for that release. To publish
-it, copy `hangar.rb` into `Casks/` of a tap repository named
-`homebrew-hangar`; then
+release with `hangar.rb`, the Homebrew cask for that release. The workflow
+then writes the cask into the tap, `csnewman/homebrew-hangar`, so
 
     brew tap csnewman/hangar
     brew install --cask hangar
+
+installs the newest release, and `brew upgrade --cask hangar` moves to the
+next.
+
+The tap is written with a fine-grained token that can write to that
+repository alone, kept as `HOMEBREW_TAP_TOKEN` in the `homebrew`
+environment, which only `desktop-v*` tags may deploy to; only admins may
+push those tags. The token expires: renew it there when it does.

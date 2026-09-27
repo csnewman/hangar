@@ -1,6 +1,6 @@
 # The Homebrew cask for the desktop app. CI fills in the version and
-# checksums for each release (desktop-v*) and attaches the result to it as
-# hangar.rb; copy that into a tap's Casks/ to publish it:
+# checksums for each release (desktop-v*), attaches the result to it as
+# hangar.rb, and writes it into the tap, csnewman/homebrew-hangar:
 #
 #   brew tap csnewman/hangar
 #   brew install --cask hangar
@@ -16,15 +16,14 @@ cask "hangar" do
   desc "Desktop control panel for Hangar development environments"
   homepage "https://github.com/csnewman/hangar"
 
-  depends_on macos: ">= :big_sur"
+  depends_on :macos
 
   app "Hangar.app"
 
   # The app is ad-hoc signed, not notarized, so macOS would refuse to open
   # it from a download; the flag that makes it do so is cleared here.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/Hangar.app"]
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/Hangar.app"]
   end
 
   zap trash: [
