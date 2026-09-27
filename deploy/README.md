@@ -31,8 +31,8 @@ TCP), 443, 80 and 2222 open, and a DNS zone delegated to it (below).
 
 ## DNS and TLS
 
-Each environment's editor is served on its own name, `e-<id>.<host>`, so
-Hangar needs every name under its host and a certificate for all of them. A
+Each environment's editor is served on its own name, `e-<id>.<host>`, and
+the registry on `registry.<host>`, so Hangar needs every name under its host and a certificate for all of them. A
 wildcard certificate is only issued against ACME's DNS-01 challenge, which
 means writing TXT records into the zone, so `hangar-server` is the zone's
 authoritative DNS server: every name in it resolves to the control plane,
@@ -71,6 +71,29 @@ To use a TLS terminator and DNS of your own instead, set
 `HANGAR_DNS_LISTEN`, `HANGAR_TLS_LISTEN` and `HANGAR_REDIRECT_LISTEN` to
 empty and put it in front of `HANGAR_LISTEN`; it then needs a certificate
 for both `<host>` and `*.<host>`.
+
+## The registry
+
+The control plane is also a container registry, at `registry.<host>`,
+covered by the same DNS and certificate as every other name under it:
+
+    docker login registry.hangar.example.com -u <username>
+    docker push registry.hangar.example.com/<username>/<image>:<tag>
+
+The password is one of the user's access tokens (Account, then Access
+tokens). Each user pushes to their own namespace, their username in lower
+case, and to the namespace of any team they are a member or admin of; a
+repository is made private on its first push, and its owner shares it with
+people, teams or everyone on the Images page. Name an image there in a
+template and workers pull it through the control plane with their own
+credential: they need no `vm.registries` entry for it, and nothing in
+their network reaches the registry's name. A template may name only images
+whoever saves it can pull.
+
+Blobs are kept in `HANGAR_REGISTRY_DIR` (the `registry` volume), and
+everything else about them in Postgres, so every replica of the control
+plane must share that directory. Setting it to empty turns the registry
+off.
 
 ## SSH
 

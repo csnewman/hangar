@@ -139,6 +139,103 @@ CREATE TABLE template_team_collaborators (
 
 CREATE INDEX template_team_collaborators_team ON template_team_collaborators (team_id);
 
+-- Image repositories in Hangar's own registry, named <namespace>/<name>
+-- where the namespace is the owner's: a user's username, lowercased, or a
+-- team's slug. Exactly one of owner_id and team_id is set, and it does not
+-- change, since the path names it. Permissions follow templates': a private
+-- repository is pulled by its owner, the owning team's members of any role
+-- and its collaborators; pushed to by the owner, the team's members and
+-- admins, collaborating users and collaborating teams' members and admins;
+-- and deleted by the owner or the team's admins.
+CREATE TABLE image_repositories (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    path        text NOT NULL UNIQUE,
+    owner_id    uuid REFERENCES users (id),
+    team_id     uuid REFERENCES teams (id),
+    CHECK ((owner_id IS NULL) <> (team_id IS NULL)),
+    visibility  text NOT NULL DEFAULT 'private' CHECK (visibility IN ('private', 'shared')),
+    description text NOT NULL DEFAULT '',
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX image_repositories_owner ON image_repositories (owner_id);
+CREATE INDEX image_repositories_team ON image_repositories (team_id);
+
+CREATE TABLE image_repository_collaborators (
+    repository_id uuid NOT NULL REFERENCES image_repositories (id) ON DELETE CASCADE,
+    user_id       uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    PRIMARY KEY (repository_id, user_id)
+);
+
+CREATE TABLE image_repository_team_collaborators (
+    repository_id uuid NOT NULL REFERENCES image_repositories (id) ON DELETE CASCADE,
+    team_id       uuid NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
+    PRIMARY KEY (repository_id, team_id)
+);
+
+-- The registry's blobs, by digest. Their bytes are files in the server's
+-- registry directory; a blob is kept once however many repositories have it.
+CREATE TABLE registry_blobs (
+    digest     text PRIMARY KEY,
+    size       bigint NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Which repositories have a blob: one pushed to it, or mounted into it from
+-- another. A repository serves only its own, so a digest learnt elsewhere
+-- does not reach a blob the caller may not pull.
+CREATE TABLE image_repository_blobs (
+    repository_id uuid NOT NULL REFERENCES image_repositories (id) ON DELETE CASCADE,
+    digest        text NOT NULL REFERENCES registry_blobs (digest),
+    PRIMARY KEY (repository_id, digest)
+);
+
+CREATE TABLE image_manifests (
+    repository_id uuid NOT NULL REFERENCES image_repositories (id) ON DELETE CASCADE,
+    digest        text NOT NULL,
+    media_type    text NOT NULL,
+    -- For the referrers API: what the manifest is, and what it refers to.
+    artifact_type text NOT NULL DEFAULT '',
+    subject       text,
+    -- Annotations, kept as the manifest has them, for referrers.
+    annotations   jsonb,
+    content       bytea NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (repository_id, digest)
+);
+
+CREATE INDEX image_manifests_subject ON image_manifests (repository_id, subject) WHERE subject IS NOT NULL;
+
+-- What each manifest names: its config and layers, or the manifests of an
+-- index. A blob or manifest named here is not deleted from under it.
+CREATE TABLE image_manifest_refs (
+    repository_id uuid NOT NULL,
+    digest        text NOT NULL,
+    ref           text NOT NULL,
+    PRIMARY KEY (repository_id, digest, ref),
+    FOREIGN KEY (repository_id, digest) REFERENCES image_manifests (repository_id, digest) ON DELETE CASCADE
+);
+
+CREATE INDEX image_manifest_refs_ref ON image_manifest_refs (repository_id, ref);
+
+CREATE TABLE image_tags (
+    repository_id uuid NOT NULL,
+    tag           text NOT NULL,
+    digest        text NOT NULL,
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (repository_id, tag),
+    FOREIGN KEY (repository_id, digest) REFERENCES image_manifests (repository_id, digest) ON DELETE CASCADE
+);
+
+-- Uploads in progress. Their bytes so far are a file in the registry
+-- directory; an upload left unfinished is removed after a day.
+CREATE TABLE registry_uploads (
+    id            uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    repository_id uuid NOT NULL REFERENCES image_repositories (id) ON DELETE CASCADE,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE environments (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     -- A user who owns environments cannot be deleted; disable them instead,

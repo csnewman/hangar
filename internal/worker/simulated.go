@@ -244,6 +244,9 @@ func (s *Simulated) Images() []api.LocalImage {
 	return out
 }
 
+// UseRegistry is nothing to the pretend store, which pulls nothing.
+func (s *Simulated) UseRegistry(host, url, credential string) {}
+
 // simDigest is the pretend digest of the one copy of ref the pretend store
 // holds.
 func simDigest(ref string) string {

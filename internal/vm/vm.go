@@ -654,6 +654,11 @@ func (r *Runtime) Images() []api.LocalImage {
 	return imgs
 }
 
+// UseRegistry says where Hangar's own registry is (see ImageStore.UseRegistry).
+func (r *Runtime) UseRegistry(host, url, credential string) {
+	r.store.UseRegistry(host, url, credential)
+}
+
 // RemoveImage deletes a copy of an image, unless an environment on this
 // worker still uses it -- stopped or not, since starting it again boots
 // from that copy.

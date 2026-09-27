@@ -241,7 +241,15 @@ type DesiredSet struct {
 	// has no record of, which it should power off and delete, disks and
 	// all.
 	RemoveEnvironments []string `json:"remove_environments"`
+	// Registry is the host of Hangar's own registry, when it has one. An
+	// image named on it is pulled through the server's worker API, at
+	// RegistryPath, with the worker's own credential.
+	Registry string `json:"registry,omitempty"`
 }
+
+// RegistryPath is where the server serves its registry to workers: the
+// distribution API's /v2/ is beneath it.
+const RegistryPath = "/api/worker/v1/registry"
 
 // EnvironmentSpec is one environment as a worker needs to see it.
 type EnvironmentSpec struct {

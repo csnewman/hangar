@@ -64,6 +64,11 @@ services:
       # <environment>@<host> -p 2222. Empty turns it off.
       HANGAR_SSH_LISTEN: ${HANGAR_SSH_LISTEN-:2222}
       HANGAR_SSH_ADDRESS: ${HANGAR_SSH_ADDRESS:-}
+      # Hangar's own container registry, at registry.<HANGAR_PUBLIC_URL's
+      # host>. Empty turns it off.
+      HANGAR_REGISTRY_DIR: ${HANGAR_REGISTRY_DIR-/var/lib/hangar-server/registry}
+    volumes:
+      - registry:/var/lib/hangar-server/registry
     secrets: [bootstrap-token, secret-key]
     ports:
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/udp
@@ -131,3 +136,4 @@ secrets:
 
 volumes:
   pgdata:
+  registry:

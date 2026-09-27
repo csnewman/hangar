@@ -36,6 +36,9 @@ export type TeamRole = Schemas['TeamRole']
 export type TeamMember = Schemas['TeamMember']
 export type CreateTeam = Schemas['CreateTeam']
 export type TeamInput = Schemas['TeamInput']
+export type ImageRepository = Schemas['ImageRepository']
+export type ImageTag = Schemas['ImageTag']
+export type ImageRepositoryInput = Schemas['ImageRepositoryInput']
 export type Template = Schemas['Template']
 export type TemplateInput = Schemas['TemplateInput']
 export type Visibility = Schemas['Visibility']
@@ -137,6 +140,16 @@ export const api = {
   setCollaborators: (id: string, user_ids: string[], team_ids: string[]) =>
     unwrap(client.PUT('/api/frontend/templates/{id}/collaborators', { ...byID(id), body: { user_ids, team_ids } })),
   people: () => unwrap(client.GET('/api/frontend/people')),
+
+  images: () => unwrap(client.GET('/api/frontend/images')),
+  image: (id: string) => unwrap(client.GET('/api/frontend/images/{id}', byID(id))),
+  updateImage: (id: string, body: ImageRepositoryInput) =>
+    unwrap(client.PATCH('/api/frontend/images/{id}', { ...byID(id), body })),
+  deleteImage: (id: string) => unwrap(client.DELETE('/api/frontend/images/{id}', byID(id))),
+  setImageCollaborators: (id: string, user_ids: string[], team_ids: string[]) =>
+    unwrap(client.PUT('/api/frontend/images/{id}/collaborators', { ...byID(id), body: { user_ids, team_ids } })),
+  deleteImageTag: (id: string, tag: string) =>
+    unwrap(client.DELETE('/api/frontend/images/{id}/tags/{tag}', { params: { path: { id, tag } } })),
 
   teams: () => unwrap(client.GET('/api/frontend/teams')),
   team: (id: string) => unwrap(client.GET('/api/frontend/teams/{id}', byID(id))),

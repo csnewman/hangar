@@ -28,6 +28,7 @@ import (
 	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/profile"
+	"github.com/csnewman/hangar/internal/registry"
 	"github.com/csnewman/hangar/internal/teams"
 	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/users"
@@ -42,6 +43,10 @@ type Config struct {
 	Environments *environments.Manager
 	Templates    *templates.Manager
 	Teams        *teams.Manager
+	// Registry is Hangar's own registry, and RegistryHost its host; nil
+	// when the server runs none.
+	Registry     *registry.Registry
+	RegistryHost string
 	Workers      *workers.Manager
 	Users        *users.Manager
 	Profiles     *profile.Store
@@ -61,15 +66,17 @@ type Config struct {
 }
 
 type handler struct {
-	envs      *environments.Manager
-	templates *templates.Manager
-	teams     *teams.Manager
-	workers   *workers.Manager
-	users     *users.Manager
-	profiles  *profile.Store
-	audit     *audit.Log
-	tunnels   Tunnels
-	editors   Editors
+	envs         *environments.Manager
+	templates    *templates.Manager
+	teams        *teams.Manager
+	registry     *registry.Registry
+	registryHost string
+	workers      *workers.Manager
+	users        *users.Manager
+	profiles     *profile.Store
+	audit        *audit.Log
+	tunnels      Tunnels
+	editors      Editors
 	// autoSignIn is Config.AutoSignIn.
 	autoSignIn string
 	ssh        *SSHGateway
@@ -93,7 +100,8 @@ func New(cfg Config) (http.Handler, error) {
 		return nil, err
 	}
 
-	h := &handler{envs: cfg.Environments, templates: cfg.Templates, teams: cfg.Teams, workers: cfg.Workers, users: cfg.Users,
+	h := &handler{envs: cfg.Environments, templates: cfg.Templates, teams: cfg.Teams,
+		registry: cfg.Registry, registryHost: cfg.RegistryHost, workers: cfg.Workers, users: cfg.Users,
 		profiles: cfg.Profiles, audit: cfg.Audit, tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, ssh: cfg.SSH, log: cfg.Log}
 	strict := NewStrictHandlerWithOptions(h, []StrictMiddlewareFunc{rules.enforce}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {

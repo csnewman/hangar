@@ -46,6 +46,15 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test -race ./...
+      # Hangar's own registry, through a real server, against the OCI
+      # distribution-spec conformance suite. The registry is a subdomain of
+      # the server's host, so both names are this machine.
+      - name: Registry conformance
+        run: |
+          echo "127.0.0.1 hangar.test registry.hangar.test" | sudo tee -a /etc/hosts
+          PGPASSWORD=hangar createdb -h localhost -U hangar conformance
+          HANGAR_DATABASE_URL=postgres://hangar:hangar@localhost:5432/conformance?sslmode=disable \
+            dev/registry-conformance.sh
       # A function no program or test reaches is one a refactor left behind.
       # deadcode reports them and exits 0 either way, so any output fails.
       - name: Check for unreachable code

@@ -71,8 +71,10 @@ type Team struct {
 	// Members is filled in by Get only; List gives MemberCount.
 	Members     []MemberOf
 	MemberCount int
-	// Templates is how many templates the team owns.
+	// Templates and Images are how many templates and image repositories
+	// the team owns.
 	Templates int
+	Images    int
 	// Role is the caller's role in the team, empty if they are not in it.
 	Role Role
 	// CanManage is whether the caller may change the team and its members:
@@ -103,12 +105,13 @@ const (
 const columns = `t.id, t.slug, t.name, t.description, t.created_at,
 	(SELECT count(*) FROM team_members m WHERE m.team_id = t.id),
 	(SELECT count(*) FROM templates x WHERE x.team_id = t.id),
+	(SELECT count(*) FROM image_repositories x WHERE x.team_id = t.id),
 	coalesce(` + myRole + `, ''), coalesce(` + canManage + `, false)`
 
 func scan(row pgx.Row) (Team, error) {
 	var t Team
 	err := row.Scan(&t.ID, &t.Slug, &t.Name, &t.Description, &t.CreatedAt, &t.MemberCount, &t.Templates,
-		&t.Role, &t.CanManage)
+		&t.Images, &t.Role, &t.CanManage)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return t, ErrNotFound
 	}
@@ -250,7 +253,8 @@ func (m *Manager) Update(ctx context.Context, p users.Principal, id string, in I
 	return t, err
 }
 
-// Delete removes a team that owns nothing. Only server administrators may.
+// Delete removes a team that owns nothing: no templates and no image
+// repositories. Only server administrators may.
 func (m *Manager) Delete(ctx context.Context, p users.Principal, id string) error {
 	if !db.ValidUUID(id) {
 		return ErrNotFound
@@ -265,6 +269,9 @@ func (m *Manager) Delete(ctx context.Context, p users.Principal, id string) erro
 		}
 		if cur.Templates > 0 {
 			return fmt.Errorf("%w: the team owns %d templates; move or delete them first", ErrConflict, cur.Templates)
+		}
+		if cur.Images > 0 {
+			return fmt.Errorf("%w: the team owns %d image repositories; delete them first", ErrConflict, cur.Images)
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM teams WHERE id = $1`, id); err != nil {
 			return err

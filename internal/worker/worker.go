@@ -48,6 +48,11 @@ type ImageStore interface {
 	// environment uses it. It is asked again on every desired set until the
 	// copy is gone, so it must be idempotent.
 	RemoveImage(c api.ImageCopy)
+	// UseRegistry says where Hangar's own registry is: images named on host
+	// are pulled from url, the distribution API's /v2/ being beneath it,
+	// signing in with the worker's credential. An empty host means there is
+	// none.
+	UseRegistry(host, url, credential string)
 }
 
 // TerminalDialer is a runtime whose environments have terminals. The
@@ -187,6 +192,7 @@ func (w *Worker) desiredLoop(ctx context.Context) error {
 			w.rt.Apply(api.EnvironmentSpec{ID: id, Desired: api.DesiredDeleted})
 		}
 		if store, ok := w.rt.(ImageStore); ok {
+			store.UseRegistry(set.Registry, w.cfg.Server.URL+api.RegistryPath, w.client.credential)
 			for _, c := range set.RemoveImages {
 				store.RemoveImage(c)
 			}

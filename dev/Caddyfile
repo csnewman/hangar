@@ -8,7 +8,8 @@
 
 :8080 {
 	# Each environment's editor has a host of its own, a subdomain of
-	# Hangar's, and all of it is the server's.
+	# Hangar's, and so has the registry (registry.hangar.localhost): all of
+	# them are the server's.
 	@editor host *.hangar.localhost
 	handle @editor {
 		reverse_proxy server:8081

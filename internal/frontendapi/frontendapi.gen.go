@@ -459,6 +459,55 @@ type ImageCopy struct {
 	Ref    string `json:"ref"`
 }
 
+// ImageRepository defines model for ImageRepository.
+type ImageRepository struct {
+	// CanManage Whether the caller may also change who may pull it, or delete it.
+	CanManage bool `json:"can_manage"`
+
+	// CanPush Whether the caller may push to it, delete its tags and choose its collaborators.
+	CanPush           bool      `json:"can_push"`
+	CollaboratorTeams []TeamRef `json:"collaborator_teams"`
+	Collaborators     []Person  `json:"collaborators"`
+	CreatedAt         time.Time `json:"created_at"`
+	Description       string    `json:"description"`
+	ID                string    `json:"id"`
+
+	// Name The repository's full name, host included, as image references use it.
+	Name  string  `json:"name"`
+	Owner *Person `json:"owner,omitempty"`
+
+	// Path <namespace>/<name>, the namespace being its owner's.
+	Path     string `json:"path"`
+	TagCount int    `json:"tag_count"`
+
+	// Tags Given by getImageRepository and the calls that change one, newest first.
+	Tags      *[]ImageTag `json:"tags,omitempty"`
+	Team      *TeamRef    `json:"team,omitempty"`
+	UpdatedAt time.Time   `json:"updated_at"`
+
+	// Visibility private: the owner and collaborators see it. shared: everyone does.
+	Visibility Visibility `json:"visibility"`
+}
+
+// ImageRepositoryInput defines model for ImageRepositoryInput.
+type ImageRepositoryInput struct {
+	Description *string `json:"description,omitempty"`
+
+	// Visibility private: the owner and collaborators see it. shared: everyone does.
+	Visibility Visibility `json:"visibility"`
+}
+
+// ImageTag defines model for ImageTag.
+type ImageTag struct {
+	Digest    string `json:"digest"`
+	MediaType string `json:"media_type"`
+	Name      string `json:"name"`
+
+	// SizeBytes The image's config and layers, compressed; for an index, its largest image.
+	SizeBytes int64     `json:"size_bytes"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // LocalImage defines model for LocalImage.
 type LocalImage struct {
 	// Current Whether the copy is what the reference names, as the worker last looked. New environments are made from the current copy; older ones stay for the environments made from them.
@@ -500,6 +549,9 @@ type Me struct {
 	// HasPassword Whether the user has a local password that they can change.
 	HasPassword bool   `json:"has_password"`
 	ID          string `json:"id"`
+
+	// Registry The host of Hangar's own registry, which image names on it start with. Absent when the server runs none.
+	Registry *string `json:"registry,omitempty"`
 
 	// SSH Where the SSH gateway is reached: ssh <environment>@<host> -p <port>, with a sign-in key. Absent when the server runs none.
 	SSH      *SSHGateway `json:"ssh,omitempty"`
@@ -934,6 +986,12 @@ type ResizeDesktopJSONRequestBody = DesktopSize
 // SignalProcessJSONRequestBody defines body for SignalProcess for application/json ContentType.
 type SignalProcessJSONRequestBody = SignalProcess
 
+// UpdateImageRepositoryJSONRequestBody defines body for UpdateImageRepository for application/json ContentType.
+type UpdateImageRepositoryJSONRequestBody = ImageRepositoryInput
+
+// SetImageRepositoryCollaboratorsJSONRequestBody defines body for SetImageRepositoryCollaborators for application/json ContentType.
+type SetImageRepositoryCollaboratorsJSONRequestBody = Collaborators
+
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePassword
 
@@ -1032,6 +1090,24 @@ type ServerInterface interface {
 
 	// (DELETE /api/frontend/environments/{id}/terminals/{session})
 	CloseTerminal(w http.ResponseWriter, r *http.Request, id ID, session string)
+
+	// (GET /api/frontend/images)
+	ListImageRepositories(w http.ResponseWriter, r *http.Request)
+
+	// (DELETE /api/frontend/images/{id})
+	DeleteImageRepository(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/images/{id})
+	GetImageRepository(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (PATCH /api/frontend/images/{id})
+	UpdateImageRepository(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (PUT /api/frontend/images/{id}/collaborators)
+	SetImageRepositoryCollaborators(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (DELETE /api/frontend/images/{id}/tags/{tag})
+	DeleteImageTag(w http.ResponseWriter, r *http.Request, id ID, tag string)
 
 	// (GET /api/frontend/me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -1570,6 +1646,159 @@ func (siw *ServerInterfaceWrapper) CloseTerminal(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.CloseTerminal(w, r, id, session)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListImageRepositories operation middleware
+func (siw *ServerInterfaceWrapper) ListImageRepositories(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListImageRepositories(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteImageRepository operation middleware
+func (siw *ServerInterfaceWrapper) DeleteImageRepository(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteImageRepository(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetImageRepository operation middleware
+func (siw *ServerInterfaceWrapper) GetImageRepository(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetImageRepository(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateImageRepository operation middleware
+func (siw *ServerInterfaceWrapper) UpdateImageRepository(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateImageRepository(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetImageRepositoryCollaborators operation middleware
+func (siw *ServerInterfaceWrapper) SetImageRepositoryCollaborators(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetImageRepositoryCollaborators(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteImageTag operation middleware
+func (siw *ServerInterfaceWrapper) DeleteImageTag(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "tag" -------------
+	var tag string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "tag", r.PathValue("tag"), &tag, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "tag", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteImageTag(w, r, id, tag)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2593,6 +2822,12 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/frontend/teams/{id}", wrapper.UpdateTeam)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/teams/{id}/members/{user}", wrapper.RemoveTeamMember)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/teams/{id}/members/{user}", wrapper.SetTeamMember)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/images", wrapper.ListImageRepositories)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/images/{id}", wrapper.DeleteImageRepository)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/images/{id}", wrapper.GetImageRepository)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/frontend/images/{id}", wrapper.UpdateImageRepository)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/images/{id}/collaborators", wrapper.SetImageRepositoryCollaborators)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/images/{id}/tags/{tag}", wrapper.DeleteImageTag)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/templates", wrapper.ListTemplates)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/templates", wrapper.CreateTemplate)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/templates/{id}", wrapper.DeleteTemplate)
@@ -3634,6 +3869,400 @@ func (response CloseTerminal503JSONResponse) VisitCloseTerminalResponse(w http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListImageRepositoriesRequestObject struct {
+}
+
+type ListImageRepositoriesResponseObject interface {
+	VisitListImageRepositoriesResponse(w http.ResponseWriter) error
+}
+
+type ListImageRepositories200JSONResponse []ImageRepository
+
+func (response ListImageRepositories200JSONResponse) VisitListImageRepositoriesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListImageRepositories401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListImageRepositories401JSONResponse) VisitListImageRepositoriesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListImageRepositories404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListImageRepositories404JSONResponse) VisitListImageRepositoriesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteImageRepositoryRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type DeleteImageRepositoryResponseObject interface {
+	VisitDeleteImageRepositoryResponse(w http.ResponseWriter) error
+}
+
+type DeleteImageRepository204Response struct {
+}
+
+func (response DeleteImageRepository204Response) VisitDeleteImageRepositoryResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteImageRepository401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteImageRepository401JSONResponse) VisitDeleteImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteImageRepository403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteImageRepository403JSONResponse) VisitDeleteImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteImageRepository404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteImageRepository404JSONResponse) VisitDeleteImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetImageRepositoryRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type GetImageRepositoryResponseObject interface {
+	VisitGetImageRepositoryResponse(w http.ResponseWriter) error
+}
+
+type GetImageRepository200JSONResponse ImageRepository
+
+func (response GetImageRepository200JSONResponse) VisitGetImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetImageRepository401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetImageRepository401JSONResponse) VisitGetImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetImageRepository404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetImageRepository404JSONResponse) VisitGetImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateImageRepositoryRequestObject struct {
+	ID   ID `json:"id"`
+	Body *UpdateImageRepositoryJSONRequestBody
+}
+
+type UpdateImageRepositoryResponseObject interface {
+	VisitUpdateImageRepositoryResponse(w http.ResponseWriter) error
+}
+
+type UpdateImageRepository200JSONResponse ImageRepository
+
+func (response UpdateImageRepository200JSONResponse) VisitUpdateImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateImageRepository400JSONResponse struct{ InvalidJSONResponse }
+
+func (response UpdateImageRepository400JSONResponse) VisitUpdateImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateImageRepository401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateImageRepository401JSONResponse) VisitUpdateImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateImageRepository403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateImageRepository403JSONResponse) VisitUpdateImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateImageRepository404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateImageRepository404JSONResponse) VisitUpdateImageRepositoryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetImageRepositoryCollaboratorsRequestObject struct {
+	ID   ID `json:"id"`
+	Body *SetImageRepositoryCollaboratorsJSONRequestBody
+}
+
+type SetImageRepositoryCollaboratorsResponseObject interface {
+	VisitSetImageRepositoryCollaboratorsResponse(w http.ResponseWriter) error
+}
+
+type SetImageRepositoryCollaborators200JSONResponse ImageRepository
+
+func (response SetImageRepositoryCollaborators200JSONResponse) VisitSetImageRepositoryCollaboratorsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetImageRepositoryCollaborators400JSONResponse struct{ InvalidJSONResponse }
+
+func (response SetImageRepositoryCollaborators400JSONResponse) VisitSetImageRepositoryCollaboratorsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetImageRepositoryCollaborators401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SetImageRepositoryCollaborators401JSONResponse) VisitSetImageRepositoryCollaboratorsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetImageRepositoryCollaborators403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetImageRepositoryCollaborators403JSONResponse) VisitSetImageRepositoryCollaboratorsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetImageRepositoryCollaborators404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetImageRepositoryCollaborators404JSONResponse) VisitSetImageRepositoryCollaboratorsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteImageTagRequestObject struct {
+	ID  ID     `json:"id"`
+	Tag string `json:"tag"`
+}
+
+type DeleteImageTagResponseObject interface {
+	VisitDeleteImageTagResponse(w http.ResponseWriter) error
+}
+
+type DeleteImageTag200JSONResponse ImageRepository
+
+func (response DeleteImageTag200JSONResponse) VisitDeleteImageTagResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteImageTag400JSONResponse struct{ InvalidJSONResponse }
+
+func (response DeleteImageTag400JSONResponse) VisitDeleteImageTagResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteImageTag401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteImageTag401JSONResponse) VisitDeleteImageTagResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteImageTag403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteImageTag403JSONResponse) VisitDeleteImageTagResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteImageTag404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteImageTag404JSONResponse) VisitDeleteImageTagResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -5935,6 +6564,24 @@ type StrictServerInterface interface {
 	// (DELETE /api/frontend/environments/{id}/terminals/{session})
 	CloseTerminal(ctx context.Context, request CloseTerminalRequestObject) (CloseTerminalResponseObject, error)
 
+	// (GET /api/frontend/images)
+	ListImageRepositories(ctx context.Context, request ListImageRepositoriesRequestObject) (ListImageRepositoriesResponseObject, error)
+
+	// (DELETE /api/frontend/images/{id})
+	DeleteImageRepository(ctx context.Context, request DeleteImageRepositoryRequestObject) (DeleteImageRepositoryResponseObject, error)
+
+	// (GET /api/frontend/images/{id})
+	GetImageRepository(ctx context.Context, request GetImageRepositoryRequestObject) (GetImageRepositoryResponseObject, error)
+
+	// (PATCH /api/frontend/images/{id})
+	UpdateImageRepository(ctx context.Context, request UpdateImageRepositoryRequestObject) (UpdateImageRepositoryResponseObject, error)
+
+	// (PUT /api/frontend/images/{id}/collaborators)
+	SetImageRepositoryCollaborators(ctx context.Context, request SetImageRepositoryCollaboratorsRequestObject) (SetImageRepositoryCollaboratorsResponseObject, error)
+
+	// (DELETE /api/frontend/images/{id}/tags/{tag})
+	DeleteImageTag(ctx context.Context, request DeleteImageTagRequestObject) (DeleteImageTagResponseObject, error)
+
 	// (GET /api/frontend/me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
 
@@ -6523,6 +7170,175 @@ func (sh *strictHandler) CloseTerminal(w http.ResponseWriter, r *http.Request, i
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(CloseTerminalResponseObject); ok {
 		if err := validResponse.VisitCloseTerminalResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListImageRepositories operation middleware
+func (sh *strictHandler) ListImageRepositories(w http.ResponseWriter, r *http.Request) {
+	var request ListImageRepositoriesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListImageRepositories(ctx, request.(ListImageRepositoriesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListImageRepositories")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListImageRepositoriesResponseObject); ok {
+		if err := validResponse.VisitListImageRepositoriesResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteImageRepository operation middleware
+func (sh *strictHandler) DeleteImageRepository(w http.ResponseWriter, r *http.Request, id ID) {
+	var request DeleteImageRepositoryRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteImageRepository(ctx, request.(DeleteImageRepositoryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteImageRepository")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteImageRepositoryResponseObject); ok {
+		if err := validResponse.VisitDeleteImageRepositoryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetImageRepository operation middleware
+func (sh *strictHandler) GetImageRepository(w http.ResponseWriter, r *http.Request, id ID) {
+	var request GetImageRepositoryRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetImageRepository(ctx, request.(GetImageRepositoryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetImageRepository")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetImageRepositoryResponseObject); ok {
+		if err := validResponse.VisitGetImageRepositoryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateImageRepository operation middleware
+func (sh *strictHandler) UpdateImageRepository(w http.ResponseWriter, r *http.Request, id ID) {
+	var request UpdateImageRepositoryRequestObject
+
+	request.ID = id
+
+	var body UpdateImageRepositoryJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateImageRepository(ctx, request.(UpdateImageRepositoryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateImageRepository")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateImageRepositoryResponseObject); ok {
+		if err := validResponse.VisitUpdateImageRepositoryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetImageRepositoryCollaborators operation middleware
+func (sh *strictHandler) SetImageRepositoryCollaborators(w http.ResponseWriter, r *http.Request, id ID) {
+	var request SetImageRepositoryCollaboratorsRequestObject
+
+	request.ID = id
+
+	var body SetImageRepositoryCollaboratorsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetImageRepositoryCollaborators(ctx, request.(SetImageRepositoryCollaboratorsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetImageRepositoryCollaborators")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetImageRepositoryCollaboratorsResponseObject); ok {
+		if err := validResponse.VisitSetImageRepositoryCollaboratorsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteImageTag operation middleware
+func (sh *strictHandler) DeleteImageTag(w http.ResponseWriter, r *http.Request, id ID, tag string) {
+	var request DeleteImageTagRequestObject
+
+	request.ID = id
+	request.Tag = tag
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteImageTag(ctx, request.(DeleteImageTagRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteImageTag")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteImageTagResponseObject); ok {
+		if err := validResponse.VisitDeleteImageTagResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

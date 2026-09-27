@@ -441,6 +441,108 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/frontend/images:
+    get:
+      operationId: listImageRepositories
+      description: >-
+        The repositories in Hangar's registry the caller may pull. Absent
+        when the server runs no registry.
+      responses:
+        "200":
+          description: Repositories, by path.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ImageRepository" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/images/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getImageRepository
+      responses:
+        "200":
+          description: The repository and its tags.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageRepository" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateImageRepository
+      description: Changes who may pull the repository, and its description. Its owner may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImageRepositoryInput" }
+      responses:
+        "200":
+          description: The repository.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageRepository" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteImageRepository
+      description: Deletes the repository with its tags. Its owner may.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/images/{id}/collaborators:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: setImageRepositoryCollaborators
+      description: >-
+        Replaces the users, who push, and teams, whose viewers pull and whose
+        members push, besides the owner. Anyone who may push may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Collaborators" }
+      responses:
+        "200":
+          description: The repository.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageRepository" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/images/{id}/tags/{tag}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: tag
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: deleteImageTag
+      description: Removes a tag. Anyone who may push may.
+      responses:
+        "200":
+          description: The repository.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ImageRepository" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/frontend/templates:
     get:
       operationId: listTemplates
@@ -1387,6 +1489,62 @@ components:
         username: { type: string }
         display_name: { type: string }
 
+    ImageRepository:
+      type: object
+      required: [id, path, name, description, visibility, collaborators, collaborator_teams, tag_count, can_push, can_manage, created_at, updated_at]
+      properties:
+        id: { type: string }
+        path:
+          type: string
+          description: <namespace>/<name>, the namespace being its owner's.
+        name:
+          type: string
+          description: The repository's full name, host included, as image references use it.
+        description: { type: string }
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        owner: { $ref: "#/components/schemas/Person" }
+        team: { $ref: "#/components/schemas/TeamRef" }
+        collaborators:
+          type: array
+          items: { $ref: "#/components/schemas/Person" }
+        collaborator_teams:
+          type: array
+          items: { $ref: "#/components/schemas/TeamRef" }
+        tag_count: { type: integer }
+        tags:
+          type: array
+          description: Given by getImageRepository and the calls that change one, newest first.
+          items: { $ref: "#/components/schemas/ImageTag" }
+        can_push:
+          type: boolean
+          description: Whether the caller may push to it, delete its tags and choose its collaborators.
+        can_manage:
+          type: boolean
+          description: Whether the caller may also change who may pull it, or delete it.
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    ImageTag:
+      type: object
+      required: [name, digest, media_type, size_bytes, updated_at]
+      properties:
+        name: { type: string }
+        digest: { type: string }
+        media_type: { type: string }
+        size_bytes:
+          type: integer
+          format: int64
+          description: The image's config and layers, compressed; for an index, its largest image.
+        updated_at: { type: string, format: date-time }
+
+    ImageRepositoryInput:
+      type: object
+      required: [visibility]
+      additionalProperties: false
+      properties:
+        visibility: { $ref: "#/components/schemas/Visibility" }
+        description: { type: string, maxLength: 2000 }
+
     TeamRef:
       type: object
       required: [id, slug, name]
@@ -1707,6 +1865,11 @@ components:
       type: object
       required: [id, username, display_name, admin, has_password]
       properties:
+        registry:
+          type: string
+          description: >-
+            The host of Hangar's own registry, which image names on it start
+            with. Absent when the server runs none.
         id: { type: string }
         username: { type: string }
         display_name: { type: string }

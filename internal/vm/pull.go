@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"runtime"
 	"strings"
@@ -40,34 +42,54 @@ func guestPlatform() platforms.MatchComparer {
 
 // newResolver makes the resolver pulls and lookups go through. A registry on
 // this machine is spoken to over plain HTTP, as one run for testing images
-// before they are published is; any other over TLS.
-func newResolver(auth map[string]RegistryAuth) remotes.Resolver {
+// before they are published is; any other over TLS. Hangar's own registry,
+// if there is one, is reached through the server, as the worker.
+func newResolver(auth map[string]RegistryAuth, hangar *hangarRegistry) remotes.Resolver {
+	hosts := docker.ConfigureDefaultRegistries(docker.WithPlainHTTP(docker.MatchLocalhost), docker.WithAuthorizer(docker.NewDockerAuthorizer(
+		docker.WithAuthCreds(func(host string) (string, string, error) {
+			a, ok := auth[host]
+			if !ok {
+				return "", "", nil
+			}
+			b, err := os.ReadFile(a.PasswordFile)
+			if err != nil {
+				return "", "", fmt.Errorf("the password for %s: %w", host, err)
+			}
+			return a.Username, strings.TrimSpace(string(b)), nil
+		}),
+	)))
 	return docker.NewResolver(docker.ResolverOptions{
-		Hosts: docker.ConfigureDefaultRegistries(docker.WithPlainHTTP(docker.MatchLocalhost), docker.WithAuthorizer(docker.NewDockerAuthorizer(
-			docker.WithAuthCreds(func(host string) (string, string, error) {
-				a, ok := auth[host]
-				if !ok {
-					return "", "", nil
-				}
-				b, err := os.ReadFile(a.PasswordFile)
-				if err != nil {
-					return "", "", fmt.Errorf("the password for %s: %w", host, err)
-				}
-				return a.Username, strings.TrimSpace(string(b)), nil
-			}),
-		))),
+		Hosts: func(host string) ([]docker.RegistryHost, error) {
+			if hangar == nil || !strings.EqualFold(host, hangar.host) {
+				return hosts(host)
+			}
+			u, err := url.Parse(hangar.url)
+			if err != nil {
+				return nil, fmt.Errorf("the server's registry at %s: %w", hangar.url, err)
+			}
+			return []docker.RegistryHost{{
+				Client: http.DefaultClient,
+				Authorizer: docker.NewDockerAuthorizer(docker.WithAuthCreds(func(string) (string, string, error) {
+					return "hangar-worker", hangar.credential, nil
+				})),
+				Host:         u.Host,
+				Scheme:       u.Scheme,
+				Path:         u.Path + "/v2",
+				Capabilities: docker.HostCapabilityPull | docker.HostCapabilityResolve,
+			}}, nil
+		},
 	})
 }
 
 // resolveDigest asks ref's registry for the digest of what ref names: the
 // multi-platform index, where it is one. It fetches only the manifest's
 // descriptor.
-func resolveDigest(ctx context.Context, ref string, auth map[string]RegistryAuth) (string, error) {
+func resolveDigest(ctx context.Context, ref string, auth map[string]RegistryAuth, hangar *hangarRegistry) (string, error) {
 	named, err := reference.ParseDockerRef(ref)
 	if err != nil {
 		return "", fmt.Errorf("parsing the image reference: %w", err)
 	}
-	_, desc, err := newResolver(auth).Resolve(ctx, named.String())
+	_, desc, err := newResolver(auth, hangar).Resolve(ctx, named.String())
 	if err != nil {
 		return "", fmt.Errorf("resolving %s: %w", named, err)
 	}
@@ -91,7 +113,8 @@ func resolveDigest(ctx context.Context, ref string, auth map[string]RegistryAuth
 // downloaded of those known to be needed -- the total grows once the
 // manifest names the layers -- and then how many of the layers' bytes have
 // been unpacked.
-func pull(ctx context.Context, ref, dgst, dir, scratch string, auth map[string]RegistryAuth, report func(FetchProgress)) error {
+func pull(ctx context.Context, ref, dgst, dir, scratch string, auth map[string]RegistryAuth, hangar *hangarRegistry,
+	report func(FetchProgress)) error {
 	named, err := reference.ParseDockerRef(ref)
 	if err != nil {
 		return fmt.Errorf("parsing the image reference: %w", err)
@@ -110,7 +133,7 @@ func pull(ctx context.Context, ref, dgst, dir, scratch string, auth map[string]R
 	if err != nil {
 		return err
 	}
-	resolver := newResolver(auth)
+	resolver := newResolver(auth, hangar)
 	name, desc, err := resolver.Resolve(ctx, full)
 	if err != nil {
 		return fmt.Errorf("resolving %s: %w", full, err)

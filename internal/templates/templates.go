@@ -103,10 +103,32 @@ type Input struct {
 }
 
 type Manager struct {
-	db *db.DB
+	db     *db.DB
+	images ImageCheck
 }
 
 func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
+
+// ImageCheck says whether a user may pull the image a reference names,
+// failing if not.
+type ImageCheck interface {
+	CheckPull(ctx context.Context, p users.Principal, ref string) error
+}
+
+// CheckImagesWith has every template saved with a new image checked: its
+// saver must be able to pull it. Workers pull whatever a template names, so
+// without it a template would reach images its author cannot.
+func (m *Manager) CheckImagesWith(c ImageCheck) { m.images = c }
+
+func (m *Manager) checkImage(ctx context.Context, p users.Principal, ref string) error {
+	if m.images == nil {
+		return nil
+	}
+	if err := m.images.CheckPull(ctx, p, ref); err != nil {
+		return fmt.Errorf("%w: image %s: %v", ErrInvalid, ref, err)
+	}
+	return nil
+}
 
 // The conditions below take the caller as $1 (admin) and $2 (user ID).
 const (
@@ -280,6 +302,9 @@ func (m *Manager) Create(ctx context.Context, p users.Principal, in Input) (Temp
 	if err != nil {
 		return Template{}, err
 	}
+	if err := m.checkImage(ctx, p, in.Spec.Image); err != nil {
+		return Template{}, err
+	}
 	spec, err := json.Marshal(in.Spec)
 	if err != nil {
 		return Template{}, err
@@ -359,6 +384,11 @@ func (m *Manager) Update(ctx context.Context, p users.Principal, id string, in I
 		}
 		if in.Visibility != cur.Visibility && !cur.CanManage {
 			return fmt.Errorf("%w: only the owner may change who can see this template", ErrForbidden)
+		}
+		if in.Spec.Image != cur.Spec.Image {
+			if err := m.checkImage(ctx, p, in.Spec.Image); err != nil {
+				return err
+			}
 		}
 		curTeam := ""
 		if cur.Team != nil {

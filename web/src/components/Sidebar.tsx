@@ -1,4 +1,5 @@
 import {
+  Boxes,
   ChevronRight,
   FolderSync,
   History,
@@ -41,6 +42,7 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
           <nav className="side-nav">
             <SideIcon to="/environments" end icon={<LayoutGrid size={17} />} label="Overview" />
             <SideIcon to="/templates" icon={<LayoutTemplate size={17} />} label="Templates" />
+            <SideIcon to="/images" icon={<Boxes size={17} />} label="Images" />
             <SideIcon to="/teams" icon={<UsersRound size={17} />} label="Teams" />
             <SideIcon to="/environments/new" icon={<Plus size={17} />} label="New environment" />
           </nav>
@@ -76,6 +78,10 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
           <NavLink to="/templates" className="side-link">
             <LayoutTemplate size={16} />
             <span>Templates</span>
+          </NavLink>
+          <NavLink to="/images" className="side-link">
+            <Boxes size={16} />
+            <span>Images</span>
           </NavLink>
           <NavLink to="/teams" className="side-link">
             <UsersRound size={16} />

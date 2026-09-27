@@ -322,6 +322,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The repositories in Hangar's registry the caller may pull. Absent when the server runs no registry. */
+        get: operations["listImageRepositories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/images/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get: operations["getImageRepository"];
+        put?: never;
+        post?: never;
+        /** @description Deletes the repository with its tags. Its owner may. */
+        delete: operations["deleteImageRepository"];
+        options?: never;
+        head?: never;
+        /** @description Changes who may pull the repository, and its description. Its owner may. */
+        patch: operations["updateImageRepository"];
+        trace?: never;
+    };
+    "/api/frontend/images/{id}/collaborators": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Replaces the users, who push, and teams, whose viewers pull and whose members push, besides the owner. Anyone who may push may. */
+        put: operations["setImageRepositoryCollaborators"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/images/{id}/tags/{tag}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                tag: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Removes a tag. Anyone who may push may. */
+        delete: operations["deleteImageTag"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/templates": {
         parameters: {
             query?: never;
@@ -948,6 +1024,46 @@ export interface components {
             username: string;
             display_name: string;
         };
+        ImageRepository: {
+            id: string;
+            /** @description <namespace>/<name>, the namespace being its owner's. */
+            path: string;
+            /** @description The repository's full name, host included, as image references use it. */
+            name: string;
+            description: string;
+            visibility: components["schemas"]["Visibility"];
+            owner?: components["schemas"]["Person"];
+            team?: components["schemas"]["TeamRef"];
+            collaborators: components["schemas"]["Person"][];
+            collaborator_teams: components["schemas"]["TeamRef"][];
+            tag_count: number;
+            /** @description Given by getImageRepository and the calls that change one, newest first. */
+            tags?: components["schemas"]["ImageTag"][];
+            /** @description Whether the caller may push to it, delete its tags and choose its collaborators. */
+            can_push: boolean;
+            /** @description Whether the caller may also change who may pull it, or delete it. */
+            can_manage: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ImageTag: {
+            name: string;
+            digest: string;
+            media_type: string;
+            /**
+             * Format: int64
+             * @description The image's config and layers, compressed; for an index, its largest image.
+             */
+            size_bytes: number;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        ImageRepositoryInput: {
+            visibility: components["schemas"]["Visibility"];
+            description?: string;
+        };
         TeamRef: {
             id: string;
             slug: string;
@@ -1143,6 +1259,8 @@ export interface components {
             password: string;
         };
         Me: {
+            /** @description The host of Hangar's own registry, which image names on it start with. Absent when the server runs none. */
+            registry?: string;
             id: string;
             username: string;
             display_name: string;
@@ -1880,6 +1998,162 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Team"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listImageRepositories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Repositories, by path. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRepository"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getImageRepository: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The repository and its tags. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRepository"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteImageRepository: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateImageRepository: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageRepositoryInput"];
+            };
+        };
+        responses: {
+            /** @description The repository. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRepository"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setImageRepositoryCollaborators: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Collaborators"];
+            };
+        };
+        responses: {
+            /** @description The repository. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRepository"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteImageTag: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                tag: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The repository. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImageRepository"];
                 };
             };
             400: components["responses"]["Invalid"];

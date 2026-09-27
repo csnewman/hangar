@@ -262,6 +262,9 @@ func (h *handler) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeRespons
 	}
 	m := me(u)
 	m.SSH = h.ssh
+	if h.registry != nil {
+		m.Registry = &h.registryHost
+	}
 	return GetMe200JSONResponse(m), nil
 }
 

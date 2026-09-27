@@ -80,6 +80,7 @@ func (s *Server) workerDesired(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
+	set.Registry = s.registryHost
 	writeJSON(w, http.StatusOK, set)
 }
 

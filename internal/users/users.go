@@ -320,7 +320,8 @@ func requireAdmin(ctx context.Context, tx db.Tx) error {
 	return nil
 }
 
-// Delete removes a user who owns no environments.
+// Delete removes a user who owns no environments and no image
+// repositories.
 func (m *Manager) Delete(ctx context.Context, id string) error {
 	if !db.ValidUUID(id) {
 		return ErrNotFound
@@ -337,6 +338,13 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		}
 		if owned > 0 {
 			return fmt.Errorf("%w: the user owns %d environments; delete them or disable the user instead",
+				ErrConflict, owned)
+		}
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM image_repositories WHERE owner_id = $1`, id).Scan(&owned); err != nil {
+			return err
+		}
+		if owned > 0 {
+			return fmt.Errorf("%w: the user owns %d image repositories; delete them or disable the user instead",
 				ErrConflict, owned)
 		}
 		var name string

@@ -47,6 +47,32 @@ type ImageStore struct {
 	held     map[api.ImageCopy]heldCopy
 	current  map[string]string
 	fetching map[api.ImageCopy]*fetch
+	hangar   *hangarRegistry
+}
+
+// hangarRegistry is Hangar's own registry: images named on host are pulled
+// from url, beneath which is the distribution API's /v2/, with the worker's
+// credential.
+type hangarRegistry struct {
+	host, url, credential string
+}
+
+// UseRegistry says where Hangar's own registry is. An empty host means there
+// is none.
+func (s *ImageStore) UseRegistry(host, url, credential string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if host == "" {
+		s.hangar = nil
+		return
+	}
+	s.hangar = &hangarRegistry{host: host, url: url, credential: credential}
+}
+
+func (s *ImageStore) registry() *hangarRegistry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.hangar
 }
 
 type heldCopy struct {
@@ -179,7 +205,7 @@ func (s *ImageStore) Current(ctx context.Context, ref string) (string, error) {
 	if src, ok := s.sources[ref]; ok {
 		digest, err = buildOf(src.Base)
 	} else {
-		digest, err = resolveDigest(ctx, ref, s.auth)
+		digest, err = resolveDigest(ctx, ref, s.auth, s.registry())
 	}
 	if err != nil {
 		return "", err
@@ -316,7 +342,7 @@ func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, rep
 			}
 		} else {
 			blobs := filepath.Join(tmp, "blobs")
-			if err := pull(ctx, c.Ref, c.Digest, rootfs, blobs, s.auth, report); err != nil {
+			if err := pull(ctx, c.Ref, c.Digest, rootfs, blobs, s.auth, s.registry(), report); err != nil {
 				return fmt.Errorf("pulling %s: %w", c.Ref, err)
 			}
 			if err := os.RemoveAll(blobs); err != nil {

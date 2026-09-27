@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/clientapi"
 	"github.com/csnewman/hangar/internal/db"
@@ -31,6 +32,7 @@ import (
 	"github.com/csnewman/hangar/internal/frontendapi"
 	"github.com/csnewman/hangar/internal/placement"
 	"github.com/csnewman/hangar/internal/profile"
+	"github.com/csnewman/hangar/internal/registry"
 	"github.com/csnewman/hangar/internal/sshgw"
 	"github.com/csnewman/hangar/internal/teams"
 	"github.com/csnewman/hangar/internal/templates"
@@ -63,7 +65,11 @@ type Config struct {
 	// SSHAddress is where people reach the gateway, as host:port, for the
 	// UI to show. Empty is PublicURL's host at SSHListen's port.
 	SSHAddress string
-	Log        *slog.Logger
+	// RegistryDir, if set, keeps the blobs of Hangar's own container
+	// registry, served on its own host: registry.<PublicURL's host>, which
+	// image names start with. Empty turns it off.
+	RegistryDir string
+	Log         *slog.Logger
 }
 
 type Server struct {
@@ -86,6 +92,9 @@ type Server struct {
 	auditLog  *audit.Log
 	sshListen string
 	sshKey    ssh.Signer
+	registry  *registry.Registry
+	// registryHost is the registry's host, port included.
+	registryHost string
 }
 
 func New(cfg Config) (*Server, error) {
@@ -99,6 +108,19 @@ func New(cfg Config) (*Server, error) {
 	edits := editor.NewManager(cfg.DB)
 	profiles := profile.NewStore(cfg.DB, cfg.Sealer)
 	auditLog := audit.NewLog(cfg.DB)
+	var reg *registry.Registry
+	var registryHost string
+	if cfg.RegistryDir != "" {
+		u, err := url.Parse(cfg.PublicURL)
+		if err != nil || u.Host == "" {
+			return nil, errors.New("the registry needs a public URL, whose host it takes a subdomain of")
+		}
+		registryHost = "registry." + u.Host
+		if reg, err = registry.New(registry.Config{DB: cfg.DB, Dir: cfg.RegistryDir, Host: registryHost, Tokens: um, Workers: wm,
+			Log: log}); err != nil {
+			return nil, fmt.Errorf("registry: %w", err)
+		}
+	}
 	var editors *editor.Gateway
 	if cfg.PublicURL != "" {
 		var err error
@@ -106,11 +128,17 @@ func New(cfg Config) (*Server, error) {
 			return nil, err
 		}
 	}
+	tm := templates.NewManager(cfg.DB)
+	if reg != nil {
+		tm.CheckImagesWith(reg)
+	}
 	cfgAPI := frontendapi.Config{
 		Tunnels:      tunnels,
 		Environments: environments.NewManager(cfg.DB),
-		Templates:    templates.NewManager(cfg.DB),
+		Templates:    tm,
 		Teams:        teams.NewManager(cfg.DB),
+		Registry:     reg,
+		RegistryHost: registryHost,
 		Workers:      wm,
 		Users:        um,
 		Profiles:     profiles,
@@ -151,25 +179,27 @@ func New(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	return &Server{
-		db:        cfg.DB,
-		frontend:  frontend,
-		client:    clientapi.New(client),
-		editors:   editors,
-		edits:     edits,
-		tunnels:   tunnels,
-		workers:   wm,
-		users:     um,
-		placement: placement.NewManager(cfg.DB),
-		bootstrap: cfg.BootstrapToken,
-		web:       cfg.Web,
-		log:       log,
-		waits:     newWaiters(),
-		placeKick: make(chan struct{}, 1),
-		sessions:  profile.NewSessions(profiles, tunnels, log),
-		profiles:  profiles,
-		auditLog:  auditLog,
-		sshListen: cfg.SSHListen,
-		sshKey:    sshKey,
+		db:           cfg.DB,
+		frontend:     frontend,
+		client:       clientapi.New(client),
+		editors:      editors,
+		edits:        edits,
+		tunnels:      tunnels,
+		workers:      wm,
+		users:        um,
+		placement:    placement.NewManager(cfg.DB),
+		bootstrap:    cfg.BootstrapToken,
+		web:          cfg.Web,
+		log:          log,
+		waits:        newWaiters(),
+		placeKick:    make(chan struct{}, 1),
+		sessions:     profile.NewSessions(profiles, tunnels, log),
+		profiles:     profiles,
+		auditLog:     auditLog,
+		sshListen:    cfg.SSHListen,
+		sshKey:       sshKey,
+		registry:     reg,
+		registryHost: registryHost,
 	}, nil
 }
 
@@ -218,6 +248,13 @@ func (s *Server) pruneSessions(ctx context.Context) {
 			s.log.Warn("pruning sessions", "err", err)
 		} else if n > 0 {
 			s.log.Info("pruned expired sessions", "count", n)
+		}
+		if s.registry != nil {
+			if n, err := s.registry.PruneUploads(ctx); err != nil && ctx.Err() == nil {
+				s.log.Warn("pruning registry uploads", "err", err)
+			} else if n > 0 {
+				s.log.Info("pruned abandoned registry uploads", "count", n)
+			}
 		}
 		if n, err := s.edits.Prune(ctx); err != nil && ctx.Err() == nil {
 			s.log.Warn("pruning editor sessions", "err", err)
@@ -291,20 +328,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such endpoint")
 	})
+	if s.registry != nil {
+		// Workers reach the registry where they reach the rest of the
+		// server, whatever name the registry has for people.
+		mux.Handle(api.RegistryPath+"/", http.StripPrefix(api.RegistryPath, s.registry))
+	}
 	mux.Handle("/", s.webHandler())
 
-	api := s.logRequests(mux)
-	if s.editors == nil {
-		return api
-	}
-	// An environment's editor has a host of its own, and everything on it
-	// is the editor's.
+	all := s.logRequests(mux)
+	// The registry and each environment's editor have hosts of their own,
+	// and everything on them is theirs.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := s.editors.Owns(r.Host); ok {
-			s.editors.ServeHTTP(w, r)
+		if s.registry != nil && strings.EqualFold(r.Host, s.registryHost) {
+			s.registry.ServeHTTP(w, r)
 			return
 		}
-		api.ServeHTTP(w, r)
+		if s.editors != nil {
+			if _, ok := s.editors.Owns(r.Host); ok {
+				s.editors.ServeHTTP(w, r)
+				return
+			}
+		}
+		all.ServeHTTP(w, r)
 	})
 }
 
