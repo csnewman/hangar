@@ -32,6 +32,11 @@ tab to reorder it, onto another window of the same server to move it
 there, or out of the window to give it a window of its own. A server can
 have as many windows as you like; a window only ever holds one server.
 
+The control panel's tab names the window's server. Its ▾, and the
+Servers menu, list every server you have added: choose one to bring its
+window forward, or open it, and Connect to a Server… (⌘N) to add another.
+File → New Window opens another window of the server in front.
+
 Every tab is a view of its own and stays alive while another is shown: VS
 Code, terminals and desktops keep everything when you move between tabs,
 when a tab is dragged to another window, and when it is moved to another
@@ -42,7 +47,7 @@ their tabs are restored when the app starts.
 
 | Keys | |
 | --- | --- |
-| ⌘N | Open another server's window, or add a server |
+| ⌘N | Connect to a server: open another's window, or add one |
 | ⌘T, ⌘L | Go to an environment (↵ open, ⌘↵ VS Code, ⌥↵ terminal) |
 | ⌘W | Close the tab; on the control panel, the window |
 | ⌘⇧T | Reopen the last closed tab |

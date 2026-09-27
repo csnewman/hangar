@@ -55,6 +55,8 @@ export interface Bridge {
   close(id: number): Promise<void>
   move(id: number, to: number): Promise<void>
   menu(id: number): Promise<void>
+  // serverMenu opens the menu of servers at a point in the bar.
+  serverMenu(x: number, y: number): Promise<void>
   tear(id: number): Promise<void>
   release(): Promise<void>
   overlay(open: boolean): Promise<void>

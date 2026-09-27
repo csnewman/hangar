@@ -84,8 +84,12 @@ function renderTabs() {
       label = `${esc(env ? env.name : t.title.split(' · ')[0])}${section ? `<span class="section">${esc(section)}</span>` : ''}`
       el.title = `${env ? env.name : t.title}${section ? ' · ' + section : ''}${env ? ` — ${env.phase}${env.reason ? ': ' + env.reason : ''}` : ''}`
     }
-    const close = t.panel ? '' : '<button class="x" aria-label="Close tab">✕</button>'
-    el.innerHTML = `${icon}<span class="title">${label}</span>${close}`
+    // The control panel's tab names the window's server, and opens the
+    // menu of servers to go to another.
+    const end = t.panel
+      ? '<button class="x servers" aria-label="Servers" title="Go to another server, or connect to one (⌘N)"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2 3.5 5 6.5 8 3.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>'
+      : '<button class="x" aria-label="Close tab">✕</button>'
+    el.innerHTML = `${icon}<span class="title">${label}</span>${end}`
     el.addEventListener('pointerdown', (e) => {
       if (e.button !== 0 || (e.target as HTMLElement).closest('.x')) return
       h.activate(t.id)
@@ -97,7 +101,13 @@ function renderTabs() {
       e.preventDefault()
       h.menu(t.id)
     })
-    if (!t.panel) {
+    if (t.panel) {
+      el.querySelector('.servers')!.addEventListener('click', (e) => {
+        e.stopPropagation()
+        const r = el.getBoundingClientRect()
+        h.serverMenu(r.left, r.bottom)
+      })
+    } else {
       el.addEventListener('auxclick', (e) => {
         if (e.button === 1) h.close(t.id)
       })

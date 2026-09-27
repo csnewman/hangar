@@ -152,7 +152,7 @@ body.bar {
 .tab .ph { background: var(--accent); opacity: 0.8; }
 .tab .dot { margin: 0 3px; }
 /* The control panel is pinned first: as wide as its name, never closed. */
-.tab.panel { flex: 0 0 auto; min-width: 0; max-width: 200px; padding-right: 12px; font-weight: 600; }
+.tab.panel { flex: 0 0 auto; min-width: 0; max-width: 220px; padding-right: 6px; font-weight: 600; }
 .tab .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab .server { font-size: 11px; color: var(--muted); white-space: nowrap; }
 .tab .x {
@@ -167,7 +167,7 @@ body.bar {
   cursor: pointer;
   visibility: hidden;
 }
-.tab:hover .x, .tab.on .x { visibility: visible; }
+.tab:hover .x, .tab.on .x, .tab .servers { visibility: visible; }
 .tab .x:hover { background: var(--border-strong); color: var(--text); }
 .tab.loading .ph, .tab.loading img { animation: pulse 1s ease-in-out infinite; }
 @keyframes pulse { 50% { opacity: 0.35; } }

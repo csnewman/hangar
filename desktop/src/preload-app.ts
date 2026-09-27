@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('hangar', {
   close: (id: number) => ipcRenderer.invoke('tab:close', id),
   move: (id: number, to: number) => ipcRenderer.invoke('tab:move', id, to),
   menu: (id: number) => ipcRenderer.invoke('tab:menu', id),
+  serverMenu: (x: number, y: number) => ipcRenderer.invoke('server:menu', x, y),
   tear: (id: number) => ipcRenderer.invoke('tab:tear', id),
   release: () => ipcRenderer.invoke('tab:release'),
   overlay: (open: boolean) => ipcRenderer.invoke('overlay', open),

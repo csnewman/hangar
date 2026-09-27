@@ -80,6 +80,7 @@ function changed() {
     for (const w of windows) w.bar.webContents.send('app:state', summary(w))
     picker?.webContents.send('app:state', summary())
     updateTray()
+    updateMenu()
   }, 30)
 }
 
@@ -92,6 +93,7 @@ function newWindow(s: Server, opts: ConstructorParameters<typeof ServerWindow>[2
   windows.unshift(w)
   w.win.on('focus', () => {
     windows = [w, ...windows.filter((x) => x !== w)]
+    updateMenu()
   })
   w.win.on('close', () => {
     // A server's last window is kept when closed, to open again as it was;
@@ -193,6 +195,10 @@ ipcMain.handle('tab:close', (e, id: number) => {
   if (t) w!.close(t)
 })
 ipcMain.handle('tab:move', (e, id: number, to: number) => own(e)?.move(id, to))
+ipcMain.handle('server:menu', (e, x: number, y: number) => {
+  const w = own(e)
+  if (w) Menu.buildFromTemplate(serverItems(w.server.id)).popup({ window: w.win, x: Math.round(x), y: Math.round(y) })
+})
 ipcMain.handle('tab:menu', (e, id: number) => {
   const w = own(e)
   const t = w?.tab(id)
@@ -458,11 +464,41 @@ function updateTray() {
     }
     items.push({ type: 'separator' })
   }
-  items.push({ label: 'Open a Server…', click: showPicker }, { type: 'separator' }, { label: 'Quit Hangar', role: 'quit' })
+  items.push({ label: 'Connect to a Server…', click: showPicker }, { type: 'separator' }, { label: 'Quit Hangar', role: 'quit' })
   tray.setContextMenu(Menu.buildFromTemplate(items))
 }
 
+// ---- Servers ----
+
+// serverItems lists every server, ticking current, to bring one's window
+// forward or open one, and ends with adding another.
+function serverItems(current?: string): Electron.MenuItemConstructorOptions[] {
+  const items: Electron.MenuItemConstructorOptions[] = watch.all().map((st) => ({
+    label: st.server.name,
+    sublabel: st.server.url,
+    type: 'checkbox',
+    checked: st.server.id === current,
+    click: () => openServer(st.server),
+  }))
+  if (items.length) items.push({ type: 'separator' })
+  items.push({ label: 'Connect to a Server…', accelerator: 'CmdOrCtrl+N', click: showPicker })
+  return items
+}
+
 // ---- The application menu ----
+
+// menuKey is what the application menu shows that can change: the
+// servers, and which is in front. The menu is rebuilt only when it does,
+// so one open while environments change is not pulled from under the
+// pointer.
+let menuKey = ''
+
+function updateMenu() {
+  const key = JSON.stringify([focused()?.server.id, watch.all().map((st) => [st.server.id, st.server.name])])
+  if (key === menuKey) return
+  menuKey = key
+  menu()
+}
 
 function menu() {
   const mac = process.platform === 'darwin'
@@ -471,7 +507,14 @@ function menu() {
     {
       label: 'File',
       submenu: [
-        { label: 'New Window…', accelerator: 'CmdOrCtrl+N', click: showPicker },
+        {
+          label: 'New Window',
+          click: () => {
+            const w = focused()
+            if (w) newWindow(w.server).win.focus()
+            else showPicker()
+          },
+        },
         { label: 'New Tab…', accelerator: 'CmdOrCtrl+T', click: () => focused()?.setOverlay(true, true) },
         { label: 'Go to Environment…', accelerator: 'CmdOrCtrl+L', click: () => focused()?.setOverlay(true, true) },
         { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => focused()?.reopen() },
@@ -522,6 +565,7 @@ function menu() {
         { role: 'togglefullscreen' },
       ],
     },
+    { label: 'Servers', submenu: serverItems(focused()?.server.id) },
     {
       label: 'Window',
       submenu: [
