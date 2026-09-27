@@ -85,6 +85,15 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 			return nil, fmt.Errorf("this worker offers no virtual GPU: %s", m.rt.gpu.Unavailable)
 		}
 	}
+	// A check of what an upgrade would hide stands down once the phase is
+	// starting, and one under way is waited for: both use the writable disk.
+	m.disk.Lock()
+	m.set(api.PhaseStarting, "starting")
+	err = m.changeImage(ctx, spec)
+	m.disk.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	img, err := m.resolve(ctx, spec)
 	if err != nil {
 		return nil, err

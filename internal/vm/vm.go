@@ -239,10 +239,17 @@ func (r *Runtime) notify() {
 }
 
 func (r *Runtime) Observe() []api.ObservedEnvironment {
+	// The image store is asked about each environment's image outside r.mu:
+	// the store holds its own lock while it asks the runtime which copies
+	// are in use.
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([]api.ObservedEnvironment, 0, len(r.envs))
+	machines := make(map[string]*machine, len(r.envs))
 	for id, m := range r.envs {
+		machines[id] = m
+	}
+	r.mu.Unlock()
+	out := make([]api.ObservedEnvironment, 0, len(machines))
+	for id, m := range machines {
 		phase, reason := m.status()
 		o := api.ObservedEnvironment{ID: id, Phase: phase, Reason: reason}
 		m.mu.Lock()
@@ -258,6 +265,7 @@ func (r *Runtime) Observe() []api.ObservedEnvironment {
 			o.Stats = &s
 		}
 		m.mu.Unlock()
+		m.imageState(&o)
 		out = append(out, o)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -304,6 +312,7 @@ func (r *Runtime) newMachine(id string, phase api.Phase) *machine {
 		log:   r.cfg.Log.With("environment", id),
 	}
 	m.image = readImagePin(m.dir)
+	m.rollback = readRollback(m.dir)
 	r.envs[id] = m
 	r.wg.Add(1)
 	go func() {
@@ -370,6 +379,16 @@ type machine struct {
 	// image is the copy of its image the environment was made over, once
 	// it has first started.
 	image *api.ImageCopy
+	// rollback is the writable disk kept from before the last upgrade.
+	rollback *rollback
+	// update is what upgrading from the copy updateFrom names to a newer one
+	// would hide, once checked; checking says a check is under way.
+	update     *api.ImageUpdate
+	updateFrom string
+	checking   bool
+	// disk is held while the writable disk is used other than by the
+	// machine: compared with a newer image, copied, or restored.
+	disk sync.Mutex
 
 	nudge chan struct{}
 }
@@ -491,6 +510,9 @@ func (m *machine) control(ctx context.Context) {
 		m.mu.Unlock()
 		if spec == nil {
 			continue
+		}
+		if spec.Desired != api.DesiredDeleted {
+			m.dropRollback(*spec)
 		}
 
 		switch spec.Desired {
@@ -639,22 +661,7 @@ func (m *machine) resolve(ctx context.Context, spec api.EnvironmentSpec) (Image,
 		}
 		pin = &c
 	}
-	img, err := m.rt.store.Get(ctx, *pin, func(p FetchProgress) {
-		switch p.Stage {
-		case StageCopy:
-			m.step(api.StepDownload, "copying the image")
-		case StageDownload:
-			m.step(api.StepDownload, "downloading the image")
-			m.measure(p.Done, p.Total, "bytes")
-		case StageUnpack:
-			reason := "unpacking the image"
-			if p.Layers > 1 {
-				reason += fmt.Sprintf(": layer %d of %d", p.Layer, p.Layers)
-			}
-			m.step(api.StepUnpack, reason)
-			m.measure(p.Done, p.Total, "bytes")
-		}
-	})
+	img, err := m.rt.store.Get(ctx, *pin, m.fetchProgress)
 	if err != nil {
 		return Image{}, err
 	}
@@ -772,20 +779,21 @@ func (r *Runtime) unaccounted() bool {
 }
 
 // imageUsers lists the environments here that use a copy of an image: the
-// ones pinned to it, and any with disks but no pin whose image is the
-// same reference, which could have been made over any copy of it.
+// ones pinned to it or keeping a rollback to it, and any with disks but no
+// pin whose image is the same reference, which could have been made over
+// any copy of it.
 func (r *Runtime) imageUsers(c api.ImageCopy) []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	var users []string
 	for id, m := range r.envs {
 		m.mu.Lock()
-		spec, pin := m.spec, m.image
+		spec, pin, rb := m.spec, m.image, m.rollback
 		m.mu.Unlock()
 		if spec != nil && spec.Desired == api.DesiredDeleted {
 			continue
 		}
-		if pin != nil && *pin == c || pin == nil && spec != nil && spec.Spec.Image == c.Ref && m.hasDisks() {
+		if pin != nil && *pin == c || rb != nil && rb.ImageCopy == c || pin == nil && spec != nil && spec.Spec.Image == c.Ref && m.hasDisks() {
 			users = append(users, id)
 		}
 	}

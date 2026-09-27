@@ -117,6 +117,13 @@ export const api = {
     unwrap(client.PUT('/api/frontend/environments/{id}/settings', { ...byID(id), body })),
   resetEnvironmentToTemplate: (id: string) =>
     unwrap(client.POST('/api/frontend/environments/{id}/reset-to-template', byID(id))),
+  upgradeEnvironmentImage: (id: string, force: boolean) =>
+    unwrap(client.POST('/api/frontend/environments/{id}/image/upgrade', { ...byID(id), body: { force } })),
+  rollbackEnvironmentImage: (id: string) =>
+    unwrap(client.POST('/api/frontend/environments/{id}/image/rollback', byID(id))),
+  keepEnvironmentImage: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/image/keep', byID(id))),
+  cancelEnvironmentImageChange: (id: string) =>
+    unwrap(client.POST('/api/frontend/environments/{id}/image/cancel', byID(id))),
   suspendEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/suspend', byID(id))),
   resizeDesktop: (id: string, width: number, height: number) =>
     unwrap(

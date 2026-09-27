@@ -169,8 +169,15 @@ type Environment struct {
 	// copy, rather than the environment having been changed since.
 	TemplateChanges []string `json:"template_changes,omitempty"`
 	TemplateUpdated bool     `json:"template_updated,omitempty"`
-	Spec            Spec     `json:"spec"`
-	Image           string   `json:"image"`
+	// ImageUpdate is a newer copy of the environment's image its worker
+	// holds, and ImageRollback the writable disk kept from before its last
+	// upgrade. ImageChange is what its next start does to its image:
+	// ImageChangeUpgrade or ImageChangeRollback, or nothing.
+	ImageUpdate   *ImageUpdate   `json:"image_update,omitempty"`
+	ImageRollback *ImageRollback `json:"image_rollback,omitempty"`
+	ImageChange   string         `json:"image_change,omitempty"`
+	Spec          Spec           `json:"spec"`
+	Image         string         `json:"image"`
 	// ImageDigest is the digest of the copy of Image the environment boots
 	// from, as its worker reports it; empty until it has first started.
 	ImageDigest string            `json:"image_digest,omitempty"`
@@ -277,6 +284,49 @@ type EnvironmentSpec struct {
 	Name    string       `json:"name"`
 	Desired DesiredState `json:"desired"`
 	Spec    Spec         `json:"spec"`
+	// PinDigest, when set, is the copy of its image the environment boots
+	// from at its next start, keeping its disks: a newer copy to upgrade to,
+	// or the one its rollback copy of the writable disk was taken from, to go
+	// back to. The empty digest names a copy taken before digests were
+	// recorded.
+	PinDigest *string `json:"pin_digest,omitempty"`
+	// DropRollback discards the copy of the writable disk kept from before
+	// an upgrade, keeping the upgrade.
+	DropRollback bool `json:"drop_rollback,omitempty"`
+}
+
+// ImageUpdate is a newer copy of an environment's image than the one it is
+// pinned to, held by its worker, and what upgrading to it would do to the
+// changes in its writable layer.
+type ImageUpdate struct {
+	Digest string `json:"digest"`
+	// Checked says the writable layer has been compared with both copies,
+	// which happens while the environment is stopped.
+	Checked bool `json:"checked"`
+	// Conflicts are files the environment has changed, added or deleted
+	// that the newer copy also changes: its version keeps hiding the
+	// image's. MoreConflicts counts those left out of the list.
+	Conflicts     []string `json:"conflicts,omitempty"`
+	MoreConflicts int      `json:"more_conflicts,omitempty"`
+	// Packages says one of them is the package manager's database, so after
+	// upgrading it describes neither the old image nor the new one.
+	Packages bool `json:"packages,omitempty"`
+	// Error is why the comparison could not be made.
+	Error string `json:"error,omitempty"`
+}
+
+// What an environment's next start does to its image.
+const (
+	ImageChangeUpgrade  = "upgrade"
+	ImageChangeRollback = "rollback"
+)
+
+// ImageRollback is the copy of an environment's writable disk kept from
+// before it was upgraded, which going back to Digest restores.
+type ImageRollback struct {
+	Digest    string    `json:"digest"`
+	At        time.Time `json:"at"`
+	SizeBytes int64     `json:"size_bytes"`
 }
 
 // WorkerStatus is everything a worker is holding, and what it can offer.
@@ -336,6 +386,12 @@ type ObservedEnvironment struct {
 	// boots from, fixed when it first starts: an image that moves on later
 	// is not the one its writable layer was made over. Empty until then.
 	ImageDigest string `json:"image_digest,omitempty"`
+	// ImagePinned says ImageDigest is known, which it is once the
+	// environment has first started, even when it is the empty digest of a
+	// copy taken before digests were recorded.
+	ImagePinned   bool           `json:"image_pinned,omitempty"`
+	ImageUpdate   *ImageUpdate   `json:"image_update,omitempty"`
+	ImageRollback *ImageRollback `json:"image_rollback,omitempty"`
 }
 
 // Step is one step of starting an environment. They happen in the order
@@ -349,6 +405,9 @@ const (
 	StepDownload Step = "download"
 	// StepUnpack applies the image's layers into its root filesystem.
 	StepUnpack Step = "unpack"
+	// StepSnapshot copies the environment's writable disk before it is
+	// upgraded to a newer copy of its image, to roll back to.
+	StepSnapshot Step = "snapshot"
 	// StepDisks makes the environment's disks, the first time.
 	StepDisks Step = "disks"
 	// StepBoot boots or resumes the machine, until its agent answers.

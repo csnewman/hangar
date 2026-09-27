@@ -851,6 +851,79 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/frontend/environments/{id}/image/upgrade:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: upgradeEnvironmentImage
+      description: >-
+        Re-pins a stopped environment to the newer copy of its image its worker holds, at its next start, keeping its disks and a copy of its writable disk to roll back to. Refused, unless forced, when files it has changed would hide the newer image's, or before that has been checked.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ImageUpgrade" }
+      responses:
+        "200":
+          description: The environment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/environments/{id}/image/rollback:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: rollbackEnvironmentImage
+      description: >-
+        Puts a stopped environment back as it was before its last upgrade, at its next start: the copy of the image and the writable disk it had, losing what has been written to that disk since.
+      responses:
+        "200":
+          description: The environment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/environments/{id}/image/keep:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: keepEnvironmentImage
+      description: >-
+        Keeps an environment's upgrade and discards the copy of its writable disk kept to roll back to.
+      responses:
+        "200":
+          description: The environment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/environments/{id}/image/cancel:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: cancelEnvironmentImageChange
+      description: >-
+        Withdraws an upgrade or rollback its next start would make.
+      responses:
+        "200":
+          description: The environment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/frontend/environments/{id}/suspend:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -1427,6 +1500,12 @@ components:
           description: >-
             Whether the template has changed since the environment took its
             copy of it, rather than the environment having been changed.
+        image_update: { $ref: "#/components/schemas/ImageUpdate" }
+        image_rollback: { $ref: "#/components/schemas/ImageRollback" }
+        image_change:
+          type: string
+          enum: [upgrade, rollback]
+          description: What the environment's next start does to its image.
         spec:
           $ref: "#/components/schemas/Spec"
         image: { type: string }
@@ -1485,6 +1564,44 @@ components:
       enum: [image, cpus, memory, display, gpu, dax, repos, editor_path, untrusted, trusted_folders, placement, name]
       x-enum-varnames: [SettingImage, SettingCPUs, SettingMemory, SettingDisplay, SettingGPU, SettingDAX, SettingRepos,
         SettingEditorPath, SettingUntrusted, SettingTrustedFolders, SettingPlacement, SettingName]
+
+    ImageUpdate:
+      type: object
+      description: >-
+        A newer copy of the environment's image its worker holds, and what
+        upgrading to it would hide: files the environment has changed that
+        the newer copy also changes keep the environment's version.
+      required: [digest, checked]
+      properties:
+        digest: { type: string }
+        checked:
+          type: boolean
+          description: Whether its writable disk has been compared with the newer copy, which happens while it is stopped.
+        conflicts:
+          type: array
+          items: { type: string }
+        more_conflicts: { type: integer }
+        packages:
+          type: boolean
+          description: The package manager's database is among them.
+        error: { type: string }
+
+    ImageRollback:
+      type: object
+      description: The copy of the writable disk kept from before the last upgrade.
+      required: [digest, at, size_bytes]
+      properties:
+        digest: { type: string }
+        at: { type: string, format: date-time }
+        size_bytes: { type: integer, format: int64 }
+
+    ImageUpgrade:
+      type: object
+      additionalProperties: false
+      properties:
+        force:
+          type: boolean
+          description: Upgrade even though files the environment has changed would hide the newer image's.
 
     EnvironmentSettings:
       type: object
@@ -1857,7 +1974,7 @@ components:
       properties:
         step:
           type: string
-          enum: [download, unpack, disks, boot, network, workspace]
+          enum: [download, unpack, snapshot, disks, boot, network, workspace]
         done: { type: integer, format: int64 }
         total: { type: integer, format: int64 }
         unit:

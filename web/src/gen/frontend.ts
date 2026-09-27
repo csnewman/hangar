@@ -598,6 +598,82 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/environments/{id}/image/upgrade": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Re-pins a stopped environment to the newer copy of its image its worker holds, at its next start, keeping its disks and a copy of its writable disk to roll back to. Refused, unless forced, when files it has changed would hide the newer image's, or before that has been checked. */
+        post: operations["upgradeEnvironmentImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/environments/{id}/image/rollback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Puts a stopped environment back as it was before its last upgrade, at its next start: the copy of the image and the writable disk it had, losing what has been written to that disk since. */
+        post: operations["rollbackEnvironmentImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/environments/{id}/image/keep": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Keeps an environment's upgrade and discards the copy of its writable disk kept to roll back to. */
+        post: operations["keepEnvironmentImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/environments/{id}/image/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Withdraws an upgrade or rollback its next start would make. */
+        post: operations["cancelEnvironmentImageChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/environments/{id}/suspend": {
         parameters: {
             query?: never;
@@ -998,6 +1074,13 @@ export interface components {
             template_changes?: components["schemas"]["TemplateSetting"][];
             /** @description Whether the template has changed since the environment took its copy of it, rather than the environment having been changed. */
             template_updated?: boolean;
+            image_update?: components["schemas"]["ImageUpdate"];
+            image_rollback?: components["schemas"]["ImageRollback"];
+            /**
+             * @description What the environment's next start does to its image.
+             * @enum {string}
+             */
+            image_change?: "upgrade" | "rollback";
             spec: components["schemas"]["Spec"];
             image: string;
             /** @description What its virtual GPU renders with on its worker; absent without one. */
@@ -1038,6 +1121,29 @@ export interface components {
          * @enum {string}
          */
         TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "untrusted" | "trusted_folders" | "placement" | "name";
+        /** @description A newer copy of the environment's image its worker holds, and what upgrading to it would hide: files the environment has changed that the newer copy also changes keep the environment's version. */
+        ImageUpdate: {
+            digest: string;
+            /** @description Whether its writable disk has been compared with the newer copy, which happens while it is stopped. */
+            checked: boolean;
+            conflicts?: string[];
+            more_conflicts?: number;
+            /** @description The package manager's database is among them. */
+            packages?: boolean;
+            error?: string;
+        };
+        /** @description The copy of the writable disk kept from before the last upgrade. */
+        ImageRollback: {
+            digest: string;
+            /** Format: date-time */
+            at: string;
+            /** Format: int64 */
+            size_bytes: number;
+        };
+        ImageUpgrade: {
+            /** @description Upgrade even though files the environment has changed would hide the newer image's. */
+            force?: boolean;
+        };
         EnvironmentSettings: {
             cpus: number;
             memory_mib: number;
@@ -1258,7 +1364,7 @@ export interface components {
         /** @description How far a starting environment has got. Steps happen in the order of the enum; one with nothing to do is passed over. total, where a step can be measured, is in unit: bytes, or a clone's objects. */
         StartProgress: {
             /** @enum {string} */
-            step: "download" | "unpack" | "disks" | "boot" | "network" | "workspace";
+            step: "download" | "unpack" | "snapshot" | "disks" | "boot" | "network" | "workspace";
             /** Format: int64 */
             done?: number;
             /** Format: int64 */
@@ -2723,6 +2829,110 @@ export interface operations {
                 };
             };
             400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    upgradeEnvironmentImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ImageUpgrade"];
+            };
+        };
+        responses: {
+            /** @description The environment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Environment"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    rollbackEnvironmentImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The environment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Environment"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    keepEnvironmentImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The environment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Environment"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    cancelEnvironmentImageChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The environment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Environment"];
+                };
+            };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];

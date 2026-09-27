@@ -267,6 +267,18 @@ CREATE TABLE environments (
     -- belongs to that copy, so it keeps booting from it whatever the image's
     -- reference names later.
     image_digest text NOT NULL DEFAULT '',
+    -- The copy of the image to boot from at the next start, keeping the
+    -- disks: a newer one to upgrade to, or the one the rollback was taken
+    -- from. NULL asks for no change; the empty digest names a copy taken
+    -- before digests were recorded.
+    image_pin_want text,
+    -- Discards the rollback, keeping the upgrade.
+    image_drop_rollback boolean NOT NULL DEFAULT false,
+    -- As the worker reports them: a newer copy of the image it holds and
+    -- what upgrading to it would hide (api.ImageUpdate), and the writable
+    -- disk kept from before the last upgrade (api.ImageRollback).
+    image_update   jsonb,
+    image_rollback jsonb,
     cpus        integer NOT NULL CHECK (cpus > 0),
     memory_mib  integer NOT NULL CHECK (memory_mib > 0),
     desired     text NOT NULL CHECK (desired IN ('running', 'stopped', 'suspended', 'deleted')),

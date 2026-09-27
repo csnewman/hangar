@@ -10,6 +10,7 @@ type Step = Progress['step']
 const steps: { step: Step; label: string }[] = [
   { step: 'download', label: 'Download image' },
   { step: 'unpack', label: 'Unpack image' },
+  { step: 'snapshot', label: 'Copy disk for rollback' },
   { step: 'disks', label: 'Prepare disks' },
   { step: 'boot', label: 'Boot' },
   { step: 'network', label: 'Connect network' },

@@ -2403,3 +2403,9 @@ a.reason {
   align-items: center;
   gap: 8px;
 }
+.image-conflicts {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  max-height: 180px;
+  overflow: auto;
+}

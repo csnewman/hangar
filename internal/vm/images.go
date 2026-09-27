@@ -256,6 +256,20 @@ func (s *ImageStore) Newest(ref string) (string, bool) {
 	return s.pick(ref, func(a, b time.Time) bool { return a.After(b) })
 }
 
+// Latest is the digest of the copy of ref that new environments are made
+// over, if the store holds it: what ref named when last looked up, or the
+// newest copy held.
+func (s *ImageStore) Latest(ref string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for c := range s.held {
+		if c.Ref == ref && s.isCurrent(c) {
+			return c.Digest, true
+		}
+	}
+	return "", false
+}
+
 // Oldest is the digest of the copy of ref taken first, if the store holds
 // one.
 func (s *ImageStore) Oldest(ref string) (string, bool) {

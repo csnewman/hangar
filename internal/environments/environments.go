@@ -44,7 +44,7 @@ func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 const columns = `e.id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
 	e.spec, e.image, e.image_digest, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
 	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress, w.gpu,
-	tm.spec, coalesce(tm.revision, 0), e.template_revision`
+	tm.spec, coalesce(tm.revision, 0), e.template_revision, e.image_pin_want, e.image_update, e.image_rollback`
 
 const from = `environments e
 	JOIN users u ON u.id = e.owner_id
@@ -57,11 +57,12 @@ const visible = `($1 OR e.owner_id = $2)`
 
 func scan(row pgx.Row) (api.Environment, error) {
 	var e api.Environment
-	var spec, stats, progress, gpu, tspec []byte
+	var spec, stats, progress, gpu, tspec, update, rollback []byte
 	var trev, erev int64
+	var pinWant *string
 	err := row.Scan(&e.ID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.ImageDigest, &e.CPUs,
 		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats,
-		&progress, &gpu, &tspec, &trev, &erev)
+		&progress, &gpu, &tspec, &trev, &erev, &pinWant, &update, &rollback)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}
@@ -92,6 +93,24 @@ func scan(row pgx.Row) (api.Environment, error) {
 		}
 		e.TemplateChanges = templateChanges(e.Spec, t, e.Name)
 		e.TemplateUpdated = trev > erev
+	}
+	if update != nil {
+		e.ImageUpdate = &api.ImageUpdate{}
+		if err := json.Unmarshal(update, e.ImageUpdate); err != nil {
+			return e, err
+		}
+	}
+	if rollback != nil {
+		e.ImageRollback = &api.ImageRollback{}
+		if err := json.Unmarshal(rollback, e.ImageRollback); err != nil {
+			return e, err
+		}
+	}
+	if pinWant != nil && *pinWant != e.ImageDigest {
+		e.ImageChange = api.ImageChangeUpgrade
+		if e.ImageRollback != nil && e.ImageRollback.Digest == *pinWant {
+			e.ImageChange = api.ImageChangeRollback
+		}
 	}
 	// What its worker's virtual GPUs render with, when it has one.
 	if gpu != nil && e.Spec.GPU == api.GPUVirtual {

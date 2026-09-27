@@ -348,7 +348,8 @@ func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredS
 		// Every row repeats the version. A worker with no environments
 		// still has its row, with the environment columns NULL.
 		rows, err := tx.Query(ctx, `
-			SELECT w.desired_version, e.id, e.name, e.desired, e.spec
+			SELECT w.desired_version, e.id, e.name, e.desired, e.spec, e.image_pin_want,
+				coalesce(e.image_drop_rollback, false)
 			FROM workers w
 			LEFT JOIN environments e ON e.worker_id = w.id
 			WHERE w.id = $1
@@ -360,15 +361,17 @@ func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredS
 		found := false
 		for rows.Next() {
 			found = true
-			var id, name, desired *string
+			var id, name, desired, pin *string
 			var spec []byte
-			if err := rows.Scan(&set.Version, &id, &name, &desired, &spec); err != nil {
+			var drop bool
+			if err := rows.Scan(&set.Version, &id, &name, &desired, &spec, &pin, &drop); err != nil {
 				return err
 			}
 			if id == nil {
 				continue
 			}
-			e := api.EnvironmentSpec{ID: *id, Name: *name, Desired: api.DesiredState(*desired)}
+			e := api.EnvironmentSpec{ID: *id, Name: *name, Desired: api.DesiredState(*desired),
+				PinDigest: pin, DropRollback: drop}
 			if err := json.Unmarshal(spec, &e.Spec); err != nil {
 				return fmt.Errorf("environment %s: %w", *id, err)
 			}
@@ -492,7 +495,17 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 					return err
 				}
 			}
-			var stats, progress []byte
+			var stats, progress, update, rollback []byte
+			if o.ImageUpdate != nil {
+				if update, err = json.Marshal(o.ImageUpdate); err != nil {
+					return err
+				}
+			}
+			if o.ImageRollback != nil {
+				if rollback, err = json.Marshal(o.ImageRollback); err != nil {
+					return err
+				}
+			}
 			if o.Stats != nil {
 				if stats, err = json.Marshal(o.Stats); err != nil {
 					return err
@@ -504,11 +517,17 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 				}
 			}
 			// updated_at marks a change of phase, not every measurement. A
-			// report without a digest leaves the one already known.
+			// report from before the environment is pinned leaves the
+			// digest already known. A pin that reaches what was wanted
+			// clears the want.
 			if _, err := tx.Exec(ctx, `UPDATE environments SET phase = $2, reason = $3, stats = $4, progress = $5,
-				image_digest = CASE WHEN $6 <> '' THEN $6 ELSE image_digest END,
+				image_digest = CASE WHEN $6 <> '' OR $7 THEN $6 ELSE image_digest END,
+				image_pin_want = CASE WHEN $7 AND image_pin_want = $6 THEN NULL ELSE image_pin_want END,
+				image_update = $8, image_rollback = $9,
+				image_drop_rollback = image_drop_rollback AND $9::jsonb IS NOT NULL,
 				updated_at = CASE WHEN (phase, reason) IS DISTINCT FROM ($2, $3) THEN now() ELSE updated_at END
-				WHERE id = $1`, o.ID, o.Phase, o.Reason, stats, progress, o.ImageDigest); err != nil {
+				WHERE id = $1`, o.ID, o.Phase, o.Reason, stats, progress, o.ImageDigest, o.ImagePinned,
+				update, rollback); err != nil {
 				return err
 			}
 		}

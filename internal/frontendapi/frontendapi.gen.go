@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -77,6 +78,24 @@ func (e Display) Valid() bool {
 	case DisplayDesktop:
 		return true
 	case DisplayNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EnvironmentImageChange.
+const (
+	Rollback EnvironmentImageChange = "rollback"
+	Upgrade  EnvironmentImageChange = "upgrade"
+)
+
+// Valid indicates whether the value is a known member of the EnvironmentImageChange enum.
+func (e EnvironmentImageChange) Valid() bool {
+	switch e {
+	case Rollback:
+		return true
+	case Upgrade:
 		return true
 	default:
 		return false
@@ -206,6 +225,7 @@ const (
 	Disks     StartProgressStep = "disks"
 	Download  StartProgressStep = "download"
 	Network   StartProgressStep = "network"
+	Snapshot  StartProgressStep = "snapshot"
 	Unpack    StartProgressStep = "unpack"
 	Workspace StartProgressStep = "workspace"
 )
@@ -220,6 +240,8 @@ func (e StartProgressStep) Valid() bool {
 	case Download:
 		return true
 	case Network:
+		return true
+	case Snapshot:
 		return true
 	case Unpack:
 		return true
@@ -467,9 +489,18 @@ type Environment struct {
 	ID          string `json:"id"`
 	Image       string `json:"image"`
 
+	// ImageChange What the environment's next start does to its image.
+	ImageChange *EnvironmentImageChange `json:"image_change,omitempty"`
+
 	// ImageDigest The digest of the copy of the image the environment boots from, fixed when it first starts. Absent until then.
 	ImageDigest *string `json:"image_digest,omitempty"`
-	MemoryMiB   int     `json:"memory_mib"`
+
+	// ImageRollback The copy of the writable disk kept from before the last upgrade.
+	ImageRollback *ImageRollback `json:"image_rollback,omitempty"`
+
+	// ImageUpdate A newer copy of the environment's image its worker holds, and what upgrading to it would hide: files the environment has changed that the newer copy also changes keep the environment's version.
+	ImageUpdate *ImageUpdate `json:"image_update,omitempty"`
+	MemoryMiB   int          `json:"memory_mib"`
 
 	// Name Unique among its owner's environments.
 	Name string `json:"name"`
@@ -510,6 +541,9 @@ type Environment struct {
 	// WorkerID The worker it is placed on. Absent until placed.
 	WorkerID *string `json:"worker_id,omitempty"`
 }
+
+// EnvironmentImageChange What the environment's next start does to its image.
+type EnvironmentImageChange string
 
 // EnvironmentSettings defines model for EnvironmentSettings.
 type EnvironmentSettings struct {
@@ -633,6 +667,13 @@ type ImageRepositoryInput struct {
 	Visibility Visibility `json:"visibility"`
 }
 
+// ImageRollback The copy of the writable disk kept from before the last upgrade.
+type ImageRollback struct {
+	At        time.Time `json:"at"`
+	Digest    string    `json:"digest"`
+	SizeBytes int64     `json:"size_bytes"`
+}
+
 // ImageTag defines model for ImageTag.
 type ImageTag struct {
 	Digest    string `json:"digest"`
@@ -642,6 +683,25 @@ type ImageTag struct {
 	// SizeBytes The image's config and layers, compressed; for an index, its largest image.
 	SizeBytes int64     `json:"size_bytes"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ImageUpdate A newer copy of the environment's image its worker holds, and what upgrading to it would hide: files the environment has changed that the newer copy also changes keep the environment's version.
+type ImageUpdate struct {
+	// Checked Whether its writable disk has been compared with the newer copy, which happens while it is stopped.
+	Checked       bool      `json:"checked"`
+	Conflicts     *[]string `json:"conflicts,omitempty"`
+	Digest        string    `json:"digest"`
+	Error         *string   `json:"error,omitempty"`
+	MoreConflicts *int      `json:"more_conflicts,omitempty"`
+
+	// Packages The package manager's database is among them.
+	Packages *bool `json:"packages,omitempty"`
+}
+
+// ImageUpgrade defines model for ImageUpgrade.
+type ImageUpgrade struct {
+	// Force Upgrade even though files the environment has changed would hide the newer image's.
+	Force *bool `json:"force,omitempty"`
 }
 
 // LocalImage defines model for LocalImage.
@@ -1134,6 +1194,9 @@ type CreateEnvironmentJSONRequestBody = CreateEnvironment
 // ResizeDesktopJSONRequestBody defines body for ResizeDesktop for application/json ContentType.
 type ResizeDesktopJSONRequestBody = DesktopSize
 
+// UpgradeEnvironmentImageJSONRequestBody defines body for UpgradeEnvironmentImage for application/json ContentType.
+type UpgradeEnvironmentImageJSONRequestBody = ImageUpgrade
+
 // SignalProcessJSONRequestBody defines body for SignalProcess for application/json ContentType.
 type SignalProcessJSONRequestBody = SignalProcess
 
@@ -1223,6 +1286,18 @@ type ServerInterface interface {
 
 	// (POST /api/frontend/environments/{id}/editor)
 	OpenEditor(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (POST /api/frontend/environments/{id}/image/cancel)
+	CancelEnvironmentImageChange(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (POST /api/frontend/environments/{id}/image/keep)
+	KeepEnvironmentImage(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (POST /api/frontend/environments/{id}/image/rollback)
+	RollbackEnvironmentImage(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (POST /api/frontend/environments/{id}/image/upgrade)
+	UpgradeEnvironmentImage(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (GET /api/frontend/environments/{id}/processes)
 	ListProcesses(w http.ResponseWriter, r *http.Request, id ID)
@@ -1606,6 +1681,110 @@ func (siw *ServerInterfaceWrapper) OpenEditor(w http.ResponseWriter, r *http.Req
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.OpenEditor(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CancelEnvironmentImageChange operation middleware
+func (siw *ServerInterfaceWrapper) CancelEnvironmentImageChange(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CancelEnvironmentImageChange(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// KeepEnvironmentImage operation middleware
+func (siw *ServerInterfaceWrapper) KeepEnvironmentImage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.KeepEnvironmentImage(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RollbackEnvironmentImage operation middleware
+func (siw *ServerInterfaceWrapper) RollbackEnvironmentImage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RollbackEnvironmentImage(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpgradeEnvironmentImage operation middleware
+func (siw *ServerInterfaceWrapper) UpgradeEnvironmentImage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpgradeEnvironmentImage(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3058,6 +3237,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/stop", wrapper.StopEnvironment)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/settings", wrapper.UpdateEnvironmentSettings)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/reset-to-template", wrapper.ResetEnvironmentToTemplate)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/image/upgrade", wrapper.UpgradeEnvironmentImage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/image/rollback", wrapper.RollbackEnvironmentImage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/image/keep", wrapper.KeepEnvironmentImage)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/image/cancel", wrapper.CancelEnvironmentImageChange)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/suspend", wrapper.SuspendEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/processes", wrapper.ListProcesses)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/processes/{pid}/signal", wrapper.SignalProcess)
@@ -3574,6 +3757,263 @@ func (response OpenEditor503JSONResponse) VisitOpenEditorResponse(w http.Respons
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelEnvironmentImageChangeRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type CancelEnvironmentImageChangeResponseObject interface {
+	VisitCancelEnvironmentImageChangeResponse(w http.ResponseWriter) error
+}
+
+type CancelEnvironmentImageChange200JSONResponse Environment
+
+func (response CancelEnvironmentImageChange200JSONResponse) VisitCancelEnvironmentImageChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelEnvironmentImageChange401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CancelEnvironmentImageChange401JSONResponse) VisitCancelEnvironmentImageChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelEnvironmentImageChange404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CancelEnvironmentImageChange404JSONResponse) VisitCancelEnvironmentImageChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CancelEnvironmentImageChange409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CancelEnvironmentImageChange409JSONResponse) VisitCancelEnvironmentImageChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type KeepEnvironmentImageRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type KeepEnvironmentImageResponseObject interface {
+	VisitKeepEnvironmentImageResponse(w http.ResponseWriter) error
+}
+
+type KeepEnvironmentImage200JSONResponse Environment
+
+func (response KeepEnvironmentImage200JSONResponse) VisitKeepEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type KeepEnvironmentImage401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response KeepEnvironmentImage401JSONResponse) VisitKeepEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type KeepEnvironmentImage404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response KeepEnvironmentImage404JSONResponse) VisitKeepEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type KeepEnvironmentImage409JSONResponse struct{ ConflictJSONResponse }
+
+func (response KeepEnvironmentImage409JSONResponse) VisitKeepEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackEnvironmentImageRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type RollbackEnvironmentImageResponseObject interface {
+	VisitRollbackEnvironmentImageResponse(w http.ResponseWriter) error
+}
+
+type RollbackEnvironmentImage200JSONResponse Environment
+
+func (response RollbackEnvironmentImage200JSONResponse) VisitRollbackEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackEnvironmentImage401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RollbackEnvironmentImage401JSONResponse) VisitRollbackEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackEnvironmentImage404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RollbackEnvironmentImage404JSONResponse) VisitRollbackEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RollbackEnvironmentImage409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RollbackEnvironmentImage409JSONResponse) VisitRollbackEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpgradeEnvironmentImageRequestObject struct {
+	ID   ID `json:"id"`
+	Body *UpgradeEnvironmentImageJSONRequestBody
+}
+
+type UpgradeEnvironmentImageResponseObject interface {
+	VisitUpgradeEnvironmentImageResponse(w http.ResponseWriter) error
+}
+
+type UpgradeEnvironmentImage200JSONResponse Environment
+
+func (response UpgradeEnvironmentImage200JSONResponse) VisitUpgradeEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpgradeEnvironmentImage401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpgradeEnvironmentImage401JSONResponse) VisitUpgradeEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpgradeEnvironmentImage404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpgradeEnvironmentImage404JSONResponse) VisitUpgradeEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpgradeEnvironmentImage409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpgradeEnvironmentImage409JSONResponse) VisitUpgradeEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6914,6 +7354,18 @@ type StrictServerInterface interface {
 	// (POST /api/frontend/environments/{id}/editor)
 	OpenEditor(ctx context.Context, request OpenEditorRequestObject) (OpenEditorResponseObject, error)
 
+	// (POST /api/frontend/environments/{id}/image/cancel)
+	CancelEnvironmentImageChange(ctx context.Context, request CancelEnvironmentImageChangeRequestObject) (CancelEnvironmentImageChangeResponseObject, error)
+
+	// (POST /api/frontend/environments/{id}/image/keep)
+	KeepEnvironmentImage(ctx context.Context, request KeepEnvironmentImageRequestObject) (KeepEnvironmentImageResponseObject, error)
+
+	// (POST /api/frontend/environments/{id}/image/rollback)
+	RollbackEnvironmentImage(ctx context.Context, request RollbackEnvironmentImageRequestObject) (RollbackEnvironmentImageResponseObject, error)
+
+	// (POST /api/frontend/environments/{id}/image/upgrade)
+	UpgradeEnvironmentImage(ctx context.Context, request UpgradeEnvironmentImageRequestObject) (UpgradeEnvironmentImageResponseObject, error)
+
 	// (GET /api/frontend/environments/{id}/processes)
 	ListProcesses(ctx context.Context, request ListProcessesRequestObject) (ListProcessesResponseObject, error)
 
@@ -7356,6 +7808,120 @@ func (sh *strictHandler) OpenEditor(w http.ResponseWriter, r *http.Request, id I
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(OpenEditorResponseObject); ok {
 		if err := validResponse.VisitOpenEditorResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CancelEnvironmentImageChange operation middleware
+func (sh *strictHandler) CancelEnvironmentImageChange(w http.ResponseWriter, r *http.Request, id ID) {
+	var request CancelEnvironmentImageChangeRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CancelEnvironmentImageChange(ctx, request.(CancelEnvironmentImageChangeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CancelEnvironmentImageChange")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CancelEnvironmentImageChangeResponseObject); ok {
+		if err := validResponse.VisitCancelEnvironmentImageChangeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// KeepEnvironmentImage operation middleware
+func (sh *strictHandler) KeepEnvironmentImage(w http.ResponseWriter, r *http.Request, id ID) {
+	var request KeepEnvironmentImageRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.KeepEnvironmentImage(ctx, request.(KeepEnvironmentImageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "KeepEnvironmentImage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(KeepEnvironmentImageResponseObject); ok {
+		if err := validResponse.VisitKeepEnvironmentImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RollbackEnvironmentImage operation middleware
+func (sh *strictHandler) RollbackEnvironmentImage(w http.ResponseWriter, r *http.Request, id ID) {
+	var request RollbackEnvironmentImageRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RollbackEnvironmentImage(ctx, request.(RollbackEnvironmentImageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RollbackEnvironmentImage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RollbackEnvironmentImageResponseObject); ok {
+		if err := validResponse.VisitRollbackEnvironmentImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpgradeEnvironmentImage operation middleware
+func (sh *strictHandler) UpgradeEnvironmentImage(w http.ResponseWriter, r *http.Request, id ID) {
+	var request UpgradeEnvironmentImageRequestObject
+
+	request.ID = id
+
+	var body UpgradeEnvironmentImageJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
+	}
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpgradeEnvironmentImage(ctx, request.(UpgradeEnvironmentImageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpgradeEnvironmentImage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpgradeEnvironmentImageResponseObject); ok {
+		if err := validResponse.VisitUpgradeEnvironmentImageResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

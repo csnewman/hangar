@@ -98,7 +98,7 @@ func changing(ctx context.Context, tx db.Tx, p users.Principal, id string) (api.
 	// One not yet placed has no machine to start with the settings it had.
 	case e.Desired != api.DesiredStopped && !(e.WorkerID == "" && e.Phase == api.PhasePending) ||
 		e.Phase == api.PhaseStopping:
-		return e, fmt.Errorf("%w: stop the environment first; its settings take effect when it next starts", ErrConflict)
+		return e, fmt.Errorf("%w: stop the environment first; the change takes effect when it next starts", ErrConflict)
 	}
 	return e, nil
 }
