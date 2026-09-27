@@ -3,11 +3,14 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -101,6 +104,10 @@ func assembleRoot() error {
 		return fmt.Errorf("installing the agent: %w", err)
 	}
 
+	if err := ensureMachineID(newRoot); err != nil {
+		return fmt.Errorf("giving the environment a machine ID: %w", err)
+	}
+
 	// The layers stay reachable in the new root rather than orphaned, and
 	// the kernel's filesystems move with it.
 	for _, m := range []struct{ from, to string }{
@@ -165,4 +172,28 @@ func copyFile(from, to string, mode os.FileMode) error {
 		return err
 	}
 	return os.Rename(tmp, to)
+}
+
+// ensureMachineID gives the environment its own machine ID on its first
+// boot, where the image has none, before systemd starts. With one, systemd
+// does not treat the boot as a machine's first, whose work -- applying the
+// presets -- the image did when it was built, and which on some
+// distributions resets the default target the image set. The ID is kept on
+// the writable layer, so the environment keeps it.
+func ensureMachineID(root string) error {
+	path := filepath.Join(root, "etc", "machine-id")
+	if b, err := os.ReadFile(path); err == nil {
+		id := strings.TrimSpace(string(b))
+		if len(id) == 32 && strings.Trim(id, "0123456789abcdef") == "" {
+			return nil
+		}
+	}
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return err
+	}
+	// Version 4, as systemd makes them.
+	raw[6] = raw[6]&0x0f | 0x40
+	raw[8] = raw[8]&0x3f | 0x80
+	return os.WriteFile(path, []byte(hex.EncodeToString(raw[:])+"\n"), 0o444)
 }
