@@ -21,6 +21,15 @@ A worker machine needs, before its container starts:
       echo 'w /sys/kernel/mm/transparent_hugepage/shmem_enabled - - - - advise' \
           | sudo tee /etc/tmpfiles.d/hangar-thp.conf    # across reboots
 
+  A huge page needs a free 2 MB block, and a host whose free memory is
+  fragmented, often by a large page cache, backs some guest memory with 4 KiB
+  pages instead. The worker logs a warning when that happens. Keeping blocks
+  free costs little memory, and matters most under nested virtualisation,
+  where guest memory on 4 KiB pages is hundreds of times slower to touch:
+
+      printf 'vm.compaction_proactiveness = 90\nvm.min_free_kbytes = 262144\n' \
+          | sudo tee /etc/sysctl.d/60-hangar-thp.conf && sudo sysctl --system
+
 - **`/var/lib/hangar`** on a fast local Linux filesystem with room for every
   environment's disks (each is sparse, up to `upper_gib + docker_gib`) and
   the images. Each image layer is unpacked there once, however many images

@@ -3,6 +3,7 @@ package ch
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -65,4 +66,53 @@ func selected(s string) string {
 		}
 	}
 	return ""
+}
+
+// HugePageCounts are the host's running totals of shared memory it has
+// asked to back with a huge page: those it could, and those it fell back to
+// 4 KiB pages for because no 2 MB block was free.
+type HugePageCounts struct {
+	Allocated, FellBack uint64
+}
+
+// ReadHugePageCounts reads the host's HugePageCounts from /proc/vmstat,
+// where shared memory counts as file memory.
+//
+// Cloud Hypervisor's guest memory is shared memory, and a guest's memory
+// that falls back runs on 4 KiB pages at the second stage of translation:
+// slower on any host, and under nested virtualisation hundreds of times
+// slower to touch. It happens when the host's free memory is fragmented, and
+// the balloon makes it recur: memory a guest frees is handed back, and taken
+// again whenever the guest next uses it.
+func ReadHugePageCounts() (HugePageCounts, error) {
+	b, err := os.ReadFile("/proc/vmstat")
+	if err != nil {
+		return HugePageCounts{}, err
+	}
+	var c HugePageCounts
+	var seen int
+	for _, line := range strings.Split(string(b), "\n") {
+		name, v, ok := strings.Cut(line, " ")
+		var dst *uint64
+		switch {
+		case !ok:
+			continue
+		case name == "thp_file_alloc":
+			dst = &c.Allocated
+		case name == "thp_file_fallback":
+			dst = &c.FellBack
+		default:
+			continue
+		}
+		n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+		if err != nil {
+			return HugePageCounts{}, fmt.Errorf("parsing %s in /proc/vmstat: %w", name, err)
+		}
+		*dst = n
+		seen++
+	}
+	if seen != 2 {
+		return HugePageCounts{}, fmt.Errorf("/proc/vmstat has no thp_file_alloc and thp_file_fallback")
+	}
+	return c, nil
 }

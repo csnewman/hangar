@@ -170,6 +170,7 @@ func New(cfg Config) (*Runtime, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Runtime{cfg: cfg, store: st, ctx: ctx, cancel: cancel, envs: map[string]*machine{},
 		changed: make(chan struct{}, 1), gpu: probeGPU(ctx, cfg, gpuEnv), gpuEnv: gpuEnv}
+	go r.watchHugePages()
 
 	entries, err := os.ReadDir(cfg.StateDir)
 	if err != nil {
