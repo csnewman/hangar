@@ -1,0 +1,38 @@
+/* The taskbar's look: plain, and legible over any window. */
+* {
+  font-family: "DejaVu Sans", sans-serif;
+  font-size: 13px;
+  border: none;
+  border-radius: 0;
+  min-height: 0;
+}
+
+window#waybar {
+  background: #1f2430;
+  color: #e6e6e6;
+}
+
+#custom-terminal,
+#custom-browser,
+#clock {
+  padding: 0 10px;
+}
+
+#custom-terminal:hover,
+#custom-browser:hover {
+  background: #33394a;
+}
+
+#taskbar button {
+  padding: 0 10px;
+  color: #c8c8c8;
+}
+
+#taskbar button.active {
+  background: #3b4252;
+  color: #ffffff;
+}
+
+#taskbar button:hover {
+  background: #33394a;
+}

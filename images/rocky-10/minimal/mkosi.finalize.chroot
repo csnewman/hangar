@@ -6,3 +6,9 @@ set -eu
 # Boots to a console; base/ sets the graphical target. The worker picks the
 # target at each boot from the template's display either way.
 systemctl set-default multi-user.target
+
+# The image is up to date as built: what an update of /usr triggers at boot
+# -- rebuilding the linker cache, the journal's catalog -- was done when its
+# packages were installed, so every environment's first boot need not do it
+# again. It must come last, after anything else has touched /usr.
+/usr/lib/systemd/systemd-update-done

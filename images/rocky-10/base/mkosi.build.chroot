@@ -1,6 +1,6 @@
 #!/bin/sh
-# Compiles the desktop programs Rocky's repositories lack -- labwc, wlr-randr
-# and grim -- into $DESTDIR, which mkosi copies into the image. It runs inside
+# Compiles the desktop programs Rocky's repositories lack -- labwc, wlr-randr,
+# grim and waybar -- into $DESTDIR, which mkosi copies into the image. It runs inside
 # the image's tree (.chroot), where the compilers and headers are, as
 # BuildPackages, so none of them reach the image.
 #
@@ -24,8 +24,10 @@ fetch https://gitlab.freedesktop.org/emersion/wlr-randr/-/archive/v0.4.1/wlr-ran
 	8af085aeed3132f7442a05bafeadfd0ea30e9a4818af1a91e161f7d560f2cd93 wlr-randr.tar.gz
 fetch https://gitlab.freedesktop.org/emersion/grim/-/archive/v1.5.0/grim-v1.5.0.tar.gz \
 	9e72a98f7621b1f5741b405b8dbd447acf7d300ddb12667ec526db1ce6154eaa grim.tar.gz
+fetch https://github.com/Alexays/Waybar/archive/refs/tags/0.15.0.tar.gz \
+	21c2bbef88c40473c355003582f9331d2f9b8a01efdcce0935edfc5f6b023a3e waybar.tar.gz
 
-for name in labwc wlr-randr grim; do
+for name in labwc wlr-randr grim waybar; do
 	mkdir "$name"
 	tar -xzf "$name.tar.gz" -C "$name" --strip-components=1
 done
@@ -44,3 +46,14 @@ build() {
 build labwc -Dman-pages=disabled -Dxwayland=enabled -Dsvg=enabled -Dicon=enabled -Dnls=disabled
 build wlr-randr
 build grim -Dman-pages=disabled -Djpeg=enabled
+
+# waybar wants a newer spdlog than EPEL's, and gtk-layer-shell, which Rocky
+# lacks. Its own wraps provide both, pinned by digest, built statically into
+# waybar and left uninstalled. Every optional module is off, the taskbar
+# using none of them, save libudev: its battery module is built on Linux
+# whatever the options say, and links against it.
+meson setup waybar/build waybar --prefix=/usr/local --buildtype=release \
+	--force-fallback-for=gtk-layer-shell-0,spdlog -Ddefault_library=static \
+	-Dauto_features=disabled -Dlibudev=enabled -Dman-pages=disabled -Dtests=disabled
+meson compile -C waybar/build
+meson install -C waybar/build --destdir "$DESTDIR" --skip-subprojects

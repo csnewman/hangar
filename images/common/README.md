@@ -8,10 +8,16 @@ disagree about how an environment is wired.
   autologin, the presets that decide which units start, `/etc/fstab` with the
   environment's Docker disk, and Docker's storage settings -- in `minimal`
   too, so a Docker the user installs lands on that disk.
-  `usr/share/hangar/image.json` says the image has no desktop.
+  `usr/share/hangar/image.json` says the image has no desktop. Units with
+  nothing to do in an environment are masked (`etc/systemd/system/*` linked
+  to `/dev/null`), since each costs boot time on few vCPUs:
+  `systemd-modules-load` and `modprobe@` (the guest kernel has no modules),
+  `systemd-firstboot` (mkosi sets what it would ask), and
+  `systemd-network-generator` and `systemd-udev-load-credentials` (nothing
+  passes them settings).
 - `base/tree`: what `base` adds. The desktop -- `hangar-desktop.service`
-  runs labwc headless, configured by `etc/xdg/labwc` -- with
-  `hangar-terminal` and `hangar-browser`, which its menu and shortcuts open
+  runs labwc headless, configured by `etc/xdg/labwc`, with waybar as its
+  taskbar (`etc/xdg/waybar`) -- with `hangar-terminal` and `hangar-browser`, which its menu and shortcuts open
   under whatever name the distribution gives them, and the smoke test.
   `image.json` says the image has a desktop, which the worker checks before
   booting an environment whose template asks for one.

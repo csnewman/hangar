@@ -1,0 +1,31 @@
+// The desktop's taskbar, at the bottom: launchers, the open windows, and the
+// time. labwc starts it (etc/xdg/labwc/autostart).
+{
+  "layer": "top",
+  "position": "bottom",
+  "height": 30,
+  "spacing": 4,
+  "modules-left": ["custom/terminal", "custom/browser"],
+  "modules-center": ["wlr/taskbar"],
+  "modules-right": ["clock"],
+  "custom/terminal": {
+    "format": "Terminal",
+    "tooltip-format": "Open a terminal (Ctrl+Alt+T)",
+    "on-click": "hangar-terminal"
+  },
+  "custom/browser": {
+    "format": "Browser",
+    "tooltip-format": "Open the web browser (Ctrl+Alt+B)",
+    "on-click": "hangar-browser"
+  },
+  "wlr/taskbar": {
+    "format": "{title:.40}",
+    "tooltip-format": "{title}",
+    "on-click": "activate",
+    "on-click-middle": "close"
+  },
+  "clock": {
+    "format": "{:%H:%M}",
+    "tooltip-format": "{:%A %d %B %Y}"
+  }
+}
