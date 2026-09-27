@@ -3,6 +3,16 @@
   "productName": "Hangar",
   "version": "0.1.0",
   "description": "Hangar's control panel as a desktop app: tabs that keep their state, several servers, notifications and a menu bar.",
+  "homepage": "https://github.com/csnewman/hangar",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/csnewman/hangar.git",
+    "directory": "desktop"
+  },
+  "author": {
+    "name": "Hangar contributors",
+    "email": "hangar@users.noreply.github.com"
+  },
   "license": "MIT",
   "private": true,
   "main": "dist/main.js",
