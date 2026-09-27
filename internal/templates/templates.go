@@ -412,8 +412,11 @@ func (m *Manager) Update(ctx context.Context, p users.Principal, id string, in I
 		if team != "" {
 			teamArg = &team
 		}
+		// The revision tells environments made from the template that what
+		// they copied has moved on; a change of name or owner is not that.
 		_, err = tx.Exec(ctx, `UPDATE templates SET name = $2, description = $3, visibility = $4, spec = $5,
-			owner_id = $6, team_id = $7, updated_at = now() WHERE id = $1`,
+			owner_id = $6, team_id = $7, updated_at = now(),
+			revision = revision + CASE WHEN spec = $5::jsonb THEN 0 ELSE 1 END WHERE id = $1`,
 			id, in.Name, in.Description, in.Visibility, spec, ownerID, teamArg)
 		if db.IsUniqueViolation(err) {
 			return fmt.Errorf("%w: the owner already has a template named %s", ErrConflict, in.Name)
@@ -567,26 +570,27 @@ func (m *Manager) SetCollaborators(ctx context.Context, p users.Principal, id st
 }
 
 // ForUse reads the template p wants to make an environment from, inside the
-// caller's transaction, and returns its name and spec.
-func ForUse(ctx context.Context, tx db.Tx, p users.Principal, id string) (string, api.TemplateSpec, error) {
+// caller's transaction, and returns its name, spec and revision.
+func ForUse(ctx context.Context, tx db.Tx, p users.Principal, id string) (string, api.TemplateSpec, int64, error) {
 	if !db.ValidUUID(id) {
-		return "", api.TemplateSpec{}, ErrNotFound
+		return "", api.TemplateSpec{}, 0, ErrNotFound
 	}
 	var name string
 	var raw []byte
-	err := tx.QueryRow(ctx, `SELECT t.name, t.spec FROM templates t WHERE `+canSee+` AND t.id = $3`,
-		p.Admin, p.UserID, id).Scan(&name, &raw)
+	var revision int64
+	err := tx.QueryRow(ctx, `SELECT t.name, t.spec, t.revision FROM templates t WHERE `+canSee+` AND t.id = $3`,
+		p.Admin, p.UserID, id).Scan(&name, &raw, &revision)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", api.TemplateSpec{}, ErrNotFound
+		return "", api.TemplateSpec{}, 0, ErrNotFound
 	}
 	if err != nil {
-		return "", api.TemplateSpec{}, err
+		return "", api.TemplateSpec{}, 0, err
 	}
 	var spec api.TemplateSpec
 	if err := json.Unmarshal(raw, &spec); err != nil {
-		return "", api.TemplateSpec{}, err
+		return "", api.TemplateSpec{}, 0, err
 	}
-	return name, spec, nil
+	return name, spec, revision, nil
 }
 
 // normalise checks a template's content and fills in defaults.

@@ -807,6 +807,50 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/frontend/environments/{id}/settings:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: updateEnvironmentSettings
+      description: >-
+        Changes a stopped environment's size, display and GPU, which take
+        effect when it next starts.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnvironmentSettings" }
+      responses:
+        "200":
+          description: The environment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/environments/{id}/reset-to-template:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: resetEnvironmentToTemplate
+      description: >-
+        Gives a stopped environment its template's current settings,
+        keeping its disks. Refused when the template names another image or
+        other repositories, or placement its worker does not meet.
+      responses:
+        "200":
+          description: The environment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
   /api/frontend/environments/{id}/suspend:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -1372,6 +1416,17 @@ components:
         template:
           type: string
           description: That template's name when the environment was made.
+        template_changes:
+          type: array
+          description: >-
+            The settings in which it differs from its template's current
+            settings.
+          items: { $ref: "#/components/schemas/TemplateSetting" }
+        template_updated:
+          type: boolean
+          description: >-
+            Whether the template has changed since the environment took its
+            copy of it, rather than the environment having been changed.
         spec:
           $ref: "#/components/schemas/Spec"
         image: { type: string }
@@ -1423,6 +1478,23 @@ components:
       type: string
       description: Whether the environment has a graphical desktop.
       enum: [none, desktop]
+
+    TemplateSetting:
+      type: string
+      description: A setting an environment takes from its template.
+      enum: [image, cpus, memory, display, gpu, repos, editor_path, untrusted, trusted_folders, placement, name]
+      x-enum-varnames: [SettingImage, SettingCPUs, SettingMemory, SettingDisplay, SettingGPU, SettingRepos,
+        SettingEditorPath, SettingUntrusted, SettingTrustedFolders, SettingPlacement, SettingName]
+
+    EnvironmentSettings:
+      type: object
+      required: [cpus, memory_mib, display, gpu]
+      additionalProperties: false
+      properties:
+        cpus: { type: integer, minimum: 1 }
+        memory_mib: { type: integer, minimum: 1 }
+        display: { $ref: "#/components/schemas/Display" }
+        gpu: { $ref: "#/components/schemas/GPU" }
 
     GPU:
       type: string

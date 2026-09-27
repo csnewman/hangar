@@ -2388,3 +2388,18 @@ a.reason {
   padding: 10px 12px;
   border-top: 1px solid var(--border);
 }
+
+/* How an environment differs from its template, and the way back to it. */
+.notice.drift {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin-bottom: 12px;
+}
+.drift-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

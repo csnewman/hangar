@@ -18,6 +18,7 @@ import { EnvironmentActions } from '../components/EnvironmentActions'
 import { formatAgo, shortDigest } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
+import { SettingsPanel, TemplateDrift } from '../components/EnvironmentSettings'
 import { StartProgress } from '../components/StartProgress'
 import { desktop } from '../desktop'
 import { PhaseBadge, RendererBadge } from '../components/Status'
@@ -132,6 +133,7 @@ export function SummaryTab() {
   const me = useMe()
   return (
     <div className="page-pad">
+      <TemplateDrift env={env} />
       <div className="panel">
         <dl className="props">
           <Prop label="Status">
@@ -210,6 +212,7 @@ export function SummaryTab() {
           </Prop>
         </dl>
       </div>
+      <SettingsPanel key={`${env.id}:${env.spec.cpus}:${env.spec.memory_mib}:${env.spec.display}:${env.spec.gpu}`} env={env} />
       <section className="section">
         <h2 className="section-title">Activity</h2>
         <AuditActivity subjects={[`environment:${env.id}`]} pageSize={5} />

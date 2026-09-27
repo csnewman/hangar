@@ -560,6 +560,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/environments/{id}/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Changes a stopped environment's size, display and GPU, which take effect when it next starts. */
+        put: operations["updateEnvironmentSettings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/environments/{id}/reset-to-template": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Gives a stopped environment its template's current settings, keeping its disks. Refused when the template names another image or other repositories, or placement its worker does not meet. */
+        post: operations["resetEnvironmentToTemplate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/environments/{id}/suspend": {
         parameters: {
             query?: never;
@@ -956,6 +994,10 @@ export interface components {
             template_id?: string;
             /** @description That template's name when the environment was made. */
             template: string;
+            /** @description The settings in which it differs from its template's current settings. */
+            template_changes?: components["schemas"]["TemplateSetting"][];
+            /** @description Whether the template has changed since the environment took its copy of it, rather than the environment having been changed. */
+            template_updated?: boolean;
             spec: components["schemas"]["Spec"];
             image: string;
             /** @description What its virtual GPU renders with on its worker; absent without one. */
@@ -991,6 +1033,17 @@ export interface components {
          * @enum {string}
          */
         Display: "none" | "desktop";
+        /**
+         * @description A setting an environment takes from its template.
+         * @enum {string}
+         */
+        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "repos" | "editor_path" | "untrusted" | "trusted_folders" | "placement" | "name";
+        EnvironmentSettings: {
+            cpus: number;
+            memory_mib: number;
+            display: components["schemas"]["Display"];
+            gpu: components["schemas"]["GPU"];
+        };
         /**
          * @description virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
          * @enum {string}
@@ -2610,6 +2663,62 @@ export interface operations {
                     "application/json": components["schemas"]["Environment"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateEnvironmentSettings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EnvironmentSettings"];
+            };
+        };
+        responses: {
+            /** @description The environment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Environment"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    resetEnvironmentToTemplate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The environment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Environment"];
+                };
+            };
+            400: components["responses"]["Invalid"];
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];

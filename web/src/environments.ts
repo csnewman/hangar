@@ -40,3 +40,10 @@ export function splitByOwner(envs: Environment[], me: Me): { mine: Environment[]
     .map(([owner, environments]) => ({ owner, environments: environments.sort(byName) }))
   return { mine, others }
 }
+
+// changeable is whether an environment's settings may change: stopped, or
+// not yet placed, so there is no machine holding the ones it has.
+export function changeable(env: Environment): boolean {
+  if (env.phase === 'suspended' || env.desired === 'suspended' || env.phase === 'stopping') return false
+  return env.desired === 'stopped' || (!env.worker_id && env.phase === 'pending')
+}

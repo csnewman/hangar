@@ -155,8 +155,14 @@ type Environment struct {
 	// keeps its name.
 	TemplateID string `json:"template_id,omitempty"`
 	Template   string `json:"template"`
-	Spec       Spec   `json:"spec"`
-	Image      string `json:"image"`
+	// TemplateChanges are the settings in which the environment differs
+	// from its template's current settings (Setting*), and TemplateUpdated
+	// whether the template has changed since the environment took its
+	// copy, rather than the environment having been changed since.
+	TemplateChanges []string `json:"template_changes,omitempty"`
+	TemplateUpdated bool     `json:"template_updated,omitempty"`
+	Spec            Spec     `json:"spec"`
+	Image           string   `json:"image"`
 	// ImageDigest is the digest of the copy of Image the environment boots
 	// from, as its worker reports it; empty until it has first started.
 	ImageDigest string            `json:"image_digest,omitempty"`

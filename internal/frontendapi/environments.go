@@ -73,6 +73,51 @@ func (h *handler) StopEnvironment(ctx context.Context, req StopEnvironmentReques
 	return StopEnvironment200JSONResponse(environment(*e)), nil
 }
 
+func (h *handler) UpdateEnvironmentSettings(ctx context.Context, req UpdateEnvironmentSettingsRequestObject) (UpdateEnvironmentSettingsResponseObject, error) {
+	e, err := h.envs.UpdateSettings(ctx, principal(ctx), req.ID, environments.Settings{
+		CPUs: req.Body.CPUs, MemoryMiB: req.Body.MemoryMiB,
+		Display: api.Display(req.Body.Display), GPU: api.GPU(req.Body.GPU)})
+	switch {
+	case errors.Is(err, environments.ErrNotFound):
+		return UpdateEnvironmentSettings404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
+	case errors.Is(err, environments.ErrInvalid):
+		return UpdateEnvironmentSettings400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
+	case errors.Is(err, environments.ErrConflict):
+		return UpdateEnvironmentSettings409JSONResponse{ConflictJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return UpdateEnvironmentSettings200JSONResponse(environment(e)), nil
+}
+
+func (h *handler) ResetEnvironmentToTemplate(ctx context.Context, req ResetEnvironmentToTemplateRequestObject) (ResetEnvironmentToTemplateResponseObject, error) {
+	e, err := h.envs.ResetToTemplate(ctx, principal(ctx), req.ID)
+	switch {
+	case errors.Is(err, environments.ErrNotFound):
+		return ResetEnvironmentToTemplate404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
+	case errors.Is(err, environments.ErrInvalid):
+		return ResetEnvironmentToTemplate400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
+	case errors.Is(err, environments.ErrConflict):
+		return ResetEnvironmentToTemplate409JSONResponse{ConflictJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return ResetEnvironmentToTemplate200JSONResponse(environment(e)), nil
+}
+
+// templateChanges is an environment's differences from its template, or
+// nothing when there are none.
+func templateChanges(c []string) *[]TemplateSetting {
+	if len(c) == 0 {
+		return nil
+	}
+	out := make([]TemplateSetting, len(c))
+	for i, s := range c {
+		out[i] = TemplateSetting(s)
+	}
+	return &out
+}
+
 func (h *handler) SuspendEnvironment(ctx context.Context, req SuspendEnvironmentRequestObject) (SuspendEnvironmentResponseObject, error) {
 	e, err := h.setDesired(ctx, req.ID, api.DesiredSuspended)
 	switch {
@@ -116,28 +161,30 @@ func (h *handler) setDesired(ctx context.Context, id string, d api.DesiredState)
 
 func environment(e api.Environment) Environment {
 	return Environment{
-		ID:          e.ID,
-		OwnerID:     e.OwnerID,
-		Owner:       e.Owner,
-		Name:        e.Name,
-		TemplateID:  optional(e.TemplateID),
-		Template:    e.Template,
-		Spec:        toSpec(e.Spec),
-		Image:       e.Image,
-		GPURenderer: optional(e.GPURenderer),
-		GPUSoftware: optionalBool(e.GPUSoftware),
-		ImageDigest: optional(e.ImageDigest),
-		CPUs:        e.CPUs,
-		MemoryMiB:   e.MemoryMiB,
-		Desired:     DesiredState(e.Desired),
-		Phase:       Phase(e.Phase),
-		Reason:      optional(e.Reason),
-		WorkerID:    optional(e.WorkerID),
-		Worker:      optional(e.Worker),
-		Stats:       environmentStats(e.Stats),
-		Progress:    startProgress(e.Progress),
-		CreatedAt:   e.CreatedAt,
-		UpdatedAt:   e.UpdatedAt,
+		ID:              e.ID,
+		OwnerID:         e.OwnerID,
+		Owner:           e.Owner,
+		Name:            e.Name,
+		TemplateID:      optional(e.TemplateID),
+		Template:        e.Template,
+		Spec:            toSpec(e.Spec),
+		Image:           e.Image,
+		GPURenderer:     optional(e.GPURenderer),
+		TemplateChanges: templateChanges(e.TemplateChanges),
+		TemplateUpdated: optionalBool(e.TemplateUpdated),
+		GPUSoftware:     optionalBool(e.GPUSoftware),
+		ImageDigest:     optional(e.ImageDigest),
+		CPUs:            e.CPUs,
+		MemoryMiB:       e.MemoryMiB,
+		Desired:         DesiredState(e.Desired),
+		Phase:           Phase(e.Phase),
+		Reason:          optional(e.Reason),
+		WorkerID:        optional(e.WorkerID),
+		Worker:          optional(e.Worker),
+		Stats:           environmentStats(e.Stats),
+		Progress:        startProgress(e.Progress),
+		CreatedAt:       e.CreatedAt,
+		UpdatedAt:       e.UpdatedAt,
 	}
 }
 

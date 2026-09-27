@@ -37,6 +37,8 @@ export type TeamMember = Schemas['TeamMember']
 export type CreateTeam = Schemas['CreateTeam']
 export type TeamInput = Schemas['TeamInput']
 export type ImageRepository = Schemas['ImageRepository']
+export type EnvironmentSettings = Schemas['EnvironmentSettings']
+export type TemplateSetting = Schemas['TemplateSetting']
 export type ImageTag = Schemas['ImageTag']
 export type ImageRepositoryInput = Schemas['ImageRepositoryInput']
 export type Template = Schemas['Template']
@@ -111,6 +113,10 @@ export const api = {
   createEnvironment: (body: CreateEnvironment) => unwrap(client.POST('/api/frontend/environments', { body })),
   startEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/start', byID(id))),
   stopEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/stop', byID(id))),
+  updateEnvironmentSettings: (id: string, body: EnvironmentSettings) =>
+    unwrap(client.PUT('/api/frontend/environments/{id}/settings', { ...byID(id), body })),
+  resetEnvironmentToTemplate: (id: string) =>
+    unwrap(client.POST('/api/frontend/environments/{id}/reset-to-template', byID(id))),
   suspendEnvironment: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/suspend', byID(id))),
   resizeDesktop: (id: string, width: number, height: number) =>
     unwrap(

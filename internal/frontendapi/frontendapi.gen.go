@@ -269,6 +269,51 @@ func (e TeamRole) Valid() bool {
 	}
 }
 
+// Defines values for TemplateSetting.
+const (
+	SettingCPUs           TemplateSetting = "cpus"
+	SettingDisplay        TemplateSetting = "display"
+	SettingEditorPath     TemplateSetting = "editor_path"
+	SettingGPU            TemplateSetting = "gpu"
+	SettingImage          TemplateSetting = "image"
+	SettingMemory         TemplateSetting = "memory"
+	SettingName           TemplateSetting = "name"
+	SettingPlacement      TemplateSetting = "placement"
+	SettingRepos          TemplateSetting = "repos"
+	SettingTrustedFolders TemplateSetting = "trusted_folders"
+	SettingUntrusted      TemplateSetting = "untrusted"
+)
+
+// Valid indicates whether the value is a known member of the TemplateSetting enum.
+func (e TemplateSetting) Valid() bool {
+	switch e {
+	case SettingCPUs:
+		return true
+	case SettingDisplay:
+		return true
+	case SettingEditorPath:
+		return true
+	case SettingGPU:
+		return true
+	case SettingImage:
+		return true
+	case SettingMemory:
+		return true
+	case SettingName:
+		return true
+	case SettingPlacement:
+		return true
+	case SettingRepos:
+		return true
+	case SettingTrustedFolders:
+		return true
+	case SettingUntrusted:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Visibility.
 const (
 	Private Visibility = "private"
@@ -446,15 +491,33 @@ type Environment struct {
 	// Template That template's name when the environment was made.
 	Template string `json:"template"`
 
+	// TemplateChanges The settings in which it differs from its template's current settings.
+	TemplateChanges *[]TemplateSetting `json:"template_changes,omitempty"`
+
 	// TemplateID The template it was made from. Absent once that template is deleted.
-	TemplateID *string   `json:"template_id,omitempty"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	TemplateID *string `json:"template_id,omitempty"`
+
+	// TemplateUpdated Whether the template has changed since the environment took its copy of it, rather than the environment having been changed.
+	TemplateUpdated *bool     `json:"template_updated,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
 
 	// Worker That worker's name.
 	Worker *string `json:"worker,omitempty"`
 
 	// WorkerID The worker it is placed on. Absent until placed.
 	WorkerID *string `json:"worker_id,omitempty"`
+}
+
+// EnvironmentSettings defines model for EnvironmentSettings.
+type EnvironmentSettings struct {
+	CPUs int `json:"cpus"`
+
+	// Display Whether the environment has a graphical desktop.
+	Display Display `json:"display"`
+
+	// GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
+	GPU       GPU `json:"gpu"`
+	MemoryMiB int `json:"memory_mib"`
 }
 
 // EnvironmentStats What a running environment uses, as its worker last measured it. Rates are per second.
@@ -915,6 +978,9 @@ type TemplateInput struct {
 	Visibility Visibility `json:"visibility"`
 }
 
+// TemplateSetting A setting an environment takes from its template.
+type TemplateSetting string
+
 // TerminalSession defines model for TerminalSession.
 type TerminalSession struct {
 	// Clients How many windows are attached to it.
@@ -1062,6 +1128,9 @@ type ResizeDesktopJSONRequestBody = DesktopSize
 // SignalProcessJSONRequestBody defines body for SignalProcess for application/json ContentType.
 type SignalProcessJSONRequestBody = SignalProcess
 
+// UpdateEnvironmentSettingsJSONRequestBody defines body for UpdateEnvironmentSettings for application/json ContentType.
+type UpdateEnvironmentSettingsJSONRequestBody = EnvironmentSettings
+
 // UpdateImageRepositoryJSONRequestBody defines body for UpdateImageRepository for application/json ContentType.
 type UpdateImageRepositoryJSONRequestBody = ImageRepositoryInput
 
@@ -1151,6 +1220,12 @@ type ServerInterface interface {
 
 	// (POST /api/frontend/environments/{id}/processes/{pid}/signal)
 	SignalProcess(w http.ResponseWriter, r *http.Request, id ID, pid int)
+
+	// (POST /api/frontend/environments/{id}/reset-to-template)
+	ResetEnvironmentToTemplate(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (PUT /api/frontend/environments/{id}/settings)
+	UpdateEnvironmentSettings(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (POST /api/frontend/environments/{id}/start)
 	StartEnvironment(w http.ResponseWriter, r *http.Request, id ID)
@@ -1583,6 +1658,58 @@ func (siw *ServerInterfaceWrapper) SignalProcess(w http.ResponseWriter, r *http.
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SignalProcess(w, r, id, pid)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResetEnvironmentToTemplate operation middleware
+func (siw *ServerInterfaceWrapper) ResetEnvironmentToTemplate(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResetEnvironmentToTemplate(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateEnvironmentSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateEnvironmentSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateEnvironmentSettings(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2920,6 +3047,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}", wrapper.GetEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/start", wrapper.StartEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/stop", wrapper.StopEnvironment)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/settings", wrapper.UpdateEnvironmentSettings)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/reset-to-template", wrapper.ResetEnvironmentToTemplate)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/suspend", wrapper.SuspendEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/processes", wrapper.ListProcesses)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/processes/{pid}/signal", wrapper.SignalProcess)
@@ -3602,6 +3731,163 @@ func (response SignalProcess503JSONResponse) VisitSignalProcessResponse(w http.R
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetEnvironmentToTemplateRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type ResetEnvironmentToTemplateResponseObject interface {
+	VisitResetEnvironmentToTemplateResponse(w http.ResponseWriter) error
+}
+
+type ResetEnvironmentToTemplate200JSONResponse Environment
+
+func (response ResetEnvironmentToTemplate200JSONResponse) VisitResetEnvironmentToTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetEnvironmentToTemplate400JSONResponse struct{ InvalidJSONResponse }
+
+func (response ResetEnvironmentToTemplate400JSONResponse) VisitResetEnvironmentToTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetEnvironmentToTemplate401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ResetEnvironmentToTemplate401JSONResponse) VisitResetEnvironmentToTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetEnvironmentToTemplate404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ResetEnvironmentToTemplate404JSONResponse) VisitResetEnvironmentToTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetEnvironmentToTemplate409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ResetEnvironmentToTemplate409JSONResponse) VisitResetEnvironmentToTemplateResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEnvironmentSettingsRequestObject struct {
+	ID   ID `json:"id"`
+	Body *UpdateEnvironmentSettingsJSONRequestBody
+}
+
+type UpdateEnvironmentSettingsResponseObject interface {
+	VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error
+}
+
+type UpdateEnvironmentSettings200JSONResponse Environment
+
+func (response UpdateEnvironmentSettings200JSONResponse) VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEnvironmentSettings400JSONResponse struct{ InvalidJSONResponse }
+
+func (response UpdateEnvironmentSettings400JSONResponse) VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEnvironmentSettings401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateEnvironmentSettings401JSONResponse) VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEnvironmentSettings404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateEnvironmentSettings404JSONResponse) VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEnvironmentSettings409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateEnvironmentSettings409JSONResponse) VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6625,6 +6911,12 @@ type StrictServerInterface interface {
 	// (POST /api/frontend/environments/{id}/processes/{pid}/signal)
 	SignalProcess(ctx context.Context, request SignalProcessRequestObject) (SignalProcessResponseObject, error)
 
+	// (POST /api/frontend/environments/{id}/reset-to-template)
+	ResetEnvironmentToTemplate(ctx context.Context, request ResetEnvironmentToTemplateRequestObject) (ResetEnvironmentToTemplateResponseObject, error)
+
+	// (PUT /api/frontend/environments/{id}/settings)
+	UpdateEnvironmentSettings(ctx context.Context, request UpdateEnvironmentSettingsRequestObject) (UpdateEnvironmentSettingsResponseObject, error)
+
 	// (POST /api/frontend/environments/{id}/start)
 	StartEnvironment(ctx context.Context, request StartEnvironmentRequestObject) (StartEnvironmentResponseObject, error)
 
@@ -7115,6 +7407,65 @@ func (sh *strictHandler) SignalProcess(w http.ResponseWriter, r *http.Request, i
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SignalProcessResponseObject); ok {
 		if err := validResponse.VisitSignalProcessResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResetEnvironmentToTemplate operation middleware
+func (sh *strictHandler) ResetEnvironmentToTemplate(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ResetEnvironmentToTemplateRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResetEnvironmentToTemplate(ctx, request.(ResetEnvironmentToTemplateRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResetEnvironmentToTemplate")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResetEnvironmentToTemplateResponseObject); ok {
+		if err := validResponse.VisitResetEnvironmentToTemplateResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateEnvironmentSettings operation middleware
+func (sh *strictHandler) UpdateEnvironmentSettings(w http.ResponseWriter, r *http.Request, id ID) {
+	var request UpdateEnvironmentSettingsRequestObject
+
+	request.ID = id
+
+	var body UpdateEnvironmentSettingsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateEnvironmentSettings(ctx, request.(UpdateEnvironmentSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateEnvironmentSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateEnvironmentSettingsResponseObject); ok {
+		if err := validResponse.VisitUpdateEnvironmentSettingsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

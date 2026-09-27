@@ -43,11 +43,13 @@ func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
 const columns = `e.id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
 	e.spec, e.image, e.image_digest, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
-	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress, w.gpu`
+	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress, w.gpu,
+	tm.spec, coalesce(tm.revision, 0), e.template_revision`
 
 const from = `environments e
 	JOIN users u ON u.id = e.owner_id
-	LEFT JOIN workers w ON w.id = e.worker_id`
+	LEFT JOIN workers w ON w.id = e.worker_id
+	LEFT JOIN templates tm ON tm.id = e.template_id`
 
 // visible is the condition that limits a query to what a principal may
 // reach. It takes the principal as $1 (admin) and $2 (user ID).
@@ -55,10 +57,11 @@ const visible = `($1 OR e.owner_id = $2)`
 
 func scan(row pgx.Row) (api.Environment, error) {
 	var e api.Environment
-	var spec, stats, progress, gpu []byte
+	var spec, stats, progress, gpu, tspec []byte
+	var trev, erev int64
 	err := row.Scan(&e.ID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.ImageDigest, &e.CPUs,
 		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats,
-		&progress, &gpu)
+		&progress, &gpu, &tspec, &trev, &erev)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}
@@ -81,6 +84,14 @@ func scan(row pgx.Row) (api.Environment, error) {
 	}
 	if err := json.Unmarshal(spec, &e.Spec); err != nil {
 		return e, err
+	}
+	if tspec != nil {
+		var t api.TemplateSpec
+		if err := json.Unmarshal(tspec, &t); err != nil {
+			return e, err
+		}
+		e.TemplateChanges = templateChanges(e.Spec, t, e.Name)
+		e.TemplateUpdated = trev > erev
 	}
 	// What its worker's virtual GPUs render with, when it has one.
 	if gpu != nil && e.Spec.GPU == api.GPUVirtual {
@@ -149,7 +160,7 @@ func (m *Manager) ByName(ctx context.Context, p users.Principal, owner, name str
 func (m *Manager) Create(ctx context.Context, p users.Principal, req api.CreateEnvironment) (api.Environment, error) {
 	var e api.Environment
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		tname, tspec, err := templates.ForUse(ctx, tx, p, req.TemplateID)
+		tname, tspec, trev, err := templates.ForUse(ctx, tx, p, req.TemplateID)
 		if errors.Is(err, templates.ErrNotFound) {
 			return fmt.Errorf("%w: no such template", ErrInvalid)
 		}
@@ -170,9 +181,9 @@ func (m *Manager) Create(ctx context.Context, p users.Principal, req api.CreateE
 
 		var id string
 		err = tx.QueryRow(ctx, `INSERT INTO environments
-				(owner_id, name, template_id, template_name, spec, image, cpus, memory_mib, desired)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'running') RETURNING id`,
-			p.UserID, req.Name, req.TemplateID, tname, raw, spec.Image, spec.CPUs, spec.MemoryMiB).Scan(&id)
+				(owner_id, name, template_id, template_name, template_revision, spec, image, cpus, memory_mib, desired)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running') RETURNING id`,
+			p.UserID, req.Name, req.TemplateID, tname, trev, raw, spec.Image, spec.CPUs, spec.MemoryMiB).Scan(&id)
 		if db.IsUniqueViolation(err) {
 			return fmt.Errorf("%w: you already have an environment named %s", ErrConflict, req.Name)
 		}

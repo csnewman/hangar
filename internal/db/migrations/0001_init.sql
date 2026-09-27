@@ -116,6 +116,9 @@ CREATE TABLE templates (
     -- What an environment made from this template is: image, size,
     -- graphics, repositories, naming rule, placement. See templates.Spec.
     spec        jsonb NOT NULL,
+    -- Goes up whenever spec changes, so an environment can tell whether its
+    -- template has changed since it took its copy.
+    revision    bigint NOT NULL DEFAULT 1,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -251,6 +254,9 @@ CREATE TABLE environments (
     -- of what the template said.
     template_id   uuid REFERENCES templates (id) ON DELETE SET NULL,
     template_name text NOT NULL,
+    -- The template's revision when the environment took its copy of it, at
+    -- creation or when last reset to it.
+    template_revision bigint NOT NULL DEFAULT 1,
     -- The template's spec as it was at creation, resolved for this
     -- environment: its branch names filled in from its name. Editing the
     -- template later changes nothing already made from it.
