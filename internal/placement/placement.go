@@ -73,9 +73,11 @@ func (w *worker) matches(selector map[string]string) bool {
 // for the length of the transaction, so two replicas cannot both spend the
 // same worker's last free memory.
 //
-// Every environment placed on a worker spends its capacity, stopped or not.
-// Placement is permanent, so a stopped environment must still fit when it is
-// started again.
+// A worker's capacity is spent by the environments occupying it: those meant
+// to be running, and those whose machines are still coming down. Placement
+// is permanent -- an environment's disks stay on its worker -- so a stopped
+// or suspended one holds no CPUs or memory, and starting it again asks its
+// worker for room then (environments.Manager.SetDesired).
 func (m *Manager) Place(ctx context.Context) (int, error) {
 	var placed int
 	// Placement is Hangar's decision, whoever's change prompted it.
@@ -118,7 +120,7 @@ func (m *Manager) Place(ctx context.Context) (int, error) {
 		rows, err = tx.Query(ctx, `
 			SELECT w.id, w.cpus - coalesce(sum(e.cpus), 0), w.memory_mib - coalesce(sum(e.memory_mib), 0), w.labels
 			FROM workers w
-			LEFT JOIN environments e ON e.worker_id = w.id AND e.desired <> 'deleted'
+			LEFT JOIN environments e ON e.worker_id = w.id AND `+workers.Occupying+`
 			WHERE w.id = ANY($1::uuid[])
 			GROUP BY w.id`, locked)
 		if err != nil {

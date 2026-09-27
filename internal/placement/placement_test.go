@@ -214,20 +214,47 @@ func TestPlacementRespectsCapacity(t *testing.T) {
 	}
 }
 
-// A stopped environment keeps its place, and so keeps its share of capacity.
-func TestStoppedEnvironmentsHoldCapacity(t *testing.T) {
-	p, _ := newPlane(t)
-	p.worker(t, "w", 2, 4096)
-	first := p.env(t, "first", 2, 4096)
-	p.place.Place(ctx)
-	p.envs.SetDesired(ctx, p.owner, first.ID, api.DesiredStopped)
+// A stopped or suspended environment keeps its place but gives back its
+// CPUs and memory, and asks its worker for them again when it is started.
+func TestStoppedEnvironmentsFreeCapacity(t *testing.T) {
+	for _, pause := range []api.DesiredState{api.DesiredStopped, api.DesiredSuspended} {
+		t.Run(string(pause), func(t *testing.T) {
+			p, _ := newPlane(t)
+			w := p.worker(t, "w", 2, 4096)
+			first := p.env(t, "first", 2, 4096)
+			p.place.Place(ctx)
+			p.report(t, w, 2, 4096, api.ObservedEnvironment{ID: first.ID, Phase: api.PhaseRunning})
+			if _, err := p.envs.SetDesired(ctx, p.owner, first.ID, pause); err != nil {
+				t.Fatal(err)
+			}
+			p.report(t, w, 2, 4096, api.ObservedEnvironment{ID: first.ID, Phase: api.Phase(pause)})
 
-	second := p.env(t, "second", 1, 1024)
-	if n, _ := p.place.Place(ctx); n != 0 {
-		t.Fatal("placed into capacity a stopped environment still holds")
-	}
-	if got := p.get(t, second.ID); got.WorkerID != "" {
-		t.Fatalf("second placed on %q", got.Worker)
+			second := p.env(t, "second", 2, 4096)
+			if n, err := p.place.Place(ctx); err != nil || n != 1 {
+				t.Fatalf("Place = %d, %v; want the room first gave back", n, err)
+			}
+			if got := p.get(t, second.ID); got.WorkerID != w {
+				t.Fatalf("second placed on %q", got.Worker)
+			}
+
+			// first's disks are on w, which second has filled.
+			_, err := p.envs.SetDesired(ctx, p.owner, first.ID, api.DesiredRunning)
+			if !errors.Is(err, environments.ErrConflict) {
+				t.Fatalf("starting first on a full worker: %v, want a conflict", err)
+			}
+			if got := p.get(t, first.ID); got.Desired != pause {
+				t.Errorf("first is %s after a refused start", got.Desired)
+			}
+
+			if _, err := p.envs.SetDesired(ctx, p.owner, second.ID, api.DesiredStopped); err != nil {
+				t.Fatal(err)
+			}
+			p.report(t, w, 2, 4096, api.ObservedEnvironment{ID: first.ID, Phase: api.Phase(pause)},
+				api.ObservedEnvironment{ID: second.ID, Phase: api.PhaseStopped})
+			if _, err := p.envs.SetDesired(ctx, p.owner, first.ID, api.DesiredRunning); err != nil {
+				t.Fatalf("starting first once second stopped: %v", err)
+			}
+		})
 	}
 }
 

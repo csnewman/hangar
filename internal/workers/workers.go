@@ -60,6 +60,37 @@ type Manager struct {
 
 func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
+// Occupying is the SQL condition, over environments aliased e, for one that
+// takes its worker's CPUs and memory: one meant to be running, or one whose
+// machine is still up. A stopped or suspended environment holds only its
+// disks, which capacity does not count.
+const Occupying = `(e.desired = 'running' OR e.phase IN ('starting', 'running', 'stopping', 'suspending'))`
+
+// Room is what a worker offers and what it has left.
+type Room struct {
+	Name                 string
+	CPUs, MemoryMiB      int
+	FreeCPUs, FreeMemMiB int
+}
+
+// RoomFor locks a worker and gives its room, not counting the environment
+// except, for the managers that decide whether an environment may run on
+// it. The lock holds for the caller's transaction, so no one else spends the
+// same room meanwhile.
+func RoomFor(ctx context.Context, tx db.Tx, workerID, except string) (Room, error) {
+	var r Room
+	err := tx.QueryRow(ctx, `SELECT name, cpus, memory_mib FROM workers WHERE id = $1 FOR UPDATE`, workerID).
+		Scan(&r.Name, &r.CPUs, &r.MemoryMiB)
+	if err != nil {
+		return r, err
+	}
+	var usedCPUs, usedMem int
+	err = tx.QueryRow(ctx, `SELECT coalesce(sum(e.cpus), 0), coalesce(sum(e.memory_mib), 0) FROM environments e
+		WHERE e.worker_id = $1 AND e.id <> $2 AND `+Occupying, workerID, except).Scan(&usedCPUs, &usedMem)
+	r.FreeCPUs, r.FreeMemMiB = r.CPUs-usedCPUs, r.MemoryMiB-usedMem
+	return r, err
+}
+
 // Bump marks a worker's desired set as changed. It is for the managers that
 // change what a worker holds, inside their own transactions.
 func Bump(ctx context.Context, tx db.Tx, workerID string) error {

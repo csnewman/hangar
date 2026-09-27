@@ -15,3 +15,7 @@ func machineCapacity() (api.Resources, error) {
 	}
 	return api.Resources{CPUs: runtime.NumCPU(), MemoryMiB: int(mem >> 20)}, nil
 }
+
+// swapMiB is 0: environments run only on Linux, so there is nothing to
+// overcommit here.
+func swapMiB() int { return 0 }

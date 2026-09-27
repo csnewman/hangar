@@ -201,9 +201,10 @@ func (m *Manager) SetDesired(ctx context.Context, p users.Principal, id string, 
 		var workerID *string
 		var current api.DesiredState
 		var name, owner, image string
-		err := tx.QueryRow(ctx, `SELECT e.worker_id::text, e.desired, e.name, e.owner_id::text, e.image FROM environments e
-			WHERE `+visible+` AND e.id = $3 FOR UPDATE`, p.Admin, p.UserID, id).
-			Scan(&workerID, &current, &name, &owner, &image)
+		var cpus, mem int
+		err := tx.QueryRow(ctx, `SELECT e.worker_id::text, e.desired, e.name, e.owner_id::text, e.image, e.cpus, e.memory_mib
+			FROM environments e WHERE `+visible+` AND e.id = $3 FOR UPDATE`, p.Admin, p.UserID, id).
+			Scan(&workerID, &current, &name, &owner, &image, &cpus, &mem)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -229,6 +230,20 @@ func (m *Manager) SetDesired(ctx context.Context, p users.Principal, id string, 
 		// suspend.
 		if desired == api.DesiredSuspended && (current != api.DesiredRunning || workerID == nil) {
 			return fmt.Errorf("%w: only a running environment can be suspended", ErrConflict)
+		}
+
+		// A stopped or suspended environment's disks are on its worker, so it
+		// can run only there, and only when that worker has room for it: its
+		// CPUs and memory were given back when it stopped.
+		if workerID != nil && desired == api.DesiredRunning {
+			room, err := workers.RoomFor(ctx, tx, *workerID, id)
+			if err != nil {
+				return err
+			}
+			if cpus > room.FreeCPUs || mem > room.FreeMemMiB {
+				return fmt.Errorf("%w: its worker, %s, has no room for it: it needs %d vCPUs and %d MiB, and %d vCPUs and %d MiB are free; stop another environment there first",
+					ErrConflict, room.Name, cpus, mem, max(room.FreeCPUs, 0), max(room.FreeMemMiB, 0))
+			}
 		}
 
 		if workerID != nil {

@@ -131,7 +131,18 @@ func TestRevokedWorkerStops(t *testing.T) {
 	}
 }
 
-func writeConfig(t *testing.T, url string) *worker.Config {
+func writeConfig(t *testing.T, url string, extra ...string) *worker.Config {
+	t.Helper()
+	cfg, err := worker.LoadConfig(configFile(t, url, extra...))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+// configFile writes a worker configuration for a simulated worker of the
+// server at url, with extra lines of YAML appended.
+func configFile(t *testing.T, url string, extra ...string) string {
 	t.Helper()
 	dir := t.TempDir()
 	tokenFile := filepath.Join(dir, "token")
@@ -144,15 +155,34 @@ func writeConfig(t *testing.T, url string) *worker.Config {
 		"  token_file: " + tokenFile + "\n" +
 		"  credential_file: " + filepath.Join(dir, "state", "credential") + "\n" +
 		"node:\n  name: test-worker\n" +
-		"runtime: simulated\n"
+		"runtime: simulated\n" + strings.Join(extra, "\n") + "\n"
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := worker.LoadConfig(path)
+	return path
+}
+
+// A worker offers its machine times its overcommit, and a ratio below 1 is
+// refused: keeping capacity back is what reserved is for.
+func TestOvercommit(t *testing.T) {
+	if _, err := worker.LoadConfig(configFile(t, "http://unused", "overcommit:\n  memory: 0.5")); err == nil {
+		t.Error("an overcommit below 1 was accepted")
+	}
+
+	plain, err := worker.New(writeConfig(t, "http://unused"), worker.NewSimulated(time.Millisecond), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
-	return cfg
+	over, err := worker.New(writeConfig(t, "http://unused", "overcommit:\n  cpus: 4"), worker.NewSimulated(time.Millisecond), quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := over.Capacity().CPUs, plain.Capacity().CPUs*4; got != want {
+		t.Errorf("with cpus: 4 the worker offers %d vCPUs, want %d", got, want)
+	}
+	if over.Capacity().MemoryMiB != plain.Capacity().MemoryMiB {
+		t.Errorf("a CPU overcommit changed memory: %d, want %d", over.Capacity().MemoryMiB, plain.Capacity().MemoryMiB)
+	}
 }
 
 // waitFor polls the public API until ok holds for the environment, which is

@@ -44,6 +44,18 @@ type Config struct {
 		Memory Size `yaml:"memory"`
 	} `yaml:"reserved"`
 
+	// Overcommit multiplies what this machine offers, once Reserved is taken
+	// off; unset is 1, offering what there is. vCPUs are time-sliced, so
+	// more of them than cores only slows guests when they are busy at once.
+	// Memory beyond the machine's is for guests that leave theirs unused:
+	// the balloon hands a guest's free memory back to the host, and swap
+	// takes what is left, slowly, so memory overcommit wants swap to cover
+	// it.
+	Overcommit struct {
+		CPUs   float64 `yaml:"cpus"`
+		Memory float64 `yaml:"memory"`
+	} `yaml:"overcommit"`
+
 	// Runtime is what runs environments on this machine: "cloud-hypervisor"
 	// runs each as a virtual machine; "simulated" runs nothing and walks
 	// each environment through its phases, for developing the control plane
@@ -138,6 +150,10 @@ func LoadConfig(path string) (*Config, error) {
 			return nil, fmt.Errorf("node.name is unset and the hostname is unavailable: %w", err)
 		}
 		c.Node.Name = h
+	}
+	if c.Overcommit.CPUs < 0 || (c.Overcommit.CPUs > 0 && c.Overcommit.CPUs < 1) ||
+		c.Overcommit.Memory < 0 || (c.Overcommit.Memory > 0 && c.Overcommit.Memory < 1) {
+		return nil, errors.New(path + ": overcommit ratios are 1 or more; Reserved keeps capacity back")
 	}
 	switch c.Runtime {
 	case "":

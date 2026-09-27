@@ -21,6 +21,11 @@ reserved:
   cpus: 1
   memory: 2GiB
 
+# The VM has few cores and environments are mostly idle. Memory is not
+# overcommitted: the VM has no swap.
+overcommit:
+  cpus: 4
+
 runtime: cloud-hypervisor
 
 vm:

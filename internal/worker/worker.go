@@ -107,19 +107,32 @@ type Worker struct {
 }
 
 // New creates a worker. The capacity it offers is this machine's, less what
-// the configuration reserves for the host.
+// the configuration reserves for the host, times its overcommit.
 func New(cfg *Config, rt Runtime, log *slog.Logger) (*Worker, error) {
 	total, err := machineCapacity()
 	if err != nil {
 		return nil, fmt.Errorf("measuring this machine: %w", err)
 	}
+	ratio := func(r float64) float64 { return max(r, 1) }
+	cpus := max(total.CPUs-cfg.Reserved.CPUs, 0)
+	mem := max(total.MemoryMiB-cfg.Reserved.Memory.MiB(), 0)
 	offered := api.Resources{
-		CPUs:      max(total.CPUs-cfg.Reserved.CPUs, 0),
-		MemoryMiB: max(total.MemoryMiB-cfg.Reserved.Memory.MiB(), 0),
+		CPUs:      int(float64(cpus) * ratio(cfg.Overcommit.CPUs)),
+		MemoryMiB: int(float64(mem) * ratio(cfg.Overcommit.Memory)),
+	}
+	if beyond := offered.MemoryMiB - mem; beyond > 0 {
+		if swap := swapMiB(); swap < beyond {
+			log.Warn("memory is overcommitted beyond this machine's memory and swap: guests that use all of theirs will be killed",
+				"offered_mib", offered.MemoryMiB, "memory_mib", mem, "swap_mib", swap)
+		}
 	}
 	return &Worker{cfg: cfg, rt: rt, client: newClient(cfg.Server.URL), capacity: offered, log: log,
 		sys: &sysStats{path: cfg.Storage.Environments}}, nil
 }
+
+// Capacity is what this worker offers the server: the machine, less what is
+// reserved for the host, times its overcommit.
+func (w *Worker) Capacity() api.Resources { return w.capacity }
 
 // Run registers if need be, then holds the desired set until ctx ends or the
 // server rejects this worker's credential.

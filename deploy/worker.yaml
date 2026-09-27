@@ -25,6 +25,16 @@ reserved:
   cpus: 1
   memory: 2GiB
 
+# What is left is offered times these. vCPUs share cores by time, so offering
+# several per core only slows guests that are busy at once. Offering more
+# memory than the machine has relies on guests leaving theirs unused (the
+# balloon returns it) and on swap for the rest: give the host swap at least
+# the size of the difference, or a guest that uses all it was given is
+# killed. The worker warns when swap is short.
+# overcommit:
+#   cpus: 4
+#   memory: 1.5
+
 runtime: cloud-hypervisor
 
 vm:
