@@ -296,6 +296,15 @@ func copySparse(ctx context.Context, src, dst string, progress func(done, total 
 			if n == 0 {
 				return done, io.ErrUnexpectedEOF
 			}
+			// Gigabytes through the page cache would fragment the host's free
+			// memory, and guests started meanwhile would find no 2 MB blocks
+			// for theirs, so each chunk is written out and dropped from it.
+			if err := unix.SyncFileRange(int(out.Fd()), data, int64(n),
+				unix.SYNC_FILE_RANGE_WAIT_BEFORE|unix.SYNC_FILE_RANGE_WRITE|unix.SYNC_FILE_RANGE_WAIT_AFTER); err != nil {
+				return done, err
+			}
+			unix.Fadvise(int(out.Fd()), data, int64(n), unix.FADV_DONTNEED)
+			unix.Fadvise(int(in.Fd()), data, int64(n), unix.FADV_DONTNEED)
 			data += int64(n)
 			done += int64(n)
 			progress(done, max(total, done))
