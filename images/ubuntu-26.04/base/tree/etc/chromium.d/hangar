@@ -1,0 +1,10 @@
+# Sourced by Debian's chromium launcher. Chromium picks Wayland by itself
+# only in a session whose XDG_SESSION_TYPE says so; the desktop's does, and
+# on a Wayland display it is told outright, so a shell without the session's
+# environment gets Wayland too.
+if [ -n "${WAYLAND_DISPLAY:-}" ]; then
+	export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --ozone-platform=wayland"
+fi
+# An environment is new, so every first run would start at the welcome and
+# terms pages.
+export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-first-run"

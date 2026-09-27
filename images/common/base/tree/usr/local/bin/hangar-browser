@@ -1,10 +1,15 @@
 #!/bin/sh
 # Opens the image's web browser, under whichever name its distribution gives
-# Chromium.
-for b in chromium chromium-browser google-chrome firefox; do
+# Chromium, past the welcome and terms pages a first run would show: an
+# environment is new, so every run would otherwise start with them.
+# /etc/chromium/policies/managed/hangar.json turns off the prompts after.
+for b in chromium chromium-browser google-chrome; do
 	if command -v "$b" >/dev/null 2>&1; then
-		exec "$b" "$@"
+		exec "$b" --no-first-run "$@"
 	fi
 done
+if command -v firefox >/dev/null 2>&1; then
+	exec firefox "$@"
+fi
 echo "hangar-browser: no web browser is installed" >&2
 exit 1

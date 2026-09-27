@@ -12,6 +12,10 @@ User=dev
 # user logging in would.
 PAMName=login
 Environment=WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1
+# The session type logind records, and what programs started from the desktop
+# see. Chromium, left to choose, takes Wayland only for a "wayland" session,
+# and X11 otherwise, which there is none of.
+Environment=XDG_SESSION_TYPE=wayland
 # The renderer is left to wlroots: GLES2 on the GPU when the environment has
 # one, so clients hand labwc their frames as GPU buffers, and pixman on the
 # CPU when it does not.
