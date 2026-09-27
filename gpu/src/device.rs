@@ -117,6 +117,37 @@ fn withhold_buffer_storage(caps: &mut [u8]) {
     }
 }
 
+/// Byte offset and size of `renderer` in virglrenderer's `struct virgl_caps_v2`:
+/// the host's `GL_RENDERER`, which the guest's GL driver reports as
+/// `virgl (<renderer>)`.
+const VIRGL_CAPS_V2_RENDERER: usize = 696;
+const VIRGL_CAPS_V2_RENDERER_LEN: usize = 64;
+
+/// The name a guest sees for a virtual GPU that the host renders on its CPU.
+const SOFTWARE_RENDERER_NAME: &[u8] = b"Hangar VGPU";
+
+/// Name a CPU-rendered virtual GPU for the guest as `SOFTWARE_RENDERER_NAME`.
+///
+/// Programs judge a GPU by its renderer string, and one naming llvmpipe or
+/// softpipe is taken for rendering in software on the machine itself:
+/// Chromium, for one, then turns off GPU compositing, rasterisation and WebGL
+/// and does all of it on the guest's vCPUs. Here that rendering happens on
+/// the host, outside the guest's vCPUs, which is what a GPU offers, so the
+/// guest is not told otherwise. The worker's page still shows what renders.
+fn name_software_renderer(caps: &mut [u8]) {
+    let at = VIRGL_CAPS_V2_RENDERER;
+    let Some(field) = caps.get_mut(at..at + VIRGL_CAPS_V2_RENDERER_LEN) else {
+        return;
+    };
+    let len = field.iter().position(|&b| b == 0).unwrap_or(field.len());
+    let name = String::from_utf8_lossy(&field[..len]).to_ascii_lowercase();
+    if !name.contains("llvmpipe") && !name.contains("softpipe") {
+        return;
+    }
+    field.fill(0);
+    field[..SOFTWARE_RENDERER_NAME.len()].copy_from_slice(SOFTWARE_RENDERER_NAME);
+}
+
 /// Build the renderer.
 ///
 /// EGL and the surfaceless platform are selected explicitly. A host with no
@@ -1272,6 +1303,7 @@ impl GpuBackend {
                     Ok(mut caps) => {
                         if req.capset_id == RUTABAGA_CAPSET_VIRGL2 {
                             withhold_buffer_storage(&mut caps);
+                            name_software_renderer(&mut caps);
                         }
                         let mut out = Self::header_of(VIRTIO_GPU_RESP_OK_CAPSET, &hdr)
                             .as_slice()
@@ -1995,5 +2027,50 @@ impl VhostUserBackendMut for GpuBackend {
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn caps_naming(renderer: &str) -> Vec<u8> {
+        let mut caps = vec![0u8; 1408];
+        caps[VIRGL_CAPS_V2_RENDERER..][..renderer.len()].copy_from_slice(renderer.as_bytes());
+        caps
+    }
+
+    fn renderer_of(caps: &[u8]) -> String {
+        let field = &caps[VIRGL_CAPS_V2_RENDERER..][..VIRGL_CAPS_V2_RENDERER_LEN];
+        let len = field.iter().position(|&b| b == 0).unwrap_or(field.len());
+        String::from_utf8_lossy(&field[..len]).into_owned()
+    }
+
+    #[test]
+    fn software_renderers_are_named_for_hangar() {
+        for host in [
+            "llvmpipe (LLVM 21.1.8, 128 bits)",
+            "LLVMPIPE (LLVM 21.1.8, 128 bits)",
+            "softpipe",
+        ] {
+            let mut caps = caps_naming(host);
+            name_software_renderer(&mut caps);
+            assert_eq!(renderer_of(&caps), "Hangar VGPU", "{host}");
+        }
+    }
+
+    #[test]
+    fn hardware_renderers_keep_their_names() {
+        let host = "AMD Radeon RX 7900 XTX (radeonsi, navi31, LLVM 21.1.8, DRM 3.61)";
+        let mut caps = caps_naming(host);
+        name_software_renderer(&mut caps);
+        assert_eq!(renderer_of(&caps), host);
+    }
+
+    #[test]
+    fn short_capsets_are_left_alone() {
+        let mut caps = vec![1u8; 100];
+        name_software_renderer(&mut caps);
+        assert_eq!(caps, vec![1u8; 100]);
     }
 }
