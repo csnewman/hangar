@@ -57,6 +57,9 @@ func fingerprint(path string) string {
 // record is what the machine runs against.
 func (c InstanceConfig) record() suspendRecord {
 	r := suspendRecord{Base: fingerprint(c.Base)}
+	if c.BaseID != "" {
+		r.Base = "image:" + c.BaseID
+	}
 	for _, d := range c.Disks {
 		if d.ReadOnly {
 			r.ReadOnly = append(r.ReadOnly, fingerprint(d.Path))

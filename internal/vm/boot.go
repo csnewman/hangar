@@ -118,6 +118,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		Kernel:      m.rt.cfg.Kernel,
 		Agent:       m.rt.cfg.Agent,
 		Base:        img.Base,
+		BaseID:      img.ID,
 		Disks:       disks,
 		MemoryMiB:   s.MemoryMiB,
 		CPUs:        s.CPUs,

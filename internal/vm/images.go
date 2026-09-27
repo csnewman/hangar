@@ -16,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/opencontainers/go-digest"
+
 	"github.com/csnewman/hangar/internal/api"
 )
 
@@ -34,8 +36,9 @@ import (
 // removed. It is pulled from its registry, unless the worker's
 // configuration names a local source for the reference, which is copied.
 //
-// Each copy is a directory holding the image's root filesystem, as
-// rootfs/, and files naming its reference and digest. A directory being
+// Each copy is a directory holding files naming its reference and digest,
+// and its root filesystem as rootfs/: for a pulled image, its layers stacked
+// there (see layers.go); for a local build, a copy of it. A directory being
 // fetched is named with ".fetching" and renamed into place when complete,
 // so a copy interrupted half made is fetched again rather than booted.
 type ImageStore struct {
@@ -48,6 +51,8 @@ type ImageStore struct {
 	current  map[string]string
 	fetching map[api.ImageCopy]*fetch
 	hangar   *hangarRegistry
+	// claimed are layers a fetch in progress wants, by how many.
+	claimed map[digest.Digest]int
 }
 
 // hangarRegistry is Hangar's own registry: images named on host are pulled
@@ -79,6 +84,9 @@ type heldCopy struct {
 	dir string
 	// at is when the copy was taken, which orders copies of one reference.
 	at time.Time
+	// layers are the copy's layers, bottom first; none for a copy that is
+	// a directory of its own.
+	layers []digest.Digest
 }
 
 type fetch struct {
@@ -152,7 +160,7 @@ func NewImageStore(dir string, sources map[string]Image, auth map[string]Registr
 		return nil, err
 	}
 	s := &ImageStore{dir: dir, sources: sources, auth: auth, held: map[api.ImageCopy]heldCopy{},
-		current: map[string]string{}, fetching: map[api.ImageCopy]*fetch{}}
+		current: map[string]string{}, fetching: map[api.ImageCopy]*fetch{}, claimed: map[digest.Digest]int{}}
 	for _, e := range entries {
 		path := filepath.Join(dir, e.Name())
 		// Anything left mid-fetch by an earlier run is started again from
@@ -174,9 +182,16 @@ func NewImageStore(dir string, sources map[string]Image, auth map[string]Registr
 		}
 		// A copy with no digest file is a copy of its own, digest "",
 		// which no lookup of its reference names.
-		digest, _ := os.ReadFile(filepath.Join(path, "digest"))
-		c := api.ImageCopy{Ref: string(ref), Digest: strings.TrimSpace(string(digest))}
-		s.held[c] = heldCopy{dir: path, at: st.ModTime()}
+		dgst, _ := os.ReadFile(filepath.Join(path, "digest"))
+		layers, err := readLayers(path)
+		if err != nil {
+			return nil, err
+		}
+		c := api.ImageCopy{Ref: string(ref), Digest: strings.TrimSpace(string(dgst))}
+		s.held[c] = heldCopy{dir: path, at: st.ModTime(), layers: layers}
+	}
+	if err := s.pruneLayers(); err != nil {
+		return nil, err
 	}
 	return s, nil
 }
@@ -269,7 +284,15 @@ func (s *ImageStore) Get(ctx context.Context, c api.ImageCopy, watch func(FetchP
 		s.mu.Lock()
 		if h, ok := s.held[c]; ok {
 			s.mu.Unlock()
-			return Image{Base: filepath.Join(h.dir, "rootfs")}, nil
+			base, err := s.base(h)
+			if err != nil {
+				return Image{}, err
+			}
+			img := Image{Base: base}
+			if len(h.layers) > 1 {
+				img.ID = c.Ref + "@" + c.Digest
+			}
+			return img, nil
 		}
 		f, busy := s.fetching[c]
 		if !busy {
@@ -279,14 +302,16 @@ func (s *ImageStore) Get(ctx context.Context, c api.ImageCopy, watch func(FetchP
 			stop := make(chan struct{})
 			go f.watch(watch, stop)
 			dst := s.path(c)
-			f.err = s.fetch(ctx, c, dst, f.report)
+			layers, release, err := s.fetch(ctx, c, dst, f.report)
+			f.err = err
 			close(stop)
 			s.mu.Lock()
 			delete(s.fetching, c)
 			if f.err == nil {
-				s.held[c] = heldCopy{dir: dst, at: time.Now()}
+				s.held[c] = heldCopy{dir: dst, at: time.Now(), layers: layers}
 			}
 			s.mu.Unlock()
+			release()
 			close(f.done)
 			if f.err != nil {
 				return Image{}, f.err
@@ -312,11 +337,17 @@ func (s *ImageStore) Get(ctx context.Context, c api.ImageCopy, watch func(FetchP
 // fetch brings a copy into the store: copied from its local source if the
 // configuration names one, and pulled from its registry by digest
 // otherwise.
-func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, report func(FetchProgress)) error {
+//
+// A pull returns the copy's layers, and a func releasing the claim it holds
+// on them until the copy is held and so keeps them itself.
+func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, report func(FetchProgress)) (
+	[]digest.Digest, func(), error) {
+	release := func() {}
+	var layers []digest.Digest
 	tmp := dst + ".fetching"
 	os.RemoveAll(tmp)
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		return err
+		return nil, release, err
 	}
 	err := func() error {
 		rootfs := filepath.Join(tmp, "rootfs")
@@ -342,10 +373,18 @@ func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, rep
 			}
 		} else {
 			blobs := filepath.Join(tmp, "blobs")
-			if err := pull(ctx, c.Ref, c.Digest, rootfs, blobs, s.auth, s.registry(), report); err != nil {
+			var err error
+			layers, release, err = pull(ctx, c.Ref, c.Digest, blobs, s.auth, s.registry(), s, report)
+			if err != nil {
 				return fmt.Errorf("pulling %s: %w", c.Ref, err)
 			}
 			if err := os.RemoveAll(blobs); err != nil {
+				return err
+			}
+			if err := writeLayers(tmp, layers); err != nil {
+				return err
+			}
+			if err := os.Mkdir(rootfs, 0o755); err != nil {
 				return err
 			}
 		}
@@ -356,9 +395,9 @@ func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, rep
 	}()
 	if err != nil {
 		os.RemoveAll(tmp)
-		return err
+		return nil, release, err
 	}
-	return os.Rename(tmp, dst)
+	return layers, release, os.Rename(tmp, dst)
 }
 
 // isCurrent is whether c is what its reference names, as last looked up,
@@ -387,19 +426,34 @@ func (s *ImageStore) List() []api.LocalImage {
 		dir     string
 		state   string
 		current bool
+		// layers are a stacked copy's, whose size is theirs; shared ones
+		// count in every copy that has them.
+		layers []string
 	}
 	var entries []entry
 	for c, h := range s.held {
-		entries = append(entries, entry{c, h.dir, "ready", s.isCurrent(c)})
+		e := entry{c: c, dir: h.dir, state: "ready", current: s.isCurrent(c)}
+		for _, d := range h.layers {
+			e.layers = append(e.layers, s.layerDir(d))
+		}
+		entries = append(entries, e)
 	}
 	for c := range s.fetching {
-		entries = append(entries, entry{c, s.path(c) + ".fetching", "fetching", s.current[c.Ref] == c.Digest})
+		entries = append(entries, entry{c: c, dir: s.path(c) + ".fetching", state: "fetching", current: s.current[c.Ref] == c.Digest})
 	}
 	s.mu.Unlock()
 
 	out := make([]api.LocalImage, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, api.LocalImage{Ref: e.c.Ref, Digest: e.c.Digest, SizeBytes: allocated(e.dir),
+		size := allocated(e.dir)
+		if len(e.layers) > 0 {
+			// The stack itself is the layers' files, seen again.
+			size = 0
+			for _, l := range e.layers {
+				size += allocated(l)
+			}
+		}
+		out = append(out, api.LocalImage{Ref: e.c.Ref, Digest: e.c.Digest, SizeBytes: size,
 			State: e.state, Current: e.current, Environments: []string{}})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -421,10 +475,14 @@ func (s *ImageStore) Remove(c api.ImageCopy) error {
 	}
 	delete(s.held, c)
 	s.mu.Unlock()
-	if err := os.RemoveAll(h.dir); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := removeCopy(h); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// Still there, and still held.
+		s.mu.Lock()
+		s.held[c] = h
+		s.mu.Unlock()
 		return err
 	}
-	return nil
+	return s.pruneLayers()
 }
 
 // Prune deletes every copy that is not current and that inUse says no

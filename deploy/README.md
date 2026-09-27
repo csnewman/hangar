@@ -8,8 +8,10 @@ environments. One machine can be both.
 
 A worker machine needs, before its container starts:
 
-- **Linux with KVM**: `/dev/kvm` present and usable (bare metal, or a VM with
-  nested virtualisation). arm64 and x86_64.
+- **Linux 6.8 or later, with KVM**: `/dev/kvm` present and usable (bare
+  metal, or a VM with nested virtualisation). arm64 and x86_64. A pulled
+  image is its layers stacked with overlayfs, one layer at a time, which
+  overlayfs takes from 6.8.
 - **Transparent huge pages for shared memory set to `advise`**. Guest memory is
   a shared memfd; without this, guests run three to five times slower, and the
   worker refuses to start. The setting belongs to the host kernel, so it is set
@@ -21,9 +23,10 @@ A worker machine needs, before its container starts:
 
 - **`/var/lib/hangar`** on a fast local Linux filesystem with room for every
   environment's disks (each is sparse, up to `upper_gib + docker_gib`) and
-  the base images. An image is a root filesystem kept as a directory, served
-  to its environments over virtio-fs, and must keep its owners: not a network
-  or foreign filesystem that maps them.
+  the images. Each image layer is unpacked there once, however many images
+  share it, and stacked into their root filesystems, served to environments
+  over virtio-fs; it must keep its owners: not a network or foreign
+  filesystem that maps them.
 - Docker with Compose v2 and Buildx.
 
 The control plane needs Docker, a public address with ports 53 (UDP and

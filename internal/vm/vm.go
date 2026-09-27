@@ -52,6 +52,10 @@ import (
 // nothing else: the kernel and the initramfs are the node's.
 type Image struct {
 	Base string `yaml:"base"`
+	// ID names what Base holds when the directory itself cannot: a stack of
+	// layers is mounted afresh after a restart, and is the same image. Empty
+	// for a directory that is the image.
+	ID string `yaml:"-"`
 }
 
 // Config is what the runtime needs from the worker's configuration.

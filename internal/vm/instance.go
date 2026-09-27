@@ -33,8 +33,10 @@ type InstanceConfig struct {
 	Kernel string `json:"kernel"`
 	// Agent is the guest agent, each boot's initramfs and then its init.
 	Agent string `json:"agent"`
-	// Base is the image's root filesystem, served over virtio-fs.
-	Base string `json:"base"`
+	// Base is the image's root filesystem, served over virtio-fs, and
+	// BaseID what it holds, when the directory does not say (Image.ID).
+	Base   string `json:"base"`
+	BaseID string `json:"base_id,omitempty"`
 	// Disks follow: the writable layer first, which the agent mounts as
 	// /dev/vda, then the Docker disk, then any read-only ones.
 	Disks []ch.Disk `json:"disks"`
