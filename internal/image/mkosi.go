@@ -2,6 +2,7 @@ package image
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -90,5 +91,32 @@ func BuildWithMkosi(ctx context.Context, o Options) (*Artifacts, error) {
 		}
 		a.Rootfs[tier] = rootfs
 	}
+	build, err := readBuild(a.Rootfs[Tiers[len(Tiers)-1]])
+	if err != nil {
+		return nil, err
+	}
+	a.Build = build
 	return a, nil
+}
+
+// infoPath is where an image says what it offers, inside its root
+// filesystem. mkosi.sh writes the build's ID into it.
+const infoPath = "usr/share/hangar/image.json"
+
+// readBuild reads the build ID mkosi.sh gave an image.
+func readBuild(rootfs string) (string, error) {
+	b, err := os.ReadFile(filepath.Join(rootfs, infoPath))
+	if err != nil {
+		return "", err
+	}
+	var info struct {
+		Build string `json:"build"`
+	}
+	if err := json.Unmarshal(b, &info); err != nil {
+		return "", fmt.Errorf("%s: %w", infoPath, err)
+	}
+	if info.Build == "" {
+		return "", fmt.Errorf("%s names no build", infoPath)
+	}
+	return info.Build, nil
 }

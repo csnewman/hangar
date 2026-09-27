@@ -149,15 +149,22 @@ clones repositories and has the package manager to add the rest, and
 `base`, which adds Docker, the GPU's drivers, a desktop, a browser and the
 everyday tools. `base` is `minimal` plus one layer, so a worker that has
 one fetches only the difference for the other. `:ubuntu` and `:rocky`
-follow the newest release of each. It keeps that
-copy until it is removed (Workers, then the worker's images), so a tag that
-moves is pulled again only then. Private registries need credentials under
+follow the newest release of each.
+
+The worker looks the tag up each time it makes an environment, and pulls
+the image again when the tag has moved. An environment stays on the copy it
+was made from, since its writable layer was made over that one, and the
+environment's page shows which copy that is. A copy nothing uses once its
+tag has moved on is deleted; Workers, then the worker's images, lists the
+copies a worker holds. Private registries need credentials under
 `vm.registries` in `worker.yaml`. To build a distribution's images on the
 machine instead, and have the worker use them for a reference:
 
     IMAGE=ubuntu-26.04 docker compose --profile images run --rm --build build-image
 
-and name them under `vm.images` in `worker.yaml`.
+and name them under `vm.images` in `worker.yaml`. Each build carries an ID,
+which the worker compares as it would a registry's digest, so rebuilding
+reaches new environments without touching the worker.
 
 Finally, in Hangar, create a template for an image with the placement rule
 `runtime=cloud-hypervisor`.

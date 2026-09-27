@@ -44,10 +44,10 @@ type Runtime interface {
 type ImageStore interface {
 	// Images returns every image in the store.
 	Images() []api.LocalImage
-	// RemoveImage deletes an image from the store, unless an environment
-	// uses it. It is asked again on every desired set until the image is
-	// gone, so it must be idempotent.
-	RemoveImage(ref string)
+	// RemoveImage deletes a copy of an image from the store, unless an
+	// environment uses it. It is asked again on every desired set until the
+	// copy is gone, so it must be idempotent.
+	RemoveImage(c api.ImageCopy)
 }
 
 // TerminalDialer is a runtime whose environments have terminals. The
@@ -187,8 +187,8 @@ func (w *Worker) desiredLoop(ctx context.Context) error {
 			w.rt.Apply(api.EnvironmentSpec{ID: id, Desired: api.DesiredDeleted})
 		}
 		if store, ok := w.rt.(ImageStore); ok {
-			for _, ref := range set.RemoveImages {
-				store.RemoveImage(ref)
+			for _, c := range set.RemoveImages {
+				store.RemoveImage(c)
 			}
 		}
 	}

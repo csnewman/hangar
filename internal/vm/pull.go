@@ -19,6 +19,7 @@ import (
 	"github.com/containerd/containerd/v2/plugins/content/local"
 	"github.com/containerd/platforms"
 	"github.com/distribution/reference"
+	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -37,37 +38,11 @@ func guestPlatform() platforms.MatchComparer {
 	return platforms.Only(ocispec.Platform{OS: "linux", Architecture: runtime.GOARCH})
 }
 
-// pull fetches an image from its registry and unpacks its layers, in order,
-// into dir as one root filesystem.
-//
-// The layers are applied onto a plain directory, so a whiteout in a layer
-// removes what it names from those below rather than being kept as a
-// marker: the result is the image's root filesystem as a container of it
-// would see it. Owners, modes and extended attributes are kept, which needs
-// the worker to be root.
-//
-// Blobs are fetched into a content store in scratch, which verifies each
-// against its digest, and are removed once unpacked: the directory is the
-// image from then on. It returns the digest pulled.
-//
-// report is told, a few times a second, how many bytes have been
-// downloaded of those known to be needed -- the total grows once the
-// manifest names the layers -- and then how many of the layers' bytes have
-// been unpacked.
-func pull(ctx context.Context, ref, dir, scratch string, auth map[string]RegistryAuth, report func(fetchProgress)) (string, error) {
-	named, err := reference.ParseDockerRef(ref)
-	if err != nil {
-		return "", fmt.Errorf("parsing the image reference: %w", err)
-	}
-	full := named.String()
-
-	cs, err := local.NewStore(scratch)
-	if err != nil {
-		return "", err
-	}
-	// A registry on this machine is spoken to over plain HTTP, as one run
-	// for testing images before they are published is; any other over TLS.
-	resolver := docker.NewResolver(docker.ResolverOptions{
+// newResolver makes the resolver pulls and lookups go through. A registry on
+// this machine is spoken to over plain HTTP, as one run for testing images
+// before they are published is; any other over TLS.
+func newResolver(auth map[string]RegistryAuth) remotes.Resolver {
+	return docker.NewResolver(docker.ResolverOptions{
 		Hosts: docker.ConfigureDefaultRegistries(docker.WithPlainHTTP(docker.MatchLocalhost), docker.WithAuthorizer(docker.NewDockerAuthorizer(
 			docker.WithAuthCreds(func(host string) (string, string, error) {
 				a, ok := auth[host]
@@ -82,13 +57,67 @@ func pull(ctx context.Context, ref, dir, scratch string, auth map[string]Registr
 			}),
 		))),
 	})
+}
+
+// resolveDigest asks ref's registry for the digest of what ref names: the
+// multi-platform index, where it is one. It fetches only the manifest's
+// descriptor.
+func resolveDigest(ctx context.Context, ref string, auth map[string]RegistryAuth) (string, error) {
+	named, err := reference.ParseDockerRef(ref)
+	if err != nil {
+		return "", fmt.Errorf("parsing the image reference: %w", err)
+	}
+	_, desc, err := newResolver(auth).Resolve(ctx, named.String())
+	if err != nil {
+		return "", fmt.Errorf("resolving %s: %w", named, err)
+	}
+	return desc.Digest.String(), nil
+}
+
+// pull fetches the image ref names at dgst from its registry and unpacks
+// its layers, in order, into dir as one root filesystem.
+//
+// The layers are applied onto a plain directory, so a whiteout in a layer
+// removes what it names from those below rather than being kept as a
+// marker: the result is the image's root filesystem as a container of it
+// would see it. Owners, modes and extended attributes are kept, which needs
+// the worker to be root.
+//
+// Blobs are fetched into a content store in scratch, which verifies each
+// against its digest, and are removed once unpacked: the directory is the
+// image from then on.
+//
+// report is told, a few times a second, how many bytes have been
+// downloaded of those known to be needed -- the total grows once the
+// manifest names the layers -- and then how many of the layers' bytes have
+// been unpacked.
+func pull(ctx context.Context, ref, dgst, dir, scratch string, auth map[string]RegistryAuth, report func(FetchProgress)) error {
+	named, err := reference.ParseDockerRef(ref)
+	if err != nil {
+		return fmt.Errorf("parsing the image reference: %w", err)
+	}
+	d, err := digest.Parse(dgst)
+	if err != nil {
+		return fmt.Errorf("%s: %w", ref, err)
+	}
+	pinned, err := reference.WithDigest(reference.TrimNamed(named), d)
+	if err != nil {
+		return err
+	}
+	full := pinned.String()
+
+	cs, err := local.NewStore(scratch)
+	if err != nil {
+		return err
+	}
+	resolver := newResolver(auth)
 	name, desc, err := resolver.Resolve(ctx, full)
 	if err != nil {
-		return "", fmt.Errorf("resolving %s: %w", full, err)
+		return fmt.Errorf("resolving %s: %w", full, err)
 	}
 	fetcher, err := resolver.Fetcher(ctx, name)
 	if err != nil {
-		return "", err
+		return err
 	}
 
 	// Only this platform's manifest, config and layers are fetched out of
@@ -105,23 +134,23 @@ func pull(ctx context.Context, ref, dir, scratch string, auth map[string]Registr
 		images.LimitManifests(images.FilterPlatforms(images.ChildrenHandler(cs), platform), platform, 1),
 	)
 	stop := every(250*time.Millisecond, func() {
-		report(fetchProgress{stage: stageDownload, done: min(downloaded.Load(), needed.Load()), total: needed.Load()})
+		report(FetchProgress{Stage: StageDownload, Done: min(downloaded.Load(), needed.Load()), Total: needed.Load()})
 	})
 	err = images.Dispatch(ctx, handler, nil, desc)
 	stop()
 	if err != nil {
-		return "", fmt.Errorf("fetching %s: %w", full, err)
+		return fmt.Errorf("fetching %s: %w", full, err)
 	}
 	manifest, err := images.Manifest(ctx, cs, desc, platform)
 	if err != nil {
-		return "", fmt.Errorf("%s: %w", full, err)
+		return fmt.Errorf("%s: %w", full, err)
 	}
 	if len(manifest.Layers) == 0 {
-		return "", fmt.Errorf("%s has no layers", full)
+		return fmt.Errorf("%s has no layers", full)
 	}
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", err
+		return err
 	}
 	var layersSize int64
 	for _, l := range manifest.Layers {
@@ -130,17 +159,17 @@ func pull(ctx context.Context, ref, dir, scratch string, auth map[string]Registr
 	var unpacked atomic.Int64
 	var current atomic.Int32
 	stop = every(250*time.Millisecond, func() {
-		report(fetchProgress{stage: stageUnpack, done: unpacked.Load(), total: layersSize,
-			layer: int(current.Load()), layers: len(manifest.Layers)})
+		report(FetchProgress{Stage: StageUnpack, Done: unpacked.Load(), Total: layersSize,
+			Layer: int(current.Load()), Layers: len(manifest.Layers)})
 	})
 	defer stop()
 	for i, layer := range manifest.Layers {
 		current.Store(int32(i + 1))
 		if err := applyLayer(ctx, cs, layer, dir, &unpacked); err != nil {
-			return "", fmt.Errorf("unpacking layer %d of %s: %w", i+1, full, err)
+			return fmt.Errorf("unpacking layer %d of %s: %w", i+1, full, err)
 		}
 	}
-	return desc.Digest.String(), nil
+	return nil
 }
 
 // every calls fn at once, then at each interval until the returned stop is

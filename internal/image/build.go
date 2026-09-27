@@ -27,6 +27,10 @@ type Artifacts struct {
 	// Rootfs is each tier's root filesystem, by tier.
 	Rootfs map[string]string
 	Tag    string // what was built
+	// Build identifies this build. mkosi.sh writes it into each tier's
+	// usr/share/hangar/image.json, where a worker copying a local build
+	// reads it to tell one build from the next.
+	Build string
 }
 
 // Options controls a build.

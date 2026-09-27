@@ -824,6 +824,8 @@ export interface components {
             template: string;
             spec: components["schemas"]["Spec"];
             image: string;
+            /** @description The digest of the copy of the image the environment boots from, fixed when it first starts. Absent until then. */
+            image_digest?: string;
             cpus: number;
             memory_mib: number;
             desired: components["schemas"]["DesiredState"];
@@ -949,8 +951,8 @@ export interface components {
             created_at: string;
             stats?: components["schemas"]["WorkerStats"];
             images: components["schemas"]["LocalImage"][];
-            /** @description Images the worker has been asked to delete and still holds. */
-            pending_removals: string[];
+            /** @description Copies of images the worker has been asked to delete and still holds. */
+            pending_removals: components["schemas"]["ImageCopy"][];
         };
         /** @description The worker's machine as a whole, as last measured. */
         WorkerStats: {
@@ -994,6 +996,10 @@ export interface components {
         };
         LocalImage: {
             ref: string;
+            /** @description What the reference named when the copy was taken: the manifest's digest for a pulled image, "build:" and the build's ID for a copy of a local build. */
+            digest: string;
+            /** @description Whether the copy is what the reference names, as the worker last looked. New environments are made from the current copy; older ones stay for the environments made from them. */
+            current: boolean;
             /** Format: int64 */
             size_bytes: number;
             /** @enum {string} */
@@ -1019,8 +1025,10 @@ export interface components {
         EditorURL: {
             url: string;
         };
-        RemoveImage: {
+        /** @description One copy of an image in a worker's store. */
+        ImageCopy: {
             ref: string;
+            digest: string;
         };
         Login: {
             username: string;
@@ -2269,7 +2277,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["RemoveImage"];
+                "application/json": components["schemas"]["ImageCopy"];
             };
         };
         responses: {

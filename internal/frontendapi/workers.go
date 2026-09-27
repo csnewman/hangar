@@ -45,7 +45,7 @@ func (h *handler) RemoveUnknownEnvironments(ctx context.Context, req RemoveUnkno
 }
 
 func (h *handler) RemoveWorkerImage(ctx context.Context, req RemoveWorkerImageRequestObject) (RemoveWorkerImageResponseObject, error) {
-	err := h.workers.RemoveImage(ctx, req.ID, req.Body.Ref)
+	err := h.workers.RemoveImage(ctx, req.ID, api.ImageCopy{Ref: req.Body.Ref, Digest: req.Body.Digest})
 	switch {
 	case errors.Is(err, workers.ErrNotFound), errors.Is(err, workers.ErrNoImage):
 		return RemoveWorkerImage404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
@@ -99,7 +99,7 @@ func worker(w api.Worker) Worker {
 		CreatedAt:       w.CreatedAt,
 		Stats:           workerStats(w.Stats),
 		Images:          localImages(w.Images),
-		PendingRemovals: nonNilStrings(w.PendingRemovals),
+		PendingRemovals: imageCopies(w.PendingRemovals),
 	}
 }
 
@@ -122,10 +122,20 @@ func localImages(in []api.LocalImage) []LocalImage {
 	for i, img := range in {
 		out[i] = LocalImage{
 			Ref:          img.Ref,
+			Digest:       img.Digest,
+			Current:      img.Current,
 			SizeBytes:    img.SizeBytes,
 			State:        LocalImageState(img.State),
 			Environments: nonNilStrings(img.Environments),
 		}
+	}
+	return out
+}
+
+func imageCopies(in []api.ImageCopy) []ImageCopy {
+	out := make([]ImageCopy, len(in))
+	for i, c := range in {
+		out[i] = ImageCopy{Ref: c.Ref, Digest: c.Digest}
 	}
 	return out
 }

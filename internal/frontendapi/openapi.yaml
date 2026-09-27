@@ -796,7 +796,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/RemoveImage" }
+            schema: { $ref: "#/components/schemas/ImageCopy" }
       responses:
         "202":
           description: Asked for.
@@ -1158,6 +1158,11 @@ components:
         spec:
           $ref: "#/components/schemas/Spec"
         image: { type: string }
+        image_digest:
+          type: string
+          description: >-
+            The digest of the copy of the image the environment boots from,
+            fixed when it first starts. Absent until then.
         cpus: { type: integer }
         memory_mib: { type: integer }
         desired: { $ref: "#/components/schemas/DesiredState" }
@@ -1364,8 +1369,9 @@ components:
           items: { $ref: "#/components/schemas/LocalImage" }
         pending_removals:
           type: array
-          description: Images the worker has been asked to delete and still holds.
-          items: { type: string }
+          description: Copies of images the worker has been asked to delete and still holds.
+          items:
+            $ref: "#/components/schemas/ImageCopy"
 
     WorkerStats:
       type: object
@@ -1422,9 +1428,21 @@ components:
 
     LocalImage:
       type: object
-      required: [ref, size_bytes, state, environments]
+      required: [ref, digest, size_bytes, state, environments, current]
       properties:
         ref: { type: string }
+        digest:
+          type: string
+          description: >-
+            What the reference named when the copy was taken: the manifest's
+            digest for a pulled image, "build:" and the build's ID for a copy
+            of a local build.
+        current:
+          type: boolean
+          description: >-
+            Whether the copy is what the reference names, as the worker last
+            looked. New environments are made from the current copy; older
+            ones stay for the environments made from them.
         size_bytes: { type: integer, format: int64 }
         state:
           type: string
@@ -1463,12 +1481,14 @@ components:
       properties:
         url: { type: string }
 
-    RemoveImage:
+    ImageCopy:
       type: object
-      required: [ref]
+      description: One copy of an image in a worker's store.
+      required: [ref, digest]
       additionalProperties: false
       properties:
         ref: { type: string, minLength: 1 }
+        digest: { type: string }
 
     Login:
       type: object

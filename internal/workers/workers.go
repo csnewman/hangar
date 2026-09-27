@@ -281,8 +281,9 @@ func list(ctx context.Context, tx db.Tx, id string) ([]api.Worker, error) {
 		       coalesce(sum(e.cpus), 0), coalesce(sum(e.memory_mib), 0),
 		       coalesce(w.last_seen_at > now() - $1::interval, false),
 		       w.stats, w.images,
-		       coalesce((SELECT jsonb_agg(r.ref ORDER BY r.ref) FROM worker_image_removals r
-		                 WHERE r.worker_id = w.id), '[]')
+		       coalesce((SELECT jsonb_agg(jsonb_build_object('ref', r.ref, 'digest', r.digest)
+		                                  ORDER BY r.ref, r.digest)
+		                 FROM worker_image_removals r WHERE r.worker_id = w.id), '[]')
 		FROM workers w
 		LEFT JOIN environments e ON e.worker_id = w.id AND e.desired <> 'deleted'
 		WHERE $2::uuid IS NULL OR w.id = $2
@@ -336,7 +337,8 @@ func (m *Manager) DesiredVersion(ctx context.Context, workerID string) (int64, e
 func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredSet, error) {
 	var set api.DesiredSet
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		set = api.DesiredSet{Environments: []api.EnvironmentSpec{}, RemoveImages: []string{}, RemoveEnvironments: []string{}}
+		set = api.DesiredSet{Environments: []api.EnvironmentSpec{}, RemoveImages: []api.ImageCopy{},
+			RemoveEnvironments: []string{}}
 		// Every row repeats the version. A worker with no environments
 		// still has its row, with the environment columns NULL.
 		rows, err := tx.Query(ctx, `
@@ -375,12 +377,12 @@ func (m *Manager) DesiredSet(ctx context.Context, workerID string) (api.DesiredS
 		rows.Close()
 		// Read after the version: a removal asked for in between raises
 		// the version again, so the worker comes straight back for it.
-		rows, err = tx.Query(ctx, `SELECT ref FROM worker_image_removals WHERE worker_id = $1 ORDER BY ref`,
-			workerID)
+		rows, err = tx.Query(ctx, `SELECT ref, digest FROM worker_image_removals WHERE worker_id = $1
+			ORDER BY ref, digest`, workerID)
 		if err != nil {
 			return err
 		}
-		if set.RemoveImages, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+		if set.RemoveImages, err = pgx.CollectRows(rows, pgx.RowToStructByPos[api.ImageCopy]); err != nil {
 			return err
 		}
 		rows, err = tx.Query(ctx, `SELECT environment FROM worker_environment_removals WHERE worker_id = $1
@@ -495,10 +497,12 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 					return err
 				}
 			}
-			// updated_at marks a change of phase, not every measurement.
+			// updated_at marks a change of phase, not every measurement. A
+			// report without a digest leaves the one already known.
 			if _, err := tx.Exec(ctx, `UPDATE environments SET phase = $2, reason = $3, stats = $4, progress = $5,
+				image_digest = CASE WHEN $6 <> '' THEN $6 ELSE image_digest END,
 				updated_at = CASE WHEN (phase, reason) IS DISTINCT FROM ($2, $3) THEN now() ELSE updated_at END
-				WHERE id = $1`, o.ID, o.Phase, o.Reason, stats, progress); err != nil {
+				WHERE id = $1`, o.ID, o.Phase, o.Reason, stats, progress, o.ImageDigest); err != nil {
 				return err
 			}
 		}
@@ -548,13 +552,13 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 			return err
 		}
 
-		// A removal is done once the worker stops reporting the image.
+		// A removal is done once the worker stops reporting the copy.
 		held := make([]string, len(images))
 		for i, img := range images {
-			held[i] = img.Ref
+			held[i] = img.Ref + "@" + img.Digest
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM worker_image_removals
-			WHERE worker_id = $1 AND NOT (ref = ANY($2::text[]))`, workerID, held); err != nil {
+			WHERE worker_id = $1 AND NOT (ref || '@' || digest = ANY($2::text[]))`, workerID, held); err != nil {
 			return err
 		}
 		// And a deletion once it stops reporting the environment.
@@ -577,46 +581,69 @@ var (
 	ErrNoImage = errors.New("image not found")
 )
 
-// RemoveImage asks a worker to delete an image from its local store. The
-// request is refused while an environment placed on the worker uses the
-// image; otherwise it stands until the worker reports the image gone.
-func (m *Manager) RemoveImage(ctx context.Context, workerID, ref string) error {
+// RemoveImage asks a worker to delete a copy of an image from its local
+// store. The copy must be one the worker reports holding, and no
+// environment on it may use the copy: one pinned to it, one the worker says
+// uses it, or one not yet started, which will be made over the current
+// copy.
+func (m *Manager) RemoveImage(ctx context.Context, workerID string, c api.ImageCopy) error {
 	if !db.ValidUUID(workerID) {
 		return ErrNotFound
 	}
 	return m.db.Transact(ctx, func(tx db.Tx) error {
 		// Environments before workers, as everywhere.
-		var users []string
-		rows, err := tx.Query(ctx, `SELECT name FROM environments
-			WHERE worker_id = $1 AND desired <> 'deleted' AND image = $2 ORDER BY name FOR UPDATE`, workerID, ref)
+		rows, err := tx.Query(ctx, `SELECT id::text, name, image, image_digest FROM environments
+			WHERE worker_id = $1 AND desired <> 'deleted' ORDER BY name FOR UPDATE`, workerID)
 		if err != nil {
 			return err
 		}
-		if users, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
+		type placedEnv struct{ ID, Name, Image, Digest string }
+		envs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[placedEnv])
+		if err != nil {
 			return err
 		}
-		var held bool
-		err = tx.QueryRow(ctx, `SELECT images @> jsonb_build_array(jsonb_build_object('ref', $2::text))
-			FROM workers WHERE id = $1 FOR UPDATE`, workerID, ref).Scan(&held)
+		var raw []byte
+		err = tx.QueryRow(ctx, `SELECT images FROM workers WHERE id = $1 FOR UPDATE`, workerID).Scan(&raw)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return err
 		}
-		if !held {
-			return fmt.Errorf("%w: the worker does not hold %s", ErrNoImage, ref)
+		var images []api.LocalImage
+		if err := json.Unmarshal(raw, &images); err != nil {
+			return err
+		}
+		var held *api.LocalImage
+		for i := range images {
+			if images[i].Ref == c.Ref && images[i].Digest == c.Digest {
+				held = &images[i]
+			}
+		}
+		if held == nil {
+			return fmt.Errorf("%w: the worker does not hold %s at %s", ErrNoImage, c.Ref, c.Digest)
+		}
+		reported := map[string]bool{}
+		for _, id := range held.Environments {
+			reported[id] = true
+		}
+		var users []string
+		for _, e := range envs {
+			if reported[e.ID] || e.Image == c.Ref && (e.Digest == c.Digest || e.Digest == "" && held.Current) {
+				users = append(users, e.Name)
+			}
 		}
 		if len(users) > 0 {
 			return fmt.Errorf("%w: used by %s", ErrInUse, strings.Join(users, ", "))
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO worker_image_removals (worker_id, ref) VALUES ($1, $2)
-			ON CONFLICT DO NOTHING`, workerID, ref); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO worker_image_removals (worker_id, ref, digest) VALUES ($1, $2, $3)
+			ON CONFLICT DO NOTHING`, workerID, c.Ref, c.Digest); err != nil {
 			return err
 		}
 		if err := audit.Record(ctx, tx, audit.Event{Action: "image.remove",
-			Target:  audit.Ref{Type: audit.KindImage, ID: ref, Name: ref},
-			Related: []audit.Ref{{Type: audit.KindWorker, ID: workerID}}}); err != nil {
+			Target:  audit.Ref{Type: audit.KindImage, ID: c.Ref, Name: c.Ref},
+			Related: []audit.Ref{{Type: audit.KindWorker, ID: workerID}},
+			Details: map[string]any{"digest": c.Digest}}); err != nil {
 			return err
 		}
 		return Bump(ctx, tx, workerID)

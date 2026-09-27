@@ -2,6 +2,8 @@ package worker
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"math/rand/v2"
 	"net"
@@ -69,6 +71,9 @@ func (s *Simulated) Observe() []api.ObservedEnvironment {
 	out := make([]api.ObservedEnvironment, 0, len(s.envs))
 	for id, e := range s.envs {
 		o := api.ObservedEnvironment{ID: id, Phase: e.phase, Reason: e.reason}
+		if _, ok := s.images[e.spec.Image]; ok {
+			o.ImageDigest = simDigest(e.spec.Image)
+		}
 		if e.phase == api.PhaseStarting {
 			// A start pretends to download its image over the Step it
 			// takes.
@@ -225,7 +230,8 @@ func (s *Simulated) Images() []api.LocalImage {
 	defer s.mu.Unlock()
 	out := make([]api.LocalImage, 0, len(s.images))
 	for ref, size := range s.images {
-		img := api.LocalImage{Ref: ref, SizeBytes: size, State: "ready", Environments: []string{}}
+		img := api.LocalImage{Ref: ref, Digest: simDigest(ref), SizeBytes: size, State: "ready", Current: true,
+			Environments: []string{}}
 		for id, e := range s.envs {
 			if e.spec.Image == ref {
 				img.Environments = append(img.Environments, id)
@@ -238,10 +244,21 @@ func (s *Simulated) Images() []api.LocalImage {
 	return out
 }
 
+// simDigest is the pretend digest of the one copy of ref the pretend store
+// holds.
+func simDigest(ref string) string {
+	sum := sha256.Sum256([]byte(ref))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
 // RemoveImage forgets an image no held environment uses.
-func (s *Simulated) RemoveImage(ref string) {
+func (s *Simulated) RemoveImage(c api.ImageCopy) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	ref := c.Ref
+	if c.Digest != simDigest(ref) {
+		return
+	}
 	for _, e := range s.envs {
 		if e.spec.Image == ref {
 			return

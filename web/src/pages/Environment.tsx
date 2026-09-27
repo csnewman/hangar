@@ -15,7 +15,7 @@ import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from 
 import type { Environment } from '../api'
 import { useMe } from '../session'
 import { EnvironmentActions } from '../components/EnvironmentActions'
-import { formatAgo } from '../components/format'
+import { formatAgo, shortDigest } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
 import { StartProgress } from '../components/StartProgress'
@@ -151,6 +151,14 @@ export function SummaryTab() {
           </Prop>
           <Prop label="Image">
             <span className="mono">{env.image}</span>
+            {env.image_digest && (
+              <div
+                className="muted small mono"
+                title={`Boots from this copy of the image, whatever the reference names later: ${env.image_digest}`}
+              >
+                {shortDigest(env.image_digest)}
+              </div>
+            )}
           </Prop>
           <Prop label="Resources">
             <SpecChips spec={env.spec} />

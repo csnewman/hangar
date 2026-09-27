@@ -115,6 +115,11 @@ CREATE TABLE environments (
     -- template later changes nothing already made from it.
     spec        jsonb NOT NULL,
     image       text NOT NULL,
+    -- The digest of the copy of the image the environment was made over, as
+    -- its worker reports it once it has first started. Its writable layer
+    -- belongs to that copy, so it keeps booting from it whatever the image's
+    -- reference names later.
+    image_digest text NOT NULL DEFAULT '',
     cpus        integer NOT NULL CHECK (cpus > 0),
     memory_mib  integer NOT NULL CHECK (memory_mib > 0),
     desired     text NOT NULL CHECK (desired IN ('running', 'stopped', 'suspended', 'deleted')),
@@ -140,14 +145,16 @@ CREATE INDEX environments_worker ON environments (worker_id);
 -- Names are a user's own: two users may each have an environment called "dev".
 CREATE UNIQUE INDEX environments_owner_name ON environments (owner_id, name);
 
--- Images the server has asked a worker to delete from its local store. A row
--- stays until the worker no longer reports the image, so a request survives
--- a worker that is offline or busy when it is made.
+-- Copies of images the server has asked a worker to delete from its local
+-- store, each a reference and the digest it named when copied. A row stays
+-- until the worker no longer reports the copy, so a request survives a
+-- worker that is offline or busy when it is made.
 CREATE TABLE worker_image_removals (
     worker_id    uuid NOT NULL REFERENCES workers (id) ON DELETE CASCADE,
     ref          text NOT NULL,
+    digest       text NOT NULL,
     requested_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (worker_id, ref)
+    PRIMARY KEY (worker_id, ref, digest)
 );
 
 -- Environments a worker runs that the server has no record of, which an

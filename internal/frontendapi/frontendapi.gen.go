@@ -359,10 +359,13 @@ type Environment struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	// Desired What the environment's owner has asked for.
-	Desired   DesiredState `json:"desired"`
-	ID        string       `json:"id"`
-	Image     string       `json:"image"`
-	MemoryMiB int          `json:"memory_mib"`
+	Desired DesiredState `json:"desired"`
+	ID      string       `json:"id"`
+	Image   string       `json:"image"`
+
+	// ImageDigest The digest of the copy of the image the environment boots from, fixed when it first starts. Absent until then.
+	ImageDigest *string `json:"image_digest,omitempty"`
+	MemoryMiB   int     `json:"memory_mib"`
 
 	// Name Unique among its owner's environments.
 	Name string `json:"name"`
@@ -421,8 +424,20 @@ type Error struct {
 // GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
 type GPU string
 
+// ImageCopy One copy of an image in a worker's store.
+type ImageCopy struct {
+	Digest string `json:"digest"`
+	Ref    string `json:"ref"`
+}
+
 // LocalImage defines model for LocalImage.
 type LocalImage struct {
+	// Current Whether the copy is what the reference names, as the worker last looked. New environments are made from the current copy; older ones stay for the environments made from them.
+	Current bool `json:"current"`
+
+	// Digest What the reference named when the copy was taken: the manifest's digest for a pulled image, "build:" and the build's ID for a copy of a local build.
+	Digest string `json:"digest"`
+
 	// Environments IDs of the environments on the worker using it.
 	Environments []string        `json:"environments"`
 	Ref          string          `json:"ref"`
@@ -554,11 +569,6 @@ type PutProfileFile struct {
 
 	// Mode Permission bits. Absent keeps the file's, or 0644.
 	Mode *int `json:"mode,omitempty"`
-}
-
-// RemoveImage defines model for RemoveImage.
-type RemoveImage struct {
-	Ref string `json:"ref"`
 }
 
 // RemoveUnknownEnvironments defines model for RemoveUnknownEnvironments.
@@ -749,9 +759,9 @@ type Worker struct {
 	Name       string            `json:"name"`
 	Online     bool              `json:"online"`
 
-	// PendingRemovals Images the worker has been asked to delete and still holds.
-	PendingRemovals []string `json:"pending_removals"`
-	Revoked         bool     `json:"revoked"`
+	// PendingRemovals Copies of images the worker has been asked to delete and still holds.
+	PendingRemovals []ImageCopy `json:"pending_removals"`
+	Revoked         bool        `json:"revoked"`
 
 	// Stats The worker's machine as a whole, as last measured.
 	Stats *WorkerStats `json:"stats,omitempty"`
@@ -869,7 +879,7 @@ type CreateUserJSONRequestBody = CreateUser
 type UpdateUserJSONRequestBody = UpdateUser
 
 // RemoveWorkerImageJSONRequestBody defines body for RemoveWorkerImage for application/json ContentType.
-type RemoveWorkerImageJSONRequestBody = RemoveImage
+type RemoveWorkerImageJSONRequestBody = ImageCopy
 
 // RemoveUnknownEnvironmentsJSONRequestBody defines body for RemoveUnknownEnvironments for application/json ContentType.
 type RemoveUnknownEnvironmentsJSONRequestBody = RemoveUnknownEnvironments

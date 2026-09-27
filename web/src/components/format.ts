@@ -38,3 +38,10 @@ export function formatRate(bytesPerSecond: number): string {
 export function formatPercent(p: number): string {
   return `${p >= 10 ? Math.round(p) : p.toFixed(1)}%`
 }
+
+// shortDigest is enough of a digest to tell copies apart at a glance: a
+// registry digest's first twelve hex digits, or a local build's ID whole.
+export function shortDigest(d: string): string {
+  const m = /^(sha256:)([0-9a-f]{12})[0-9a-f]+$/.exec(d)
+  return m ? m[1] + m[2] : d
+}

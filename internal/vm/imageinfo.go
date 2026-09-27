@@ -19,6 +19,9 @@ type ImageInfo struct {
 	// Desktop is whether the image has a desktop to run: its compositor, the
 	// unit that starts it and the VNC server the Desktop tab reaches.
 	Desktop bool `json:"desktop"`
+	// Build identifies the build, so a worker copying a local build tells
+	// one from the next. `hangar build` sets it.
+	Build string `json:"build,omitempty"`
 }
 
 // ReadImageInfo reads what the image whose root filesystem is rootfs offers.

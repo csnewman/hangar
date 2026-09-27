@@ -61,6 +61,30 @@ if ls rootfs/usr/lib/*/libvulkan.so.1 >/dev/null 2>&1; then
     echo "vkcheck: installed" >&2
 fi
 
+# --- build ID ---------------------------------------------------------------
+# Each build is told apart by an ID in the image's image.json: a worker
+# copying a local build compares it as it would a registry's digest, to see
+# whether the source has been rebuilt. It is when the build finished, and a
+# few random bytes for two in the same second.
+build="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+for tier in minimal base; do
+	python3 - "/work/src/$IMAGE/$tier/rootfs/usr/share/hangar/image.json" "$build" <<'PY'
+import json, os, sys
+path, build = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        info = json.load(f)
+except FileNotFoundError:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    info = {}
+info["build"] = build
+with open(path, "w") as f:
+    json.dump(info, f, indent=2)
+    f.write("\n")
+PY
+done
+echo "build: $build" >&2
+
 for tier in minimal base; do
 	sh /scripts/postprocess.sh "/work/src/$IMAGE/$tier/rootfs" "/out/$tier"
 done

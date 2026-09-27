@@ -4,7 +4,7 @@ import { Link, useParams } from 'react-router'
 import { api, type LocalImage, type Worker, type WorkerStats } from '../../api'
 import { Meter, StatTile } from '../../components/charts'
 import { ConfirmButton } from '../../components/ConfirmButton'
-import { formatAgo, formatBytes, formatMemory, formatPercent } from '../../components/format'
+import { formatAgo, formatBytes, formatMemory, formatPercent, shortDigest } from '../../components/format'
 import { PageHeader } from '../../components/PageHeader'
 import { OnlineBadge, PhaseBadge } from '../../components/Status'
 import { useEnvironments } from '../../environments'
@@ -188,10 +188,10 @@ function Images({ worker: w }: { worker: Worker }) {
           <tbody>
             {w.images.map((img) => (
               <ImageRow
-                key={img.ref}
+                key={`${img.ref}@${img.digest}`}
                 worker={w}
                 image={img}
-                pending={w.pending_removals.includes(img.ref)}
+                pending={w.pending_removals.some((r) => r.ref === img.ref && r.digest === img.digest)}
                 names={names}
               />
             ))}
@@ -222,7 +222,7 @@ function ImageRow({
 }) {
   const qc = useQueryClient()
   const remove = useMutation({
-    mutationFn: () => api.removeWorkerImage(w.id, img.ref),
+    mutationFn: () => api.removeWorkerImage(w.id, img.ref, img.digest),
     onSettled: () => qc.invalidateQueries({ queryKey: ['workers', w.id] }),
   })
   const inUse = img.environments.length > 0
@@ -233,6 +233,20 @@ function ImageRow({
         <Link to={`/admin/audit?subject=${encodeURIComponent(`image:${img.ref}`)}`} className="muted small">
           history
         </Link>
+        <div className="muted small mono" title={img.digest}>
+          {shortDigest(img.digest)}
+          {!img.current && img.state === 'ready' && (
+            <>
+              {' '}
+              <span
+                className="badge"
+                title="The image has moved on since this copy was taken. Environments made from it keep it; new ones get the current copy."
+              >
+                older
+              </span>
+            </>
+          )}
+        </div>
         {img.state === 'fetching' && (
           <div className="reason">
             <span className="badge badge-busy">

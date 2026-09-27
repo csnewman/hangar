@@ -13,14 +13,16 @@
 // different from the outside.
 //
 // Everything an environment keeps between runs is in its own directory under
-// StateDir: its writable layer and Docker store, its console log, and a mark
-// recording that provisioning is done. Stopping keeps the directory, so the
+// StateDir: its writable layer and Docker store, its console log, a mark
+// recording that provisioning is done, and which copy of its image it was
+// made over. Stopping keeps the directory, so the
 // next start boots the same disks without cloning again; deleting removes it.
 package vm
 
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -118,12 +120,16 @@ func (c *Config) defaults() {
 // Runtime runs environments as virtual machines. It implements the worker's
 // Runtime interface.
 type Runtime struct {
-	cfg     Config
-	store   *store
-	ctx     context.Context
-	cancel  context.CancelFunc
-	mu      sync.Mutex
-	envs    map[string]*machine
+	cfg    Config
+	store  *ImageStore
+	ctx    context.Context
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	envs   map[string]*machine
+	// applied is set by the first spec the server hands over. The worker
+	// applies a desired set whole, so from then on an environment with no
+	// spec is one the server has no record of.
+	applied bool
 	changed chan struct{}
 	wg      sync.WaitGroup
 }
@@ -141,7 +147,7 @@ func New(cfg Config) (*Runtime, error) {
 	if err := os.MkdirAll(cfg.StateDir, 0o755); err != nil {
 		return nil, err
 	}
-	st, err := newStore(cfg.ImagesDir, cfg.Images, cfg.Registries)
+	st, err := NewImageStore(cfg.ImagesDir, cfg.Images, cfg.Registries)
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +184,9 @@ func (r *Runtime) Observe() []api.ObservedEnvironment {
 		phase, reason := m.status()
 		o := api.ObservedEnvironment{ID: id, Phase: phase, Reason: reason}
 		m.mu.Lock()
+		if m.image != nil {
+			o.ImageDigest = m.image.Digest
+		}
 		if m.progress != nil && phase == api.PhaseStarting {
 			p := *m.progress
 			o.Progress = &p
@@ -197,6 +206,7 @@ func (r *Runtime) Observe() []api.ObservedEnvironment {
 // is the first the runtime has heard of it.
 func (r *Runtime) Apply(spec api.EnvironmentSpec) {
 	r.mu.Lock()
+	r.applied = true
 	m, ok := r.envs[spec.ID]
 	if !ok {
 		if spec.Desired == api.DesiredDeleted {
@@ -231,6 +241,7 @@ func (r *Runtime) newMachine(id string, phase api.Phase) *machine {
 		nudge: make(chan struct{}, 1),
 		log:   r.cfg.Log.With("environment", id),
 	}
+	m.image = readImagePin(m.dir)
 	r.envs[id] = m
 	r.wg.Add(1)
 	go func() {
@@ -244,6 +255,7 @@ func (r *Runtime) forget(id string) {
 	r.mu.Lock()
 	delete(r.envs, id)
 	r.mu.Unlock()
+	r.prune()
 	r.notify()
 }
 
@@ -293,6 +305,9 @@ type machine struct {
 	// suspendFailed is set when suspending failed, so it is not tried
 	// again until something else is asked for.
 	suspendFailed bool
+	// image is the copy of its image the environment was made over, once
+	// it has first started.
+	image *api.ImageCopy
 
 	nudge chan struct{}
 }
@@ -526,68 +541,188 @@ func (m *machine) powerOff() {
 
 var errUnsupported = errors.New("not supported by this worker")
 
-// resolve returns the local copy of an environment's image, fetching it
-// into the store first if need be.
-func (m *machine) resolve(ctx context.Context, spec api.EnvironmentSpec) (Image, error) {
-	return m.rt.store.get(ctx, spec.Spec.Image, func(p fetchProgress) {
-		switch p.stage {
-		case stageCopy:
-			m.step(api.StepDownload, "copying the image")
-		case stageDownload:
-			m.step(api.StepDownload, "downloading the image")
-			m.measure(p.done, p.total, "bytes")
-		case stageUnpack:
-			reason := "unpacking the image"
-			if p.layers > 1 {
-				reason += fmt.Sprintf(": layer %d of %d", p.layer, p.layers)
-			}
-			m.step(api.StepUnpack, reason)
-			m.measure(p.done, p.total, "bytes")
-		}
-	})
+// imagePinFile, in an environment's directory, names the copy of its image
+// it was made over.
+const imagePinFile = "image.json"
+
+func readImagePin(dir string) *api.ImageCopy {
+	b, err := os.ReadFile(filepath.Join(dir, imagePinFile))
+	if err != nil {
+		return nil
+	}
+	var c api.ImageCopy
+	if json.Unmarshal(b, &c) != nil || c.Ref == "" {
+		return nil
+	}
+	return &c
 }
 
-// Images reports the local store, with the environments using each image.
+// resolve returns the copy of its image the environment boots from,
+// fetching it into the store first if need be.
+//
+// On its first start that is whatever the image's reference names then,
+// and the environment is pinned to it: every later start boots the same
+// copy, whatever the reference has moved on to, because the environment's
+// writable layer was made over it.
+func (m *machine) resolve(ctx context.Context, spec api.EnvironmentSpec) (Image, error) {
+	ref := spec.Spec.Image
+	m.mu.Lock()
+	pin := m.image
+	m.mu.Unlock()
+	fresh := pin == nil || pin.Ref != ref
+	if fresh {
+		c, err := m.choose(ctx, ref)
+		if err != nil {
+			return Image{}, err
+		}
+		pin = &c
+	}
+	img, err := m.rt.store.Get(ctx, *pin, func(p FetchProgress) {
+		switch p.Stage {
+		case StageCopy:
+			m.step(api.StepDownload, "copying the image")
+		case StageDownload:
+			m.step(api.StepDownload, "downloading the image")
+			m.measure(p.Done, p.Total, "bytes")
+		case StageUnpack:
+			reason := "unpacking the image"
+			if p.Layers > 1 {
+				reason += fmt.Sprintf(": layer %d of %d", p.Layer, p.Layers)
+			}
+			m.step(api.StepUnpack, reason)
+			m.measure(p.Done, p.Total, "bytes")
+		}
+	})
+	if err != nil {
+		return Image{}, err
+	}
+	if fresh {
+		if err := os.MkdirAll(m.dir, 0o755); err != nil {
+			return Image{}, err
+		}
+		b, err := json.Marshal(pin)
+		if err != nil {
+			return Image{}, err
+		}
+		if err := os.WriteFile(filepath.Join(m.dir, imagePinFile), b, 0o644); err != nil {
+			return Image{}, err
+		}
+		m.mu.Lock()
+		m.image = pin
+		m.mu.Unlock()
+		m.rt.prune()
+		m.rt.notify()
+	}
+	return img, nil
+}
+
+// choose picks the copy of ref an environment not yet pinned to one is
+// made over: what ref names at its first start, or, when that cannot be
+// looked up, the newest copy held. An environment with disks but no pin
+// was made over a copy nothing recorded, and is given the oldest held, the
+// one taken first.
+func (m *machine) choose(ctx context.Context, ref string) (api.ImageCopy, error) {
+	if m.hasDisks() {
+		if d, ok := m.rt.store.Oldest(ref); ok {
+			return api.ImageCopy{Ref: ref, Digest: d}, nil
+		}
+	}
+	d, err := m.rt.store.Current(ctx, ref)
+	if err == nil {
+		return api.ImageCopy{Ref: ref, Digest: d}, nil
+	}
+	if held, ok := m.rt.store.Newest(ref); ok {
+		m.log.Warn("looking up the image; using the newest copy held", "image", ref, "err", err)
+		return api.ImageCopy{Ref: ref, Digest: held}, nil
+	}
+	return api.ImageCopy{}, err
+}
+
+func (m *machine) hasDisks() bool {
+	_, err := os.Stat(filepath.Join(m.dir, "upper.ext4"))
+	return err == nil
+}
+
+// Images reports the local store, with the environments using each copy.
 func (r *Runtime) Images() []api.LocalImage {
-	imgs := r.store.list()
-	users := r.imageUsers()
+	imgs := r.store.List()
 	for i := range imgs {
-		if u := users[imgs[i].Ref]; u != nil {
+		if u := r.imageUsers(api.ImageCopy{Ref: imgs[i].Ref, Digest: imgs[i].Digest}); u != nil {
 			imgs[i].Environments = u
 		}
 	}
 	return imgs
 }
 
-// RemoveImage deletes an image's local copy, unless an environment on this
+// RemoveImage deletes a copy of an image, unless an environment on this
 // worker still uses it -- stopped or not, since starting it again boots
 // from that copy.
-func (r *Runtime) RemoveImage(ref string) {
-	if len(r.imageUsers()[ref]) > 0 {
+func (r *Runtime) RemoveImage(c api.ImageCopy) {
+	if len(r.imageUsers(c)) > 0 {
 		return
 	}
-	if err := r.store.remove(ref); err != nil {
-		r.cfg.Log.Warn("removing an image", "image", ref, "err", err)
+	if err := r.store.Remove(c); err != nil {
+		r.cfg.Log.Warn("removing an image", "image", c.Ref, "digest", c.Digest, "err", err)
 		return
 	}
 	r.notify()
 }
 
-// imageUsers maps each image to the environments here that use it.
-func (r *Runtime) imageUsers() map[string][]string {
+// prune deletes the copies of images their references have moved on from
+// that no environment here uses.
+func (r *Runtime) prune() {
+	if r.unaccounted() {
+		return
+	}
+	removed, err := r.store.Prune(func(c api.ImageCopy) bool { return len(r.imageUsers(c)) > 0 })
+	for _, c := range removed {
+		r.cfg.Log.Info("removed a superseded copy of an image", "image", c.Ref, "digest", c.Digest)
+	}
+	if err != nil {
+		r.cfg.Log.Warn("removing superseded copies of images", "err", err)
+	}
+}
+
+// unaccounted is whether an environment here has disks but no pin, and no
+// spec yet to say what its image is: it could be using any copy. Once the
+// server has handed over its specs, one still without is unknown to it and
+// cannot be started, so it holds on to nothing.
+func (r *Runtime) unaccounted() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	users := map[string][]string{}
+	if r.applied {
+		return false
+	}
+	for _, m := range r.envs {
+		m.mu.Lock()
+		unknown := m.spec == nil && m.image == nil
+		m.mu.Unlock()
+		if unknown && m.hasDisks() {
+			return true
+		}
+	}
+	return false
+}
+
+// imageUsers lists the environments here that use a copy of an image: the
+// ones pinned to it, and any with disks but no pin whose image is the
+// same reference, which could have been made over any copy of it.
+func (r *Runtime) imageUsers(c api.ImageCopy) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var users []string
 	for id, m := range r.envs {
 		m.mu.Lock()
-		if m.spec != nil && m.spec.Desired != api.DesiredDeleted {
-			users[m.spec.Spec.Image] = append(users[m.spec.Spec.Image], id)
-		}
+		spec, pin := m.spec, m.image
 		m.mu.Unlock()
+		if spec != nil && spec.Desired == api.DesiredDeleted {
+			continue
+		}
+		if pin != nil && *pin == c || pin == nil && spec != nil && spec.Spec.Image == c.Ref && m.hasDisks() {
+			users = append(users, id)
+		}
 	}
-	for _, u := range users {
-		sort.Strings(u)
-	}
+	sort.Strings(users)
 	return users
 }
 

@@ -153,21 +153,24 @@ type Environment struct {
 	Name    string `json:"name"`
 	// TemplateID is empty once the template has been deleted; Template
 	// keeps its name.
-	TemplateID string            `json:"template_id,omitempty"`
-	Template   string            `json:"template"`
-	Spec       Spec              `json:"spec"`
-	Image      string            `json:"image"`
-	CPUs       int               `json:"cpus"`
-	MemoryMiB  int               `json:"memory_mib"`
-	Desired    DesiredState      `json:"desired"`
-	Phase      Phase             `json:"phase"`
-	Reason     string            `json:"reason,omitempty"`
-	Progress   *Progress         `json:"progress,omitempty"`
-	WorkerID   string            `json:"worker_id,omitempty"`
-	Worker     string            `json:"worker,omitempty"`
-	Stats      *EnvironmentStats `json:"stats,omitempty"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
+	TemplateID string `json:"template_id,omitempty"`
+	Template   string `json:"template"`
+	Spec       Spec   `json:"spec"`
+	Image      string `json:"image"`
+	// ImageDigest is the digest of the copy of Image the environment boots
+	// from, as its worker reports it; empty until it has first started.
+	ImageDigest string            `json:"image_digest,omitempty"`
+	CPUs        int               `json:"cpus"`
+	MemoryMiB   int               `json:"memory_mib"`
+	Desired     DesiredState      `json:"desired"`
+	Phase       Phase             `json:"phase"`
+	Reason      string            `json:"reason,omitempty"`
+	Progress    *Progress         `json:"progress,omitempty"`
+	WorkerID    string            `json:"worker_id,omitempty"`
+	Worker      string            `json:"worker,omitempty"`
+	Stats       *EnvironmentStats `json:"stats,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
 // CreateEnvironment is a request to create an environment from a template.
@@ -195,9 +198,9 @@ type Worker struct {
 	CreatedAt  time.Time    `json:"created_at"`
 	Stats      *WorkerStats `json:"stats,omitempty"`
 	Images     []LocalImage `json:"images"`
-	// PendingRemovals are images the worker has been asked to delete and
-	// still holds.
-	PendingRemovals []string `json:"pending_removals"`
+	// PendingRemovals are copies of images the worker has been asked to
+	// delete and still holds.
+	PendingRemovals []ImageCopy `json:"pending_removals"`
 }
 
 // Resources is an amount of CPU and memory.
@@ -231,9 +234,9 @@ type WorkerCredential struct {
 type DesiredSet struct {
 	Version      int64             `json:"version"`
 	Environments []EnvironmentSpec `json:"environments"`
-	// RemoveImages are images the worker should delete from its store. One
-	// an environment still uses is kept, and stays asked for.
-	RemoveImages []string `json:"remove_images"`
+	// RemoveImages are copies of images the worker should delete from its
+	// store. One an environment still uses is kept, and stays asked for.
+	RemoveImages []ImageCopy `json:"remove_images"`
 	// RemoveEnvironments are environments the worker runs that the server
 	// has no record of, which it should power off and delete, disks and
 	// all.
@@ -265,6 +268,10 @@ type ObservedEnvironment struct {
 	// Progress is how far a starting environment has got.
 	Progress *Progress         `json:"progress,omitempty"`
 	Stats    *EnvironmentStats `json:"stats,omitempty"`
+	// ImageDigest is the digest of the copy of its image the environment
+	// boots from, fixed when it first starts: an image that moves on later
+	// is not the one its writable layer was made over. Empty until then.
+	ImageDigest string `json:"image_digest,omitempty"`
 }
 
 // Step is one step of starting an environment. They happen in the order
@@ -328,13 +335,29 @@ type WorkerStats struct {
 	DiskTotalBytes int64 `json:"disk_total_bytes"`
 }
 
-// LocalImage is an image a worker holds in its own store.
+// ImageCopy names one copy of an image in a worker's store: the reference
+// a template gives, and the digest of what it named when the copy was
+// taken. A reference whose image moves on is held as one copy per digest.
+type ImageCopy struct {
+	Ref    string `json:"ref"`
+	Digest string `json:"digest"`
+}
+
+// LocalImage is a copy of an image a worker holds in its own store.
 type LocalImage struct {
-	Ref       string `json:"ref"`
+	Ref string `json:"ref"`
+	// Digest identifies what the reference named when the copy was taken:
+	// the manifest's digest for an image pulled from a registry, and
+	// "build:" and the build's ID for one copied from a local build.
+	Digest    string `json:"digest"`
 	SizeBytes int64  `json:"size_bytes"`
 	// State is "ready", or "fetching" while it is being pulled or copied
 	// in.
 	State string `json:"state"`
 	// Environments lists the environments on the worker using it.
 	Environments []string `json:"environments"`
+	// Current is whether the copy is of what the reference named when the
+	// worker last looked. New environments are made from the current copy;
+	// the others stay for the environments made from them.
+	Current bool `json:"current"`
 }

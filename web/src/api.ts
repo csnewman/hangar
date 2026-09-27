@@ -134,8 +134,8 @@ export const api = {
 
   workers: () => unwrap(client.GET('/api/frontend/workers')),
   worker: (id: string) => unwrap(client.GET('/api/frontend/workers/{id}', byID(id))),
-  removeWorkerImage: (id: string, ref: string) =>
-    unwrap(client.POST('/api/frontend/workers/{id}/images/remove', { ...byID(id), body: { ref } })),
+  removeWorkerImage: (id: string, ref: string, digest: string) =>
+    unwrap(client.POST('/api/frontend/workers/{id}/images/remove', { ...byID(id), body: { ref, digest } })),
   removeUnknownEnvironments: (id: string, environments: string[]) =>
     unwrap(client.POST('/api/frontend/workers/{id}/unknown/remove', { ...byID(id), body: { environments } })),
   revokeWorker: (id: string) => unwrap(client.POST('/api/frontend/workers/{id}/revoke', byID(id))),

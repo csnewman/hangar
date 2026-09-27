@@ -167,9 +167,10 @@ func report(t *testing.T, wm *workers.Manager, id string, cpus, mem int, envs ..
 	}
 }
 
-// An image an environment on the worker uses cannot be removed. Once
-// nothing uses it, a removal is asked for in the desired set and stands
-// until the worker stops reporting the image.
+// A copy of an image an environment on the worker uses cannot be removed:
+// the one it is pinned to, or, before it has started, the current one it
+// will be made over. Once nothing uses a copy, a removal is asked for in the
+// desired set and stands until the worker stops reporting the copy.
 func TestImageRemoval(t *testing.T) {
 	d := dbtest.Open(t)
 	wm := workers.NewManager(d)
@@ -178,16 +179,19 @@ func TestImageRemoval(t *testing.T) {
 	owner, _ := users.NewManager(d).Create(ctx, users.NewUser{Username: "owner", Password: "password1"})
 	p := users.Principal{UserID: owner.ID}
 
-	img := api.LocalImage{Ref: "img", SizeBytes: 1 << 30, State: "ready"}
-	status := func(images ...api.LocalImage) {
+	old := api.LocalImage{Ref: "img", Digest: "sha256:old", SizeBytes: 1 << 30, State: "ready"}
+	cur := api.LocalImage{Ref: "img", Digest: "sha256:new", SizeBytes: 1 << 30, State: "ready", Current: true}
+	oldCopy := api.ImageCopy{Ref: "img", Digest: "sha256:old"}
+	curCopy := api.ImageCopy{Ref: "img", Digest: "sha256:new"}
+	status := func(envs []api.ObservedEnvironment, images ...api.LocalImage) {
 		t.Helper()
 		if err := wm.ReportStatus(ctx, w.ID, api.WorkerStatus{
-			Capacity: api.Resources{CPUs: 4, MemoryMiB: 8192}, Images: images,
+			Capacity: api.Resources{CPUs: 4, MemoryMiB: 8192}, Environments: envs, Images: images,
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	status(img)
+	status(nil, old, cur)
 
 	tmpl, _ := templates.NewManager(d).Create(ctx, p, templates.Input{
 		Name: "t", Spec: api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 1, MemoryMiB: 1024}},
@@ -200,39 +204,49 @@ func TestImageRemoval(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := wm.RemoveImage(ctx, w.ID, "img"); !errors.Is(err, workers.ErrInUse) {
-		t.Fatalf("removing an image in use: %v, want ErrInUse", err)
+	// Not yet started, it will be made over the current copy.
+	if err := wm.RemoveImage(ctx, w.ID, curCopy); !errors.Is(err, workers.ErrInUse) {
+		t.Fatalf("removing the copy an unstarted environment will use: %v, want ErrInUse", err)
 	}
-	if err := wm.RemoveImage(ctx, w.ID, "other"); !errors.Is(err, workers.ErrNoImage) {
+	if err := wm.RemoveImage(ctx, w.ID, api.ImageCopy{Ref: "other"}); !errors.Is(err, workers.ErrNoImage) {
 		t.Fatalf("removing an image the worker lacks: %v, want ErrNoImage", err)
 	}
 
-	// Deleted and gone from the worker: nothing uses it.
-	if _, err := em.SetDesired(ctx, p, env.ID, api.DesiredDeleted); err != nil {
-		t.Fatal(err)
+	// Pinned to the old copy, it keeps that one and frees the current.
+	oldUser := old
+	oldUser.Environments = []string{env.ID}
+	status([]api.ObservedEnvironment{{ID: env.ID, Phase: api.PhaseRunning, ImageDigest: oldCopy.Digest}}, oldUser, cur)
+	if got, _ := em.Get(ctx, p, env.ID); got.ImageDigest != oldCopy.Digest {
+		t.Fatalf("the environment's digest is %q, want %q", got.ImageDigest, oldCopy.Digest)
 	}
-	status(img)
+	if err := wm.RemoveImage(ctx, w.ID, oldCopy); !errors.Is(err, workers.ErrInUse) {
+		t.Fatalf("removing the copy an environment is pinned to: %v, want ErrInUse", err)
+	}
 	before, _ := wm.DesiredVersion(ctx, w.ID)
-	if err := wm.RemoveImage(ctx, w.ID, "img"); err != nil {
-		t.Fatalf("removing an unused image: %v", err)
+	if err := wm.RemoveImage(ctx, w.ID, curCopy); err != nil {
+		t.Fatalf("removing a copy nothing uses: %v", err)
 	}
 	set, _ := wm.DesiredSet(ctx, w.ID)
-	if set.Version <= before || len(set.RemoveImages) != 1 || set.RemoveImages[0] != "img" {
+	if set.Version <= before || len(set.RemoveImages) != 1 || set.RemoveImages[0] != curCopy {
 		t.Fatalf("desired set after asking: version %d -> %d, removals %v", before, set.Version, set.RemoveImages)
 	}
 	got, _ := wm.Get(ctx, w.ID)
-	if len(got.PendingRemovals) != 1 {
+	if len(got.PendingRemovals) != 1 || got.PendingRemovals[0] != curCopy {
 		t.Fatalf("pending removals %v", got.PendingRemovals)
 	}
 
-	// Still held: still asked for. Gone: done.
-	status(img)
+	// Still held: still asked for. Gone: done, and the other copy's
+	// report leaves it be.
+	status(nil, oldUser, cur)
 	if set, _ := wm.DesiredSet(ctx, w.ID); len(set.RemoveImages) != 1 {
-		t.Fatal("the removal was dropped while the worker still held the image")
+		t.Fatal("the removal was dropped while the worker still held the copy")
 	}
-	status()
+	status(nil, oldUser)
 	if set, _ := wm.DesiredSet(ctx, w.ID); len(set.RemoveImages) != 0 {
-		t.Fatalf("the removal stands after the image went: %v", set.RemoveImages)
+		t.Fatalf("the removal stands after the copy went: %v", set.RemoveImages)
+	}
+	if got, _ := em.Get(ctx, p, env.ID); got.ImageDigest != oldCopy.Digest {
+		t.Fatalf("a report without a digest changed the environment's to %q", got.ImageDigest)
 	}
 }
 

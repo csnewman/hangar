@@ -138,6 +138,7 @@ func build(ctx context.Context, argv []string) error {
 	for _, tier := range image.Tiers {
 		fmt.Fprintf(os.Stderr, "built %s\n", a.Rootfs[tier])
 	}
+	fmt.Fprintf(os.Stderr, "build %s\n", a.Build)
 	return nil
 }
 
