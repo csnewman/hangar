@@ -121,3 +121,41 @@ func TestSettingsNeedStopped(t *testing.T) {
 		t.Fatalf("changing it once stopped: %v", err)
 	}
 }
+
+// Whether an environment maps its image's files is its template's to start
+// with, its own to change, and a difference from the template once changed.
+func TestDAXSetting(t *testing.T) {
+	d := dbtest.Open(t)
+	em, tm := environments.NewManager(d), templates.NewManager(d)
+	u, _ := users.NewManager(d).Create(ctx, users.NewUser{Username: "owner", Password: "password1"})
+	p := users.Principal{UserID: u.ID, Username: u.Username}
+	tpl, err := tm.Create(ctx, p, templates.Input{Name: "t",
+		Spec: api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 2, MemoryMiB: 2048, Display: api.DisplayNone, DAX: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := em.Create(ctx, p, api.CreateEnvironment{TemplateID: tpl.ID, Name: "e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !env.Spec.DAX {
+		t.Fatal("an environment from a template asking for DAX does not ask for it")
+	}
+
+	got, err := em.UpdateSettings(ctx, p, env.ID, environments.Settings{CPUs: 2, MemoryMiB: 2048,
+		Display: api.DisplayNone, GPU: api.GPUNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.DAX || !slices.Equal(got.TemplateChanges, []string{environments.SettingDAX}) {
+		t.Fatalf("after turning DAX off: dax %v, changes %v", got.Spec.DAX, got.TemplateChanges)
+	}
+
+	got, err = em.ResetToTemplate(ctx, p, env.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Spec.DAX || len(got.TemplateChanges) != 0 {
+		t.Fatalf("after resetting: dax %v, changes %v", got.Spec.DAX, got.TemplateChanges)
+	}
+}

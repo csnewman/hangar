@@ -130,7 +130,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		Disks:       disks,
 		MemoryMiB:   s.MemoryMiB,
 		CPUs:        s.CPUs,
-		DaxMiB:      m.rt.cfg.DaxMiB,
+		DaxMiB:      daxMiB(m.rt.cfg.DaxMiB, s),
 		Net:         true,
 		GPU:         s.GPU == api.GPUVirtual,
 		ConsoleFile: filepath.Join(m.dir, "console.log"),
@@ -431,4 +431,13 @@ func writeEditorTrust(sess *agent.Session, spec api.Spec) error {
 		return fmt.Errorf("exit %d: %s", out.Code, firstLine(out.Stderr, out.Stdout))
 	}
 	return nil
+}
+
+// daxMiB is the DAX window an environment's machine is given: the worker's,
+// if the environment asks to map its image's files, and none otherwise.
+func daxMiB(worker int, s api.Spec) int {
+	if !s.DAX {
+		return 0
+	}
+	return worker
 }

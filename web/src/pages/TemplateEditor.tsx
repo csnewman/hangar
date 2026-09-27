@@ -97,6 +97,7 @@ function Editor({ existing }: { existing?: Template }) {
         repos: spec.repos.map((r) => ({ ...r, ref: r.ref || undefined, branch: r.branch || undefined })),
         editor_path: spec.editor_path || undefined,
         untrusted: spec.untrusted || undefined,
+        dax: spec.dax || undefined,
         trusted_folders: spec.untrusted
           ? undefined
           : (spec.trusted_folders ?? []).map((f) => f.trim()).filter((f) => f !== '') || undefined,
@@ -295,6 +296,16 @@ function Editor({ existing }: { existing?: Template }) {
                 so it lands on a worker that has one.
               </small>
             )}
+            <label className="check">
+              <input type="checkbox" checked={spec.dax ?? false} onChange={(e) => setSpec({ dax: e.target.checked })} />
+              <span>
+                Map image files from the host (DAX)
+                <small className="muted">
+                  Shares the image's files in memory with other environments instead of each keeping a copy. Programs
+                  that run from large files, such as a browser, can be many times slower with it.
+                </small>
+              </span>
+            </label>
           </Section>
 
           <Section title="Workspace" hint="Cloned when the environment is created.">

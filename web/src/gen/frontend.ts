@@ -1037,12 +1037,14 @@ export interface components {
          * @description A setting an environment takes from its template.
          * @enum {string}
          */
-        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "repos" | "editor_path" | "untrusted" | "trusted_folders" | "placement" | "name";
+        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "untrusted" | "trusted_folders" | "placement" | "name";
         EnvironmentSettings: {
             cpus: number;
             memory_mib: number;
             display: components["schemas"]["Display"];
             gpu: components["schemas"]["GPU"];
+            /** @description Map the image's files from the host's page cache rather than read them into the environment's memory. */
+            dax?: boolean;
         };
         /**
          * @description virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
@@ -1071,6 +1073,8 @@ export interface components {
             trusted_folders?: string[];
             /** @description For code the owner does not trust: the environment is never given their credentials -- Claude's sign-in, or signatures from their SSH keys -- though the rest of their profile still follows them in. */
             untrusted?: boolean;
+            /** @description Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. A worker with DAX turned off (dax_mib 0) reads them in regardless. */
+            dax?: boolean;
             /** @description Worker labels the environment requires: it runs only on a worker with every one of these labels, with these values. */
             placement: {
                 [key: string]: string;

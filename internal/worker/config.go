@@ -80,9 +80,9 @@ type VMConfig struct {
 	Editor    string `yaml:"editor"`
 	UpperGiB  int    `yaml:"upper_gib"`
 	DockerGiB int    `yaml:"docker_gib"`
-	// DaxMiB sizes the DAX window through which environments map their
-	// base's files from this machine's page cache. 0 serves the base over
-	// virtio-fs without one.
+	// DaxMiB sizes the DAX window through which an environment that asks
+	// for DAX maps its base's files from this machine's page cache. 0 serves
+	// every base over virtio-fs without one, whatever an environment asks.
 	DaxMiB int `yaml:"dax_mib"`
 	// GPU is what an environment with a virtual GPU gets on this machine.
 	GPU VMGPU `yaml:"gpu"`

@@ -76,7 +76,8 @@ func (h *handler) StopEnvironment(ctx context.Context, req StopEnvironmentReques
 func (h *handler) UpdateEnvironmentSettings(ctx context.Context, req UpdateEnvironmentSettingsRequestObject) (UpdateEnvironmentSettingsResponseObject, error) {
 	e, err := h.envs.UpdateSettings(ctx, principal(ctx), req.ID, environments.Settings{
 		CPUs: req.Body.CPUs, MemoryMiB: req.Body.MemoryMiB,
-		Display: api.Display(req.Body.Display), GPU: api.GPU(req.Body.GPU)})
+		Display: api.Display(req.Body.Display), GPU: api.GPU(req.Body.GPU),
+		DAX: req.Body.Dax != nil && *req.Body.Dax})
 	switch {
 	case errors.Is(err, environments.ErrNotFound):
 		return UpdateEnvironmentSettings404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil

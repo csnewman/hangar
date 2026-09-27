@@ -25,6 +25,7 @@ const (
 	SettingMemory         = "memory"
 	SettingDisplay        = "display"
 	SettingGPU            = "gpu"
+	SettingDAX            = "dax"
 	SettingRepos          = "repos"
 	SettingEditorPath     = "editor_path"
 	SettingUntrusted      = "untrusted"
@@ -54,6 +55,7 @@ func templateChanges(env api.Spec, t api.TemplateSpec, name string) []string {
 	add(env.MemoryMiB != want.MemoryMiB, SettingMemory)
 	add(env.Display != want.Display, SettingDisplay)
 	add(env.GPU != want.GPU, SettingGPU)
+	add(env.DAX != want.DAX, SettingDAX)
 	add(!slices.Equal(env.Repos, want.Repos), SettingRepos)
 	add(env.EditorPath != want.EditorPath, SettingEditorPath)
 	add(env.Untrusted != want.Untrusted, SettingUntrusted)
@@ -63,13 +65,15 @@ func templateChanges(env api.Spec, t api.TemplateSpec, name string) []string {
 }
 
 // Settings are what of an environment may change after it is made: its
-// size, and whether it has a desktop and a virtual GPU. They are the
-// machine's, so they take effect when it next starts.
+// size, whether it has a desktop and a virtual GPU, and whether its image's
+// files are mapped from the host. They are the machine's, so they take
+// effect when it next starts.
 type Settings struct {
 	CPUs      int
 	MemoryMiB int
 	Display   api.Display
 	GPU       api.GPU
+	DAX       bool
 }
 
 // changing reads and locks an environment p may reach for a change to its
@@ -135,7 +139,8 @@ func checkGPU(ctx context.Context, tx db.Tx, e api.Environment, gpu api.GPU) err
 	return nil
 }
 
-// UpdateSettings changes a stopped environment's size, display and GPU.
+// UpdateSettings changes a stopped environment's size, display, GPU and
+// whether its image's files are mapped from the host.
 // They are held to what a template may ask, and a GPU passed through is
 // only a template's to ask for.
 func (m *Manager) UpdateSettings(ctx context.Context, p users.Principal, id string, s Settings) (api.Environment, error) {
@@ -146,7 +151,7 @@ func (m *Manager) UpdateSettings(ctx context.Context, p users.Principal, id stri
 			return err
 		}
 		spec := cur.Spec
-		spec.CPUs, spec.MemoryMiB, spec.Display, spec.GPU = s.CPUs, s.MemoryMiB, s.Display, s.GPU
+		spec.CPUs, spec.MemoryMiB, spec.Display, spec.GPU, spec.DAX = s.CPUs, s.MemoryMiB, s.Display, s.GPU, s.DAX
 		if s.GPU == api.GPUPassthrough && cur.Spec.GPU != api.GPUPassthrough {
 			return fmt.Errorf("%w: a GPU passed through is only a template's to ask for", ErrInvalid)
 		}
@@ -171,6 +176,7 @@ func (m *Manager) UpdateSettings(ctx context.Context, p users.Principal, id stri
 				"memory_mib": map[string]int{"from": cur.Spec.MemoryMiB, "to": spec.MemoryMiB},
 				"display":    map[string]api.Display{"from": cur.Spec.Display, "to": spec.Display},
 				"gpu":        map[string]api.GPU{"from": cur.Spec.GPU, "to": spec.GPU},
+				"dax":        map[string]bool{"from": cur.Spec.DAX, "to": spec.DAX},
 			}})
 	})
 	return e, err

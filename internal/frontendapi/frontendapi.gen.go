@@ -272,6 +272,7 @@ func (e TeamRole) Valid() bool {
 // Defines values for TemplateSetting.
 const (
 	SettingCPUs           TemplateSetting = "cpus"
+	SettingDAX            TemplateSetting = "dax"
 	SettingDisplay        TemplateSetting = "display"
 	SettingEditorPath     TemplateSetting = "editor_path"
 	SettingGPU            TemplateSetting = "gpu"
@@ -288,6 +289,8 @@ const (
 func (e TemplateSetting) Valid() bool {
 	switch e {
 	case SettingCPUs:
+		return true
+	case SettingDAX:
 		return true
 	case SettingDisplay:
 		return true
@@ -511,6 +514,9 @@ type Environment struct {
 // EnvironmentSettings defines model for EnvironmentSettings.
 type EnvironmentSettings struct {
 	CPUs int `json:"cpus"`
+
+	// Dax Map the image's files from the host's page cache rather than read them into the environment's memory.
+	Dax *bool `json:"dax,omitempty"`
 
 	// Display Whether the environment has a graphical desktop.
 	Display Display `json:"display"`
@@ -837,6 +843,9 @@ type SignalProcessSignal string
 // Spec defines model for Spec.
 type Spec struct {
 	CPUs int `json:"cpus"`
+
+	// Dax Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. A worker with DAX turned off (dax_mib 0) reads them in regardless.
+	Dax *bool `json:"dax,omitempty"`
 
 	// Display Whether the environment has a graphical desktop.
 	Display Display `json:"display"`

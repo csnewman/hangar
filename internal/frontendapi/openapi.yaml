@@ -1482,8 +1482,8 @@ components:
     TemplateSetting:
       type: string
       description: A setting an environment takes from its template.
-      enum: [image, cpus, memory, display, gpu, repos, editor_path, untrusted, trusted_folders, placement, name]
-      x-enum-varnames: [SettingImage, SettingCPUs, SettingMemory, SettingDisplay, SettingGPU, SettingRepos,
+      enum: [image, cpus, memory, display, gpu, dax, repos, editor_path, untrusted, trusted_folders, placement, name]
+      x-enum-varnames: [SettingImage, SettingCPUs, SettingMemory, SettingDisplay, SettingGPU, SettingDAX, SettingRepos,
         SettingEditorPath, SettingUntrusted, SettingTrustedFolders, SettingPlacement, SettingName]
 
     EnvironmentSettings:
@@ -1495,6 +1495,9 @@ components:
         memory_mib: { type: integer, minimum: 1 }
         display: { $ref: "#/components/schemas/Display" }
         gpu: { $ref: "#/components/schemas/GPU" }
+        dax:
+          type: boolean
+          description: Map the image's files from the host's page cache rather than read them into the environment's memory.
 
     GPU:
       type: string
@@ -1552,6 +1555,15 @@ components:
             their credentials -- Claude's sign-in, or signatures from their
             SSH keys -- though the rest of their profile still follows them
             in.
+        dax:
+          type: boolean
+          description: >-
+            Map the image's files from the host's page cache (DAX) rather than
+            read them into the environment's own memory. Their memory is then
+            shared with other environments on the image, but programs that run
+            from large files, such as a browser, are many times slower on a
+            worker under nested virtualisation. A worker with DAX turned off
+            (dax_mib 0) reads them in regardless.
         placement:
           type: object
           description: >-

@@ -89,8 +89,9 @@ type Config struct {
 	// space spent.
 	UpperGiB  int
 	DockerGiB int
-	// DaxMiB sizes the window a virtio-fs base is mapped through. Zero
-	// reads every file through the backend instead.
+	// DaxMiB sizes the window a virtio-fs base is mapped through, for an
+	// environment that asks for DAX. Zero reads every file through the
+	// backend, whatever an environment asks.
 	DaxMiB int
 	// GPUVenus offers an environment with a virtual GPU Vulkan as well as
 	// OpenGL, and GPUVenusRestore carries its Vulkan state across a suspend.

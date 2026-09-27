@@ -10,6 +10,7 @@ const settingNames: Record<TemplateSetting, string> = {
   memory: 'memory',
   display: 'display',
   gpu: 'GPU',
+  dax: 'image file mapping',
   repos: 'repositories',
   editor_path: 'editor folder',
   untrusted: 'trust',
@@ -73,6 +74,7 @@ export function SettingsPanel({ env }: { env: Environment }) {
     memory_mib: env.spec.memory_mib,
     display: env.spec.display,
     gpu: env.spec.gpu,
+    dax: env.spec.dax ?? false,
   }
   const [form, setForm] = useState<EnvironmentSettings>(initial)
   const save = useMutation({
@@ -107,7 +109,8 @@ export function SettingsPanel({ env }: { env: Environment }) {
         <p className="muted small">
           {env.spec.cpus} vCPU{env.spec.cpus === 1 ? '' : 's'}, {env.spec.memory_mib} MiB,{' '}
           {env.spec.display === 'desktop' ? 'desktop' : 'headless'},{' '}
-          {env.spec.gpu === 'none' ? 'no GPU' : `${env.spec.gpu} GPU`}.{' '}
+          {env.spec.gpu === 'none' ? 'no GPU' : `${env.spec.gpu} GPU`}
+          {env.spec.dax ? ', image files mapped from the host' : ''}.{' '}
           {ok ? 'Changes take effect when it next starts.' : 'Stop the environment to change them.'}
         </p>
       ) : (
@@ -165,6 +168,20 @@ export function SettingsPanel({ env }: { env: Environment }) {
               </select>
             </label>
           </div>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={form.dax ?? false}
+              onChange={(e) => setForm({ ...form, dax: e.target.checked })}
+            />
+            <span>
+              Map image files from the host (DAX)
+              <small className="muted">
+                Shares the image's files in memory with other environments. Programs that run from large files, such
+                as a browser, can be many times slower with it.
+              </small>
+            </span>
+          </label>
           {save.error && <div className="alert">{save.error.message}</div>}
           <div className="form-actions">
             <button type="button" className="btn btn-ghost" onClick={() => setEditing(false)}>

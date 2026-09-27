@@ -179,6 +179,7 @@ func toSpec(s api.Spec) Spec {
 		Repos:          repos,
 		EditorPath:     optional(s.EditorPath),
 		Untrusted:      optionalBool(s.Untrusted),
+		Dax:            optionalBool(s.DAX),
 		TrustedFolders: optionalSlice(s.TrustedFolders),
 		Placement:      placement,
 	}
@@ -198,6 +199,7 @@ func fromSpec(s Spec) api.Spec {
 		Repos:          repos,
 		EditorPath:     deref(s.EditorPath),
 		Untrusted:      s.Untrusted != nil && *s.Untrusted,
+		DAX:            s.Dax != nil && *s.Dax,
 		TrustedFolders: derefSlice(s.TrustedFolders),
 		Placement:      s.Placement,
 	}

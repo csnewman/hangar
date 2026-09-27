@@ -43,8 +43,11 @@ vm:
   editor: /usr/share/hangar/editor.ext4
   upper_gib: 32
   docker_gib: 64
-  # Environments map their base's files from this machine's page cache
-  # through a DAX window of this size, rather than each keeping a copy.
+  # Environments whose template asks for DAX map their base's files from
+  # this machine's page cache through a window of this size, rather than
+  # each keeping a copy. Programs that run from large files, such as a
+  # browser, can be many times slower that way, so it is off unless a
+  # template asks. 0 turns it off here whatever a template asks.
   dax_mib: 1024
   # Environments whose template asks for a virtual GPU get OpenGL; with
   # venus, Vulkan too, which the worker image's virglrenderer supports.

@@ -106,6 +106,14 @@ type Spec struct {
 	// repositories and the editor's folder, which a trusted environment's
 	// editor trusts anyway. Ignored for an untrusted one.
 	TrustedFolders []string `json:"trusted_folders,omitempty"`
+	// DAX has the guest map its image's files from the host's page cache,
+	// through the worker's DAX window, rather than read them into its own
+	// memory. The files' memory is then shared with every other environment
+	// on the image, but a program that runs from large mapped files, such as
+	// a browser, executes through the window: under nested virtualisation
+	// Chromium runs tens of times slower from it, so it is asked for, not
+	// assumed.
+	DAX bool `json:"dax,omitempty"`
 	// Placement limits which workers may run the environment: each key must
 	// be a label the worker has, with this value.
 	Placement map[string]string `json:"placement"`
