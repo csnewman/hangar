@@ -17,6 +17,7 @@ import (
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 
+	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/profile"
@@ -88,6 +89,12 @@ func newPlane(t *testing.T) *plane {
 // env makes a running environment with a home directory of its own.
 func (p *plane) env(t *testing.T, name string, untrusted bool) (id, home string, g *profile.Guest) {
 	t.Helper()
+	return p.envIn(t, name, untrusted, api.PhaseRunning)
+}
+
+// envIn makes an environment in the given phase, with a guest for it.
+func (p *plane) envIn(t *testing.T, name string, untrusted bool, phase api.Phase) (id, home string, g *profile.Guest) {
+	t.Helper()
 	ctx := context.Background()
 	spec := `{}`
 	if untrusted {
@@ -96,8 +103,8 @@ func (p *plane) env(t *testing.T, name string, untrusted bool) (id, home string,
 	err := p.d.Transact(ctx, func(tx db.Tx) error {
 		return tx.QueryRow(ctx, `INSERT INTO environments (owner_id, name, template_name, spec, image, cpus,
 				memory_mib, desired, worker_id, phase)
-			VALUES ($1, $2, 't', $3, 'img', 1, 512, 'running', $4, 'running') RETURNING id`,
-			p.owner, name, spec, p.guests.worker).Scan(&id)
+			VALUES ($1, $2, 't', $3, 'img', 1, 512, 'running', $4, $5) RETURNING id`,
+			p.owner, name, spec, p.guests.worker, phase).Scan(&id)
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -330,6 +337,29 @@ func TestSSHAgentSignsWithTheOwnersKey(t *testing.T) {
 	}
 	if err := client.Add(agent.AddedKey{}); err == nil {
 		t.Error("the agent took a key")
+	}
+}
+
+// A clone while an environment is still starting signs in with its owner's
+// keys: the session opens then, and the agent waits for it rather than
+// answering that there are no keys.
+func TestSSHAgentServesAStartingEnvironment(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	if _, err := p.store.GenerateKey(ctx, p.owner, "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	_, _, g := p.envIn(t, "a", false, api.PhaseStarting)
+	sock := socketPath(t)
+	go g.ServeSSHAgent(sock)
+	var conn net.Conn
+	eventually(t, "the agent's socket", func() bool {
+		var err error
+		conn, err = net.Dial("unix", sock)
+		return err == nil
+	})
+	if keys, err := agent.NewClient(conn).List(); err != nil || len(keys) != 1 {
+		t.Fatalf("the agent of a starting environment offers %d keys (%v), want 1", len(keys), err)
 	}
 }
 

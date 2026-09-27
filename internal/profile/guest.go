@@ -709,12 +709,20 @@ func (g *Guest) ServeSSHAgent(socket string) error {
 	}
 }
 
+// keysWait is how long the SSH agent waits for a session before listing the
+// keys it has, which with no session is none.
+const keysWait = 30 * time.Second
+
 // sshAgent is the SSH agent's keyring: read-only, and backed by the server.
 type sshAgent struct{ g *Guest }
 
 var errReadOnly = errors.New("keys are managed in Hangar, on the Profile page")
 
+// List gives the user's keys, waiting a while for the server to send them:
+// a clone made while the environment is still starting asks before the
+// profile session has connected.
 func (a sshAgent) List() ([]*agent.Key, error) {
+	a.g.session(keysWait)
 	a.g.mu.Lock()
 	defer a.g.mu.Unlock()
 	out := []*agent.Key{}

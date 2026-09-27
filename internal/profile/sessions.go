@@ -99,7 +99,7 @@ func (s *Sessions) reconcile(ctx context.Context) {
 			rows, err := tx.Query(ctx, `SELECT e.id::text, e.name, e.owner_id::text, u.username, e.worker_id::text,
 					coalesce((e.spec->>'untrusted')::boolean, false)
 				FROM environments e JOIN users u ON u.id = e.owner_id
-				WHERE e.phase = 'running' AND e.desired = 'running' AND e.worker_id = ANY($1::uuid[])`, workers)
+				WHERE e.phase IN ('starting', 'running') AND e.desired = 'running' AND e.worker_id = ANY($1::uuid[])`, workers)
 			if err != nil {
 				return err
 			}

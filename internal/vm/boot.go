@@ -16,6 +16,7 @@ import (
 	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/gitout"
 	"github.com/csnewman/hangar/internal/host"
+	"github.com/csnewman/hangar/internal/sysuser"
 )
 
 // guestCID is the context ID every guest is given. Cloud Hypervisor carries
@@ -208,8 +209,11 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 	// restarting, and runs again from the top on the next boot -- the disks
 	// keep what it had done. So each step is skipped if it is already done,
 	// rather than failing on finding its own earlier work.
+	// runuser leaves the SSH agent out of git's environment, and a clone
+	// over SSH signs in with the owner's keys through it.
 	git := func(args ...string) []string {
-		return append(append([]string{}, as...), append([]string{"git"}, args...)...)
+		cmd := append(append([]string{}, as...), "env", "SSH_AUTH_SOCK="+sysuser.SSHAuthSock, "git")
+		return append(cmd, args...)
 	}
 	done := func(cmd ...string) bool {
 		out, err := sess.Exec(30*time.Second, cmd...)
