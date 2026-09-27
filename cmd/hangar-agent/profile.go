@@ -1,11 +1,15 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/csnewman/hangar/internal/profile"
@@ -37,6 +41,20 @@ func serveProfile() {
 		for {
 			if err := g.ServeSSHAgent(sysuser.SSHAuthSock); err != nil {
 				fmt.Fprintf(os.Stderr, "hangar-agent: ssh agent: %v\n", err)
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}()
+	// Docker runs a credential helper by name from PATH: this agent,
+	// under that name.
+	helper := filepath.Join(filepath.Dir(agentInRoot), "docker-credential-"+profile.CredentialHelper)
+	if err := os.Symlink(filepath.Base(agentInRoot), helper); err != nil && !os.IsExist(err) {
+		log.Warn("profile: installing the docker credential helper", "err", err)
+	}
+	go func() {
+		for {
+			if err := g.ServeRegistryCredentials(sysuser.RegistrySock); err != nil {
+				fmt.Fprintf(os.Stderr, "hangar-agent: registry credentials: %v\n", err)
 			}
 			time.Sleep(5 * time.Second)
 		}
@@ -73,4 +91,50 @@ func sshSetup() {
 			os.WriteFile(path, []byte(content), 0o644)
 		}
 	}
+}
+
+// credentialHelper is Docker's credential helper protocol for Hangar's
+// registry: get asks the agent for a credential for the host on stdin;
+// store and erase have nothing to do, since Hangar gives the credentials;
+// list names no stored ones. It returns the exit status.
+func credentialHelper(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: docker-credential-hangar get|store|erase|list")
+		return 2
+	}
+	in, _ := io.ReadAll(os.Stdin)
+	switch args[0] {
+	case "get":
+		host := strings.TrimSpace(string(in))
+		host = strings.TrimPrefix(strings.TrimPrefix(host, "https://"), "http://")
+		conn, err := net.Dial("unix", sysuser.RegistrySock)
+		if err != nil {
+			fmt.Println("credentials not found in native keychain")
+			return 1
+		}
+		defer conn.Close()
+		fmt.Fprintln(conn, host)
+		var c profile.HelperCredential
+		if err := json.NewDecoder(conn).Decode(&c); err != nil || c.Error != "" {
+			if c.Error != "" {
+				fmt.Fprintln(os.Stderr, "hangar:", c.Error)
+			}
+			// What docker takes as having no credentials, and pulls
+			// anonymously.
+			fmt.Println("credentials not found in native keychain")
+			return 1
+		}
+		json.NewEncoder(os.Stdout).Encode(c)
+		return 0
+	case "store":
+		fmt.Println("Hangar signs this environment in to its registry itself: no login is needed")
+		return 1
+	case "erase":
+		return 0
+	case "list":
+		fmt.Println("{}")
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, "unknown action", args[0])
+	return 2
 }

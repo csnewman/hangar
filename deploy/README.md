@@ -84,7 +84,10 @@ covered by the same DNS and certificate as every other name under it:
     docker push registry.hangar.example.com/<username>/<image>:<tag>
 
 The password is one of the user's access tokens (Account, then Access
-tokens). Each user pushes to their own namespace, their username in lower
+tokens). Inside an environment nobody signs in: Docker there is set up to
+ask Hangar, and is given a credential for the environment's owner that
+lasts an hour, which is never stored and never has an administrator's
+rights. An environment made from an untrusted template is given none. Each user pushes to their own namespace, their username in lower
 case, and to the namespace of any team they are a member or admin of; a
 repository is made private on its first push, and its owner shares it with
 people, teams or everyone on the Images page. Name an image there in a
@@ -96,7 +99,10 @@ whoever saves it can pull.
 Blobs are kept in `HANGAR_REGISTRY_DIR` (the `registry` volume), and
 everything else about them in Postgres, so every replica of the control
 plane must share that directory. Setting it to empty turns the registry
-off.
+off. Once an hour the control plane deletes what nothing needs: manifests
+no tag, index or environment keeps, and blobs no repository uses, leaving
+anything pushed within the hour. Deleting a tag or a repository frees its
+space then.
 
 ## SSH
 

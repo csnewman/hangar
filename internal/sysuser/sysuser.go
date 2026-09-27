@@ -16,6 +16,10 @@ import (
 // given it.
 const SSHAuthSock = "/run/hangar/ssh-agent.sock"
 
+// RegistrySock is where the guest's Docker credential helper asks the agent
+// for credentials for Hangar's registry (internal/profile).
+const RegistrySock = "/run/hangar/registry.sock"
+
 // Credential is who a user's processes run as, with every group they are
 // in: without the supplementary groups a user in docker's group could not
 // reach Docker.

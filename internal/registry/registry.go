@@ -10,7 +10,10 @@
 //
 // Clients sign in with HTTP Basic authentication: a user with one of their
 // access tokens as the password (the username is theirs, and is checked),
-// and a worker with its credential, which pulls anything.
+// an environment's Docker with the credential its agent was given for its
+// owner, and a worker with its credential, which pulls anything. An
+// environment's credential acts as its owner, but never as an
+// administrator.
 //
 // Blobs are files in the registry's directory, kept once however many
 // repositories have them; what each repository has, its manifests and its
@@ -30,6 +33,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/users"
 )
@@ -44,6 +49,12 @@ type Workers interface {
 	Authenticate(ctx context.Context, credential string) (string, error)
 }
 
+// Credentials opens the credentials environments are given for the
+// registry, returning the user one is for.
+type Credentials interface {
+	OpenRegistryCredential(credential string) (string, error)
+}
+
 // Config is what the registry needs.
 type Config struct {
 	DB *db.DB
@@ -54,7 +65,9 @@ type Config struct {
 	Host    string
 	Tokens  Tokens
 	Workers Workers
-	Log     *slog.Logger
+	// Credentials, if set, admits environments' credentials.
+	Credentials Credentials
+	Log         *slog.Logger
 }
 
 // Registry serves the distribution API and manages repositories.
@@ -64,6 +77,7 @@ type Registry struct {
 	dir     string
 	tokens  Tokens
 	workers Workers
+	creds   Credentials
 	log     *slog.Logger
 }
 
@@ -77,7 +91,8 @@ func New(cfg Config) (*Registry, error) {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Registry{host: cfg.Host, db: cfg.DB, dir: cfg.Dir, tokens: cfg.Tokens, workers: cfg.Workers, log: log}, nil
+	return &Registry{host: cfg.Host, db: cfg.DB, dir: cfg.Dir, tokens: cfg.Tokens, workers: cfg.Workers,
+		creds: cfg.Credentials, log: log}, nil
 }
 
 // caller is who a request is from: a user, or a worker.
@@ -96,6 +111,10 @@ var (
 )
 
 const realm = `Basic realm="Hangar", charset="UTF-8"`
+
+// profileCredentialPrefix begins an environment's credential
+// (profile.RegistryCredentialPrefix).
+const profileCredentialPrefix = "hge_"
 
 // ServeHTTP serves /v2/.
 func (reg *Registry) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -161,6 +180,27 @@ func (reg *Registry) authenticate(r *http.Request) (caller, error) {
 		}
 		// The username is checked, so a token pasted under someone else's
 		// name fails rather than acting as its owner under theirs.
+		if !strings.EqualFold(user, p.Username) {
+			return caller{}, errUnauthorized
+		}
+		return caller{Principal: p}, nil
+	}
+	if reg.creds != nil && strings.HasPrefix(password, profileCredentialPrefix) {
+		id, err := reg.creds.OpenRegistryCredential(password)
+		if err != nil {
+			return caller{}, errUnauthorized
+		}
+		var p users.Principal
+		err = reg.db.Transact(ctx, func(tx db.Tx) error {
+			return tx.QueryRow(ctx, `SELECT id, username FROM users
+				WHERE id = $1 AND disabled_at IS NULL AND kind = 'person'`, id).Scan(&p.UserID, &p.Username)
+		})
+		if errors.Is(err, pgx.ErrNoRows) {
+			return caller{}, errUnauthorized
+		}
+		if err != nil {
+			return caller{}, err
+		}
 		if !strings.EqualFold(user, p.Username) {
 			return caller{}, errUnauthorized
 		}

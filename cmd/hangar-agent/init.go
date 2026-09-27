@@ -30,10 +30,9 @@ import (
 // overlayfs, so the image's fstab mounts a disk of its own there by label.
 
 const (
-	baseTag     = "hangar-base"
-	upperDisk   = "/dev/vda"
-	newRoot     = "/root"
-	agentInRoot = "/usr/local/bin/hangar-agent"
+	baseTag   = "hangar-base"
+	upperDisk = "/dev/vda"
+	newRoot   = "/root"
 	// diskWait covers the kernel still probing the virtio-blk device when
 	// init starts.
 	diskWait = 10 * time.Second

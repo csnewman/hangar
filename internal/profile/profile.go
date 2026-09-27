@@ -48,6 +48,13 @@
 // Private keys never enter a guest. The agent serves an SSH agent socket,
 // and the server signs with the key.
 //
+// # Hangar's registry
+//
+// The agent serves a Docker credential helper for Hangar's registry, and
+// asks the server for a credential each time it is used: one good for an
+// hour, as the environment's owner, which nothing stores. An environment
+// not trusted with its owner's credentials is sent none.
+//
 // # Protocol
 //
 // A session is JSON lines both ways on one stream, which the server opens
@@ -73,12 +80,18 @@ const (
 	TypeKeys   = "keys"   // the public keys the SSH agent offers
 	TypeSigned = "signed" // the answer to a sign
 	TypeLocked = "locked" // the answer to a lock or unlock
+	// Hangar's registry's host, sent first when there is one and the
+	// environment is trusted with its owner's credentials.
+	TypeRegistry   = "registry"
+	TypeCredential = "credential" // the answer to a get_credential
 
 	// Agent to server.
 	TypePut    = "put"    // a file changed here
 	TypeDelete = "delete" // a file was removed here
 	TypeLock   = "lock"   // take, renew or let go of one of the Locks
 	TypeSign   = "sign"   // sign with one of the keys
+	// A credential for Hangar's registry, as the environment's owner.
+	TypeGetCredential = "get_credential"
 )
 
 // Message is one line of a session.
@@ -115,6 +128,12 @@ type Message struct {
 	Flags     uint32 `json:"flags,omitempty"`
 	Signature []byte `json:"signature,omitempty"`
 	Error     string `json:"error,omitempty"`
+
+	// Hangar's registry: its host, and a credential for it, which is a
+	// username and a secret.
+	Host     string `json:"host,omitempty"`
+	Username string `json:"username,omitempty"`
+	Secret   string `json:"secret,omitempty"`
 }
 
 // MaxFileSize is the largest file a profile holds. Larger files under a

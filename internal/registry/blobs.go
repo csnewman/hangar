@@ -317,17 +317,15 @@ func (reg *Registry) finish(ctx context.Context, repo, path string, d digest.Dig
 		return failure(http.StatusBadRequest, "DIGEST_INVALID", "the upload's content does not match its digest")
 	}
 	dst := reg.blobPath(d)
-	if _, err := os.Stat(dst); errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-			return err
-		}
-		if err := os.Rename(path, dst); err != nil {
-			return err
-		}
-	} else {
-		os.Remove(path)
-	}
 	return reg.db.Transact(ctx, func(tx db.Tx) error {
+		// Held while the file is put in place and recorded, so collecting
+		// the blob cannot delete it meanwhile (see Collect).
+		if err := lockBlob(ctx, tx, d); err != nil {
+			return err
+		}
+		if err := place(path, dst); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `INSERT INTO registry_blobs (digest, size) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 			d.String(), size); err != nil {
 			return err
@@ -336,6 +334,28 @@ func (reg *Registry) finish(ctx context.Context, repo, path string, d digest.Dig
 			ON CONFLICT DO NOTHING`, repo, d.String())
 		return err
 	})
+}
+
+// place moves a verified upload to where its blob is kept, or drops it if
+// the blob is there already. Done again, it does nothing more.
+func place(path, dst string) error {
+	if _, err := os.Stat(dst); err == nil {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return err
+	}
+	return os.Rename(path, dst)
+}
+
+// lockBlob holds, until the transaction ends, the lock that putting a blob
+// in place and deleting it both take.
+func lockBlob(ctx context.Context, tx db.Tx, d digest.Digest) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('registry.blob:' || $1))`, d.String())
+	return err
 }
 
 // inOrder checks that a chunk's Content-Range, if it has one, starts where

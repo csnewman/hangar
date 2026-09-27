@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,15 +27,25 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/agent"
+	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sshd"
 	"github.com/csnewman/hangar/internal/vsock"
 )
+
+// agentInRoot is where init installs the agent in the root file system,
+// and where it runs from once the guest is up.
+const agentInRoot = "/usr/local/bin/hangar-agent"
 
 func main() {
 	// In the initramfs the kernel starts the agent as init.
 	if os.Getpid() == 1 {
 		initRoot()
 		return
+	}
+	// Docker's credential helper for Hangar's registry, run by docker as
+	// docker-credential-hangar.
+	if filepath.Base(os.Args[0]) == "docker-credential-"+profile.CredentialHelper {
+		os.Exit(credentialHelper(os.Args[1:]))
 	}
 	// The sftp subsystem of the agent's own SSH server, run as the user.
 	if len(os.Args) == 2 && os.Args[1] == "sftp-server" {

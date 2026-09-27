@@ -116,7 +116,8 @@ func New(cfg Config) (*Server, error) {
 			return nil, errors.New("the registry needs a public URL, whose host it takes a subdomain of")
 		}
 		registryHost = "registry." + u.Host
-		if reg, err = registry.New(registry.Config{DB: cfg.DB, Dir: cfg.RegistryDir, Host: registryHost, Tokens: um, Workers: wm,
+		if reg, err = registry.New(registry.Config{DB: cfg.DB, Dir: cfg.RegistryDir, Host: registryHost, Tokens: um,
+			Workers: wm, Credentials: profiles,
 			Log: log}); err != nil {
 			return nil, fmt.Errorf("registry: %w", err)
 		}
@@ -127,6 +128,10 @@ func New(cfg Config) (*Server, error) {
 		if editors, err = editor.NewGateway(edits, tunnels, cfg.PublicURL, log); err != nil {
 			return nil, err
 		}
+	}
+	sessions := profile.NewSessions(profiles, tunnels, log)
+	if reg != nil {
+		sessions.UseRegistry(registryHost)
 	}
 	tm := templates.NewManager(cfg.DB)
 	if reg != nil {
@@ -193,7 +198,7 @@ func New(cfg Config) (*Server, error) {
 		log:          log,
 		waits:        newWaiters(),
 		placeKick:    make(chan struct{}, 1),
-		sessions:     profile.NewSessions(profiles, tunnels, log),
+		sessions:     sessions,
 		profiles:     profiles,
 		auditLog:     auditLog,
 		sshListen:    cfg.SSHListen,
@@ -254,6 +259,14 @@ func (s *Server) pruneSessions(ctx context.Context) {
 				s.log.Warn("pruning registry uploads", "err", err)
 			} else if n > 0 {
 				s.log.Info("pruned abandoned registry uploads", "count", n)
+			}
+			// An hour's grace: nothing made in the last hour goes, so no
+			// push in progress is caught halfway.
+			if c, err := s.registry.Collect(ctx, time.Hour); err != nil && ctx.Err() == nil {
+				s.log.Warn("collecting the registry's unused manifests and blobs", "err", err)
+			} else if c.Manifests > 0 || c.Blobs > 0 {
+				s.log.Info("collected the registry's unused manifests and blobs",
+					"manifests", c.Manifests, "blobs", c.Blobs, "bytes", c.Bytes)
 			}
 		}
 		if n, err := s.edits.Prune(ctx); err != nil && ctx.Err() == nil {

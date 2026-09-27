@@ -36,6 +36,8 @@ type Sessions struct {
 	store   *Store
 	tunnels Tunnels
 	log     *slog.Logger
+	// registry is Hangar's registry's host, when it has one.
+	registry string
 
 	kick chan struct{}
 
@@ -47,6 +49,10 @@ func NewSessions(store *Store, tunnels Tunnels, log *slog.Logger) *Sessions {
 	return &Sessions{store: store, tunnels: tunnels, log: log, kick: make(chan struct{}, 1),
 		sessions: map[string]*session{}}
 }
+
+// UseRegistry has sessions offer environments credentials for Hangar's
+// registry, at host.
+func (s *Sessions) UseRegistry(host string) { s.registry = host }
 
 // target is an environment a session is held with.
 type target struct {
@@ -258,6 +264,11 @@ func (x *session) serve(ctx context.Context) error {
 	if err := x.sendPaths(ctx); err != nil {
 		return err
 	}
+	if x.s.registry != "" && x.trusted {
+		if err := x.send(Message{Type: TypeRegistry, Host: x.s.registry}); err != nil {
+			return err
+		}
+	}
 	if err := x.sendFiles(ctx); err != nil {
 		return err
 	}
@@ -413,6 +424,22 @@ func (x *session) handle(ctx context.Context, m Message) error {
 			}
 		}
 		reply.Held = got
+		return x.send(reply)
+	case TypeGetCredential:
+		reply := Message{Type: TypeCredential, ID: m.ID}
+		switch {
+		case x.s.registry == "":
+			reply.Error = "this server runs no registry"
+		case !x.trusted:
+			reply.Error = "this environment is not trusted with its owner's credentials"
+		default:
+			secret, err := x.s.store.IssueRegistryCredential(x.owner, x.env)
+			if err != nil {
+				reply.Error = err.Error()
+			} else {
+				reply.Host, reply.Username, reply.Secret = x.s.registry, x.ownerName, secret
+			}
+		}
 		return x.send(reply)
 	case TypeSign:
 		reply := Message{Type: TypeSigned, ID: m.ID}

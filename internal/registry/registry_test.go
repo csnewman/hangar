@@ -11,10 +11,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/dbtest"
+	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/registry"
 	"github.com/csnewman/hangar/internal/teams"
 	"github.com/csnewman/hangar/internal/templates"
@@ -35,6 +37,8 @@ type world struct {
 	users *users.Manager
 	teams *teams.Manager
 	admin users.Principal
+	// profiles issues environments' registry credentials.
+	profiles *profile.Store
 }
 
 // login is someone who talks to the registry: a user with an access token,
@@ -48,13 +52,19 @@ func open(t *testing.T) *world {
 	t.Helper()
 	d := dbtest.Open(t)
 	um := users.NewManager(d)
-	reg, err := registry.New(registry.Config{DB: d, Dir: t.TempDir(), Host: host, Tokens: um, Workers: workers.NewManager(d)})
+	sealer, err := profile.NewSealer(bytes.Repeat([]byte{7}, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := profile.NewStore(d, sealer)
+	reg, err := registry.New(registry.Config{DB: d, Dir: t.TempDir(), Host: host, Tokens: um,
+		Workers: workers.NewManager(d), Credentials: store})
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(reg)
 	t.Cleanup(srv.Close)
-	w := &world{t: t, db: d, srv: srv, reg: reg, users: um, teams: teams.NewManager(d)}
+	w := &world{t: t, db: d, srv: srv, reg: reg, users: um, teams: teams.NewManager(d), profiles: store}
 	w.admin = w.person("root", true).p
 	return w
 }
@@ -102,8 +112,14 @@ func sha(b []byte) string {
 // last request that failed, or of the manifest's.
 func (w *world) push(l login, repo, tag string) int {
 	w.t.Helper()
+	return w.pushLayer(l, repo, tag, "layer of "+repo)
+}
+
+// pushLayer pushes an image whose one layer holds content.
+func (w *world) pushLayer(l login, repo, tag, content string) int {
+	w.t.Helper()
 	config := []byte(`{"architecture":"arm64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
-	layer := []byte("layer of " + repo)
+	layer := []byte(content)
 	for _, blob := range [][]byte{config, layer} {
 		resp := w.do(l, http.MethodPost, "/v2/"+repo+"/blobs/uploads/?digest="+sha(blob), blob)
 		if resp.StatusCode != http.StatusCreated {
@@ -313,5 +329,88 @@ func TestTemplateImages(t *testing.T) {
 	}
 	if _, err := tm.Create(ctx, bob.p, in(private)); err != nil {
 		t.Errorf("bob naming a shared image: %v", err)
+	}
+}
+
+// Collecting deletes what no tag keeps, and leaves what is newer than its
+// grace.
+func TestCollect(t *testing.T) {
+	w := open(t)
+	alice := w.person("alice", false)
+	if got := w.pushLayer(alice, "alice/app", "v1", "first"); got != 201 {
+		t.Fatalf("push v1: %d", got)
+	}
+	if got := w.pushLayer(alice, "alice/app", "v2", "second"); got != 201 {
+		t.Fatalf("push v2: %d", got)
+	}
+	stray := []byte("pushed, never named by a manifest")
+	if got := w.do(alice, http.MethodPost, "/v2/alice/app/blobs/uploads/?digest="+sha(stray), stray).StatusCode; got != 201 {
+		t.Fatalf("stray blob: %d", got)
+	}
+	blob := func(content []byte) int {
+		return w.do(alice, http.MethodHead, "/v2/alice/app/blobs/"+sha(content), nil).StatusCode
+	}
+
+	// Within the grace, nothing goes.
+	if c, err := w.reg.Collect(ctx, time.Hour); err != nil || c.Manifests != 0 || c.Blobs != 0 {
+		t.Fatalf("collecting within the grace: %+v, %v", c, err)
+	}
+	if blob(stray) != 200 {
+		t.Fatal("a new blob was collected")
+	}
+
+	x := w.repo(alice.p, "alice/app")
+	if _, err := w.reg.DeleteTag(ctx, alice.p, x.ID, "v1"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := w.reg.Collect(ctx, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Manifests != 1 || c.Blobs != 2 || c.Bytes != int64(len("first")+len(stray)) {
+		t.Errorf("collected %+v; want v1's manifest, and its layer and the stray blob", c)
+	}
+	if blob([]byte("first")) != 404 || blob(stray) != 404 {
+		t.Error("an unused blob is still served")
+	}
+	if blob([]byte("second")) != 200 || w.pull(alice, "alice/app", "v2") != 200 {
+		t.Error("the tagged image lost something")
+	}
+	// Pushed again, a collected blob is kept afresh.
+	if got := w.pushLayer(alice, "alice/app", "v1", "first"); got != 201 {
+		t.Errorf("pushing a collected layer again: %d", got)
+	}
+	if blob([]byte("first")) != 200 {
+		t.Error("a blob pushed again is not served")
+	}
+}
+
+// An environment's credential acts as its owner, under the owner's
+// username, and never as an administrator.
+func TestEnvironmentCredential(t *testing.T) {
+	w := open(t)
+	alice := w.person("alice", false)
+	cred, err := w.profiles.IssueRegistryCredential(alice.p.UserID, "some-environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := login{name: "alice", password: cred}
+	if got := w.push(env, "alice/app", "v1"); got != 201 {
+		t.Errorf("pushing with the environment's credential: %d", got)
+	}
+	if got := w.do(login{name: "root", password: cred}, http.MethodGet, "/v2/", nil).StatusCode; got != 401 {
+		t.Errorf("the credential under another username: %d, want 401", got)
+	}
+	tampered := cred[:len(cred)-2] + "AA"
+	if got := w.do(login{name: "alice", password: tampered}, http.MethodGet, "/v2/", nil).StatusCode; got != 401 {
+		t.Errorf("a tampered credential: %d, want 401", got)
+	}
+
+	rootCred, err := w.profiles.IssueRegistryCredential(w.admin.UserID, "an-admin-environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := w.push(login{name: "root", password: rootCred}, "alice/other", "v1"); got != 403 {
+		t.Errorf("an administrator's environment pushing to alice's namespace: %d, want 403", got)
 	}
 }

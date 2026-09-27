@@ -296,7 +296,7 @@ func (s *guestSession) run(ctx context.Context) error {
 			}
 			// Answers go straight to what asked, which may be a lock
 			// handler run cannot help.
-			if m.Type == TypeSigned || m.Type == TypeLocked {
+			if m.Type == TypeSigned || m.Type == TypeLocked || m.Type == TypeCredential {
 				s.answer(m)
 				continue
 			}
@@ -371,6 +371,8 @@ func (s *guestSession) handle(m Message) error {
 		s.ready = true
 		s.rmu.Unlock()
 		return s.flush()
+	case TypeRegistry:
+		s.g.setRegistry(m.Host)
 	case TypeKeys:
 		var keys []ssh.PublicKey
 		for _, k := range m.Keys {

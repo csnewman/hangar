@@ -188,6 +188,7 @@ CREATE TABLE registry_blobs (
 CREATE TABLE image_repository_blobs (
     repository_id uuid NOT NULL REFERENCES image_repositories (id) ON DELETE CASCADE,
     digest        text NOT NULL REFERENCES registry_blobs (digest),
+    created_at    timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (repository_id, digest)
 );
 
