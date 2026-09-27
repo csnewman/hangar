@@ -23,6 +23,11 @@
 # namespace permissions that `docker build` does not have.
 #
 # The editor stage builds VS Code and wants 8 GiB of memory and some time.
+#
+# Every stage that builds removes what it built from in the same step, and
+# keeps only /out (or what it installed): the build cache stores each
+# stage's layers, and a source tree or a target directory left in one is
+# gigabytes of it.
 
 ARG UBUNTU=ubuntu:26.04
 
@@ -36,7 +41,8 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/csnewman/hangar/internal/version.Version=$VERSION" -o /out/hangar-worker ./cmd/hangar-worker \
- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/hangar-agent ./cmd/hangar-agent
+ && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/hangar-agent ./cmd/hangar-agent \
+ && rm -rf "$(go env GOCACHE)"
 
 # ---------------------------------------------------------------- guest kernel
 FROM ${UBUNTU} AS kernel
@@ -49,7 +55,8 @@ COPY internal/kernel/hangar.config internal/kernel/hangar-arm64.config internal/
 COPY internal/kernel/patches/ /cfg/patches/
 RUN case "$(uname -m)" in aarch64) KARCH=arm64 ;; *) KARCH=x86_64 ;; esac \
  && mkdir -p /out \
- && KERNEL_VERSION=$KERNEL_VERSION KARCH=$KARCH sh /scripts/build.sh
+ && KERNEL_VERSION=$KERNEL_VERSION KARCH=$KARCH sh /scripts/build.sh \
+ && rm -rf /src /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------- Rust toolchain
 FROM ${UBUNTU} AS rust
@@ -72,14 +79,16 @@ RUN git init -q /src && cd /src \
  && git checkout -q FETCH_HEAD \
  && git -c user.name=build -c user.email=build@localhost am -q /patches/*.patch \
  && cargo build --release --locked \
- && install -D target/release/cloud-hypervisor /out/cloud-hypervisor
+ && install -D target/release/cloud-hypervisor /out/cloud-hypervisor \
+ && cd / && rm -rf /src /root/.cargo/registry /root/.cargo/git
 
 # ---------------------------------------------------------------- hangar-fs
 FROM rust AS fs
 COPY fs/Cargo.toml fs/Cargo.lock /src/
 COPY fs/src/ /src/src/
 RUN cd /src && cargo build --release --locked \
- && install -D target/release/hangar-fs /out/hangar-fs
+ && install -D target/release/hangar-fs /out/hangar-fs \
+ && rm -rf /src/target /root/.cargo/registry /root/.cargo/git
 
 # ---------------------------------------------------------------- hangar-gpu
 FROM rust AS gpu
@@ -91,7 +100,8 @@ COPY gpu/Cargo.toml gpu/Cargo.lock /src/
 COPY gpu/src/ /src/src/
 RUN cd /src \
  && PKG_CONFIG_PATH=/usr/local/lib/$(gcc -dumpmachine)/pkgconfig cargo build --release --locked \
- && install -D target/release/hangar-gpu /out/hangar-gpu
+ && install -D target/release/hangar-gpu /out/hangar-gpu \
+ && rm -rf /src/target /root/.cargo/registry /root/.cargo/git
 
 # ---------------------------------------------------------------- editor
 FROM ${UBUNTU} AS editor
@@ -105,7 +115,9 @@ RUN apt-get update -qq \
     | tar -xJ -C /usr/local --strip-components=1
 COPY editor/ /src/editor/
 RUN HANGAR_EDITOR_WORK=/work /src/editor/build.sh /out \
- && mv /out/editor-*.ext4 /out/editor.ext4
+ && mv /out/editor-*.ext4 /out/editor.ext4 \
+ && find /out -mindepth 1 -maxdepth 1 ! -name editor.ext4 -exec rm -rf {} + \
+ && rm -rf /work /root/.npm /root/.cache
 
 # ---------------------------------------------------------------- worker
 FROM ${UBUNTU} AS worker
