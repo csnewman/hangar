@@ -1,12 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useParams } from 'react-router'
 
-import { api, type LocalImage, type Worker, type WorkerStats } from '../../api'
+import { api, type GPUInfo, type LocalImage, type Worker, type WorkerStats } from '../../api'
 import { Meter, StatTile } from '../../components/charts'
 import { ConfirmButton } from '../../components/ConfirmButton'
-import { formatAgo, formatBytes, formatMemory, formatPercent, shortDigest } from '../../components/format'
+import { formatAgo, formatBytes, formatCores, formatMemory, formatPercent, shortDigest } from '../../components/format'
 import { PageHeader } from '../../components/PageHeader'
-import { OnlineBadge, PhaseBadge } from '../../components/Status'
+import { OnlineBadge, PhaseBadge, RendererBadge } from '../../components/Status'
 import { useEnvironments } from '../../environments'
 import { useHistory } from '../../history'
 import { Activity } from '../../components/Activity'
@@ -87,8 +87,15 @@ function Machine({ worker: w }: { worker: Worker }) {
             max={s.disk_total_bytes || undefined}
           />
           <StatTile label="Load" value={s.load1.toFixed(2)} detail="1-minute average" trend={pick((x) => x.load1)} />
+          <StatTile
+            label="Support processes"
+            value={formatCores(s.support_cpus)}
+            detail={s.gpu_cpus > 0.005 ? `${formatCores(s.gpu_cpus)} rendering` : 'GPU, file systems, networks'}
+            trend={pick((x) => x.support_cpus)}
+          />
         </div>
       )}
+      {w.gpu && <GPU gpu={w.gpu} />}
       <div className="panel capacity">
         <div className="capacity-row">
           <span className="muted">Allocated vCPUs</span>
@@ -104,6 +111,45 @@ function Machine({ worker: w }: { worker: Worker }) {
         </div>
       </div>
     </section>
+  )
+}
+
+// GPU says what the worker's virtual GPUs render with, as it found when it
+// started, and what its configuration asked for.
+function GPU({ gpu: g }: { gpu: GPUInfo }) {
+  const vulkan = g.vulkan ?? []
+  return (
+    <div className="panel capacity">
+      <div className="capacity-row">
+        <span className="muted">Virtual GPU</span>
+        <span>
+          {g.unavailable ? (
+            <span className="reason reason-bad">Not offered: {g.unavailable}</span>
+          ) : (
+            <>
+              <RendererBadge software={!!g.gl?.software} /> <span className="mono">{g.gl?.renderer}</span>
+            </>
+          )}
+        </span>
+      </div>
+      {!g.unavailable && (
+        <div className="capacity-row">
+          <span className="muted">Vulkan</span>
+          <span className="mono">
+            {vulkan.length > 0
+              ? vulkan.map((d) => `${d.name}${d.software ? ' (software)' : ''}`).join(', ')
+              : g.vulkan_error || 'none'}
+          </span>
+        </div>
+      )}
+      <div className="capacity-row">
+        <span className="muted">Configured</span>
+        <span className="mono">
+          renderer: {g.renderer}
+          {g.device && `, device: ${g.device}`}
+        </span>
+      </div>
+    </div>
   )
 }
 

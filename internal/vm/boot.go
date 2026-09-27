@@ -77,6 +77,14 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if s.GPU == api.GPUPassthrough {
 		return nil, fmt.Errorf("GPU passthrough is %w", errUnsupported)
 	}
+	if s.GPU == api.GPUVirtual {
+		switch {
+		case m.rt.gpu == nil:
+			return nil, errors.New("this worker has no GPU backend, and the template asks for a virtual GPU")
+		case m.rt.gpu.Unavailable != "":
+			return nil, fmt.Errorf("this worker offers no virtual GPU: %s", m.rt.gpu.Unavailable)
+		}
+	}
 	img, err := m.resolve(ctx, spec)
 	if err != nil {
 		return nil, err
@@ -134,6 +142,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		cfg.GPUVenus = m.rt.cfg.GPUVenus
 		cfg.GPUVenusRestore = m.rt.cfg.GPUVenus && m.rt.cfg.GPUVenusRestore
 		cfg.GPUWindowMiB = m.rt.cfg.GPUWindowMiB
+		cfg.GPUEnv = m.rt.gpuEnv
 	}
 	// An image may have a desktop; the template decides whether it runs. A
 	// headless environment boots to multi-user.target, which leaves out

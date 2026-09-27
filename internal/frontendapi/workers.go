@@ -100,7 +100,32 @@ func worker(w api.Worker) Worker {
 		Stats:           workerStats(w.Stats),
 		Images:          localImages(w.Images),
 		PendingRemovals: imageCopies(w.PendingRemovals),
+		GPU:             gpuInfo(w.GPU),
 	}
+}
+
+func gpuInfo(g *api.GPUInfo) *GPUInfo {
+	if g == nil {
+		return nil
+	}
+	out := &GPUInfo{
+		Renderer:    GPUInfoRenderer(g.Renderer),
+		Device:      optional(g.Device),
+		GlError:     optional(g.GLError),
+		VulkanError: optional(g.VulkanError),
+		Unavailable: optional(g.Unavailable),
+	}
+	if g.GL != nil {
+		out.Gl = &GPURenderer{Vendor: g.GL.Vendor, Renderer: g.GL.Renderer, Version: g.GL.Version, Software: g.GL.Software}
+	}
+	if len(g.Vulkan) > 0 {
+		devices := make([]GPUDevice, len(g.Vulkan))
+		for i, d := range g.Vulkan {
+			devices[i] = GPUDevice{Name: d.Name, Software: d.Software}
+		}
+		out.Vulkan = &devices
+	}
+	return out
 }
 
 func workerStats(s *api.WorkerStats) *WorkerStats {
@@ -109,6 +134,8 @@ func workerStats(s *api.WorkerStats) *WorkerStats {
 	}
 	return &WorkerStats{
 		CPUPercent:     float32(s.CPUPercent),
+		SupportCPUs:    float32(s.SupportCPUs),
+		GPUCPUs:        float32(s.GPUCPUs),
 		Load1:          float32(s.Load1),
 		MemoryUsedMiB:  s.MemoryUsedMiB,
 		MemoryTotalMiB: s.MemoryTotalMiB,

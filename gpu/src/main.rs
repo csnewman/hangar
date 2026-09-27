@@ -9,6 +9,7 @@
 //! guest memory mapping it did not ask for.
 
 mod device;
+mod probe;
 mod protocol;
 mod replay;
 
@@ -27,8 +28,12 @@ use crate::replay::Session;
 #[command(about = "virtio-gpu vhost-user backend")]
 struct Args {
     /// Where to listen for the monitor.
+    #[arg(long, required_unless_present = "probe")]
+    socket: Option<PathBuf>,
+
+    /// Say what this host renders with, as JSON, and exit.
     #[arg(long)]
-    socket: PathBuf,
+    probe: bool,
 
     /// Offer OpenGL through virgl.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
@@ -101,6 +106,11 @@ fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     let args = Args::parse();
+    if args.probe {
+        println!("{}", serde_json::to_string(&probe::run()).unwrap());
+        return;
+    }
+    let socket = args.socket.clone().expect("--socket is required");
     // The renderer only records what a Venus context builds when asked to,
     // since recording costs a copy of every lasting command. It reads this
     // from the environment of the render server, which inherits ours.
@@ -165,11 +175,11 @@ fn main() {
             .expect("registering a worker event");
     }
 
-    let _ = std::fs::remove_file(&args.socket);
+    let _ = std::fs::remove_file(&socket);
     let mut listener =
-        vhost::vhost_user::Listener::new(&args.socket, true).expect("listening on the socket");
+        vhost::vhost_user::Listener::new(&socket, true).expect("listening on the socket");
 
-    log::info!("virtio-gpu backend listening on {}", args.socket.display());
+    log::info!("virtio-gpu backend listening on {}", socket.display());
     if let Err(e) = daemon.start(&mut listener) {
         log::error!("daemon: {e:?}");
         std::process::exit(1);
@@ -177,5 +187,5 @@ fn main() {
     if let Err(e) = daemon.wait() {
         log::error!("daemon exited: {e:?}");
     }
-    let _ = std::fs::remove_file(&args.socket);
+    let _ = std::fs::remove_file(&socket);
 }

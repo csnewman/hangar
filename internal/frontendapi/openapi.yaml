@@ -1375,6 +1375,12 @@ components:
         spec:
           $ref: "#/components/schemas/Spec"
         image: { type: string }
+        gpu_renderer:
+          type: string
+          description: What its virtual GPU renders with on its worker; absent without one.
+        gpu_software:
+          type: boolean
+          description: Whether that is the worker's CPU.
         image_digest:
           type: string
           description: >-
@@ -1730,6 +1736,7 @@ components:
         images:
           type: array
           items: { $ref: "#/components/schemas/LocalImage" }
+        gpu: { $ref: "#/components/schemas/GPUInfo" }
         pending_removals:
           type: array
           description: Copies of images the worker has been asked to delete and still holds.
@@ -1739,9 +1746,17 @@ components:
     WorkerStats:
       type: object
       description: The worker's machine as a whole, as last measured.
-      required: [cpu_percent, load1, memory_used_mib, memory_total_mib, disk_used_bytes, disk_total_bytes]
+      required: [cpu_percent, support_cpus, gpu_cpus, load1, memory_used_mib, memory_total_mib, disk_used_bytes, disk_total_bytes]
       properties:
         cpu_percent: { type: number }
+        support_cpus:
+          type: number
+          description: >-
+            Host cores its environments' support processes use -- their GPU
+            backends, file systems and networks -- beside their vCPUs.
+        gpu_cpus:
+          type: number
+          description: The GPU backends' part of support_cpus, where software rendering runs.
         load1: { type: number }
         memory_used_mib: { type: integer }
         memory_total_mib: { type: integer }
@@ -1773,8 +1788,16 @@ components:
       description: >-
         What a running environment uses, as its worker last measured it.
         Rates are per second.
-      required: [cpu_percent, memory_used_mib, memory_total_mib, disk_used_bytes, disk_read_bps, disk_write_bps, net_rx_bps, net_tx_bps]
+      required: [cpu_percent, support_cpus, gpu_cpus, memory_used_mib, memory_total_mib, disk_used_bytes, disk_read_bps, disk_write_bps, net_rx_bps, net_tx_bps]
       properties:
+        support_cpus:
+          type: number
+          description: >-
+            Host cores the processes serving it beside its vCPUs use: its GPU
+            backend, file system and network. No vCPU limit holds them.
+        gpu_cpus:
+          type: number
+          description: The GPU backend's part of support_cpus, where software rendering runs.
         cpu_percent:
           type: number
           description: Of the environment's own vCPUs; 100 is all of them busy.
@@ -1788,6 +1811,44 @@ components:
         disk_write_bps: { type: number }
         net_rx_bps: { type: number }
         net_tx_bps: { type: number }
+
+    GPUInfo:
+      type: object
+      description: What a worker's virtual GPUs render with, as it found when it started.
+      required: [renderer]
+      properties:
+        renderer:
+          type: string
+          description: What its configuration asks for.
+          enum: [auto, hardware, software]
+        device: { type: string }
+        gl: { $ref: "#/components/schemas/GPURenderer" }
+        gl_error: { type: string }
+        vulkan:
+          type: array
+          items: { $ref: "#/components/schemas/GPUDevice" }
+        vulkan_error: { type: string }
+        unavailable:
+          type: string
+          description: Why the worker offers no virtual GPU, when it offers none.
+
+    GPURenderer:
+      type: object
+      required: [vendor, renderer, version, software]
+      properties:
+        vendor: { type: string }
+        renderer: { type: string }
+        version: { type: string }
+        software:
+          type: boolean
+          description: Whether it renders on the host's CPU.
+
+    GPUDevice:
+      type: object
+      required: [name, software]
+      properties:
+        name: { type: string }
+        software: { type: boolean }
 
     LocalImage:
       type: object

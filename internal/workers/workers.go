@@ -280,7 +280,7 @@ func list(ctx context.Context, tx db.Tx, id string) ([]api.Worker, error) {
 		       w.revoked_at IS NOT NULL, w.created_at,
 		       coalesce(sum(e.cpus), 0), coalesce(sum(e.memory_mib), 0),
 		       coalesce(w.last_seen_at > now() - $1::interval, false),
-		       w.stats, w.images,
+		       w.stats, w.images, w.gpu,
 		       coalesce((SELECT jsonb_agg(jsonb_build_object('ref', r.ref, 'digest', r.digest)
 		                                  ORDER BY r.ref, r.digest)
 		                 FROM worker_image_removals r WHERE r.worker_id = w.id), '[]')
@@ -294,10 +294,10 @@ func list(ctx context.Context, tx db.Tx, id string) ([]api.Worker, error) {
 	}
 	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (api.Worker, error) {
 		var w api.Worker
-		var labels, unknown, stats, images, removals []byte
+		var labels, unknown, stats, images, gpu, removals []byte
 		if err := r.Scan(&w.ID, &w.Name, &labels, &w.Capacity.CPUs, &w.Capacity.MemoryMiB, &unknown,
 			&w.LastSeenAt, &w.Revoked, &w.CreatedAt, &w.Allocated.CPUs, &w.Allocated.MemoryMiB, &w.Online,
-			&stats, &images, &removals); err != nil {
+			&stats, &images, &gpu, &removals); err != nil {
 			return w, err
 		}
 		for _, f := range []struct {
@@ -311,6 +311,12 @@ func list(ctx context.Context, tx db.Tx, id string) ([]api.Worker, error) {
 		if stats != nil {
 			w.Stats = &api.WorkerStats{}
 			if err := json.Unmarshal(stats, w.Stats); err != nil {
+				return w, err
+			}
+		}
+		if gpu != nil {
+			w.GPU = &api.GPUInfo{}
+			if err := json.Unmarshal(gpu, w.GPU); err != nil {
 				return w, err
 			}
 		}
@@ -546,9 +552,15 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 		if err != nil {
 			return err
 		}
+		var gpu []byte
+		if st.GPU != nil {
+			if gpu, err = json.Marshal(st.GPU); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.Exec(ctx, `UPDATE workers SET cpus = $2, memory_mib = $3, labels = $4, unknown = $5,
-			stats = $6, images = $7, last_seen_at = now() WHERE id = $1`,
-			workerID, st.Capacity.CPUs, st.Capacity.MemoryMiB, labels, unknownJSON, stats, imagesJSON); err != nil {
+			stats = $6, images = $7, gpu = $8, last_seen_at = now() WHERE id = $1`,
+			workerID, st.Capacity.CPUs, st.Capacity.MemoryMiB, labels, unknownJSON, stats, imagesJSON, gpu); err != nil {
 			return err
 		}
 

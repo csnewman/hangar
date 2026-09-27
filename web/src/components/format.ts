@@ -45,3 +45,9 @@ export function shortDigest(d: string): string {
   const m = /^(sha256:)([0-9a-f]{12})[0-9a-f]+$/.exec(d)
   return m ? m[1] + m[2] : d
 }
+
+// formatCores is an amount of CPU in cores, as the host counts them.
+export function formatCores(cores: number): string {
+  if (cores < 0.01) return '0 cores'
+  return `${cores < 10 ? cores.toFixed(2) : cores.toFixed(1)} core${cores === 1 ? '' : 's'}`
+}

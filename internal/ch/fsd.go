@@ -122,3 +122,6 @@ func (f *FsBackend) Close() error {
 	}
 	return os.Remove(f.socket)
 }
+
+// Pid is the backend's process ID.
+func (b *FsBackend) Pid() int { return pidOf(b.cmd) }

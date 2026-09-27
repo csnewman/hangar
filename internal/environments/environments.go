@@ -43,7 +43,7 @@ func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
 const columns = `e.id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
 	e.spec, e.image, e.image_digest, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
-	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress`
+	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress, w.gpu`
 
 const from = `environments e
 	JOIN users u ON u.id = e.owner_id
@@ -55,10 +55,10 @@ const visible = `($1 OR e.owner_id = $2)`
 
 func scan(row pgx.Row) (api.Environment, error) {
 	var e api.Environment
-	var spec, stats, progress []byte
+	var spec, stats, progress, gpu []byte
 	err := row.Scan(&e.ID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.ImageDigest, &e.CPUs,
 		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats,
-		&progress)
+		&progress, &gpu)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}
@@ -79,7 +79,20 @@ func scan(row pgx.Row) (api.Environment, error) {
 			return e, err
 		}
 	}
-	return e, json.Unmarshal(spec, &e.Spec)
+	if err := json.Unmarshal(spec, &e.Spec); err != nil {
+		return e, err
+	}
+	// What its worker's virtual GPUs render with, when it has one.
+	if gpu != nil && e.Spec.GPU == api.GPUVirtual {
+		var g api.GPUInfo
+		if err := json.Unmarshal(gpu, &g); err != nil {
+			return e, err
+		}
+		if g.GL != nil {
+			e.GPURenderer, e.GPUSoftware = g.GL.Renderer, g.GL.Software
+		}
+	}
+	return e, nil
 }
 
 // List returns every environment p may reach, oldest first.

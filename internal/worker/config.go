@@ -109,6 +109,14 @@ type VMGPU struct {
 	// WindowMiB sizes the window the guest maps GPU resources into, which
 	// Venus and zero-copy buffers need. 0 is 512.
 	WindowMiB int `yaml:"window_mib"`
+	// Renderer is what renders: "auto", a GPU if the host has one and its
+	// CPU if not; "hardware", a GPU only, offering no virtual GPU without
+	// one; or "software", the CPU always, through Mesa's llvmpipe and
+	// lavapipe. Empty is auto.
+	Renderer string `yaml:"renderer"`
+	// Device is the GPU to render on, as its render node, for a host with
+	// more than one: /dev/dri/renderD129. Empty is Mesa's choice.
+	Device string `yaml:"device"`
 }
 
 // VMImage is a local copy of an image: its root filesystem, a directory,

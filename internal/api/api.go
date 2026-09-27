@@ -169,8 +169,12 @@ type Environment struct {
 	WorkerID    string            `json:"worker_id,omitempty"`
 	Worker      string            `json:"worker,omitempty"`
 	Stats       *EnvironmentStats `json:"stats,omitempty"`
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	// GPURenderer is what its virtual GPU renders with on its worker, and
+	// GPUSoftware whether that is the worker's CPU; empty without one.
+	GPURenderer string    `json:"gpu_renderer,omitempty"`
+	GPUSoftware bool      `json:"gpu_software,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // CreateEnvironment is a request to create an environment from a template.
@@ -198,6 +202,8 @@ type Worker struct {
 	CreatedAt  time.Time    `json:"created_at"`
 	Stats      *WorkerStats `json:"stats,omitempty"`
 	Images     []LocalImage `json:"images"`
+	// GPU is what its virtual GPUs render with.
+	GPU *GPUInfo `json:"gpu,omitempty"`
 	// PendingRemovals are copies of images the worker has been asked to
 	// delete and still holds.
 	PendingRemovals []ImageCopy `json:"pending_removals"`
@@ -266,6 +272,42 @@ type WorkerStatus struct {
 	Environments []ObservedEnvironment `json:"environments"`
 	Stats        *WorkerStats          `json:"stats,omitempty"`
 	Images       []LocalImage          `json:"images"`
+	// GPU is what environments with a virtual GPU render with here; nil on
+	// a worker that offers none.
+	GPU *GPUInfo `json:"gpu,omitempty"`
+}
+
+// GPUInfo is what a worker's virtual GPUs render with, as its GPU backend
+// found when the worker started.
+type GPUInfo struct {
+	// Renderer is what the worker's configuration asks for: auto, hardware
+	// or software. Device is the GPU it names, if any.
+	Renderer string `json:"renderer"`
+	Device   string `json:"device,omitempty"`
+	// GL is OpenGL's renderer, or GLError why there is none.
+	GL      *GPURenderer `json:"gl,omitempty"`
+	GLError string       `json:"gl_error,omitempty"`
+	// Vulkan are the devices Venus chooses among.
+	Vulkan      []GPUDevice `json:"vulkan,omitempty"`
+	VulkanError string      `json:"vulkan_error,omitempty"`
+	// Unavailable says why the worker offers no virtual GPU: the renderer
+	// asks for hardware and it has none, say.
+	Unavailable string `json:"unavailable,omitempty"`
+}
+
+// GPURenderer is an OpenGL renderer.
+type GPURenderer struct {
+	Vendor   string `json:"vendor"`
+	Renderer string `json:"renderer"`
+	Version  string `json:"version"`
+	// Software is whether it renders on the host's CPU.
+	Software bool `json:"software"`
+}
+
+// GPUDevice is a Vulkan device.
+type GPUDevice struct {
+	Name     string `json:"name"`
+	Software bool   `json:"software"`
 }
 
 // ObservedEnvironment is one environment as the worker finds it.
@@ -319,7 +361,13 @@ type Progress struct {
 // Rates are per second, averaged since the previous measurement.
 type EnvironmentStats struct {
 	// CPUPercent is of the environment's own vCPUs: 100 is all of them busy.
-	CPUPercent     float64 `json:"cpu_percent"`
+	CPUPercent float64 `json:"cpu_percent"`
+	// SupportCPUs is the host CPU, in cores, of the processes serving the
+	// environment beside its vCPUs: its GPU backend, file system and
+	// network. GPUCPUs is the GPU backend's part, which is where software
+	// rendering runs. No vCPU limit holds either.
+	SupportCPUs    float64 `json:"support_cpus"`
+	GPUCPUs        float64 `json:"gpu_cpus"`
 	MemoryUsedMiB  int     `json:"memory_used_mib"`
 	MemoryTotalMiB int     `json:"memory_total_mib"`
 	// DiskUsedBytes is what its writable layer and Docker store take up on
@@ -333,7 +381,11 @@ type EnvironmentStats struct {
 
 // WorkerStats is the load on a worker's machine as a whole.
 type WorkerStats struct {
-	CPUPercent     float64 `json:"cpu_percent"`
+	CPUPercent float64 `json:"cpu_percent"`
+	// SupportCPUs and GPUCPUs are its environments' (EnvironmentStats),
+	// summed.
+	SupportCPUs    float64 `json:"support_cpus"`
+	GPUCPUs        float64 `json:"gpu_cpus"`
 	Load1          float64 `json:"load1"`
 	MemoryUsedMiB  int     `json:"memory_used_mib"`
 	MemoryTotalMiB int     `json:"memory_total_mib"`

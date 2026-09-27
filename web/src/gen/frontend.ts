@@ -958,6 +958,10 @@ export interface components {
             template: string;
             spec: components["schemas"]["Spec"];
             image: string;
+            /** @description What its virtual GPU renders with on its worker; absent without one. */
+            gpu_renderer?: string;
+            /** @description Whether that is the worker's CPU. */
+            gpu_software?: boolean;
             /** @description The digest of the copy of the image the environment boots from, fixed when it first starts. Absent until then. */
             image_digest?: string;
             cpus: number;
@@ -1175,12 +1179,17 @@ export interface components {
             created_at: string;
             stats?: components["schemas"]["WorkerStats"];
             images: components["schemas"]["LocalImage"][];
+            gpu?: components["schemas"]["GPUInfo"];
             /** @description Copies of images the worker has been asked to delete and still holds. */
             pending_removals: components["schemas"]["ImageCopy"][];
         };
         /** @description The worker's machine as a whole, as last measured. */
         WorkerStats: {
             cpu_percent: number;
+            /** @description Host cores its environments' support processes use -- their GPU backends, file systems and networks -- beside their vCPUs. */
+            support_cpus: number;
+            /** @description The GPU backends' part of support_cpus, where software rendering runs. */
+            gpu_cpus: number;
             load1: number;
             memory_used_mib: number;
             memory_total_mib: number;
@@ -1204,6 +1213,10 @@ export interface components {
         };
         /** @description What a running environment uses, as its worker last measured it. Rates are per second. */
         EnvironmentStats: {
+            /** @description Host cores the processes serving it beside its vCPUs use: its GPU backend, file system and network. No vCPU limit holds them. */
+            support_cpus: number;
+            /** @description The GPU backend's part of support_cpus, where software rendering runs. */
+            gpu_cpus: number;
             /** @description Of the environment's own vCPUs; 100 is all of them busy. */
             cpu_percent: number;
             memory_used_mib: number;
@@ -1217,6 +1230,32 @@ export interface components {
             disk_write_bps: number;
             net_rx_bps: number;
             net_tx_bps: number;
+        };
+        /** @description What a worker's virtual GPUs render with, as it found when it started. */
+        GPUInfo: {
+            /**
+             * @description What its configuration asks for.
+             * @enum {string}
+             */
+            renderer: "auto" | "hardware" | "software";
+            device?: string;
+            gl?: components["schemas"]["GPURenderer"];
+            gl_error?: string;
+            vulkan?: components["schemas"]["GPUDevice"][];
+            vulkan_error?: string;
+            /** @description Why the worker offers no virtual GPU, when it offers none. */
+            unavailable?: string;
+        };
+        GPURenderer: {
+            vendor: string;
+            renderer: string;
+            version: string;
+            /** @description Whether it renders on the host's CPU. */
+            software: boolean;
+        };
+        GPUDevice: {
+            name: string;
+            software: boolean;
         };
         LocalImage: {
             ref: string;

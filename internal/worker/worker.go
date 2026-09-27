@@ -55,6 +55,34 @@ type ImageStore interface {
 	UseRegistry(host, url, credential string)
 }
 
+// GPUReporter is a runtime that says what its virtual GPUs render with.
+type GPUReporter interface {
+	GPU() *api.GPUInfo
+}
+
+// RendererLabel is the label a worker gives itself for what its virtual
+// GPUs render with, software or hardware, so a template can ask for one by
+// placement. A label of that name in the configuration wins.
+const RendererLabel = "gpu-renderer"
+
+func withRendererLabel(labels map[string]string, g *api.GPUInfo) map[string]string {
+	if g == nil || g.Unavailable != "" || g.GL == nil {
+		return labels
+	}
+	if _, set := labels[RendererLabel]; set {
+		return labels
+	}
+	out := make(map[string]string, len(labels)+1)
+	for k, v := range labels {
+		out[k] = v
+	}
+	out[RendererLabel] = "hardware"
+	if g.GL.Software {
+		out[RendererLabel] = "software"
+	}
+	return out
+}
+
 // TerminalDialer is a runtime whose environments have terminals. The
 // control plane reaches one through the worker's tunnel; the runtime opens
 // the connection to wherever the environment's sessions live, which speaks
@@ -211,6 +239,18 @@ func (w *Worker) reportLoop(ctx context.Context) error {
 				Environments: w.rt.Observe(),
 				Stats:        w.sys.measure(),
 				Images:       []api.LocalImage{},
+			}
+			if st.Stats != nil {
+				for _, e := range st.Environments {
+					if e.Stats != nil {
+						st.Stats.SupportCPUs += e.Stats.SupportCPUs
+						st.Stats.GPUCPUs += e.Stats.GPUCPUs
+					}
+				}
+			}
+			if g, ok := w.rt.(GPUReporter); ok {
+				st.GPU = g.GPU()
+				st.Labels = withRendererLabel(st.Labels, st.GPU)
 			}
 			if store, ok := w.rt.(ImageStore); ok {
 				st.Images = store.Images()

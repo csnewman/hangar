@@ -104,6 +104,27 @@ func (e GPU) Valid() bool {
 	}
 }
 
+// Defines values for GPUInfoRenderer.
+const (
+	Auto     GPUInfoRenderer = "auto"
+	Hardware GPUInfoRenderer = "hardware"
+	Software GPUInfoRenderer = "software"
+)
+
+// Valid indicates whether the value is a known member of the GPUInfoRenderer enum.
+func (e GPUInfoRenderer) Valid() bool {
+	switch e {
+	case Auto:
+		return true
+	case Hardware:
+		return true
+	case Software:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LocalImageState.
 const (
 	Fetching LocalImageState = "fetching"
@@ -389,8 +410,14 @@ type Environment struct {
 
 	// Desired What the environment's owner has asked for.
 	Desired DesiredState `json:"desired"`
-	ID      string       `json:"id"`
-	Image   string       `json:"image"`
+
+	// GPURenderer What its virtual GPU renders with on its worker; absent without one.
+	GPURenderer *string `json:"gpu_renderer,omitempty"`
+
+	// GPUSoftware Whether that is the worker's CPU.
+	GPUSoftware *bool  `json:"gpu_software,omitempty"`
+	ID          string `json:"id"`
+	Image       string `json:"image"`
 
 	// ImageDigest The digest of the copy of the image the environment boots from, fixed when it first starts. Absent until then.
 	ImageDigest *string `json:"image_digest,omitempty"`
@@ -437,12 +464,18 @@ type EnvironmentStats struct {
 	DiskReadBps float32 `json:"disk_read_bps"`
 
 	// DiskUsedBytes What its writable layer and Docker store take on the worker.
-	DiskUsedBytes  int64   `json:"disk_used_bytes"`
-	DiskWriteBps   float32 `json:"disk_write_bps"`
+	DiskUsedBytes int64   `json:"disk_used_bytes"`
+	DiskWriteBps  float32 `json:"disk_write_bps"`
+
+	// GPUCPUs The GPU backend's part of support_cpus, where software rendering runs.
+	GPUCPUs        float32 `json:"gpu_cpus"`
 	MemoryTotalMiB int     `json:"memory_total_mib"`
 	MemoryUsedMiB  int     `json:"memory_used_mib"`
 	NetRxBps       float32 `json:"net_rx_bps"`
 	NetTxBps       float32 `json:"net_tx_bps"`
+
+	// SupportCPUs Host cores the processes serving it beside its vCPUs use: its GPU backend, file system and network. No vCPU limit holds them.
+	SupportCPUs float32 `json:"support_cpus"`
 }
 
 // Error defines model for Error.
@@ -452,6 +485,40 @@ type Error struct {
 
 // GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
 type GPU string
+
+// GPUDevice defines model for GPUDevice.
+type GPUDevice struct {
+	Name     string `json:"name"`
+	Software bool   `json:"software"`
+}
+
+// GPUInfo What a worker's virtual GPUs render with, as it found when it started.
+type GPUInfo struct {
+	Device  *string      `json:"device,omitempty"`
+	Gl      *GPURenderer `json:"gl,omitempty"`
+	GlError *string      `json:"gl_error,omitempty"`
+
+	// Renderer What its configuration asks for.
+	Renderer GPUInfoRenderer `json:"renderer"`
+
+	// Unavailable Why the worker offers no virtual GPU, when it offers none.
+	Unavailable *string      `json:"unavailable,omitempty"`
+	Vulkan      *[]GPUDevice `json:"vulkan,omitempty"`
+	VulkanError *string      `json:"vulkan_error,omitempty"`
+}
+
+// GPUInfoRenderer What its configuration asks for.
+type GPUInfoRenderer string
+
+// GPURenderer defines model for GPURenderer.
+type GPURenderer struct {
+	Renderer string `json:"renderer"`
+
+	// Software Whether it renders on the host's CPU.
+	Software bool   `json:"software"`
+	Vendor   string `json:"vendor"`
+	Version  string `json:"version"`
+}
 
 // ImageCopy One copy of an image in a worker's store.
 type ImageCopy struct {
@@ -890,9 +957,12 @@ type Visibility string
 
 // Worker defines model for Worker.
 type Worker struct {
-	Allocated  Resources         `json:"allocated"`
-	Capacity   Resources         `json:"capacity"`
-	CreatedAt  time.Time         `json:"created_at"`
+	Allocated Resources `json:"allocated"`
+	Capacity  Resources `json:"capacity"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// GPU What a worker's virtual GPUs render with, as it found when it started.
+	GPU        *GPUInfo          `json:"gpu,omitempty"`
 	ID         string            `json:"id"`
 	Images     []LocalImage      `json:"images"`
 	Labels     map[string]string `json:"labels"`
@@ -916,9 +986,15 @@ type WorkerStats struct {
 	CPUPercent     float32 `json:"cpu_percent"`
 	DiskTotalBytes int64   `json:"disk_total_bytes"`
 	DiskUsedBytes  int64   `json:"disk_used_bytes"`
+
+	// GPUCPUs The GPU backends' part of support_cpus, where software rendering runs.
+	GPUCPUs        float32 `json:"gpu_cpus"`
 	Load1          float32 `json:"load1"`
 	MemoryTotalMiB int     `json:"memory_total_mib"`
 	MemoryUsedMiB  int     `json:"memory_used_mib"`
+
+	// SupportCPUs Host cores its environments' support processes use -- their GPU backends, file systems and networks -- beside their vCPUs.
+	SupportCPUs float32 `json:"support_cpus"`
 }
 
 // ID defines model for ID.

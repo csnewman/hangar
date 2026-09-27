@@ -56,3 +56,16 @@ export function OnlineBadge({ online, revoked }: { online: boolean; revoked: boo
     </span>
   )
 }
+
+// RendererBadge says whether a virtual GPU renders on a GPU or the CPU.
+export function RendererBadge({ software }: { software: boolean }) {
+  return software ? (
+    <span className="badge badge-idle" title="Rendered on the worker's CPU, outside the environment's vCPUs">
+      software
+    </span>
+  ) : (
+    <span className="badge badge-good" title="Rendered on the worker's GPU">
+      hardware
+    </span>
+  )
+}

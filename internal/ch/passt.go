@@ -75,3 +75,6 @@ func (p *Passt) Close() error {
 	_ = os.Remove(p.socket + ".repair")
 	return os.Remove(p.socket)
 }
+
+// Pid is the backend's process ID.
+func (b *Passt) Pid() int { return pidOf(b.cmd) }

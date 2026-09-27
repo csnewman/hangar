@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/code"
 	"github.com/csnewman/hangar/internal/desktop"
 	"github.com/csnewman/hangar/internal/procs"
@@ -97,6 +98,9 @@ type Config struct {
 	// GPUWindowMiB sizes the window such an environment maps GPU resources
 	// into.
 	GPUWindowMiB int
+	// GPURenderer and GPUDevice choose what renders for such environments
+	// (ch.GPUEnv).
+	GPURenderer, GPUDevice string
 	// BootTimeout is how long an agent has to dial back after the monitor
 	// starts.
 	BootTimeout time.Duration
@@ -136,6 +140,10 @@ type Runtime struct {
 	applied bool
 	changed chan struct{}
 	wg      sync.WaitGroup
+	// gpu is what virtual GPUs render with here, and gpuEnv the GPU
+	// backend's environment for it; gpu is nil without a GPU backend.
+	gpu    *api.GPUInfo
+	gpuEnv []string
 }
 
 // New checks that this host can run environments and returns a runtime.
@@ -155,9 +163,13 @@ func New(cfg Config) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	gpuEnv, err := ch.GPUEnv(cfg.GPURenderer, cfg.GPUDevice)
+	if err != nil {
+		return nil, fmt.Errorf("vm.gpu: %w", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Runtime{cfg: cfg, store: st, ctx: ctx, cancel: cancel, envs: map[string]*machine{},
-		changed: make(chan struct{}, 1)}
+		changed: make(chan struct{}, 1), gpu: probeGPU(ctx, cfg, gpuEnv), gpuEnv: gpuEnv}
 
 	entries, err := os.ReadDir(cfg.StateDir)
 	if err != nil {
@@ -170,6 +182,50 @@ func New(cfg Config) (*Runtime, error) {
 	}
 	return r, nil
 }
+
+// probeGPU asks the GPU backend what it renders with, as the worker's
+// configuration has it render, and decides whether a virtual GPU is on
+// offer: not when it asks for hardware and there is only the CPU, nor when
+// the backend cannot render at all. It is nil without a GPU backend.
+func probeGPU(ctx context.Context, cfg Config, env []string) *api.GPUInfo {
+	if _, err := ch.FindGpuBackend(); err != nil {
+		return nil
+	}
+	info := &api.GPUInfo{Renderer: cfg.GPURenderer, Device: cfg.GPUDevice}
+	if info.Renderer == "" {
+		info.Renderer = ch.RendererAuto
+	}
+	p, err := ch.ProbeGPU(ctx, env)
+	if err != nil {
+		info.Unavailable = err.Error()
+		cfg.Log.Warn("probing the GPU backend: environments are offered no virtual GPU", "err", err)
+		return info
+	}
+	if p.GL != nil {
+		info.GL = &api.GPURenderer{Vendor: p.GL.Vendor, Renderer: p.GL.Renderer, Version: p.GL.Version,
+			Software: p.GL.Software}
+	}
+	info.GLError, info.VulkanError = p.GLError, p.VulkanError
+	for _, d := range p.Vulkan {
+		info.Vulkan = append(info.Vulkan, api.GPUDevice{Name: d.Name, Software: d.Software})
+	}
+	switch {
+	case info.GL == nil:
+		info.Unavailable = "the GPU backend has no OpenGL: " + info.GLError
+	case info.Renderer == ch.RendererHardware && info.GL.Software:
+		info.Unavailable = "the configuration asks for a GPU to render on, and this host renders on its CPU (" +
+			info.GL.Renderer + ")"
+	}
+	if info.Unavailable != "" {
+		cfg.Log.Warn("environments are offered no virtual GPU", "why", info.Unavailable)
+	} else {
+		cfg.Log.Info("virtual GPUs render with", "gl", info.GL.Renderer, "software", info.GL.Software)
+	}
+	return info
+}
+
+// GPU is what virtual GPUs render with here, nil without a GPU backend.
+func (r *Runtime) GPU() *api.GPUInfo { return r.gpu }
 
 func (r *Runtime) Changed() <-chan struct{} { return r.changed }
 

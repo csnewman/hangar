@@ -51,10 +51,18 @@ vm:
   # venus_restore carries a Vulkan program across a suspend (experimental;
   # without it the program ends on resume, as on losing a real GPU).
   # window_mib sizes the window GPU resources are mapped through.
+  # renderer is what renders: auto (a GPU if the host has one, its CPU
+  # through Mesa's llvmpipe and lavapipe if not), hardware (a GPU only; no
+  # virtual GPU is offered without one) or software (the CPU always).
+  # Rendering on the CPU is not held to an environment's vCPUs: the worker
+  # and environment pages show what it costs. device picks a GPU, by render
+  # node, on a host with several. The worker's page shows what it found.
   # gpu:
   #   venus: true
   #   venus_restore: false
   #   window_mib: 512
+  #   renderer: auto
+  #   device: /dev/dri/renderD128
   # Images are pulled from their registries the first time an environment
   # needs them, and unpacked into storage.images as a root filesystem, which
   # environments are served over virtio-fs. A private registry needs

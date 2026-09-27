@@ -55,6 +55,8 @@ type InstanceConfig struct {
 	// GPUVenusRestore carries Vulkan state across a suspend.
 	GPUVenusRestore bool `json:"gpu_venus_restore,omitempty"`
 	GPUWindowMiB    int  `json:"gpu_window_mib,omitempty"`
+	// GPUEnv is the GPU backend's environment, which chooses its renderer.
+	GPUEnv []string `json:"gpu_env,omitempty"`
 
 	// ConsoleFile receives the guest's console; empty is the monitor's
 	// stdio.
@@ -92,6 +94,7 @@ type Instance struct {
 	// save; gpu is nil without a GPU.
 	fs      *ch.FsBackend
 	gpu     *ch.GpuBackend
+	net     *ch.Passt
 	resumed bool
 
 	mu  sync.Mutex
@@ -107,6 +110,21 @@ func (i *Instance) Resumed() bool { return i.resumed }
 
 // Exited is closed when the monitor exits.
 func (i *Instance) Exited() <-chan struct{} { return i.exited }
+
+// supportPids are the processes that serve the guest beside its monitor:
+// the GPU backend, nil without one, and the others.
+func (i *Instance) supportPids() (gpu int, others []int) {
+	if i.gpu != nil {
+		gpu = i.gpu.Pid()
+	}
+	if i.fs != nil {
+		others = append(others, i.fs.Pid())
+	}
+	if i.net != nil {
+		others = append(others, i.net.Pid())
+	}
+	return gpu, others
+}
 
 // Pid is the monitor's process ID.
 func (i *Instance) Pid() int {
@@ -233,12 +251,13 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 			return nil, err
 		}
 		inst.backends = append(inst.backends, net)
+		inst.net = net
 		ccfg.NetSocket = net.Socket()
 	}
 
 	if cfg.GPU {
 		gpu, err := ch.StartGpuBackend(procCtx, filepath.Join(run, "gpu.sock"), cfg.GPUVenus, cfg.GPUVenusRestore,
-			filepath.Join(cfg.Dir, "gpu.json"), cfg.Verbose)
+			filepath.Join(cfg.Dir, "gpu.json"), cfg.GPUEnv, cfg.Verbose)
 		if err != nil {
 			return nil, err
 		}

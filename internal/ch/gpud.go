@@ -48,10 +48,13 @@ func FindGpuBackend() (string, error) {
 //
 // state is where the objects the guest holds are recorded; see SaveState.
 //
+// env is what GPUEnv gives for the renderer and device the worker chose.
+//
 // venusRestore has the renderer carry Venus contexts across a suspend. It is
 // off by default: the rebuild is proven on software rendering only, and
 // without it a Venus program is told at once that its device is gone.
-func StartGpuBackend(ctx context.Context, socket string, venus, venusRestore bool, state string, verbose bool) (*GpuBackend, error) {
+func StartGpuBackend(ctx context.Context, socket string, venus, venusRestore bool, state string, env []string,
+	verbose bool) (*GpuBackend, error) {
 	bin, err := FindGpuBackend()
 	if err != nil {
 		return nil, err
@@ -73,9 +76,7 @@ func StartGpuBackend(ctx context.Context, socket string, venus, venusRestore boo
 		args = append(args, "--venus-restore")
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
-	// A host with no /dev/dri has no GBM device, and the renderer needs
-	// telling to use the surfaceless platform rather than probing for one.
-	cmd.Env = append(os.Environ(), "EGL_PLATFORM=surfaceless")
+	cmd.Env = append(os.Environ(), env...)
 	if err := launch(cmd, "the gpu backend", socket, logPathFor(state), 15*time.Second, verbose); err != nil {
 		return nil, err
 	}
@@ -84,6 +85,10 @@ func StartGpuBackend(ctx context.Context, socket string, venus, venusRestore boo
 
 // Socket is the path the monitor should connect to.
 func (g *GpuBackend) Socket() string { return g.socket }
+
+// Pid is the backend's process ID; the processes it starts, such as Venus's
+// render server, are its children.
+func (g *GpuBackend) Pid() int { return pidOf(g.cmd) }
 
 // SaveState records the objects the guest holds.
 //

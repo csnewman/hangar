@@ -72,6 +72,8 @@ func run(path string, log *slog.Logger) error {
 			GPUVenus:        cfg.VM.GPU.Venus,
 			GPUVenusRestore: cfg.VM.GPU.VenusRestore,
 			GPUWindowMiB:    cfg.VM.GPU.WindowMiB,
+			GPURenderer:     cfg.VM.GPU.Renderer,
+			GPUDevice:       cfg.VM.GPU.Device,
 			Log:             log,
 		})
 		if err != nil {

@@ -63,6 +63,9 @@ CREATE TABLE workers (
     -- reported them. Only the latest is kept.
     stats           jsonb,
     images          jsonb NOT NULL DEFAULT '[]',
+    -- What its virtual GPUs render with, as it last reported; NULL for a
+    -- worker that offers none.
+    gpu             jsonb,
     -- Bumped whenever the worker's desired set changes, in the same
     -- transaction as the change, so a waiting worker can tell whether it has
     -- seen the latest.

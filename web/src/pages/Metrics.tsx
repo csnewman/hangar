@@ -2,7 +2,7 @@ import { useOutletContext } from 'react-router'
 
 import type { Environment, EnvironmentStats } from '../api'
 import { LineChart } from '../components/charts'
-import { formatBytes, formatMemory, formatPercent, formatRate } from '../components/format'
+import { formatBytes, formatCores, formatMemory, formatPercent, formatRate } from '../components/format'
 import { useEnvironments } from '../environments'
 import { useHistory } from '../history'
 
@@ -47,6 +47,17 @@ export function MetricsTab() {
           max={100}
           format={formatPercent}
           series={[{ name: 'CPU', values: pick((x) => x.cpu_percent) }]}
+        />
+        <LineChart
+          title="Support processes"
+          current={`${formatCores(s.support_cpus)} of the worker's CPU${s.gpu_cpus > 0.005 ? `, ${formatCores(s.gpu_cpus)} rendering` : ''}`}
+          times={times}
+          format={formatCores}
+          floor={0.1}
+          series={[
+            { name: 'All', values: pick((x) => x.support_cpus) },
+            { name: 'GPU', values: pick((x) => x.gpu_cpus) },
+          ]}
         />
         <LineChart
           title="Memory"

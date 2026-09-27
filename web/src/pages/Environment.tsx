@@ -20,7 +20,7 @@ import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
 import { StartProgress } from '../components/StartProgress'
 import { desktop } from '../desktop'
-import { PhaseBadge } from '../components/Status'
+import { PhaseBadge, RendererBadge } from '../components/Status'
 import { useEnvironments } from '../environments'
 import { useTitle } from '../title'
 import { Activity as AuditActivity } from '../components/Activity'
@@ -163,6 +163,16 @@ export function SummaryTab() {
           <Prop label="Resources">
             <SpecChips spec={env.spec} />
           </Prop>
+          {env.gpu_renderer && (
+            <Prop label="Virtual GPU">
+              <RendererBadge software={!!env.gpu_software} /> <span className="mono">{env.gpu_renderer}</span>
+              {env.gpu_software && (
+                <div className="muted small">
+                  Rendered on the worker's CPU, beside this environment's vCPUs. Performance shows how much.
+                </div>
+              )}
+            </Prop>
+          )}
           {env.spec.repos.map((r) => (
             <Prop key={r.path} label="Repository">
               <span className="mono">{r.url}</span> <span className="muted">in</span>{' '}

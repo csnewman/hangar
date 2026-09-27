@@ -124,6 +124,8 @@ func environment(e api.Environment) Environment {
 		Template:    e.Template,
 		Spec:        toSpec(e.Spec),
 		Image:       e.Image,
+		GPURenderer: optional(e.GPURenderer),
+		GPUSoftware: optionalBool(e.GPUSoftware),
 		ImageDigest: optional(e.ImageDigest),
 		CPUs:        e.CPUs,
 		MemoryMiB:   e.MemoryMiB,
@@ -161,6 +163,8 @@ func environmentStats(s *api.EnvironmentStats) *EnvironmentStats {
 	}
 	return &EnvironmentStats{
 		CPUPercent:     float32(s.CPUPercent),
+		SupportCPUs:    float32(s.SupportCPUs),
+		GPUCPUs:        float32(s.GPUCPUs),
 		MemoryUsedMiB:  s.MemoryUsedMiB,
 		MemoryTotalMiB: s.MemoryTotalMiB,
 		DiskUsedBytes:  s.DiskUsedBytes,
