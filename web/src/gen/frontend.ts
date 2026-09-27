@@ -264,6 +264,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/teams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Every team, with the caller's role in each: for choosing a template's owner or collaborators. */
+        get: operations["listTeams"];
+        put?: never;
+        post: operations["createTeam"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/teams/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get: operations["getTeam"];
+        put?: never;
+        post?: never;
+        /** @description Deletes a team that owns nothing. */
+        delete: operations["deleteTeam"];
+        options?: never;
+        head?: never;
+        /** @description Changes the team's name and description. Its admins may. */
+        patch: operations["updateTeam"];
+        trace?: never;
+    };
+    "/api/frontend/teams/{id}/members/{user}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                user: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Adds a user to the team, or changes their role. Its admins may. */
+        put: operations["setTeamMember"];
+        post?: never;
+        /** @description Takes a user out of the team. Its admins may. */
+        delete: operations["removeTeamMember"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/templates": {
         parameters: {
             query?: never;
@@ -310,7 +368,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Replaces who, besides the owner, may edit the template. The owner and any collaborator may. */
+        /** @description Replaces the users and teams who, besides the owner, may work on the template. The owner and anyone who may edit it may. */
         put: operations["setTemplateCollaborators"];
         post?: never;
         delete?: never;
@@ -890,13 +948,60 @@ export interface components {
             username: string;
             display_name: string;
         };
+        TeamRef: {
+            id: string;
+            slug: string;
+            name: string;
+        };
+        /**
+         * @description viewer: sees and uses what the team owns. member: also changes it. admin: also runs the team and deletes what it owns.
+         * @enum {string}
+         */
+        TeamRole: "viewer" | "member" | "admin";
+        TeamMember: {
+            person: components["schemas"]["Person"];
+            role: components["schemas"]["TeamRole"];
+        };
+        Team: {
+            id: string;
+            /** @description The team's name in paths. It does not change. */
+            slug: string;
+            name: string;
+            description: string;
+            member_count: number;
+            /** @description Given by getTeam and the calls that change a team. */
+            members?: components["schemas"]["TeamMember"][];
+            /** @description How many templates the team owns. */
+            templates: number;
+            role?: components["schemas"]["TeamRole"];
+            /** @description Whether the caller may change the team and its members. */
+            can_manage: boolean;
+            /** Format: date-time */
+            created_at: string;
+        };
+        CreateTeam: {
+            slug: string;
+            name: string;
+            description?: string;
+        };
+        TeamInput: {
+            name: string;
+            description?: string;
+        };
+        TeamMembership: {
+            role: components["schemas"]["TeamRole"];
+        };
+        /** @description owner is the user who made the template or took it on; team, when present, is the team that owns it instead. */
         Template: {
             id: string;
             name: string;
             description: string;
             visibility: components["schemas"]["Visibility"];
             owner: components["schemas"]["Person"];
+            team?: components["schemas"]["TeamRef"];
             collaborators: components["schemas"]["Person"][];
+            /** @description Teams whose viewers use the template and whose members and admins edit it. */
+            collaborator_teams: components["schemas"]["TeamRef"][];
             spec: components["schemas"]["Spec"];
             /** @description A regular expression an environment's whole name must match, such as a ticket ID. */
             name_pattern?: string;
@@ -925,9 +1030,12 @@ export interface components {
             spec: components["schemas"]["Spec"];
             name_pattern?: string;
             name_hint?: string;
+            /** @description The team to own the template, one the caller is a member or admin of; empty for the caller. Absent leaves an existing template's owner as it is. */
+            team_id?: string;
         };
         Collaborators: {
             user_ids: string[];
+            team_ids?: string[];
         };
         Resources: {
             cpus: number;
@@ -1593,6 +1701,191 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    listTeams: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Teams, by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateTeam"];
+            };
+        };
+        responses: {
+            /** @description Created, with no members. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    getTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The team and its members. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+        };
+    };
+    updateTeam: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeamInput"];
+            };
+        };
+        responses: {
+            /** @description The team. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setTeamMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                user: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TeamMembership"];
+            };
+        };
+        responses: {
+            /** @description The team. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    removeTeamMember: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                user: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The team. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Team"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
         };
     };
     listTemplates: {

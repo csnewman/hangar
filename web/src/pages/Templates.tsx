@@ -6,11 +6,13 @@ import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
 import { useMe } from '../session'
 import { groupTemplates, useTemplates } from '../templates'
+import { useTeams } from '../teams'
 
 export function TemplatesPage() {
   const me = useMe()
   const templates = useTemplates()
-  const { mine, collaborating, others } = groupTemplates(templates.data ?? [], me)
+  const teams = useTeams()
+  const { mine, teams: teamGroups, collaborating, others } = groupTemplates(templates.data ?? [], me, teams.data)
 
   return (
     <div className="page">
@@ -37,6 +39,26 @@ export function TemplatesPage() {
           </>
         }
       />
+      {teamGroups.map(({ team, templates: owned }) => (
+        <TemplateSection
+          key={team.id}
+          title={
+            <>
+              Team <Link to={`/teams/${team.id}`}>{team.name}</Link>
+            </>
+          }
+          templates={owned}
+          empty={
+            team.role === 'viewer' ? (
+              'The team has no templates yet.'
+            ) : (
+              <>
+                The team has no templates yet. <Link to={`/templates/new?team=${team.id}`}>Make one</Link>.
+              </>
+            )
+          }
+        />
+      ))}
       {collaborating.length > 0 && <TemplateSection title="Shared with you to edit" templates={collaborating} />}
       <TemplateSection
         title={me.admin ? 'Everyone else’s' : 'Shared by others'}
@@ -54,7 +76,7 @@ function TemplateSection({
   loading = false,
   empty,
 }: {
-  title: string
+  title: React.ReactNode
   templates: Template[]
   loading?: boolean
   empty?: React.ReactNode
@@ -84,7 +106,10 @@ export function VisibilityBadge({ template: t }: { template: Template }) {
     )
   }
   return (
-    <span className="badge badge-idle" title="Only its owner and collaborators can see it">
+    <span
+      className="badge badge-idle"
+      title={t.team ? 'Only its team and collaborators can see it' : 'Only its owner and collaborators can see it'}
+    >
       <Lock size={11} />
       private
     </span>
@@ -104,11 +129,16 @@ function TemplateCard({ template: t }: { template: Template }) {
       <SpecChips spec={t.spec} namePattern={t.name_pattern} />
       <div className="card-foot">
         <span className="muted small">
-          by {t.owner.display_name || t.owner.username}
-          {t.collaborators.length > 0 && (
-            <span title={t.collaborators.map((c) => c.display_name || c.username).join(', ')}>
+          {t.team ? `team ${t.team.name}` : `by ${t.owner.display_name || t.owner.username}`}
+          {t.collaborators.length + t.collaborator_teams.length > 0 && (
+            <span
+              title={[
+                ...t.collaborators.map((c) => c.display_name || c.username),
+                ...t.collaborator_teams.map((c) => `team ${c.name}`),
+              ].join(', ')}
+            >
               {' '}
-              <Users size={11} className="inline-icon" /> +{t.collaborators.length}
+              <Users size={11} className="inline-icon" /> +{t.collaborators.length + t.collaborator_teams.length}
             </span>
           )}
         </span>

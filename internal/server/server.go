@@ -32,6 +32,7 @@ import (
 	"github.com/csnewman/hangar/internal/placement"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sshgw"
+	"github.com/csnewman/hangar/internal/teams"
 	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/tunnel"
 	"github.com/csnewman/hangar/internal/users"
@@ -109,6 +110,7 @@ func New(cfg Config) (*Server, error) {
 		Tunnels:      tunnels,
 		Environments: environments.NewManager(cfg.DB),
 		Templates:    templates.NewManager(cfg.DB),
+		Teams:        teams.NewManager(cfg.DB),
 		Workers:      wm,
 		Users:        um,
 		Profiles:     profiles,

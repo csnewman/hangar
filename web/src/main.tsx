@@ -23,6 +23,7 @@ import { OverviewPage } from './pages/Overview'
 import { EditorTab } from './pages/EditorTab'
 import { TemplateEditorPage } from './pages/TemplateEditor'
 import { TemplatesPage } from './pages/Templates'
+import { TeamPage, TeamsPage } from './pages/Teams'
 
 // A 401 from anything means the session has gone -- expired, signed out
 // elsewhere, or the user disabled. Refetching the current user then fails
@@ -97,6 +98,8 @@ const router = createBrowserRouter([
           { path: 'templates', element: <TemplatesPage /> },
           { path: 'templates/new', element: <TemplateEditorPage /> },
           { path: 'templates/:id', element: <TemplateEditorPage /> },
+          { path: 'teams', element: <TeamsPage /> },
+          { path: 'teams/:id', element: <TeamPage /> },
           { path: 'account', element: <AccountPage /> },
           { path: 'profile', element: <ProfilePage /> },
           {

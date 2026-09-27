@@ -2375,3 +2375,16 @@ a.reason {
 .metrics + .page-pad {
   padding-top: 0;
 }
+
+/* A team's description, under its name. */
+.page-lead {
+  margin: -8px 0 16px;
+  color: var(--muted);
+}
+
+/* A form along the bottom of a panel, below its table. */
+.panel-foot {
+  margin: 0;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}

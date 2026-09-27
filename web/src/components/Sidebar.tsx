@@ -11,6 +11,7 @@ import {
   Server,
   UserRound,
   Users,
+  UsersRound,
 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, NavLink, useLocation } from 'react-router'
@@ -40,6 +41,7 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
           <nav className="side-nav">
             <SideIcon to="/environments" end icon={<LayoutGrid size={17} />} label="Overview" />
             <SideIcon to="/templates" icon={<LayoutTemplate size={17} />} label="Templates" />
+            <SideIcon to="/teams" icon={<UsersRound size={17} />} label="Teams" />
             <SideIcon to="/environments/new" icon={<Plus size={17} />} label="New environment" />
           </nav>
           <nav className="side-nav side-group">
@@ -74,6 +76,10 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
           <NavLink to="/templates" className="side-link">
             <LayoutTemplate size={16} />
             <span>Templates</span>
+          </NavLink>
+          <NavLink to="/teams" className="side-link">
+            <UsersRound size={16} />
+            <span>Teams</span>
           </NavLink>
         </nav>
 

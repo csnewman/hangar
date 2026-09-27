@@ -8,7 +8,8 @@ import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
 import { environmentsKey } from '../environments'
 import { useMe } from '../session'
-import { branchFor, checkName, groupTemplates, repoName, useTemplates } from '../templates'
+import { branchFor, checkName, groupTemplates, ownerLabel, repoName, useTemplates } from '../templates'
+import { useTeams } from '../teams'
 
 export function NewEnvironmentPage() {
   const me = useMe()
@@ -36,8 +37,9 @@ export function NewEnvironmentPage() {
     if (chosen && !problem) create.mutate()
   }
 
-  const { mine, collaborating, others } = groupTemplates(templates.data ?? [], me)
-  const ordered = [...mine, ...collaborating, ...others]
+  const teams = useTeams()
+  const groups = groupTemplates(templates.data ?? [], me, teams.data)
+  const ordered = [...groups.mine, ...groups.teams.flatMap((g) => g.templates), ...groups.collaborating, ...groups.others]
 
   return (
     <div className="page page-narrow">
@@ -62,9 +64,7 @@ export function NewEnvironmentPage() {
             >
               <div className="choice-head">
                 <span className="strong">{t.name}</span>
-                <span className="muted small">
-                  {t.owner.id === me.id ? 'yours' : `by ${t.owner.display_name || t.owner.username}`}
-                </span>
+                <span className="muted small">{ownerLabel(t, me)}</span>
               </div>
               {t.description && <p className="choice-desc">{t.description}</p>}
               <SpecChips spec={t.spec} namePattern={t.name_pattern} />

@@ -326,6 +326,121 @@ paths:
                 items: { $ref: "#/components/schemas/Person" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /api/frontend/teams:
+    get:
+      operationId: listTeams
+      description: >-
+        Every team, with the caller's role in each: for choosing a template's
+        owner or collaborators.
+      responses:
+        "200":
+          description: Teams, by name.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Team" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createTeam
+      x-hangar-admin: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateTeam" }
+      responses:
+        "201":
+          description: Created, with no members.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/teams/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getTeam
+      responses:
+        "200":
+          description: The team and its members.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: updateTeam
+      description: Changes the team's name and description. Its admins may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TeamInput" }
+      responses:
+        "200":
+          description: The team.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteTeam
+      x-hangar-admin: true
+      description: Deletes a team that owns nothing.
+      responses:
+        "204": { description: Deleted. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/frontend/teams/{id}/members/{user}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: user
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      operationId: setTeamMember
+      description: Adds a user to the team, or changes their role. Its admins may.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TeamMembership" }
+      responses:
+        "200":
+          description: The team.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: removeTeamMember
+      description: Takes a user out of the team. Its admins may.
+      responses:
+        "200":
+          description: The team.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Team" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/frontend/templates:
     get:
       operationId: listTemplates
@@ -410,8 +525,8 @@ paths:
     put:
       operationId: setTemplateCollaborators
       description: >-
-        Replaces who, besides the owner, may edit the template. The owner and
-        any collaborator may.
+        Replaces the users and teams who, besides the owner, may work on the
+        template. The owner and anyone who may edit it may.
       requestBody:
         required: true
         content:
@@ -1272,18 +1387,98 @@ components:
         username: { type: string }
         display_name: { type: string }
 
+    TeamRef:
+      type: object
+      required: [id, slug, name]
+      properties:
+        id: { type: string }
+        slug: { type: string }
+        name: { type: string }
+
+    TeamRole:
+      type: string
+      description: >-
+        viewer: sees and uses what the team owns. member: also changes it.
+        admin: also runs the team and deletes what it owns.
+      enum: [viewer, member, admin]
+
+    TeamMember:
+      type: object
+      required: [person, role]
+      properties:
+        person: { $ref: "#/components/schemas/Person" }
+        role: { $ref: "#/components/schemas/TeamRole" }
+
+    Team:
+      type: object
+      required: [id, slug, name, description, member_count, templates, can_manage, created_at]
+      properties:
+        id: { type: string }
+        slug:
+          type: string
+          description: The team's name in paths. It does not change.
+        name: { type: string }
+        description: { type: string }
+        member_count: { type: integer }
+        members:
+          type: array
+          description: Given by getTeam and the calls that change a team.
+          items: { $ref: "#/components/schemas/TeamMember" }
+        templates:
+          type: integer
+          description: How many templates the team owns.
+        role: { $ref: "#/components/schemas/TeamRole" }
+        can_manage:
+          type: boolean
+          description: Whether the caller may change the team and its members.
+        created_at: { type: string, format: date-time }
+
+    CreateTeam:
+      type: object
+      required: [slug, name]
+      additionalProperties: false
+      properties:
+        slug: { type: string, minLength: 1, maxLength: 63 }
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 1000 }
+
+    TeamInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 1000 }
+
+    TeamMembership:
+      type: object
+      required: [role]
+      additionalProperties: false
+      properties:
+        role: { $ref: "#/components/schemas/TeamRole" }
+
     Template:
       type: object
-      required: [id, name, description, visibility, owner, collaborators, spec, environments, can_edit, can_manage, created_at, updated_at]
+      description: >-
+        owner is the user who made the template or took it on; team, when
+        present, is the team that owns it instead.
+      required: [id, name, description, visibility, owner, collaborators, collaborator_teams, spec, environments, can_edit, can_manage, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
         description: { type: string }
         visibility: { $ref: "#/components/schemas/Visibility" }
         owner: { $ref: "#/components/schemas/Person" }
+        team: { $ref: "#/components/schemas/TeamRef" }
         collaborators:
           type: array
           items: { $ref: "#/components/schemas/Person" }
+        collaborator_teams:
+          type: array
+          description: >-
+            Teams whose viewers use the template and whose members and admins
+            edit it.
+          items: { $ref: "#/components/schemas/TeamRef" }
         spec: { $ref: "#/components/schemas/Spec" }
         name_pattern:
           type: string
@@ -1322,6 +1517,12 @@ components:
         spec: { $ref: "#/components/schemas/Spec" }
         name_pattern: { type: string, maxLength: 500 }
         name_hint: { type: string, maxLength: 200 }
+        team_id:
+          type: string
+          description: >-
+            The team to own the template, one the caller is a member or admin
+            of; empty for the caller. Absent leaves an existing template's
+            owner as it is.
 
     Collaborators:
       type: object
@@ -1329,6 +1530,10 @@ components:
       additionalProperties: false
       properties:
         user_ids:
+          type: array
+          maxItems: 100
+          items: { type: string }
+        team_ids:
           type: array
           maxItems: 100
           items: { type: string }

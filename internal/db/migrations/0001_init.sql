@@ -72,11 +72,40 @@ CREATE TABLE workers (
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 
+-- Teams own templates, as users do, and give their members a role over
+-- what they own. Server administrators make and delete them.
+CREATE TABLE teams (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- The team's name in paths, such as its images' repositories. Slugs and
+    -- usernames are one namespace: no slug is any user's username.
+    slug        text NOT NULL,
+    name        text NOT NULL,
+    description text NOT NULL DEFAULT '',
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX teams_slug ON teams (lower(slug));
+
+-- A member's role over what the team owns: a viewer sees and uses it, a
+-- member also changes it, and an admin also runs the team and deletes
+-- what it owns.
+CREATE TABLE team_members (
+    team_id uuid NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
+    user_id uuid NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    role    text NOT NULL CHECK (role IN ('viewer', 'member', 'admin')),
+    PRIMARY KEY (team_id, user_id)
+);
+
+CREATE INDEX team_members_user ON team_members (user_id);
+
 CREATE TABLE templates (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    -- The user who created the template. They alone decide who else may edit
-    -- it and whether everyone may use it.
+    -- The user who made the template, or took it on. Without a team, they
+    -- alone decide who else may edit it and whether everyone may use it.
     owner_id    uuid NOT NULL REFERENCES users (id),
+    -- The team that owns it, if one does: then its roles decide, not
+    -- owner_id's. A team owning templates cannot be deleted.
+    team_id     uuid REFERENCES teams (id),
     name        text NOT NULL,
     description text NOT NULL DEFAULT '',
     -- 'private': the owner and collaborators see it. 'shared': everyone does.
@@ -88,7 +117,9 @@ CREATE TABLE templates (
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX templates_owner_name ON templates (owner_id, name);
+-- Names are unique among what one owner has: a user's own, or a team's.
+CREATE UNIQUE INDEX templates_owner_name ON templates (owner_id, name) WHERE team_id IS NULL;
+CREATE UNIQUE INDEX templates_team_name ON templates (team_id, name) WHERE team_id IS NOT NULL;
 
 -- Users other than the owner who may edit a template.
 CREATE TABLE template_collaborators (
@@ -98,6 +129,15 @@ CREATE TABLE template_collaborators (
 );
 
 CREATE INDEX template_collaborators_user ON template_collaborators (user_id);
+
+-- Teams whose members may use, or by their role edit, a template.
+CREATE TABLE template_team_collaborators (
+    template_id uuid NOT NULL REFERENCES templates (id) ON DELETE CASCADE,
+    team_id     uuid NOT NULL REFERENCES teams (id) ON DELETE CASCADE,
+    PRIMARY KEY (template_id, team_id)
+);
+
+CREATE INDEX template_team_collaborators_team ON template_team_collaborators (team_id);
 
 CREATE TABLE environments (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),

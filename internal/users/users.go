@@ -118,6 +118,17 @@ func (m *Manager) Create(ctx context.Context, nu NewUser) (User, error) {
 	}
 	var u User
 	err = m.db.Transact(ctx, func(tx db.Tx) error {
+		if err := LockNames(ctx, tx); err != nil {
+			return err
+		}
+		var team bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM teams WHERE lower(slug) = lower($1))`,
+			nu.Username).Scan(&team); err != nil {
+			return err
+		}
+		if team {
+			return fmt.Errorf("%w: %s is a team's name", ErrConflict, nu.Username)
+		}
 		var id string
 		err := tx.QueryRow(ctx, `INSERT INTO users (username, display_name, password_hash, is_admin)
 			VALUES ($1, $2, $3, $4) RETURNING id`,
@@ -135,6 +146,14 @@ func (m *Manager) Create(ctx context.Context, nu NewUser) (User, error) {
 			Details: map[string]any{"admin": nu.Admin}})
 	})
 	return u, err
+}
+
+// LockNames holds, until the transaction ends, the lock taken by anything
+// that claims a name in the namespace usernames and team slugs share, so
+// two claims of one name cannot both see it free.
+func LockNames(ctx context.Context, tx db.Tx) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('hangar.names'))`)
+	return err
 }
 
 func userRef(u User) audit.Ref {

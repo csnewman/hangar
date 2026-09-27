@@ -30,6 +30,12 @@ export type Repo = Schemas['Repo']
 export type Display = Schemas['Display']
 export type GPU = Schemas['GPU']
 export type Person = Schemas['Person']
+export type Team = Schemas['Team']
+export type TeamRef = Schemas['TeamRef']
+export type TeamRole = Schemas['TeamRole']
+export type TeamMember = Schemas['TeamMember']
+export type CreateTeam = Schemas['CreateTeam']
+export type TeamInput = Schemas['TeamInput']
 export type Template = Schemas['Template']
 export type TemplateInput = Schemas['TemplateInput']
 export type Visibility = Schemas['Visibility']
@@ -128,9 +134,19 @@ export const api = {
   updateTemplate: (id: string, body: TemplateInput) =>
     unwrap(client.PUT('/api/frontend/templates/{id}', { ...byID(id), body })),
   deleteTemplate: (id: string) => unwrap(client.DELETE('/api/frontend/templates/{id}', byID(id))),
-  setCollaborators: (id: string, user_ids: string[]) =>
-    unwrap(client.PUT('/api/frontend/templates/{id}/collaborators', { ...byID(id), body: { user_ids } })),
+  setCollaborators: (id: string, user_ids: string[], team_ids: string[]) =>
+    unwrap(client.PUT('/api/frontend/templates/{id}/collaborators', { ...byID(id), body: { user_ids, team_ids } })),
   people: () => unwrap(client.GET('/api/frontend/people')),
+
+  teams: () => unwrap(client.GET('/api/frontend/teams')),
+  team: (id: string) => unwrap(client.GET('/api/frontend/teams/{id}', byID(id))),
+  createTeam: (body: CreateTeam) => unwrap(client.POST('/api/frontend/teams', { body })),
+  updateTeam: (id: string, body: TeamInput) => unwrap(client.PATCH('/api/frontend/teams/{id}', { ...byID(id), body })),
+  deleteTeam: (id: string) => unwrap(client.DELETE('/api/frontend/teams/{id}', byID(id))),
+  setTeamMember: (id: string, user: string, role: TeamRole) =>
+    unwrap(client.PUT('/api/frontend/teams/{id}/members/{user}', { params: { path: { id, user } }, body: { role } })),
+  removeTeamMember: (id: string, user: string) =>
+    unwrap(client.DELETE('/api/frontend/teams/{id}/members/{user}', { params: { path: { id, user } } })),
 
   workers: () => unwrap(client.GET('/api/frontend/workers')),
   worker: (id: string) => unwrap(client.GET('/api/frontend/workers/{id}', byID(id))),

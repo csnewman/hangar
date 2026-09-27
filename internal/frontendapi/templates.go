@@ -75,7 +75,11 @@ func (h *handler) DeleteTemplate(ctx context.Context, req DeleteTemplateRequestO
 }
 
 func (h *handler) SetTemplateCollaborators(ctx context.Context, req SetTemplateCollaboratorsRequestObject) (SetTemplateCollaboratorsResponseObject, error) {
-	t, err := h.templates.SetCollaborators(ctx, principal(ctx), req.ID, req.Body.UserIds)
+	var teamIDs []string
+	if req.Body.TeamIds != nil {
+		teamIDs = *req.Body.TeamIds
+	}
+	t, err := h.templates.SetCollaborators(ctx, principal(ctx), req.ID, req.Body.UserIds, teamIDs)
 	switch {
 	case errors.Is(err, templates.ErrNotFound):
 		return SetTemplateCollaborators404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
@@ -116,6 +120,7 @@ func templateInput(in TemplateInput) templates.Input {
 	if in.NameHint != nil {
 		out.Spec.NameHint = *in.NameHint
 	}
+	out.Team = in.TeamID
 	return out
 }
 
@@ -124,21 +129,31 @@ func template(t templates.Template) Template {
 	for i, c := range t.Collaborators {
 		collaborators[i] = person(c)
 	}
+	collaboratorTeams := make([]TeamRef, len(t.CollaboratorTeams))
+	for i, c := range t.CollaboratorTeams {
+		collaboratorTeams[i] = TeamRef{ID: c.ID, Slug: c.Slug, Name: c.Name}
+	}
+	var team *TeamRef
+	if t.Team != nil {
+		team = &TeamRef{ID: t.Team.ID, Slug: t.Team.Slug, Name: t.Team.Name}
+	}
 	return Template{
-		ID:            t.ID,
-		Name:          t.Name,
-		Description:   t.Description,
-		Visibility:    Visibility(t.Visibility),
-		Owner:         person(t.Owner),
-		Collaborators: collaborators,
-		Spec:          toSpec(t.Spec.Spec),
-		NamePattern:   optional(t.Spec.NamePattern),
-		NameHint:      optional(t.Spec.NameHint),
-		Environments:  t.Environments,
-		CanEdit:       t.CanEdit,
-		CanManage:     t.CanManage,
-		CreatedAt:     t.CreatedAt,
-		UpdatedAt:     t.UpdatedAt,
+		Team:              team,
+		CollaboratorTeams: collaboratorTeams,
+		ID:                t.ID,
+		Name:              t.Name,
+		Description:       t.Description,
+		Visibility:        Visibility(t.Visibility),
+		Owner:             person(t.Owner),
+		Collaborators:     collaborators,
+		Spec:              toSpec(t.Spec.Spec),
+		NamePattern:       optional(t.Spec.NamePattern),
+		NameHint:          optional(t.Spec.NameHint),
+		Environments:      t.Environments,
+		CanEdit:           t.CanEdit,
+		CanManage:         t.CanManage,
+		CreatedAt:         t.CreatedAt,
+		UpdatedAt:         t.UpdatedAt,
 	}
 }
 

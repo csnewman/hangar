@@ -100,6 +100,7 @@ const (
 	KindWorker      = "worker"
 	KindImage       = "image"
 	KindUser        = "user"
+	KindTeam        = "team"
 	KindOwner       = "owner"
 	KindSSHKey      = "ssh_key"
 	KindFile        = "profile_file"

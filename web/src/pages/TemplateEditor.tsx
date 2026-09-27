@@ -1,20 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Plus, Trash2, X } from 'lucide-react'
+import { Plus, Trash2, UsersRound, X } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { api, type Display, type GPU, type Repo, type Template, type TemplateInput } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { PageHeader } from '../components/PageHeader'
 import { useMe } from '../session'
 import { blankSpec, hangarImages, templatesKey } from '../templates'
+import { canGive, teamsKey, useTeams } from '../teams'
 import { VisibilityBadge } from './Templates'
 import { Activity } from '../components/Activity'
 
 const blank: TemplateInput = { name: '', description: '', visibility: 'private', spec: blankSpec }
 
 // TemplateEditorPage creates a template, or shows one: editable for its
-// owner and collaborators, read-only for anyone else who can see it.
+// owner, its team's members and its collaborators, read-only for anyone else
+// who can see it. ?team= makes a new template that team's.
 export function TemplateEditorPage() {
   const { id } = useParams()
   const template = useQuery({
@@ -54,7 +56,14 @@ function toInput(t: Template): TemplateInput {
 function Editor({ existing }: { existing?: Template }) {
   const qc = useQueryClient()
   const navigate = useNavigate()
+  const me = useMe()
+  const [params] = useSearchParams()
+  const teams = useTeams()
   const [form, setForm] = useState<TemplateInput>(() => (existing ? toInput(existing) : blank))
+  // owner is the team to own the template, '' for its user.
+  const initialOwner = existing ? (existing.team?.id ?? '') : (params.get('team') ?? '')
+  const [owner, setOwner] = useState(initialOwner)
+  const ownerChoices = (teams.data ?? []).filter((t) => canGive(t, me.admin) || t.id === initialOwner)
   const [placement, setPlacement] = useState<[string, string][]>(() =>
     Object.entries(existing?.spec.placement ?? {}),
   )
@@ -67,6 +76,7 @@ function Editor({ existing }: { existing?: Template }) {
     mutationFn: (body: TemplateInput) => (existing ? api.updateTemplate(existing.id, body) : api.createTemplate(body)),
     onSuccess: (t) => {
       qc.invalidateQueries({ queryKey: templatesKey })
+      qc.invalidateQueries({ queryKey: teamsKey })
       if (!existing) navigate(`/templates/${t.id}`, { replace: true })
     },
   })
@@ -95,6 +105,8 @@ function Editor({ existing }: { existing?: Template }) {
       description: form.description || undefined,
       name_pattern: form.name_pattern || undefined,
       name_hint: form.name_hint || undefined,
+      // An existing template's owner is sent only to change it.
+      team_id: existing && owner === initialOwner ? undefined : owner,
     }
     save.mutate(body)
   }
@@ -112,8 +124,14 @@ function Editor({ existing }: { existing?: Template }) {
             <span className="subtitle-row">
               <VisibilityBadge template={existing} />
               <span>
-                by {existing.owner.display_name || existing.owner.username} · used by {existing.environments}{' '}
-                environment{existing.environments === 1 ? '' : 's'}
+                {existing.team ? (
+                  <>
+                    team <Link to={`/teams/${existing.team.id}`}>{existing.team.name}</Link>
+                  </>
+                ) : (
+                  <>by {existing.owner.display_name || existing.owner.username}</>
+                )}{' '}
+                · used by {existing.environments} environment{existing.environments === 1 ? '' : 's'}
               </span>
             </span>
           )
@@ -133,7 +151,10 @@ function Editor({ existing }: { existing?: Template }) {
       />
 
       {existing && !editable && (
-        <div className="notice">You can use this template, but only its owner and collaborators can change it.</div>
+        <div className="notice">
+          You can use this template, but only its {existing.team ? "team's members" : 'owner'} and collaborators can
+          change it.
+        </div>
       )}
       {remove.error && <div className="alert">{remove.error.message}</div>}
 
@@ -160,6 +181,28 @@ function Editor({ existing }: { existing?: Template }) {
                 placeholder="What it is for, and who should use it."
               />
             </label>
+            <label className="field">
+              <span>Owner</span>
+              <select value={owner} disabled={!manageable} onChange={(e) => setOwner(e.target.value)}>
+                <option value="">
+                  {existing && existing.team
+                    ? 'Me — take it out of the team'
+                    : existing && existing.owner.id !== me.id
+                      ? existing.owner.display_name || existing.owner.username
+                      : `Me (${me.username})`}
+                </option>
+                {ownerChoices.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} (team)
+                  </option>
+                ))}
+              </select>
+              {owner ? (
+                <small>The team's viewers use it, its members edit it, and its admins decide the rest.</small>
+              ) : (
+                !manageable && <small>Only the owner can give it to another.</small>
+              )}
+            </label>
             <div className="field">
               <span>Who can use it</span>
               <div className="segmented" role="radiogroup">
@@ -172,7 +215,7 @@ function Editor({ existing }: { existing?: Template }) {
                       disabled={!manageable}
                       onChange={() => setForm({ ...form, visibility: v })}
                     />
-                    {v === 'private' ? 'Owner and collaborators' : 'Everyone'}
+                    {v === 'private' ? (owner ? 'The team and collaborators' : 'Owner and collaborators') : 'Everyone'}
                   </label>
                 ))}
               </div>
@@ -459,14 +502,16 @@ function Section({ title, hint, children }: { title: string; hint?: string; chil
   )
 }
 
-// Collaborators can edit the template and change who else can.
+// Collaborators are people, who edit the template and choose who else can,
+// and teams, whose viewers use it and whose members edit it.
 function Collaborators({ template: t }: { template: Template }) {
   const me = useMe()
   const qc = useQueryClient()
   const [adding, setAdding] = useState('')
   const people = useQuery({ queryKey: ['people'], queryFn: api.people, enabled: t.can_edit, refetchInterval: false })
+  const teams = useTeams()
   const set = useMutation({
-    mutationFn: (ids: string[]) => api.setCollaborators(t.id, ids),
+    mutationFn: ({ users, teams }: { users: string[]; teams: string[] }) => api.setCollaborators(t.id, users, teams),
     onSuccess: (updated) => {
       qc.setQueryData([...templatesKey, t.id], updated)
       qc.invalidateQueries({ queryKey: templatesKey })
@@ -474,20 +519,53 @@ function Collaborators({ template: t }: { template: Template }) {
     },
   })
   const ids = t.collaborators.map((c) => c.id)
+  const teamIDs = t.collaborator_teams.map((c) => c.id)
   const candidates = (people.data ?? []).filter((p) => p.id !== t.owner.id && !ids.includes(p.id))
+  const teamCandidates = (teams.data ?? []).filter((x) => x.id !== t.team?.id && !teamIDs.includes(x.id))
+  const add = () => {
+    const [kind, id] = adding.split(':')
+    if (kind === 'team') set.mutate({ users: ids, teams: [...teamIDs, id] })
+    else set.mutate({ users: [...ids, id], teams: teamIDs })
+  }
 
   return (
     <section className="panel form section">
       <div className="form-section-head">
         <h2>Collaborators</h2>
-        <span className="muted small">Can edit this template and choose who else can.</span>
+        <span className="muted small">People edit it; a team's viewers use it and its members edit it.</span>
       </div>
       <div className="people">
-        <span className="person person-owner">
-          <span className="avatar avatar-sm">{initial(t.owner.display_name || t.owner.username)}</span>
-          {t.owner.display_name || t.owner.username}
-          <span className="muted small">owner</span>
-        </span>
+        {t.team ? (
+          <span className="person person-owner">
+            <UsersRound size={14} />
+            {t.team.name}
+            <span className="muted small">owner</span>
+          </span>
+        ) : (
+          <span className="person person-owner">
+            <span className="avatar avatar-sm">{initial(t.owner.display_name || t.owner.username)}</span>
+            {t.owner.display_name || t.owner.username}
+            <span className="muted small">owner</span>
+          </span>
+        )}
+        {t.collaborator_teams.map((c) => (
+          <span key={c.id} className="person">
+            <UsersRound size={14} />
+            <Link to={`/teams/${c.id}`}>{c.name}</Link>
+            {t.can_edit && (
+              <button
+                type="button"
+                className="person-remove"
+                title="Remove"
+                aria-label={`Remove team ${c.slug}`}
+                disabled={set.isPending}
+                onClick={() => set.mutate({ users: ids, teams: teamIDs.filter((x) => x !== c.id) })}
+              >
+                <X size={13} />
+              </button>
+            )}
+          </span>
+        ))}
         {t.collaborators.map((c) => (
           <span key={c.id} className="person">
             <span className="avatar avatar-sm">{initial(c.display_name || c.username)}</span>
@@ -500,31 +578,39 @@ function Collaborators({ template: t }: { template: Template }) {
                 title={c.id === me.id ? 'Leave' : 'Remove'}
                 aria-label={`Remove ${c.username}`}
                 disabled={set.isPending}
-                onClick={() => set.mutate(ids.filter((x) => x !== c.id))}
+                onClick={() => set.mutate({ users: ids.filter((x) => x !== c.id), teams: teamIDs })}
               >
                 <X size={13} />
               </button>
             )}
           </span>
         ))}
-        {t.collaborators.length === 0 && <span className="muted small">No collaborators yet.</span>}
+        {t.collaborators.length === 0 && t.collaborator_teams.length === 0 && (
+          <span className="muted small">No collaborators yet.</span>
+        )}
       </div>
       {t.can_edit && (
         <div className="inline-form">
           <select value={adding} onChange={(e) => setAdding(e.target.value)} aria-label="Add a collaborator">
-            <option value="">Add a person…</option>
-            {candidates.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.display_name ? `${p.display_name} (${p.username})` : p.username}
-              </option>
-            ))}
+            <option value="">Add a person or team…</option>
+            {teamCandidates.length > 0 && (
+              <optgroup label="Teams">
+                {teamCandidates.map((x) => (
+                  <option key={x.id} value={`team:${x.id}`}>
+                    {x.name}
+                  </option>
+                ))}
+              </optgroup>
+            )}
+            <optgroup label="People">
+              {candidates.map((p) => (
+                <option key={p.id} value={`user:${p.id}`}>
+                  {p.display_name ? `${p.display_name} (${p.username})` : p.username}
+                </option>
+              ))}
+            </optgroup>
           </select>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            disabled={!adding || set.isPending}
-            onClick={() => set.mutate([...ids, adding])}
-          >
+          <button type="button" className="btn btn-ghost" disabled={!adding || set.isPending} onClick={add}>
             Add
           </button>
         </div>

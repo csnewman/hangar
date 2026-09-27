@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 
-import { api, type Me, type Spec, type Template } from './api'
+import { api, type Me, type Spec, type Team, type Template } from './api'
 
 export const templatesKey = ['templates'] as const
 
@@ -37,20 +37,37 @@ export function branchFor(pattern: string | undefined, name: string): string | u
 
 export interface TemplateGroups {
   mine: Template[]
+  // teams are the templates of each team the caller is in, in the order
+  // the teams are given.
+  teams: { team: Team; templates: Template[] }[]
   collaborating: Template[]
   others: Template[]
 }
 
 // groupTemplates splits templates by the caller's relationship to them: their
-// own, ones they collaborate on, and everything else they can see.
-export function groupTemplates(list: Template[], me: Me): TemplateGroups {
-  const groups: TemplateGroups = { mine: [], collaborating: [], others: [] }
+// own, their teams', ones they collaborate on -- themselves or through a
+// team -- and everything else they can see.
+export function groupTemplates(list: Template[], me: Me, teams: Team[] = []): TemplateGroups {
+  const mineTeams = teams.filter((tm) => tm.role)
+  const inTeam = new Set(mineTeams.map((tm) => tm.id))
+  const byTeam = new Map<string, Template[]>(mineTeams.map((tm) => [tm.id, []]))
+  const groups: TemplateGroups = { mine: [], teams: [], collaborating: [], others: [] }
   for (const t of list) {
-    if (t.owner.id === me.id) groups.mine.push(t)
-    else if (t.collaborators.some((c) => c.id === me.id)) groups.collaborating.push(t)
+    if (t.team && byTeam.has(t.team.id)) byTeam.get(t.team.id)!.push(t)
+    else if (!t.team && t.owner.id === me.id) groups.mine.push(t)
+    else if (t.collaborators.some((c) => c.id === me.id) || t.collaborator_teams.some((c) => inTeam.has(c.id)))
+      groups.collaborating.push(t)
     else groups.others.push(t)
   }
+  groups.teams = mineTeams.map((team) => ({ team, templates: byTeam.get(team.id)! }))
   return groups
+}
+
+// ownerLabel says whose a template is, as the caller sees it.
+export function ownerLabel(t: Template, me: Me): string {
+  if (t.team) return `team ${t.team.name}`
+  if (t.owner.id === me.id) return 'yours'
+  return `by ${t.owner.display_name || t.owner.username}`
 }
 
 // Hangar's own images, which the template editor suggests.
