@@ -81,9 +81,11 @@ release with `hangar.rb`, the Homebrew cask for that release. The workflow
 then writes the cask into the tap, `csnewman/homebrew-hangar`, so
 
     brew tap csnewman/hangar
+    brew trust --cask csnewman/hangar/hangar
     brew install --cask hangar
 
-installs the newest release, and `brew upgrade --cask hangar` moves to the
+installs the newest release (Homebrew loads a cask from a tap other than
+its own only once it is trusted), and `brew upgrade --cask hangar` moves to the
 next.
 
 The tap is written with a fine-grained token that can write to that

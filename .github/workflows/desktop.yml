@@ -98,8 +98,7 @@ jobs:
   # The release's cask, into the tap (csnewman/homebrew-hangar) that
   # `brew tap csnewman/hangar` reads. The token writes to that repository
   # alone, and is an environment secret: only a job naming the homebrew
-  # environment, run from a desktop-v* tag, is given it. It commits through
-  # the API, so GitHub signs the commit.
+  # environment, run from a desktop-v* tag, is given it.
   tap:
     needs: release
     runs-on: ubuntu-26.04

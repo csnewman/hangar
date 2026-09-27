@@ -3,6 +3,7 @@
 # hangar.rb, and writes it into the tap, csnewman/homebrew-hangar:
 #
 #   brew tap csnewman/hangar
+#   brew trust --cask csnewman/hangar/hangar
 #   brew install --cask hangar
 cask "hangar" do
   arch arm: "arm64", intel: "x64"
