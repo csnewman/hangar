@@ -37,6 +37,11 @@ Servers menu, list every server you have added: choose one to bring its
 window forward, or open it, and Connect to a Server… (⌘N) to add another.
 File → New Window opens another window of the server in front.
 
+The Environments menu is the server in front's: Go to Environment… (⌘L),
+New Environment…, and each of your environments there with its phase,
+to open in its tab, VS Code or a terminal, or to start, suspend or stop.
+The menu bar icon has the same for every server.
+
 Every tab is a view of its own and stays alive while another is shown: VS
 Code, terminals and desktops keep everything when you move between tabs,
 when a tab is dragged to another window, and when it is moved to another

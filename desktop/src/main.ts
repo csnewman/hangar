@@ -410,6 +410,75 @@ watch.on('change', () => {
   changed()
 })
 
+// ---- Environments ----
+
+// envItems is what can be done with one of a server's environments, from a
+// menu: open it, in its tab, VS Code or a terminal, and start, suspend or
+// stop it.
+function envItems(st: ServerState, e: api.Environment): Electron.MenuItemConstructorOptions[] {
+  const running = e.phase === 'running'
+  const busy = !['running', 'stopped', 'suspended', 'failed'].includes(e.phase)
+  return [
+    { label: 'Open', click: () => openServer(st.server).openEnvironment(e.id) },
+    { label: 'Open in VS Code', enabled: running, click: () => openInVSCode(st.server, e) },
+    { label: 'Open Terminal', enabled: running && !!st.me?.ssh, click: () => openTerminal(st.me!, e) },
+    { type: 'separator' },
+    {
+      label: e.phase === 'suspended' ? 'Resume' : 'Start',
+      enabled: !running && !busy,
+      click: () => api.act(st.server, e.id, 'start').then(() => watch.refresh()),
+    },
+    {
+      label: 'Suspend',
+      enabled: running,
+      click: () => api.act(st.server, e.id, 'suspend').then(() => watch.refresh()),
+    },
+    {
+      label: 'Stop',
+      enabled: running || e.phase === 'suspended' || e.phase === 'starting',
+      click: () => api.act(st.server, e.id, 'stop').then(() => watch.refresh()),
+    },
+  ]
+}
+
+// frontState is the state of the server whose window is in front.
+function frontState(): { w: ServerWindow; st: ServerState } | undefined {
+  const w = focused()
+  const st = w && watch.all().find((x) => x.server.id === w.server.id)
+  return w && st ? { w, st } : undefined
+}
+
+// ownEnvironments are the environments of a server that are the user's:
+// an administrator is shown everyone's, which would bury them.
+const ownEnvironments = (st: ServerState) => st.environments.filter((e) => e.owner_id === st.me?.id)
+
+// environmentItems is the Environments menu: finding and making one on the
+// server in front, then each of the user's there.
+function environmentItems(): Electron.MenuItemConstructorOptions[] {
+  const front = frontState()
+  const items: Electron.MenuItemConstructorOptions[] = [
+    { label: 'Go to Environment…', accelerator: 'CmdOrCtrl+L', enabled: !!front, click: () => focused()?.setOverlay(true, true) },
+    {
+      label: 'New Environment…',
+      enabled: !!front?.st.signedIn,
+      click: () => front && front.w.route(front.w.server.url + '/environments/new'),
+    },
+    { type: 'separator' },
+  ]
+  if (!front) {
+    items.push({ label: 'No server open', enabled: false })
+  } else if (front.st.compatibility && !front.st.compatibility.ok) {
+    items.push({ label: front.st.compatibility.why, enabled: false })
+  } else if (!front.st.signedIn) {
+    items.push({ label: 'Not signed in', enabled: false })
+  } else {
+    const mine = ownEnvironments(front.st)
+    if (mine.length === 0) items.push({ label: 'No environments', enabled: false })
+    for (const e of mine) items.push({ label: `${e.name} — ${e.phase}`, submenu: envItems(front.st, e) })
+  }
+  return items
+}
+
 // ---- The menu bar icon ----
 
 function trayIcon() {
@@ -432,36 +501,9 @@ function updateTray() {
       items.push({ label: '  Sign in…', click: () => openServer(st.server) }, { type: 'separator' })
       continue
     }
-    const mine = st.environments.filter((e) => e.owner_id === st.me?.id)
+    const mine = ownEnvironments(st)
     if (mine.length === 0) items.push({ label: '  No environments', enabled: false })
-    for (const e of mine) {
-      const running = e.phase === 'running'
-      const busy = !['running', 'stopped', 'suspended', 'failed'].includes(e.phase)
-      items.push({
-        label: `  ${e.name} — ${e.phase}`,
-        submenu: [
-          { label: 'Open', click: () => openServer(st.server).openEnvironment(e.id) },
-          { label: 'Open in VS Code', enabled: running, click: () => openInVSCode(st.server, e) },
-          { label: 'Open Terminal', enabled: running && !!st.me?.ssh, click: () => openTerminal(st.me!, e) },
-          { type: 'separator' },
-          {
-            label: e.phase === 'suspended' ? 'Resume' : 'Start',
-            enabled: !running && !busy,
-            click: () => api.act(st.server, e.id, 'start').then(() => watch.refresh()),
-          },
-          {
-            label: 'Suspend',
-            enabled: running,
-            click: () => api.act(st.server, e.id, 'suspend').then(() => watch.refresh()),
-          },
-          {
-            label: 'Stop',
-            enabled: running || e.phase === 'suspended' || e.phase === 'starting',
-            click: () => api.act(st.server, e.id, 'stop').then(() => watch.refresh()),
-          },
-        ],
-      })
-    }
+    for (const e of mine) items.push({ label: `  ${e.name} — ${e.phase}`, submenu: envItems(st, e) })
     items.push({ type: 'separator' })
   }
   items.push({ label: 'Connect to a Server…', click: showPicker }, { type: 'separator' }, { label: 'Quit Hangar', role: 'quit' })
@@ -488,13 +530,18 @@ function serverItems(current?: string): Electron.MenuItemConstructorOptions[] {
 // ---- The application menu ----
 
 // menuKey is what the application menu shows that can change: the
-// servers, and which is in front. The menu is rebuilt only when it does,
-// so one open while environments change is not pulled from under the
-// pointer.
+// servers, which is in front, and its environments and their phases. The
+// menu is rebuilt only when that does -- not on every step of a start's
+// progress -- so one that is open is seldom pulled from under the pointer.
 let menuKey = ''
 
 function updateMenu() {
-  const key = JSON.stringify([focused()?.server.id, watch.all().map((st) => [st.server.id, st.server.name])])
+  const front = frontState()
+  const key = JSON.stringify([
+    focused()?.server.id,
+    watch.all().map((st) => [st.server.id, st.server.name]),
+    front && [front.st.signedIn, front.st.compatibility, ownEnvironments(front.st).map((e) => [e.id, e.name, e.phase])],
+  ])
   if (key === menuKey) return
   menuKey = key
   menu()
@@ -516,7 +563,6 @@ function menu() {
           },
         },
         { label: 'New Tab…', accelerator: 'CmdOrCtrl+T', click: () => focused()?.setOverlay(true, true) },
-        { label: 'Go to Environment…', accelerator: 'CmdOrCtrl+L', click: () => focused()?.setOverlay(true, true) },
         { label: 'Reopen Closed Tab', accelerator: 'CmdOrCtrl+Shift+T', click: () => focused()?.reopen() },
         {
           label: 'Duplicate Tab',
@@ -566,6 +612,7 @@ function menu() {
       ],
     },
     { label: 'Servers', submenu: serverItems(focused()?.server.id) },
+    { label: 'Environments', submenu: environmentItems() },
     {
       label: 'Window',
       submenu: [
