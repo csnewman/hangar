@@ -160,15 +160,19 @@ function DesktopView({ env, name }: { env: string; name: string }) {
           {state === 'reconnecting' && <>Reconnecting…{reason && ` (${reason})`}</>}
         </span>
         <span className="desktop-spacer" />
-        <button
-          type="button"
-          className={viewOnly ? 'btn btn-ghost btn-on' : 'btn btn-ghost'}
-          onClick={() => setViewOnly((v) => !v)}
-          title={viewOnly ? 'Viewing only: click to control the desktop' : 'Watch without sending input'}
-        >
-          {viewOnly ? <Eye size={14} /> : <MousePointer2 size={14} />}
-          {viewOnly ? 'View only' : 'Control'}
-        </button>
+        <div className="segmented" role="radiogroup" aria-label="Input">
+          {([false, true] as const).map((v) => (
+            <label
+              key={String(v)}
+              className={viewOnly === v ? 'seg seg-on' : 'seg'}
+              title={v ? 'Watch the desktop without sending it input' : 'Send the desktop your mouse and keyboard'}
+            >
+              <input type="radio" name="desktop-input" checked={viewOnly === v} onChange={() => setViewOnly(v)} />
+              {v ? <Eye size={14} /> : <MousePointer2 size={14} />}
+              {v ? 'View' : 'Control'}
+            </label>
+          ))}
+        </div>
         <button
           type="button"
           className={fit ? 'btn btn-ghost btn-on' : 'btn btn-ghost'}
