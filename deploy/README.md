@@ -184,10 +184,22 @@ base image with what your work needs added:
     COPY my-agent.service /etc/systemd/system/
     RUN systemctl enable my-agent.service
 
-For Rocky Linux, start `FROM ghcr.io/csnewman/hangar/base:rocky-10` and use
-`dnf`. `minimal:<distro>` in place of `base:<distro>` starts from an image
-with no desktop, Docker or everyday tools, for a headless environment that
-wants little.
+For Rocky Linux the same, with `dnf`. The base image has Rocky's own
+repositories; many everyday tools are in EPEL, which is added first:
+
+    # Dockerfile
+    FROM ghcr.io/csnewman/hangar/base:rocky-10
+    RUN dnf install -y epel-release \
+     && dnf install -y --setopt=install_weak_deps=False \
+          postgresql python3-pip ripgrep \
+     && dnf clean all
+    COPY --chown=1000:1000 dotfiles/ /home/dev/
+    COPY my-agent.service /etc/systemd/system/
+    RUN systemctl enable my-agent.service
+
+`minimal:<distro>` in place of `base:<distro>` starts from an image with no
+desktop, Docker or everyday tools, for a headless environment that wants
+little.
 
 Build it for the workers' architecture, sign in to Hangar's registry with
 an access token, and push:
