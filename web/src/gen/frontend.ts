@@ -684,7 +684,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Says whether anyone may reach the environment's own web servers, on its <anything>-env<id> hosts, without signing in to Hangar, or only those who may reach the environment. */
+        /** @description Says whether anyone may reach the environment's own web servers, on its <anything>-env<short> hosts, without signing in to Hangar, or only those who may reach the environment. */
         put: operations["setEnvironmentPorts"];
         post?: never;
         delete?: never;
@@ -1099,6 +1099,8 @@ export interface components {
         Phase: "pending" | "starting" | "running" | "stopping" | "stopped" | "suspending" | "suspended" | "failed" | "deleting";
         Environment: {
             id: string;
+            /** @description Names the environment's hosts: code<short_id> for its editor, and <name>-env<short_id> for its web servers. */
+            short_id: string;
             owner_id: string;
             /** @description The owner's username. */
             owner: string;
@@ -1221,7 +1223,7 @@ export interface components {
             untrusted?: boolean;
             /** @description Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. A worker with DAX turned off (dax_mib 0) reads them in regardless. */
             dax?: boolean;
-            /** @description Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<id> after Hangar's host. */
+            /** @description Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<short> after Hangar's host. */
             web_names?: string[];
             /** @description Worker labels the environment requires: it runs only on a worker with every one of these labels, with these values. */
             placement: {
@@ -1505,7 +1507,7 @@ export interface components {
         Me: {
             /** @description The host of Hangar's own registry, which image names on it start with. Absent when the server runs none. */
             registry?: string;
-            /** @description What follows env<id> in the host an environment's own web servers are reached on, such as .hangar.example.com: any name and a hyphen may go before it. Absent when the server has no public URL. */
+            /** @description What follows env<short> in the host an environment's own web servers are reached on, such as .hangar.example.com: any name and a hyphen may go before it. Absent when the server has no public URL. */
             environment_host_suffix?: string;
             id: string;
             username: string;

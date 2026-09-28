@@ -14,7 +14,7 @@ func spec(names ...string) api.TemplateSpec {
 	return api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 1, MemoryMiB: 1024, WebNames: names}}
 }
 
-// A web server's name goes in front of -env<id> in one DNS label, written
+// A web server's name goes in front of -env<short> in one DNS label, written
 // as the user would, with or without the hyphen.
 func TestWebNames(t *testing.T) {
 	got, err := templates.Validate(spec(" Dashboard- ", "customer-ui", "api2"))

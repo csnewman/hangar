@@ -57,8 +57,8 @@ type Config struct {
 	// environments without an editor.
 	PublicURL string
 	// HostStyle names the editors' and the registry's hosts after
-	// PublicURL's: as subdomains of it, code<id>.hangar.example.com, or with
-	// its first label as their suffix, code<id>-hangar.example.com (package
+	// PublicURL's: as subdomains of it, code<short>.hangar.example.com, or with
+	// its first label as their suffix, code<short>-hangar.example.com (package
 	// publichost). Empty is subdomains.
 	HostStyle publichost.Style
 	// AutoSignIn, for development only, signs every visitor in as this

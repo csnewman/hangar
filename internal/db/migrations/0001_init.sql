@@ -243,8 +243,20 @@ CREATE TABLE registry_uploads (
     created_at    timestamptz NOT NULL DEFAULT now()
 );
 
+-- A new environment's short ID: six characters from a-z and 0-9, about 31
+-- bits, taken from the random bytes of a v4 UUID. Host names are made from
+-- it, where a UUID leaves little room in a DNS label for anything else.
+CREATE FUNCTION new_short_id() RETURNS text LANGUAGE sql VOLATILE AS $$
+    SELECT string_agg(substr('abcdefghijklmnopqrstuvwxyz0123456789', get_byte(r.b, i) % 36 + 1, 1), '' ORDER BY i)
+    FROM (SELECT uuid_send(gen_random_uuid()) AS b) r, generate_series(0, 5) AS i
+$$;
+
 CREATE TABLE environments (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- Names the environment's hosts, code<short_id> for its editor and
+    -- <name>-env<short_id> for its web servers. Unique among environments
+    -- that exist; creating one retries on the rare clash.
+    short_id    text NOT NULL DEFAULT new_short_id() UNIQUE CHECK (short_id ~ '^[a-z0-9]{6}$'),
     -- A user who owns environments cannot be deleted; disable them instead,
     -- or delete their environments first.
     owner_id    uuid NOT NULL REFERENCES users (id),
@@ -280,7 +292,7 @@ CREATE TABLE environments (
     image_update   jsonb,
     image_rollback jsonb,
     -- Whether anyone may reach the environment's own web servers, on its
-    -- <anything>-env<id> hosts, without signing in to Hangar.
+    -- <anything>-env<short> hosts, without signing in to Hangar.
     ports_public boolean NOT NULL DEFAULT false,
     cpus        integer NOT NULL CHECK (cpus > 0),
     memory_mib  integer NOT NULL CHECK (memory_mib > 0),

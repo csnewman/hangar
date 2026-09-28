@@ -5,7 +5,7 @@
 // The editor runs code the environment controls: extensions, and a
 // workbench that renders the repository. Served from Hangar's origin it
 // could call Hangar's API as the signed-in user. On its own origin, a sibling
-// of Hangar's (code<id>.<hangar host>), it cannot read Hangar's cookie or its
+// of Hangar's (code<short>.<hangar host>), it cannot read Hangar's cookie or its
 // responses, and Hangar's API refuses its state-changing requests as
 // cross-origin.
 //
@@ -161,19 +161,17 @@ func (m *Manager) Authenticate(ctx context.Context, cookie, environmentID string
 	return t, err
 }
 
-// Environment is what reaching an environment's own web servers needs to
-// know of it: where it runs, and whether anyone may reach them without
-// signing in. ErrNoSession is that there is no such environment.
-func (m *Manager) Environment(ctx context.Context, environmentID string) (PortEnvironment, error) {
+// Environment is what a request to one of an environment's hosts needs to
+// know of it, by the short ID the host names: its ID, where it runs, and
+// whether anyone may reach its web servers without signing in.
+// ErrNoSession is that there is no such environment.
+func (m *Manager) Environment(ctx context.Context, short string) (PortEnvironment, error) {
 	var e PortEnvironment
-	if !db.ValidUUID(environmentID) {
-		return e, ErrNoSession
-	}
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
 		var worker *string
 		var phase string
-		err := tx.QueryRow(ctx, `SELECT worker_id, phase, ports_public FROM environments WHERE id = $1`,
-			environmentID).Scan(&worker, &phase, &e.Public)
+		err := tx.QueryRow(ctx, `SELECT id::text, worker_id, phase, ports_public FROM environments WHERE short_id = $1`,
+			short).Scan(&e.ID, &worker, &phase, &e.Public)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNoSession
 		}
@@ -189,8 +187,9 @@ func (m *Manager) Environment(ctx context.Context, environmentID string) (PortEn
 	return e, err
 }
 
-// PortEnvironment is an environment as its own web servers' hosts see it.
+// PortEnvironment is an environment as its hosts see it.
 type PortEnvironment struct {
+	ID       string
 	WorkerID string
 	Running  bool
 	// Public is that anyone may reach its web servers, signed in or not.

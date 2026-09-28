@@ -115,7 +115,7 @@ type Spec struct {
 	// assumed.
 	DAX bool `json:"dax,omitempty"`
 	// WebNames are the names of the environment's own web servers its page
-	// links to, each reached on <name>-env<id> after Hangar's host.
+	// links to, each reached on <name>-env<short> after Hangar's host.
 	WebNames []string `json:"web_names,omitempty"`
 	// Placement limits which workers may run the environment: each key must
 	// be a label the worker has, with this value.
@@ -158,7 +158,10 @@ type TemplateSpec struct {
 
 // Environment is the public view of one environment.
 type Environment struct {
-	ID      string `json:"id"`
+	ID string `json:"id"`
+	// ShortID names the environment's hosts: code<short> for its editor,
+	// <name>-env<short> for its web servers.
+	ShortID string `json:"short_id"`
 	OwnerID string `json:"owner_id"`
 	Owner   string `json:"owner"`
 	Name    string `json:"name"`
@@ -180,7 +183,7 @@ type Environment struct {
 	ImageRollback *ImageRollback `json:"image_rollback,omitempty"`
 	ImageChange   string         `json:"image_change,omitempty"`
 	// PortsPublic is that anyone may reach the environment's own web
-	// servers, on its <anything>-env<id> hosts, without signing in.
+	// servers, on its <anything>-env<short> hosts, without signing in.
 	PortsPublic bool   `json:"ports_public,omitempty"`
 	Spec        Spec   `json:"spec"`
 	Image       string `json:"image"`

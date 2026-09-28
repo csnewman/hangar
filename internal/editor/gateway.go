@@ -9,10 +9,10 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
-	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/publichost"
 	"github.com/csnewman/hangar/internal/tunnel"
 )
@@ -25,8 +25,11 @@ const CookieName = "hangar_editor"
 const signInPath = "/_hangar/sign-in"
 
 // labelPrefix begins the label every editor origin's host is named for,
-// which ends in the environment's ID.
+// which ends in the environment's short ID.
 const labelPrefix = "code"
+
+// shortID is an environment's short ID, which names its hosts.
+var shortID = regexp.MustCompile(`^[a-z0-9]{6}$`)
 
 // Tunnels opens streams to workers.
 type Tunnels interface {
@@ -70,26 +73,27 @@ func NewGateway(sessions *Manager, tunnels Tunnels, public *publichost.Public, l
 	return g
 }
 
-// Owns reports whether a request's host is an editor's, and whose.
+// Owns reports whether a request's host is an editor's, and the short ID
+// of the environment whose.
 func (g *Gateway) Owns(host string) (string, bool) {
 	label, ok := g.public.Label(host)
 	if !ok {
 		return "", false
 	}
-	id, ok := strings.CutPrefix(label, labelPrefix)
-	return id, ok && db.ValidUUID(id)
+	short, ok := strings.CutPrefix(label, labelPrefix)
+	return short, ok && shortID.MatchString(short)
 }
 
-// Origin is one environment's editor origin.
-func (g *Gateway) Origin(environmentID string) string {
-	return g.public.NameOrigin(labelPrefix + environmentID)
+// Origin is the editor origin of the environment with this short ID.
+func (g *Gateway) Origin(short string) string {
+	return g.public.NameOrigin(labelPrefix + short)
 }
 
 // SignIn issues a ticket for the Hangar session whose token is given and
 // returns the URL that redeems it and opens the editor on folder, which may
 // be empty. The caller has checked that the session's user may reach the
-// environment.
-func (g *Gateway) SignIn(ctx context.Context, sessionToken, environmentID, folder string) (string, error) {
+// environment, whose ID and short ID are given.
+func (g *Gateway) SignIn(ctx context.Context, sessionToken, environmentID, short, folder string) (string, error) {
 	ticket, err := g.sessions.Ticket(ctx, sessionToken, environmentID)
 	if err != nil {
 		return "", err
@@ -98,16 +102,27 @@ func (g *Gateway) SignIn(ctx context.Context, sessionToken, environmentID, folde
 	if folder != "" {
 		to += "?" + url.Values{"folder": {folder}}.Encode()
 	}
-	return g.Origin(environmentID) + signInPath + "?" + url.Values{"ticket": {ticket}, "to": {to}}.Encode(), nil
+	return g.Origin(short) + signInPath + "?" + url.Values{"ticket": {ticket}, "to": {to}}.Encode(), nil
 }
 
 // ServeHTTP serves a request for an editor host; Owns has said it is one.
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	env, _ := g.Owns(r.Host)
-	if !g.allowed(r, env) {
+	short, _ := g.Owns(r.Host)
+	if !g.allowed(r, short) {
 		textError(w, http.StatusForbidden, "Cross-origin request refused.")
 		return
 	}
+	e, err := g.sessions.Environment(r.Context(), short)
+	switch {
+	case errors.Is(err, ErrNoSession):
+		textError(w, http.StatusNotFound, "There is no such environment.")
+		return
+	case err != nil:
+		g.log.Error("looking up an environment for its editor", "err", err)
+		textError(w, http.StatusInternalServerError, "Internal error.")
+		return
+	}
+	env := e.ID
 	if r.URL.Path == signInPath {
 		g.signIn(w, r, env)
 		return
@@ -139,7 +154,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // other, so the SameSite cookie alone would let one environment's editor
 // drive another's; only Hangar's page opening the editor in its iframe, and
 // the editor's own requests, get through.
-func (g *Gateway) allowed(r *http.Request, env string) bool {
+func (g *Gateway) allowed(r *http.Request, short string) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
 	case "", "same-origin", "none":
 	case "same-site":
@@ -152,7 +167,7 @@ func (g *Gateway) allowed(r *http.Request, env string) bool {
 	}
 	// The browser sends Origin on a WebSocket's opening request, which
 	// Sec-Fetch-Site does not cover in every browser.
-	if origin := r.Header.Get("Origin"); origin != "" && origin != g.Origin(env) {
+	if origin := r.Header.Get("Origin"); origin != "" && origin != g.Origin(short) {
 		return false
 	}
 	return true

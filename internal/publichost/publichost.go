@@ -3,10 +3,10 @@
 // registry -- after Hangar's public host.
 //
 // A name is a label joined to the public host in one of two styles. With
-// Subdomain, the default, it is a subdomain: code<id>.hangar.example.com,
+// Subdomain, the default, it is a subdomain: code<short>.hangar.example.com,
 // which needs the zone under the public host and a certificate for
 // *.<host>. With Prefix it is a sibling that ends in the public host's
-// first label: code<id>-hangar.example.com, for networks where a machine is
+// first label: code<short>-hangar.example.com, for networks where a machine is
 // given one name, and every <anything>-<name> beside it in the same domain
 // already resolves to it and is covered by a wildcard certificate for the
 // domain.

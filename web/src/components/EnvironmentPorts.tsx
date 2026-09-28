@@ -5,7 +5,7 @@ import { environmentsKey } from '../environments'
 import { useMe } from '../session'
 import { CopyCode } from './CopyCode'
 
-// A DNS label is at most this long, and the name before -env<id> shares
+// A DNS label is at most this long, and the name before -env<short> shares
 // one with it.
 const maxLabel = 63
 
@@ -20,10 +20,10 @@ export function EnvironmentPorts({ env }: { env: Environment }) {
   })
   const suffix = me.environment_host_suffix
   if (suffix === undefined) return null
-  const host = `env${env.id}${suffix}`
+  const host = `env${env.short_id}${suffix}`
   // In the prefix style the machine's own name shares the label too.
   const sharing = suffix.startsWith('-') ? suffix.split('.')[0].length : 0
-  const longest = maxLabel - `-env${env.id}`.length - sharing
+  const longest = maxLabel - `-env${env.short_id}`.length - sharing
   const scheme = window.location.protocol
   const example = `${scheme}//app-${host}`
   const pub = env.ports_public ?? false

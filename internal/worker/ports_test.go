@@ -17,7 +17,7 @@ import (
 	"github.com/csnewman/hangar/internal/worker"
 )
 
-// An environment's own web servers are reached on <anything>-env<id> hosts:
+// An environment's own web servers are reached on <anything>-env<short> hosts:
 // plain HTTP at its port 80 and HTTPS at its port 443, as asked. A private
 // environment's send a browser to Hangar to sign in, and refuse other
 // sites; a public one's let anyone through.
@@ -53,10 +53,20 @@ func TestPorts(t *testing.T) {
 	call(t, hs.URL, http.MethodPost, "/api/frontend/environments", `{"template_id":"`+tmpl.ID+`","name":"web"}`, &env)
 	waitFor(t, hs.URL, env.ID, func(e *api.Environment) bool { return e != nil && e.Phase == api.PhaseRunning })
 
-	host := "app-env" + env.ID + ".hangar.test"
-	if !srv.EnvironmentHost(host) || srv.EnvironmentHost("code"+env.ID+".hangar.test") ||
-		srv.EnvironmentHost("appenv"+env.ID+".hangar.test") {
-		t.Fatal("hosts taken for an environment's web servers wrongly")
+	host := "app-env" + env.ShortID + ".hangar.test"
+	for h, want := range map[string]bool{
+		host:                                      true,
+		"env" + env.ShortID + ".hangar.test":      true,
+		"a-b-env" + env.ShortID + ".hangar.test":  true,
+		"code" + env.ShortID + ".hangar.test":     false,
+		"appenv" + env.ShortID + ".hangar.test":   false,
+		"-env" + env.ShortID + ".hangar.test":     false,
+		"app-env" + env.ShortID + "x.hangar.test": false,
+		"app-env" + env.ID + ".hangar.test":       false,
+	} {
+		if srv.EnvironmentHost(h) != want {
+			t.Errorf("%s: taken for an environment's web servers %v, want %v", h, !want, want)
+		}
 	}
 
 	// A browser on the environment's host, which follows nothing itself.
@@ -134,7 +144,7 @@ func TestPorts(t *testing.T) {
 	for name, h := range map[string]http.Header{
 		"no cookie":              {"Sec-Fetch-Mode": {"cors"}},
 		"another site's request": {"Cookie": {sent}, "Sec-Fetch-Site": {"same-site"}, "Sec-Fetch-Mode": {"cors"}},
-		"another host's origin":  {"Cookie": {sent}, "Origin": {"http://other-env" + env.ID + ".hangar.test"}},
+		"another host's origin":  {"Cookie": {sent}, "Origin": {"http://other-env" + env.ShortID + ".hangar.test"}},
 	} {
 		resp := do(hs.URL, "/", h)
 		resp.Body.Close()

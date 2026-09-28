@@ -43,7 +43,8 @@ TCP), 443, 80 and 2222 open, and a DNS zone delegated to it (below).
 
 ## DNS and TLS
 
-Each environment's editor is served on its own name, `code<id>.<host>`, and
+Each environment's editor is served on its own name, `code<short>.<host>`
+(its six-character short ID), and
 the registry on `registry.<host>`, so Hangar needs every name under its host and a certificate for all of them. A
 wildcard certificate is only issued against ACME's DNS-01 challenge, which
 means writing TXT records into the zone, so `hangar-server` is the zone's
@@ -104,9 +105,9 @@ the machine's name as their suffix instead of as their parent:
 
 | | subdomain (default) | prefix |
 |---|---|---|
-| editors | `code<id>.hangar1.example.com` | `code<id>-hangar1.example.com` |
+| editors | `code<short>.hangar1.example.com` | `code<short>-hangar1.example.com` |
 | registry | `registry.hangar1.example.com` | `registry-hangar1.example.com` |
-| web servers | `<name>-env<id>.hangar1.example.com` | `<name>-env<id>-hangar1.example.com` |
+| web servers | `<name>-env<short>.hangar1.example.com` | `<name>-env<short>-hangar1.example.com` |
 
 Set `HANGAR_PUBLIC_URL=https://hangar1.example.com` and
 `HANGAR_HOST_STYLE=prefix`, and give the wildcard certificate as above. The
@@ -118,8 +119,9 @@ as Hangar's own, which the editor, framed in Hangar's page, relies on.
 ## Environments' web servers
 
 Whatever an environment serves is reached on any name ending in
-`-env<id>.<host>` (or `-env<id>-<host>` in the prefix style), with the
-name before it free: `app-env<id>.hangar.example.com`. HTTPS reaches the
+`-env<short>.<host>` (or `-env<short>-<host>` in the prefix style), where
+`<short>` is the environment's six-character short ID, with the name
+before it free: `app-envk3x9q2.hangar.example.com`. HTTPS reaches the
 environment's port 443, over TLS whatever certificate it has there, and
 plain HTTP its port 80, with the host, path and headers as they were sent;
 the browser is shown Hangar's certificate. Port 80 on the control plane
@@ -132,7 +134,7 @@ An environment is private until its owner makes it public, on its page:
 private, a browser is sent to Hangar to sign in and back, and only people
 who may use the environment get through; public, anyone who can reach
 Hangar does. A DNS label is at most 63 characters, so the free name is at
-most 23 (fewer in the prefix style, which shares the label with the
+most 53 (fewer in the prefix style, which shares the label with the
 machine's name).
 
 

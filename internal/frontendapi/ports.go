@@ -40,7 +40,7 @@ func (h *handler) SignInEnvironmentPorts(ctx context.Context, req SignInEnvironm
 	case err != nil:
 		return nil, err
 	}
-	loc, err := h.editors.SignInPort(ctx, s.token, env.ID, req.Params.To)
+	loc, err := h.editors.SignInPort(ctx, s.token, env.ID, env.ShortID, req.Params.To)
 	if err != nil {
 		return SignInEnvironmentPorts400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
 	}

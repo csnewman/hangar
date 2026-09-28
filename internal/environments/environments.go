@@ -41,7 +41,7 @@ type Manager struct {
 
 func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
-const columns = `e.id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
+const columns = `e.id, e.short_id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
 	e.spec, e.image, e.image_digest, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
 	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress, w.gpu,
 	tm.spec, coalesce(tm.revision, 0), e.template_revision, e.image_pin_want, e.image_update, e.image_rollback, e.ports_public`
@@ -60,7 +60,7 @@ func scan(row pgx.Row) (api.Environment, error) {
 	var spec, stats, progress, gpu, tspec, update, rollback []byte
 	var trev, erev int64
 	var pinWant *string
-	err := row.Scan(&e.ID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.ImageDigest, &e.CPUs,
+	err := row.Scan(&e.ID, &e.ShortID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.ImageDigest, &e.CPUs,
 		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats,
 		&progress, &gpu, &tspec, &trev, &erev, &pinWant, &update, &rollback, &e.PortsPublic)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -198,16 +198,23 @@ func (m *Manager) Create(ctx context.Context, p users.Principal, req api.CreateE
 			return err
 		}
 
+		// The short ID is drawn at random; one already taken draws again.
 		var id string
-		err = tx.QueryRow(ctx, `INSERT INTO environments
-				(owner_id, name, template_id, template_name, template_revision, spec, image, cpus, memory_mib, desired)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running') RETURNING id`,
-			p.UserID, req.Name, req.TemplateID, tname, trev, raw, spec.Image, spec.CPUs, spec.MemoryMiB).Scan(&id)
-		if db.IsUniqueViolation(err) {
-			return fmt.Errorf("%w: you already have an environment named %s", ErrConflict, req.Name)
-		}
-		if err != nil {
-			return err
+		for tries := 0; id == ""; tries++ {
+			if tries == 10 {
+				return errors.New("no free short ID for the environment after 10 tries")
+			}
+			err = tx.QueryRow(ctx, `INSERT INTO environments
+					(owner_id, name, template_id, template_name, template_revision, spec, image, cpus, memory_mib, desired)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running')
+				ON CONFLICT (short_id) DO NOTHING RETURNING id`,
+				p.UserID, req.Name, req.TemplateID, tname, trev, raw, spec.Image, spec.CPUs, spec.MemoryMiB).Scan(&id)
+			if db.IsUniqueViolation(err) {
+				return fmt.Errorf("%w: you already have an environment named %s", ErrConflict, req.Name)
+			}
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+				return err
+			}
 		}
 		if err := db.Notify(ctx, tx, placement.Channel, ""); err != nil {
 			return err

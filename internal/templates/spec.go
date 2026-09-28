@@ -17,9 +17,9 @@ const (
 	MaxMemoryMiB = 256 * 1024
 	MaxRepos     = 16
 	MaxWebNames  = 16
-	// MaxWebName is the longest name that fits before -env<id> in one DNS
-	// label of 63 characters.
-	MaxWebName = 63 - len("-env00000000-0000-0000-0000-000000000000")
+	// MaxWebName is the longest name that fits before -env<short ID> in one
+	// DNS label of 63 characters.
+	MaxWebName = 63 - len("-env000000")
 )
 
 // An environment's name becomes its hostname and part of URLs, so whatever

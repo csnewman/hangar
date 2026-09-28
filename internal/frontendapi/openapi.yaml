@@ -931,7 +931,7 @@ paths:
       operationId: setEnvironmentPorts
       description: >-
         Says whether anyone may reach the environment's own web servers, on
-        its <anything>-env<id> hosts, without signing in to Hangar, or only
+        its <anything>-env<short> hosts, without signing in to Hangar, or only
         those who may reach the environment.
       requestBody:
         required: true
@@ -1528,9 +1528,14 @@ components:
 
     Environment:
       type: object
-      required: [id, owner_id, owner, name, template, spec, image, cpus, memory_mib, desired, phase, created_at, updated_at]
+      required: [id, short_id, owner_id, owner, name, template, spec, image, cpus, memory_mib, desired, phase, created_at, updated_at]
       properties:
         id: { type: string }
+        short_id:
+          type: string
+          description: >-
+            Names the environment's hosts: code<short_id> for its editor, and
+            <name>-env<short_id> for its web servers.
         owner_id: { type: string }
         owner:
           type: string
@@ -1747,7 +1752,7 @@ components:
           description: >-
             Names of the environment's own web servers, such as dashboard,
             which its page links to: each is reached on
-            <name>-env<id> after Hangar's host.
+            <name>-env<short> after Hangar's host.
           items: { type: string }
         placement:
           type: object
@@ -2203,7 +2208,7 @@ components:
         environment_host_suffix:
           type: string
           description: >-
-            What follows env<id> in the host an environment's own web servers
+            What follows env<short> in the host an environment's own web servers
             are reached on, such as .hangar.example.com: any name and a hyphen
             may go before it. Absent when the server has no public URL.
         id: { type: string }

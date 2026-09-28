@@ -12,14 +12,14 @@ import (
 type Editors interface {
 	// SignIn returns the URL that signs the holder of a Hangar session in to
 	// an environment's editor and opens it on folder.
-	SignIn(ctx context.Context, sessionToken, environmentID, folder string) (string, error)
+	SignIn(ctx context.Context, sessionToken, environmentID, short, folder string) (string, error)
 	// SignInPort returns the URL that signs the holder of a Hangar session
 	// in to the host of an environment's own web server that to is on, and
 	// goes on to it.
-	SignInPort(ctx context.Context, sessionToken, environmentID, to string) (string, error)
-	// PortHost is the host an environment's own web servers are reached
-	// on, with any name and a hyphen before it.
-	PortHost(environmentID string) string
+	SignInPort(ctx context.Context, sessionToken, environmentID, short, to string) (string, error)
+	// PortHost is the host the web servers of the environment with this
+	// short ID are reached on, with any name and a hyphen before it.
+	PortHost(short string) string
 }
 
 func (h *handler) OpenEditor(ctx context.Context, req OpenEditorRequestObject) (OpenEditorResponseObject, error) {
@@ -36,7 +36,7 @@ func (h *handler) OpenEditor(ctx context.Context, req OpenEditorRequestObject) (
 	if env.Phase != api.PhaseRunning || env.WorkerID == "" {
 		return OpenEditor409JSONResponse{ConflictJSONResponse{Error: errNotRunning.Error()}}, nil
 	}
-	url, err := h.editors.SignIn(ctx, sessionFrom(ctx).token, env.ID, env.Spec.EditorPath)
+	url, err := h.editors.SignIn(ctx, sessionFrom(ctx).token, env.ID, env.ShortID, env.Spec.EditorPath)
 	if err != nil {
 		return nil, err
 	}

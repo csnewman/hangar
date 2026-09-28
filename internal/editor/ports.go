@@ -13,13 +13,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/guestport"
 	"github.com/csnewman/hangar/internal/tunnel"
 )
 
 // An environment's own web servers are reached on hosts named
-// <anything>-env<id> after Hangar's (or env<id> alone): a request that
+// <anything>-env<short> after Hangar's (or env<short> alone), where short is
+// the environment's short ID: a request that
 // arrived over HTTPS goes to the environment's port 443, over TLS, and one
 // over plain HTTP to its port 80, with its host, path and headers as they
 // were. Hangar's own certificate is what the browser sees; the
@@ -30,7 +30,7 @@ import (
 // editor's is. A public environment's are reached by anyone.
 
 // portLabel ends the label of a host an environment's web servers are
-// reached on, followed by the environment's ID.
+// reached on, followed by the environment's short ID.
 const portLabel = "env"
 
 // PortCookieName is an environment host's session cookie.
@@ -42,39 +42,47 @@ func PortsSignInPath(environmentID string) string {
 	return "/api/frontend/environments/" + environmentID + "/ports/sign-in"
 }
 
-// PortHost is the host an environment's web servers are reached on, which
-// any name and a hyphen may go before.
-func (g *Gateway) PortHost(environmentID string) string {
-	return g.public.Name(portLabel + environmentID)
+// PortHost is the host the web servers of the environment with this short
+// ID are reached on, which any name and a hyphen may go before.
+func (g *Gateway) PortHost(short string) string {
+	return g.public.Name(portLabel + short)
 }
 
 // OwnsPort reports whether a request's host is one of an environment's own
-// web servers', and whose.
+// web servers', and the short ID of the environment whose. The short ID is
+// the label's last six characters, and env comes before them, alone or after
+// a name and a hyphen.
 func (g *Gateway) OwnsPort(host string) (string, bool) {
 	label, ok := g.public.Label(host)
 	if !ok {
 		return "", false
 	}
-	// An ID is hexadecimal and hyphens, so the last "env" is where it
-	// starts.
-	i := strings.LastIndex(label, portLabel)
-	if i < 0 || (i > 0 && label[i-1] != '-') || i == 1 {
+	n := len(portLabel) + 6
+	if len(label) < n {
 		return "", false
 	}
-	id := label[i+len(portLabel):]
-	return id, db.ValidUUID(id)
+	rest, short := label[:len(label)-6], label[len(label)-6:]
+	name, ok := strings.CutSuffix(rest, portLabel)
+	if !ok || !shortID.MatchString(short) {
+		return "", false
+	}
+	if name != "" && (len(name) < 2 || !strings.HasSuffix(name, "-")) {
+		return "", false
+	}
+	return short, true
 }
 
 // SignInPort issues a ticket for the Hangar session whose token is given and
 // returns the URL on the environment's host that redeems it and goes on to
 // to, an absolute URL on one of the environment's hosts. The caller has
-// checked that the session's user may reach the environment.
-func (g *Gateway) SignInPort(ctx context.Context, sessionToken, environmentID, to string) (string, error) {
+// checked that the session's user may reach the environment, whose ID and
+// short ID are given.
+func (g *Gateway) SignInPort(ctx context.Context, sessionToken, environmentID, short, to string) (string, error) {
 	u, err := url.Parse(to)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
 		return "", fmt.Errorf("%q is not a URL on the environment's host", to)
 	}
-	if env, ok := g.OwnsPort(u.Host); !ok || env != environmentID {
+	if s, ok := g.OwnsPort(u.Host); !ok || s != short {
 		return "", fmt.Errorf("%q is not a URL on the environment's host", to)
 	}
 	ticket, err := g.sessions.Ticket(ctx, sessionToken, environmentID)
@@ -88,9 +96,9 @@ func (g *Gateway) SignInPort(ctx context.Context, sessionToken, environmentID, t
 // ServePort serves a request for one of an environment's own web servers;
 // OwnsPort has said it is one.
 func (g *Gateway) ServePort(w http.ResponseWriter, r *http.Request) {
-	env, _ := g.OwnsPort(r.Host)
+	short, _ := g.OwnsPort(r.Host)
 	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
-	e, err := g.sessions.Environment(r.Context(), env)
+	e, err := g.sessions.Environment(r.Context(), short)
 	switch {
 	case errors.Is(err, ErrNoSession):
 		textError(w, http.StatusNotFound, "There is no such environment.")
@@ -100,6 +108,7 @@ func (g *Gateway) ServePort(w http.ResponseWriter, r *http.Request) {
 		textError(w, http.StatusInternalServerError, "Internal error.")
 		return
 	}
+	env := e.ID
 	if !e.Public {
 		if !portAllowed(r, secure) {
 			textError(w, http.StatusForbidden, "Cross-site request refused: this environment is private.")

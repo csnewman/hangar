@@ -523,7 +523,10 @@ type Environment struct {
 
 	// Reason Why the environment is in its phase, when there is more to say.
 	Reason *string `json:"reason,omitempty"`
-	Spec   Spec    `json:"spec"`
+
+	// ShortID Names the environment's hosts: code<short_id> for its editor, and <name>-env<short_id> for its web servers.
+	ShortID string `json:"short_id"`
+	Spec    Spec   `json:"spec"`
 
 	// Stats What a running environment uses, as its worker last measured it. Rates are per second.
 	Stats *EnvironmentStats `json:"stats,omitempty"`
@@ -748,7 +751,7 @@ type Me struct {
 	Admin       bool   `json:"admin"`
 	DisplayName string `json:"display_name"`
 
-	// EnvironmentHostSuffix What follows env<id> in the host an environment's own web servers are reached on, such as .hangar.example.com: any name and a hyphen may go before it. Absent when the server has no public URL.
+	// EnvironmentHostSuffix What follows env<short> in the host an environment's own web servers are reached on, such as .hangar.example.com: any name and a hyphen may go before it. Absent when the server has no public URL.
 	EnvironmentHostSuffix *string `json:"environment_host_suffix,omitempty"`
 
 	// HasPassword Whether the user has a local password that they can change.
@@ -937,7 +940,7 @@ type Spec struct {
 	// Untrusted For code the owner does not trust: the environment is never given their credentials -- Claude's sign-in, or signatures from their SSH keys -- though the rest of their profile still follows them in.
 	Untrusted *bool `json:"untrusted,omitempty"`
 
-	// WebNames Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<id> after Hangar's host.
+	// WebNames Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<short> after Hangar's host.
 	WebNames *[]string `json:"web_names,omitempty"`
 }
 

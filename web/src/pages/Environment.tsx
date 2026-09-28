@@ -118,8 +118,8 @@ function DesktopActions({ env }: { env: string }) {
 
 // webURL is where an environment's web server called name is reached,
 // over the same scheme as Hangar itself.
-function webURL(name: string, id: string, suffix: string): string {
-  return `${window.location.protocol}//${name}-env${id}${suffix}/`
+function webURL(name: string, short: string, suffix: string): string {
+  return `${window.location.protocol}//${name}-env${short}${suffix}/`
 }
 
 export function useEnv() {
@@ -199,7 +199,7 @@ export function SummaryTab() {
                   <a
                     key={n}
                     className="mono"
-                    href={webURL(n, env.id, me.environment_host_suffix ?? '')}
+                    href={webURL(n, env.short_id, me.environment_host_suffix ?? '')}
                     target="_blank"
                     rel="noreferrer"
                     title={env.phase === 'running' ? undefined : 'The environment is not running'}
