@@ -181,6 +181,7 @@ func toSpec(s api.Spec) Spec {
 		Untrusted:      optionalBool(s.Untrusted),
 		Dax:            optionalBool(s.DAX),
 		TrustedFolders: optionalSlice(s.TrustedFolders),
+		WebNames:       optionalSlice(s.WebNames),
 		Placement:      placement,
 	}
 }
@@ -201,6 +202,7 @@ func fromSpec(s Spec) api.Spec {
 		Untrusted:      s.Untrusted != nil && *s.Untrusted,
 		DAX:            s.Dax != nil && *s.Dax,
 		TrustedFolders: derefSlice(s.TrustedFolders),
+		WebNames:       derefSlice(s.WebNames),
 		Placement:      s.Placement,
 	}
 }

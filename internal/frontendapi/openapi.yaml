@@ -1621,9 +1621,9 @@ components:
     TemplateSetting:
       type: string
       description: A setting an environment takes from its template.
-      enum: [image, cpus, memory, display, gpu, dax, repos, editor_path, untrusted, trusted_folders, placement, name]
+      enum: [image, cpus, memory, display, gpu, dax, repos, editor_path, untrusted, trusted_folders, web_names, placement, name]
       x-enum-varnames: [SettingImage, SettingCPUs, SettingMemory, SettingDisplay, SettingGPU, SettingDAX, SettingRepos,
-        SettingEditorPath, SettingUntrusted, SettingTrustedFolders, SettingPlacement, SettingName]
+        SettingEditorPath, SettingUntrusted, SettingTrustedFolders, SettingWebNames, SettingPlacement, SettingName]
 
     ImageUpdate:
       type: object
@@ -1741,6 +1741,14 @@ components:
             from large files, such as a browser, are many times slower on a
             worker under nested virtualisation. A worker with DAX turned off
             (dax_mib 0) reads them in regardless.
+        web_names:
+          type: array
+          maxItems: 16
+          description: >-
+            Names of the environment's own web servers, such as dashboard,
+            which its page links to: each is reached on
+            <name>-env<id> after Hangar's host.
+          items: { type: string }
         placement:
           type: object
           description: >-

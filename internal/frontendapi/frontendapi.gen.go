@@ -305,6 +305,7 @@ const (
 	SettingRepos          TemplateSetting = "repos"
 	SettingTrustedFolders TemplateSetting = "trusted_folders"
 	SettingUntrusted      TemplateSetting = "untrusted"
+	SettingWebNames       TemplateSetting = "web_names"
 )
 
 // Valid indicates whether the value is a known member of the TemplateSetting enum.
@@ -333,6 +334,8 @@ func (e TemplateSetting) Valid() bool {
 	case SettingTrustedFolders:
 		return true
 	case SettingUntrusted:
+		return true
+	case SettingWebNames:
 		return true
 	default:
 		return false
@@ -933,6 +936,9 @@ type Spec struct {
 
 	// Untrusted For code the owner does not trust: the environment is never given their credentials -- Claude's sign-in, or signatures from their SSH keys -- though the rest of their profile still follows them in.
 	Untrusted *bool `json:"untrusted,omitempty"`
+
+	// WebNames Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<id> after Hangar's host.
+	WebNames *[]string `json:"web_names,omitempty"`
 }
 
 // StartProgress How far a starting environment has got. Steps happen in the order of the enum; one with nothing to do is passed over. total, where a step can be measured, is in unit: bytes, or a clone's objects.

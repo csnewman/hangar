@@ -30,6 +30,7 @@ const (
 	SettingEditorPath     = "editor_path"
 	SettingUntrusted      = "untrusted"
 	SettingTrustedFolders = "trusted_folders"
+	SettingWebNames       = "web_names"
 	SettingPlacement      = "placement"
 	// SettingName is that the template does not accept the environment's
 	// name, whose pattern it has changed.
@@ -60,6 +61,7 @@ func templateChanges(env api.Spec, t api.TemplateSpec, name string) []string {
 	add(env.EditorPath != want.EditorPath, SettingEditorPath)
 	add(env.Untrusted != want.Untrusted, SettingUntrusted)
 	add(!slices.Equal(env.TrustedFolders, want.TrustedFolders), SettingTrustedFolders)
+	add(!slices.Equal(env.WebNames, want.WebNames), SettingWebNames)
 	add(!maps.Equal(env.Placement, want.Placement), SettingPlacement)
 	return out
 }

@@ -114,6 +114,9 @@ type Spec struct {
 	// Chromium runs tens of times slower from it, so it is asked for, not
 	// assumed.
 	DAX bool `json:"dax,omitempty"`
+	// WebNames are the names of the environment's own web servers its page
+	// links to, each reached on <name>-env<id> after Hangar's host.
+	WebNames []string `json:"web_names,omitempty"`
 	// Placement limits which workers may run the environment: each key must
 	// be a label the worker has, with this value.
 	Placement map[string]string `json:"placement"`

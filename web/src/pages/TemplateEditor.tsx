@@ -97,6 +97,10 @@ function Editor({ existing }: { existing?: Template }) {
         repos: spec.repos.map((r) => ({ ...r, ref: r.ref || undefined, branch: r.branch || undefined })),
         editor_path: spec.editor_path || undefined,
         untrusted: spec.untrusted || undefined,
+        web_names: (() => {
+          const names = (spec.web_names ?? []).map((n) => n.trim()).filter((n) => n !== '')
+          return names.length > 0 ? names : undefined
+        })(),
         dax: spec.dax || undefined,
         trusted_folders: spec.untrusted
           ? undefined
@@ -415,6 +419,19 @@ function Editor({ existing }: { existing?: Template }) {
                 </small>
               </label>
             )}
+            <label className="field">
+              <span>Web servers</span>
+              <input
+                className="mono"
+                value={(spec.web_names ?? []).join(', ')}
+                onChange={(e) => setSpec({ web_names: e.target.value.split(/[\s,]+/) })}
+                placeholder="dashboard, customer-ui"
+              />
+              <small className="muted">
+                Names the environment's page links to, each reaching its web server at &lt;name&gt;-env&lt;id&gt; on
+                Hangar's host: HTTPS to its port 443, HTTP to its port 80.
+              </small>
+            </label>
           </Section>
 
           <Section title="Naming" hint="Leave empty to allow any name.">

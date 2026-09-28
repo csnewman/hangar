@@ -125,6 +125,9 @@ plain HTTP its port 80, with the host, path and headers as they were sent;
 the browser is shown Hangar's certificate. Port 80 on the control plane
 serves these names rather than redirecting them to HTTPS.
 
+A template can name the web servers its environments run, `dashboard` and
+`customer-ui` say, and each environment's page then links to them.
+
 An environment is private until its owner makes it public, on its page:
 private, a browser is sent to Hangar to sign in and back, and only people
 who may use the environment get through; public, anyone who can reach

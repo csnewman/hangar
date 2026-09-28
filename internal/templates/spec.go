@@ -16,6 +16,10 @@ const (
 	MinMemoryMiB = 512
 	MaxMemoryMiB = 256 * 1024
 	MaxRepos     = 16
+	MaxWebNames  = 16
+	// MaxWebName is the longest name that fits before -env<id> in one DNS
+	// label of 63 characters.
+	MaxWebName = 63 - len("-env00000000-0000-0000-0000-000000000000")
 )
 
 // An environment's name becomes its hostname and part of URLs, so whatever
@@ -107,6 +111,23 @@ func Validate(s api.TemplateSpec) (api.TemplateSpec, error) {
 			return bad("trusted folder %d must be an absolute path", i+1)
 		}
 		s.TrustedFolders[i] = path.Clean(f)
+	}
+
+	if len(s.WebNames) > MaxWebNames {
+		return bad("at most %d web server names", MaxWebNames)
+	}
+	seen := map[string]bool{}
+	for i, n := range s.WebNames {
+		// "dashboard-" is how the name is written in front of the rest.
+		n = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(n)), "-")
+		if !envName.MatchString(n) || len(n) > MaxWebName {
+			return bad("web server name %q must be lower-case letters, digits and hyphens, at most %d long", s.WebNames[i], MaxWebName)
+		}
+		if seen[n] {
+			return bad("web server name %q is given twice", n)
+		}
+		seen[n] = true
+		s.WebNames[i] = n
 	}
 
 	s.NamePattern = strings.TrimSpace(s.NamePattern)

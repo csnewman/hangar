@@ -1160,7 +1160,7 @@ export interface components {
          * @description A setting an environment takes from its template.
          * @enum {string}
          */
-        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "untrusted" | "trusted_folders" | "placement" | "name";
+        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "untrusted" | "trusted_folders" | "web_names" | "placement" | "name";
         /** @description A newer copy of the environment's image its worker holds, and what upgrading to it would hide: files the environment has changed that the newer copy also changes keep the environment's version. */
         ImageUpdate: {
             digest: string;
@@ -1221,6 +1221,8 @@ export interface components {
             untrusted?: boolean;
             /** @description Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. A worker with DAX turned off (dax_mib 0) reads them in regardless. */
             dax?: boolean;
+            /** @description Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<id> after Hangar's host. */
+            web_names?: string[];
             /** @description Worker labels the environment requires: it runs only on a worker with every one of these labels, with these values. */
             placement: {
                 [key: string]: string;

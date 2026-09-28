@@ -1,14 +1,4 @@
-import {
-  Activity,
-  Code2,
-  Copy,
-  FileCode2,
-  GitBranch,
-  LayoutDashboard,
-  Monitor,
-  SquareTerminal,
-  type LucideIcon,
-} from 'lucide-react'
+import { Activity, Code2, Copy, ExternalLink, FileCode2, GitBranch, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from 'react-router'
 
@@ -126,6 +116,12 @@ function DesktopActions({ env }: { env: string }) {
   )
 }
 
+// webURL is where an environment's web server called name is reached,
+// over the same scheme as Hangar itself.
+function webURL(name: string, id: string, suffix: string): string {
+  return `${window.location.protocol}//${name}-env${id}${suffix}/`
+}
+
 export function useEnv() {
   return useOutletContext<Environment>()
 }
@@ -196,6 +192,24 @@ export function SummaryTab() {
               )}
             </Prop>
           ))}
+          {me.environment_host_suffix !== undefined && (env.spec.web_names ?? []).length > 0 && (
+            <Prop label="Web servers">
+              <span className="web-links">
+                {(env.spec.web_names ?? []).map((n) => (
+                  <a
+                    key={n}
+                    className="mono"
+                    href={webURL(n, env.id, me.environment_host_suffix ?? '')}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={env.phase === 'running' ? undefined : 'The environment is not running'}
+                  >
+                    {n} <ExternalLink size={12} />
+                  </a>
+                ))}
+              </span>
+            </Prop>
+          )}
           {me.ssh && (
             <Prop label="SSH">
               <SSHCommand command={sshCommand(me.ssh, env, env.owner_id === me.id)} />
