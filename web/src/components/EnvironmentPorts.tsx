@@ -37,7 +37,7 @@ export function EnvironmentPorts({ env }: { env: Environment }) {
         Any name of up to {longest} characters and a hyphen before <span className="mono">{host}</span> reaches this
         environment as it is: HTTPS to its port 443, over TLS whatever its certificate, and HTTP to its port 80.
       </p>
-      <CopyCode text={example} />
+      <CopyCode text={example} href={example} />
       <div className="field-row ports-access">
         <label className="check">
           <input type="radio" name={`ports-${env.id}`} checked={!pub} disabled={set.isPending} onChange={() => set.mutate(false)} />
