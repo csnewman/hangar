@@ -979,6 +979,34 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
+  /api/frontend/environments/{id}/logs/{log}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: log
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/EnvironmentLogName" }
+    get:
+      operationId: getEnvironmentLog
+      description: >-
+        Part of one of the environment's logs, from its worker: what follows
+        offset, or with no offset the end. Kept from its last start, so a
+        start that failed can be looked into.
+      parameters:
+        - name: offset
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Part of the log.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogPart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
   /api/frontend/environments/{id}/suspend:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -1141,6 +1169,30 @@ paths:
               schema:
                 type: array
                 items: { $ref: "#/components/schemas/Worker" }
+
+  /api/frontend/workers/{id}/log:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getWorkerLog
+      x-hangar-admin: true
+      description: >-
+        Part of the worker's own log, the latest of which it keeps in
+        memory: what follows offset, or with no offset the end.
+      parameters:
+        - name: offset
+          in: query
+          schema: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: Part of the log.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LogPart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
 
   /api/frontend/workers/{id}:
     parameters:
@@ -1629,6 +1681,36 @@ components:
       enum: [image, cpus, memory, display, gpu, dax, repos, editor_path, untrusted, trusted_folders, web_names, placement, name]
       x-enum-varnames: [SettingImage, SettingCPUs, SettingMemory, SettingDisplay, SettingGPU, SettingDAX, SettingRepos,
         SettingEditorPath, SettingUntrusted, SettingTrustedFolders, SettingWebNames, SettingPlacement, SettingName]
+
+    EnvironmentLogName:
+      type: string
+      description: >-
+        console is the guest's serial console, kernel and systemd; worker
+        what the worker logged about the environment; monitor Cloud
+        Hypervisor's; fs the backend serving the image; gpu the virtual
+        GPU's backend.
+      enum: [console, worker, monitor, fs, gpu]
+
+    LogPart:
+      type: object
+      required: [start, next, size, text]
+      properties:
+        start:
+          type: integer
+          format: int64
+          description: Where in the log the text begins. The oldest of a long log may be gone.
+        next:
+          type: integer
+          format: int64
+          description: The offset to ask for next, to read on from here.
+        size:
+          type: integer
+          format: int64
+          description: How long the log is so far.
+        text: { type: string }
+        missing:
+          type: boolean
+          description: There is no such log yet, such as for a machine not started, or without a GPU.
 
     ImageUpdate:
       type: object

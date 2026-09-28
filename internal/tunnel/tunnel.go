@@ -58,6 +58,9 @@ const (
 	// (package guestport), which the control plane asks for a port: one of
 	// the environment's own web servers.
 	KindPorts = "ports"
+	// KindLogs carries one request for part of a log the worker holds
+	// (package logs), and its reply: the worker answers it itself.
+	KindLogs = "logs"
 )
 
 // Header opens a stream.

@@ -1,4 +1,5 @@
 import { Check, LoaderCircle } from 'lucide-react'
+import { Link } from 'react-router'
 
 import type { Environment } from '../api'
 import { formatBytes } from './format'
@@ -70,7 +71,9 @@ export function StartProgress({ env }: { env: Environment }) {
         ))}
       </ol>
       <div className="start-detail">
-        <span>{reasonText(env)}</span>
+        <span>
+          {reasonText(env)} <Link to={`/environments/${env.id}/logs`}>Logs</Link>
+        </span>
         {p && f !== null && (
           <span className="muted">
             {Math.floor(f * 100)}% · {amount(p)}

@@ -1,9 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { api, type GPUInfo, type LocalImage, type Worker, type WorkerStats } from '../../api'
 import { Meter, StatTile } from '../../components/charts'
 import { ConfirmButton } from '../../components/ConfirmButton'
+import { LogView } from '../../components/LogView'
 import { formatAgo, formatBytes, formatCores, formatMemory, formatPercent, shortDigest } from '../../components/format'
 import { PageHeader } from '../../components/PageHeader'
 import { OnlineBadge, PhaseBadge, RendererBadge } from '../../components/Status'
@@ -52,6 +54,7 @@ export function WorkerDetailPage() {
       <Machine worker={w} />
       <Environments worker={w} />
       <Images worker={w} />
+      <WorkerLog worker={w} />
       <section className="section">
         <h2 className="section-title">Activity</h2>
         <Activity subjects={[`worker:${w.id}`]} />
@@ -366,5 +369,21 @@ function Unknown({ worker: w }: { worker: Worker }) {
         disabled={remove.isPending}
       />
     </div>
+  )
+}
+
+// WorkerLog is the latest of what the worker logged, which it keeps in
+// memory: why it could not start an environment, among the rest.
+function WorkerLog({ worker: w }: { worker: Worker }) {
+  const load = useCallback((offset?: number) => api.workerLog(w.id, offset), [w.id])
+  return (
+    <section className="section">
+      <h2 className="section-title">Log</h2>
+      {w.online ? (
+        <LogView key={w.id} load={load} />
+      ) : (
+        <p className="muted small">The worker is not connected, so its log cannot be read.</p>
+      )}
+    </section>
   )
 }

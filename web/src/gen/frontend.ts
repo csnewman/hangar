@@ -712,6 +712,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/environments/{id}/logs/{log}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                log: components["schemas"]["EnvironmentLogName"];
+            };
+            cookie?: never;
+        };
+        /** @description Part of one of the environment's logs, from its worker: what follows offset, or with no offset the end. Kept from its last start, so a start that failed can be looked into. */
+        get: operations["getEnvironmentLog"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/environments/{id}/suspend": {
         parameters: {
             query?: never;
@@ -855,6 +875,25 @@ export interface paths {
             cookie?: never;
         };
         get: operations["listWorkers"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/workers/{id}/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description Part of the worker's own log, the latest of which it keeps in memory: what follows offset, or with no offset the end. */
+        get: operations["getWorkerLog"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1163,6 +1202,31 @@ export interface components {
          * @enum {string}
          */
         TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "untrusted" | "trusted_folders" | "web_names" | "placement" | "name";
+        /**
+         * @description console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; fs the backend serving the image; gpu the virtual GPU's backend.
+         * @enum {string}
+         */
+        EnvironmentLogName: "console" | "worker" | "monitor" | "fs" | "gpu";
+        LogPart: {
+            /**
+             * Format: int64
+             * @description Where in the log the text begins. The oldest of a long log may be gone.
+             */
+            start: number;
+            /**
+             * Format: int64
+             * @description The offset to ask for next, to read on from here.
+             */
+            next: number;
+            /**
+             * Format: int64
+             * @description How long the log is so far.
+             */
+            size: number;
+            text: string;
+            /** @description There is no such log yet, such as for a machine not started, or without a GPU. */
+            missing?: boolean;
+        };
         /** @description A newer copy of the environment's image its worker holds, and what upgrading to it would hide: files the environment has changed that the newer copy also changes keep the environment's version. */
         ImageUpdate: {
             digest: string;
@@ -3041,6 +3105,35 @@ export interface operations {
             503: components["responses"]["Unavailable"];
         };
     };
+    getEnvironmentLog: {
+        parameters: {
+            query?: {
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                log: components["schemas"]["EnvironmentLogName"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Part of the log. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogPart"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            503: components["responses"]["Unavailable"];
+        };
+    };
     suspendEnvironment: {
         parameters: {
             query?: never;
@@ -3247,6 +3340,34 @@ export interface operations {
             };
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
+        };
+    };
+    getWorkerLog: {
+        parameters: {
+            query?: {
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Part of the log. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LogPart"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["Unavailable"];
         };
     };
     getWorker: {

@@ -38,6 +38,8 @@ export type CreateTeam = Schemas['CreateTeam']
 export type TeamInput = Schemas['TeamInput']
 export type ImageRepository = Schemas['ImageRepository']
 export type EnvironmentSettings = Schemas['EnvironmentSettings']
+export type LogPart = Schemas['LogPart']
+export type EnvironmentLogName = Schemas['EnvironmentLogName']
 export type TemplateSetting = Schemas['TemplateSetting']
 export type ImageTag = Schemas['ImageTag']
 export type ImageRepositoryInput = Schemas['ImageRepositoryInput']
@@ -132,6 +134,18 @@ export const api = {
       client.PUT('/api/frontend/environments/{id}/desktop/size', { params: { path: { id } }, body: { width, height } }),
     ),
   openEditor: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/editor', byID(id))),
+  environmentLog: (id: string, log: EnvironmentLogName, offset?: number) =>
+    unwrap(
+      client.GET('/api/frontend/environments/{id}/logs/{log}', {
+        params: { path: { id, log }, query: offset === undefined ? {} : { offset } },
+      }),
+    ),
+  workerLog: (id: string, offset?: number) =>
+    unwrap(
+      client.GET('/api/frontend/workers/{id}/log', {
+        params: { path: { id }, query: offset === undefined ? {} : { offset } },
+      }),
+    ),
   processes: (id: string) => unwrap(client.GET('/api/frontend/environments/{id}/processes', byID(id))),
   signalProcess: (id: string, pid: number, signal: 'TERM' | 'KILL') =>
     unwrap(

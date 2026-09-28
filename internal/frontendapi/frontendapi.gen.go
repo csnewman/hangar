@@ -102,6 +102,33 @@ func (e EnvironmentImageChange) Valid() bool {
 	}
 }
 
+// Defines values for EnvironmentLogName.
+const (
+	EnvironmentLogNameConsole EnvironmentLogName = "console"
+	EnvironmentLogNameFs      EnvironmentLogName = "fs"
+	EnvironmentLogNameGPU     EnvironmentLogName = "gpu"
+	EnvironmentLogNameMonitor EnvironmentLogName = "monitor"
+	EnvironmentLogNameWorker  EnvironmentLogName = "worker"
+)
+
+// Valid indicates whether the value is a known member of the EnvironmentLogName enum.
+func (e EnvironmentLogName) Valid() bool {
+	switch e {
+	case EnvironmentLogNameConsole:
+		return true
+	case EnvironmentLogNameFs:
+		return true
+	case EnvironmentLogNameGPU:
+		return true
+	case EnvironmentLogNameMonitor:
+		return true
+	case EnvironmentLogNameWorker:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GPU.
 const (
 	GPUNone        GPU = "none"
@@ -554,6 +581,9 @@ type Environment struct {
 // EnvironmentImageChange What the environment's next start does to its image.
 type EnvironmentImageChange string
 
+// EnvironmentLogName console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; fs the backend serving the image; gpu the virtual GPU's backend.
+type EnvironmentLogName string
+
 // EnvironmentSettings defines model for EnvironmentSettings.
 type EnvironmentSettings struct {
 	CPUs int `json:"cpus"`
@@ -730,6 +760,22 @@ type LocalImage struct {
 
 // LocalImageState defines model for LocalImage.State.
 type LocalImageState string
+
+// LogPart defines model for LogPart.
+type LogPart struct {
+	// Missing There is no such log yet, such as for a machine not started, or without a GPU.
+	Missing *bool `json:"missing,omitempty"`
+
+	// Next The offset to ask for next, to read on from here.
+	Next int64 `json:"next"`
+
+	// Size How long the log is so far.
+	Size int64 `json:"size"`
+
+	// Start Where in the log the text begins. The oldest of a long log may be gone.
+	Start int64  `json:"start"`
+	Text  string `json:"text"`
+}
 
 // Login defines model for Login.
 type Login struct {
@@ -1177,6 +1223,11 @@ type ListAuditParams struct {
 	Limit  *int   `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// GetEnvironmentLogParams defines parameters for GetEnvironmentLog.
+type GetEnvironmentLogParams struct {
+	Offset *int64 `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
 // SetEnvironmentPortsJSONBody defines parameters for SetEnvironmentPorts.
 type SetEnvironmentPortsJSONBody struct {
 	Public bool `json:"public"`
@@ -1209,6 +1260,11 @@ type PutProfileFileParams struct {
 // RemoveProfilePathParams defines parameters for RemoveProfilePath.
 type RemoveProfilePathParams struct {
 	Path string `form:"path" json:"path"`
+}
+
+// GetWorkerLogParams defines parameters for GetWorkerLog.
+type GetWorkerLogParams struct {
+	Offset *int64 `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
@@ -1327,6 +1383,9 @@ type ServerInterface interface {
 
 	// (POST /api/frontend/environments/{id}/image/upgrade)
 	UpgradeEnvironmentImage(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/environments/{id}/logs/{log})
+	GetEnvironmentLog(w http.ResponseWriter, r *http.Request, id ID, log EnvironmentLogName, params GetEnvironmentLogParams)
 
 	// (PUT /api/frontend/environments/{id}/ports)
 	SetEnvironmentPorts(w http.ResponseWriter, r *http.Request, id ID)
@@ -1489,6 +1548,9 @@ type ServerInterface interface {
 
 	// (POST /api/frontend/workers/{id}/images/remove)
 	RemoveWorkerImage(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/workers/{id}/log)
+	GetWorkerLog(w http.ResponseWriter, r *http.Request, id ID, params GetWorkerLogParams)
 
 	// (POST /api/frontend/workers/{id}/revoke)
 	RevokeWorker(w http.ResponseWriter, r *http.Request, id ID)
@@ -1820,6 +1882,57 @@ func (siw *ServerInterfaceWrapper) UpgradeEnvironmentImage(w http.ResponseWriter
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpgradeEnvironmentImage(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetEnvironmentLog operation middleware
+func (siw *ServerInterfaceWrapper) GetEnvironmentLog(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "log" -------------
+	var log EnvironmentLogName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "log", r.PathValue("log"), &log, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "log", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetEnvironmentLogParams
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", r.URL.Query(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "offset"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "offset", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetEnvironmentLog(w, r, id, log, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3118,6 +3231,48 @@ func (siw *ServerInterfaceWrapper) RemoveWorkerImage(w http.ResponseWriter, r *h
 	handler.ServeHTTP(w, r)
 }
 
+// GetWorkerLog operation middleware
+func (siw *ServerInterfaceWrapper) GetWorkerLog(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetWorkerLogParams
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", r.URL.Query(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "offset"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "offset", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetWorkerLog(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // RevokeWorker operation middleware
 func (siw *ServerInterfaceWrapper) RevokeWorker(w http.ResponseWriter, r *http.Request) {
 
@@ -3346,6 +3501,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/image/cancel", wrapper.CancelEnvironmentImageChange)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/ports", wrapper.SetEnvironmentPorts)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/ports/sign-in", wrapper.SignInEnvironmentPorts)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/logs/{log}", wrapper.GetEnvironmentLog)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/suspend", wrapper.SuspendEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/processes", wrapper.ListProcesses)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/processes/{pid}/signal", wrapper.SignalProcess)
@@ -3354,6 +3510,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/desktop/size", wrapper.ResizeDesktop)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/environments/{id}/terminals/{session}", wrapper.CloseTerminal)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers", wrapper.ListWorkers)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers/{id}/log", wrapper.GetWorkerLog)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.DeleteWorker)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.GetWorker)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/workers/{id}/images/remove", wrapper.RemoveWorkerImage)
@@ -4119,6 +4276,86 @@ func (response UpgradeEnvironmentImage409JSONResponse) VisitUpgradeEnvironmentIm
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentLogRequestObject struct {
+	ID     ID                 `json:"id"`
+	Log    EnvironmentLogName `json:"log"`
+	Params GetEnvironmentLogParams
+}
+
+type GetEnvironmentLogResponseObject interface {
+	VisitGetEnvironmentLogResponse(w http.ResponseWriter) error
+}
+
+type GetEnvironmentLog200JSONResponse LogPart
+
+func (response GetEnvironmentLog200JSONResponse) VisitGetEnvironmentLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentLog401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetEnvironmentLog401JSONResponse) VisitGetEnvironmentLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentLog404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetEnvironmentLog404JSONResponse) VisitGetEnvironmentLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentLog409JSONResponse struct{ ConflictJSONResponse }
+
+func (response GetEnvironmentLog409JSONResponse) VisitGetEnvironmentLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentLog503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response GetEnvironmentLog503JSONResponse) VisitGetEnvironmentLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -7416,6 +7653,85 @@ func (response RemoveWorkerImage409JSONResponse) VisitRemoveWorkerImageResponse(
 	return err
 }
 
+type GetWorkerLogRequestObject struct {
+	ID     ID `json:"id"`
+	Params GetWorkerLogParams
+}
+
+type GetWorkerLogResponseObject interface {
+	VisitGetWorkerLogResponse(w http.ResponseWriter) error
+}
+
+type GetWorkerLog200JSONResponse LogPart
+
+func (response GetWorkerLog200JSONResponse) VisitGetWorkerLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetWorkerLog401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetWorkerLog401JSONResponse) VisitGetWorkerLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetWorkerLog403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetWorkerLog403JSONResponse) VisitGetWorkerLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetWorkerLog404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetWorkerLog404JSONResponse) VisitGetWorkerLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetWorkerLog503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response GetWorkerLog503JSONResponse) VisitGetWorkerLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RevokeWorkerRequestObject struct {
 	ID ID `json:"id"`
 }
@@ -7589,6 +7905,9 @@ type StrictServerInterface interface {
 	// (POST /api/frontend/environments/{id}/image/upgrade)
 	UpgradeEnvironmentImage(ctx context.Context, request UpgradeEnvironmentImageRequestObject) (UpgradeEnvironmentImageResponseObject, error)
 
+	// (GET /api/frontend/environments/{id}/logs/{log})
+	GetEnvironmentLog(ctx context.Context, request GetEnvironmentLogRequestObject) (GetEnvironmentLogResponseObject, error)
+
 	// (PUT /api/frontend/environments/{id}/ports)
 	SetEnvironmentPorts(ctx context.Context, request SetEnvironmentPortsRequestObject) (SetEnvironmentPortsResponseObject, error)
 
@@ -7750,6 +8069,9 @@ type StrictServerInterface interface {
 
 	// (POST /api/frontend/workers/{id}/images/remove)
 	RemoveWorkerImage(ctx context.Context, request RemoveWorkerImageRequestObject) (RemoveWorkerImageResponseObject, error)
+
+	// (GET /api/frontend/workers/{id}/log)
+	GetWorkerLog(ctx context.Context, request GetWorkerLogRequestObject) (GetWorkerLogResponseObject, error)
 
 	// (POST /api/frontend/workers/{id}/revoke)
 	RevokeWorker(ctx context.Context, request RevokeWorkerRequestObject) (RevokeWorkerResponseObject, error)
@@ -8151,6 +8473,34 @@ func (sh *strictHandler) UpgradeEnvironmentImage(w http.ResponseWriter, r *http.
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(UpgradeEnvironmentImageResponseObject); ok {
 		if err := validResponse.VisitUpgradeEnvironmentImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetEnvironmentLog operation middleware
+func (sh *strictHandler) GetEnvironmentLog(w http.ResponseWriter, r *http.Request, id ID, log EnvironmentLogName, params GetEnvironmentLogParams) {
+	var request GetEnvironmentLogRequestObject
+
+	request.ID = id
+	request.Log = log
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetEnvironmentLog(ctx, request.(GetEnvironmentLogRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetEnvironmentLog")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetEnvironmentLogResponseObject); ok {
+		if err := validResponse.VisitGetEnvironmentLogResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -9667,6 +10017,33 @@ func (sh *strictHandler) RemoveWorkerImage(w http.ResponseWriter, r *http.Reques
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RemoveWorkerImageResponseObject); ok {
 		if err := validResponse.VisitRemoveWorkerImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetWorkerLog operation middleware
+func (sh *strictHandler) GetWorkerLog(w http.ResponseWriter, r *http.Request, id ID, params GetWorkerLogParams) {
+	var request GetWorkerLogRequestObject
+
+	request.ID = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetWorkerLog(ctx, request.(GetWorkerLogRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetWorkerLog")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetWorkerLogResponseObject); ok {
+		if err := validResponse.VisitGetWorkerLogResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -39,6 +39,7 @@ import (
 	"github.com/csnewman/hangar/internal/code"
 	"github.com/csnewman/hangar/internal/desktop"
 	"github.com/csnewman/hangar/internal/guestport"
+	"github.com/csnewman/hangar/internal/logs"
 	"github.com/csnewman/hangar/internal/procs"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sshd"
@@ -824,6 +825,24 @@ func (r *Runtime) DialEditor(ctx context.Context, id string) (net.Conn, error) {
 
 // DialCode opens one connection to a running environment's Code tab
 // service, which its agent runs in the guest.
+// LogFile is where an environment's machine writes the log of that name:
+// its console, its monitor's, or one of its backends'. Only environments
+// this runtime holds, and only those logs, so a request names no other file.
+func (r *Runtime) LogFile(id, name string) (string, bool) {
+	switch name {
+	case logs.Console, logs.Monitor, logs.Files, logs.GPU:
+	default:
+		return "", false
+	}
+	r.mu.Lock()
+	m, ok := r.envs[id]
+	r.mu.Unlock()
+	if !ok {
+		return "", false
+	}
+	return filepath.Join(m.dir, name+".log"), true
+}
+
 // DialPorts connects to a running environment's port forwarder, which its
 // agent runs in the guest (package guestport).
 func (r *Runtime) DialPorts(ctx context.Context, id string) (net.Conn, error) {

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/csnewman/hangar/internal/logs"
 	"github.com/csnewman/hangar/internal/vm"
 	"github.com/csnewman/hangar/internal/worker"
 )
@@ -25,10 +26,13 @@ func main() {
 	if *debug {
 		level = slog.LevelDebug
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	// What the worker logs is kept in memory too, for the control plane to
+	// show: whole, and each environment's lines.
+	rings := logs.NewRings()
+	log := slog.New(logs.Tee(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}), rings))
 	slog.SetDefault(log)
 
-	if err := run(*config, log); err != nil {
+	if err := run(*config, log, rings); err != nil {
 		fmt.Fprintf(os.Stderr, "hangar-worker: %v\n", err)
 		os.Exit(1)
 	}
@@ -39,7 +43,7 @@ type shutdowner interface {
 	Shutdown(ctx context.Context) error
 }
 
-func run(path string, log *slog.Logger) error {
+func run(path string, log *slog.Logger, rings *logs.Rings) error {
 	cfg, err := worker.LoadConfig(path)
 	if err != nil {
 		return err
@@ -84,6 +88,9 @@ func run(path string, log *slog.Logger) error {
 	}
 
 	w, err := worker.New(cfg, rt, log)
+	if err == nil {
+		w.UseLogs(rings)
+	}
 	if err != nil {
 		return err
 	}

@@ -13,7 +13,9 @@
 package worker
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +24,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/logs"
 	"github.com/csnewman/hangar/internal/tunnel"
 )
 
@@ -124,6 +127,59 @@ type EditorDialer interface {
 	DialEditor(ctx context.Context, environment string) (net.Conn, error)
 }
 
+// LogFiler is a runtime whose environments' machines write logs of their
+// own: logs.Console, logs.Monitor and so on.
+type LogFiler interface {
+	// LogFile is where an environment's log of that name is, if it is one
+	// the environment has.
+	LogFile(environment, name string) (string, bool)
+}
+
+// UseLogs has the worker answer the control plane's requests for its log
+// from rings, which its logger writes to.
+func (w *Worker) UseLogs(rings *logs.Rings) { w.logs = rings }
+
+// serveLogs answers one request for part of a log: the worker's own, whole
+// or an environment's lines of it, or a file an environment's machine
+// writes.
+func (w *Worker) serveLogs(r io.Reader, stream net.Conn) {
+	line, err := bufio.NewReader(r).ReadBytes('\n')
+	if err != nil {
+		return
+	}
+	var req logs.Request
+	var reply logs.Reply
+	if err := json.Unmarshal(line, &req); err != nil {
+		reply.Error = "a malformed request"
+	} else {
+		reply = w.readLog(req)
+	}
+	b, _ := json.Marshal(reply)
+	stream.Write(append(b, '\n'))
+}
+
+func (w *Worker) readLog(req logs.Request) logs.Reply {
+	if req.Log == logs.Worker {
+		if w.logs == nil {
+			return logs.Reply{Missing: true}
+		}
+		return w.logs.Read(req)
+	}
+	files, ok := w.rt.(LogFiler)
+	if !ok || req.Environment == "" {
+		return logs.Reply{Missing: true}
+	}
+	path, ok := files.LogFile(req.Environment, req.Log)
+	if !ok {
+		return logs.Reply{Missing: true}
+	}
+	reply, err := logs.ReadFile(path, req)
+	if err != nil {
+		return logs.Reply{Error: err.Error()}
+	}
+	return reply
+}
+
 // PortsDialer is a runtime whose environments' own TCP ports can be
 // reached, through a forwarder that speaks package guestport.
 type PortsDialer interface {
@@ -137,6 +193,8 @@ type PortsDialer interface {
 const reportEvery = 5 * time.Second
 
 type Worker struct {
+	// logs is the worker's own log, kept in memory for the control plane.
+	logs     *logs.Rings
 	cfg      *Config
 	rt       Runtime
 	client   *client
@@ -311,6 +369,10 @@ func (w *Worker) stream(h tunnel.Header, r io.Reader, stream net.Conn) {
 	var guest net.Conn
 	var err error
 	switch h.Kind {
+	case tunnel.KindLogs:
+		cancel()
+		w.serveLogs(r, stream)
+		return
 	case tunnel.KindTerminal:
 		dialer, ok := w.rt.(TerminalDialer)
 		if !ok {

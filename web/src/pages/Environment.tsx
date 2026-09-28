@@ -1,4 +1,4 @@
-import { Activity, Code2, Copy, ExternalLink, FileCode2, GitBranch, LayoutDashboard, Monitor, SquareTerminal, type LucideIcon } from 'lucide-react'
+import { Activity, Code2, Copy, ExternalLink, FileCode2, GitBranch, LayoutDashboard, Monitor, ScrollText, SquareTerminal, type LucideIcon } from 'lucide-react'
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from 'react-router'
 
@@ -25,6 +25,7 @@ const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: 'code', label: 'Code', icon: FileCode2 },
   { to: 'editor', label: 'VS Code', icon: Code2 },
   { to: 'desktop', label: 'Desktop', icon: Monitor },
+  { to: 'logs', label: 'Logs', icon: ScrollText },
 ]
 
 // EnvironmentPage is one environment: its header and actions, and a tab for
@@ -83,7 +84,12 @@ export function EnvironmentPage() {
       {env.phase === 'starting' ? (
         <StartProgress env={env} />
       ) : (
-        env.reason && <div className="notice env-reason">{env.reason}</div>
+        env.reason && (
+          <div className="notice env-reason">
+            {env.reason}
+            {env.phase === 'failed' && <Link to={`/environments/${env.id}/logs`}>See its logs</Link>}
+          </div>
+        )
       )}
       <div className="tab-body">
         <Outlet context={env} />
