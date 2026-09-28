@@ -57,8 +57,8 @@ type Config struct {
 	// environments without an editor.
 	PublicURL string
 	// HostStyle names the editors' and the registry's hosts after
-	// PublicURL's: as subdomains of it, e-<id>.hangar.example.com, or with
-	// its first label as their suffix, e-<id>-hangar.example.com (package
+	// PublicURL's: as subdomains of it, code<id>.hangar.example.com, or with
+	// its first label as their suffix, code<id>-hangar.example.com (package
 	// publichost). Empty is subdomains.
 	HostStyle publichost.Style
 	// AutoSignIn, for development only, signs every visitor in as this
@@ -361,8 +361,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/", s.webHandler())
 
 	all := s.logRequests(mux)
-	// The registry and each environment's editor have hosts of their own,
-	// and everything on them is theirs.
+	// The registry, each environment's editor and each environment's own
+	// web servers have hosts of their own, and everything on them is
+	// theirs.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.registry != nil && strings.EqualFold(r.Host, s.registryHost) {
 			s.registry.ServeHTTP(w, r)
@@ -373,9 +374,24 @@ func (s *Server) Handler() http.Handler {
 				s.editors.ServeHTTP(w, r)
 				return
 			}
+			if _, ok := s.editors.OwnsPort(r.Host); ok {
+				s.editors.ServePort(w, r)
+				return
+			}
 		}
 		all.ServeHTTP(w, r)
 	})
+}
+
+// EnvironmentHost reports whether host is one an environment's own web
+// servers are reached on, which plain HTTP reaches as it is rather than
+// being sent to HTTPS: it goes to the environment's port 80.
+func (s *Server) EnvironmentHost(host string) bool {
+	if s.editors == nil {
+		return false
+	}
+	_, ok := s.editors.OwnsPort(host)
+	return ok
 }
 
 func (s *Server) healthz(w http.ResponseWriter, r *http.Request) {

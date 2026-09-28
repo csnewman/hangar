@@ -4,7 +4,7 @@
 // The zone is delegated to it: the parent zone's NS records name
 // hangar-server's nameservers, with glue giving their addresses. Every name
 // in the zone resolves to Hangar -- Hangar itself, and each environment's
-// editor on e-<id>.<zone> -- so the zone needs no records made per
+// editor on code<id>.<zone> -- so the zone needs no records made per
 // environment. What it does need is TXT records made on demand: ACME's
 // DNS-01 challenge, which is the only way to be issued the wildcard
 // certificate the editors' names need. Those are kept in Postgres, so every

@@ -64,7 +64,7 @@ services:
       HANGAR_TLS_CERT_FILE: ${HANGAR_TLS_CERT_FILE:-}
       HANGAR_TLS_KEY_FILE: ${HANGAR_TLS_KEY_FILE:-}
       # How editors' and the registry's hosts are named after the public
-      # one: subdomain (e-<id>.<host>) or prefix (e-<id>-<host>). See
+      # one: subdomain (code<id>.<host>) or prefix (code<id>-<host>). See
       # README.md.
       HANGAR_HOST_STYLE: ${HANGAR_HOST_STYLE:-subdomain}
       # The SSH gateway, in front of every environment: ssh

@@ -12,6 +12,13 @@ function destination(next: string | null): string {
   return next && next.startsWith('/') && !next.startsWith('//') ? next : '/environments'
 }
 
+// served is whether a destination is the server's rather than a page of
+// the app, and so is loaded rather than routed to: signing in to an
+// environment's web server, say.
+function served(to: string): boolean {
+  return to.startsWith('/api/')
+}
+
 export function LoginPage() {
   const qc = useQueryClient()
   const navigate = useNavigate()
@@ -30,11 +37,20 @@ export function LoginPage() {
       qc.clear()
       qc.setQueryData(meKey, me)
       announceSessionChange()
-      navigate(destination(params.get('next')), { replace: true })
+      const to = destination(params.get('next'))
+      if (served(to)) window.location.replace(to)
+      else navigate(to, { replace: true })
     },
   })
 
-  if (me.isSuccess) return <Navigate to={destination(params.get('next'))} replace />
+  if (me.isSuccess) {
+    const to = destination(params.get('next'))
+    if (served(to)) {
+      window.location.replace(to)
+      return null
+    }
+    return <Navigate to={to} replace />
+  }
 
   const submit = (e: FormEvent) => {
     e.preventDefault()

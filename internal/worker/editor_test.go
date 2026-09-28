@@ -65,7 +65,7 @@ func testEditor(t *testing.T, style publichost.Style, public string, name func(l
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := name("e-" + env.ID)
+	host := name("code" + env.ID)
 	if signInURL.Host != host {
 		t.Fatalf("editor host %q, want %q", signInURL.Host, host)
 	}
@@ -138,7 +138,7 @@ func testEditor(t *testing.T, style publichost.Style, public string, name func(l
 		"no cookie":                  {"Sec-Fetch-Site": {"same-origin"}},
 		"another environment":        {"Cookie": {sent}, "Sec-Fetch-Site": {"same-site"}, "Sec-Fetch-Mode": {"cors"}},
 		"another site":               {"Cookie": {sent}, "Sec-Fetch-Site": {"cross-site"}, "Sec-Fetch-Mode": {"navigate"}},
-		"a WebSocket from elsewhere": {"Cookie": {sent}, "Origin": {"http://" + name("e-00000000-0000-0000-0000-000000000000")}},
+		"a WebSocket from elsewhere": {"Cookie": {sent}, "Origin": {"http://" + name("code00000000-0000-0000-0000-000000000000")}},
 	}
 	for name, h := range refused {
 		resp = do("/_simulated/request", h)

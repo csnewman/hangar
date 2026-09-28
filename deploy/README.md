@@ -43,7 +43,7 @@ TCP), 443, 80 and 2222 open, and a DNS zone delegated to it (below).
 
 ## DNS and TLS
 
-Each environment's editor is served on its own name, `e-<id>.<host>`, and
+Each environment's editor is served on its own name, `code<id>.<host>`, and
 the registry on `registry.<host>`, so Hangar needs every name under its host and a certificate for all of them. A
 wildcard certificate is only issued against ACME's DNS-01 challenge, which
 means writing TXT records into the zone, so `hangar-server` is the zone's
@@ -67,7 +67,7 @@ all pointing at the control plane, listed in `HANGAR_DNS_NAMESERVERS`.
 
 Check the delegation from outside once the control plane is up:
 
-    dig +trace e-test.hangar.example.com
+    dig +trace test.hangar.example.com
     dig @203.0.113.10 hangar.example.com NS
 
 A new deployment is best tried against Let's Encrypt's staging CA
@@ -104,8 +104,9 @@ the machine's name as their suffix instead of as their parent:
 
 | | subdomain (default) | prefix |
 |---|---|---|
-| editors | `e-<id>.hangar1.example.com` | `e-<id>-hangar1.example.com` |
+| editors | `code<id>.hangar1.example.com` | `code<id>-hangar1.example.com` |
 | registry | `registry.hangar1.example.com` | `registry-hangar1.example.com` |
+| web servers | `<name>-env<id>.hangar1.example.com` | `<name>-env<id>-hangar1.example.com` |
 
 Set `HANGAR_PUBLIC_URL=https://hangar1.example.com` and
 `HANGAR_HOST_STYLE=prefix`, and give the wildcard certificate as above. The
@@ -114,7 +115,23 @@ with `HANGAR_DNS_LISTEN=` (empty); ACME is not used either, since it only
 issues for the zone Hangar serves. Both kinds of name stay in the same site
 as Hangar's own, which the editor, framed in Hangar's page, relies on.
 
-## The registry
+## Environments' web servers
+
+Whatever an environment serves is reached on any name ending in
+`-env<id>.<host>` (or `-env<id>-<host>` in the prefix style), with the
+name before it free: `app-env<id>.hangar.example.com`. HTTPS reaches the
+environment's port 443, over TLS whatever certificate it has there, and
+plain HTTP its port 80, with the host, path and headers as they were sent;
+the browser is shown Hangar's certificate. Port 80 on the control plane
+serves these names rather than redirecting them to HTTPS.
+
+An environment is private until its owner makes it public, on its page:
+private, a browser is sent to Hangar to sign in and back, and only people
+who may use the environment get through; public, anyone who can reach
+Hangar does. A DNS label is at most 63 characters, so the free name is at
+most 23 (fewer in the prefix style, which shares the label with the
+machine's name).
+
 
 The control plane is also a container registry, at `registry.<host>`,
 covered by the same DNS and certificate as every other name under it:

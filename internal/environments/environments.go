@@ -44,7 +44,7 @@ func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 const columns = `e.id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
 	e.spec, e.image, e.image_digest, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
 	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress, w.gpu,
-	tm.spec, coalesce(tm.revision, 0), e.template_revision, e.image_pin_want, e.image_update, e.image_rollback`
+	tm.spec, coalesce(tm.revision, 0), e.template_revision, e.image_pin_want, e.image_update, e.image_rollback, e.ports_public`
 
 const from = `environments e
 	JOIN users u ON u.id = e.owner_id
@@ -62,7 +62,7 @@ func scan(row pgx.Row) (api.Environment, error) {
 	var pinWant *string
 	err := row.Scan(&e.ID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.ImageDigest, &e.CPUs,
 		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats,
-		&progress, &gpu, &tspec, &trev, &erev, &pinWant, &update, &rollback)
+		&progress, &gpu, &tspec, &trev, &erev, &pinWant, &update, &rollback, &e.PortsPublic)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}

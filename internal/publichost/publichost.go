@@ -1,14 +1,15 @@
 // Package publichost names the parts of Hangar that are served on hosts of
-// their own -- each environment's editor, and the container registry --
-// after Hangar's public host.
+// their own -- each environment's editor and web servers, and the container
+// registry -- after Hangar's public host.
 //
 // A name is a label joined to the public host in one of two styles. With
-// Subdomain, the default, it is a subdomain: e-<id>.hangar.example.com, which
-// needs the zone under the public host and a certificate for *.<host>.
-// With Prefix it is a sibling that ends in the public host's first label:
-// e-<id>-hangar.example.com, for networks where a machine is given one name,
-// and every <anything>-<name> beside it in the same domain already resolves
-// to it and is covered by a wildcard certificate for the domain.
+// Subdomain, the default, it is a subdomain: code<id>.hangar.example.com,
+// which needs the zone under the public host and a certificate for
+// *.<host>. With Prefix it is a sibling that ends in the public host's
+// first label: code<id>-hangar.example.com, for networks where a machine is
+// given one name, and every <anything>-<name> beside it in the same domain
+// already resolves to it and is covered by a wildcard certificate for the
+// domain.
 //
 // Either way the names are in the same site as Hangar's own, which the
 // editor needs: the browser then sends its cookie inside Hangar's frame.

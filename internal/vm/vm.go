@@ -38,6 +38,7 @@ import (
 	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/code"
 	"github.com/csnewman/hangar/internal/desktop"
+	"github.com/csnewman/hangar/internal/guestport"
 	"github.com/csnewman/hangar/internal/procs"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sshd"
@@ -823,6 +824,16 @@ func (r *Runtime) DialEditor(ctx context.Context, id string) (net.Conn, error) {
 
 // DialCode opens one connection to a running environment's Code tab
 // service, which its agent runs in the guest.
+// DialPorts connects to a running environment's port forwarder, which its
+// agent runs in the guest (package guestport).
+func (r *Runtime) DialPorts(ctx context.Context, id string) (net.Conn, error) {
+	m, err := r.runningMachine(id)
+	if err != nil {
+		return nil, err
+	}
+	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), guestport.Port)
+}
+
 func (r *Runtime) DialSSH(ctx context.Context, id string) (net.Conn, error) {
 	m, err := r.runningMachine(id)
 	if err != nil {

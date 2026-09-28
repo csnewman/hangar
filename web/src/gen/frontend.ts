@@ -674,6 +674,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/environments/{id}/ports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Says whether anyone may reach the environment's own web servers, on its <anything>-env<id> hosts, without signing in to Hangar, or only those who may reach the environment. */
+        put: operations["setEnvironmentPorts"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/environments/{id}/ports/sign-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description Where a browser opening a private environment's own web server is sent: it signs the browser in to that host, for the Hangar session it has here, and sends it back to the URL it asked for. Without a session it goes to Hangar's sign-in page first, and on from there. */
+        get: operations["signInEnvironmentPorts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/environments/{id}/suspend": {
         parameters: {
             query?: never;
@@ -1074,6 +1112,8 @@ export interface components {
             template_changes?: components["schemas"]["TemplateSetting"][];
             /** @description Whether the template has changed since the environment took its copy of it, rather than the environment having been changed. */
             template_updated?: boolean;
+            /** @description Whether anyone may reach the environment's own web servers without signing in to Hangar. */
+            ports_public?: boolean;
             image_update?: components["schemas"]["ImageUpdate"];
             image_rollback?: components["schemas"]["ImageRollback"];
             /**
@@ -1463,6 +1503,8 @@ export interface components {
         Me: {
             /** @description The host of Hangar's own registry, which image names on it start with. Absent when the server runs none. */
             registry?: string;
+            /** @description What follows env<id> in the host an environment's own web servers are reached on, such as .hangar.example.com: any name and a hyphen may go before it. Absent when the server has no public URL. */
+            environment_host_suffix?: string;
             id: string;
             username: string;
             display_name: string;
@@ -2936,6 +2978,63 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+        };
+    };
+    setEnvironmentPorts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    public: boolean;
+                };
+            };
+        };
+        responses: {
+            /** @description The environment. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Environment"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    signInEnvironmentPorts: {
+        parameters: {
+            query: {
+                /** @description The URL asked for, on one of the environment's hosts. */
+                to: string;
+            };
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description On to the environment's host, or to sign in. */
+            303: {
+                headers: {
+                    Location?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Invalid"];
+            404: components["responses"]["NotFound"];
+            503: components["responses"]["Unavailable"];
         };
     };
     suspendEnvironment: {

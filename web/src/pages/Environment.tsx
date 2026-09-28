@@ -19,6 +19,7 @@ import { formatAgo, shortDigest } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
 import { SettingsPanel, TemplateDrift } from '../components/EnvironmentSettings'
+import { EnvironmentPorts } from '../components/EnvironmentPorts'
 import { ImageUpdate } from '../components/ImageUpdate'
 import { StartProgress } from '../components/StartProgress'
 import { desktop } from '../desktop'
@@ -214,6 +215,7 @@ export function SummaryTab() {
           </Prop>
         </dl>
       </div>
+      <EnvironmentPorts env={env} />
       <SettingsPanel key={`${env.id}:${env.spec.cpus}:${env.spec.memory_mib}:${env.spec.display}:${env.spec.gpu}:${env.spec.dax}`} env={env} />
       <section className="section">
         <h2 className="section-title">Activity</h2>

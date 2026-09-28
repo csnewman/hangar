@@ -1,6 +1,6 @@
 // Package certs obtains and renews hangar-server's TLS certificates from an
 // ACME CA: one for Hangar's host, and a wildcard one for every name under
-// it, which is what the editors' e-<id> hosts need.
+// it, which is what the editors' code<id> hosts need.
 //
 // A wildcard certificate is issued only against the DNS-01 challenge, a TXT
 // record the CA looks up in the zone. Hangar is its zone's authoritative

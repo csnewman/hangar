@@ -66,6 +66,7 @@ func main() {
 	go serveProfile()
 	go serveProcs()
 	go serveSSH()
+	go servePorts()
 	run(uint32(*port), *retry)
 }
 

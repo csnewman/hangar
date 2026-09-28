@@ -924,6 +924,61 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /api/frontend/environments/{id}/ports:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: setEnvironmentPorts
+      description: >-
+        Says whether anyone may reach the environment's own web servers, on
+        its <anything>-env<id> hosts, without signing in to Hangar, or only
+        those who may reach the environment.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [public]
+              additionalProperties: false
+              properties:
+                public: { type: boolean }
+      responses:
+        "200":
+          description: The environment.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/environments/{id}/ports/sign-in:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: signInEnvironmentPorts
+      description: >-
+        Where a browser opening a private environment's own web server is
+        sent: it signs the browser in to that host, for the Hangar session
+        it has here, and sends it back to the URL it asked for. Without a
+        session it goes to Hangar's sign-in page first, and on from there.
+      security: []
+      parameters:
+        - name: to
+          in: query
+          required: true
+          description: The URL asked for, on one of the environment's hosts.
+          schema: { type: string }
+      responses:
+        "303":
+          description: On to the environment's host, or to sign in.
+          headers:
+            Location:
+              schema: { type: string }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
   /api/frontend/environments/{id}/suspend:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -1500,6 +1555,11 @@ components:
           description: >-
             Whether the template has changed since the environment took its
             copy of it, rather than the environment having been changed.
+        ports_public:
+          type: boolean
+          description: >-
+            Whether anyone may reach the environment's own web servers without
+            signing in to Hangar.
         image_update: { $ref: "#/components/schemas/ImageUpdate" }
         image_rollback: { $ref: "#/components/schemas/ImageRollback" }
         image_change:
@@ -2132,6 +2192,12 @@ components:
           description: >-
             The host of Hangar's own registry, which image names on it start
             with. Absent when the server runs none.
+        environment_host_suffix:
+          type: string
+          description: >-
+            What follows env<id> in the host an environment's own web servers
+            are reached on, such as .hangar.example.com: any name and a hyphen
+            may go before it. Absent when the server has no public URL.
         id: { type: string }
         username: { type: string }
         display_name: { type: string }

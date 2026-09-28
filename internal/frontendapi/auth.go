@@ -265,6 +265,10 @@ func (h *handler) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeRespons
 	if h.registry != nil {
 		m.Registry = &h.registryHost
 	}
+	if h.editors != nil {
+		suffix := strings.TrimPrefix(h.editors.PortHost(""), "env")
+		m.EnvironmentHostSuffix = &suffix
+	}
 	return GetMe200JSONResponse(m), nil
 }
 

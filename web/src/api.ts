@@ -117,6 +117,8 @@ export const api = {
     unwrap(client.PUT('/api/frontend/environments/{id}/settings', { ...byID(id), body })),
   resetEnvironmentToTemplate: (id: string) =>
     unwrap(client.POST('/api/frontend/environments/{id}/reset-to-template', byID(id))),
+  setEnvironmentPorts: (id: string, pub: boolean) =>
+    unwrap(client.PUT('/api/frontend/environments/{id}/ports', { ...byID(id), body: { public: pub } })),
   upgradeEnvironmentImage: (id: string, force: boolean) =>
     unwrap(client.POST('/api/frontend/environments/{id}/image/upgrade', { ...byID(id), body: { force } })),
   rollbackEnvironmentImage: (id: string) =>

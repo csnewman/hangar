@@ -54,6 +54,10 @@ const (
 	// KindSSH carries one SSH connection from the gateway to the
 	// environment's SSH server.
 	KindSSH = "ssh"
+	// KindPorts carries one connection to the environment's port forwarder
+	// (package guestport), which the control plane asks for a port: one of
+	// the environment's own web servers.
+	KindPorts = "ports"
 )
 
 // Header opens a stream.

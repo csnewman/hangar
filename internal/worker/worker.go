@@ -124,6 +124,12 @@ type EditorDialer interface {
 	DialEditor(ctx context.Context, environment string) (net.Conn, error)
 }
 
+// PortsDialer is a runtime whose environments' own TCP ports can be
+// reached, through a forwarder that speaks package guestport.
+type PortsDialer interface {
+	DialPorts(ctx context.Context, environment string) (net.Conn, error)
+}
+
 // reportEvery is how often the worker reports even when nothing changed. The
 // report carries usage figures, which change all the time, so this is also
 // how fresh they are; it is well inside the server's online window, so a few
@@ -350,6 +356,13 @@ func (w *Worker) stream(h tunnel.Header, r io.Reader, stream net.Conn) {
 			return
 		}
 		guest, err = dialer.DialProfile(ctx, h.Environment)
+	case tunnel.KindPorts:
+		dialer, ok := w.rt.(PortsDialer)
+		if !ok {
+			cancel()
+			return
+		}
+		guest, err = dialer.DialPorts(ctx, h.Environment)
 	case tunnel.KindDesktop:
 		dialer, ok := w.rt.(DesktopDialer)
 		if !ok {

@@ -279,6 +279,9 @@ CREATE TABLE environments (
     -- disk kept from before the last upgrade (api.ImageRollback).
     image_update   jsonb,
     image_rollback jsonb,
+    -- Whether anyone may reach the environment's own web servers, on its
+    -- <anything>-env<id> hosts, without signing in to Hangar.
+    ports_public boolean NOT NULL DEFAULT false,
     cpus        integer NOT NULL CHECK (cpus > 0),
     memory_mib  integer NOT NULL CHECK (memory_mib > 0),
     desired     text NOT NULL CHECK (desired IN ('running', 'stopped', 'suspended', 'deleted')),

@@ -178,6 +178,7 @@ func environment(e api.Environment) Environment {
 		ImageUpdate:     imageUpdate(e.ImageUpdate),
 		ImageRollback:   imageRollback(e.ImageRollback),
 		ImageChange:     imageChange(e.ImageChange),
+		PortsPublic:     optionalBool(e.PortsPublic),
 		CPUs:            e.CPUs,
 		MemoryMiB:       e.MemoryMiB,
 		Desired:         DesiredState(e.Desired),

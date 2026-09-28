@@ -147,7 +147,7 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 	go func() { errc <- servers[0].ListenAndServe() }()
 	slog.Info("serving HTTP", "addr", listen)
 
-	edge, err := serveEdge(ctx, d, srv.Handler(), style, errc)
+	edge, err := serveEdge(ctx, d, srv.Handler(), srv.EnvironmentHost, style, errc)
 	if err != nil {
 		return err
 	}
@@ -179,7 +179,11 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 // the zone and its subdomains. Names in the prefix style are outside the
 // zone, in a domain someone else runs, so they need the files, and the zone
 // has nothing to serve.
-func serveEdge(ctx context.Context, d *db.DB, handler http.Handler, style publichost.Style, errc chan<- error) ([]*http.Server, error) {
+//
+// The redirect serves an environment's own hosts rather than redirecting
+// them, since plain HTTP to one of them is for the environment's port 80.
+func serveEdge(ctx context.Context, d *db.DB, handler http.Handler, environmentHost func(string) bool,
+	style publichost.Style, errc chan<- error) ([]*http.Server, error) {
 	dnsListen := os.Getenv("HANGAR_DNS_LISTEN")
 	tlsListen := os.Getenv("HANGAR_TLS_LISTEN")
 	redirectListen := os.Getenv("HANGAR_REDIRECT_LISTEN")
@@ -298,6 +302,10 @@ func serveEdge(ctx context.Context, d *db.DB, handler http.Handler, style public
 		hs := &http.Server{
 			Addr: redirectListen,
 			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if environmentHost(r.Host) {
+					handler.ServeHTTP(w, r)
+					return
+				}
 				to := *public
 				to.Host = r.Host
 				if h, _, err := net.SplitHostPort(r.Host); err == nil {
@@ -321,7 +329,7 @@ func serveEdge(ctx context.Context, d *db.DB, handler http.Handler, style public
 // warnUncovered warns about each of the names Hangar serves that a
 // certificate from files does not cover: a browser would refuse them.
 func warnUncovered(leaf *x509.Certificate, names *publichost.Public) {
-	hosts := []string{names.Host(), names.Name("e-00000000-0000-0000-0000-000000000000")}
+	hosts := []string{names.Host(), names.Name("code00000000-0000-0000-0000-000000000000"), names.Name("app-env00000000-0000-0000-0000-000000000000")}
 	if os.Getenv("HANGAR_REGISTRY_DIR") != "" {
 		hosts = append(hosts, names.Name("registry"))
 	}

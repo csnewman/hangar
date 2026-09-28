@@ -176,8 +176,11 @@ type Environment struct {
 	ImageUpdate   *ImageUpdate   `json:"image_update,omitempty"`
 	ImageRollback *ImageRollback `json:"image_rollback,omitempty"`
 	ImageChange   string         `json:"image_change,omitempty"`
-	Spec          Spec           `json:"spec"`
-	Image         string         `json:"image"`
+	// PortsPublic is that anyone may reach the environment's own web
+	// servers, on its <anything>-env<id> hosts, without signing in.
+	PortsPublic bool   `json:"ports_public,omitempty"`
+	Spec        Spec   `json:"spec"`
+	Image       string `json:"image"`
 	// ImageDigest is the digest of the copy of Image the environment boots
 	// from, as its worker reports it; empty until it has first started.
 	ImageDigest string            `json:"image_digest,omitempty"`

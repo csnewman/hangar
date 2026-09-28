@@ -512,6 +512,9 @@ type Environment struct {
 	// Phase What the environment is doing, as its worker last reported. "pending" means no worker has reported on it yet.
 	Phase Phase `json:"phase"`
 
+	// PortsPublic Whether anyone may reach the environment's own web servers without signing in to Hangar.
+	PortsPublic *bool `json:"ports_public,omitempty"`
+
 	// Progress How far a starting environment has got. Steps happen in the order of the enum; one with nothing to do is passed over. total, where a step can be measured, is in unit: bytes, or a clone's objects.
 	Progress *StartProgress `json:"progress,omitempty"`
 
@@ -741,6 +744,9 @@ type LoginKey struct {
 type Me struct {
 	Admin       bool   `json:"admin"`
 	DisplayName string `json:"display_name"`
+
+	// EnvironmentHostSuffix What follows env<id> in the host an environment's own web servers are reached on, such as .hangar.example.com: any name and a hyphen may go before it. Absent when the server has no public URL.
+	EnvironmentHostSuffix *string `json:"environment_host_suffix,omitempty"`
 
 	// HasPassword Whether the user has a local password that they can change.
 	HasPassword bool   `json:"has_password"`
@@ -1162,6 +1168,17 @@ type ListAuditParams struct {
 	Limit  *int   `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// SetEnvironmentPortsJSONBody defines parameters for SetEnvironmentPorts.
+type SetEnvironmentPortsJSONBody struct {
+	Public bool `json:"public"`
+}
+
+// SignInEnvironmentPortsParams defines parameters for SignInEnvironmentPorts.
+type SignInEnvironmentPortsParams struct {
+	// To The URL asked for, on one of the environment's hosts.
+	To string `form:"to" json:"to"`
+}
+
 // DeleteProfileFileParams defines parameters for DeleteProfileFile.
 type DeleteProfileFileParams struct {
 	// Path The file's path, relative to the home directory.
@@ -1196,6 +1213,9 @@ type ResizeDesktopJSONRequestBody = DesktopSize
 
 // UpgradeEnvironmentImageJSONRequestBody defines body for UpgradeEnvironmentImage for application/json ContentType.
 type UpgradeEnvironmentImageJSONRequestBody = ImageUpgrade
+
+// SetEnvironmentPortsJSONRequestBody defines body for SetEnvironmentPorts for application/json ContentType.
+type SetEnvironmentPortsJSONRequestBody SetEnvironmentPortsJSONBody
 
 // SignalProcessJSONRequestBody defines body for SignalProcess for application/json ContentType.
 type SignalProcessJSONRequestBody = SignalProcess
@@ -1298,6 +1318,12 @@ type ServerInterface interface {
 
 	// (POST /api/frontend/environments/{id}/image/upgrade)
 	UpgradeEnvironmentImage(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (PUT /api/frontend/environments/{id}/ports)
+	SetEnvironmentPorts(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/environments/{id}/ports/sign-in)
+	SignInEnvironmentPorts(w http.ResponseWriter, r *http.Request, id ID, params SignInEnvironmentPortsParams)
 
 	// (GET /api/frontend/environments/{id}/processes)
 	ListProcesses(w http.ResponseWriter, r *http.Request, id ID)
@@ -1785,6 +1811,74 @@ func (siw *ServerInterfaceWrapper) UpgradeEnvironmentImage(w http.ResponseWriter
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.UpgradeEnvironmentImage(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetEnvironmentPorts operation middleware
+func (siw *ServerInterfaceWrapper) SetEnvironmentPorts(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetEnvironmentPorts(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SignInEnvironmentPorts operation middleware
+func (siw *ServerInterfaceWrapper) SignInEnvironmentPorts(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SignInEnvironmentPortsParams
+
+	// ------------- Required query parameter "to" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "to", r.URL.Query(), &params.To, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "to"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "to", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SignInEnvironmentPorts(w, r, id, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3241,6 +3335,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/image/rollback", wrapper.RollbackEnvironmentImage)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/image/keep", wrapper.KeepEnvironmentImage)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/image/cancel", wrapper.CancelEnvironmentImageChange)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/ports", wrapper.SetEnvironmentPorts)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/ports/sign-in", wrapper.SignInEnvironmentPorts)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/suspend", wrapper.SuspendEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/processes", wrapper.ListProcesses)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/processes/{pid}/signal", wrapper.SignalProcess)
@@ -4014,6 +4110,124 @@ func (response UpgradeEnvironmentImage409JSONResponse) VisitUpgradeEnvironmentIm
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetEnvironmentPortsRequestObject struct {
+	ID   ID `json:"id"`
+	Body *SetEnvironmentPortsJSONRequestBody
+}
+
+type SetEnvironmentPortsResponseObject interface {
+	VisitSetEnvironmentPortsResponse(w http.ResponseWriter) error
+}
+
+type SetEnvironmentPorts200JSONResponse Environment
+
+func (response SetEnvironmentPorts200JSONResponse) VisitSetEnvironmentPortsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetEnvironmentPorts401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SetEnvironmentPorts401JSONResponse) VisitSetEnvironmentPortsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetEnvironmentPorts404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetEnvironmentPorts404JSONResponse) VisitSetEnvironmentPortsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignInEnvironmentPortsRequestObject struct {
+	ID     ID `json:"id"`
+	Params SignInEnvironmentPortsParams
+}
+
+type SignInEnvironmentPortsResponseObject interface {
+	VisitSignInEnvironmentPortsResponse(w http.ResponseWriter) error
+}
+
+type SignInEnvironmentPorts303ResponseHeaders struct {
+	Location *string
+}
+
+type SignInEnvironmentPorts303Response struct {
+	Headers SignInEnvironmentPorts303ResponseHeaders
+}
+
+func (response SignInEnvironmentPorts303Response) VisitSignInEnvironmentPortsResponse(w http.ResponseWriter) error {
+	if response.Headers.Location != nil {
+		w.Header().Set("Location", fmt.Sprint(*response.Headers.Location))
+	}
+	w.WriteHeader(303)
+	return nil
+}
+
+type SignInEnvironmentPorts400JSONResponse struct{ InvalidJSONResponse }
+
+func (response SignInEnvironmentPorts400JSONResponse) VisitSignInEnvironmentPortsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignInEnvironmentPorts404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SignInEnvironmentPorts404JSONResponse) VisitSignInEnvironmentPortsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SignInEnvironmentPorts503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response SignInEnvironmentPorts503JSONResponse) VisitSignInEnvironmentPortsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -7366,6 +7580,12 @@ type StrictServerInterface interface {
 	// (POST /api/frontend/environments/{id}/image/upgrade)
 	UpgradeEnvironmentImage(ctx context.Context, request UpgradeEnvironmentImageRequestObject) (UpgradeEnvironmentImageResponseObject, error)
 
+	// (PUT /api/frontend/environments/{id}/ports)
+	SetEnvironmentPorts(ctx context.Context, request SetEnvironmentPortsRequestObject) (SetEnvironmentPortsResponseObject, error)
+
+	// (GET /api/frontend/environments/{id}/ports/sign-in)
+	SignInEnvironmentPorts(ctx context.Context, request SignInEnvironmentPortsRequestObject) (SignInEnvironmentPortsResponseObject, error)
+
 	// (GET /api/frontend/environments/{id}/processes)
 	ListProcesses(ctx context.Context, request ListProcessesRequestObject) (ListProcessesResponseObject, error)
 
@@ -7922,6 +8142,66 @@ func (sh *strictHandler) UpgradeEnvironmentImage(w http.ResponseWriter, r *http.
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(UpgradeEnvironmentImageResponseObject); ok {
 		if err := validResponse.VisitUpgradeEnvironmentImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetEnvironmentPorts operation middleware
+func (sh *strictHandler) SetEnvironmentPorts(w http.ResponseWriter, r *http.Request, id ID) {
+	var request SetEnvironmentPortsRequestObject
+
+	request.ID = id
+
+	var body SetEnvironmentPortsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetEnvironmentPorts(ctx, request.(SetEnvironmentPortsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetEnvironmentPorts")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetEnvironmentPortsResponseObject); ok {
+		if err := validResponse.VisitSetEnvironmentPortsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SignInEnvironmentPorts operation middleware
+func (sh *strictHandler) SignInEnvironmentPorts(w http.ResponseWriter, r *http.Request, id ID, params SignInEnvironmentPortsParams) {
+	var request SignInEnvironmentPortsRequestObject
+
+	request.ID = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SignInEnvironmentPorts(ctx, request.(SignInEnvironmentPortsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SignInEnvironmentPorts")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SignInEnvironmentPortsResponseObject); ok {
+		if err := validResponse.VisitSignInEnvironmentPortsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -26,7 +26,7 @@ const signInPath = "/_hangar/sign-in"
 
 // labelPrefix begins the label every editor origin's host is named for,
 // which ends in the environment's ID.
-const labelPrefix = "e-"
+const labelPrefix = "code"
 
 // Tunnels opens streams to workers.
 type Tunnels interface {
@@ -42,7 +42,9 @@ type Gateway struct {
 	// the only one that may frame an editor.
 	public *publichost.Public
 	proxy  *httputil.ReverseProxy
-	log    *slog.Logger
+	// portProxy reaches environments' own web servers (ports.go).
+	portProxy *httputil.ReverseProxy
+	log       *slog.Logger
 }
 
 // NewGateway serves editors on hosts named after public, Hangar's own
@@ -64,6 +66,7 @@ func NewGateway(sessions *Manager, tunnels Tunnels, public *publichost.Public, l
 			textError(w, http.StatusBadGateway, "The editor could not be reached. It may still be starting; reload to try again.")
 		},
 	}
+	g.portProxy = g.newPortProxy()
 	return g
 }
 
@@ -156,32 +159,7 @@ func (g *Gateway) allowed(r *http.Request, env string) bool {
 }
 
 func (g *Gateway) signIn(w http.ResponseWriter, r *http.Request, env string) {
-	q := r.URL.Query()
-	cookie, err := g.sessions.Redeem(r.Context(), q.Get("ticket"), env)
-	switch {
-	case errors.Is(err, ErrNoSession):
-		textError(w, http.StatusUnauthorized, "This link has expired. Open the editor from Hangar again.")
-		return
-	case err != nil:
-		g.log.Error("redeeming an editor ticket", "err", err)
-		textError(w, http.StatusInternalServerError, "Internal error.")
-		return
-	}
-	to := q.Get("to")
-	if !strings.HasPrefix(to, "/") || strings.HasPrefix(to, "//") || strings.HasPrefix(to, "/\\") {
-		to = "/"
-	}
-	http.SetCookie(w, &http.Cookie{
-		Name:     CookieName,
-		Value:    cookie,
-		Path:     "/",
-		MaxAge:   int(cookieLifetime.Seconds()),
-		HttpOnly: true,
-		Secure:   g.public.Scheme() == "https",
-		SameSite: http.SameSiteLaxMode,
-	})
-	w.Header().Set("Cache-Control", "no-store")
-	http.Redirect(w, r, to, http.StatusSeeOther)
+	g.redeem(w, r, env, CookieName, g.public.Scheme() == "https")
 }
 
 type targetKey struct{}
