@@ -121,6 +121,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if err := EnsureDisk(ctx, docker, "hangar-docker", m.rt.cfg.DockerGiB); err != nil {
 		return nil, err
 	}
+	m.makeRoomForHugePages(s.MemoryMiB)
 	// The writable layer is the first disk: the agent, as init, mounts
 	// /dev/vda. The Docker disk is mounted by label, and so is the editor
 	// disk, shared read-only by every environment.
@@ -449,4 +450,25 @@ func daxMiB(worker int, s api.Spec) int {
 		return 0
 	}
 	return worker
+}
+
+// makeRoomForHugePages compacts the host's memory when it has too few free
+// huge-page-sized blocks for a guest of memMiB. A guest's memory that finds
+// none runs on 4 KiB pages, which is slower on any host and, under nested
+// virtualisation, hundreds of times slower to touch; a page cache that has
+// grown through the host's free memory is the usual reason, and compaction
+// moves it aside in about a second.
+func (m *machine) makeRoomForHugePages(memMiB int) {
+	free, err := ch.FreeHugeBlocksMiB()
+	if err != nil || free >= memMiB {
+		return
+	}
+	start := time.Now()
+	if err := ch.CompactMemory(); err != nil {
+		m.log.Warn("compacting the host's memory for the guest's huge pages", "err", err)
+		return
+	}
+	after, _ := ch.FreeHugeBlocksMiB()
+	m.log.Info("compacted the host's memory for the guest's huge pages", "free_huge_mib_before", free,
+		"free_huge_mib_after", after, "guest_mib", memMiB, "took", time.Since(start).Round(time.Millisecond))
 }

@@ -116,3 +116,50 @@ func ReadHugePageCounts() (HugePageCounts, error) {
 	}
 	return c, nil
 }
+
+// FreeHugeBlocksMiB is how much of the host's free memory is in blocks at
+// least as large as a transparent huge page, which is all a guest's memory
+// can take huge pages from without the kernel first compacting.
+func FreeHugeBlocksMiB() (int, error) {
+	pmd, err := os.ReadFile("/sys/kernel/mm/transparent_hugepage/hpage_pmd_size")
+	if err != nil {
+		return 0, err
+	}
+	huge, err := strconv.Atoi(strings.TrimSpace(string(pmd)))
+	if err != nil {
+		return 0, err
+	}
+	order := 0
+	for size := os.Getpagesize(); size < huge; size *= 2 {
+		order++
+	}
+	b, err := os.ReadFile("/proc/buddyinfo")
+	if err != nil {
+		return 0, err
+	}
+	var bytes int64
+	for _, line := range strings.Split(string(b), "\n") {
+		// Node 0, zone   Normal  <free blocks of order 0> <order 1> ...
+		f := strings.Fields(line)
+		if len(f) < 4 {
+			continue
+		}
+		for i, count := range f[4:] {
+			if i < order {
+				continue
+			}
+			n, err := strconv.ParseInt(count, 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("parsing /proc/buddyinfo: %w", err)
+			}
+			bytes += n << i * int64(os.Getpagesize())
+		}
+	}
+	return int(bytes >> 20), nil
+}
+
+// CompactMemory has the kernel move pages to make free memory contiguous
+// again, so that it can back a guest's memory with huge pages.
+func CompactMemory() error {
+	return os.WriteFile("/proc/sys/vm/compact_memory", []byte("1"), 0)
+}
