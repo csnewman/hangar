@@ -84,6 +84,36 @@ To use a TLS terminator and DNS of your own instead, set
 empty and put it in front of `HANGAR_LISTEN`; it then needs a certificate
 for both `<host>` and `*.<host>`.
 
+To serve a certificate you already have instead of one from ACME, put it and
+its key, as PEM, in `./tls` beside `compose.yaml`, which is mounted at
+`/etc/hangar-server/tls`, and set
+
+    HANGAR_TLS_CERT_FILE=/etc/hangar-server/tls/cert.pem
+    HANGAR_TLS_KEY_FILE=/etc/hangar-server/tls/key.pem
+
+The certificate file holds the chain, leaf first. Replacing the files is
+picked up within a minute, without a restart. The server warns at start
+about any name it serves that the certificate does not cover.
+
+### Prefix host names
+
+Some networks give a machine one name, `hangar1.example.com`, and resolve
+every `<anything>-hangar1.example.com` to it too, under a wildcard
+certificate for `*.example.com`. There Hangar names its other hosts with
+the machine's name as their suffix instead of as their parent:
+
+| | subdomain (default) | prefix |
+|---|---|---|
+| editors | `e-<id>.hangar1.example.com` | `e-<id>-hangar1.example.com` |
+| registry | `registry.hangar1.example.com` | `registry-hangar1.example.com` |
+
+Set `HANGAR_PUBLIC_URL=https://hangar1.example.com` and
+`HANGAR_HOST_STYLE=prefix`, and give the wildcard certificate as above. The
+network's own DNS answers for these names, so turn off Hangar's DNS server
+with `HANGAR_DNS_LISTEN=` (empty); ACME is not used either, since it only
+issues for the zone Hangar serves. Both kinds of name stay in the same site
+as Hangar's own, which the editor, framed in Hangar's page, relies on.
+
 ## The registry
 
 The control plane is also a container registry, at `registry.<host>`,

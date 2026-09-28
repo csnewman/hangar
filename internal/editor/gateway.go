@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/db"
+	"github.com/csnewman/hangar/internal/publichost"
 	"github.com/csnewman/hangar/internal/tunnel"
 )
 
@@ -23,38 +24,33 @@ const CookieName = "hangar_editor"
 // path VS Code's server uses.
 const signInPath = "/_hangar/sign-in"
 
-// hostPrefix begins every editor origin's host name.
-const hostPrefix = "e-"
+// labelPrefix begins the label every editor origin's host is named for,
+// which ends in the environment's ID.
+const labelPrefix = "e-"
 
 // Tunnels opens streams to workers.
 type Tunnels interface {
 	Open(workerID string, h tunnel.Header) (net.Conn, error)
 }
 
-// Gateway serves every environment's editor, each on its own host under
-// Hangar's public one.
+// Gateway serves every environment's editor, each on its own host named
+// after Hangar's public one.
 type Gateway struct {
 	sessions *Manager
 	tunnels  Tunnels
-	// public is Hangar's own origin: an editor's host is a subdomain of its
-	// host, and only it may frame the editor.
-	public *url.URL
+	// public is Hangar's own origin, which names the editors' hosts and is
+	// the only one that may frame an editor.
+	public *publichost.Public
 	proxy  *httputil.ReverseProxy
 	log    *slog.Logger
 }
 
-// NewGateway serves editors under public, Hangar's own origin as the browser
-// sees it, such as https://hangar.example.com.
-//
-// Editor hosts must be subdomains of Hangar's host so that the two are one
-// site: the browser then sends the editor origin its cookie inside Hangar's
-// iframe, which it may refuse for a cross-site frame.
-func NewGateway(sessions *Manager, tunnels Tunnels, public string, log *slog.Logger) (*Gateway, error) {
-	u, err := url.Parse(public)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return nil, fmt.Errorf("the public URL must be an http or https origin, such as https://hangar.example.com; got %q", public)
-	}
-	g := &Gateway{sessions: sessions, tunnels: tunnels, public: &url.URL{Scheme: u.Scheme, Host: u.Host}, log: log}
+// NewGateway serves editors on hosts named after public, Hangar's own
+// origin as the browser sees it. Those names are in Hangar's own site, so
+// the browser sends the editor origin its cookie inside Hangar's iframe,
+// which it may refuse for a cross-site frame.
+func NewGateway(sessions *Manager, tunnels Tunnels, public *publichost.Public, log *slog.Logger) *Gateway {
+	g := &Gateway{sessions: sessions, tunnels: tunnels, public: public, log: log}
 	g.proxy = &httputil.ReverseProxy{
 		Rewrite:        g.rewrite,
 		Transport:      g.transport(),
@@ -68,22 +64,22 @@ func NewGateway(sessions *Manager, tunnels Tunnels, public string, log *slog.Log
 			textError(w, http.StatusBadGateway, "The editor could not be reached. It may still be starting; reload to try again.")
 		},
 	}
-	return g, nil
+	return g
 }
 
 // Owns reports whether a request's host is an editor's, and whose.
 func (g *Gateway) Owns(host string) (string, bool) {
-	suffix := "." + g.public.Host
-	if !strings.HasPrefix(host, hostPrefix) || !strings.HasSuffix(host, suffix) {
+	label, ok := g.public.Label(host)
+	if !ok {
 		return "", false
 	}
-	id := strings.TrimSuffix(strings.TrimPrefix(host, hostPrefix), suffix)
-	return id, db.ValidUUID(id)
+	id, ok := strings.CutPrefix(label, labelPrefix)
+	return id, ok && db.ValidUUID(id)
 }
 
 // Origin is one environment's editor origin.
 func (g *Gateway) Origin(environmentID string) string {
-	return g.public.Scheme + "://" + hostPrefix + environmentID + "." + g.public.Host
+	return g.public.NameOrigin(labelPrefix + environmentID)
 }
 
 // SignIn issues a ticket for the Hangar session whose token is given and
@@ -181,7 +177,7 @@ func (g *Gateway) signIn(w http.ResponseWriter, r *http.Request, env string) {
 		Path:     "/",
 		MaxAge:   int(cookieLifetime.Seconds()),
 		HttpOnly: true,
-		Secure:   g.public.Scheme == "https",
+		Secure:   g.public.Scheme() == "https",
 		SameSite: http.SameSiteLaxMode,
 	})
 	w.Header().Set("Cache-Control", "no-store")
@@ -207,7 +203,7 @@ func (g *Gateway) rewrite(pr *httputil.ProxyRequest) {
 	pr.Out.URL.Host = t.env + "." + t.worker + ".hangar-editor"
 	pr.Out.Host = pr.In.Host
 	pr.SetXForwarded()
-	pr.Out.Header.Set("X-Forwarded-Proto", g.public.Scheme)
+	pr.Out.Header.Set("X-Forwarded-Proto", g.public.Scheme())
 
 	var kept []string
 	for _, c := range pr.Out.Cookies() {
@@ -248,7 +244,7 @@ func (g *Gateway) transport() *http.Transport {
 // editor frame itself: VS Code runs its web worker extension host in an
 // iframe of its own origin, and every ancestor of a frame must be allowed.
 func (g *Gateway) modifyResponse(resp *http.Response) error {
-	resp.Header.Add("Content-Security-Policy", "frame-ancestors 'self' "+g.public.String())
+	resp.Header.Add("Content-Security-Policy", "frame-ancestors 'self' "+g.public.Origin())
 	return nil
 }
 

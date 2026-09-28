@@ -32,6 +32,7 @@ import (
 	"github.com/csnewman/hangar/internal/frontendapi"
 	"github.com/csnewman/hangar/internal/placement"
 	"github.com/csnewman/hangar/internal/profile"
+	"github.com/csnewman/hangar/internal/publichost"
 	"github.com/csnewman/hangar/internal/registry"
 	"github.com/csnewman/hangar/internal/sshgw"
 	"github.com/csnewman/hangar/internal/teams"
@@ -52,8 +53,14 @@ type Config struct {
 	Web fs.FS
 	// PublicURL is Hangar's origin as browsers reach it, such as
 	// https://hangar.example.com. Each environment's editor is served on a
-	// subdomain of its host. Empty leaves environments without an editor.
+	// host of its own named after it, in HostStyle. Empty leaves
+	// environments without an editor.
 	PublicURL string
+	// HostStyle names the editors' and the registry's hosts after
+	// PublicURL's: as subdomains of it, e-<id>.hangar.example.com, or with
+	// its first label as their suffix, e-<id>-hangar.example.com (package
+	// publichost). Empty is subdomains.
+	HostStyle publichost.Style
 	// AutoSignIn, for development only, signs every visitor in as this
 	// existing user without a password. Empty requires signing in.
 	AutoSignIn string
@@ -66,8 +73,9 @@ type Config struct {
 	// UI to show. Empty is PublicURL's host at SSHListen's port.
 	SSHAddress string
 	// RegistryDir, if set, keeps the blobs of Hangar's own container
-	// registry, served on its own host: registry.<PublicURL's host>, which
-	// image names start with. Empty turns it off.
+	// registry, served on its own host named after PublicURL's, which image
+	// names start with: registry.<host>, or registry-<host> in the prefix
+	// style. Empty turns it off.
 	RegistryDir string
 	Log         *slog.Logger
 }
@@ -108,14 +116,21 @@ func New(cfg Config) (*Server, error) {
 	edits := editor.NewManager(cfg.DB)
 	profiles := profile.NewStore(cfg.DB, cfg.Sealer)
 	auditLog := audit.NewLog(cfg.DB)
+	var public *publichost.Public
+	if cfg.PublicURL != "" {
+		var err error
+		if public, err = publichost.Parse(cfg.PublicURL, cfg.HostStyle); err != nil {
+			return nil, err
+		}
+	}
 	var reg *registry.Registry
 	var registryHost string
 	if cfg.RegistryDir != "" {
-		u, err := url.Parse(cfg.PublicURL)
-		if err != nil || u.Host == "" {
-			return nil, errors.New("the registry needs a public URL, whose host it takes a subdomain of")
+		if public == nil {
+			return nil, errors.New("the registry needs a public URL, whose host it names its own after")
 		}
-		registryHost = "registry." + u.Host
+		registryHost = public.Name("registry")
+		var err error
 		if reg, err = registry.New(registry.Config{DB: cfg.DB, Dir: cfg.RegistryDir, Host: registryHost, Tokens: um,
 			Workers: wm, Credentials: profiles,
 			Log: log}); err != nil {
@@ -123,11 +138,8 @@ func New(cfg Config) (*Server, error) {
 		}
 	}
 	var editors *editor.Gateway
-	if cfg.PublicURL != "" {
-		var err error
-		if editors, err = editor.NewGateway(edits, tunnels, cfg.PublicURL, log); err != nil {
-			return nil, err
-		}
+	if public != nil {
+		editors = editor.NewGateway(edits, tunnels, public, log)
 	}
 	sessions := profile.NewSessions(profiles, tunnels, log)
 	if reg != nil {

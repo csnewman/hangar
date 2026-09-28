@@ -12,14 +12,27 @@ import (
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/editor"
+	"github.com/csnewman/hangar/internal/publichost"
 	"github.com/csnewman/hangar/internal/server"
 	"github.com/csnewman/hangar/internal/worker"
 )
 
+// An environment's editor is served on a host of its own, named after
+// Hangar's in either style.
 func TestEditor(t *testing.T) {
+	t.Run("subdomain", func(t *testing.T) {
+		testEditor(t, publichost.Subdomain, "http://hangar.test", func(label string) string { return label + ".hangar.test" })
+	})
+	t.Run("prefix", func(t *testing.T) {
+		testEditor(t, publichost.Prefix, "http://hangar1.corp.test", func(label string) string { return label + "-hangar1.corp.test" })
+	})
+}
+
+func testEditor(t *testing.T, style publichost.Style, public string, name func(label string) string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	srv, err := server.New(server.Config{DB: dbtest.Open(t), BootstrapToken: token, PublicURL: "http://hangar.test", Log: quiet()})
+	srv, err := server.New(server.Config{DB: dbtest.Open(t), BootstrapToken: token, PublicURL: public, HostStyle: style,
+		Log: quiet()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +65,7 @@ func TestEditor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := "e-" + env.ID + ".hangar.test"
+	host := name("e-" + env.ID)
 	if signInURL.Host != host {
 		t.Fatalf("editor host %q, want %q", signInURL.Host, host)
 	}
@@ -117,7 +130,7 @@ func TestEditor(t *testing.T) {
 	if got := seen.Header.Get("Cookie"); got != "other=kept" {
 		t.Errorf("the editor was sent cookies %q; its own must not reach the guest", got)
 	}
-	if csp := resp.Header.Get("Content-Security-Policy"); csp != "frame-ancestors 'self' http://hangar.test" {
+	if csp := resp.Header.Get("Content-Security-Policy"); csp != "frame-ancestors 'self' "+public {
 		t.Errorf("framing policy %q", csp)
 	}
 
@@ -125,7 +138,7 @@ func TestEditor(t *testing.T) {
 		"no cookie":                  {"Sec-Fetch-Site": {"same-origin"}},
 		"another environment":        {"Cookie": {sent}, "Sec-Fetch-Site": {"same-site"}, "Sec-Fetch-Mode": {"cors"}},
 		"another site":               {"Cookie": {sent}, "Sec-Fetch-Site": {"cross-site"}, "Sec-Fetch-Mode": {"navigate"}},
-		"a WebSocket from elsewhere": {"Cookie": {sent}, "Origin": {"http://e-00000000-0000-0000-0000-000000000000.hangar.test"}},
+		"a WebSocket from elsewhere": {"Cookie": {sent}, "Origin": {"http://" + name("e-00000000-0000-0000-0000-000000000000")}},
 	}
 	for name, h := range refused {
 		resp = do("/_simulated/request", h)

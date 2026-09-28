@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
@@ -24,6 +26,7 @@ import (
 	"github.com/csnewman/hangar/internal/certs"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/profile"
+	"github.com/csnewman/hangar/internal/publichost"
 	"github.com/csnewman/hangar/internal/server"
 	"github.com/csnewman/hangar/internal/webui"
 	"github.com/csnewman/hangar/internal/zone"
@@ -105,8 +108,15 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 		slog.Warn("no secret key (HANGAR_SECRET_KEY_FILE); users cannot keep credentials or SSH keys")
 	}
 
+	// Editors and the registry have hosts named after the public one, as its
+	// subdomains or, in the prefix style, beside it (package publichost).
+	style, err := publichost.ParseStyle(os.Getenv("HANGAR_HOST_STYLE"))
+	if err != nil {
+		return fmt.Errorf("HANGAR_HOST_STYLE: %w", err)
+	}
+
 	srv, err := server.New(server.Config{DB: d, BootstrapToken: token, Web: web,
-		PublicURL: os.Getenv("HANGAR_PUBLIC_URL"), AutoSignIn: autoSignIn, Sealer: sealer,
+		PublicURL: os.Getenv("HANGAR_PUBLIC_URL"), HostStyle: style, AutoSignIn: autoSignIn, Sealer: sealer,
 		SSHListen: os.Getenv("HANGAR_SSH_LISTEN"), SSHAddress: os.Getenv("HANGAR_SSH_ADDRESS"),
 		RegistryDir: os.Getenv("HANGAR_REGISTRY_DIR")})
 	if err != nil {
@@ -137,7 +147,7 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 	go func() { errc <- servers[0].ListenAndServe() }()
 	slog.Info("serving HTTP", "addr", listen)
 
-	edge, err := serveEdge(ctx, d, srv.Handler(), errc)
+	edge, err := serveEdge(ctx, d, srv.Handler(), style, errc)
 	if err != nil {
 		return err
 	}
@@ -160,19 +170,39 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 }
 
 // serveEdge starts what faces the internet directly, each part only when
-// configured: the zone's DNS server (HANGAR_DNS_LISTEN), HTTPS with a
-// certificate from ACME (HANGAR_TLS_LISTEN), and a redirect from HTTP to it
+// configured: the zone's DNS server (HANGAR_DNS_LISTEN), HTTPS
+// (HANGAR_TLS_LISTEN), and a redirect from HTTP to it
 // (HANGAR_REDIRECT_LISTEN). The zone is the host of HANGAR_PUBLIC_URL.
-func serveEdge(ctx context.Context, d *db.DB, handler http.Handler, errc chan<- error) ([]*http.Server, error) {
+//
+// HTTPS serves the certificate in HANGAR_TLS_CERT_FILE and
+// HANGAR_TLS_KEY_FILE when they are set, and otherwise one ACME issues for
+// the zone and its subdomains. Names in the prefix style are outside the
+// zone, in a domain someone else runs, so they need the files, and the zone
+// has nothing to serve.
+func serveEdge(ctx context.Context, d *db.DB, handler http.Handler, style publichost.Style, errc chan<- error) ([]*http.Server, error) {
 	dnsListen := os.Getenv("HANGAR_DNS_LISTEN")
 	tlsListen := os.Getenv("HANGAR_TLS_LISTEN")
 	redirectListen := os.Getenv("HANGAR_REDIRECT_LISTEN")
+	certFile, keyFile := os.Getenv("HANGAR_TLS_CERT_FILE"), os.Getenv("HANGAR_TLS_KEY_FILE")
+	if (certFile != "" || keyFile != "") && tlsListen == "" {
+		return nil, errors.New("HANGAR_TLS_CERT_FILE and HANGAR_TLS_KEY_FILE are served by HANGAR_TLS_LISTEN, which is not set")
+	}
+	if (certFile == "") != (keyFile == "") {
+		return nil, errors.New("HANGAR_TLS_CERT_FILE and HANGAR_TLS_KEY_FILE are set together: the certificate and its key")
+	}
 	if dnsListen == "" && tlsListen == "" && redirectListen == "" {
 		return nil, nil
 	}
 	public, err := url.Parse(os.Getenv("HANGAR_PUBLIC_URL"))
 	if err != nil || public.Hostname() == "" {
 		return nil, errors.New("HANGAR_DNS_LISTEN, HANGAR_TLS_LISTEN and HANGAR_REDIRECT_LISTEN need HANGAR_PUBLIC_URL, whose host is the zone")
+	}
+	names, err := publichost.Parse(public.String(), style)
+	if err != nil {
+		return nil, err
+	}
+	if style == publichost.Prefix && dnsListen != "" {
+		return nil, errors.New("HANGAR_DNS_LISTEN serves a zone under the public host, and prefix host names (HANGAR_HOST_STYLE) are outside it, in a domain whose own DNS already answers for them; leave it unset")
 	}
 	host := public.Hostname()
 	records := zone.NewManager(d)
@@ -226,23 +256,37 @@ func serveEdge(ctx context.Context, d *db.DB, handler http.Handler, errc chan<- 
 		if public.Scheme != "https" {
 			return nil, errors.New("HANGAR_TLS_LISTEN needs an https HANGAR_PUBLIC_URL")
 		}
-		o := certs.Options{Zone: host, Email: os.Getenv("HANGAR_ACME_EMAIL"), CA: os.Getenv("HANGAR_ACME_CA")}
-		if f := os.Getenv("HANGAR_ACME_CA_ROOTS"); f != "" {
-			if o.CARoots, err = os.ReadFile(f); err != nil {
-				return nil, fmt.Errorf("HANGAR_ACME_CA_ROOTS: %w", err)
+		var tlsConfig *tls.Config
+		switch {
+		case certFile != "":
+			files, err := certs.LoadFiles(certFile, keyFile, slog.Default())
+			if err != nil {
+				return nil, err
 			}
-		}
-		cm, err := certs.New(d, records, o, slog.Default())
-		if err != nil {
-			return nil, err
-		}
-		if err := cm.Start(ctx); err != nil {
-			return nil, err
+			warnUncovered(files.Leaf(), names)
+			tlsConfig = files.TLSConfig()
+		case style == publichost.Prefix:
+			return nil, errors.New("HTTPS for prefix host names (HANGAR_HOST_STYLE) needs a certificate that covers them, such as one for *.<domain>, in HANGAR_TLS_CERT_FILE and HANGAR_TLS_KEY_FILE: ACME certificates are only issued for the zone Hangar serves")
+		default:
+			o := certs.Options{Zone: host, Email: os.Getenv("HANGAR_ACME_EMAIL"), CA: os.Getenv("HANGAR_ACME_CA")}
+			if f := os.Getenv("HANGAR_ACME_CA_ROOTS"); f != "" {
+				if o.CARoots, err = os.ReadFile(f); err != nil {
+					return nil, fmt.Errorf("HANGAR_ACME_CA_ROOTS: %w", err)
+				}
+			}
+			cm, err := certs.New(d, records, o, slog.Default())
+			if err != nil {
+				return nil, err
+			}
+			if err := cm.Start(ctx); err != nil {
+				return nil, err
+			}
+			tlsConfig = cm.TLSConfig()
 		}
 		hs := &http.Server{
 			Addr:              tlsListen,
 			Handler:           handler,
-			TLSConfig:         cm.TLSConfig(),
+			TLSConfig:         tlsConfig,
 			ReadHeaderTimeout: 10 * time.Second,
 		}
 		go func() { errc <- hs.ListenAndServeTLS("", "") }()
@@ -272,6 +316,24 @@ func serveEdge(ctx context.Context, d *db.DB, handler http.Handler, errc chan<- 
 		servers = append(servers, hs)
 	}
 	return servers, nil
+}
+
+// warnUncovered warns about each of the names Hangar serves that a
+// certificate from files does not cover: a browser would refuse them.
+func warnUncovered(leaf *x509.Certificate, names *publichost.Public) {
+	hosts := []string{names.Host(), names.Name("e-00000000-0000-0000-0000-000000000000")}
+	if os.Getenv("HANGAR_REGISTRY_DIR") != "" {
+		hosts = append(hosts, names.Name("registry"))
+	}
+	for _, h := range hosts {
+		if name, _, err := net.SplitHostPort(h); err == nil {
+			h = name
+		}
+		if err := leaf.VerifyHostname(h); err != nil {
+			slog.Warn("the certificate in HANGAR_TLS_CERT_FILE does not cover a host Hangar serves; browsers will refuse it",
+				"host", h, "covers", leaf.DNSNames)
+		}
+	}
 }
 
 func splitList(s string) []string {
