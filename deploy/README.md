@@ -272,6 +272,31 @@ source -- Cloud Hypervisor with Hangar's patches, the virtio-fs and
 virtio-gpu backends, the guest kernel, the guest agent and VS Code's server
 -- so building it takes a while and wants about 8 GiB of memory.
 
+## Updating
+
+On each machine, from `deploy/`, pull the new images and recreate what
+changed, naming the profiles that machine runs:
+
+    docker compose --profile control-plane --profile worker pull
+    docker compose --profile control-plane --profile worker up -d
+
+`latest` moves with every commit on master; set `HANGAR_VERSION` to a
+commit to stay on one, and change it to update. Copy the new `compose.yaml`
+across too when it has changed. Nothing else is needed:
+
+- The server brings the database up to date as it starts, and workers
+  reconnect to it on their own.
+- A worker that is replaced powers its environments off first; their disks
+  are kept, and those that were running start again once it is back,
+  booting the new worker's kernel and agent. Anything unsaved in them is
+  lost, so update when people can stop.
+- A suspended environment stays suspended and resumes on the new worker. A
+  release that changes the machine underneath, such as Cloud Hypervisor,
+  may not resume one suspended on the old; stop environments rather than
+  suspend them before such an update.
+- An environment's image stays the copy it was made over; the page offers
+  a newer build of it when there is one.
+
 Images are pulled too, by the worker, the first time an environment needs
 one: a template names an image reference, such as
 `ghcr.io/csnewman/hangar/base:ubuntu-26.04`, and the worker pulls its own
