@@ -121,10 +121,13 @@ RUN HANGAR_EDITOR_WORK=/work /src/editor/build.sh /out \
 
 # ---------------------------------------------------------------- worker
 FROM ${UBUNTU} AS worker
+# libopengl0 is desktop OpenGL through EGL, which libepoxy loads for
+# virglrenderer and aborts without: the GPU backend would die as the guest
+# first asked what it offers.
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
       ca-certificates passt e2fsprogs coreutils \
-      libepoxy0 libgbm1 libegl1 libgles2 libdrm2 libvulkan1 \
+      libepoxy0 libgbm1 libegl1 libgles2 libopengl0 libdrm2 libvulkan1 \
       libgl1-mesa-dri mesa-vulkan-drivers >/dev/null \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=gpu /usr/local/lib/ /usr/local/lib/
