@@ -267,9 +267,15 @@ components:
 
     Environment:
       type: object
-      required: [id, name, owner_id, owner, template, phase, desired, created_at, updated_at]
+      required: [id, short_id, name, owner_id, owner, template, phase, desired, created_at, updated_at]
       properties:
         id: { type: string }
+        short_id:
+          type: string
+          description: >-
+            Six characters that name the environment on the whole server:
+            the SSH gateway takes it as the username, as <short_id>@<host>,
+            whoever owns the environment.
         name: { type: string }
         owner_id: { type: string }
         owner:

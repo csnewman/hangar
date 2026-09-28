@@ -221,6 +221,27 @@ func TestGateway(t *testing.T) {
 		t.Error("a name with no environment was let in")
 	}
 
+	// An environment's short ID names it on the whole server, for whoever
+	// may reach it and nobody else.
+	var short string
+	if err := d.Transact(ctx, func(tx db.Tx) error {
+		return tx.QueryRow(ctx, `SELECT short_id FROM environments WHERE id = $1`, running).Scan(&short)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	byShort, err := dial(short, aliceKey)
+	if err != nil {
+		t.Fatalf("alice by the short ID: %v", err)
+	}
+	s, _ = byShort.NewSession()
+	if b, err := s.Output("echo by short id"); err != nil || string(b) != "by short id\n" {
+		t.Errorf("a command by the short ID: %q, %v", b, err)
+	}
+	byShort.Close()
+	if _, err := dial(short, bobKey); err == nil {
+		t.Error("bob reached alice's environment by its short ID")
+	}
+
 	// A stopped environment says so.
 	c2, err := dial("idle", aliceKey)
 	if err != nil {

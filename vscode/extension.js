@@ -244,7 +244,11 @@ function alias(me, env) {
   return `hangar-${env.name}.${env.owner.replace(/[^A-Za-z0-9_-]/g, '_')}`
 }
 
+// sshUser is how the gateway is told which environment: its short ID, which
+// names it whoever owns it, or on a server that has none, its name, with
+// its owner's before it for anyone else's.
 function sshUser(me, env) {
+  if (env.short_id) return env.short_id
   return env.owner_id === me.id ? env.name : `${env.owner}/${env.name}`
 }
 

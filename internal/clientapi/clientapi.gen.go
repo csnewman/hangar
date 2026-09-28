@@ -53,8 +53,11 @@ type Environment struct {
 	Progress *StartProgress `json:"progress,omitempty"`
 
 	// Reason Why it is in its phase, when there is more to say.
-	Reason   *string `json:"reason,omitempty"`
-	Template string  `json:"template"`
+	Reason *string `json:"reason,omitempty"`
+
+	// ShortID Six characters that name the environment on the whole server: the SSH gateway takes it as the username, as <short_id>@<host>, whoever owns the environment.
+	ShortID  string `json:"short_id"`
+	Template string `json:"template"`
 
 	// UpdatedAt When its phase last changed.
 	UpdatedAt time.Time `json:"updated_at"`

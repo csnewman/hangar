@@ -26,7 +26,9 @@ function sshArgs(me: Me, env: Environment): string[] {
   mkdirSync(dir, { recursive: true })
   const knownHosts = join(dir, 'known_hosts')
   writeFileSync(knownHosts, `${alias} ${gw.host_key}\n`)
-  const user = env.owner_id === me.id ? env.name : `${env.owner}/${env.name}`
+  // The short ID names the environment whoever owns it; a name is the
+  // owner's, and someone else's needs the owner before it.
+  const user = env.short_id ?? (env.owner_id === me.id ? env.name : `${env.owner}/${env.name}`)
   return [
     '-p',
     String(gw.port),

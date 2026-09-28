@@ -111,7 +111,8 @@ func TestClientAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, body = f.call("GET", "/api/v1/environments", "", bearer)
-	if list, _ := body.([]any); status != 200 || len(list) != 1 || list[0].(map[string]any)["name"] != "dev" {
+	if list, _ := body.([]any); status != 200 || len(list) != 1 || list[0].(map[string]any)["name"] != "dev" ||
+		list[0].(map[string]any)["short_id"] != env.ShortID {
 		t.Fatalf("environments: %d %v", status, body)
 	}
 	if status, _ := f.call("GET", "/api/v1/environments/"+env.ID, "", bearer); status != 200 {

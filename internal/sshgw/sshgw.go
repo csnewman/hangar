@@ -23,6 +23,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -95,8 +96,14 @@ func (g *Gateway) Serve(ctx context.Context, addr string) error {
 	}
 }
 
+// shortID is an environment's short ID.
+var shortID = regexp.MustCompile(`^[a-z0-9]{6}$`)
+
 // authenticate lets a key in if its owner may reach the environment the
-// username names: "name" for one of their own, "owner/name" otherwise.
+// username names: "name" for one of their own, "owner/name" otherwise, or
+// the environment's short ID, which names one on the whole server and is
+// what tools that write the command use. A name of the key's owner's is
+// taken first, so what someone types means what it always did.
 func (g *Gateway) authenticate(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Permissions, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -117,6 +124,9 @@ func (g *Gateway) authenticate(meta ssh.ConnMetadata, key ssh.PublicKey) (*ssh.P
 			who = ownerName
 		}
 		env, err := g.envs.ByName(ctx, p, who, name)
+		if (errors.Is(err, environments.ErrNotFound) || errors.Is(err, pgx.ErrNoRows)) && !qualified && shortID.MatchString(name) {
+			env, err = g.envs.ByShortID(ctx, p, name)
+		}
 		if errors.Is(err, environments.ErrNotFound) || errors.Is(err, pgx.ErrNoRows) {
 			continue
 		}

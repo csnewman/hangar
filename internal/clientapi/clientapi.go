@@ -328,6 +328,7 @@ func (h *handler) setDesired(ctx context.Context, id string, d api.DesiredState)
 func environment(e api.Environment) Environment {
 	out := Environment{
 		ID:        e.ID,
+		ShortID:   e.ShortID,
 		Name:      e.Name,
 		OwnerID:   e.OwnerID,
 		Owner:     e.Owner,

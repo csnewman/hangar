@@ -19,6 +19,9 @@ export const partition = (s: Server) => `persist:server-${s.id}`
 
 export interface Environment {
   id: string
+  // short_id names the environment on the whole server, for the SSH
+  // gateway. A server from before it has none.
+  short_id?: string
   name: string
   owner_id: string
   owner: string

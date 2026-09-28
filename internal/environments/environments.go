@@ -170,6 +170,18 @@ func (m *Manager) ByName(ctx context.Context, p users.Principal, owner, name str
 	return e, err
 }
 
+// ByShortID returns the environment with this short ID, if p may reach it.
+func (m *Manager) ByShortID(ctx context.Context, p users.Principal, short string) (api.Environment, error) {
+	var e api.Environment
+	err := m.db.Transact(ctx, func(tx db.Tx) error {
+		var err error
+		e, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM `+from+` WHERE `+visible+`
+			AND e.short_id = $3 AND e.desired <> 'deleted'`, p.Admin, p.UserID, short))
+		return err
+	})
+	return e, err
+}
+
 // Create makes an environment, owned by p, from a template p may see, and
 // asks for it to run. Placement picks it up from there.
 //

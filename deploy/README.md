@@ -176,7 +176,10 @@ It signs people in with the public keys they add under Profile, then
 Sign-in keys, and reaches the environment over the worker's own connection:
 no environment is reachable from the network, and the workers need no
 ports open for it. A person reaches their own environments by name, and
-anyone else's they can see as `<owner>/<environment>`. Shells, commands,
+anyone else's they can see as `<owner>/<environment>`. An environment's
+six-character short ID, on its page, names it whoever owns it
+(`ssh k3x9q2@<host> -p 2222`), which is what the desktop app and the VS
+Code extension use. Shells, commands,
 port forwarding, `scp` and `sftp` all work, and so does VS Code's
 Remote-SSH. The gateway's host key is made on first start and kept in
 Postgres, sealed with the secret key, so every replica presents the same
