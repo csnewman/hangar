@@ -30,7 +30,7 @@ A worker machine needs, before its container starts:
       printf 'vm.compaction_proactiveness = 90\nvm.min_free_kbytes = 262144\n' \
           | sudo tee /etc/sysctl.d/60-hangar-thp.conf && sudo sysctl --system
 
-- **`/var/lib/hangar`** on a fast local Linux filesystem with room for every
+- **`HANGAR_WORKER_DATA_DIR`** (`/var/lib/hangar` unless set) on a fast local Linux filesystem with room for every
   environment's disks (each is sparse, up to `upper_gib + docker_gib`) and
   the images. Each image layer is unpacked there once, however many images
   share it, and stacked into their root filesystems, served to environments
@@ -197,11 +197,20 @@ it:
 |---|---|
 | control plane's database | `$HANGAR_DATA_DIR/postgres` |
 | registry's blobs | `$HANGAR_DATA_DIR/registry` |
-| a worker's environments, images and caches | `/var/lib/hangar` |
+| a worker's environments, images and caches | `$HANGAR_WORKER_DATA_DIR` |
 | secrets | `bootstrap-token` and `secret-key` beside `compose.yaml` |
 
-`HANGAR_DATA_DIR` is `/var/lib/hangar-server` unless `.env` says
-otherwise. Back up the database with the secret key: a copy of one without
+`HANGAR_DATA_DIR` is `/var/lib/hangar-server` and `HANGAR_WORKER_DATA_DIR`
+`/var/lib/hangar` unless `.env` says otherwise; the worker sees its own as
+`/var/lib/hangar` either way, which is what `worker.yaml` names. To keep
+everything in one directory, set `HANGAR_WORKER_DATA_DIR` to
+`$HANGAR_DATA_DIR/worker` (spelled out: `.env` does not expand it); a
+worker already in use is moved with it stopped:
+
+    docker compose --profile worker down
+    sudo mv /var/lib/hangar /var/lib/hangar-server/worker
+    docker compose --profile worker up -d
+ Back up the database with the secret key: a copy of one without
 the other loses users' credentials. Stop the control plane first, or dump
 the database live:
 

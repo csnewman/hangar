@@ -131,9 +131,11 @@ services:
       - apparmor=unconfined
     volumes:
       - ./worker.yaml:/etc/hangar/worker.yaml:ro
-      # Environments' disks. A host path, not a volume, so they sit on the
-      # host's own filesystem and survive the container.
-      - /var/lib/hangar:/var/lib/hangar
+      # Environments' disks, images and caches. A directory on the host,
+      # not a volume, so they sit on the host's own filesystem and survive
+      # the container. The worker sees it as /var/lib/hangar wherever it
+      # is, which is what worker.yaml names.
+      - ${HANGAR_WORKER_DATA_DIR:-/var/lib/hangar}:/var/lib/hangar
     secrets: [bootstrap-token]
 
   build-image:
@@ -151,7 +153,7 @@ services:
     environment:
       IMAGE: ${IMAGE:-ubuntu-26.04}
     volumes:
-      - /var/lib/hangar/image-src/${IMAGE:-ubuntu-26.04}:/out
+      - ${HANGAR_WORKER_DATA_DIR:-/var/lib/hangar}/image-src/${IMAGE:-ubuntu-26.04}:/out
 
 secrets:
   bootstrap-token:
