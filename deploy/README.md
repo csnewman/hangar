@@ -137,6 +137,7 @@ Hangar does. A DNS label is at most 63 characters, so the free name is at
 most 53 (fewer in the prefix style, which shares the label with the
 machine's name).
 
+## The registry
 
 The control plane is also a container registry, at `registry.<host>`,
 covered by the same DNS and certificate as every other name under it:
@@ -164,6 +165,54 @@ off. Once an hour the control plane deletes what nothing needs: manifests
 no tag, index or environment keeps, and blobs no repository uses, leaving
 anything pushed within the hour. Deleting a tag or a repository frees its
 space then.
+
+## Your own images
+
+An environment's image is a container image whose root filesystem is booted
+as a machine, with systemd, so the easiest image of your own is Hangar's
+base image with what your work needs added:
+
+    # Dockerfile
+    FROM ghcr.io/csnewman/hangar/base:ubuntu-26.04
+    RUN apt-get update \
+     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+          postgresql-client python3-venv \
+     && rm -rf /var/lib/apt/lists/*
+    # Everything's user is dev, uid 1000, at /home/dev.
+    COPY --chown=1000:1000 dotfiles/ /home/dev/
+    # A service that starts with the environment.
+    COPY my-agent.service /etc/systemd/system/
+    RUN systemctl enable my-agent.service
+
+For Rocky Linux, start `FROM ghcr.io/csnewman/hangar/base:rocky-10` and use
+`dnf`. `minimal:<distro>` in place of `base:<distro>` starts from an image
+with no desktop, Docker or everyday tools, for a headless environment that
+wants little.
+
+Build it for the workers' architecture, sign in to Hangar's registry with
+an access token, and push:
+
+    docker buildx build --platform linux/amd64,linux/arm64 \
+        -t registry.hangar.example.com/<username>/devtools:1 --push .
+    docker login registry.hangar.example.com -u <username>
+
+then name `registry.hangar.example.com/<username>/devtools:1` as the image
+in a template. Any registry works the same way; a private one needs
+`vm.registries` in `worker.yaml`.
+
+- Only the file system counts. `ENV`, `USER`, `WORKDIR`, `CMD`,
+  `ENTRYPOINT`, `EXPOSE` and `VOLUME` are Docker's to run a container, and a
+  machine boots its own init instead: put environment variables in
+  `/etc/environment` or `/etc/profile.d/`, and what should run in a systemd
+  unit.
+- Workers keep each layer once, so an image on top of the base costs them
+  only its own layers, and pulls only those.
+- Pushing a new build to the same tag reaches new environments by itself.
+  One made from the old build keeps it, and its page offers the upgrade
+  (see Updating). Tag builds, or pin the base by digest, to know what an
+  environment has.
+- The base images' tags move with Hangar; rebuild on top of them to pick up
+  its changes to the guest.
 
 ## SSH
 
