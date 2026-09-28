@@ -25,8 +25,11 @@ services:
       POSTGRES_USER: hangar
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
       POSTGRES_DB: hangar
+    # A directory on the host, not a Docker volume, so the database is where
+    # backups and the host's own tools can see it. Postgres makes it its
+    # own on first start.
     volumes:
-      - pgdata:/var/lib/postgresql
+      - ${HANGAR_DATA_DIR:-/var/lib/hangar-server}/postgres:/var/lib/postgresql
     healthcheck:
       test: [CMD, pg_isready, -U, hangar]
       interval: 5s
@@ -75,7 +78,7 @@ services:
       # host> (registry-<host> in the prefix style). Empty turns it off.
       HANGAR_REGISTRY_DIR: ${HANGAR_REGISTRY_DIR-/var/lib/hangar-server/registry}
     volumes:
-      - registry:/var/lib/hangar-server/registry
+      - ${HANGAR_DATA_DIR:-/var/lib/hangar-server}/registry:/var/lib/hangar-server/registry
       # The directory, not the files, so that files replaced by renaming
       # new ones into place are seen.
       - ${HANGAR_TLS_DIR:-./tls}:/etc/hangar-server/tls:ro
@@ -92,6 +95,18 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      data-dirs:
+        condition: service_completed_successfully
+
+  # The server runs as an unprivileged user (65532, the image's nonroot),
+  # and a directory Docker makes on the host for a bind mount belongs to
+  # root: this gives the server its own before it starts.
+  data-dirs:
+    profiles: [control-plane]
+    image: busybox:1.37
+    command: [chown, "65532:65532", /registry]
+    volumes:
+      - ${HANGAR_DATA_DIR:-/var/lib/hangar-server}/registry:/registry
 
   worker:
     profiles: [worker]
@@ -143,7 +158,3 @@ secrets:
     file: ${HANGAR_BOOTSTRAP_TOKEN_FILE:-./bootstrap-token}
   secret-key:
     file: ${HANGAR_SECRET_KEY_FILE:-./secret-key}
-
-volumes:
-  pgdata:
-  registry:

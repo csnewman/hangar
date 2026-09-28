@@ -157,7 +157,7 @@ credential: they need no `vm.registries` entry for it, and nothing in
 their network reaches the registry's name. A template may name only images
 whoever saves it can pull.
 
-Blobs are kept in `HANGAR_REGISTRY_DIR` (the `registry` volume), and
+Blobs are kept in `HANGAR_REGISTRY_DIR` (`registry/` under `HANGAR_DATA_DIR`), and
 everything else about them in Postgres, so every replica of the control
 plane must share that directory. Setting it to empty turns the registry
 off. Once an hour the control plane deletes what nothing needs: manifests
@@ -186,6 +186,36 @@ one.
 `HANGAR_SSH_ADDRESS` is the `host:port` the UI shows people, when that is not
 the public URL's host at the listen port -- behind a load balancer on port
 22, say.
+
+## Where the data is
+
+Everything that lasts is in directories on the host, not Docker volumes,
+so backups and the host's own tools see it and nothing in Docker can lose
+it:
+
+| | host directory |
+|---|---|
+| control plane's database | `$HANGAR_DATA_DIR/postgres` |
+| registry's blobs | `$HANGAR_DATA_DIR/registry` |
+| a worker's environments, images and caches | `/var/lib/hangar` |
+| secrets | `bootstrap-token` and `secret-key` beside `compose.yaml` |
+
+`HANGAR_DATA_DIR` is `/var/lib/hangar-server` unless `.env` says
+otherwise. Back up the database with the secret key: a copy of one without
+the other loses users' credentials. Stop the control plane first, or dump
+the database live:
+
+    docker compose exec -T postgres pg_dump -U hangar hangar > hangar.sql
+
+A deployment from before these were directories kept them in the volumes
+`hangar_pgdata` and `hangar_registry`. Stop it, copy them across, and
+start it again:
+
+    docker compose --profile control-plane down
+    sudo mkdir -p /var/lib/hangar-server
+    docker run --rm -v hangar_pgdata:/from -v /var/lib/hangar-server/postgres:/to busybox cp -a /from/. /to/
+    docker run --rm -v hangar_registry:/from -v /var/lib/hangar-server/registry:/to busybox cp -a /from/. /to/
+    docker compose --profile control-plane up -d
 
 ## Does the worker need `--privileged`?
 
