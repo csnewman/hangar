@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -43,7 +45,7 @@ func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(ctx, bin,
+	args := []string{
 		"--vhost-user",
 		"--socket-path", socket,
 		// Stay in the foreground so this process supervises it rather than
@@ -56,12 +58,39 @@ func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error
 		// passt of its own, so one monitor is all it ever serves.
 		"--one-off",
 		"--quiet",
-	)
-	if err := launch(cmd, "passt", socket, "", 10*time.Second, verbose); err != nil {
+	}
+	if passtAsRoot.Load() {
+		args = append(args, asRoot...)
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	err = launch(cmd, "passt", socket, "", 10*time.Second, verbose)
+	if err != nil && !passtAsRoot.Load() && os.Geteuid() == 0 && strings.Contains(err.Error(), "Failed to sandbox") {
+		// Started as root, passt changes to nobody and then sandboxes
+		// itself in new namespaces, a user namespace among them. Ubuntu
+		// refuses an unprivileged process one unless its AppArmor profile
+		// allows it (kernel.apparmor_restrict_unprivileged_userns), which
+		// passt's own profile does, but not in a container with AppArmor
+		// turned off, as the worker's is. Kept as root, the process that
+		// makes the namespaces has the capabilities to, and passt is still
+		// sandboxed in them.
+		passtAsRoot.Store(true)
+		_ = os.Remove(socket)
+		_ = os.Remove(socket + ".repair")
+		cmd = exec.CommandContext(ctx, bin, append(args, asRoot...)...)
+		err = launch(cmd, "passt", socket, "", 10*time.Second, verbose)
+	}
+	if err != nil {
 		return nil, err
 	}
 	return &Passt{cmd: cmd, socket: socket}, nil
 }
+
+// asRoot keeps passt as root rather than changing to nobody.
+var asRoot = []string{"--runas", "0:0"}
+
+// passtAsRoot is set once passt has been found unable to sandbox itself as
+// nobody on this host, so every later one starts as root.
+var passtAsRoot atomic.Bool
 
 // Socket is the path the monitor should connect to.
 func (p *Passt) Socket() string { return p.socket }
