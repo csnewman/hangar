@@ -249,6 +249,9 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 		out, err := sess.Exec(30*time.Second, cmd...)
 		return err == nil && out.Code == 0
 	}
+	// The keys are listed before the first clone over SSH, for the worker's
+	// log, and named again if the git host refuses them.
+	var keys *agentKeys
 	for _, r := range spec.Spec.Repos {
 		m.step(api.StepWorkspace, "cloning "+r.URL)
 		if err := run(time.Minute, "creating "+filepath.Dir(r.Path),
@@ -264,7 +267,14 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 			if err := run(time.Minute, "clearing an earlier attempt", "rm", "-rf", "--", partial); err != nil {
 				return err
 			}
+			if keys == nil && overSSH(r.URL) {
+				keys = listAgentKeys(sess, as)
+				m.log.Info("the owner's SSH agent in the guest", "keys", keys.String())
+			}
 			if err := m.clone(ctx, sess, r.URL, git("clone", "--progress", "--", r.URL, partial)); err != nil {
+				if keys != nil && strings.Contains(err.Error(), "(publickey") {
+					return fmt.Errorf("%s: %s", strings.TrimRight(err.Error(), "."), keys.refused())
+				}
 				return err
 			}
 			if r.Ref != "" {
@@ -368,6 +378,62 @@ func (m *machine) clone(ctx context.Context, sess *agent.Session, url string, cm
 		return fmt.Errorf("%s: %s", what, why)
 	}
 	return nil
+}
+
+// agentKeys are the keys the owner's SSH agent in the guest offers, as a
+// clone over SSH sees them, to tell a key the git host does not know from no
+// key at all.
+type agentKeys struct {
+	keys []string // fingerprint and type: "SHA256:... (ED25519)"
+	why  string   // why there are none
+}
+
+func listAgentKeys(sess *agent.Session, as []string) *agentKeys {
+	cmd := append(append([]string{}, as...), "env", "SSH_AUTH_SOCK="+sysuser.SSHAuthSock, "ssh-add", "-l")
+	out, err := sess.Exec(45*time.Second, cmd...)
+	switch {
+	case err != nil || out.Code == 2:
+		return &agentKeys{why: "the SSH agent could not be reached"}
+	case out.Code == 1:
+		return &agentKeys{why: "the SSH agent offered no keys"}
+	}
+	k := &agentKeys{}
+	for _, line := range strings.Split(strings.TrimSpace(out.Stdout), "\n") {
+		// "256 SHA256:... comment (ED25519)"
+		f := strings.Fields(line)
+		if len(f) >= 2 {
+			k.keys = append(k.keys, f[1]+" "+f[len(f)-1])
+		}
+	}
+	return k
+}
+
+func (k *agentKeys) String() string {
+	if len(k.keys) == 0 {
+		return k.why
+	}
+	return strings.Join(k.keys, ", ")
+}
+
+// refused explains a git host's refusal of the keys.
+func (k *agentKeys) refused() string {
+	switch len(k.keys) {
+	case 0:
+		return k.why + "; add one under Profile, then SSH keys (an environment of an untrusted template is given none)."
+	case 1:
+		return "the git host refused " + k.String() + ", the key the SSH agent offered; add it to your account there."
+	}
+	return "the git host refused " + k.String() + ", the keys the SSH agent offered; add one to your account there."
+}
+
+// overSSH is whether git fetches url over SSH: an ssh:// URL, or the
+// scp-like user@host:path.
+func overSSH(url string) bool {
+	if scheme, _, ok := strings.Cut(url, "://"); ok {
+		return strings.HasPrefix(scheme, "ssh") || strings.HasSuffix(scheme, "ssh")
+	}
+	host, _, ok := strings.Cut(url, ":")
+	return ok && !strings.Contains(host, "/")
 }
 
 // passtDir is where passt's socket goes. Distributions confine passt with an
