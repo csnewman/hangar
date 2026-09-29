@@ -250,6 +250,17 @@ func (x *session) serve(ctx context.Context) error {
 				readErr <- fmt.Errorf("a malformed message from the agent: %w", err)
 				return
 			}
+			// Signatures and credentials are answered at once, not after
+			// the profile's files: a clone signs in while a large profile
+			// is still being sent.
+			if m.Type == TypeSign || m.Type == TypeGetCredential {
+				go func() {
+					if err := x.handle(ctx, m); err != nil {
+						conn.Close()
+					}
+				}()
+				continue
+			}
 			select {
 			case incoming <- m:
 			case <-ctx.Done():
@@ -258,9 +269,13 @@ func (x *session) serve(ctx context.Context) error {
 		}
 	}()
 
-	// What is shared, everything in it, then that it is everything: the
+	// The keys first, which a clone as the environment starts waits for;
+	// then what is shared, everything in it, and that it is everything: the
 	// agent sends what it has that the profile does not only once it knows
 	// what the profile has.
+	if err := x.sendKeys(ctx); err != nil {
+		return err
+	}
 	if err := x.sendPaths(ctx); err != nil {
 		return err
 	}
@@ -270,9 +285,6 @@ func (x *session) serve(ctx context.Context) error {
 		}
 	}
 	if err := x.sendFiles(ctx); err != nil {
-		return err
-	}
-	if err := x.sendKeys(ctx); err != nil {
 		return err
 	}
 	if err := x.send(Message{Type: TypeSynced}); err != nil {

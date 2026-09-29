@@ -42,7 +42,13 @@ type Guest struct {
 	keys    []ssh.PublicKey
 	held    map[string]bool   // locks held here, renewed while they are
 	backing map[string]string // LockFS's backing for each directory it serves
+
+	synced     chan struct{} // closed once a session has had the profile whole
+	syncedOnce sync.Once
 }
+
+// Synced is closed once the profile has first arrived whole.
+func (g *Guest) Synced() <-chan struct{} { return g.synced }
 
 // SetBacking tells the guest where LockFS keeps each directory it serves.
 // While a program takes or lets go of a lock, the directory is held by the
@@ -55,7 +61,8 @@ func (g *Guest) SetBacking(backing map[string]string) {
 
 // NewGuest keeps u's home directory, and serves u's SSH agent.
 func NewGuest(u *user.User, log *slog.Logger) *Guest {
-	g := &Guest{user: u, log: log, changed: make(chan struct{}), held: map[string]bool{}}
+	g := &Guest{user: u, log: log, changed: make(chan struct{}), held: map[string]bool{},
+		synced: make(chan struct{})}
 	go g.renew()
 	return g
 }
@@ -100,12 +107,25 @@ func (g *Guest) setCurrent(s, was *guestSession) {
 // session returns the session once it has been sent the profile whole,
 // waiting up to wait for one.
 func (g *Guest) session(wait time.Duration) *guestSession {
+	return g.await(wait, (*guestSession).isReady)
+}
+
+// connected returns the session as soon as there is one. Signatures and
+// credentials are the server's to give and need nothing of the profile, so
+// they are not held up while a large profile is still arriving.
+func (g *Guest) connected(wait time.Duration) *guestSession {
+	return g.await(wait, func(*guestSession) bool { return true })
+}
+
+// await returns the session once there is one and ok says it will do,
+// waiting up to wait.
+func (g *Guest) await(wait time.Duration, ok func(*guestSession) bool) *guestSession {
 	deadline := time.After(wait)
 	for {
 		g.mu.Lock()
 		s, changed := g.current, g.changed
 		g.mu.Unlock()
-		if s != nil && s.isReady() {
+		if s != nil && ok(s) {
 			return s
 		}
 		select {
@@ -211,8 +231,9 @@ type guestSession struct {
 	watched map[string]bool // directories watched
 	watcher *fsnotify.Watcher
 
-	rmu   sync.Mutex
-	ready bool // the profile has been sent whole
+	rmu      sync.Mutex
+	ready    bool // the profile has been sent whole
+	haveKeys bool // the keys have been sent
 
 	pmu     sync.Mutex
 	pending map[int64]chan Message
@@ -223,6 +244,12 @@ func (s *guestSession) isReady() bool {
 	s.rmu.Lock()
 	defer s.rmu.Unlock()
 	return s.ready
+}
+
+func (s *guestSession) keysKnown() bool {
+	s.rmu.Lock()
+	defer s.rmu.Unlock()
+	return s.haveKeys
 }
 
 func (s *guestSession) send(m Message) error {
@@ -370,6 +397,7 @@ func (s *guestSession) handle(m Message) error {
 		s.rmu.Lock()
 		s.ready = true
 		s.rmu.Unlock()
+		s.g.syncedOnce.Do(func() { close(s.g.synced) })
 		return s.flush()
 	case TypeRegistry:
 		s.g.setRegistry(m.Host)
@@ -383,6 +411,9 @@ func (s *guestSession) handle(m Message) error {
 		s.g.mu.Lock()
 		s.g.keys = keys
 		s.g.mu.Unlock()
+		s.rmu.Lock()
+		s.haveKeys = true
+		s.rmu.Unlock()
 	}
 	return nil
 }
@@ -722,9 +753,10 @@ var errReadOnly = errors.New("keys are managed in Hangar, on the Profile page")
 
 // List gives the user's keys, waiting a while for the server to send them:
 // a clone made while the environment is still starting asks before the
-// profile session has connected.
+// profile session has connected. The keys come before the profile's files,
+// so a large profile does not hold them up.
 func (a sshAgent) List() ([]*agent.Key, error) {
-	a.g.session(keysWait)
+	a.g.await(keysWait, (*guestSession).keysKnown)
 	a.g.mu.Lock()
 	defer a.g.mu.Unlock()
 	out := []*agent.Key{}
@@ -739,7 +771,7 @@ func (a sshAgent) Sign(key ssh.PublicKey, data []byte) (*ssh.Signature, error) {
 }
 
 func (a sshAgent) SignWithFlags(key ssh.PublicKey, data []byte, flags agent.SignatureFlags) (*ssh.Signature, error) {
-	s := a.g.session(5 * time.Second)
+	s := a.g.connected(keysWait)
 	if s == nil {
 		return nil, errors.New("not connected to Hangar")
 	}

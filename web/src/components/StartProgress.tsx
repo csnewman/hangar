@@ -15,6 +15,7 @@ const steps: { step: Step; label: string }[] = [
   { step: 'disks', label: 'Prepare disks' },
   { step: 'boot', label: 'Boot' },
   { step: 'network', label: 'Connect network' },
+  { step: 'profile', label: 'Sync profile' },
   { step: 'workspace', label: 'Set up workspace' },
 ]
 

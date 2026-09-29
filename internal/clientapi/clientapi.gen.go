@@ -49,7 +49,7 @@ type Environment struct {
 	// Phase What it is doing, as its worker last reported: pending, starting, running, stopping, stopped, suspending, suspended, failed, deleting. More may come; treat one you do not know as busy.
 	Phase string `json:"phase"`
 
-	// Progress How far a start has got: its step -- download, unpack, disks, boot, network, workspace, in that order, more may come -- and, where the step can be measured, done of total in unit (bytes or objects), at rate a second lately.
+	// Progress How far a start has got: its step -- download, unpack, disks, boot, network, profile, workspace, in that order, more may come -- and, where the step can be measured, done of total in unit (bytes or objects), at rate a second lately.
 	Progress *StartProgress `json:"progress,omitempty"`
 
 	// Reason Why it is in its phase, when there is more to say.
@@ -101,7 +101,7 @@ type SSHGateway struct {
 	Port    int    `json:"port"`
 }
 
-// StartProgress How far a start has got: its step -- download, unpack, disks, boot, network, workspace, in that order, more may come -- and, where the step can be measured, done of total in unit (bytes or objects), at rate a second lately.
+// StartProgress How far a start has got: its step -- download, unpack, disks, boot, network, profile, workspace, in that order, more may come -- and, where the step can be measured, done of total in unit (bytes or objects), at rate a second lately.
 type StartProgress struct {
 	Done  *int64   `json:"done,omitempty"`
 	Rate  *float32 `json:"rate,omitempty"`

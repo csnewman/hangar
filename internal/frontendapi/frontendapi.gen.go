@@ -248,31 +248,34 @@ func (e SignalProcessSignal) Valid() bool {
 
 // Defines values for StartProgressStep.
 const (
-	Boot      StartProgressStep = "boot"
-	Disks     StartProgressStep = "disks"
-	Download  StartProgressStep = "download"
-	Network   StartProgressStep = "network"
-	Snapshot  StartProgressStep = "snapshot"
-	Unpack    StartProgressStep = "unpack"
-	Workspace StartProgressStep = "workspace"
+	StartProgressStepBoot      StartProgressStep = "boot"
+	StartProgressStepDisks     StartProgressStep = "disks"
+	StartProgressStepDownload  StartProgressStep = "download"
+	StartProgressStepNetwork   StartProgressStep = "network"
+	StartProgressStepProfile   StartProgressStep = "profile"
+	StartProgressStepSnapshot  StartProgressStep = "snapshot"
+	StartProgressStepUnpack    StartProgressStep = "unpack"
+	StartProgressStepWorkspace StartProgressStep = "workspace"
 )
 
 // Valid indicates whether the value is a known member of the StartProgressStep enum.
 func (e StartProgressStep) Valid() bool {
 	switch e {
-	case Boot:
+	case StartProgressStepBoot:
 		return true
-	case Disks:
+	case StartProgressStepDisks:
 		return true
-	case Download:
+	case StartProgressStepDownload:
 		return true
-	case Network:
+	case StartProgressStepNetwork:
 		return true
-	case Snapshot:
+	case StartProgressStepProfile:
 		return true
-	case Unpack:
+	case StartProgressStepSnapshot:
 		return true
-	case Workspace:
+	case StartProgressStepUnpack:
+		return true
+	case StartProgressStepWorkspace:
 		return true
 	default:
 		return false

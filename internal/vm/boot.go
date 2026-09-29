@@ -187,6 +187,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if err := m.waitNetwork(ctx, inst.Session()); err != nil {
 		return nil, err
 	}
+	m.waitProfile(ctx, inst.Session())
 	if err := m.provision(ctx, inst.Session(), spec); err != nil {
 		return nil, err
 	}
@@ -322,6 +323,35 @@ func (m *machine) waitNetwork(ctx context.Context, sess *agent.Session) error {
 		return fmt.Errorf("the network did not come up: %s", firstLine(out.Stderr, out.Stdout))
 	}
 	return nil
+}
+
+// profileWait is how long a boot waits for the owner's profile.
+const profileWait = 2 * time.Minute
+
+// waitProfile waits for the owner's profile to reach the guest, so that the
+// workspace is set up, and the environment is running, with their settings
+// and the keys a clone over SSH signs in with. A profile that does not come
+// holds nothing else back: the environment starts without it, and a clone
+// that needs a key says so.
+func (m *machine) waitProfile(ctx context.Context, sess *agent.Session) {
+	m.step(api.StepProfile, "syncing the profile")
+	start := time.Now()
+	for time.Since(start) < profileWait {
+		if ctx.Err() != nil {
+			return
+		}
+		out, err := sess.Exec(10*time.Second, "test", "-e", sysuser.ProfileSynced)
+		if err == nil && out.Code == 0 {
+			m.log.Info("the profile reached the guest", "after", time.Since(start).Round(time.Millisecond))
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	m.log.Warn("the profile did not reach the guest; starting without it", "waited", profileWait)
 }
 
 // cloneLog is where a clone's progress and errors are written in the guest,

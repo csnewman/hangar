@@ -1472,7 +1472,7 @@ export interface components {
         /** @description How far a starting environment has got. Steps happen in the order of the enum; one with nothing to do is passed over. total, where a step can be measured, is in unit: bytes, or a clone's objects. */
         StartProgress: {
             /** @enum {string} */
-            step: "download" | "unpack" | "snapshot" | "disks" | "boot" | "network" | "workspace";
+            step: "download" | "unpack" | "snapshot" | "disks" | "boot" | "network" | "profile" | "workspace";
             /** Format: int64 */
             done?: number;
             /** Format: int64 */

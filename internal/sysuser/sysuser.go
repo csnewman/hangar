@@ -20,6 +20,11 @@ const SSHAuthSock = "/run/hangar/ssh-agent.sock"
 // for credentials for Hangar's registry (internal/profile).
 const RegistrySock = "/run/hangar/registry.sock"
 
+// ProfileSynced is written once the owner's profile has first arrived whole
+// (internal/profile), which the worker waits for before setting up the
+// workspace.
+const ProfileSynced = "/run/hangar/profile-synced"
+
 // Credential is who a user's processes run as, with every group they are
 // in: without the supplementary groups a user in docker's group could not
 // reach Docker.

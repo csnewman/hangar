@@ -38,6 +38,13 @@ func serveProfile() {
 		g.SetBacking(l.Backing)
 	}
 	go func() {
+		<-g.Synced()
+		os.MkdirAll(filepath.Dir(sysuser.ProfileSynced), 0o755)
+		if err := os.WriteFile(sysuser.ProfileSynced, nil, 0o644); err != nil {
+			log.Warn("profile: marking it synced", "err", err)
+		}
+	}()
+	go func() {
 		for {
 			if err := g.ServeSSHAgent(sysuser.SSHAuthSock); err != nil {
 				fmt.Fprintf(os.Stderr, "hangar-agent: ssh agent: %v\n", err)

@@ -424,6 +424,9 @@ const (
 	StepBoot Step = "boot"
 	// StepNetwork waits for the guest's network and name resolver.
 	StepNetwork Step = "network"
+	// StepProfile waits for the owner's profile to reach the guest: their
+	// settings, and the keys a clone over SSH signs in with.
+	StepProfile Step = "profile"
 	// StepWorkspace applies the template: the hostname and the clones.
 	StepWorkspace Step = "workspace"
 )

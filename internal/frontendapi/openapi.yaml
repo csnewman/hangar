@@ -2140,7 +2140,7 @@ components:
       properties:
         step:
           type: string
-          enum: [download, unpack, snapshot, disks, boot, network, workspace]
+          enum: [download, unpack, snapshot, disks, boot, network, profile, workspace]
         done: { type: integer, format: int64 }
         total: { type: integer, format: int64 }
         unit:

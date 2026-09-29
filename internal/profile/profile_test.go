@@ -3,6 +3,7 @@ package profile_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -30,6 +31,9 @@ type guests struct {
 	worker string
 	mu     sync.Mutex
 	by     map[string]*profile.Guest
+	// files, when set, holds back the files the server sends until it is
+	// closed, as a large profile takes a while to arrive.
+	files chan struct{}
 }
 
 func (g *guests) Connected() []string { return []string{g.worker} }
@@ -43,7 +47,25 @@ func (g *guests) Open(worker string, h tunnel.Header) (net.Conn, error) {
 	}
 	server, env := net.Pipe()
 	go guest.Serve(env)
+	if g.files != nil {
+		return &slowFiles{Conn: server, files: g.files}, nil
+	}
 	return server, nil
+}
+
+// slowFiles holds back each file message written to it until files is
+// closed.
+type slowFiles struct {
+	net.Conn
+	files chan struct{}
+}
+
+func (c *slowFiles) Write(b []byte) (int, error) {
+	var m profile.Message
+	if json.Unmarshal(b, &m) == nil && m.Type == profile.TypeFile {
+		<-c.files
+	}
+	return c.Conn.Write(b)
 }
 
 type plane struct {
@@ -360,6 +382,70 @@ func TestSSHAgentServesAStartingEnvironment(t *testing.T) {
 	})
 	if keys, err := agent.NewClient(conn).List(); err != nil || len(keys) != 1 {
 		t.Fatalf("the agent of a starting environment offers %d keys (%v), want 1", len(keys), err)
+	}
+}
+
+// The agent offers the owner's keys while the profile's files are still
+// arriving, and the guest says when they have all arrived.
+func TestSSHAgentServesBeforeTheProfileArrives(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	files := make(chan struct{})
+	p.guests.files = files
+	key, err := p.store.GenerateKey(ctx, p.owner, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.store.Put(ctx, p.owner, ".gitconfig", []byte("[user]\n\tname = Alice\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, home, g := p.env(t, "a", false)
+	sock := socketPath(t)
+	go g.ServeSSHAgent(sock)
+	var conn net.Conn
+	eventually(t, "the agent's socket", func() bool {
+		var err error
+		conn, err = net.Dial("unix", sock)
+		return err == nil
+	})
+	client := agent.NewClient(conn)
+	start := time.Now()
+	keys, err := client.List()
+	if err != nil || len(keys) != 1 {
+		t.Fatalf("the agent offers %d keys (%v), want 1", len(keys), err)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("listing took %v", d)
+	}
+	select {
+	case <-g.Synced():
+		t.Fatal("synced while the profile's files are held back")
+	default:
+	}
+	if exists(home, ".gitconfig") {
+		t.Fatal("the profile's files arrived: the test held none back")
+	}
+
+	close(files)
+	select {
+	case <-g.Synced():
+	case <-time.After(10 * time.Second):
+		t.Fatal("not synced once the files arrived")
+	}
+	if !exists(home, ".gitconfig") {
+		t.Error("synced without the profile's files")
+	}
+	pub, _, _, _, err := ssh.ParseAuthorizedKey([]byte(key.PublicKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("session to sign")
+	sig, err := client.Sign(pub, data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pub.Verify(data, sig); err != nil {
+		t.Fatalf("the signature does not verify: %v", err)
 	}
 }
 

@@ -316,7 +316,7 @@ components:
       type: object
       description: >-
         How far a start has got: its step -- download, unpack, disks, boot,
-        network, workspace, in that order, more may come -- and, where the
+        network, profile, workspace, in that order, more may come -- and, where the
         step can be measured, done of total in unit (bytes or objects), at
         rate a second lately.
       required: [step]

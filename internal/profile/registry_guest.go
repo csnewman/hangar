@@ -126,7 +126,7 @@ type HelperCredential struct {
 }
 
 func (g *Guest) credential(host string) HelperCredential {
-	s := g.session(credentialWait)
+	s := g.connected(credentialWait)
 	if s == nil {
 		return HelperCredential{Error: "not connected to Hangar"}
 	}
