@@ -1189,7 +1189,7 @@ export interface components {
         };
         CreateEnvironment: {
             template_id: string;
-            /** @description A DNS label, since it becomes a hostname, and whatever else the template's name pattern demands. */
+            /** @description A DNS label in either case, since it becomes the hostname in lower case, and whatever else the template's name pattern demands. Branch names made from it keep its case. */
             name: string;
         };
         /**

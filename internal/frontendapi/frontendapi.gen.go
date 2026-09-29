@@ -459,7 +459,7 @@ type Collaborators struct {
 
 // CreateEnvironment defines model for CreateEnvironment.
 type CreateEnvironment struct {
-	// Name A DNS label, since it becomes a hostname, and whatever else the template's name pattern demands.
+	// Name A DNS label in either case, since it becomes the hostname in lower case, and whatever else the template's name pattern demands. Branch names made from it keep its case.
 	Name       string `json:"name"`
 	TemplateID string `json:"template_id"`
 }

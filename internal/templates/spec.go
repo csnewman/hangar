@@ -22,9 +22,13 @@ const (
 	MaxWebName = 63 - len("-env000000")
 )
 
-// An environment's name becomes its hostname and part of URLs, so whatever
-// else a template demands of it, it is always a DNS label.
-var envName = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+// An environment's name is its hostname, in lower case, so whatever else a
+// template demands of it, it is always a DNS label in either case: ticket
+// numbers such as PROJ-123 keep theirs, for branch names made from it.
+var envName = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+// dnsLabel is a label as it goes into a host name: lower case.
+var dnsLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Label keys and values follow Kubernetes' rules, so a selector can be
 // written the same way whichever backend the workers run on.
@@ -120,7 +124,7 @@ func Validate(s api.TemplateSpec) (api.TemplateSpec, error) {
 	for i, n := range s.WebNames {
 		// "dashboard-" is how the name is written in front of the rest.
 		n = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(n)), "-")
-		if !envName.MatchString(n) || len(n) > MaxWebName {
+		if !dnsLabel.MatchString(n) || len(n) > MaxWebName {
 			return bad("web server name %q must be lower-case letters, digits and hyphens, at most %d long", s.WebNames[i], MaxWebName)
 		}
 		if seen[n] {
@@ -163,7 +167,7 @@ func namePattern(p string) (*regexp.Regexp, error) {
 // against the template's rule, and fills the name into branch patterns.
 func Resolve(t api.TemplateSpec, name string) (api.Spec, error) {
 	if !envName.MatchString(name) {
-		return api.Spec{}, fmt.Errorf("%w: a name is lowercase letters, digits and hyphens, at most 63 characters", ErrInvalid)
+		return api.Spec{}, fmt.Errorf("%w: a name is letters, digits and hyphens, not starting or ending with one, at most 63 characters", ErrInvalid)
 	}
 	if t.NamePattern != "" {
 		re, err := namePattern(t.NamePattern)

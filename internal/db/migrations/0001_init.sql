@@ -317,7 +317,9 @@ CREATE INDEX environments_unplaced ON environments (created_at)
 CREATE INDEX environments_worker ON environments (worker_id);
 
 -- Names are a user's own: two users may each have an environment called "dev".
-CREATE UNIQUE INDEX environments_owner_name ON environments (owner_id, name);
+-- Case is kept but does not tell two apart, since the name is the guest's
+-- hostname and SSH takes it in any case.
+CREATE UNIQUE INDEX environments_owner_name ON environments (owner_id, lower(name));
 
 -- Copies of images the server has asked a worker to delete from its local
 -- store, each a reference and the digest it named when copied. A row stays

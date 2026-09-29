@@ -83,12 +83,12 @@ export function NewEnvironmentPage() {
                 autoFocus
                 required
                 value={name}
-                onChange={(e) => setName(e.target.value.toLowerCase())}
+                onChange={(e) => setName(e.target.value)}
                 placeholder={chosen.name_hint ? undefined : 'my-agent'}
                 aria-invalid={problem !== null}
               />
               <small className={problem ? 'field-error' : undefined}>
-                {problem ?? chosen.name_hint ?? 'It becomes the environment’s hostname.'}
+                {problem ?? chosen.name_hint ?? 'It becomes the environment’s hostname, in lower case.'}
               </small>
             </label>
 

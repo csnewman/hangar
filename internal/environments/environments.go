@@ -164,7 +164,7 @@ func (m *Manager) ByName(ctx context.Context, p users.Principal, owner, name str
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
 		var err error
 		e, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM `+from+` WHERE `+visible+`
-			AND lower(u.username) = lower($3) AND e.name = $4 AND e.desired <> 'deleted'`, p.Admin, p.UserID, owner, name))
+			AND lower(u.username) = lower($3) AND lower(e.name) = lower($4) AND e.desired <> 'deleted'`, p.Admin, p.UserID, owner, name))
 		return err
 	})
 	return e, err

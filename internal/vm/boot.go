@@ -210,9 +210,10 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 	m.step(api.StepWorkspace, "setting up the workspace")
 	// Written directly rather than through hostnamectl: the agent is up
 	// early in the boot, before the bus hostnamectl talks to. The name is a
-	// DNS label, and reaches the shell as an argument, never as script.
+	// DNS label, in lower case as host names are written, and reaches the
+	// shell as an argument, never as script.
 	if err := run(30*time.Second, "setting the hostname", "sh", "-c",
-		`printf '%s\n' "$1" > /etc/hostname && hostname "$1"`, "sh", spec.Name); err != nil {
+		`printf '%s\n' "$1" > /etc/hostname && hostname "$1"`, "sh", strings.ToLower(spec.Name)); err != nil {
 		return err
 	}
 

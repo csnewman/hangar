@@ -8,8 +8,9 @@ export function useTemplates() {
   return useQuery({ queryKey: templatesKey, queryFn: api.templates, refetchInterval: 15_000 })
 }
 
-// A name becomes the environment's hostname, whatever else a template asks.
-export const envNamePattern = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
+// A name becomes the environment's hostname, in lower case, whatever else a
+// template asks; its own case is kept, for branch names made from it.
+export const envNamePattern = /^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/
 
 // checkName says what is wrong with a name for a template, or nothing. The
 // server decides; this only lets the form say so before it is asked. A
@@ -17,7 +18,7 @@ export const envNamePattern = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/
 // expressions differ in small ways.
 export function checkName(name: string, t: Template): string | null {
   if (name === '') return null
-  if (!envNamePattern.test(name)) return 'Lowercase letters, digits and hyphens only.'
+  if (!envNamePattern.test(name)) return 'Letters, digits and hyphens only, not at either end.'
   if (t.name_pattern) {
     let re: RegExp
     try {

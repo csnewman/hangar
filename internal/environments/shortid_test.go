@@ -1,6 +1,7 @@
 package environments_test
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"testing"
@@ -39,5 +40,33 @@ func TestShortIDs(t *testing.T) {
 		if err != nil || got.ShortID != e.ShortID {
 			t.Fatalf("read back: %q, %v", got.ShortID, err)
 		}
+	}
+}
+
+// A name keeps its case, but two of one owner's cannot differ only in it,
+// and one is found whatever case it is asked for in.
+func TestNameCase(t *testing.T) {
+	d := dbtest.Open(t)
+	em, tm := environments.NewManager(d), templates.NewManager(d)
+	u, _ := users.NewManager(d).Create(ctx, users.NewUser{Username: "owner", Password: "password1"})
+	p := users.Principal{UserID: u.ID, Username: u.Username}
+	tpl, err := tm.Create(ctx, p, templates.Input{Name: "t",
+		Spec: api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 1, MemoryMiB: 1024}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := em.Create(ctx, p, api.CreateEnvironment{TemplateID: tpl.ID, Name: "BLAH-123-example"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Name != "BLAH-123-example" {
+		t.Errorf("name %q", e.Name)
+	}
+	if _, err := em.Create(ctx, p, api.CreateEnvironment{TemplateID: tpl.ID, Name: "blah-123-example"}); !errors.Is(err, environments.ErrConflict) {
+		t.Errorf("the same name in lower case: %v, want ErrConflict", err)
+	}
+	got, err := em.ByName(ctx, p, "owner", "blah-123-EXAMPLE")
+	if err != nil || got.ID != e.ID {
+		t.Errorf("found in another case: %v, %v", got.ID, err)
 	}
 }
