@@ -369,8 +369,10 @@ type machine struct {
 	// measuredDone how much was done then, for the rate.
 	measured     time.Time
 	measuredDone int64
-	// running is the booted machine, while there is one.
-	running *Instance
+	// running is the booted machine, while there is one. starting is it
+	// while it is still being set up, which it takes streams for too.
+	running  *Instance
+	starting *Instance
 	// cancelBoot interrupts a boot in progress when what is wanted changes.
 	cancelBoot context.CancelFunc
 	// stats is the latest measurement of the running machine.
@@ -904,9 +906,9 @@ func (r *Runtime) runningMachine(id string) (*machine, error) {
 		return nil, fmt.Errorf("environment %s is not on this worker", id)
 	}
 	m.mu.Lock()
-	running := m.running != nil
+	up := m.running != nil || m.starting != nil
 	m.mu.Unlock()
-	if !running {
+	if !up {
 		return nil, fmt.Errorf("environment %s is not running", id)
 	}
 	return m, nil

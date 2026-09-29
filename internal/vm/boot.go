@@ -167,7 +167,16 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if err != nil {
 		return nil, err
 	}
+	// The machine takes streams while it is set up: a clone over SSH signs
+	// with the owner's keys, which the server sends over the profile
+	// session it opens as soon as the machine will have one.
+	m.mu.Lock()
+	m.starting = inst
+	m.mu.Unlock()
 	defer func() {
+		m.mu.Lock()
+		m.starting = nil
+		m.mu.Unlock()
 		if err != nil {
 			inst.Shutdown(m.log)
 		}
