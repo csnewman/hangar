@@ -43,11 +43,19 @@ type Sessions struct {
 
 	mu       sync.Mutex
 	sessions map[string]*session // by environment
+	// tries are the attempts at an environment's session since it last
+	// had one, for the log to say how long it took to open.
+	tries map[string]*tries
+}
+
+type tries struct {
+	first time.Time
+	n     int
 }
 
 func NewSessions(store *Store, tunnels Tunnels, log *slog.Logger) *Sessions {
 	return &Sessions{store: store, tunnels: tunnels, log: log, kick: make(chan struct{}, 1),
-		sessions: map[string]*session{}}
+		sessions: map[string]*session{}, tries: map[string]*tries{}}
 }
 
 // UseRegistry has sessions offer environments credentials for Hangar's
@@ -131,6 +139,11 @@ func (s *Sessions) reconcile(ctx context.Context) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	for id := range s.tries {
+		if _, ok := want[id]; !ok {
+			delete(s.tries, id)
+		}
+	}
 	for id, sess := range s.sessions {
 		if t, ok := want[id]; !ok || t != sess.target {
 			sess.stop()
@@ -141,8 +154,14 @@ func (s *Sessions) reconcile(ctx context.Context) {
 		if sess, ok := s.sessions[id]; ok && !sess.ended() {
 			continue
 		}
+		tr := s.tries[id]
+		if tr == nil {
+			tr = &tries{first: time.Now()}
+			s.tries[id] = tr
+		}
+		tr.n++
 		sess := &session{target: t, s: s, nudges: make(chan struct{}, 1), done: make(chan struct{}),
-			own: map[int64]bool{}}
+			own: map[int64]bool{}, tries: *tr}
 		sessCtx, cancel := context.WithCancel(ctx)
 		sess.cancel = cancel
 		s.sessions[id] = sess
@@ -172,6 +191,9 @@ type session struct {
 	// keys are the keys last sent.
 	keys     []string
 	keysSent bool
+	// tries are the attempts at a session with the environment, this one
+	// included, since it last had one.
+	tries tries
 }
 
 func (x *session) nudge() {
@@ -229,6 +251,12 @@ func (x *session) serve(ctx context.Context) error {
 		return err
 	}
 	x.conn = conn
+	log := x.s.log.With("environment", x.env)
+	x.s.mu.Lock()
+	delete(x.s.tries, x.env)
+	x.s.mu.Unlock()
+	log.Info("profile session opened", "attempts", x.tries.n, "waited", time.Since(x.tries.first).Round(time.Millisecond))
+	start := time.Now()
 	defer conn.Close()
 	go func() {
 		<-ctx.Done()
@@ -284,12 +312,15 @@ func (x *session) serve(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := x.sendFiles(ctx); err != nil {
+	sent := &sentFiles{paths: x.paths}
+	if err := x.sendFiles(ctx, sent); err != nil {
 		return err
 	}
 	if err := x.send(Message{Type: TypeSynced}); err != nil {
 		return err
 	}
+	log.Info("profile sent", "took", time.Since(start).Round(time.Millisecond), "files", sent.files,
+		"bytes", sent.bytes, "largest", sent.largest(5))
 
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
@@ -309,7 +340,7 @@ func (x *session) serve(ctx context.Context) error {
 		if err := x.sendPaths(ctx); err != nil {
 			return err
 		}
-		if err := x.sendFiles(ctx); err != nil {
+		if err := x.sendFiles(ctx, nil); err != nil {
 			return err
 		}
 		if err := x.sendKeys(ctx); err != nil {
@@ -331,8 +362,47 @@ func (x *session) sendPaths(ctx context.Context) error {
 	return x.send(Message{Type: TypePaths, Paths: paths})
 }
 
-// sendFiles sends what changed since the last it sent.
-func (x *session) sendFiles(ctx context.Context) error {
+// sentFiles counts what is sent, by the shared path each file is under.
+type sentFiles struct {
+	paths        Paths
+	files, bytes int
+	by           map[string][2]int // shared path: files, bytes
+}
+
+func (s *sentFiles) add(p string, size int) {
+	s.files++
+	s.bytes += size
+	under := p
+	for _, sp := range s.paths {
+		if p == sp || (strings.HasSuffix(sp, "/") && strings.HasPrefix(p, sp)) {
+			under = sp
+			break
+		}
+	}
+	if s.by == nil {
+		s.by = map[string][2]int{}
+	}
+	c := s.by[under]
+	s.by[under] = [2]int{c[0] + 1, c[1] + size}
+}
+
+// largest names the n shared paths the most was sent of.
+func (s *sentFiles) largest(n int) string {
+	keys := make([]string, 0, len(s.by))
+	for k := range s.by {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a, b string) int { return s.by[b][1] - s.by[a][1] })
+	var out []string
+	for _, k := range keys[:min(n, len(keys))] {
+		out = append(out, fmt.Sprintf("%s (%d files, %d bytes)", k, s.by[k][0], s.by[k][1]))
+	}
+	return strings.Join(out, ", ")
+}
+
+// sendFiles sends what changed since the last it sent, counting it in sent
+// when that is given.
+func (x *session) sendFiles(ctx context.Context, sent *sentFiles) error {
 	files, err := x.s.store.Since(ctx, x.owner, x.trusted, x.sent)
 	if err != nil {
 		return err
@@ -346,6 +416,9 @@ func (x *session) sendFiles(ctx context.Context) error {
 		if err := x.send(Message{Type: TypeFile, Path: f.Path, Data: f.Data, Mode: f.Mode,
 			Version: f.Version, Deleted: f.Deleted}); err != nil {
 			return err
+		}
+		if sent != nil {
+			sent.add(f.Path, len(f.Data))
 		}
 	}
 	return nil
