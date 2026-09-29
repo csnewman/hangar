@@ -1265,11 +1265,11 @@ export interface components {
         GPU: "none" | "virtual" | "passthrough";
         Repo: {
             url: string;
-            /** @description Branch, tag or commit to check out. Empty for the default branch. */
+            /** @description Branch, tag or commit to check out. Empty for the default branch. In a template it may use variables, as branch does. */
             ref?: string;
-            /** @description Where in the environment to clone it. Absolute. */
+            /** @description Where in the environment to clone it. Absolute. In a template it may use variables, as branch does. */
             path: string;
-            /** @description A new branch to create after cloning. In a template, {name} is replaced by the environment's name. */
+            /** @description A new branch to create after cloning. In a template it may use variables, filled in as each environment is made: {name}, {owner}, {short_id}, {template}, and each named group of the name pattern, such as {ticket} from (?P<ticket>[A-Z]+-[0-9]+); a group the name leaves out is empty. {variable:lower} and {variable:upper} change the case. */
             branch?: string;
         };
         Spec: {
@@ -1279,7 +1279,7 @@ export interface components {
             display: components["schemas"]["Display"];
             gpu: components["schemas"]["GPU"];
             repos: components["schemas"]["Repo"][];
-            /** @description The folder the editor opens on. */
+            /** @description The folder the editor opens on. In a template it may use variables, as a repository's branch does. */
             editor_path?: string;
             /** @description Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored when untrusted, where it trusts nothing. */
             trusted_folders?: string[];

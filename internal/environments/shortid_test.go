@@ -70,3 +70,27 @@ func TestNameCase(t *testing.T) {
 		t.Errorf("found in another case: %v, %v", got.ID, err)
 	}
 }
+
+// A template may use the short ID an environment is given, and its owner.
+func TestShortIDInTemplate(t *testing.T) {
+	d := dbtest.Open(t)
+	em, tm := environments.NewManager(d), templates.NewManager(d)
+	u, _ := users.NewManager(d).Create(ctx, users.NewUser{Username: "owner", Password: "password1"})
+	p := users.Principal{UserID: u.ID}
+	tpl, err := tm.Create(ctx, users.Principal{UserID: u.ID, Username: u.Username}, templates.Input{Name: "t",
+		Spec: api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 1, MemoryMiB: 1024,
+			Repos: []api.Repo{{URL: "https://example.com/a.git", Path: "/workspace/a", Branch: "{owner}/{short_id}"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := em.Create(ctx, p, api.CreateEnvironment{TemplateID: tpl.ID, Name: "e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "owner/" + e.ShortID; e.Spec.Repos[0].Branch != want {
+		t.Errorf("branch %q, want %q", e.Spec.Repos[0].Branch, want)
+	}
+	if len(e.TemplateChanges) != 0 {
+		t.Errorf("an environment just made differs from its template in %v", e.TemplateChanges)
+	}
+}

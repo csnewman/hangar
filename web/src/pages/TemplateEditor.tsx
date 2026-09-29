@@ -7,7 +7,7 @@ import { api, type Display, type GPU, type Repo, type Template, type TemplateInp
 import { ConfirmButton } from '../components/ConfirmButton'
 import { PageHeader } from '../components/PageHeader'
 import { useMe } from '../session'
-import { blankSpec, hangarImages, templatesKey } from '../templates'
+import { blankSpec, builtinVariables, hangarImages, patternGroups, templatesKey } from '../templates'
 import { canGive, teamsKey, useTeams } from '../teams'
 import { VisibilityBadge } from './Templates'
 import { Activity } from '../components/Activity'
@@ -379,7 +379,16 @@ function Editor({ existing }: { existing?: Template }) {
               </button>
             )}
             <small className="muted">
-              In a new branch, <code>{'{name}'}</code> becomes the environment's name.
+              Paths, refs, new branches and the editor folder may use{' '}
+              {[...builtinVariables, ...patternGroups(form.name_pattern)].map((v, i, all) => (
+                <span key={v}>
+                  <code>{`{${v}}`}</code>
+                  {i < all.length - 2 ? ', ' : i === all.length - 2 ? ' and ' : ''}
+                </span>
+              ))}
+              , filled in as each environment is made; <code>{'{name:lower}'}</code> and <code>{'{name:upper}'}</code>{' '}
+              change the case. A named group in the name pattern, such as <code>{'(?P<ticket>[A-Z]+-[0-9]+)'}</code>,
+              is a variable of its own.
             </small>
             <label className="field">
               <span>Open the editor in</span>

@@ -913,13 +913,13 @@ type RemoveUnknownEnvironments struct {
 
 // Repo defines model for Repo.
 type Repo struct {
-	// Branch A new branch to create after cloning. In a template, {name} is replaced by the environment's name.
+	// Branch A new branch to create after cloning. In a template it may use variables, filled in as each environment is made: {name}, {owner}, {short_id}, {template}, and each named group of the name pattern, such as {ticket} from (?P<ticket>[A-Z]+-[0-9]+); a group the name leaves out is empty. {variable:lower} and {variable:upper} change the case.
 	Branch *string `json:"branch,omitempty"`
 
-	// Path Where in the environment to clone it. Absolute.
+	// Path Where in the environment to clone it. Absolute. In a template it may use variables, as branch does.
 	Path string `json:"path"`
 
-	// Ref Branch, tag or commit to check out. Empty for the default branch.
+	// Ref Branch, tag or commit to check out. Empty for the default branch. In a template it may use variables, as branch does.
 	Ref *string `json:"ref,omitempty"`
 	URL string  `json:"url"`
 }
@@ -968,7 +968,7 @@ type Spec struct {
 	// Display Whether the environment has a graphical desktop.
 	Display Display `json:"display"`
 
-	// EditorPath The folder the editor opens on.
+	// EditorPath The folder the editor opens on. In a template it may use variables, as a repository's branch does.
 	EditorPath *string `json:"editor_path,omitempty"`
 
 	// GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.

@@ -38,10 +38,10 @@ const (
 )
 
 // templateChanges are the settings in which an environment's spec differs
-// from what its template's current settings would give an environment of
-// its name.
-func templateChanges(env api.Spec, t api.TemplateSpec, name string) []string {
-	want, err := templates.Resolve(t, name)
+// from what its template's current settings would give it.
+func templateChanges(e api.Environment, t api.TemplateSpec) []string {
+	env := e.Spec
+	want, err := templates.Resolve(t, varsOf(e))
 	if err != nil {
 		return []string{SettingName}
 	}
@@ -64,6 +64,12 @@ func templateChanges(env api.Spec, t api.TemplateSpec, name string) []string {
 	add(!slices.Equal(env.WebNames, want.WebNames), SettingWebNames)
 	add(!maps.Equal(env.Placement, want.Placement), SettingPlacement)
 	return out
+}
+
+// varsOf is what an environment's template is filled in with: its name,
+// owner and short ID, and its template's name as it was when it was made.
+func varsOf(e api.Environment) templates.Vars {
+	return templates.Vars{Name: e.Name, Owner: e.Owner, ShortID: e.ShortID, Template: e.Template}
 }
 
 // Settings are what of an environment may change after it is made: its
@@ -206,7 +212,7 @@ func (m *Manager) ResetToTemplate(ctx context.Context, p users.Principal, id str
 		if err != nil {
 			return err
 		}
-		spec, err := templates.Resolve(tspec, cur.Name)
+		spec, err := templates.Resolve(tspec, varsOf(cur))
 		if err != nil {
 			return fmt.Errorf("%w: its template does not accept the name %s%s", ErrConflict, cur.Name, trimInvalid(err))
 		}

@@ -1779,15 +1779,23 @@ components:
         url: { type: string, minLength: 1 }
         ref:
           type: string
-          description: Branch, tag or commit to check out. Empty for the default branch.
+          description: >-
+            Branch, tag or commit to check out. Empty for the default branch.
+            In a template it may use variables, as branch does.
         path:
           type: string
-          description: Where in the environment to clone it. Absolute.
+          description: >-
+            Where in the environment to clone it. Absolute. In a template it
+            may use variables, as branch does.
         branch:
           type: string
           description: >-
-            A new branch to create after cloning. In a template, {name} is
-            replaced by the environment's name.
+            A new branch to create after cloning. In a template it may use
+            variables, filled in as each environment is made: {name},
+            {owner}, {short_id}, {template}, and each named group of the name
+            pattern, such as {ticket} from (?P<ticket>[A-Z]+-[0-9]+); a
+            group the name leaves out is empty. {variable:lower} and
+            {variable:upper} change the case.
 
     Spec:
       type: object
@@ -1805,7 +1813,9 @@ components:
           items: { $ref: "#/components/schemas/Repo" }
         editor_path:
           type: string
-          description: The folder the editor opens on.
+          description: >-
+            The folder the editor opens on. In a template it may use
+            variables, as a repository's branch does.
         trusted_folders:
           type: array
           description: >-

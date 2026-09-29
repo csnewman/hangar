@@ -82,8 +82,9 @@ type Repo struct {
 	// Path is where in the environment the repository is cloned.
 	Path string `json:"path"`
 	// Branch, if set, is a new branch created from Ref after cloning. In a
-	// template it may contain {name}, replaced by the environment's name; in
-	// an environment it is the resolved name.
+	// template it, Ref and Path may use variables, filled in when an
+	// environment is made (templates.Vars); in an environment they are
+	// filled in.
 	Branch string `json:"branch,omitempty"`
 }
 

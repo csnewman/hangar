@@ -5,6 +5,7 @@ import (
 	"maps"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/csnewman/hangar/internal/api"
@@ -69,6 +70,34 @@ func Validate(s api.TemplateSpec) (api.TemplateSpec, error) {
 		return bad("gpu must be none, virtual or passthrough")
 	}
 
+	// The name pattern first: its named groups are variables the rest may
+	// use.
+	s.NamePattern = strings.TrimSpace(s.NamePattern)
+	s.NameHint = strings.TrimSpace(s.NameHint)
+	if s.NamePattern != "" {
+		if _, err := namePattern(s.NamePattern); err != nil {
+			return bad("the name pattern is not a valid regular expression: %v", err)
+		}
+		for _, g := range patternGroups(s.NamePattern) {
+			if slices.Contains(builtins, g) {
+				return bad("the name pattern's group %q has the name of a variable every template has", g)
+			}
+		}
+	}
+	// What uses variables is checked with stand-ins for them: an environment's
+	// own values are checked again when it is made.
+	stand := standIns(s.NamePattern)
+	check := func(what, v string, ok func(string) bool, want string) error {
+		x, err := expand(v, stand)
+		if err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrInvalid, what, err)
+		}
+		if !ok(x) {
+			return fmt.Errorf("%w: %s: %q is not %s", ErrInvalid, what, v, want)
+		}
+		return nil
+	}
+
 	if len(s.Repos) > MaxRepos {
 		return bad("at most %d repositories", MaxRepos)
 	}
@@ -83,28 +112,30 @@ func Validate(s api.TemplateSpec) (api.TemplateSpec, error) {
 		if !gitURL(r.URL) {
 			return bad("repository %d: %q is not a git URL (https://, ssh://, git@host:path or git://)", i+1, r.URL)
 		}
-		if !absPath(r.Path) {
-			return bad("repository %d: the path must be absolute", i+1)
+		if err := check(fmt.Sprintf("repository %d's path", i+1), r.Path, absPath, "an absolute path"); err != nil {
+			return s, err
 		}
 		r.Path = path.Clean(r.Path)
 		if paths[r.Path] {
 			return bad("two repositories are cloned to %s", r.Path)
 		}
 		paths[r.Path] = true
-		if r.Ref != "" && !refName(r.Ref) {
-			return bad("repository %d: %q is not a valid ref", i+1, r.Ref)
+		if r.Ref != "" {
+			if err := check(fmt.Sprintf("repository %d's ref", i+1), r.Ref, refName, "a valid ref"); err != nil {
+				return s, err
+			}
 		}
-		// The branch is checked with a stand-in name: the real one is only
-		// known when an environment is made, and is checked again then.
-		if r.Branch != "" && !refName(strings.ReplaceAll(r.Branch, "{name}", "name")) {
-			return bad("repository %d: %q is not a valid branch name", i+1, r.Branch)
+		if r.Branch != "" {
+			if err := check(fmt.Sprintf("repository %d's branch", i+1), r.Branch, refName, "a valid branch name"); err != nil {
+				return s, err
+			}
 		}
 	}
 
 	s.EditorPath = strings.TrimSpace(s.EditorPath)
 	if s.EditorPath != "" {
-		if !absPath(s.EditorPath) {
-			return bad("the editor folder must be an absolute path")
+		if err := check("the editor folder", s.EditorPath, absPath, "an absolute path"); err != nil {
+			return s, err
 		}
 		s.EditorPath = path.Clean(s.EditorPath)
 	}
@@ -134,14 +165,6 @@ func Validate(s api.TemplateSpec) (api.TemplateSpec, error) {
 		s.WebNames[i] = n
 	}
 
-	s.NamePattern = strings.TrimSpace(s.NamePattern)
-	s.NameHint = strings.TrimSpace(s.NameHint)
-	if s.NamePattern != "" {
-		if _, err := namePattern(s.NamePattern); err != nil {
-			return bad("the name pattern is not a valid regular expression: %v", err)
-		}
-	}
-
 	if s.Placement == nil {
 		s.Placement = map[string]string{}
 	}
@@ -164,8 +187,10 @@ func namePattern(p string) (*regexp.Regexp, error) {
 }
 
 // Resolve turns a template's spec into an environment's: it checks the name
-// against the template's rule, and fills the name into branch patterns.
-func Resolve(t api.TemplateSpec, name string) (api.Spec, error) {
+// against the template's rule, and fills what is known of the environment
+// into its repositories' branches, refs and paths and its editor folder.
+func Resolve(t api.TemplateSpec, v Vars) (api.Spec, error) {
+	name := v.Name
 	if !envName.MatchString(name) {
 		return api.Spec{}, fmt.Errorf("%w: a name is letters, digits and hyphens, not starting or ending with one, at most 63 characters", ErrInvalid)
 	}
@@ -183,14 +208,45 @@ func Resolve(t api.TemplateSpec, name string) (api.Spec, error) {
 		}
 	}
 
+	vals := values(t.NamePattern, v)
+	fill := func(what, s string, ok func(string) bool) (string, error) {
+		x, err := expand(s, vals)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s: %v", ErrInvalid, what, err)
+		}
+		if x != "" && !ok(x) {
+			return "", fmt.Errorf("%w: the name %q makes %s %q, which is not valid", ErrInvalid, name, what, x)
+		}
+		return x, nil
+	}
+
 	s := t.Spec
 	s.Repos = make([]api.Repo, len(t.Repos))
+	paths := map[string]bool{}
 	for i, r := range t.Repos {
-		r.Branch = strings.ReplaceAll(r.Branch, "{name}", name)
-		if r.Branch != "" && !refName(r.Branch) {
-			return api.Spec{}, fmt.Errorf("%w: the name %q makes an invalid branch name %q", ErrInvalid, name, r.Branch)
+		var err error
+		if r.Branch, err = fill("the branch", r.Branch, refName); err != nil {
+			return api.Spec{}, err
 		}
+		if r.Ref, err = fill("the ref", r.Ref, refName); err != nil {
+			return api.Spec{}, err
+		}
+		if r.Path, err = fill("the path", r.Path, absPath); err != nil {
+			return api.Spec{}, err
+		}
+		r.Path = path.Clean(r.Path)
+		if paths[r.Path] {
+			return api.Spec{}, fmt.Errorf("%w: the name %q clones two repositories to %s", ErrInvalid, name, r.Path)
+		}
+		paths[r.Path] = true
 		s.Repos[i] = r
+	}
+	var err error
+	if s.EditorPath, err = fill("the editor folder", s.EditorPath, absPath); err != nil {
+		return api.Spec{}, err
+	}
+	if s.EditorPath != "" {
+		s.EditorPath = path.Clean(s.EditorPath)
 	}
 	if s.EditorPath == "" && len(s.Repos) > 0 {
 		// The editor opens on what the environment is for.

@@ -91,7 +91,7 @@ func scan(row pgx.Row) (api.Environment, error) {
 		if err := json.Unmarshal(tspec, &t); err != nil {
 			return e, err
 		}
-		e.TemplateChanges = templateChanges(e.Spec, t, e.Name)
+		e.TemplateChanges = templateChanges(e, t)
 		e.TemplateUpdated = trev > erev
 	}
 	if update != nil {
@@ -198,29 +198,39 @@ func (m *Manager) Create(ctx context.Context, p users.Principal, req api.CreateE
 		if err != nil {
 			return err
 		}
-		spec, err := templates.Resolve(tspec, req.Name)
-		if errors.Is(err, templates.ErrInvalid) {
-			return fmt.Errorf("%w%s", ErrInvalid, strings.TrimPrefix(err.Error(), templates.ErrInvalid.Error()))
-		}
-		if err != nil {
-			return err
-		}
-		raw, err := json.Marshal(spec)
-		if err != nil {
+		var owner string
+		if err := tx.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, p.UserID).Scan(&owner); err != nil {
 			return err
 		}
 
-		// The short ID is drawn at random; one already taken draws again.
+		// The short ID is drawn at random before the spec is made, since the
+		// spec may use it; one already taken draws again.
 		var id string
+		var spec api.Spec
 		for tries := 0; id == ""; tries++ {
 			if tries == 10 {
 				return errors.New("no free short ID for the environment after 10 tries")
 			}
+			var short string
+			if err := tx.QueryRow(ctx, `SELECT new_short_id()`).Scan(&short); err != nil {
+				return err
+			}
+			spec, err = templates.Resolve(tspec, templates.Vars{Name: req.Name, Owner: owner, ShortID: short, Template: tname})
+			if errors.Is(err, templates.ErrInvalid) {
+				return fmt.Errorf("%w%s", ErrInvalid, strings.TrimPrefix(err.Error(), templates.ErrInvalid.Error()))
+			}
+			if err != nil {
+				return err
+			}
+			raw, err := json.Marshal(spec)
+			if err != nil {
+				return err
+			}
 			err = tx.QueryRow(ctx, `INSERT INTO environments
-					(owner_id, name, template_id, template_name, template_revision, spec, image, cpus, memory_mib, desired)
-				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'running')
+					(owner_id, name, short_id, template_id, template_name, template_revision, spec, image, cpus, memory_mib, desired)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'running')
 				ON CONFLICT (short_id) DO NOTHING RETURNING id`,
-				p.UserID, req.Name, req.TemplateID, tname, trev, raw, spec.Image, spec.CPUs, spec.MemoryMiB).Scan(&id)
+				p.UserID, req.Name, short, req.TemplateID, tname, trev, raw, spec.Image, spec.CPUs, spec.MemoryMiB).Scan(&id)
 			if db.IsUniqueViolation(err) {
 				return fmt.Errorf("%w: you already have an environment named %s", ErrConflict, req.Name)
 			}

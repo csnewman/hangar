@@ -8,7 +8,7 @@ import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
 import { environmentsKey } from '../environments'
 import { useMe } from '../session'
-import { branchFor, checkName, groupTemplates, ownerLabel, repoName, useTemplates } from '../templates'
+import { checkName, fillTemplate, groupTemplates, ownerLabel, patternGroups, repoName, templateVars, useTemplates } from '../templates'
 import { useTeams } from '../teams'
 
 export function NewEnvironmentPage() {
@@ -110,8 +110,12 @@ export function NewEnvironmentPage() {
   )
 }
 
-// Preview shows what the environment will be, with its name filled in.
+// Preview shows what the environment will be, with what is known of it filled
+// into its template: all but its short ID, which it is given when made.
 function Preview({ template: t, name }: { template: Template; name: string }) {
+  const me = useMe()
+  const vars = templateVars(t, name, me.username)
+  const groups = patternGroups(t.name_pattern)
   return (
     <div className="preview">
       <div className="preview-row">
@@ -122,12 +126,18 @@ function Preview({ template: t, name }: { template: Template; name: string }) {
         <div key={r.path} className="preview-row">
           <span className="muted">Clones</span>
           <span>
-            <span className="mono">{repoName(r.url)}</span> <span className="muted">into</span>{' '}
-            <span className="mono">{r.path}</span>
+            <span className="mono">{repoName(r.url)}</span>
+            {r.ref && (
+              <>
+                {' '}
+                <span className="muted">at</span> <span className="mono">{fillTemplate(r.ref, vars)}</span>
+              </>
+            )}{' '}
+            <span className="muted">into</span> <span className="mono">{fillTemplate(r.path, vars)}</span>
             {r.branch && (
               <span className="branch">
                 <GitBranch size={12} />
-                <span className="mono">{branchFor(r.branch, name)}</span>
+                <span className="mono">{fillTemplate(r.branch, vars)}</span>
               </span>
             )}
           </span>
@@ -136,7 +146,15 @@ function Preview({ template: t, name }: { template: Template; name: string }) {
       {t.spec.editor_path && (
         <div className="preview-row">
           <span className="muted">Editor opens</span>
-          <span className="mono">{t.spec.editor_path}</span>
+          <span className="mono">{fillTemplate(t.spec.editor_path, vars)}</span>
+        </div>
+      )}
+      {groups.length > 0 && (
+        <div className="preview-row">
+          <span className="muted">From the name</span>
+          <span className="mono">
+            {groups.map((g) => `{${g}} = ${vars[g] === undefined ? '…' : vars[g] || '(empty)'}`).join(', ')}
+          </span>
         </div>
       )}
       <div className="preview-row">
