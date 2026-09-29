@@ -62,7 +62,31 @@ export function TerminalPane({
     const el = host.current
     if (!el) return
 
+    // A link opens in a new tab or window: the browser's, or in the desktop
+    // app, the default browser's. Only the web's, not file: or anything a
+    // program might name.
+    const openLink = (uri: string) => {
+      if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener,noreferrer')
+    }
     const term = new Terminal({
+      // Hyperlinks a program writes (OSC 8), such as a sign-in page. Their
+      // text need not be where they go, so the address is asked about
+      // first, and shows as the pointer rests on one. The address itself
+      // is opened: xterm's own handler opens an empty window and then sends
+      // it there, which the desktop app, handing new windows to the default
+      // browser, has nothing to do with.
+      linkHandler: {
+        activate: (e, uri) => {
+          e.preventDefault()
+          if (window.confirm(`Do you want to open ${uri}?\n\nA program in the environment wrote this link.`)) openLink(uri)
+        },
+        hover: (_, uri) => {
+          el.title = uri
+        },
+        leave: () => {
+          el.title = ''
+        },
+      },
       allowProposedApi: true,
       cursorBlink: true,
       fontFamily: '"JetBrains Mono", "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace',
@@ -84,7 +108,7 @@ export function TerminalPane({
     term.loadAddon(
       new WebLinksAddon((e, uri) => {
         e.preventDefault()
-        window.open(uri, '_blank', 'noopener,noreferrer')
+        openLink(uri)
       }),
     )
     // Programs in the environment may copy to the clipboard (OSC 52) but
