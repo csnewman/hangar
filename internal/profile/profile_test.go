@@ -398,6 +398,73 @@ func TestSSHAgentServesAStartingEnvironment(t *testing.T) {
 	}
 }
 
+// Shared paths may overlap: a directory over a shared file, one inside a
+// shared directory is refused as already shared, and what one of two
+// overlapping paths shares goes on being shared once the other goes.
+func TestOverlappingPaths(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	for path, why := range map[string]string{
+		".claude/skills/review/": "inside a default directory",
+		".gitconfig":             "a default file",
+	} {
+		if err := p.store.AddPath(ctx, p.owner, path); !errors.Is(err, profile.ErrInvalid) {
+			t.Errorf("sharing %s, %s: %v", path, why, err)
+		}
+	}
+	// Over the default .config/gh/config.yml.
+	if err := p.store.AddPath(ctx, p.owner, ".config/"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.AddPath(ctx, p.owner, ".config/"); err != nil {
+		t.Errorf("sharing a path again: %v", err)
+	}
+	if err := p.store.AddPath(ctx, p.owner, ".config/nvim/"); !errors.Is(err, profile.ErrInvalid) {
+		t.Errorf("sharing a directory inside one shared: %v", err)
+	}
+	if err := p.store.AddPath(ctx, p.owner, ".config/nvim/init.lua"); !errors.Is(err, profile.ErrInvalid) {
+		t.Errorf("sharing a file inside a shared directory: %v", err)
+	}
+
+	_, a, _ := p.env(t, "a", false)
+	_, b, _ := p.env(t, "b", false)
+	os.MkdirAll(filepath.Join(a, ".config", "gh"), 0o755)
+	os.MkdirAll(filepath.Join(a, ".config", "nvim"), 0o755)
+	os.WriteFile(filepath.Join(a, ".config", "gh", "config.yml"), []byte("git_protocol: ssh\n"), 0o644)
+	os.WriteFile(filepath.Join(a, ".config", "nvim", "init.lua"), []byte("-- one\n"), 0o644)
+	eventually(t, "files under overlapping paths to reach the other", func() bool {
+		return read(b, ".config/gh/config.yml") == "git_protocol: ssh\n" && read(b, ".config/nvim/init.lua") == "-- one\n"
+	})
+	files, err := p.store.Files(ctx, p.owner, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, f := range files {
+		if f.Path == ".config/gh/config.yml" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("a file under two shared paths is kept %d times", n)
+	}
+
+	// The directory goes; the default file it covered stays shared.
+	if err := p.store.RemovePath(ctx, p.owner, ".config/"); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	os.WriteFile(filepath.Join(a, ".config", "gh", "config.yml"), []byte("git_protocol: https\n"), 0o644)
+	os.WriteFile(filepath.Join(a, ".config", "nvim", "init.lua"), []byte("-- two\n"), 0o644)
+	eventually(t, "the default file to go on being shared", func() bool {
+		return read(b, ".config/gh/config.yml") == "git_protocol: https\n"
+	})
+	time.Sleep(500 * time.Millisecond)
+	if got := read(b, ".config/nvim/init.lua"); got != "-- one\n" {
+		t.Errorf("a file no longer shared still travels: %q", got)
+	}
+}
+
 // A server shares paths for everyone beside the defaults, as it is set up
 // to; a user neither adds nor removes them.
 func TestPathsForEveryone(t *testing.T) {

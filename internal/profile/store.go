@@ -183,9 +183,9 @@ func (s *Store) write(ctx context.Context, userID, path string, stored []byte, m
 	}
 	f := File{Path: path, Data: plain, Mode: mode, Deleted: deleted}
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		// One sequence per user, so a session asks for everything after the
-		// last version it sent. A user's writes take turns, so no two take
-		// the same number.
+		// One sequence per user (profile_versions), so a session asks for
+		// everything after the last version it sent. A user's writes take
+		// turns, so no two take the same number.
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "profile:"+userID); err != nil {
 			return err
 		}
@@ -197,13 +197,18 @@ func (s *Store) write(ctx context.Context, userID, path string, stored []byte, m
 		if total+int64(len(stored)) > MaxProfileSize {
 			return fmt.Errorf("%w: the profile would hold more than %d MiB", ErrInvalid, MaxProfileSize>>20)
 		}
+		var version int64
+		if err := tx.QueryRow(ctx, `INSERT INTO profile_versions (user_id, version) VALUES ($1, 1)
+			ON CONFLICT (user_id) DO UPDATE SET version = profile_versions.version + 1
+			RETURNING version`, userID).Scan(&version); err != nil {
+			return err
+		}
 		err := tx.QueryRow(ctx, `
 			INSERT INTO profile_files (user_id, path, data, mode, deleted, version)
-			VALUES ($1, $2, $3, $4, $5,
-				(SELECT coalesce(max(version), 0) + 1 FROM profile_files WHERE user_id = $1))
+			VALUES ($1, $2, $3, $4, $5, $6)
 			ON CONFLICT (user_id, path) DO UPDATE SET data = EXCLUDED.data, mode = EXCLUDED.mode,
 				deleted = EXCLUDED.deleted, version = EXCLUDED.version, updated_at = now()
-			RETURNING version, updated_at`, userID, path, stored, int32(mode), deleted).
+			RETURNING version, updated_at`, userID, path, stored, int32(mode), deleted, version).
 			Scan(&f.Version, &f.UpdatedAt)
 		if err != nil {
 			return err
@@ -445,9 +450,18 @@ func (s *Store) AddPath(ctx context.Context, userID, path string) error {
 	if err := CheckUserPath(path); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	if slices.Contains(DefaultPaths, path) || slices.Contains(s.everyone, path) ||
-		(!strings.HasSuffix(path, "/") && s.UserPaths(nil).Synced(path)) {
+	if slices.Contains(DefaultPaths, path) || slices.Contains(s.everyone, path) {
 		return fmt.Errorf("%w: %s is already shared", ErrInvalid, path)
+	}
+	own, err := s.OwnPaths(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if slices.Contains(own, path) {
+		return nil
+	}
+	if by, ok := s.UserPaths(own).Covering(path); ok {
+		return fmt.Errorf("%w: %s is already shared, by %s", ErrInvalid, path, by)
 	}
 	return s.db.Transact(ctx, func(tx db.Tx) error {
 		var n int

@@ -260,6 +260,23 @@ func (ps Paths) Synced(p string) bool {
 	return false
 }
 
+// Covering returns the path in ps, other than p itself, that already shares
+// p: a shared directory it is under, or for a file, the file.
+func (ps Paths) Covering(p string) (string, bool) {
+	for _, s := range ps {
+		if s == p {
+			if !strings.HasSuffix(p, "/") {
+				return s, true
+			}
+			continue
+		}
+		if strings.HasSuffix(s, "/") && strings.HasPrefix(p, s) {
+			return s, true
+		}
+	}
+	return "", false
+}
+
 // Dirs are the directories the agent watches: the parents of shared files,
 // whose other contents are not shared, and the shared directories, watched
 // with everything under them.
