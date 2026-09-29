@@ -32,6 +32,9 @@ export interface PaneEvents {
 // or opening it in a second window, attaches to the same shell. A dropped
 // connection is re-attached to the same session until it succeeds or the
 // session is found to have ended.
+// isMac is whether ⌘ is the platform's key for copy and paste.
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent)
+
 export function TerminalPane({
   env,
   session,
@@ -98,6 +101,25 @@ export function TerminalPane({
       rescaleOverlappingGlyphs: true,
       vtExtensions: { kittyKeyboard: true },
     })
+    // On a Mac, ⌘C, ⌘X and ⌘V are the browser's copy, cut and paste, which
+    // xterm answers from its selection and with the clipboard, and ⌘A
+    // selects all of the terminal. Otherwise a program that asks for the
+    // kitty keyboard protocol would be sent them as keys, with ⌘ as Super,
+    // and nothing would be copied or pasted.
+    if (isMac) {
+      term.attachCustomKeyEventHandler((e) => {
+        if (!e.metaKey || e.ctrlKey || e.altKey) return true
+        const key = e.key.toLowerCase()
+        if (key === 'a') {
+          if (e.type === 'keydown') {
+            e.preventDefault()
+            term.selectAll()
+          }
+          return false
+        }
+        return !['c', 'x', 'v'].includes(key)
+      })
+    }
     const fit = new FitAddon()
     term.loadAddon(fit)
     term.loadAddon(new UnicodeGraphemesAddon())
