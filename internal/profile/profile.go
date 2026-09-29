@@ -156,6 +156,8 @@ var DefaultPaths = []string{
 	".claude/commands/",
 	".claude/skills/",
 	".claude/output-styles/",
+	// Where Claude's /statusline writes the script settings.json runs.
+	".claude/statusline-command.sh",
 	".gitconfig",
 	".config/gh/config.yml",
 	".aws/config",

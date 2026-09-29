@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -189,10 +190,22 @@ func TestFilesFollowTheOwner(t *testing.T) {
 	}
 	_, a, _ := p.env(t, "a", false)
 	_, b, _ := p.env(t, "b", false)
+	// Claude's record of an environment is its own, but one without it is
+	// not taken through Claude's setup again: its choices are in the
+	// profile.
+	if err := os.WriteFile(filepath.Join(b, ".claude.json"), []byte(`{"numStartups":3}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	for _, home := range []string{a, b} {
 		eventually(t, "the profile to reach an environment", func() bool {
 			return read(home, ".gitconfig") == "[user]\n\tname = Alice\n"
 		})
+	}
+	eventually(t, "Claude's setup to be marked done", func() bool {
+		return strings.Contains(read(a, ".claude.json"), `"hasCompletedOnboarding": true`)
+	})
+	if got := read(b, ".claude.json"); got != `{"numStartups":3}` {
+		t.Errorf("an environment's own record of Claude became %q", got)
 	}
 
 	// Changed in one environment, it reaches the other and the profile.

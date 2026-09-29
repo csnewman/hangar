@@ -18,6 +18,7 @@ const describe: [string, string][] = [
   ['.claude/commands/', 'Claude slash commands'],
   ['.claude/skills/', 'Claude skills'],
   ['.claude/output-styles/', 'Claude output styles'],
+  ['.claude/statusline-command.sh', "Claude's status line script"],
   ['.gitconfig', "git's settings"],
   ['.git-credentials', "git's stored HTTPS credentials"],
   ['.netrc', 'Logins for curl, git and others'],

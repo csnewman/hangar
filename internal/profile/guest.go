@@ -397,6 +397,9 @@ func (s *guestSession) handle(m Message) error {
 		s.rmu.Lock()
 		s.ready = true
 		s.rmu.Unlock()
+		if err := s.seedClaudeState(); err != nil {
+			s.g.log.Warn("profile: writing Claude's state", "err", err)
+		}
 		s.g.syncedOnce.Do(func() { close(s.g.synced) })
 		return s.flush()
 	case TypeRegistry:
@@ -443,6 +446,31 @@ func (s *guestSession) setPaths(paths Paths) {
 	if s.isReady() {
 		s.flush()
 	}
+}
+
+// claudeState is Claude's own record of this machine: the projects it has
+// been used in, its caches, and that its setup is done. Claude rewrites it
+// all the time, so it is not shared; an environment that has none is given
+// one saying the setup is done, since the setup's choices -- the theme in
+// settings.json and the sign-in -- come with the profile.
+const claudeState = ".claude.json"
+
+func (s *guestSession) seedClaudeState() error {
+	f, err := os.OpenFile(filepath.Join(s.home, claudeState), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = f.Write([]byte(`{"hasCompletedOnboarding": true}` + "\n"))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Chown(f.Name(), s.uid, s.gid)
+	}
+	return err
 }
 
 // rescan marks every shared file here to be looked at.
