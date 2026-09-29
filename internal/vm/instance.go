@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -97,8 +98,16 @@ type Instance struct {
 	net     *ch.Passt
 	resumed bool
 
-	mu  sync.Mutex
-	err error
+	mu       sync.Mutex
+	err      error
+	rebooted bool
+}
+
+// Rebooted reports whether the monitor exited because the guest rebooted.
+func (i *Instance) Rebooted() bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.rebooted
 }
 
 // Session is the agent's session with the guest.
@@ -331,26 +340,42 @@ func (i *Instance) launch(ctx context.Context, args []string) error {
 		}
 		out = logFile
 	}
+	// A guest that reboots is reset inside the monitor, which loses the
+	// socket the host reaches the guest's vsock on. So the monitor reports
+	// its events, and a reboot ends it: the machine is booted again whole.
+	events, eventsW, err := os.Pipe()
+	if err != nil {
+		if logFile != nil {
+			logFile.Close()
+		}
+		return err
+	}
+	args = append(args, "--event-monitor", "fd=3")
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 	cmd.Stdin = i.cfg.Stdin
+	cmd.ExtraFiles = []*os.File{eventsW}
 	cmd.SysProcAttr = sysProcAttr()
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 15 * time.Second
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	eventsW.Close()
+	if err != nil {
+		events.Close()
 		if logFile != nil {
 			logFile.Close()
 		}
 		return fmt.Errorf("starting cloud-hypervisor: %w", err)
 	}
 	i.cmd = cmd
+	go i.watchEvents(events)
 	go func() {
 		err := cmd.Wait()
 		if logFile != nil {
 			logFile.Close()
 		}
-		if err != nil && ctx.Err() == nil {
+		if err != nil && ctx.Err() == nil && !i.Rebooted() {
 			i.mu.Lock()
 			i.err = fmt.Errorf("cloud-hypervisor exited: %v%s", err, lastLine(filepath.Join(i.cfg.Dir, "monitor.log")))
 			i.mu.Unlock()
@@ -358,6 +383,30 @@ func (i *Instance) launch(ctx context.Context, args []string) error {
 		close(i.exited)
 	}()
 	return nil
+}
+
+// watchEvents reads the monitor's events until it exits, and stops it when
+// the guest reboots. The guest has flushed its disks by then, and what the
+// monitor wrote of them is in the host's page cache, so killing it loses
+// nothing.
+func (i *Instance) watchEvents(r *os.File) {
+	defer r.Close()
+	dec := json.NewDecoder(r)
+	for {
+		var ev struct {
+			Source string `json:"source"`
+			Event  string `json:"event"`
+		}
+		if err := dec.Decode(&ev); err != nil {
+			return
+		}
+		if ev.Source == "vm" && ev.Event == "rebooting" {
+			i.mu.Lock()
+			i.rebooted = true
+			i.mu.Unlock()
+			i.cmd.Process.Kill()
+		}
+	}
 }
 
 // restore starts the monitor from the machine's snapshot and resumes the

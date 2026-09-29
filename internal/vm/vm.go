@@ -608,6 +608,16 @@ func (m *machine) lost() {
 	if inst == nil {
 		return
 	}
+	if inst.Rebooted() {
+		inst.Close()
+		m.log.Info("the guest rebooted; booting it again")
+		m.set(api.PhaseStarting, "rebooting")
+		select {
+		case m.nudge <- struct{}{}:
+		default:
+		}
+		return
+	}
 	reason := "the machine stopped on its own"
 	if err := inst.Err(); err != nil {
 		reason = err.Error()
