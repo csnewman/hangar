@@ -25,7 +25,7 @@ export function EnvironmentPorts({ env }: { env: Environment }) {
   const sharing = suffix.startsWith('-') ? suffix.split('.')[0].length : 0
   const longest = maxLabel - `-env${env.short_id}`.length - sharing
   const scheme = window.location.protocol
-  const example = `${scheme}//app-${host}`
+  const url = `${scheme}//${host}`
   const pub = env.ports_public ?? false
 
   return (
@@ -34,10 +34,14 @@ export function EnvironmentPorts({ env }: { env: Environment }) {
         <h2>Web servers</h2>
       </div>
       <p className="muted small">
-        Any name of up to {longest} characters and a hyphen before <span className="mono">{host}</span> reaches this
-        environment as it is: HTTPS to its port 443, over TLS whatever its certificate, and HTTP to its port 80.
+        This environment&rsquo;s web server, as it is: HTTPS reaches its port 443, over TLS whatever its certificate,
+        and HTTP its port 80.
       </p>
-      <CopyCode text={example} href={example} />
+      <CopyCode text={url} href={url} />
+      <p className="muted small">
+        Any name of up to {longest} characters and a hyphen before it reaches the same, for a server that tells its
+        sites apart by host: <span className="mono">api-{host}</span>.
+      </p>
       <div className="field-row ports-access">
         <label className="check">
           <input type="radio" name={`ports-${env.id}`} checked={!pub} disabled={set.isPending} onChange={() => set.mutate(false)} />

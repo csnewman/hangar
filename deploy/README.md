@@ -118,17 +118,18 @@ as Hangar's own, which the editor, framed in Hangar's page, relies on.
 
 ## Environments' web servers
 
-Whatever an environment serves is reached on any name ending in
-`-env<short>.<host>` (or `-env<short>-<host>` in the prefix style), where
-`<short>` is the environment's six-character short ID, with the name
-before it free: `app-envk3x9q2.hangar.example.com`. HTTPS reaches the
+Whatever an environment serves is reached on `env<short>.<host>` (or
+`env<short>-<host>` in the prefix style), where `<short>` is the
+environment's six-character short ID: `envk3x9q2.hangar.example.com`. Any
+name and a hyphen before it reaches the same, for a server that tells its
+sites apart by host: `api-envk3x9q2.hangar.example.com`. HTTPS reaches the
 environment's port 443, over TLS whatever certificate it has there, and
 plain HTTP its port 80, with the host, path and headers as they were sent;
 the browser is shown Hangar's certificate. Port 80 on the control plane
 serves these names rather than redirecting them to HTTPS.
 
-A template can name the web servers its environments run, `dashboard` and
-`customer-ui` say, and each environment's page then links to them.
+Each environment's page links to its plain name, and to any a template
+names, `dashboard` and `customer-ui` say.
 
 An environment is private until its owner makes it public, on its page:
 private, a browser is sent to Hangar to sign in and back, and only people

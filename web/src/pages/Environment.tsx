@@ -122,10 +122,10 @@ function DesktopActions({ env }: { env: string }) {
   )
 }
 
-// webURL is where an environment's web server called name is reached,
-// over the same scheme as Hangar itself.
+// webURL is where an environment's web server called name is reached, or
+// its plain one with no name, over the same scheme as Hangar itself.
 function webURL(name: string, short: string, suffix: string): string {
-  return `${window.location.protocol}//${name}-env${short}${suffix}/`
+  return `${window.location.protocol}//${name ? `${name}-` : ''}env${short}${suffix}/`
 }
 
 export function useEnv() {
@@ -198,10 +198,10 @@ export function SummaryTab() {
               )}
             </Prop>
           ))}
-          {me.environment_host_suffix !== undefined && (env.spec.web_names ?? []).length > 0 && (
+          {me.environment_host_suffix !== undefined && (
             <Prop label="Web servers">
               <span className="web-links">
-                {(env.spec.web_names ?? []).map((n) => (
+                {['', ...(env.spec.web_names ?? [])].map((n) => (
                   <a
                     key={n}
                     className="mono"
@@ -210,7 +210,7 @@ export function SummaryTab() {
                     rel="noreferrer"
                     title={env.phase === 'running' ? undefined : 'The environment is not running'}
                   >
-                    {n} <ExternalLink size={12} />
+                    {n || 'default'} <ExternalLink size={12} />
                   </a>
                 ))}
               </span>
