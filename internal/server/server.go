@@ -77,7 +77,10 @@ type Config struct {
 	// names start with: registry.<host>, or registry-<host> in the prefix
 	// style. Empty turns it off.
 	RegistryDir string
-	Log         *slog.Logger
+	// ProfilePaths are shared in every user's profile beside the defaults
+	// (profile.DefaultPaths).
+	ProfilePaths []string
+	Log          *slog.Logger
 }
 
 type Server struct {
@@ -115,6 +118,9 @@ func New(cfg Config) (*Server, error) {
 	tunnels := tunnel.NewRegistry(log)
 	edits := editor.NewManager(cfg.DB)
 	profiles := profile.NewStore(cfg.DB, cfg.Sealer)
+	if err := profiles.ShareForEveryone(cfg.ProfilePaths); err != nil {
+		return nil, fmt.Errorf("profile paths: %w", err)
+	}
 	auditLog := audit.NewLog(cfg.DB)
 	var public *publichost.Public
 	if cfg.PublicURL != "" {

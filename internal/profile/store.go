@@ -57,6 +57,29 @@ type Key struct {
 type Store struct {
 	db     *db.DB
 	sealer *Sealer
+	// everyone are the paths the server shares for every user beside the
+	// DefaultPaths.
+	everyone []string
+}
+
+// ShareForEveryone shares paths for every user beside the DefaultPaths, as
+// a server is set up to. Each is one a user could share for themselves.
+func (s *Store) ShareForEveryone(paths []string) error {
+	for _, p := range paths {
+		if err := CheckUserPath(p); err != nil {
+			return err
+		}
+		if !slices.Contains(DefaultPaths, p) && !slices.Contains(s.everyone, p) {
+			s.everyone = append(s.everyone, p)
+		}
+	}
+	return nil
+}
+
+// UserPaths is the set a user shares: the DefaultPaths, the server's, and
+// own, the user's own.
+func (s *Store) UserPaths(own []string) Paths {
+	return UserPaths(append(slices.Clone(s.everyone), own...))
 }
 
 // NewStore returns a store. A nil sealer keeps no secrets: credentials and
@@ -393,7 +416,7 @@ func (s *Store) Paths(ctx context.Context, userID string) (Paths, error) {
 	if err != nil {
 		return nil, err
 	}
-	return UserPaths(own), nil
+	return s.UserPaths(own), nil
 }
 
 // OwnPaths returns the paths a user has added.
@@ -422,7 +445,8 @@ func (s *Store) AddPath(ctx context.Context, userID, path string) error {
 	if err := CheckUserPath(path); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
-	if slices.Contains(DefaultPaths, path) || (!strings.HasSuffix(path, "/") && UserPaths(nil).Synced(path)) {
+	if slices.Contains(DefaultPaths, path) || slices.Contains(s.everyone, path) ||
+		(!strings.HasSuffix(path, "/") && s.UserPaths(nil).Synced(path)) {
 		return fmt.Errorf("%w: %s is already shared", ErrInvalid, path)
 	}
 	return s.db.Transact(ctx, func(tx db.Tx) error {
@@ -474,7 +498,7 @@ func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
 		if err != nil {
 			return err
 		}
-		still := UserPaths(own)
+		still := s.UserPaths(own)
 		rows, err = tx.Query(ctx, `SELECT path FROM profile_files WHERE user_id = $1`, userID)
 		if err != nil {
 			return err

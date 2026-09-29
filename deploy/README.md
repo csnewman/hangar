@@ -252,6 +252,21 @@ one.
 the public URL's host at the listen port -- behind a load balancer on port
 22, say.
 
+## Profiles
+
+Each person's profile -- Claude's settings and sign-in, `.gitconfig`,
+VS Code's settings, CLI sign-ins and the like -- is kept by the control
+plane and synced into every environment they own. The Profile page lists
+what is shared, and each person can add paths of their own there.
+`HANGAR_PROFILE_PATHS` adds paths for everyone, beside the built-in ones:
+
+    HANGAR_PROFILE_PATHS=.config/nvim/,.bash_aliases
+
+Each is relative to the home directory, and a directory, ending in a slash,
+shares everything under it. A path no one may share -- caches, and what
+programs rewrite per machine, such as `.claude.json` -- stops the server
+starting, and says why.
+
 ## Where the data is
 
 Everything that lasts is in directories on the host, not Docker volumes,

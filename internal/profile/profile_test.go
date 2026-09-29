@@ -398,6 +398,39 @@ func TestSSHAgentServesAStartingEnvironment(t *testing.T) {
 	}
 }
 
+// A server shares paths for everyone beside the defaults, as it is set up
+// to; a user neither adds nor removes them.
+func TestPathsForEveryone(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	if err := p.store.ShareForEveryone([]string{".claude/projects/"}); err == nil {
+		t.Error("the server shared a path no one may")
+	}
+	if err := p.store.ShareForEveryone([]string{".config/nvim/", ".gitconfig"}); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := p.store.Paths(ctx, p.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !paths.Synced(".config/nvim/init.lua") || !paths.Synced(".gitconfig") {
+		t.Errorf("the server's paths are not shared: %v", paths)
+	}
+	if err := p.store.AddPath(ctx, p.owner, ".config/nvim/"); !errors.Is(err, profile.ErrInvalid) {
+		t.Errorf("a user shared a path the server shares: %v", err)
+	}
+	if err := p.store.RemovePath(ctx, p.owner, ".config/nvim/"); !errors.Is(err, profile.ErrNotFound) {
+		t.Errorf("a user removed a path the server shares: %v", err)
+	}
+	_, a, _ := p.env(t, "a", false)
+	_, b, _ := p.env(t, "b", false)
+	os.MkdirAll(filepath.Join(a, ".config", "nvim"), 0o755)
+	os.WriteFile(filepath.Join(a, ".config", "nvim", "init.lua"), []byte("-- everyone\n"), 0o644)
+	eventually(t, "a file under the server's path to reach the other environment", func() bool {
+		return read(b, ".config/nvim/init.lua") == "-- everyone\n"
+	})
+}
+
 // The agent offers the owner's keys while the profile's files are still
 // arriving, and the guest says when they have all arrived.
 func TestSSHAgentServesBeforeTheProfileArrives(t *testing.T) {

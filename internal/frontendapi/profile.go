@@ -28,7 +28,7 @@ func (h *handler) GetProfile(ctx context.Context, _ GetProfileRequestObject) (Ge
 	if err != nil {
 		return nil, err
 	}
-	out := Profile{Files: []ProfileFile{}, Keys: []SSHKey{}, LoginKeys: []LoginKey{}, Paths: profile.UserPaths(own),
+	out := Profile{Files: []ProfileFile{}, Keys: []SSHKey{}, LoginKeys: []LoginKey{}, Paths: h.profiles.UserPaths(own),
 		OwnPaths: own, Secrets: h.profiles.KeepsSecrets()}
 	for _, k := range logins {
 		out.LoginKeys = append(out.LoginKeys, loginKey(k))
