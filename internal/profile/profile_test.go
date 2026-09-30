@@ -221,8 +221,10 @@ func TestFilesFollowTheOwner(t *testing.T) {
 	if err := os.WriteFile(skill, []byte("# Review\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// An empty file travels as one.
+	os.WriteFile(filepath.Join(b, ".claude", "skills", "review", "EMPTY"), nil, 0o644)
 	eventually(t, "a new file in a new directory to reach the other", func() bool {
-		return read(a, ".claude/skills/review/SKILL.md") == "# Review\n"
+		return read(a, ".claude/skills/review/SKILL.md") == "# Review\n" && exists(a, ".claude/skills/review/EMPTY")
 	})
 
 	// Removed in one, it goes from the other.

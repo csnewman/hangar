@@ -181,6 +181,11 @@ func (s *Store) write(ctx context.Context, userID, path string, stored []byte, m
 	if !db.ValidUUID(userID) {
 		return File{}, ErrNotFound
 	}
+	// An empty file arrives with no data at all, which would be stored as
+	// NULL.
+	if stored == nil {
+		stored = []byte{}
+	}
 	f := File{Path: path, Data: plain, Mode: mode, Deleted: deleted}
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
 		// One sequence per user (profile_versions), so a session asks for
