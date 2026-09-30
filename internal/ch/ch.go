@@ -88,6 +88,11 @@ type Config struct {
 	// numbers.
 	VirtiofsDaxMiB int
 
+	// Pmem are files given to the guest as virtio-pmem, read-only: the
+	// guest's writes are discarded, and the host's page cache pages are
+	// mapped copy-on-write, so every guest on a file shares them.
+	Pmem []string
+
 	// NetSocket is a passt vhost-user socket. Empty leaves the guest with no
 	// network.
 	NetSocket string
@@ -196,6 +201,9 @@ func (c *Config) Args() ([]string, error) {
 			spec += fmt.Sprintf(",shm_size=%dM,shm_id=%d", c.VirtiofsDaxMiB, VirtiofsShmID)
 		}
 		args = append(args, "--generic-vhost-user", spec)
+	}
+	for _, f := range c.Pmem {
+		args = append(args, "--pmem", "file="+f+",discard_writes=on")
 	}
 
 	if c.GuestCID != 0 {

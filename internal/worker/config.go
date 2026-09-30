@@ -80,9 +80,15 @@ type VMConfig struct {
 	Editor    string `yaml:"editor"`
 	UpperGiB  int    `yaml:"upper_gib"`
 	DockerGiB int    `yaml:"docker_gib"`
+	// ImageDevice is how an environment's image reaches it: "disk" (the
+	// default), an EROFS image as a read-only virtio-blk disk; "pmem", the
+	// same image as virtio-pmem, mapped with DAX for an environment that
+	// asks; or "virtiofs", the image's directory served over virtio-fs.
+	ImageDevice string `yaml:"image_device"`
 	// DaxMiB sizes the DAX window through which an environment that asks
-	// for DAX maps its base's files from this machine's page cache. 0 serves
-	// every base over virtio-fs without one, whatever an environment asks.
+	// for DAX maps its base's files from this machine's page cache, with
+	// image_device virtiofs. 0 serves every base without one, whatever an
+	// environment asks.
 	DaxMiB int `yaml:"dax_mib"`
 	// GPU is what an environment with a virtual GPU gets on this machine.
 	GPU VMGPU `yaml:"gpu"`
@@ -120,7 +126,7 @@ type VMGPU struct {
 }
 
 // VMImage is a local copy of an image: its root filesystem, a directory,
-// which environments boot from over virtio-fs.
+// which environments boot from (VMConfig.ImageDevice).
 type VMImage struct {
 	Base string `yaml:"base"`
 }

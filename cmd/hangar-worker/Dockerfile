@@ -126,7 +126,7 @@ FROM ${UBUNTU} AS worker
 # first asked what it offers.
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-      ca-certificates passt e2fsprogs coreutils \
+      ca-certificates passt e2fsprogs erofs-utils coreutils \
       libepoxy0 libgbm1 libegl1 libgles2 libopengl0 libdrm2 libvulkan1 \
       libgl1-mesa-dri mesa-vulkan-drivers >/dev/null \
  && rm -rf /var/lib/apt/lists/*
@@ -146,7 +146,7 @@ CMD ["-config", "/etc/hangar/worker.yaml"]
 # ---------------------------------------------------------------- imagebuilder
 # Builds a distribution's images the way `hangar build` does: /out/minimal
 # and /out/base, each holding rootfs, the image's root filesystem, which a
-# worker serves to its environments over virtio-fs. Run it with
+# worker boots its environments from. Run it with
 # CAP_SYS_ADMIN and seccomp and AppArmor unconfined, IMAGE=<images/ subdir>,
 # and /out mounted from a Linux filesystem: the trees keep the images' owners.
 FROM ${UBUNTU} AS imagebuilder

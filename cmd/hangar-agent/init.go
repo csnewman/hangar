@@ -22,7 +22,9 @@ import (
 //
 // As PID 1 it assembles the root and hands over to the image's own init:
 //
-//	/base  the image, read-only, over virtiofs (tag hangar-base)
+//	/base  the image, read-only: an EROFS image on the device the kernel
+//	       command line names (hangar.image=), mounted with DAX if
+//	       hangar.image_dax=1, or else over virtiofs (tag hangar-base)
 //	/rw    the environment's writable disk, the first virtio-blk device
 //	/root  overlayfs of the two, which becomes /
 //
@@ -37,6 +39,62 @@ const (
 	// init starts.
 	diskWait = 10 * time.Second
 )
+
+// mountBase mounts the image at /base.
+func mountBase() error {
+	b, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		return err
+	}
+	var device string
+	var dax bool
+	for _, f := range strings.Fields(string(b)) {
+		if v, ok := strings.CutPrefix(f, "hangar.image="); ok {
+			device = v
+		}
+		if f == "hangar.image_dax=1" {
+			dax = true
+		}
+	}
+	if device == "" {
+		if err := unix.Mount(baseTag, "/base", "virtiofs", unix.MS_RDONLY, ""); err != nil {
+			return fmt.Errorf("mounting the base over virtiofs (%s): %w", baseTag, err)
+		}
+		fmt.Fprintln(os.Stderr, "INITRAMFS: base over virtiofs")
+		return nil
+	}
+	if err := waitFor(device); err != nil {
+		return err
+	}
+	opts := ""
+	if dax {
+		opts = "dax=always"
+	}
+	if err := unix.Mount(device, "/base", "erofs", unix.MS_RDONLY, opts); err != nil {
+		return fmt.Errorf("mounting the base from %s: %w", device, err)
+	}
+	how := "erofs"
+	if dax {
+		how += ", dax"
+	}
+	fmt.Fprintf(os.Stderr, "INITRAMFS: base from %s (%s)\n", device, how)
+	return nil
+}
+
+// waitFor waits for a device node, which the kernel may still be probing
+// when init starts.
+func waitFor(device string) error {
+	deadline := time.Now().Add(diskWait)
+	for {
+		if _, err := os.Stat(device); err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("no device at %s", device)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
 
 // initRoot assembles the root and executes the image's init. It returns only
 // if that fails, having said why on the console.
@@ -69,20 +127,12 @@ func assembleRoot() error {
 		}
 	}
 
-	if err := unix.Mount(baseTag, "/base", "virtiofs", unix.MS_RDONLY, ""); err != nil {
-		return fmt.Errorf("mounting the base over virtiofs (%s): %w", baseTag, err)
+	if err := mountBase(); err != nil {
+		return err
 	}
-	fmt.Fprintln(os.Stderr, "INITRAMFS: base over virtiofs")
 
-	deadline := time.Now().Add(diskWait)
-	for {
-		if _, err := os.Stat(upperDisk); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("no writable disk at %s", upperDisk)
-		}
-		time.Sleep(50 * time.Millisecond)
+	if err := waitFor(upperDisk); err != nil {
+		return fmt.Errorf("the writable disk: %w", err)
 	}
 	if err := unix.Mount(upperDisk, "/rw", "ext4", 0, ""); err != nil {
 		return fmt.Errorf("mounting the writable layer (%s): %w", upperDisk, err)

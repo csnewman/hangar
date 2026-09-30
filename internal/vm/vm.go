@@ -49,12 +49,16 @@ import (
 
 // Image is how a worker finds the base an environment's image names.
 //
-// Base is the image's root filesystem, a directory, exported to the guest
-// over virtio-fs as the read-only lower layer; every environment on the
-// worker using the image shares it, and its page cache. An image carries
-// nothing else: the kernel and the initramfs are the node's.
+// Base is the image's root filesystem, a directory, which the guest mounts
+// read-only as the lower layer: as an EROFS image of it, or the directory
+// itself over virtio-fs (Config.ImageDevice). Every environment on the worker
+// using the image shares it. An image carries nothing else: the kernel and
+// the initramfs are the node's.
 type Image struct {
 	Base string `yaml:"base"`
+	// Copy is the store's directory for the copy, where its EROFS image is
+	// kept.
+	Copy string `yaml:"-"`
 	// ID names what Base holds when the directory itself cannot: a stack of
 	// layers is mounted afresh after a restart, and is the same image. Empty
 	// for a directory that is the image.
@@ -91,6 +95,9 @@ type Config struct {
 	// space spent.
 	UpperGiB  int
 	DockerGiB int
+	// ImageDevice is how the base reaches the guest: ImageDisk (the
+	// default), ImagePmem, or ImageVirtiofs.
+	ImageDevice string
 	// DaxMiB sizes the window a virtio-fs base is mapped through, for an
 	// environment that asks for DAX. Zero reads every file through the
 	// backend, whatever an environment asks.
@@ -110,7 +117,27 @@ type Config struct {
 	Log         *slog.Logger
 }
 
+// How the base reaches the guest.
+const (
+	// ImageDisk attaches an EROFS image of the base as a read-only
+	// virtio-blk disk. The guest answers lookups from its own cache and
+	// reads in large requests; each guest caches what it reads itself.
+	ImageDisk = "disk"
+	// ImagePmem attaches the EROFS image as virtio-pmem. An environment that
+	// asks for DAX maps the host's page cache pages directly, shared by
+	// every guest on the image. The first touch of each page faults to the
+	// host, which is costly under nested virtualisation.
+	ImagePmem = "pmem"
+	// ImageVirtiofs serves the base directory over virtio-fs (hangar-fs),
+	// with a DAX window for an environment that asks for DAX. Every lookup
+	// is a round trip to the host.
+	ImageVirtiofs = "virtiofs"
+)
+
 func (c *Config) defaults() {
+	if c.ImageDevice == "" {
+		c.ImageDevice = ImageDisk
+	}
 	if c.UpperGiB == 0 {
 		c.UpperGiB = 16
 	}

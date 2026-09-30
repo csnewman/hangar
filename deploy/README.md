@@ -33,8 +33,9 @@ A worker machine needs, before its container starts:
 - **`HANGAR_WORKER_DATA_DIR`** (`/var/lib/hangar` unless set) on a fast local Linux filesystem with room for every
   environment's disks (each is sparse, up to `upper_gib + docker_gib`) and
   the images. Each image layer is unpacked there once, however many images
-  share it, and stacked into their root filesystems, served to environments
-  over virtio-fs; it must keep its owners: not a network or foreign
+  share it, and stacked into their root filesystems, from which each image
+  gets an EROFS image its environments mount (`image_device` in
+  `worker.yaml`); it must keep its owners: not a network or foreign
   filesystem that maps them.
 - Docker with Compose v2 and Buildx.
 

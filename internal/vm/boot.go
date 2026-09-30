@@ -55,8 +55,17 @@ func preflight(cfg *Config) error {
 	if _, err := os.Stat(cfg.Agent); err != nil {
 		return fmt.Errorf("agent: %w", err)
 	}
-	if _, err := ch.FindFsBackend(); err != nil {
-		return err
+	switch cfg.ImageDevice {
+	case ImageDisk, ImagePmem:
+		if _, err := exec.LookPath("mkfs.erofs"); err != nil {
+			return fmt.Errorf("mkfs.erofs not found (apt install erofs-utils): %w", err)
+		}
+	case ImageVirtiofs:
+		if _, err := ch.FindFsBackend(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("vm.image_device %q is none of %s, %s or %s", cfg.ImageDevice, ImageDisk, ImagePmem, ImageVirtiofs)
 	}
 	for ref, img := range cfg.Images {
 		st, err := os.Stat(img.Base)
@@ -64,7 +73,7 @@ func preflight(cfg *Config) error {
 			return fmt.Errorf("image %s: base: %w", ref, err)
 		}
 		if !st.IsDir() {
-			return fmt.Errorf("image %s: base %s is not a directory: an image is its root filesystem, served over virtio-fs", ref, img.Base)
+			return fmt.Errorf("image %s: base %s is not a directory: an image is its root filesystem", ref, img.Base)
 		}
 	}
 	return nil
@@ -121,6 +130,18 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if err := EnsureDisk(ctx, docker, "hangar-docker", m.rt.cfg.DockerGiB); err != nil {
 		return nil, err
 	}
+	var baseFile, baseDevice string
+	if dev := m.rt.cfg.ImageDevice; dev == ImageDisk || dev == ImagePmem {
+		// Built once per copy of the image, and shared by every machine on
+		// it.
+		m.step(api.StepDisks, "preparing the image")
+		f, err := m.rt.store.EROFS(ctx, img)
+		if err != nil {
+			return nil, fmt.Errorf("image %s: %w", s.Image, err)
+		}
+		baseFile, baseDevice = f, dev
+		m.step(api.StepDisks, "preparing its disks")
+	}
 	m.makeRoomForHugePages(s.MemoryMiB)
 	// The writable layer is the first disk: the agent, as init, mounts
 	// /dev/vda. The Docker disk is mounted by label, and so is the editor
@@ -137,10 +158,13 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		Agent:       m.rt.cfg.Agent,
 		Base:        img.Base,
 		BaseID:      img.ID,
+		BaseFile:    baseFile,
+		BaseDevice:  baseDevice,
+		BaseDAX:     baseDevice == ImagePmem && s.DAX,
 		Disks:       disks,
 		MemoryMiB:   s.MemoryMiB,
 		CPUs:        s.CPUs,
-		DaxMiB:      daxMiB(m.rt.cfg.DaxMiB, s),
+		DaxMiB:      daxMiB(m.rt.cfg, s),
 		Net:         true,
 		GPU:         s.GPU == api.GPUVirtual,
 		ConsoleFile: filepath.Join(m.dir, "console.log"),
@@ -549,13 +573,14 @@ func writeEditorTrust(sess *agent.Session, spec api.Spec) error {
 	return nil
 }
 
-// daxMiB is the DAX window an environment's machine is given: the worker's,
-// if the environment asks to map its image's files, and none otherwise.
-func daxMiB(worker int, s api.Spec) int {
-	if !s.DAX {
+// daxMiB is the virtio-fs DAX window an environment's machine is given: the
+// worker's, if its base is served over virtio-fs and it asks to map its
+// image's files, and none otherwise.
+func daxMiB(worker Config, s api.Spec) int {
+	if !s.DAX || worker.ImageDevice != ImageVirtiofs {
 		return 0
 	}
-	return worker
+	return worker.DaxMiB
 }
 
 // makeRoomForHugePages compacts the host's memory when it has too few free

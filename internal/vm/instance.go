@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 	"time"
@@ -34,10 +35,16 @@ type InstanceConfig struct {
 	Kernel string `json:"kernel"`
 	// Agent is the guest agent, each boot's initramfs and then its init.
 	Agent string `json:"agent"`
-	// Base is the image's root filesystem, served over virtio-fs, and
-	// BaseID what it holds, when the directory does not say (Image.ID).
+	// Base is the image's root filesystem, and BaseID what it holds, when
+	// the directory does not say (Image.ID).
 	Base   string `json:"base"`
 	BaseID string `json:"base_id,omitempty"`
+	// BaseFile is an EROFS image of Base, attached as BaseDevice
+	// (ImageDisk or ImagePmem), which the guest mounts with DAX if BaseDAX.
+	// Empty serves Base itself over virtio-fs.
+	BaseFile   string `json:"base_file,omitempty"`
+	BaseDevice string `json:"base_device,omitempty"`
+	BaseDAX    bool   `json:"base_dax,omitempty"`
 	// Disks follow: the writable layer first, which the agent mounts as
 	// /dev/vda, then the Docker disk, then any read-only ones.
 	Disks []ch.Disk `json:"disks"`
@@ -233,22 +240,38 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 		APISocket:    filepath.Join(run, "api.sock"),
 	}
 
-	// The base is exported read-only over virtio-fs. With a DAX window its
-	// files are mapped from the host's page cache, which every machine on
-	// the base shares.
-	var minSize uint64
-	if cfg.DaxMiB > 0 {
-		minSize = ch.DefaultDaxMinFileSize
+	// The guest's initramfs mounts the base as the lower layer: the EROFS
+	// image from the device named on the command line, or, with no image,
+	// the directory over virtio-fs.
+	switch cfg.BaseDevice {
+	case ImageDisk:
+		// After the disks the guest already knows by position and label, so
+		// none of them moves.
+		ccfg.Disks = append(slices.Clone(cfg.Disks), ch.Disk{Path: cfg.BaseFile, ReadOnly: true})
+		ccfg.ExtraCmdline += " hangar.image=/dev/vd" + string(rune('a'+len(cfg.Disks)))
+	case ImagePmem:
+		ccfg.Pmem = []string{cfg.BaseFile}
+		ccfg.ExtraCmdline += " hangar.image=/dev/pmem0"
+		if cfg.BaseDAX {
+			ccfg.ExtraCmdline += " hangar.image_dax=1"
+		}
+	default:
+		// With a DAX window the base's files are mapped from the host's
+		// page cache, which every machine on the base shares.
+		var minSize uint64
+		if cfg.DaxMiB > 0 {
+			minSize = ch.DefaultDaxMinFileSize
+		}
+		fs, err := ch.StartFsBackend(procCtx, cfg.Base, filepath.Join(run, "fs.sock"), ch.DefaultVirtiofsTag,
+			minSize, filepath.Join(cfg.Dir, "fs.json"), cfg.Verbose)
+		if err != nil {
+			return nil, err
+		}
+		inst.backends = append(inst.backends, fs)
+		inst.fs = fs
+		ccfg.VirtiofsSocket = fs.Socket()
+		ccfg.VirtiofsDaxMiB = cfg.DaxMiB
 	}
-	fs, err := ch.StartFsBackend(procCtx, cfg.Base, filepath.Join(run, "fs.sock"), ch.DefaultVirtiofsTag,
-		minSize, filepath.Join(cfg.Dir, "fs.json"), cfg.Verbose)
-	if err != nil {
-		return nil, err
-	}
-	inst.backends = append(inst.backends, fs)
-	inst.fs = fs
-	ccfg.VirtiofsSocket = fs.Socket()
-	ccfg.VirtiofsDaxMiB = cfg.DaxMiB
 
 	if cfg.Net {
 		pdir, err := passtDir(cfg.ID)

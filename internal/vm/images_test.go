@@ -2,7 +2,9 @@ package vm_test
 
 import (
 	"context"
+	"encoding/binary"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -196,5 +198,54 @@ func TestImageStoreSourceWithoutBuildID(t *testing.T) {
 	}
 	if second == first {
 		t.Fatalf("a replaced directory kept its digest %q", first)
+	}
+}
+
+// A copy's EROFS image is made once, where the copy is, padded to what a
+// persistent-memory region is aligned to, and handed out again after.
+func TestImageStoreEROFS(t *testing.T) {
+	linuxOnly(t)
+	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
+		t.Skip("mkfs.erofs is not installed")
+	}
+	ctx := context.Background()
+	src := filepath.Join(t.TempDir(), "rootfs")
+	build(t, src, "one", "first")
+	const ref = "example.com/img:tag"
+	s, err := vm.NewImageStore(t.TempDir(), map[string]vm.Image{ref: {Base: src}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := s.Current(ctx, ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := s.Get(ctx, api.ImageCopy{Ref: ref, Digest: d}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := s.EROFS(ctx, img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// EROFS's superblock is 1024 bytes in, and starts with its magic.
+	if len(b) < 1028 || binary.LittleEndian.Uint32(b[1024:]) != 0xE0F5E1E2 {
+		t.Fatalf("%s is not an EROFS image", f)
+	}
+	if len(b)%(2<<20) != 0 {
+		t.Errorf("the image is %d bytes, not a multiple of 2 MiB", len(b))
+	}
+	st, _ := os.Stat(f)
+	again, err := s.EROFS(ctx, img)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st2, _ := os.Stat(again)
+	if again != f || !st2.ModTime().Equal(st.ModTime()) {
+		t.Error("the image was made again")
 	}
 }

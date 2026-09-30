@@ -302,7 +302,7 @@ func (s *ImageStore) Get(ctx context.Context, c api.ImageCopy, watch func(FetchP
 			if err != nil {
 				return Image{}, err
 			}
-			img := Image{Base: base}
+			img := Image{Base: base, Copy: h.dir}
 			if len(h.layers) > 1 {
 				img.ID = c.Ref + "@" + c.Digest
 			}
@@ -378,8 +378,7 @@ func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, rep
 			}
 			report(FetchProgress{Stage: StageCopy})
 			// Owners, modes, links and extended attributes are the image,
-			// and virtio-fs passes them to the guest as they are, so the
-			// copy keeps them all.
+			// and reach the guest as they are, so the copy keeps them all.
 			out, err := exec.CommandContext(ctx, "cp", "-a", "--reflink=auto", "--", src.Base, rootfs).
 				CombinedOutput()
 			if err != nil {

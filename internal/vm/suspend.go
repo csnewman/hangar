@@ -29,12 +29,15 @@ const (
 
 // suspendRecord is what a suspended machine was running against.
 type suspendRecord struct {
-	Base     string   `json:"base"`
+	Base string `json:"base"`
+	// Image is how the base was attached: the snapshot holds its devices,
+	// which a machine attaching it another way does not have.
+	Image    string   `json:"image,omitempty"`
 	ReadOnly []string `json:"read_only,omitempty"`
 }
 
 func (r suspendRecord) equal(o suspendRecord) bool {
-	return r.Base == o.Base && slices.Equal(r.ReadOnly, o.ReadOnly)
+	return r.Base == o.Base && r.Image == o.Image && slices.Equal(r.ReadOnly, o.ReadOnly)
 }
 
 // fingerprint identifies a file or directory as the one it is: made again
@@ -59,6 +62,9 @@ func (c InstanceConfig) record() suspendRecord {
 	r := suspendRecord{Base: fingerprint(c.Base)}
 	if c.BaseID != "" {
 		r.Base = "image:" + c.BaseID
+	}
+	if c.BaseDevice != "" {
+		r.Image = fmt.Sprintf("%s:%t:%s", c.BaseDevice, c.BaseDAX, fingerprint(c.BaseFile))
 	}
 	for _, d := range c.Disks {
 		if d.ReadOnly {
