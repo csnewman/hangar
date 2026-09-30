@@ -133,16 +133,27 @@ func (p *plane) envIn(t *testing.T, name string, untrusted bool, phase api.Phase
 		t.Fatal(err)
 	}
 	home = t.TempDir()
+	return id, home, p.guestFor(t, id, home)
+}
+
+// guestFor starts a guest for an environment, as its agent does, keeping
+// its state beside the home directory. One started again for the same
+// environment is the agent restarted.
+func (p *plane) guestFor(t *testing.T, id, home string) *profile.Guest {
+	t.Helper()
 	me, err := user.Current()
 	if err != nil {
 		t.Fatal(err)
 	}
-	g = profile.NewGuest(&user.User{Uid: me.Uid, Gid: me.Gid, Username: me.Username, HomeDir: home},
+	g := profile.NewGuest(&user.User{Uid: me.Uid, Gid: me.Gid, Username: me.Username, HomeDir: home},
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := g.KeepStateIn(home + ".state.json"); err != nil {
+		t.Fatal(err)
+	}
 	p.guests.mu.Lock()
 	p.guests.by[id] = g
 	p.guests.mu.Unlock()
-	return id, home, g
+	return g
 }
 
 // socketPath is somewhere short enough for a unix socket: a test's own
@@ -397,6 +408,90 @@ func TestSSHAgentServesAStartingEnvironment(t *testing.T) {
 	})
 	if keys, err := agent.NewClient(conn).List(); err != nil || len(keys) != 1 {
 		t.Fatalf("the agent of a starting environment offers %d keys (%v), want 1", len(keys), err)
+	}
+}
+
+// What goes from a shared directory in one environment goes from the others:
+// a file, a directory and everything in it, and a directory moved aside, as
+// Claude moves a skill to .trash.
+func TestRemovalsInSharedDirectories(t *testing.T) {
+	p := newPlane(t)
+	_, a, _ := p.env(t, "a", false)
+	_, b, _ := p.env(t, "b", false)
+	skills := filepath.Join(a, ".claude", "skills")
+	for _, f := range []string{"one/SKILL.md", "one/notes.md", "two/SKILL.md", "three/SKILL.md", "three/ref/deep.md"} {
+		os.MkdirAll(filepath.Dir(filepath.Join(skills, f)), 0o755)
+		os.WriteFile(filepath.Join(skills, f), []byte(f), 0o644)
+	}
+	eventually(t, "the skills to reach the other", func() bool {
+		return read(b, ".claude/skills/three/ref/deep.md") == "three/ref/deep.md" && read(b, ".claude/skills/one/notes.md") == "one/notes.md"
+	})
+
+	os.Remove(filepath.Join(skills, "one", "notes.md"))
+	eventually(t, "a file removed from a shared directory to go", func() bool {
+		return !exists(b, ".claude/skills/one/notes.md")
+	})
+	os.RemoveAll(filepath.Join(skills, "two"))
+	eventually(t, "a directory removed to go", func() bool { return !exists(b, ".claude/skills/two/SKILL.md") })
+	os.MkdirAll(filepath.Join(skills, ".trash"), 0o755)
+	if err := os.Rename(filepath.Join(skills, "three"), filepath.Join(skills, ".trash", "three")); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a directory moved aside to go from where it was", func() bool {
+		return !exists(b, ".claude/skills/three/SKILL.md") && !exists(b, ".claude/skills/three/ref/deep.md") &&
+			read(b, ".claude/skills/.trash/three/ref/deep.md") == "three/ref/deep.md"
+	})
+	if !exists(b, ".claude/skills/one/SKILL.md") {
+		t.Error("a file still there went")
+	}
+}
+
+// What an environment changes while it has no session -- the server or
+// its worker restarting, or the environment rebooting -- is not undone when
+// the session comes back: the profile takes it, as it would have.
+func TestChangesWhileDisconnected(t *testing.T) {
+	t.Run("session", func(t *testing.T) { changesWhileDisconnected(t, false) })
+	t.Run("agent restarted", func(t *testing.T) { changesWhileDisconnected(t, true) })
+}
+
+func changesWhileDisconnected(t *testing.T, restart bool) {
+	ctx := context.Background()
+	p := newPlane(t)
+	id, a, _ := p.env(t, "a", false)
+	_, b, _ := p.env(t, "b", false)
+	skills := filepath.Join(a, ".claude", "skills", "x")
+	os.MkdirAll(skills, 0o755)
+	os.WriteFile(filepath.Join(skills, "gone.md"), []byte("gone"), 0o644)
+	os.WriteFile(filepath.Join(skills, "edited.md"), []byte("before"), 0o644)
+	eventually(t, "the files to reach the other", func() bool {
+		return read(b, ".claude/skills/x/gone.md") == "gone" && read(b, ".claude/skills/x/edited.md") == "before"
+	})
+
+	setPhase := func(phase string) {
+		err := p.d.Transact(ctx, func(tx db.Tx) error {
+			_, err := tx.Exec(ctx, `UPDATE environments SET phase = $2 WHERE id = $1`, id, phase)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	setPhase("stopped")
+	time.Sleep(4 * time.Second)
+	if restart {
+		p.guestFor(t, id, a)
+	}
+	os.Remove(filepath.Join(skills, "gone.md"))
+	os.WriteFile(filepath.Join(skills, "edited.md"), []byte("after"), 0o644)
+	time.Sleep(500 * time.Millisecond)
+	setPhase("running")
+
+	eventually(t, "the changes made while disconnected to reach the other", func() bool {
+		return !exists(b, ".claude/skills/x/gone.md") && read(b, ".claude/skills/x/edited.md") == "after"
+	})
+	if exists(a, ".claude/skills/x/gone.md") || read(a, ".claude/skills/x/edited.md") != "after" {
+		t.Errorf("the session undid what was changed while it was away: gone.md there %v, edited.md %q",
+			exists(a, ".claude/skills/x/gone.md"), read(a, ".claude/skills/x/edited.md"))
 	}
 }
 

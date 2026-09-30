@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -45,6 +46,61 @@ type Guest struct {
 
 	synced     chan struct{} // closed once a session has had the profile whole
 	syncedOnce sync.Once
+
+	// agreed is, for each shared file, the hash of what this home and the
+	// profile last agreed it held, "" for removed. It outlasts a session,
+	// so a change made here while there was none is told from one the
+	// profile made, and is kept in state across the agent's restarts.
+	amu         sync.Mutex
+	agreed      map[string]string
+	state       string
+	agreedStale bool
+}
+
+// KeepStateIn keeps what the guest knows of the profile in a file, so that
+// it outlasts the agent: what is changed here while the agent is not
+// running, or has no session, is then still told from what the profile
+// changed.
+func (g *Guest) KeepStateIn(path string) error {
+	g.amu.Lock()
+	defer g.amu.Unlock()
+	g.state = path
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	agreed := map[string]string{}
+	if err := json.Unmarshal(b, &agreed); err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	for p, h := range agreed {
+		g.agreed[p] = h
+	}
+	return nil
+}
+
+// saveState writes what the guest knows of the profile, if it changed.
+func (g *Guest) saveState() {
+	g.amu.Lock()
+	defer g.amu.Unlock()
+	if g.state == "" || !g.agreedStale {
+		return
+	}
+	b, err := json.Marshal(g.agreed)
+	if err == nil {
+		tmp := g.state + ".tmp"
+		if err = os.WriteFile(tmp, b, 0o600); err == nil {
+			err = os.Rename(tmp, g.state)
+		}
+	}
+	if err != nil {
+		g.log.Warn("profile: saving what it knows", "err", err)
+		return
+	}
+	g.agreedStale = false
 }
 
 // Synced is closed once the profile has first arrived whole.
@@ -62,7 +118,7 @@ func (g *Guest) SetBacking(backing map[string]string) {
 // NewGuest keeps u's home directory, and serves u's SSH agent.
 func NewGuest(u *user.User, log *slog.Logger) *Guest {
 	g := &Guest{user: u, log: log, changed: make(chan struct{}), held: map[string]bool{},
-		synced: make(chan struct{})}
+		synced: make(chan struct{}), agreed: map[string]string{}}
 	go g.renew()
 	return g
 }
@@ -75,7 +131,7 @@ func (g *Guest) Serve(conn io.ReadWriteCloser) {
 	u := g.user
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s := &guestSession{g: g, conn: conn, home: u.HomeDir, known: map[string]string{},
+	s := &guestSession{g: g, conn: conn, home: u.HomeDir,
 		dirty: map[string]bool{}, watched: map[string]bool{}, pending: map[int64]chan Message{},
 	}
 	s.uid, _ = strconv.Atoi(u.Uid)
@@ -224,7 +280,6 @@ type guestSession struct {
 	// Shared with the lock handlers.
 	kmu   sync.Mutex
 	paths Paths
-	known map[string]string // path to the hash of what the profile holds; "" for removed
 
 	// Owned by run's goroutine.
 	dirty   map[string]bool // paths changed here, not yet looked at
@@ -263,9 +318,10 @@ func (s *guestSession) send(m Message) error {
 	return err
 }
 
+// hash is hex, being kept in the guest's state as JSON.
 func hash(b []byte) string {
 	sum := sha256.Sum256(b)
-	return string(sum[:])
+	return hex.EncodeToString(sum[:])
 }
 
 // synced reports whether a path is shared and is not one of the agent's
@@ -283,16 +339,32 @@ func (s *guestSession) sharedPaths() Paths {
 }
 
 func (s *guestSession) knownHash(rel string) (string, bool) {
-	s.kmu.Lock()
-	defer s.kmu.Unlock()
-	h, ok := s.known[rel]
+	s.g.amu.Lock()
+	defer s.g.amu.Unlock()
+	h, ok := s.g.agreed[rel]
 	return h, ok
 }
 
+// knownUnder returns the files the profile holds under dir.
+func (s *guestSession) knownUnder(dir string) []string {
+	s.g.amu.Lock()
+	defer s.g.amu.Unlock()
+	var out []string
+	for p, h := range s.g.agreed {
+		if h != "" && strings.HasPrefix(p, dir+"/") {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func (s *guestSession) setKnown(rel, h string) {
-	s.kmu.Lock()
-	s.known[rel] = h
-	s.kmu.Unlock()
+	s.g.amu.Lock()
+	if cur, ok := s.g.agreed[rel]; !ok || cur != h {
+		s.g.agreed[rel] = h
+		s.g.agreedStale = true
+	}
+	s.g.amu.Unlock()
 }
 
 func (s *guestSession) run(ctx context.Context) error {
@@ -367,6 +439,13 @@ func (s *guestSession) run(ctx context.Context) error {
 				}
 			}
 			s.dirty[rel] = true
+			// A directory moved or removed is one event, not one for each
+			// file in it: what the profile holds under it is looked at too.
+			if ev.Has(fsnotify.Rename) || ev.Has(fsnotify.Remove) {
+				for _, p := range s.knownUnder(rel) {
+					s.dirty[p] = true
+				}
+			}
 			debounce.Reset(100 * time.Millisecond)
 		case err := <-w.Errors:
 			s.g.log.Warn("profile: watching files", "err", err)
@@ -379,6 +458,9 @@ func (s *guestSession) run(ctx context.Context) error {
 }
 
 func (s *guestSession) handle(m Message) error {
+	if s.isReady() {
+		defer s.g.saveState()
+	}
 	switch m.Type {
 	case TypePaths:
 		s.setPaths(Paths(m.Paths))
@@ -397,6 +479,7 @@ func (s *guestSession) handle(m Message) error {
 		s.rmu.Lock()
 		s.ready = true
 		s.rmu.Unlock()
+		defer s.g.saveState()
 		if err := s.seedClaudeState(); err != nil {
 			s.g.log.Warn("profile: writing Claude's state", "err", err)
 		}
@@ -499,6 +582,7 @@ func (s *guestSession) flush() error {
 	if !s.isReady() {
 		return nil
 	}
+	defer s.g.saveState()
 	for rel := range s.dirty {
 		delete(s.dirty, rel)
 		if !s.synced(rel) {
@@ -537,8 +621,24 @@ func (s *guestSession) flush() error {
 // apply writes a file the profile sent. It is written beside the file and
 // renamed into place, so a program reading it never sees it half written,
 // and one watching it sees it replaced.
+//
+// A file changed or removed here since this home and the profile last
+// agreed on it -- while there was no session -- is left as it is, and the
+// change is sent instead, unless the profile changed it too: then the
+// profile's is taken.
 func (s *guestSession) apply(m Message) error {
-	return s.applyAt(filepath.Join(s.home, m.Path), m)
+	full := filepath.Join(s.home, m.Path)
+	if base, ok := s.knownHash(m.Path); ok && base != "" {
+		unchanged := !m.Deleted && hash(m.Data) == base
+		cur, err := os.ReadFile(full)
+		switch {
+		case errors.Is(err, fs.ErrNotExist) && unchanged,
+			err == nil && hash(cur) != base && (m.Deleted || unchanged):
+			s.dirty[m.Path] = true
+			return nil
+		}
+	}
+	return s.applyAt(full, m)
 }
 
 // applyUnder writes a file sent with a lock into the directory's backing.
@@ -633,15 +733,16 @@ func (s *guestSession) sendUnder(backing, dir string) error {
 		return err
 	}
 	// Removed under the lock.
-	s.kmu.Lock()
+	s.g.amu.Lock()
 	var gone []string
-	for p, h := range s.known {
+	for p, h := range s.g.agreed {
 		if h != "" && !seen[p] && strings.HasPrefix(p, dir+"/") {
 			gone = append(gone, p)
-			s.known[p] = ""
+			s.g.agreed[p] = ""
+			s.g.agreedStale = true
 		}
 	}
-	s.kmu.Unlock()
+	s.g.amu.Unlock()
 	for _, p := range gone {
 		if err := s.send(Message{Type: TypeDelete, Path: p}); err != nil {
 			return err

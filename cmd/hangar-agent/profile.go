@@ -30,6 +30,11 @@ func serveProfile() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	g := profile.NewGuest(u, log)
+	// Beside LockFS's backing, on the environment's own disk, so it
+	// outlasts a reboot.
+	if err := g.KeepStateIn("/var/lib/hangar/profile-state.json"); err != nil {
+		log.Warn("profile: reading what it knew", "err", err)
+	}
 	// Before anything of the user's runs: a program must never take a lock
 	// the server has not been asked about.
 	if l, err := profile.MountLockFS(u, "/var/lib/hangar/lockfs", g); err != nil {
