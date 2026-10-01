@@ -1,0 +1,23 @@
+[package]
+name = "hangar-router"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "A FUSE filesystem over an environment's root that decides, per path, where each request goes"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+# Vendored with Hangar's patches (vendor/fuser/PATCHES.md).
+fuser = { path = "vendor/fuser" }
+libc = "0.2"
+log = "0.4"
+parking_lot = "0.12"
+
+[profile.release]
+# Every environment's initramfs carries it, so it is kept small.
+strip = true
+# A worker thread that panics would leave its request unanswered, and the
+# program that made it waiting forever on the root filesystem; a router that
+# stops is at least seen to.
+panic = "abort"

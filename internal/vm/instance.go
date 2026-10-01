@@ -35,6 +35,9 @@ type InstanceConfig struct {
 	Kernel string `json:"kernel"`
 	// Agent is the guest agent, each boot's initramfs and then its init.
 	Agent string `json:"agent"`
+	// Router, if set, is hangar-router, which the guest runs as its root
+	// filesystem in place of overlayfs (Config.Root).
+	Router string `json:"router,omitempty"`
 	// Base is the image's root filesystem, and BaseID what it holds, when
 	// the directory does not say (Image.ID).
 	Base   string `json:"base"`
@@ -221,7 +224,7 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 	inst.backends = append(inst.backends, closer(cancelProcs))
 
 	initrd := filepath.Join(run, "initrd.img")
-	if err := WriteInitrd(cfg.Agent, initrd); err != nil {
+	if err := WriteInitrd(cfg.Agent, cfg.Router, initrd); err != nil {
 		return nil, err
 	}
 	ccfg := &ch.Config{
@@ -240,6 +243,9 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 		APISocket:    filepath.Join(run, "api.sock"),
 	}
 
+	if cfg.Router != "" {
+		ccfg.ExtraCmdline += " hangar.root=router"
+	}
 	// The guest's initramfs mounts the base as the lower layer: the EROFS
 	// image from the device named on the command line, or, with no image,
 	// the directory over virtio-fs.

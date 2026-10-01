@@ -73,6 +73,8 @@ func run(path string, log *slog.Logger, rings *logs.Rings) error {
 			UpperGiB:        cfg.VM.UpperGiB,
 			DockerGiB:       cfg.VM.DockerGiB,
 			ImageDevice:     cfg.VM.ImageDevice,
+			Root:            cfg.VM.Root,
+			Router:          cfg.VM.Router,
 			DaxMiB:          cfg.VM.DaxMiB,
 			GPUVenus:        cfg.VM.GPU.Venus,
 			GPUVenusRestore: cfg.VM.GPU.VenusRestore,

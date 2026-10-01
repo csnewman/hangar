@@ -98,6 +98,11 @@ type Config struct {
 	// ImageDevice is how the base reaches the guest: ImageDisk (the
 	// default), ImagePmem, or ImageVirtiofs.
 	ImageDevice string
+	// Root is what merges the writable layer over the base as the guest's
+	// root: RootOverlay (the default), or RootRouter, which is experimental.
+	Root string
+	// Router is hangar-router built for the guest, which RootRouter runs.
+	Router string
 	// DaxMiB sizes the window a virtio-fs base is mapped through, for an
 	// environment that asks for DAX. Zero reads every file through the
 	// backend, whatever an environment asks.
@@ -116,6 +121,17 @@ type Config struct {
 	BootTimeout time.Duration
 	Log         *slog.Logger
 }
+
+// What the guest's root is.
+const (
+	// RootOverlay is the kernel's overlayfs over the base and the writable
+	// disk.
+	RootOverlay = "overlay"
+	// RootRouter is hangar-router, a FUSE filesystem merging the same layers
+	// in the same format, where shared paths are to be routed
+	// (docs/root-filesystem.md). Experimental.
+	RootRouter = "router"
+)
 
 // How the base reaches the guest.
 const (
@@ -137,6 +153,9 @@ const (
 func (c *Config) defaults() {
 	if c.ImageDevice == "" {
 		c.ImageDevice = ImageDisk
+	}
+	if c.Root == "" {
+		c.Root = RootOverlay
 	}
 	if c.UpperGiB == 0 {
 		c.UpperGiB = 16

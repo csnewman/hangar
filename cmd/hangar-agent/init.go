@@ -10,7 +10,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -26,7 +28,9 @@ import (
 //	       command line names (hangar.image=), mounted with DAX if
 //	       hangar.image_dax=1, or else over virtiofs (tag hangar-base)
 //	/rw    the environment's writable disk, the first virtio-blk device
-//	/root  overlayfs of the two, which becomes /
+//	/root  overlayfs of the two, which becomes /; or with hangar.root=router
+//	       on the command line, hangar-router merging them, run from the
+//	       initramfs as the root filesystem's daemon
 //
 // /var/lib/docker is not part of the overlay: overlay2 cannot stack on
 // overlayfs, so the image's fstab mounts a disk of its own there by label.
@@ -78,6 +82,69 @@ func mountBase() error {
 		how += ", dax"
 	}
 	fmt.Fprintf(os.Stderr, "INITRAMFS: base from %s (%s)\n", device, how)
+	return nil
+}
+
+// cmdlineHas is whether the kernel command line has a parameter.
+func cmdlineHas(param string) bool {
+	b, err := os.ReadFile("/proc/cmdline")
+	return err == nil && slices.Contains(strings.Fields(string(b)), param)
+}
+
+// routerBin is where the worker puts hangar-router in the initramfs.
+const routerBin = "/hangar-router"
+
+// fuseMagic is the type statfs reports for a FUSE filesystem.
+const fuseMagic = 0x65735546
+
+// startRouter runs hangar-router over the writable layer and the base, as
+// the new root, and waits for it to be mounted.
+//
+// It is the root filesystem's daemon: started from the initramfs, it
+// outlives the hand-over to the image's init, and its name starts with @,
+// which tells systemd to leave it running when it stops everything else at
+// shutdown, since the root it is unmounting is the router's.
+func startRouter() error {
+	r, w, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	attr := &os.ProcAttr{Files: []*os.File{nil, os.Stderr, os.Stderr, w},
+		Sys: &syscall.SysProcAttr{Setsid: true}}
+	p, err := os.StartProcess(routerBin, []string{"@hangar-router",
+		"--upper", "/rw/upper", "--lower", "/base", "--mountpoint", newRoot}, attr)
+	w.Close()
+	if err != nil {
+		return fmt.Errorf("starting the router: %w", err)
+	}
+	// The pipe's write end is only the router's: it closes when the router
+	// exits, which is how a router that failed to start is noticed.
+	exited := make(chan struct{})
+	go func() {
+		io.Copy(io.Discard, r)
+		close(exited)
+	}()
+	deadline := time.Now().Add(diskWait)
+	for {
+		var st unix.Statfs_t
+		if unix.Statfs(newRoot, &st) == nil && uint32(st.Type) == fuseMagic {
+			break
+		}
+		select {
+		case <-exited:
+			return fmt.Errorf("the router exited before mounting the root (pid %d)", p.Pid)
+		default:
+		}
+		if time.Now().After(deadline) {
+			return errors.New("the router did not mount the root")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// Its binary goes with the rest of the initramfs; the running router
+	// keeps its own copy.
+	_ = os.Remove(routerBin)
+	fmt.Fprintln(os.Stderr, "INITRAMFS: root by hangar-router")
 	return nil
 }
 
@@ -142,7 +209,12 @@ func assembleRoot() error {
 			return err
 		}
 	}
-	if err := unix.Mount("overlay", newRoot, "overlay", 0,
+	routerRoot := cmdlineHas("hangar.root=router")
+	if routerRoot {
+		if err := startRouter(); err != nil {
+			return err
+		}
+	} else if err := unix.Mount("overlay", newRoot, "overlay", 0,
 		"lowerdir=/base,upperdir=/rw/upper,workdir=/rw/work"); err != nil {
 		return fmt.Errorf("stacking overlayfs: %w", err)
 	}
@@ -172,6 +244,14 @@ func assembleRoot() error {
 		}
 		if err := unix.Mount(m.from, to, "", unix.MS_MOVE, ""); err != nil {
 			return fmt.Errorf("moving %s into the new root: %w", m.from, err)
+		}
+	}
+	if routerRoot {
+		// The router stays in the initramfs, and reopens files through
+		// /proc/self/fd: it is given a /proc of its own there, for the one
+		// it had has moved into the new root.
+		if err := unix.Mount("proc", "/proc", "proc", 0, ""); err != nil {
+			return fmt.Errorf("mounting the router's /proc: %w", err)
 		}
 	}
 

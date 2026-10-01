@@ -15,6 +15,9 @@
 #   /usr/share/hangar/vmlinuz         the guest kernel (internal/kernel)
 #   /usr/share/hangar/hangar-agent    the guest agent, each boot's initramfs
 #                                     (as init) and then the agent
+#   /usr/share/hangar/hangar-router   the experimental FUSE root (router/),
+#                                     static, put in the initramfs with
+#                                     vm.root: router
 #   /usr/share/hangar/editor.ext4     VS Code's server (editor/), attached to
 #                                     every environment
 #
@@ -90,6 +93,17 @@ RUN cd /src && cargo build --release --locked \
  && install -D target/release/hangar-fs /out/hangar-fs \
  && rm -rf /src/target /root/.cargo/registry /root/.cargo/git
 
+# ---------------------------------------------------------------- hangar-router
+# Static: it runs from the initramfs, which has no C library.
+FROM rust AS router
+COPY router/Cargo.toml router/Cargo.lock /src/
+COPY router/src/ /src/src/
+COPY router/vendor/ /src/vendor/
+RUN cd /src && RUSTFLAGS="-C target-feature=+crt-static" \
+    cargo build --release --locked --target "$(rustc -vV | sed -n 's/^host: //p')" \
+ && install -D target/*/release/hangar-router /out/hangar-router \
+ && rm -rf /src/target /root/.cargo/registry /root/.cargo/git
+
 # ---------------------------------------------------------------- hangar-gpu
 FROM rust AS gpu
 # virglrenderer is built with /usr/local as its prefix, which is where the
@@ -138,6 +152,7 @@ COPY --from=fs /out/hangar-fs /usr/local/bin/
 COPY --from=gpu /out/hangar-gpu /usr/local/bin/
 COPY --from=go /out/hangar-worker /usr/local/bin/
 COPY --from=go /out/hangar-agent /usr/share/hangar/hangar-agent
+COPY --from=router /out/hangar-router /usr/share/hangar/hangar-router
 COPY --from=kernel /out/vmlinuz /usr/share/hangar/vmlinuz
 COPY --from=editor /out/editor.ext4 /usr/share/hangar/editor.ext4
 ENTRYPOINT ["hangar-worker"]

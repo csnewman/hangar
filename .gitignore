@@ -9,6 +9,7 @@ docs/
 /hangar
 /fs/target/
 /gpu/target/
+/router/target/
 
 # Reference checkouts of other VMMs, for reading only.
 # Underscore-prefixed so the Go toolchain does not walk into them.

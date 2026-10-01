@@ -7,21 +7,30 @@ import (
 )
 
 // WriteInitrd writes the initramfs an environment boots: the agent, as its
-// init. Nothing else is needed: the agent assembles the root from the base
-// over virtiofs and the writable disk, installs itself there, and hands over
-// to the image's own init (cmd/hangar-agent/init.go). So an image is a root
+// init, and with router, hangar-router, which the agent starts as the root
+// filesystem. Nothing else is needed: the agent assembles the root from the
+// base and the writable disk, installs itself there, and hands over to the
+// image's own init (cmd/hangar-agent/init.go). So an image is a root
 // filesystem and nothing else, and every environment runs the agent of the
 // worker that boots it.
-func WriteInitrd(agent, path string) error {
+func WriteInitrd(agent, router, path string) error {
 	bin, err := os.ReadFile(agent)
 	if err != nil {
 		return fmt.Errorf("reading the agent: %w", err)
+	}
+	entries := []cpioEntry{{name: "init", mode: 0o100755, data: bin}}
+	if router != "" {
+		rbin, err := os.ReadFile(router)
+		if err != nil {
+			return fmt.Errorf("reading the router: %w", err)
+		}
+		entries = append(entries, cpioEntry{name: "hangar-router", mode: 0o100755, data: rbin})
 	}
 	out, err := os.Create(path + ".new")
 	if err != nil {
 		return err
 	}
-	err = writeCpio(out, []cpioEntry{{name: "init", mode: 0o100755, data: bin}})
+	err = writeCpio(out, entries)
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
