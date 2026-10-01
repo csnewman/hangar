@@ -95,65 +95,56 @@ func resolveDigest(ctx context.Context, ref string, auth map[string]RegistryAuth
 	return desc.Digest.String(), nil
 }
 
-// pull fetches the image ref names at dgst from its registry and unpacks
-// the layers the store does not have into it, returning the image's layers,
-// bottom first, and a func releasing the claim held on them meanwhile.
-//
-// Layers are unpacked each on its own, with overlayfs's whiteouts, for the
-// store to stack. Owners, modes and extended attributes are kept, which
-// needs the worker to be root.
+// pull fetches the image ref names at dgst from its registry and writes the
+// tree its layers describe to out as an EROFS image (BuildEROFS), without
+// unpacking them. Owners, modes and extended attributes are kept, which needs
+// the worker to be root.
 //
 // Blobs are fetched into a content store in scratch, which verifies each
-// against its digest; the caller removes it once the layers are unpacked.
-// A layer the store already has is not fetched at all.
+// against its digest; the caller removes it once the image is written.
 //
 // report is told, a few times a second, how many bytes have been
 // downloaded of those known to be needed -- the total grows once the
-// manifest names the layers -- and then how many of the new layers' bytes
-// have been unpacked.
-func pull(ctx context.Context, ref, dgst, scratch string, auth map[string]RegistryAuth, hangar *hangarRegistry,
-	store *ImageStore, report func(FetchProgress)) ([]digest.Digest, func(), error) {
-	release := func() {}
+// manifest names the layers -- and then how many of the layers' bytes have
+// been converted.
+func pull(ctx context.Context, ref, dgst, scratch, out string, auth map[string]RegistryAuth, hangar *hangarRegistry,
+	report func(FetchProgress)) error {
 	named, err := reference.ParseDockerRef(ref)
 	if err != nil {
-		return nil, release, fmt.Errorf("parsing the image reference: %w", err)
+		return fmt.Errorf("parsing the image reference: %w", err)
 	}
 	d, err := digest.Parse(dgst)
 	if err != nil {
-		return nil, release, fmt.Errorf("%s: %w", ref, err)
+		return fmt.Errorf("%s: %w", ref, err)
 	}
 	pinned, err := reference.WithDigest(reference.TrimNamed(named), d)
 	if err != nil {
-		return nil, release, err
+		return err
 	}
 	full := pinned.String()
 
 	cs, err := local.NewStore(scratch)
 	if err != nil {
-		return nil, release, err
+		return err
 	}
 	resolver := newResolver(auth, hangar)
 	name, desc, err := resolver.Resolve(ctx, full)
 	if err != nil {
-		return nil, release, fmt.Errorf("resolving %s: %w", full, err)
+		return fmt.Errorf("resolving %s: %w", full, err)
 	}
 	fetcher, err := resolver.Fetcher(ctx, name)
 	if err != nil {
-		return nil, release, err
+		return err
 	}
 
 	// Only this platform's manifest, config and layers are fetched out of
-	// a multi-platform index, and of its layers only those the store does
-	// not have. Each is counted into the total as it is dispatched, and its
-	// bytes as they arrive.
+	// a multi-platform index. Each is counted into the total as it is
+	// dispatched, and its bytes as they arrive.
 	var downloaded, needed atomic.Int64
 	platform := guestPlatform()
 	fetch := remotes.FetchHandler(cs, countingFetcher{fetcher, &downloaded})
 	children := images.LimitManifests(images.FilterPlatforms(images.ChildrenHandler(cs), platform), platform, 1)
 	handler := images.HandlerFunc(func(ctx context.Context, d ocispec.Descriptor) ([]ocispec.Descriptor, error) {
-		if images.IsLayerType(d.MediaType) && store.hasLayer(d.Digest) {
-			return nil, nil
-		}
 		needed.Add(d.Size)
 		if _, err := fetch(ctx, d); err != nil {
 			return nil, err
@@ -166,41 +157,65 @@ func pull(ctx context.Context, ref, dgst, scratch string, auth map[string]Regist
 	err = images.Dispatch(ctx, handler, nil, desc)
 	stop()
 	if err != nil {
-		return nil, release, fmt.Errorf("fetching %s: %w", full, err)
+		return fmt.Errorf("fetching %s: %w", full, err)
 	}
 	manifest, err := images.Manifest(ctx, cs, desc, platform)
 	if err != nil {
-		return nil, release, fmt.Errorf("%s: %w", full, err)
+		return fmt.Errorf("%s: %w", full, err)
 	}
 	if len(manifest.Layers) == 0 {
-		return nil, release, fmt.Errorf("%s has no layers", full)
+		return fmt.Errorf("%s has no layers", full)
 	}
 
-	layers := make([]digest.Digest, len(manifest.Layers))
-	var fresh []ocispec.Descriptor
-	var layersSize int64
-	for i, l := range manifest.Layers {
-		layers[i] = l.Digest
-		if !store.hasLayer(l.Digest) {
-			fresh = append(fresh, l)
-			layersSize += l.Size
-		}
+	var total int64
+	for _, l := range manifest.Layers {
+		total += l.Size
 	}
-	release = store.claimLayers(layers)
-	var unpacked atomic.Int64
+	var converted atomic.Int64
 	var current atomic.Int32
 	stop = every(250*time.Millisecond, func() {
-		report(FetchProgress{Stage: StageUnpack, Done: unpacked.Load(), Total: layersSize,
-			Layer: int(current.Load()), Layers: len(fresh)})
+		report(FetchProgress{Stage: StageUnpack, Done: converted.Load(), Total: total,
+			Layer: int(current.Load()), Layers: len(manifest.Layers)})
 	})
 	defer stop()
-	for i, layer := range fresh {
-		current.Store(int32(i + 1))
-		if err := applyLayer(ctx, cs, layer, store, &unpacked); err != nil {
-			return nil, release, fmt.Errorf("unpacking layer %s of %s: %w", layer.Digest, full, err)
+	// Top layer first.
+	i := len(manifest.Layers)
+	next := func() (io.ReadCloser, error) {
+		if i == 0 {
+			return nil, nil
 		}
+		i--
+		current.Store(int32(len(manifest.Layers) - i))
+		layer := manifest.Layers[i]
+		ra, err := cs.ReaderAt(ctx, layer)
+		if err != nil {
+			return nil, err
+		}
+		rd, err := compression.DecompressStream(countingReadCloser{io.NopCloser(content.NewReader(ra)), &converted})
+		if err != nil {
+			ra.Close()
+			return nil, fmt.Errorf("layer %s: %w", layer.Digest, err)
+		}
+		return closeBoth{rd, ra}, nil
 	}
-	return layers, release, nil
+	if err := BuildEROFS(ctx, out, next); err != nil {
+		return fmt.Errorf("converting %s: %w", full, err)
+	}
+	return nil
+}
+
+// closeBoth closes a decompressing reader and the blob beneath it.
+type closeBoth struct {
+	io.ReadCloser
+	under io.Closer
+}
+
+func (c closeBoth) Close() error {
+	err := c.ReadCloser.Close()
+	if uerr := c.under.Close(); err == nil {
+		err = uerr
+	}
+	return err
 }
 
 // every calls fn at once, then at each interval until the returned stop is
@@ -251,18 +266,4 @@ func (c countingReadCloser) Read(p []byte) (int, error) {
 	n, err := c.ReadCloser.Read(p)
 	c.n.Add(int64(n))
 	return n, err
-}
-
-func applyLayer(ctx context.Context, cs content.Store, layer ocispec.Descriptor, store *ImageStore, unpacked *atomic.Int64) error {
-	ra, err := cs.ReaderAt(ctx, layer)
-	if err != nil {
-		return err
-	}
-	defer ra.Close()
-	rd, err := compression.DecompressStream(countingReadCloser{io.NopCloser(content.NewReader(ra)), unpacked})
-	if err != nil {
-		return err
-	}
-	defer rd.Close()
-	return store.addLayer(ctx, layer.Digest, rd)
 }

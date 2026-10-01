@@ -42,15 +42,9 @@ func (s *ImageStore) EROFS(ctx context.Context, img Image) (string, error) {
 		os.Remove(tmp)
 		return "", fmt.Errorf("building the image's EROFS image: %w: %s", err, lastLineOf(out))
 	}
-	st, err := os.Stat(tmp)
-	if err != nil {
+	if err := padEROFS(tmp); err != nil {
+		os.Remove(tmp)
 		return "", err
-	}
-	if rem := st.Size() % erofsAlign; rem != 0 {
-		if err := os.Truncate(tmp, st.Size()+erofsAlign-rem); err != nil {
-			os.Remove(tmp)
-			return "", err
-		}
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)

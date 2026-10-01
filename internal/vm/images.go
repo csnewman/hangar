@@ -51,8 +51,6 @@ type ImageStore struct {
 	current  map[string]string
 	fetching map[api.ImageCopy]*fetch
 	hangar   *hangarRegistry
-	// claimed are layers a fetch in progress wants, by how many.
-	claimed map[digest.Digest]int
 }
 
 // hangarRegistry is Hangar's own registry: images named on host are pulled
@@ -84,9 +82,22 @@ type heldCopy struct {
 	dir string
 	// at is when the copy was taken, which orders copies of one reference.
 	at time.Time
-	// layers are the copy's layers, bottom first; none for a copy that is
-	// a directory of its own.
+	// layers are the copy's layers, bottom first, for a copy pulled before
+	// pulls wrote EROFS images: they are unpacked and stacked. None for any
+	// other copy.
 	layers []digest.Digest
+	// image is whether the copy's root filesystem is its EROFS image,
+	// mounted, as a pulled copy's is.
+	image bool
+}
+
+// imageMark, in a copy's directory, says its root filesystem is its EROFS
+// image, mounted read-only on the host when the copy is used.
+const imageMark = "rootfs-is-image"
+
+func hasImageMark(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, imageMark))
+	return err == nil
 }
 
 type fetch struct {
@@ -160,7 +171,7 @@ func NewImageStore(dir string, sources map[string]Image, auth map[string]Registr
 		return nil, err
 	}
 	s := &ImageStore{dir: dir, sources: sources, auth: auth, held: map[api.ImageCopy]heldCopy{},
-		current: map[string]string{}, fetching: map[api.ImageCopy]*fetch{}, claimed: map[digest.Digest]int{}}
+		current: map[string]string{}, fetching: map[api.ImageCopy]*fetch{}}
 	for _, e := range entries {
 		path := filepath.Join(dir, e.Name())
 		// Anything left mid-fetch by an earlier run is started again from
@@ -188,7 +199,7 @@ func NewImageStore(dir string, sources map[string]Image, auth map[string]Registr
 			return nil, err
 		}
 		c := api.ImageCopy{Ref: string(ref), Digest: strings.TrimSpace(string(dgst))}
-		s.held[c] = heldCopy{dir: path, at: st.ModTime(), layers: layers}
+		s.held[c] = heldCopy{dir: path, at: st.ModTime(), layers: layers, image: hasImageMark(path)}
 	}
 	if err := s.pruneLayers(); err != nil {
 		return nil, err
@@ -316,16 +327,14 @@ func (s *ImageStore) Get(ctx context.Context, c api.ImageCopy, watch func(FetchP
 			stop := make(chan struct{})
 			go f.watch(watch, stop)
 			dst := s.path(c)
-			layers, release, err := s.fetch(ctx, c, dst, f.report)
-			f.err = err
+			f.err = s.fetch(ctx, c, dst, f.report)
 			close(stop)
 			s.mu.Lock()
 			delete(s.fetching, c)
 			if f.err == nil {
-				s.held[c] = heldCopy{dir: dst, at: time.Now(), layers: layers}
+				s.held[c] = heldCopy{dir: dst, at: time.Now(), image: hasImageMark(dst)}
 			}
 			s.mu.Unlock()
-			release()
 			close(f.done)
 			if f.err != nil {
 				return Image{}, f.err
@@ -350,18 +359,12 @@ func (s *ImageStore) Get(ctx context.Context, c api.ImageCopy, watch func(FetchP
 
 // fetch brings a copy into the store: copied from its local source if the
 // configuration names one, and pulled from its registry by digest
-// otherwise.
-//
-// A pull returns the copy's layers, and a func releasing the claim it holds
-// on them until the copy is held and so keeps them itself.
-func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, report func(FetchProgress)) (
-	[]digest.Digest, func(), error) {
-	release := func() {}
-	var layers []digest.Digest
+// otherwise, straight into an EROFS image.
+func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, report func(FetchProgress)) error {
 	tmp := dst + ".fetching"
 	os.RemoveAll(tmp)
 	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		return nil, release, err
+		return err
 	}
 	err := func() error {
 		rootfs := filepath.Join(tmp, "rootfs")
@@ -386,15 +389,13 @@ func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, rep
 			}
 		} else {
 			blobs := filepath.Join(tmp, "blobs")
-			var err error
-			layers, release, err = pull(ctx, c.Ref, c.Digest, blobs, s.auth, s.registry(), s, report)
-			if err != nil {
+			if err := pull(ctx, c.Ref, c.Digest, blobs, filepath.Join(tmp, erofsFile), s.auth, s.registry(), report); err != nil {
 				return fmt.Errorf("pulling %s: %w", c.Ref, err)
 			}
 			if err := os.RemoveAll(blobs); err != nil {
 				return err
 			}
-			if err := writeLayers(tmp, layers); err != nil {
+			if err := os.WriteFile(filepath.Join(tmp, imageMark), nil, 0o644); err != nil {
 				return err
 			}
 			if err := os.Mkdir(rootfs, 0o755); err != nil {
@@ -408,9 +409,9 @@ func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, rep
 	}()
 	if err != nil {
 		os.RemoveAll(tmp)
-		return nil, release, err
+		return err
 	}
-	return layers, release, os.Rename(tmp, dst)
+	return os.Rename(tmp, dst)
 }
 
 // isCurrent is whether c is what its reference names, as last looked up,
