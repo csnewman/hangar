@@ -1,6 +1,7 @@
 package vsock
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -27,7 +28,7 @@ import (
 // One listener therefore serves one environment, where the AF_VSOCK listener
 // serves all of them on CIDAny.
 type HybridListener struct {
-	fd   int
+	f    *os.File
 	path string
 	cid  uint32
 }
@@ -74,14 +75,14 @@ func ListenHybrid(base string, port, cid uint32) (*HybridListener, error) {
 		os.Remove(path)
 		return nil, fmt.Errorf("listening on the agent socket: %w", err)
 	}
-	// Non-blocking so Accept can honour a deadline, exactly as the AF_VSOCK
-	// listener does.
+	// Non-blocking so Accept waits in the runtime's poller and can honour a
+	// deadline, exactly as the AF_VSOCK listener does.
 	if err := syscall.SetNonblock(fd, true); err != nil {
 		syscall.Close(fd)
 		os.Remove(path)
 		return nil, fmt.Errorf("agent socket set nonblocking: %w", err)
 	}
-	return &HybridListener{fd: fd, path: path, cid: cid}, nil
+	return &HybridListener{f: os.NewFile(uintptr(fd), path), path: path, cid: cid}, nil
 }
 
 // HybridPath is where a userspace-vsock monitor expects the host to be
@@ -95,34 +96,20 @@ func HybridPath(base string, port uint32) string {
 //
 // A zero or negative timeout waits indefinitely.
 func (l *HybridListener) Accept(timeout time.Duration) (*os.File, uint32, error) {
-	var deadline time.Time
-	if timeout > 0 {
-		deadline = time.Now().Add(timeout)
+	var sa syscall.RawSockaddrAny
+	fd, err := accept(l.f, timeout, unsafe.Pointer(&sa), unsafe.Sizeof(sa))
+	if errors.Is(err, ErrAcceptTimeout) {
+		return nil, 0, err
 	}
-	for {
-		var sa syscall.RawSockaddrAny
-		length := uintptr(unsafe.Sizeof(sa))
-		fd, _, errno := syscall.Syscall6(syscall.SYS_ACCEPT4,
-			uintptr(l.fd), uintptr(unsafe.Pointer(&sa)), uintptr(unsafe.Pointer(&length)),
-			uintptr(syscall.SOCK_CLOEXEC|syscall.SOCK_NONBLOCK), 0, 0)
-		switch errno {
-		case 0:
-			return os.NewFile(fd, fmt.Sprintf("hybrid-vsock:%d", l.cid)), l.cid, nil
-		case syscall.EAGAIN, syscall.EINTR:
-			// EAGAIN is the normal "nothing yet" on a non-blocking socket.
-		default:
-			return nil, 0, fmt.Errorf("accepting the agent connection: %w", errno)
-		}
-		if !deadline.IsZero() && time.Now().After(deadline) {
-			return nil, 0, ErrAcceptTimeout
-		}
-		time.Sleep(acceptPoll)
+	if err != nil {
+		return nil, 0, fmt.Errorf("accepting the agent connection: %w", err)
 	}
+	return os.NewFile(fd, fmt.Sprintf("hybrid-vsock:%d", l.cid)), l.cid, nil
 }
 
 // Close stops the listener and removes the socket.
 func (l *HybridListener) Close() error {
-	err := syscall.Close(l.fd)
+	err := l.f.Close()
 	os.Remove(l.path)
 	return err
 }

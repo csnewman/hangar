@@ -1,6 +1,7 @@
 package vsock
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"syscall"
@@ -8,11 +9,85 @@ import (
 	"unsafe"
 )
 
-// acceptPoll is how often a blocked Accept re-checks for a connection. The
-// sockets are non-blocking so that Accept can honour a deadline at all; the
-// interval only bounds how late it notices, and an agent connecting during
-// boot does not care about a few milliseconds.
+// acceptPoll is how often Accept re-checks for a connection on a socket the
+// runtime's poller cannot wait on. Every listener here can be polled, so it
+// is a fallback only: in a guest, waking a few times a second for each of
+// the agent's listeners is a measurable share of an idle CPU.
 const acceptPoll = 20 * time.Millisecond
+
+// accept waits up to timeout (none if zero or negative) for a connection on
+// f, a non-blocking listening socket, and returns the new descriptor, with
+// the peer's address in sa. It waits in the runtime's poller, as a
+// net.Listener does, so an idle listener costs nothing.
+func accept(f *os.File, timeout time.Duration, sa unsafe.Pointer, size uintptr) (uintptr, error) {
+	var deadline time.Time
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
+	}
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return 0, err
+	}
+	try := func(fd uintptr) (uintptr, syscall.Errno) {
+		for {
+			length := size
+			nfd, _, errno := syscall.Syscall6(syscall.SYS_ACCEPT4,
+				fd, uintptr(sa), uintptr(unsafe.Pointer(&length)),
+				uintptr(syscall.SOCK_CLOEXEC|syscall.SOCK_NONBLOCK), 0, 0)
+			if errno != syscall.EINTR {
+				return nfd, errno
+			}
+		}
+	}
+	if err := f.SetReadDeadline(deadline); errors.Is(err, os.ErrNoDeadline) {
+		return acceptPolling(rc, deadline, try)
+	} else if err != nil {
+		return 0, err
+	}
+	var nfd uintptr
+	var aerr error
+	err = rc.Read(func(fd uintptr) bool {
+		var errno syscall.Errno
+		nfd, errno = try(fd)
+		if errno == syscall.EAGAIN {
+			return false
+		}
+		if errno != 0 {
+			aerr = errno
+		}
+		return true
+	})
+	switch {
+	case errors.Is(err, os.ErrDeadlineExceeded):
+		return 0, ErrAcceptTimeout
+	case err != nil:
+		return 0, err
+	}
+	return nfd, aerr
+}
+
+// acceptPolling is accept for a socket the poller cannot wait on: it tries,
+// and sleeps between tries.
+func acceptPolling(rc syscall.RawConn, deadline time.Time, try func(uintptr) (uintptr, syscall.Errno)) (uintptr, error) {
+	for {
+		var nfd uintptr
+		var errno syscall.Errno
+		if err := rc.Control(func(fd uintptr) { nfd, errno = try(fd) }); err != nil {
+			return 0, err
+		}
+		switch errno {
+		case 0:
+			return nfd, nil
+		case syscall.EAGAIN:
+		default:
+			return 0, errno
+		}
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			return 0, ErrAcceptTimeout
+		}
+		time.Sleep(acceptPoll)
+	}
+}
 
 // afVSOCK is AF_VSOCK. It is defined here rather than taken from the syscall
 // package because Go generates that package's constants per architecture and
@@ -75,7 +150,7 @@ func Dial(cid, port uint32) (*os.File, error) {
 
 // Listener accepts vsock connections.
 type Listener struct {
-	fd   int
+	f    *os.File
 	port uint32
 }
 
@@ -96,14 +171,15 @@ func Listen(cid, port uint32) (*Listener, error) {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("vsock listen: %w", err)
 	}
-	// Non-blocking, so Accept can give up. A blocking accept(2) cannot be
-	// bounded, which would leave a host waiting forever on a guest that never
-	// comes up -- and holding the port against the next attempt.
+	// Non-blocking, so Accept waits in the runtime's poller and can give
+	// up. A blocking accept(2) cannot be bounded, which would leave a host
+	// waiting forever on a guest that never comes up -- and holding the port
+	// against the next attempt.
 	if err := syscall.SetNonblock(fd, true); err != nil {
 		syscall.Close(fd)
 		return nil, fmt.Errorf("vsock set nonblocking: %w", err)
 	}
-	return &Listener{fd: fd, port: port}, nil
+	return &Listener{f: os.NewFile(uintptr(fd), fmt.Sprintf("vsock-listen:%d", port)), port: port}, nil
 }
 
 // Accept waits up to timeout for the next connection and returns it with the
@@ -112,34 +188,19 @@ func Listen(cid, port uint32) (*Listener, error) {
 //
 // A zero or negative timeout waits indefinitely.
 func (l *Listener) Accept(timeout time.Duration) (*os.File, uint32, error) {
-	var deadline time.Time
-	if timeout > 0 {
-		deadline = time.Now().Add(timeout)
+	var sa sockaddrVM
+	ptr, size := sa.raw()
+	fd, err := accept(l.f, timeout, ptr, size)
+	if errors.Is(err, ErrAcceptTimeout) {
+		return nil, 0, err
 	}
-	for {
-		var sa sockaddrVM
-		ptr, size := sa.raw()
-		length := size
-		fd, _, errno := syscall.Syscall6(syscall.SYS_ACCEPT4,
-			uintptr(l.fd), uintptr(ptr), uintptr(unsafe.Pointer(&length)),
-			uintptr(syscall.SOCK_CLOEXEC|syscall.SOCK_NONBLOCK), 0, 0)
-		switch errno {
-		case 0:
-			f := os.NewFile(fd, fmt.Sprintf("vsock:%d:%d", sa.cid, sa.port))
-			return f, sa.cid, nil
-		case syscall.EAGAIN, syscall.EINTR:
-			// EAGAIN is the normal "nothing yet" on a non-blocking socket.
-		default:
-			return nil, 0, fmt.Errorf("vsock accept: %w", errno)
-		}
-		if !deadline.IsZero() && time.Now().After(deadline) {
-			return nil, 0, ErrAcceptTimeout
-		}
-		time.Sleep(acceptPoll)
+	if err != nil {
+		return nil, 0, fmt.Errorf("vsock accept: %w", err)
 	}
+	return os.NewFile(fd, fmt.Sprintf("vsock:%d:%d", sa.cid, sa.port)), sa.cid, nil
 }
 
 // Close stops the listener. A blocked Accept fails once the socket is closed.
 func (l *Listener) Close() error {
-	return syscall.Close(l.fd)
+	return l.f.Close()
 }
