@@ -160,6 +160,10 @@ func (c *Config) Args() ([]string, error) {
 		// hands back pages as it frees them and the host takes them without
 		// anyone deciding a target size.
 		"--balloon", "size=0,free_page_reporting=on",
+
+		// The guest says when its kernel panics, before it reboots, so the
+		// host can tell a panic from a reboot.
+		"--pvpanic",
 	}
 
 	if c.Initrd != "" {
@@ -182,6 +186,9 @@ func (c *Config) Args() ([]string, error) {
 			// ext4 images, and letting the monitor guess invites it to read a
 			// guest-writable file as a QCOW header.
 			spec := "path=" + d.Path + ",image_type=raw"
+			// A queue per vCPU, so each submits its own I/O without a lock
+			// shared with the others.
+			spec += ",num_queues=" + strconv.Itoa(c.CPUs)
 			if d.ReadOnly {
 				spec += ",readonly=on"
 			}

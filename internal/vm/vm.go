@@ -656,8 +656,13 @@ func (m *machine) lost() {
 	}
 	if inst.Rebooted() {
 		inst.Close()
-		m.log.Info("the guest rebooted; booting it again")
-		m.set(api.PhaseStarting, "rebooting")
+		if inst.Panicked() {
+			m.log.Warn("the guest's kernel panicked; booting it again (its console log says why)")
+			m.set(api.PhaseStarting, "rebooting after a kernel panic")
+		} else {
+			m.log.Info("the guest rebooted; booting it again")
+			m.set(api.PhaseStarting, "rebooting")
+		}
 		select {
 		case m.nudge <- struct{}{}:
 		default:

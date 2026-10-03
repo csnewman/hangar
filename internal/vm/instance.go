@@ -111,6 +111,7 @@ type Instance struct {
 	mu       sync.Mutex
 	err      error
 	rebooted bool
+	panicked bool
 }
 
 // Rebooted reports whether the monitor exited because the guest rebooted.
@@ -118,6 +119,14 @@ func (i *Instance) Rebooted() bool {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	return i.rebooted
+}
+
+// Panicked reports whether the guest's kernel panicked, which it follows by
+// rebooting.
+func (i *Instance) Panicked() bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.panicked
 }
 
 // Session is the agent's session with the guest.
@@ -428,6 +437,11 @@ func (i *Instance) watchEvents(r *os.File) {
 		}
 		if err := dec.Decode(&ev); err != nil {
 			return
+		}
+		if ev.Source == "guest" && ev.Event == "panic" {
+			i.mu.Lock()
+			i.panicked = true
+			i.mu.Unlock()
 		}
 		if ev.Source == "vm" && ev.Event == "rebooting" {
 			i.mu.Lock()
