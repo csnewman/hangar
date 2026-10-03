@@ -251,6 +251,10 @@ func (c *Config) cmdline() string {
 	// read-write, stacks overlayfs and switch_roots into the result.
 	cl := "console=" + c.ConsoleTTY
 	cl += " systemd.show_status=1"
+	// The VM is the boundary between tenants, and the host protects itself;
+	// inside a guest, one owner's processes need not pay to be kept from
+	// each other.
+	cl += " mitigations=off"
 	if c.ExtraCmdline != "" {
 		cl += " " + c.ExtraCmdline
 	}
