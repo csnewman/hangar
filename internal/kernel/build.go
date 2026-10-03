@@ -39,7 +39,7 @@ const builderImage = "ubuntu:26.04"
 
 // Options controls a kernel build.
 type Options struct {
-	Version string // upstream kernel version, e.g. "6.18.52"
+	Version string // upstream kernel version, e.g. "7.2.9"
 	Arch    string // "arm64" or "x86_64"; defaults to the host
 	OutDir  string
 	Jobs    int
@@ -60,7 +60,7 @@ type Options struct {
 type Artifacts struct {
 	Image         string // raw Image / bzImage, for a direct kernel boot
 	Config        string // the resolved .config
-	KernelRelease string // e.g. "6.18.52"
+	KernelRelease string // e.g. "7.2.9"
 }
 
 // Build produces a kernel and its matching modules.

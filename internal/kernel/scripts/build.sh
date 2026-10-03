@@ -20,7 +20,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
 apt-get install -y -qq --no-install-recommends \
         build-essential flex bison libssl-dev libelf-dev bc kmod cpio rsync \
-        zstd xz-utils curl ca-certificates python3-minimal patch >/dev/null
+        zstd xz-utils curl ca-certificates python3-minimal patch dwarves >/dev/null
 
 KERNEL_VERSION="${KERNEL_VERSION:-$(cat /cfg/version)}"
 : "${KARCH:?}"
@@ -61,9 +61,9 @@ esac
 echo "kernel: configuring ($KARCH, base=${KBASE:-tinyconfig})" >&2
 make ARCH="$KARCH" "${KBASE:-tinyconfig}" >/dev/null
 
-# kvm_guest.config is the kernel's own fragment for VM guests; hangar.config is
-# ours on top. merge_config.sh warns but does not fail when an option cannot be
-# satisfied, so the result is verified below rather than trusted.
+# hangar.config and its architecture's half go on top of the base.
+# merge_config.sh warns but does not fail when an option cannot be satisfied,
+# so the result is verified below rather than trusted.
 ./scripts/kconfig/merge_config.sh -m -O . .config \
         /cfg/hangar.config "/cfg/hangar-${KARCH}.config" >/dev/null 2>&1 || true
 make ARCH="$KARCH" olddefconfig >/dev/null
