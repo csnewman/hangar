@@ -63,6 +63,7 @@ struct Node {
     /// Where it is, for copying it up: its parent's node and its name there.
     place: Mutex<(u64, CString)>,
     is_dir: bool,
+    is_symlink: bool,
     key: Mutex<(u64, u64)>,
     lookups: AtomicU64,
 }
@@ -314,6 +315,7 @@ impl Router {
             lowers: RwLock::new(lows),
             place: Mutex::new((INodeNo::ROOT.0, CString::default())),
             is_dir: true,
+            is_symlink: false,
             key: Mutex::new(key),
             lookups: AtomicU64::new(1 << 32),
         };
@@ -412,6 +414,12 @@ impl Router {
     /// Looks a name up and counts a lookup on the node it finds.
     fn lookup_at(&self, parent_ino: u64, parent: &Node, name: &CStr) -> Result<(u64, libc::stat), Errno> {
         let (upper, lowers, st) = self.resolve(parent, name)?;
+        Ok((self.intern(parent_ino, name, upper, lowers, &st), st))
+    }
+
+    /// The node for what a name resolved to, made if there is none, with a
+    /// lookup counted on it.
+    fn intern(&self, parent_ino: u64, name: &CStr, upper: Option<OwnedFd>, lowers: Vec<OwnedFd>, st: &libc::stat) -> u64 {
         let key = (st.st_dev, st.st_ino);
         {
             let t = self.table.read();
@@ -419,7 +427,7 @@ impl Router {
                 if let Some(n) = t.nodes.get(&ino) {
                     n.lookups.fetch_add(1, Ordering::Relaxed);
                     *n.place.lock() = (parent_ino, name.to_owned());
-                    return Ok((ino, st));
+                    return ino;
                 }
             }
         }
@@ -427,7 +435,7 @@ impl Router {
         if let Some(&ino) = t.by_key.get(&key) {
             if let Some(n) = t.nodes.get(&ino) {
                 n.lookups.fetch_add(1, Ordering::Relaxed);
-                return Ok((ino, st));
+                return ino;
             }
         }
         let ino = self.next_ino.fetch_add(1, Ordering::Relaxed);
@@ -435,13 +443,14 @@ impl Router {
             upper: RwLock::new(upper.map(Arc::new)),
             lowers: RwLock::new(lowers.into_iter().map(Arc::new).collect()),
             place: Mutex::new((parent_ino, name.to_owned())),
-            is_dir: is_dir(&st),
+            is_dir: is_dir(st),
+            is_symlink: st.st_mode & libc::S_IFMT == libc::S_IFLNK,
             key: Mutex::new(key),
             lookups: AtomicU64::new(1),
         };
         t.nodes.insert(ino, Arc::new(node));
         t.by_key.insert(key, ino);
-        Ok((ino, st))
+        ino
     }
 
     fn entry(&self, parent_ino: u64, parent: &Node, name: &CStr, reply: ReplyEntry) {
@@ -655,7 +664,8 @@ impl Router {
     /// was one (a directory made in its place must be opaque).
     fn prepare_create(&self, pino: u64, parent: &Node, name: &CStr) -> Result<(Arc<OwnedFd>, bool), Errno> {
         let pu = self.copy_up(pino, parent)?;
-        let had = Self::clear_whiteout(pu.as_raw_fd(), name)?;
+        // Only a directory with something beneath it can hold a whiteout.
+        let had = if parent.has_lower() { Self::clear_whiteout(pu.as_raw_fd(), name)? } else { false };
         Ok((pu, had))
     }
 
@@ -703,22 +713,42 @@ impl Router {
         Ok(out)
     }
 
-    /// Forgets that a name led to a node, for a node removed or replaced.
-    fn detach(&self, parent: u64, name: &CStr) {
+    /// Forgets that a name led to the node for a file, removed or replaced.
+    /// It stays in the table while the kernel holds it, but nothing will
+    /// copy it up by this name again.
+    fn detach(&self, st: &libc::stat, parent: u64, name: &CStr) {
         let t = self.table.read();
-        for n in t.nodes.values() {
-            let p = n.place.lock();
-            if p.0 == parent && p.1.as_c_str() == name {
-                // It stays in the table while the kernel holds it, but
-                // nothing will copy it up by this name again.
-                drop(p);
-                *n.place.lock() = (u64::MAX, CString::default());
-            }
+        let Some(n) = t.by_key.get(&(st.st_dev, st.st_ino)).and_then(|ino| t.nodes.get(ino)) else { return };
+        let mut p = n.place.lock();
+        if p.0 == parent && p.1.as_c_str() == name {
+            *p = (u64::MAX, CString::default());
         }
     }
 
+    /// Closing a file sends nothing: the router keeps no state a flush
+    /// would settle, and its locks are on the open's own descriptor, which
+    /// goes with the release.
     fn open_flags(&self, passthrough: bool) -> FopenFlags {
-        if passthrough { FopenFlags::empty() } else { FopenFlags::FOPEN_KEEP_CACHE }
+        if passthrough { FopenFlags::FOPEN_NOFLUSH } else { FopenFlags::FOPEN_KEEP_CACHE | FopenFlags::FOPEN_NOFLUSH }
+    }
+
+    /// Clears set-user-ID and set-group-ID on a file an unprivileged caller
+    /// truncated: with FUSE_HANDLE_KILLPRIV_V2 that is the router's to do,
+    /// and the router, being root, is exempt from the kernel's own clearing.
+    fn kill_suid(&self, req: &Request, fd: RawFd, st: &mut libc::stat) {
+        if req.uid() == 0 || st.st_mode & libc::S_IFMT != libc::S_IFREG {
+            return;
+        }
+        let mode = st.st_mode & 0o7777;
+        let mut keep = mode & !libc::S_ISUID;
+        // A group-executable file loses set-group-ID too; without group
+        // execute it is a mandatory-locking mark, which stays.
+        if mode & libc::S_IXGRP != 0 {
+            keep &= !libc::S_ISGID;
+        }
+        if keep != mode && unsafe { libc::chmod(proc_path(fd).as_ptr(), keep) } == 0 {
+            st.st_mode = (st.st_mode & libc::S_IFMT) | keep;
+        }
     }
 }
 
@@ -799,7 +829,11 @@ impl Filesystem for Router {
             | InitFlags::FUSE_MAX_PAGES
             | InitFlags::FUSE_ASYNC_READ
             | InitFlags::FUSE_BIG_WRITES
-            | InitFlags::FUSE_NO_OPENDIR_SUPPORT;
+            | InitFlags::FUSE_NO_OPENDIR_SUPPORT
+            // The router clears set-ID bits itself (kill_suid; writes go to
+            // ext4, which clears them), so the kernel need not ask for every
+            // file's security.capability before each write.
+            | InitFlags::FUSE_HANDLE_KILLPRIV_V2;
         if self.passthrough {
             want |= InitFlags::FUSE_PASSTHROUGH;
         } else {
@@ -858,7 +892,7 @@ impl Filesystem for Router {
 
     fn setattr(
         &self,
-        _req: &Request,
+        req: &Request,
         ino: INodeNo,
         mode: Option<u32>,
         uid: Option<u32>,
@@ -913,8 +947,7 @@ impl Filesystem for Router {
                     }
                 };
                 let times = [conv(atime), conv(mtime)];
-                let st = stat_fd(fd)?;
-                let r = if st.st_mode & libc::S_IFMT == libc::S_IFLNK {
+                let r = if node.is_symlink {
                     unsafe { libc::utimensat(fd, EMPTY.as_ptr(), times.as_ptr(), libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW) }
                 } else {
                     unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) }
@@ -923,7 +956,11 @@ impl Filesystem for Router {
                     return Err(last());
                 }
             }
-            stat_fd(fd)
+            let mut st = stat_fd(fd)?;
+            if size.is_some() {
+                self.kill_suid(req, fd, &mut st);
+            }
+            Ok(st)
         })();
         match res {
             Ok(st) => reply.attr(&self.ttl, &attr(ino.0, &st)),
@@ -997,11 +1034,11 @@ impl Filesystem for Router {
             let p = self.node(parent)?;
             let name = cstr(name)?;
             // It must be there, in some layer, to be removed.
-            self.resolve(&p, &name)?;
+            let (up, _, st) = self.resolve(&p, &name)?;
             let pu = self.copy_up(parent.0, &p)?;
             let covered = self.in_lower(&p, &name);
-            match open_path(pu.as_raw_fd(), &name) {
-                Ok(_) => {
+            match up {
+                Some(_) => {
                     if covered {
                         // Replace it with a whiteout in one step.
                         let tmp = CString::new(format!(".hangar-wh-{}", self.next_fh.fetch_add(1, Ordering::Relaxed))).unwrap();
@@ -1015,9 +1052,9 @@ impl Filesystem for Router {
                         return Err(last());
                     }
                 }
-                Err(_) => Self::make_whiteout(pu.as_raw_fd(), &name)?,
+                None => Self::make_whiteout(pu.as_raw_fd(), &name)?,
             }
-            self.detach(parent.0, &name);
+            self.detach(&st, parent.0, &name);
             Ok(())
         })();
         match res {
@@ -1030,7 +1067,7 @@ impl Filesystem for Router {
         let res = (|| -> Result<(), Errno> {
             let p = self.node(parent)?;
             let name = cstr(name)?;
-            let (ino, _) = self.lookup_at(parent.0, &p, &name)?;
+            let (ino, cst) = self.lookup_at(parent.0, &p, &name)?;
             let child = self.node(INodeNo(ino))?;
             let r = (|| {
                 if !child.is_dir {
@@ -1056,7 +1093,7 @@ impl Filesystem for Router {
             })();
             self.forget(_req, INodeNo(ino), 1);
             r?;
-            self.detach(parent.0, &name);
+            self.detach(&cst, parent.0, &name);
             Ok(())
         })();
         match res {
@@ -1120,6 +1157,7 @@ impl Filesystem for Router {
                         self.forget(_req, INodeNo(tino), 1);
                     }
                 }
+                let replaced = if exchange { None } else { self.resolve(&np, &newname).ok().map(|(_, _, st)| st) };
                 let client_whiteout = flags.bits() & libc::RENAME_WHITEOUT != 0;
                 let mut f = flags.bits() & !libc::RENAME_WHITEOUT;
                 let covered = !exchange && self.in_lower(&p, &name);
@@ -1140,8 +1178,8 @@ impl Filesystem for Router {
                         set_xattr(fd.as_raw_fd(), OPAQUE, b"y")?;
                     }
                 }
-                if !exchange {
-                    self.detach(newparent.0, &newname);
+                if let Some(rst) = replaced {
+                    self.detach(&rst, newparent.0, &newname);
                 }
                 *src.place.lock() = (newparent.0, newname.clone());
                 Ok(())
@@ -1173,7 +1211,7 @@ impl Filesystem for Router {
         }
     }
 
-    fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+    fn open(&self, req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         let node = match self.node(ino) {
             Ok(n) => n,
             Err(e) => return reply.error(e),
@@ -1187,6 +1225,12 @@ impl Filesystem for Router {
             Ok(f) => f,
             Err(e) => return reply.error(e),
         };
+        if flags.0 & libc::O_TRUNC != 0 {
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            if unsafe { libc::fstat(file.as_raw_fd(), &mut st) } == 0 {
+                self.kill_suid(req, file.as_raw_fd(), &mut st);
+            }
+        }
         if self.passthrough {
             match self.backing(ino.0, &node, |f| reply.open_backing(f)) {
                 Ok(id) => {
@@ -1210,15 +1254,30 @@ impl Filesystem for Router {
             let p = self.node(parent)?;
             let name = cstr(name)?;
             let (pu, _) = self.prepare_create(parent.0, &p, &name)?;
-            let fd = unsafe {
-                libc::openat(pu.as_raw_fd(), name.as_ptr(), (flags | libc::O_CREAT | libc::O_CLOEXEC) & !libc::O_NOCTTY, mode & !umask)
-            };
+            // Opened read-write whatever the caller asked, so the one
+            // descriptor serves this open and the inode's passthrough
+            // backing, which later opens share.
+            let oflags = ((flags & !libc::O_ACCMODE) | libc::O_RDWR | libc::O_CREAT | libc::O_CLOEXEC) & !libc::O_NOCTTY;
+            let fd = unsafe { libc::openat(pu.as_raw_fd(), name.as_ptr(), oflags, mode & !umask) };
             if fd < 0 {
                 return Err(last());
             }
             let file = unsafe { File::from_raw_fd(fd) };
-            self.chown_new(req, pu.as_raw_fd(), &name)?;
-            let (ino, st) = self.lookup_at(parent.0, &p, &name)?;
+            let mut st: libc::stat = unsafe { std::mem::zeroed() };
+            if unsafe { libc::fstat(fd, &mut st) } < 0 {
+                return Err(last());
+            }
+            // It is the caller's, with the directory's group if that is
+            // set-group-ID (which the file has already taken from it), and
+            // the caller's otherwise.
+            let gid = if st.st_gid != 0 { st.st_gid } else { req.gid() };
+            if unsafe { libc::fchown(fd, req.uid(), gid) } < 0 {
+                return Err(last());
+            }
+            st.st_uid = req.uid();
+            st.st_gid = gid;
+            let path = open_path(pu.as_raw_fd(), &name)?;
+            let ino = self.intern(parent.0, &name, Some(path), Vec::new(), &st);
             Ok((ino, st, file))
         })();
         let (ino, st, file) = match res {
@@ -1227,16 +1286,16 @@ impl Filesystem for Router {
         };
         let a = attr(ino, &st);
         if self.passthrough {
-            if let Ok(node) = self.node(INodeNo(ino)) {
-                match self.backing(ino, &node, |f| reply.open_backing(f)) {
-                    Ok(id) => {
-                        let fh = self.next_fh.fetch_add(1, Ordering::Relaxed);
-                        self.handles.write().insert(fh, Arc::new(Handle::File { file, _backing: Some(id.clone()) }));
-                        reply.created_passthrough(&self.ttl, &a, Generation(0), FileHandle(fh), self.open_flags(true), &id);
-                        return;
-                    }
-                    Err(e) => log::warn!("passthrough refused for a new file: {e:?}"),
+            match reply.open_backing(&file) {
+                Ok(id) => {
+                    let id = Arc::new(id);
+                    self.backings.lock().insert(ino, Arc::downgrade(&id));
+                    let fh = self.next_fh.fetch_add(1, Ordering::Relaxed);
+                    self.handles.write().insert(fh, Arc::new(Handle::File { file, _backing: Some(id.clone()) }));
+                    reply.created_passthrough(&self.ttl, &a, Generation(0), FileHandle(fh), self.open_flags(true), &id);
+                    return;
                 }
+                Err(e) => log::warn!("passthrough refused for a new file: {e:?}"),
             }
         }
         let fh = self.next_fh.fetch_add(1, Ordering::Relaxed);
