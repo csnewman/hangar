@@ -286,9 +286,33 @@ impl<FS: Filesystem> Session<FS> {
                 channels.push(ch.clone());
             }
         }
+        #[cfg(target_os = "linux")]
+        let ring_ch = ch.clone();
         channels.push(ch);
 
         let mut threads = Vec::with_capacity(n_threads);
+
+        #[cfg(target_os = "linux")]
+        if let Some(entries) = config.io_uring {
+            for qid in 0..crate::uring::queues() {
+                let thread_name = format!("fuser-ring-{qid}");
+                let event_loop = SessionEventLoop {
+                    thread_name: thread_name.clone(),
+                    filesystem: filesystem.clone(),
+                    ch: ring_ch.clone(),
+                    allowed,
+                    session_owner,
+                };
+                let qid = u16::try_from(qid).map_err(io::Error::other)?;
+                threads.push(thread::Builder::new().name(thread_name).spawn(move || {
+                    // A ring that fails leaves its requests to /dev/fuse.
+                    if let Err(e) = crate::uring::serve(&event_loop, qid, entries.max(1)) {
+                        error!("ring {qid}: {e}");
+                    }
+                    Ok(())
+                })?);
+            }
+        }
 
         for (i, ch) in channels.into_iter().enumerate() {
             let thread_name = format!("fuser-{i}");

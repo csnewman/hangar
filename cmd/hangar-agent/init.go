@@ -94,6 +94,10 @@ func cmdlineHas(param string) bool {
 // routerBin is where the worker puts hangar-router in the initramfs.
 const routerBin = "/hangar-router"
 
+// routerRingEntries is how many requests each CPU's io_uring ring holds:
+// one being answered while the next waits.
+const routerRingEntries = "2"
+
 // fuseMagic is the type statfs reports for a FUSE filesystem.
 const fuseMagic = 0x65735546
 
@@ -113,7 +117,8 @@ func startRouter() error {
 	attr := &os.ProcAttr{Files: []*os.File{nil, os.Stderr, os.Stderr, w},
 		Sys: &syscall.SysProcAttr{Setsid: true}}
 	p, err := os.StartProcess(routerBin, []string{"@hangar-router",
-		"--upper", "/rw/upper", "--lower", "/base", "--mountpoint", newRoot}, attr)
+		"--upper", "/rw/upper", "--lower", "/base", "--mountpoint", newRoot,
+		"--uring", routerRingEntries}, attr)
 	w.Close()
 	if err != nil {
 		return fmt.Errorf("starting the router: %w", err)

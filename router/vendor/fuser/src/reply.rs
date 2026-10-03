@@ -38,6 +38,10 @@ use crate::passthrough::BackingId;
 #[derive(Debug)]
 pub(crate) enum ReplySender {
     Channel(ChannelSender),
+    /// A request that came over an io_uring ring: the reply is held for the
+    /// ring's thread to commit, and the channel opens backing files.
+    #[cfg(target_os = "linux")]
+    Ring(crate::uring::RingReply, ChannelSender),
     #[cfg(test)]
     Assert(AssertSender),
     #[cfg(test)]
@@ -49,6 +53,8 @@ impl ReplySender {
     pub(crate) fn send(&self, data: &[IoSlice<'_>]) -> std::io::Result<()> {
         match self {
             ReplySender::Channel(sender) => sender.send(data),
+            #[cfg(target_os = "linux")]
+            ReplySender::Ring(ring, _) => ring.send(data),
             #[cfg(test)]
             ReplySender::Assert(sender) => sender.send(data),
             #[cfg(test)]
@@ -63,6 +69,8 @@ impl ReplySender {
     pub(crate) fn open_backing(&self, fd: BorrowedFd<'_>) -> std::io::Result<BackingId> {
         match self {
             ReplySender::Channel(sender) => sender.open_backing(fd),
+            #[cfg(target_os = "linux")]
+            ReplySender::Ring(_, sender) => sender.open_backing(fd),
             #[cfg(test)]
             ReplySender::Assert(_) => unreachable!(),
             #[cfg(test)]
@@ -74,6 +82,8 @@ impl ReplySender {
     pub(crate) unsafe fn wrap_backing(&self, id: u32) -> BackingId {
         match self {
             ReplySender::Channel(sender) => unsafe { sender.wrap_backing(id) },
+            #[cfg(target_os = "linux")]
+            ReplySender::Ring(_, sender) => unsafe { sender.wrap_backing(id) },
             #[cfg(test)]
             ReplySender::Assert(_) => unreachable!(),
             #[cfg(test)]

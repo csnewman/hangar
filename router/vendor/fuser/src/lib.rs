@@ -101,6 +101,8 @@ mod request;
 mod request_param;
 mod session;
 mod time;
+#[cfg(target_os = "linux")]
+mod uring;
 
 /// We generally support async reads
 #[cfg(not(target_os = "macos"))]

@@ -199,3 +199,6 @@ version = "3.10.1"
 
 [build-dependencies.pkg-config]
 version = "0.3.14"
+
+[target.'cfg(target_os = "linux")'.dependencies.io-uring]
+version = "0.7"

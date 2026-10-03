@@ -7,6 +7,16 @@ changes for hangar-router:
   as `FUSE_SETLK`/`FUSE_SETLKW`, marking `flock()` with `FUSE_LK_FLOCK` in
   `lk_flags`, which fuser read and dropped. `Filesystem::setlk` takes a
   `flock` argument.
+- **FUSE over io_uring** (`src/uring.rs`, `Config::io_uring`). With it, a
+  session also runs one io_uring ring per possible CPU, each on a thread
+  pinned to that CPU, and the kernel sends each request to the ring of the
+  CPU its caller runs on, once every ring has registered. A request is
+  rebuilt in front of its payload, where fuser's parser expects it, and
+  `ReplySender::Ring` holds the reply until the method returns, when the
+  thread commits it and fetches the next request in one command. Replies
+  must therefore be sent before the method returns. Forgets and interrupts
+  still come through `/dev/fuse`, and so does everything if the kernel
+  refuses the rings. Adds the `io-uring` crate.
 
 Known, not changed:
 

@@ -34,6 +34,9 @@ use crate::session::SessionEventLoop;
 pub(crate) struct RequestWithSender<'a> {
     /// Channel sender for sending the reply
     ch: ChannelSender,
+    /// The ring entry the request came on, which takes the reply instead
+    #[cfg(target_os = "linux")]
+    ring: Option<crate::uring::RingReply>,
     /// Parsed request
     pub(crate) request: ll::AnyRequest<'a>,
 }
@@ -49,7 +52,27 @@ impl<'a> RequestWithSender<'a> {
             }
         };
 
-        Some(Self { ch, request })
+        Some(Self {
+            ch,
+            #[cfg(target_os = "linux")]
+            ring: None,
+            request,
+        })
+    }
+
+    /// A request that came on a ring entry, which takes its reply.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn with_ring(mut self, ring: crate::uring::RingReply) -> Self {
+        self.ring = Some(ring);
+        self
+    }
+
+    fn sender(&self) -> ReplySender {
+        #[cfg(target_os = "linux")]
+        if let Some(ring) = &self.ring {
+            return ReplySender::Ring(ring.clone(), self.ch.clone());
+        }
+        ReplySender::Channel(self.ch.clone())
     }
 
     /// Dispatch request to the given filesystem.
@@ -304,7 +327,7 @@ impl<'a> RequestWithSender<'a> {
                     x.offset(),
                     ReplyDirectory::new(
                         self.request.unique(),
-                        ReplySender::Channel(self.ch.clone()),
+                        self.sender(),
                         x.size() as usize,
                     ),
                 );
@@ -480,7 +503,7 @@ impl<'a> RequestWithSender<'a> {
                     x.offset(),
                     ReplyDirectoryPlus::new(
                         self.request.unique(),
-                        ReplySender::Channel(self.ch.clone()),
+                        self.sender(),
                         x.size() as usize,
                     ),
                 );
@@ -553,7 +576,7 @@ impl<'a> RequestWithSender<'a> {
     /// Create a reply object for this request that can be passed to the filesystem
     /// implementation and makes sure that a request is replied exactly once
     pub(crate) fn reply<T: Reply>(&self) -> T {
-        Reply::new(self.request.unique(), ReplySender::Channel(self.ch.clone()))
+        Reply::new(self.request.unique(), self.sender())
     }
 
     /// Returns a Request reference for this request

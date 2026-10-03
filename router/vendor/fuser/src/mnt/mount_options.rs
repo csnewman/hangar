@@ -18,6 +18,15 @@ pub struct Config {
     /// This enables more efficient request processing
     /// when multiple threads are used. Requires Linux 4.5+.
     pub clone_fd: bool,
+    /// Serve requests over FUSE's io_uring transport (Linux 6.14+, with the
+    /// `fuse.enable_uring` parameter set): one ring per CPU, each with this
+    /// many entries, on a thread pinned to that CPU. The filesystem must ask
+    /// for `FUSE_OVER_IO_URING` in `init`, and must reply to each request
+    /// before its method returns. Forgets, interrupts, and every request
+    /// until each CPU's ring is registered, still arrive on the `/dev/fuse`
+    /// threads. Where the kernel refuses the rings, those threads serve
+    /// everything.
+    pub io_uring: Option<usize>,
 }
 
 /// Mount options accepted by the FUSE filesystem type

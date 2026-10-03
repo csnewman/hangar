@@ -40,6 +40,12 @@ struct Args {
     #[arg(long, default_value_t = 3600)]
     ttl: u64,
 
+    /// Serve requests over FUSE's io_uring transport, with this many ring
+    /// entries for each CPU, as well as on the worker threads, which then
+    /// carry only forgets and interrupts. 0 is /dev/fuse alone.
+    #[arg(long, default_value_t = 0)]
+    uring: usize,
+
     /// Serve file contents through the router rather than passing them to
     /// the backing file.
     #[arg(long)]
@@ -74,6 +80,19 @@ fn raise_file_limit() {
     }
 }
 
+/// Turns on the kernel's FUSE over io_uring, which is off unless the fuse
+/// module's enable_uring parameter is set. Without it the router serves
+/// /dev/fuse alone.
+fn enable_uring() {
+    const PARAM: &str = "/sys/module/fuse/parameters/enable_uring";
+    if std::fs::read_to_string(PARAM).is_ok_and(|v| v.trim() == "Y") {
+        return;
+    }
+    if let Err(e) = std::fs::write(PARAM, "Y") {
+        log::warn!("enabling FUSE over io_uring ({PARAM}): {e}");
+    }
+}
+
 fn main() {
     env_logger::init();
     let args = Args::parse();
@@ -88,7 +107,11 @@ fn main() {
     .unwrap_or_else(|e| {
         eprintln!("hangar-router: opening the layers: {e}");
         std::process::exit(1);
-    });
+    })
+    .with_uring(args.uring > 0);
+    if args.uring > 0 {
+        enable_uring();
+    }
 
     let mut cfg = Config::default();
     cfg.mount_options.extend([
@@ -103,6 +126,9 @@ fn main() {
     cfg.acl = SessionACL::All;
     cfg.n_threads = Some(args.threads);
     cfg.clone_fd = true;
+    if args.uring > 0 {
+        cfg.io_uring = Some(args.uring);
+    }
 
     if let Err(e) = fuser::mount(fs, &args.mountpoint, &cfg) {
         eprintln!("hangar-router: mounting at {}: {e}", args.mountpoint.display());

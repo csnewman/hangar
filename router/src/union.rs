@@ -110,6 +110,8 @@ pub struct Router {
     next_fh: AtomicU64,
     ttl: Duration,
     passthrough: bool,
+    /// Whether to ask for FUSE over io_uring.
+    uring: bool,
     /// The backing file registered for each inode's contents. The kernel
     /// allows one per inode at a time, so every open of an inode shares it,
     /// and it goes when the last of them is released.
@@ -329,9 +331,17 @@ impl Router {
             next_fh: AtomicU64::new(1),
             ttl,
             passthrough,
+            uring: false,
             backings: Mutex::new(HashMap::new()),
             copy_up: Mutex::new(()),
         })
+    }
+
+    /// Asks the kernel for FUSE over io_uring, which the session must then
+    /// serve.
+    pub fn with_uring(mut self, on: bool) -> Self {
+        self.uring = on;
+        self
     }
 
     fn node(&self, ino: INodeNo) -> Result<Arc<Node>, Errno> {
@@ -834,6 +844,9 @@ impl Filesystem for Router {
             // ext4, which clears them), so the kernel need not ask for every
             // file's security.capability before each write.
             | InitFlags::FUSE_HANDLE_KILLPRIV_V2;
+        if self.uring {
+            want |= InitFlags::FUSE_OVER_IO_URING;
+        }
         if self.passthrough {
             want |= InitFlags::FUSE_PASSTHROUGH;
         } else {
