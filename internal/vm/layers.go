@@ -78,15 +78,6 @@ func readLayers(copyDir string) ([]digest.Digest, error) {
 	return out, nil
 }
 
-func writeLayers(copyDir string, ds []digest.Digest) error {
-	var b strings.Builder
-	for _, d := range ds {
-		b.WriteString(d.String())
-		b.WriteByte('\n')
-	}
-	return os.WriteFile(filepath.Join(copyDir, "layers"), []byte(b.String()), 0o644)
-}
-
 // base is the root filesystem of a held copy, stacking its layers first if
 // it is a stack and they are not stacked. A single layer is the root
 // filesystem as it is.
