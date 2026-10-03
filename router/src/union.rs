@@ -66,7 +66,17 @@ struct Node {
     is_symlink: bool,
     key: Mutex<(u64, u64)>,
     lookups: AtomicU64,
+    /// Whether the file is known to have no `security.capability`, which
+    /// the kernel asks for before every write and change of owner: the low
+    /// bit says so, and the rest counts changes to that attribute, so an
+    /// answer read before a change cannot be recorded after it.
+    caps: AtomicU64,
 }
+
+/// `Node::caps` when the file is known to have no `security.capability`.
+const NO_CAPS: u64 = 1;
+
+const CAPS_NAME: &[u8] = b"security.capability";
 
 impl Node {
     fn upper(&self) -> Option<Arc<OwnedFd>> {
@@ -142,6 +152,25 @@ fn cstr(name: &OsStr) -> Result<CString, Errno> {
 /// would act on the `/proc` link.
 fn proc_path(fd: RawFd) -> CString {
     CString::new(format!("/proc/self/fd/{fd}")).unwrap()
+}
+
+/// fchmodat2(2), which the C library may not wrap: the same number on
+/// every architecture.
+const SYS_FCHMODAT2: libc::c_long = 452;
+
+/// Changes the mode of an `O_PATH` descriptor's file. fchmod(2) refuses
+/// such a descriptor; fchmodat2(2) (Linux 6.6) with an empty path does not,
+/// and on an older kernel the file is named through `/proc`.
+fn chmod_fd(fd: RawFd, mode: u32) -> Result<(), Errno> {
+    let r = unsafe { libc::syscall(SYS_FCHMODAT2, fd, EMPTY.as_ptr(), mode, libc::AT_EMPTY_PATH) };
+    if r == 0 {
+        return Ok(());
+    }
+    let e = last();
+    if e.code() != libc::ENOSYS {
+        return Err(e);
+    }
+    if unsafe { libc::chmod(proc_path(fd).as_ptr(), mode) } < 0 { Err(last()) } else { Ok(()) }
 }
 
 fn stat_fd(fd: RawFd) -> Result<libc::stat, Errno> {
@@ -320,6 +349,7 @@ impl Router {
             is_symlink: false,
             key: Mutex::new(key),
             lookups: AtomicU64::new(1 << 32),
+            caps: AtomicU64::new(0),
         };
         let mut table = Table::default();
         table.nodes.insert(INodeNo::ROOT.0, Arc::new(root));
@@ -457,6 +487,7 @@ impl Router {
             is_symlink: st.st_mode & libc::S_IFMT == libc::S_IFLNK,
             key: Mutex::new(key),
             lookups: AtomicU64::new(1),
+            caps: AtomicU64::new(0),
         };
         t.nodes.insert(ino, Arc::new(node));
         t.by_key.insert(key, ino);
@@ -588,14 +619,19 @@ impl Router {
         }
         let up = open_path(dir, &name)?;
         let ufd = up.as_raw_fd();
-        unsafe { libc::fchownat(ufd, EMPTY.as_ptr(), st.st_uid, st.st_gid, libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW) };
-        if st.st_mode & libc::S_IFMT == libc::S_IFDIR {
+        // A regular file was given its owner and attributes before it was
+        // linked in. Changing the owner strips `security.capability`, so it
+        // comes before the attributes are copied, never after.
+        if st.st_mode & libc::S_IFMT != libc::S_IFREG {
+            unsafe { libc::fchownat(ufd, EMPTY.as_ptr(), st.st_uid, st.st_gid, libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW) };
             copy_xattrs(lfd, ufd);
+        }
+        if st.st_mode & libc::S_IFMT == libc::S_IFDIR {
             let times = [
                 libc::timespec { tv_sec: st.st_atime, tv_nsec: st.st_atime_nsec },
                 libc::timespec { tv_sec: st.st_mtime, tv_nsec: st.st_mtime_nsec },
             ];
-            unsafe { libc::utimensat(libc::AT_FDCWD, proc_path(ufd).as_ptr(), times.as_ptr(), 0) };
+            unsafe { libc::utimensat(ufd, EMPTY.as_ptr(), times.as_ptr(), libc::AT_EMPTY_PATH) };
         }
         // Once copied up, the node is found by its upper file, so a hard
         // link made to it, or a later lookup, reaches this node.
@@ -663,6 +699,11 @@ impl Router {
     /// Makes what a request created belong to whoever asked, taking the
     /// directory's group where it has set-group-ID.
     fn chown_new(&self, req: &Request, dir: RawFd, name: &CStr) -> Result<(), Errno> {
+        // The router is root, so what it makes is root's, with the
+        // directory's group or its own: already right for root.
+        if req.uid() == 0 && req.gid() == 0 {
+            return Ok(());
+        }
         let pst = stat_fd(dir)?;
         let gid = if pst.st_mode & libc::S_ISGID != 0 { pst.st_gid } else { req.gid() };
         let r = unsafe { libc::fchownat(dir, name.as_ptr(), req.uid(), gid, libc::AT_SYMLINK_NOFOLLOW) };
@@ -756,7 +797,7 @@ impl Router {
         if mode & libc::S_IXGRP != 0 {
             keep &= !libc::S_ISGID;
         }
-        if keep != mode && unsafe { libc::chmod(proc_path(fd).as_ptr(), keep) } == 0 {
+        if keep != mode && chmod_fd(fd, keep).is_ok() {
             st.st_mode = (st.st_mode & libc::S_IFMT) | keep;
         }
     }
@@ -928,11 +969,8 @@ impl Filesystem for Router {
         let res = (|| -> Result<libc::stat, Errno> {
             let up = self.copy_up(ino.0, &node)?;
             let fd = up.as_raw_fd();
-            let path = proc_path(fd);
             if let Some(mode) = mode {
-                if unsafe { libc::chmod(path.as_ptr(), mode & 0o7777) } < 0 {
-                    return Err(last());
-                }
+                chmod_fd(fd, mode & 0o7777)?;
             }
             if uid.is_some() || gid.is_some() {
                 let u = uid.unwrap_or(u32::MAX);
@@ -944,7 +982,7 @@ impl Filesystem for Router {
             if let Some(size) = size {
                 let r = match fh.and_then(|fh| self.handle(fh).ok()) {
                     Some((_h, ffd)) => unsafe { libc::ftruncate(ffd, size as i64) },
-                    None => unsafe { libc::truncate(path.as_ptr(), size as i64) },
+                    None => unsafe { libc::truncate(proc_path(fd).as_ptr(), size as i64) },
                 };
                 if r < 0 {
                     return Err(last());
@@ -960,11 +998,7 @@ impl Filesystem for Router {
                     }
                 };
                 let times = [conv(atime), conv(mtime)];
-                let r = if node.is_symlink {
-                    unsafe { libc::utimensat(fd, EMPTY.as_ptr(), times.as_ptr(), libc::AT_EMPTY_PATH | libc::AT_SYMLINK_NOFOLLOW) }
-                } else {
-                    unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) }
-                };
+                let r = unsafe { libc::utimensat(fd, EMPTY.as_ptr(), times.as_ptr(), libc::AT_EMPTY_PATH) };
                 if r < 0 {
                     return Err(last());
                 }
@@ -1284,13 +1318,16 @@ impl Filesystem for Router {
             // set-group-ID (which the file has already taken from it), and
             // the caller's otherwise.
             let gid = if st.st_gid != 0 { st.st_gid } else { req.gid() };
-            if unsafe { libc::fchown(fd, req.uid(), gid) } < 0 {
+            if (st.st_uid, st.st_gid) != (req.uid(), gid) && unsafe { libc::fchown(fd, req.uid(), gid) } < 0 {
                 return Err(last());
             }
             st.st_uid = req.uid();
             st.st_gid = gid;
             let path = open_path(pu.as_raw_fd(), &name)?;
             let ino = self.intern(parent.0, &name, Some(path), Vec::new(), &st);
+            if let Ok(n) = self.node(INodeNo(ino)) {
+                n.caps.store(NO_CAPS, Ordering::Relaxed);
+            }
             Ok((ino, st, file))
         })();
         let (ino, st, file) = match res {
@@ -1455,6 +1492,11 @@ impl Filesystem for Router {
             let up = self.copy_up(ino.0, &n)?;
             let path = proc_path(up.as_raw_fd());
             let r = unsafe { libc::setxattr(path.as_ptr(), name.as_ptr(), value.as_ptr() as *const libc::c_void, value.len(), flags) };
+            if name.as_bytes() == CAPS_NAME {
+                // A new count, without the mark: whatever was read before
+                // this is no longer known.
+                let _ = n.caps.fetch_update(Ordering::AcqRel, Ordering::Relaxed, |v| Some((v | NO_CAPS) + 1));
+            }
             if r < 0 { Err(last()) } else { Ok(()) }
         })();
         match res {
@@ -1470,11 +1512,24 @@ impl Filesystem for Router {
             if name.as_bytes().starts_with(HANGAR_PREFIX) {
                 return Err(err(libc::ENODATA));
             }
+            let caps = name.as_bytes() == CAPS_NAME;
+            let seen = n.caps.load(Ordering::Acquire);
+            if caps && seen & NO_CAPS != 0 {
+                return Err(err(libc::ENODATA));
+            }
             let name = escape(&name)?;
             let path = proc_path(n.real().as_raw_fd());
             let mut buf = vec![0u8; size as usize];
             let r = unsafe { libc::getxattr(path.as_ptr(), name.as_ptr(), buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-            if r < 0 { Err(last()) } else { Ok((r, buf)) }
+            if r < 0 {
+                let e = last();
+                if caps && e.code() == libc::ENODATA {
+                    // Unless the attribute changed since it was read.
+                    let _ = n.caps.compare_exchange(seen, seen | NO_CAPS, Ordering::AcqRel, Ordering::Relaxed);
+                }
+                return Err(e);
+            }
+            Ok((r, buf))
         })();
         match res {
             Ok((r, buf)) => {
