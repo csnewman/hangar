@@ -66,6 +66,14 @@ case "$KARCH" in
   *) echo "unsupported KARCH=$KARCH" >&2; exit 1 ;;
 esac
 
+# Every option at its default, with the fragments over it, for the check
+# below. Made out of tree while the source tree is still clean.
+mkdir -p /tmp/kdef
+make ARCH="$KARCH" O=/tmp/kdef alldefconfig >/dev/null
+./scripts/kconfig/merge_config.sh -m -O /tmp/kdef /tmp/kdef/.config \
+        /cfg/hangar.config "/cfg/hangar-${KARCH}.config" >/dev/null 2>&1 || true
+make ARCH="$KARCH" O=/tmp/kdef olddefconfig >/dev/null
+
 echo "kernel: configuring ($KARCH, base=${KBASE:-tinyconfig})" >&2
 make ARCH="$KARCH" "${KBASE:-tinyconfig}" >/dev/null
 
@@ -118,6 +126,23 @@ if [ -n "$missing" ] || [ -n "$unwanted" ]; then
     exit 1
 fi
 echo "kernel: all $(grep -c "^CONFIG_.*=y\$" /tmp/wanted.config) requested options built in" >&2
+
+# tinyconfig turns off every option that has a prompt, whatever its default,
+# so an option on by default is off here unless a fragment turns it on. Each
+# that stays off must be named off in a fragment: a default nobody looked at
+# (a stack guard page, a CPU's errata) is otherwise lost without a trace, and
+# a new kernel brings new ones.
+lost=""
+for opt in $(sed -n 's/=y$//p' /tmp/kdef/.config); do
+    grep -q "^${opt}=y\$" .config && continue
+    grep -q "^# ${opt} is not set\$" /tmp/wanted.config && continue
+    lost="$lost $opt"
+done
+if [ -n "$lost" ]; then
+    echo "kernel: on by default, off here, and not named off in a fragment:" >&2
+    for opt in $lost; do echo "  $opt" >&2; done
+    exit 1
+fi
 
 # Nothing may be a module: the guest has a fixed, known device model, so a
 # module is either for hardware that cannot exist or for a feature we should
