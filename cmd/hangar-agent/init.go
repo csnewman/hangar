@@ -206,7 +206,11 @@ func assembleRoot() error {
 	if err := waitFor(upperDisk); err != nil {
 		return fmt.Errorf("the writable disk: %w", err)
 	}
-	if err := unix.Mount(upperDisk, "/rw", "ext4", 0, ""); err != nil {
+	// discard hands freed blocks back to the host as files are deleted: the
+	// disk is a sparse file there, and without it everything an environment
+	// ever wrote stays allocated. Nothing in the guest can trim it later,
+	// for systemd's /run hides where it is mounted.
+	if err := unix.Mount(upperDisk, "/rw", "ext4", 0, "discard"); err != nil {
 		return fmt.Errorf("mounting the writable layer (%s): %w", upperDisk, err)
 	}
 	for _, d := range []string{"/rw/upper", "/rw/work"} {
