@@ -460,6 +460,7 @@ const struct inode_operations hfs_dir_iops = {
 	.unlink = hfs_unlink,
 	.rmdir = hfs_rmdir,
 	.rename = hfs_rename,
+	.tmpfile = hfs_tmpfile,
 	.permission = hfs_permission,
 	.setattr = hfs_setattr,
 	.getattr = hfs_getattr,

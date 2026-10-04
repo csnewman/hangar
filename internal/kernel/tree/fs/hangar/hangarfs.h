@@ -74,5 +74,7 @@ extern const struct dentry_operations hfs_dops;
 extern const struct xattr_handler * const hfs_xattr_handlers[];
 
 struct inode *hfs_iget(struct super_block *sb, struct inode *lower);
+int hfs_tmpfile(struct mnt_idmap *idmap, struct inode *dir, struct file *file,
+		umode_t mode);
 
 #endif /* _FS_HANGAR_HANGARFS_H */

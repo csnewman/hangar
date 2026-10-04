@@ -44,6 +44,56 @@ static int hfs_open(struct inode *inode, struct file *file)
 	return 0;
 }
 
+static int hfs_tmpfile_open(struct inode *inode, struct file *file)
+{
+	return 0;
+}
+
+/*
+ * O_TMPFILE: an unnamed file made in the lower directory, opened as the
+ * lower file of this one, which is opened already when the VFS gets it.
+ */
+int hfs_tmpfile(struct mnt_idmap *idmap, struct inode *dir, struct file *file,
+		umode_t mode)
+{
+	struct dentry *dentry = file->f_path.dentry;
+	struct hfs_file *hf;
+	struct file *lower;
+	struct inode *inode;
+	struct path parent;
+	int err;
+
+	hf = kzalloc(sizeof(*hf), GFP_KERNEL);
+	if (!hf)
+		return -ENOMEM;
+	hfs_lower_path(dentry->d_parent, &parent);
+	lower = backing_tmpfile_open(file, file->f_flags, &parent, mode,
+				     current_cred());
+	if (IS_ERR(lower)) {
+		kfree(hf);
+		return PTR_ERR(lower);
+	}
+	hf->lower = lower;
+	inode = hfs_iget(dir->i_sb, file_inode(lower));
+	if (IS_ERR(inode)) {
+		err = PTR_ERR(inode);
+		goto fail;
+	}
+	dentry->d_fsdata = dget(lower->f_path.dentry);
+	d_instantiate(dentry, inode);
+	file->private_data = hf;
+	if (lower->f_mode & FMODE_CAN_ODIRECT)
+		file->f_mode |= FMODE_CAN_ODIRECT;
+	err = finish_open(file, dentry, hfs_tmpfile_open);
+	if (file->f_mode & FMODE_OPENED)
+		return err;
+	file->private_data = NULL;
+fail:
+	fput(lower);
+	kfree(hf);
+	return err;
+}
+
 static int hfs_release(struct inode *inode, struct file *file)
 {
 	struct hfs_file *hf = file->private_data;
