@@ -1,0 +1,24 @@
+diff --git a/fs/Kconfig b/fs/Kconfig
+index cf6ae6477..e35846226 100644
+--- a/fs/Kconfig
++++ b/fs/Kconfig
+@@ -130,6 +130,7 @@ source "fs/quota/Kconfig"
+ source "fs/autofs/Kconfig"
+ source "fs/fuse/Kconfig"
+ source "fs/overlayfs/Kconfig"
++source "fs/hangar/Kconfig"
+ 
+ menu "Caches"
+ 
+diff --git a/fs/Makefile b/fs/Makefile
+index 89a8a9d20..6dced513a 100644
+--- a/fs/Makefile
++++ b/fs/Makefile
+@@ -103,6 +103,7 @@ obj-$(CONFIG_AUTOFS_FS)		+= autofs/
+ obj-$(CONFIG_ADFS_FS)		+= adfs/
+ obj-$(CONFIG_FUSE_FS)		+= fuse/
+ obj-$(CONFIG_OVERLAY_FS)	+= overlayfs/
++obj-$(CONFIG_HANGAR_FS)	+= hangar/
+ obj-$(CONFIG_ORANGEFS_FS)       += orangefs/
+ obj-$(CONFIG_UDF_FS)		+= udf/
+ obj-$(CONFIG_SUN_OPENPROMFS)	+= openpromfs/

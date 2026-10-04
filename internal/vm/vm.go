@@ -99,7 +99,8 @@ type Config struct {
 	// default), ImagePmem, or ImageVirtiofs.
 	ImageDevice string
 	// Root is what merges the writable layer over the base as the guest's
-	// root: RootOverlay (the default), or RootRouter, which is experimental.
+	// root: RootOverlay (the default), or RootHangarfs or RootRouter, which
+	// are experimental.
 	Root string
 	// Router is hangar-router built for the guest, which RootRouter runs.
 	Router string
@@ -131,6 +132,10 @@ const (
 	// in the same format, where shared paths are to be routed
 	// (docs/root-filesystem.md). Experimental.
 	RootRouter = "router"
+	// RootHangarfs is overlayfs with hangarfs (the guest kernel's own,
+	// internal/kernel/tree/fs/hangar) mounted over it as the root, so that
+	// locks on shared files are taken across environments. Experimental.
+	RootHangarfs = "hangarfs"
 )
 
 // How the base reaches the guest.

@@ -88,8 +88,10 @@ type VMConfig struct {
 	// asks; or "virtiofs", the image's directory served over virtio-fs.
 	ImageDevice string `yaml:"image_device"`
 	// Root is what an environment's root is: "overlay" (the default), the
-	// kernel's overlayfs; or, experimentally, "router", hangar-router (Router)
-	// merging the same layers.
+	// kernel's overlayfs; or, experimentally, "hangarfs", the guest kernel's
+	// hangarfs over that overlayfs, which takes locks on shared files across
+	// an owner's environments; or "router", hangar-router (Router) merging
+	// the same layers.
 	Root string `yaml:"root"`
 	// Router is hangar-router built for the guest's architecture, which an
 	// environment runs as its root with root: router.

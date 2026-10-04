@@ -68,7 +68,7 @@ func preflight(cfg *Config) error {
 		return fmt.Errorf("vm.image_device %q is none of %s, %s or %s", cfg.ImageDevice, ImageDisk, ImagePmem, ImageVirtiofs)
 	}
 	switch cfg.Root {
-	case RootOverlay:
+	case RootOverlay, RootHangarfs:
 	case RootRouter:
 		if cfg.Router == "" {
 			return errors.New("vm.root is router, and there is no vm.router to run")
@@ -77,7 +77,7 @@ func preflight(cfg *Config) error {
 			return fmt.Errorf("router: %w", err)
 		}
 	default:
-		return fmt.Errorf("vm.root %q is neither %s nor %s", cfg.Root, RootOverlay, RootRouter)
+		return fmt.Errorf("vm.root %q is none of %s, %s or %s", cfg.Root, RootOverlay, RootHangarfs, RootRouter)
 	}
 	for ref, img := range cfg.Images {
 		st, err := os.Stat(img.Base)
@@ -177,6 +177,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		Kernel:      m.rt.cfg.Kernel,
 		Agent:       m.rt.cfg.Agent,
 		Router:      routerFor(m.rt.cfg),
+		Hangarfs:    m.rt.cfg.Root == RootHangarfs,
 		Base:        img.Base,
 		BaseID:      img.ID,
 		BaseFile:    baseFile,

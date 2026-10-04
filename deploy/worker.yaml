@@ -55,6 +55,11 @@ vm:
   # reads it. "virtiofs": the image's directory served over virtio-fs, where
   # every lookup is a round trip to this machine.
   image_device: disk
+  # Experimental: hangarfs, the guest kernel's own filesystem, mounted over
+  # the overlayfs root, through which a lock taken on a file under a shared
+  # path holds across the owner's environments. Without it such locks hold
+  # within one environment only.
+  # root: hangarfs
   # Experimental: an environment's root merged by hangar-router, a FUSE
   # filesystem, instead of the kernel's overlayfs, in the same on-disk
   # format. Slower today; it is where shared paths are to be routed.

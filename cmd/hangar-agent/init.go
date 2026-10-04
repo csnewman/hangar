@@ -28,9 +28,10 @@ import (
 //	       command line names (hangar.image=), mounted with DAX if
 //	       hangar.image_dax=1, or else over virtiofs (tag hangar-base)
 //	/rw    the environment's writable disk, the first virtio-blk device
-//	/root  overlayfs of the two, which becomes /; or with hangar.root=router
-//	       on the command line, hangar-router merging them, run from the
-//	       initramfs as the root filesystem's daemon
+//	/root  overlayfs of the two, which becomes /; with hangar.root=hangarfs
+//	       on the command line, hangarfs over that overlayfs (mounted at
+//	       /lower); or with hangar.root=router, hangar-router merging them,
+//	       run from the initramfs as the root filesystem's daemon
 //
 // /var/lib/docker is not part of the root: overlay2 cannot stack on
 // overlayfs (or on hangar-router). It is /rw/docker, a directory on the same
@@ -255,13 +256,33 @@ func assembleRoot() error {
 		}
 	}
 	routerRoot := cmdlineHas("hangar.root=router")
+	hangarfsRoot := cmdlineHas("hangar.root=hangarfs")
 	if routerRoot {
 		if err := startRouter(); err != nil {
 			return err
 		}
-	} else if err := unix.Mount("overlay", newRoot, "overlay", 0,
-		"lowerdir=/base,upperdir=/rw/upper,workdir=/rw/work"); err != nil {
-		return fmt.Errorf("stacking overlayfs: %w", err)
+	} else {
+		// Under hangarfs, the overlay is its lower directory, left in the
+		// initramfs: hangarfs holds it for as long as it is mounted.
+		at := newRoot
+		if hangarfsRoot {
+			at = "/lower"
+			if err := os.MkdirAll(at, 0o755); err != nil {
+				return err
+			}
+		}
+		if err := unix.Mount("overlay", at, "overlay", 0,
+			"lowerdir=/base,upperdir=/rw/upper,workdir=/rw/work"); err != nil {
+			return fmt.Errorf("stacking overlayfs: %w", err)
+		}
+		if hangarfsRoot {
+			// transparent: hangarfs takes no stacking depth of its own,
+			// so an overlay can still be mounted on the root.
+			if err := unix.Mount(at, newRoot, "hangarfs", 0, "transparent"); err != nil {
+				return fmt.Errorf("mounting hangarfs over the overlay: %w", err)
+			}
+			fmt.Fprintln(os.Stderr, "INITRAMFS: root by hangarfs over overlayfs")
+		}
 	}
 
 	// Without it Docker cannot start, but the environment is still usable.

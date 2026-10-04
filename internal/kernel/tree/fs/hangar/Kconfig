@@ -1,10 +1,21 @@
 # SPDX-License-Identifier: GPL-2.0
+config HANGAR_FS
+	bool "Hangar: hangarfs, the environment's root"
+	depends on FILE_LOCKING
+	select FS_STACK
+	select HANGAR_SYNC
+	help
+	  A thin stacking filesystem over a directory, passing every operation
+	  through to it, which Hangar's guest agent mounts as an environment's
+	  root over its overlayfs. Its own lock operations take a lock on a
+	  file under a shared path for the environment as a whole (below)
+	  before the local one.
+
 config HANGAR_SYNC
-	bool "Hangar: locks shared between environments"
+	bool
 	depends on FILE_LOCKING
 	help
-	  Locks taken with flock(2) or fcntl(2) on files under paths Hangar's
-	  guest agent registers are taken for the environment as a whole from
-	  the agent, through /dev/hangar-sync, before the local lock, and given
-	  back when no process here holds one. Without the agent, locks are
-	  local only.
+	  Locks taken on hangarfs files under paths Hangar's guest agent
+	  registers are taken for the environment from the agent, through
+	  /dev/hangar-sync, and given back when no process here holds one.
+	  Without the agent, locks are local only.
