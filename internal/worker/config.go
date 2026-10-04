@@ -77,11 +77,11 @@ type VMConfig struct {
 	// Editor is the editor disk editor/build.sh makes for the guest's
 	// architecture, attached read-only to every environment here. Without
 	// one, environments have no editor.
-	Editor    string `yaml:"editor"`
+	Editor string `yaml:"editor"`
 	// UpperGiB and DockerGiB are an environment's room for its files and
 	// for Docker's store: one sparse disk of their sum.
-	UpperGiB  int    `yaml:"upper_gib"`
-	DockerGiB int    `yaml:"docker_gib"`
+	UpperGiB  int `yaml:"upper_gib"`
+	DockerGiB int `yaml:"docker_gib"`
 	// ImageDevice is how an environment's image reaches it: "disk" (the
 	// default), an EROFS image as a read-only virtio-blk disk; "pmem", the
 	// same image as virtio-pmem, mapped with DAX for an environment that
