@@ -56,6 +56,7 @@ COPY internal/kernel/scripts/build.sh /scripts/build.sh
 COPY internal/kernel/version /cfg/version
 COPY internal/kernel/hangar.config internal/kernel/hangar-arm64.config internal/kernel/hangar-x86_64.config /cfg/
 COPY internal/kernel/patches/ /cfg/patches/
+COPY internal/kernel/tree/ /cfg/tree/
 RUN case "$(uname -m)" in aarch64) KARCH=arm64 ;; *) KARCH=x86_64 ;; esac \
  && mkdir -p /out \
  && KERNEL_VERSION=$KERNEL_VERSION KARCH=$KARCH sh /scripts/build.sh \

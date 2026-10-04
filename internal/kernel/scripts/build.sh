@@ -2,6 +2,8 @@
 # Builds the Hangar guest kernel inside a throwaway container.
 #
 # Inputs:  /cfg/hangar.config          the committed config fragment
+#          /cfg/tree                    source files added to the kernel tree
+#          /cfg/patches                 patches applied to it
 #          /cfg/hangar-$KARCH.config   its architecture-specific half
 #          /cfg/version                 the kernel version, unless
 #                                       KERNEL_VERSION names another
@@ -41,6 +43,12 @@ else
 fi
 tar -xf linux.tar.xz
 cd "linux-${KERNEL_VERSION}"
+
+# Hangar's own source files (fs/hangar and its headers), at their paths in
+# the tree; the patches that follow hook them in.
+if [ -d /cfg/tree ]; then
+    cp -a /cfg/tree/. .
+fi
 
 # Fixes carried against the upstream tree. Each one is expected to apply
 # cleanly; a rejected hunk means the fix has landed upstream or the code has

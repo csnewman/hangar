@@ -2,8 +2,10 @@ package kernel
 
 import (
 	"embed"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 //go:embed scripts/build.sh
@@ -32,6 +34,12 @@ var archFragments embed.FS
 //
 //go:embed patches
 var kernelPatches embed.FS
+
+// Source files of Hangar's own, added to the kernel tree before the patches
+// apply (fs/hangar, and its headers), as the tree's paths.
+//
+//go:embed all:tree
+var kernelTree embed.FS
 
 func materialiseScripts() (string, error) {
 	dir, err := os.MkdirTemp("", "hangar-kscripts-")
@@ -76,7 +84,29 @@ func materialiseConfig() (string, error) {
 		os.RemoveAll(dir)
 		return "", err
 	}
+	if err := copyTree(filepath.Join(dir, "tree")); err != nil {
+		os.RemoveAll(dir)
+		return "", err
+	}
 	return dir, nil
+}
+
+// copyTree writes the embedded source files into dst, at their paths.
+func copyTree(dst string) error {
+	return fs.WalkDir(kernelTree, "tree", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		out := filepath.Join(dst, strings.TrimPrefix(p, "tree"))
+		if d.IsDir() {
+			return os.MkdirAll(out, 0o755)
+		}
+		b, err := kernelTree.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(out, b, 0o644)
+	})
 }
 
 // copyPatches writes the embedded patch series into dst.

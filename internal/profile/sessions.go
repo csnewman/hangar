@@ -468,8 +468,19 @@ func (x *session) handle(ctx context.Context, m Message) error {
 		}
 		return err
 	case TypeLock:
+		// One of the Locks LockFS serves, or a lock the guest's kernel
+		// takes on a shared file for a program there.
 		if _, ok := LockAt(m.Path); !ok {
-			return nil
+			paths, err := x.s.store.Paths(ctx, x.owner)
+			if err != nil {
+				return err
+			}
+			if !paths.Synced(m.Path) {
+				if m.ID == 0 {
+					return nil
+				}
+				return x.send(Message{Type: TypeLocked, ID: m.ID, Path: m.Path})
+			}
 		}
 		if m.ID == 0 {
 			// A renewal from the holder.

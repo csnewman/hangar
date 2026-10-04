@@ -1,0 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0
+config HANGAR_SYNC
+	bool "Hangar: locks shared between environments"
+	depends on FILE_LOCKING
+	help
+	  Locks taken with flock(2) or fcntl(2) on files under paths Hangar's
+	  guest agent registers are taken for the environment as a whole from
+	  the agent, through /dev/hangar-sync, before the local lock, and given
+	  back when no process here holds one. Without the agent, locks are
+	  local only.

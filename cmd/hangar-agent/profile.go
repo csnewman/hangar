@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/csnewman/hangar/internal/hangarsync"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sysuser"
 	"github.com/csnewman/hangar/internal/vsock"
@@ -28,7 +30,11 @@ func serveProfile() {
 		time.Sleep(10 * time.Second)
 		u, err = user.Lookup("dev")
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	level := slog.LevelInfo
+	if os.Getenv("HANGAR_AGENT_DEBUG") != "" {
+		level = slog.LevelDebug
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 	g := profile.NewGuest(u, log)
 	// Beside LockFS's backing, on the environment's own disk, so it
 	// outlasts a reboot.
@@ -42,6 +48,7 @@ func serveProfile() {
 	} else {
 		g.SetBacking(l.Backing)
 	}
+	go serveKernelLocks(g, log)
 	go func() {
 		<-g.Synced()
 		os.MkdirAll(filepath.Dir(sysuser.ProfileSynced), 0o755)
@@ -149,4 +156,25 @@ func credentialHelper(args []string) int {
 	}
 	fmt.Fprintln(os.Stderr, "unknown action", args[0])
 	return 2
+}
+
+// serveKernelLocks answers the kernel about locks on shared files, where it
+// can ask (hangar-sync, in Hangar's kernel). A kernel without it keeps those
+// locks local.
+func serveKernelLocks(g *profile.Guest, log *slog.Logger) {
+	for {
+		dev, err := os.OpenFile(hangarsync.Device, os.O_RDWR, 0)
+		if errors.Is(err, os.ErrNotExist) {
+			return
+		}
+		if err != nil {
+			log.Warn("profile: opening the kernel's lock device", "err", err)
+			time.Sleep(5 * time.Second)
+			continue
+		}
+		err = g.ServeLocks(dev)
+		dev.Close()
+		log.Warn("profile: serving the kernel's locks", "err", err)
+		time.Sleep(time.Second)
+	}
 }
