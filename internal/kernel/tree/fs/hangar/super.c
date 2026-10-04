@@ -74,18 +74,31 @@ static const struct super_operations hfs_sops = {
 	.show_options = hfs_show_options,
 };
 
-/* A cached name is still right if the lower one is, and the file is there. */
+/*
+ * A cached name is still right if the lower one is, and the file is there.
+ * The lower filesystem is reached only through this one, whose operations
+ * keep the inodes' attributes in step, so a walk under RCU needs only the
+ * lower dentry's own word: it stays a walk under RCU unless the lower
+ * dentry was dropped or has a revalidation of its own.
+ */
 static int hfs_d_revalidate(struct inode *dir, const struct qstr *name,
 			    struct dentry *dentry, unsigned int flags)
 {
-	struct dentry *lower = hfs_lower_dentry(dentry);
+	struct dentry *lower = READ_ONCE(dentry->d_fsdata);
 	int ret = 1;
 
-	if (flags & LOOKUP_RCU)
-		return -ECHILD;
 	/* The lower filesystem dropped its dentry: look the name up again. */
 	if (d_unhashed(lower))
-		return 0;
+		return flags & LOOKUP_RCU ? -ECHILD : 0;
+	if (flags & LOOKUP_RCU) {
+		struct inode *inode = d_inode_rcu(dentry);
+
+		if (READ_ONCE(lower->d_flags) & DCACHE_OP_REVALIDATE)
+			return -ECHILD;
+		if (inode && !READ_ONCE(hfs_lower_inode(inode)->i_nlink))
+			return -ECHILD;
+		return 1;
+	}
 	if (lower->d_flags & DCACHE_OP_REVALIDATE) {
 		struct name_snapshot n;
 

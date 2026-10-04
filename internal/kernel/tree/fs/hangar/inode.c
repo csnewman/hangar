@@ -120,9 +120,12 @@ static struct dentry *hfs_start_removing(struct dentry *dentry)
 /* After a create: the new name's dentry points at the lower one made. */
 static void hfs_set_lower(struct dentry *dentry, struct dentry *lower)
 {
-	if (dentry->d_fsdata != lower) {
-		dput(dentry->d_fsdata);
-		dentry->d_fsdata = dget(lower);
+	struct dentry *old = dentry->d_fsdata;
+
+	/* Walks under RCU read it unlocked; the old one is freed after them. */
+	if (old != lower) {
+		WRITE_ONCE(dentry->d_fsdata, dget(lower));
+		dput(old);
 	}
 }
 
