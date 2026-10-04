@@ -63,7 +63,6 @@ struct Node {
     /// Where it is, for copying it up: its parent's node and its name there.
     place: Mutex<(u64, CString)>,
     is_dir: bool,
-    is_symlink: bool,
     key: Mutex<(u64, u64)>,
     lookups: AtomicU64,
     /// Whether the file is known to have no `security.capability`, which
@@ -346,7 +345,6 @@ impl Router {
             lowers: RwLock::new(lows),
             place: Mutex::new((INodeNo::ROOT.0, CString::default())),
             is_dir: true,
-            is_symlink: false,
             key: Mutex::new(key),
             lookups: AtomicU64::new(1 << 32),
             caps: AtomicU64::new(0),
@@ -484,7 +482,6 @@ impl Router {
             lowers: RwLock::new(lowers.into_iter().map(Arc::new).collect()),
             place: Mutex::new((parent_ino, name.to_owned())),
             is_dir: is_dir(st),
-            is_symlink: st.st_mode & libc::S_IFMT == libc::S_IFLNK,
             key: Mutex::new(key),
             lookups: AtomicU64::new(1),
             caps: AtomicU64::new(0),
