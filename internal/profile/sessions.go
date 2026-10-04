@@ -507,16 +507,13 @@ func (x *session) handle(ctx context.Context, m Message) error {
 			// The holder starts from the profile as it stands: what it
 			// is about to read, another environment may have just
 			// written.
-			files, err := x.s.store.Files(ctx, x.owner, x.trusted)
+			files, err := x.s.store.FilesUnder(ctx, x.owner, path.Dir(m.Path)+"/", x.trusted)
 			if err != nil {
 				return err
 			}
-			dir := path.Dir(m.Path) + "/"
 			for _, f := range files {
-				if strings.HasPrefix(f.Path, dir) {
-					reply.Files = append(reply.Files, Message{Type: TypeFile, Path: f.Path, Data: f.Data,
-						Mode: f.Mode, Version: f.Version, Deleted: f.Deleted})
-				}
+				reply.Files = append(reply.Files, Message{Type: TypeFile, Path: f.Path, Data: f.Data,
+					Mode: f.Mode, Version: f.Version, Deleted: f.Deleted})
 			}
 		}
 		reply.Held = got

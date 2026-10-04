@@ -720,3 +720,40 @@ func TestSecretsAreSealed(t *testing.T) {
 		t.Errorf("a path outside the profile: %v", err)
 	}
 }
+
+func TestFilesUnderADirectory(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	for _, f := range []string{".claude/settings.json", ".claude/agents/a.md", ".claude/.credentials.json", ".gitconfig", ".config/gh/config.yml"} {
+		if _, err := p.store.Put(ctx, p.owner, f, []byte("data of "+f), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	paths := func(secrets bool, dir string) []string {
+		t.Helper()
+		files, err := p.store.FilesUnder(ctx, p.owner, dir, secrets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, f := range files {
+			if string(f.Data) != "data of "+f.Path {
+				t.Errorf("%s holds %q", f.Path, f.Data)
+			}
+			out = append(out, f.Path)
+		}
+		return out
+	}
+	if got := strings.Join(paths(true, ".claude/"), " "); got != ".claude/settings.json .claude/agents/a.md .claude/.credentials.json" {
+		t.Errorf("under .claude/: %s", got)
+	}
+	if got := strings.Join(paths(false, ".claude/"), " "); got != ".claude/settings.json .claude/agents/a.md" {
+		t.Errorf("under .claude/ without secrets: %s", got)
+	}
+	if got := strings.Join(paths(true, ".config/"), " "); got != ".config/gh/config.yml" {
+		t.Errorf("under .config/: %s", got)
+	}
+	if got := strings.Join(paths(true, ".c%/"), " "); got != "" {
+		t.Errorf("a pattern character matched: %s", got)
+	}
+}

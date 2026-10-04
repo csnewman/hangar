@@ -94,22 +94,28 @@ func (s *Store) KeepsSecrets() bool { return s.sealer != nil }
 // Files returns a user's files, removed ones included, with secrets opened.
 // Without secrets, secret files are left out.
 func (s *Store) Files(ctx context.Context, userID string, secrets bool) ([]File, error) {
-	return s.files(ctx, userID, secrets, 0)
+	return s.files(ctx, userID, secrets, 0, "")
+}
+
+// FilesUnder returns, as Files does, a user's files whose paths start with
+// dir: those in a directory and below, for a dir ending in a slash.
+func (s *Store) FilesUnder(ctx context.Context, userID, dir string, secrets bool) ([]File, error) {
+	return s.files(ctx, userID, secrets, 0, dir)
 }
 
 // Since returns the files changed after version.
 func (s *Store) Since(ctx context.Context, userID string, secrets bool, version int64) ([]File, error) {
-	return s.files(ctx, userID, secrets, version)
+	return s.files(ctx, userID, secrets, version, "")
 }
 
-func (s *Store) files(ctx context.Context, userID string, secrets bool, after int64) ([]File, error) {
+func (s *Store) files(ctx context.Context, userID string, secrets bool, after int64, prefix string) ([]File, error) {
 	if !db.ValidUUID(userID) {
 		return nil, ErrNotFound
 	}
 	var out []File
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT path, data, mode, version, deleted, updated_at FROM profile_files
-			WHERE user_id = $1 AND version > $2 ORDER BY version`, userID, after)
+			WHERE user_id = $1 AND version > $2 AND starts_with(path, $3) ORDER BY version`, userID, after, prefix)
 		if err != nil {
 			return err
 		}
