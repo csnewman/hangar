@@ -5,9 +5,9 @@ here via `ExtraTrees=` in its `mkosi.conf`, so the distributions cannot
 disagree about how an environment is wired.
 
 - `minimal/tree`: what every Hangar image has. The agent's unit, console
-  autologin, the presets that decide which units start, `/etc/fstab` with the
-  environment's Docker disk, and Docker's storage settings -- in `minimal`
-  too, so a Docker the user installs lands on that disk.
+  autologin, the presets that decide which units start, and Docker's storage
+  settings -- in `minimal` too, so a Docker the user installs uses the store
+  the agent mounts at `/var/lib/docker`.
   `usr/share/hangar/image.json` says the image has no desktop. Units with
   nothing to do in an environment are masked (`etc/systemd/system/*` linked
   to `/dev/null`), since each costs boot time on few vCPUs:

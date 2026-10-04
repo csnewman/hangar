@@ -90,9 +90,9 @@ type Config struct {
 	// Registries are the credentials pulls sign in to registries with, by
 	// registry host.
 	Registries map[string]RegistryAuth
-	// UpperGiB and DockerGiB size each environment's writable layer and
-	// Docker store. The files are sparse, so this is a ceiling rather than
-	// space spent.
+	// UpperGiB and DockerGiB are each environment's room for its writable
+	// layer and its Docker store, which share one disk of their sum. The
+	// file is sparse, so this is a ceiling rather than space spent.
 	UpperGiB  int
 	DockerGiB int
 	// ImageDevice is how the base reaches the guest: ImageDisk (the

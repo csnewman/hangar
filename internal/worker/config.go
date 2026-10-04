@@ -78,6 +78,8 @@ type VMConfig struct {
 	// architecture, attached read-only to every environment here. Without
 	// one, environments have no editor.
 	Editor    string `yaml:"editor"`
+	// UpperGiB and DockerGiB are an environment's room for its files and
+	// for Docker's store: one sparse disk of their sum.
 	UpperGiB  int    `yaml:"upper_gib"`
 	DockerGiB int    `yaml:"docker_gib"`
 	// ImageDevice is how an environment's image reaches it: "disk" (the

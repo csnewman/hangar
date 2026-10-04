@@ -1,1 +1,0 @@
-LABEL=hangar-docker /var/lib/docker ext4 defaults,nofail,discard 0 2

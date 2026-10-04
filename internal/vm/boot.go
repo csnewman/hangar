@@ -134,13 +134,17 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if err := os.MkdirAll(m.dir, 0o755); err != nil {
 		return nil, err
 	}
+	// One writable disk holds both the root's layer and Docker's store,
+	// which the agent mounts at /var/lib/docker beside the root rather than
+	// in it: overlay2 cannot stack on the overlay root. An environment made
+	// with a separate Docker disk keeps it.
 	upper := filepath.Join(m.dir, "upper.ext4")
-	docker := filepath.Join(m.dir, "docker.ext4")
-	if err := EnsureDisk(ctx, upper, "hangar-upper", m.rt.cfg.UpperGiB); err != nil {
+	if err := EnsureDisk(ctx, upper, "hangar-upper", m.rt.cfg.UpperGiB+m.rt.cfg.DockerGiB); err != nil {
 		return nil, err
 	}
-	if err := EnsureDisk(ctx, docker, "hangar-docker", m.rt.cfg.DockerGiB); err != nil {
-		return nil, err
+	docker := filepath.Join(m.dir, "docker.ext4")
+	if _, err := os.Stat(docker); err != nil {
+		docker = ""
 	}
 	var baseFile, baseDevice string
 	if dev := m.rt.cfg.ImageDevice; dev == ImageDisk || dev == ImagePmem {
@@ -156,9 +160,13 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	}
 	m.makeRoomForHugePages(s.MemoryMiB)
 	// The writable layer is the first disk: the agent, as init, mounts
-	// /dev/vda. The Docker disk is mounted by label, and so is the editor
-	// disk, shared read-only by every environment.
-	disks := []ch.Disk{{Path: upper}, {Path: docker}}
+	// /dev/vda, and a separate Docker disk, where there is one, /dev/vdb.
+	// The editor disk, shared read-only by every environment, is mounted by
+	// label.
+	disks := []ch.Disk{{Path: upper}}
+	if docker != "" {
+		disks = append(disks, ch.Disk{Path: docker})
+	}
 	if m.rt.cfg.Editor != "" {
 		disks = append(disks, ch.Disk{Path: m.rt.cfg.Editor, ReadOnly: true})
 	}
@@ -199,6 +207,9 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		cfg.ExtraCmdline = "systemd.unit=multi-user.target systemd.mask=hangar-desktop.service"
 	} else {
 		cfg.ExtraCmdline = "systemd.unit=graphical.target"
+	}
+	if docker != "" {
+		cfg.ExtraCmdline += " hangar.docker=/dev/vdb"
 	}
 	inst, err := Boot(ctx, cfg)
 	if err != nil {

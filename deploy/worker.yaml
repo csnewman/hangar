@@ -41,6 +41,9 @@ vm:
   kernel: /usr/share/hangar/vmlinuz
   agent: /usr/share/hangar/hangar-agent
   editor: /usr/share/hangar/editor.ext4
+  # Each environment's room for its files and for Docker's images and
+  # containers: one sparse disk of the sum, of which only what is written
+  # takes space.
   upper_gib: 32
   docker_gib: 64
   # How an environment's image reaches it. "disk" (the default): an EROFS

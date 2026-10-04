@@ -32,8 +32,10 @@ import (
 //	       on the command line, hangar-router merging them, run from the
 //	       initramfs as the root filesystem's daemon
 //
-// /var/lib/docker is not part of the overlay: overlay2 cannot stack on
-// overlayfs, so the image's fstab mounts a disk of its own there by label.
+// /var/lib/docker is not part of the root: overlay2 cannot stack on
+// overlayfs (or on hangar-router). It is /rw/docker, a directory on the same
+// writable disk, mounted there beside the root; or, for an environment made
+// with a disk of its own for Docker, that disk (hangar.docker=).
 
 const (
 	baseTag   = "hangar-base"
@@ -83,6 +85,40 @@ func mountBase() error {
 	}
 	fmt.Fprintf(os.Stderr, "INITRAMFS: base from %s (%s)\n", device, how)
 	return nil
+}
+
+// cmdlineValue is the value of a key=value parameter on the kernel command
+// line, or "" without it.
+func cmdlineValue(key string) string {
+	b, err := os.ReadFile("/proc/cmdline")
+	if err != nil {
+		return ""
+	}
+	for _, f := range strings.Fields(string(b)) {
+		if v, ok := strings.CutPrefix(f, key+"="); ok {
+			return v
+		}
+	}
+	return ""
+}
+
+// mountDocker gives the new root its Docker store at /var/lib/docker.
+func mountDocker() error {
+	target := filepath.Join(newRoot, "var", "lib", "docker")
+	if err := os.MkdirAll(target, 0o710); err != nil {
+		return err
+	}
+	if dev := cmdlineValue("hangar.docker"); dev != "" {
+		if err := waitFor(dev); err != nil {
+			return err
+		}
+		return unix.Mount(dev, target, "ext4", 0, "discard")
+	}
+	src := "/rw/docker"
+	if err := os.MkdirAll(src, 0o710); err != nil {
+		return err
+	}
+	return unix.Mount(src, target, "", unix.MS_BIND, "")
 }
 
 // cmdlineHas is whether the kernel command line has a parameter.
@@ -226,6 +262,11 @@ func assembleRoot() error {
 	} else if err := unix.Mount("overlay", newRoot, "overlay", 0,
 		"lowerdir=/base,upperdir=/rw/upper,workdir=/rw/work"); err != nil {
 		return fmt.Errorf("stacking overlayfs: %w", err)
+	}
+
+	// Without it Docker cannot start, but the environment is still usable.
+	if err := mountDocker(); err != nil {
+		fmt.Fprintf(os.Stderr, "INITRAMFS: mounting Docker's store: %v\n", err)
 	}
 
 	// The agent the worker supplied, installed where the image's

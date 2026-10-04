@@ -49,7 +49,8 @@ type InstanceConfig struct {
 	BaseDevice string `json:"base_device,omitempty"`
 	BaseDAX    bool   `json:"base_dax,omitempty"`
 	// Disks follow: the writable layer first, which the agent mounts as
-	// /dev/vda, then the Docker disk, then any read-only ones.
+	// /dev/vda, then a separate Docker disk where an environment has one,
+	// then any read-only ones.
 	Disks []ch.Disk `json:"disks"`
 
 	MemoryMiB int `json:"memory_mib"`
