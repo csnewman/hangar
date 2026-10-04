@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -44,6 +45,7 @@ func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error
 	if err := os.MkdirAll(filepath.Dir(socket), 0o755); err != nil {
 		return nil, err
 	}
+	passtProbe.Do(func() { probePasst(bin, filepath.Dir(socket)) })
 
 	args := []string{
 		"--vhost-user",
@@ -83,6 +85,43 @@ func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error
 		return nil, err
 	}
 	return &Passt{cmd: cmd, socket: socket}, nil
+}
+
+// passtProbe decides, once, whether passt can run as nobody here.
+var passtProbe sync.Once
+
+// probePasst finds out whether passt can sandbox itself as nobody on this
+// host, and if it cannot, has every passt run as root. Its socket is no sign:
+// passt binds it before sandboxing, then exits when that fails, leaving a
+// socket nothing answers, and the monitor waits on it for a minute. So a
+// passt is started on a socket of its own and watched until it has had time
+// to sandbox itself.
+func probePasst(bin, dir string) {
+	if os.Geteuid() != 0 {
+		return
+	}
+	socket := filepath.Join(dir, "probe.sock")
+	defer os.Remove(socket)
+	defer os.Remove(socket + ".repair")
+	_ = os.Remove(socket)
+	_ = os.Remove(socket + ".repair")
+	var stderr strings.Builder
+	cmd := exec.Command(bin, "--vhost-user", "--socket-path", socket, "--foreground", "--one-off")
+	cmd.Stderr = &stderr
+	if err := cmd.Start(); err != nil {
+		return
+	}
+	exited := make(chan struct{})
+	go func() { cmd.Wait(); close(exited) }()
+	select {
+	case <-exited:
+		if strings.Contains(stderr.String(), "Failed to sandbox") {
+			passtAsRoot.Store(true)
+		}
+	case <-time.After(time.Second):
+		_ = cmd.Process.Kill()
+		<-exited
+	}
 }
 
 // asRoot keeps passt as root rather than changing to nobody.
