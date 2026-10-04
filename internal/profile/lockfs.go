@@ -52,6 +52,9 @@ func MountLockFS(u *user.User, backingRoot string, gate Gate) (*LockFS, error) {
 		if err := mkdirOwned(backing, uid, gid); err != nil {
 			return nil, err
 		}
+		if err := detachStale(target); err != nil {
+			return nil, fmt.Errorf("letting go of %s, left mounted: %w", target, err)
+		}
 		if err := mkdirOwned(target, uid, gid); err != nil {
 			return nil, err
 		}
