@@ -278,10 +278,20 @@ func assembleRoot() error {
 		if hangarfsRoot {
 			// transparent: hangarfs takes no stacking depth of its own,
 			// so an overlay can still be mounted on the root.
-			if err := unix.Mount(at, newRoot, "hangarfs", 0, "transparent"); err != nil {
+			err := unix.Mount(at, newRoot, "hangarfs", 0, "transparent")
+			switch {
+			case errors.Is(err, unix.ENODEV):
+				// A kernel built without hangarfs: the overlay is the
+				// root, and locks on shared files are this guest's own.
+				if err := unix.Mount(at, newRoot, "", unix.MS_MOVE, ""); err != nil {
+					return fmt.Errorf("moving the overlay to the root: %w", err)
+				}
+				fmt.Fprintln(os.Stderr, "INITRAMFS: this kernel has no hangarfs; root by overlayfs alone")
+			case err != nil:
 				return fmt.Errorf("mounting hangarfs over the overlay: %w", err)
+			default:
+				fmt.Fprintln(os.Stderr, "INITRAMFS: root by hangarfs over overlayfs")
 			}
-			fmt.Fprintln(os.Stderr, "INITRAMFS: root by hangarfs over overlayfs")
 		}
 	}
 

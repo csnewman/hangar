@@ -99,8 +99,8 @@ type Config struct {
 	// default), ImagePmem, or ImageVirtiofs.
 	ImageDevice string
 	// Root is what merges the writable layer over the base as the guest's
-	// root: RootOverlay (the default), or RootHangarfs or RootRouter, which
-	// are experimental.
+	// root: RootHangarfs (the default), RootOverlay, or RootRouter, which is
+	// experimental.
 	Root string
 	// Router is hangar-router built for the guest, which RootRouter runs.
 	Router string
@@ -126,7 +126,8 @@ type Config struct {
 // What the guest's root is.
 const (
 	// RootOverlay is the kernel's overlayfs over the base and the writable
-	// disk.
+	// disk, and nothing over it: locks on shared files hold within one
+	// environment.
 	RootOverlay = "overlay"
 	// RootRouter is hangar-router, a FUSE filesystem merging the same layers
 	// in the same format, where shared paths are to be routed
@@ -134,7 +135,8 @@ const (
 	RootRouter = "router"
 	// RootHangarfs is overlayfs with hangarfs (the guest kernel's own,
 	// internal/kernel/tree/fs/hangar) mounted over it as the root, so that
-	// locks on shared files are taken across environments. Experimental.
+	// locks on shared files are taken across environments. A guest kernel
+	// without hangarfs gets the overlay alone.
 	RootHangarfs = "hangarfs"
 )
 
@@ -160,7 +162,7 @@ func (c *Config) defaults() {
 		c.ImageDevice = ImageDisk
 	}
 	if c.Root == "" {
-		c.Root = RootOverlay
+		c.Root = RootHangarfs
 	}
 	if c.UpperGiB == 0 {
 		c.UpperGiB = 16

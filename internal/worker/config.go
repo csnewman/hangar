@@ -87,11 +87,12 @@ type VMConfig struct {
 	// same image as virtio-pmem, mapped with DAX for an environment that
 	// asks; or "virtiofs", the image's directory served over virtio-fs.
 	ImageDevice string `yaml:"image_device"`
-	// Root is what an environment's root is: "overlay" (the default), the
-	// kernel's overlayfs; or, experimentally, "hangarfs", the guest kernel's
-	// hangarfs over that overlayfs, which takes locks on shared files across
-	// an owner's environments; or "router", hangar-router (Router) merging
-	// the same layers.
+	// Root is what an environment's root is: "hangarfs" (the default), the
+	// guest kernel's hangarfs over the kernel's overlayfs, which takes locks
+	// on shared files across an owner's environments; "overlay", the
+	// overlayfs alone, where such locks hold within one environment; or,
+	// experimentally, "router", hangar-router (Router) merging the same
+	// layers.
 	Root string `yaml:"root"`
 	// Router is hangar-router built for the guest's architecture, which an
 	// environment runs as its root with root: router.
