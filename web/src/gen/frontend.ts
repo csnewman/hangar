@@ -1085,7 +1085,7 @@ export interface components {
             paths: string[];
             /** @description The paths among them the user added, which they may remove. */
             own_paths: string[];
-            /** @description Whether the server can keep secrets: without its key, credentials and SSH keys are refused. */
+            /** @description Whether the server can keep SSH keys: without its key, they are refused. */
             secrets: boolean;
         };
         ProfileFile: {

@@ -9,7 +9,7 @@ import (
 
 func (h *handler) GetProfile(ctx context.Context, _ GetProfileRequestObject) (GetProfileResponseObject, error) {
 	uid := principal(ctx).UserID
-	files, err := h.profiles.Files(ctx, uid, true)
+	files, err := h.profiles.List(ctx, uid, true)
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +37,7 @@ func (h *handler) GetProfile(ctx context.Context, _ GetProfileRequestObject) (Ge
 		if f.Deleted {
 			continue
 		}
-		out.Files = append(out.Files, ProfileFile{Path: f.Path, Size: len(f.Data), Mode: int(f.Mode),
+		out.Files = append(out.Files, ProfileFile{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
 			Secret: profile.Secret(f.Path), UpdatedAt: f.UpdatedAt})
 	}
 	for _, k := range keys {
@@ -50,17 +50,15 @@ func (h *handler) GetProfileFile(ctx context.Context, req GetProfileFileRequestO
 	if profile.Secret(req.Params.Path) {
 		return GetProfileFile403JSONResponse{ForbiddenJSONResponse{Error: "a credential's content is not shown"}}, nil
 	}
-	files, err := h.profiles.Files(ctx, principal(ctx).UserID, false)
+	f, err := h.profiles.File(ctx, principal(ctx).UserID, req.Params.Path, false)
+	if errors.Is(err, profile.ErrNotFound) {
+		return GetProfileFile404JSONResponse{NotFoundJSONResponse{Error: "no such file in the profile"}}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	for _, f := range files {
-		if f.Path == req.Params.Path && !f.Deleted {
-			return GetProfileFile200JSONResponse{Path: f.Path, Content: string(f.Data), Mode: int(f.Mode),
-				UpdatedAt: f.UpdatedAt}, nil
-		}
-	}
-	return GetProfileFile404JSONResponse{NotFoundJSONResponse{Error: "no such file in the profile"}}, nil
+	return GetProfileFile200JSONResponse{Path: f.Path, Content: string(f.Data), Mode: int(f.Mode),
+		UpdatedAt: f.UpdatedAt}, nil
 }
 
 func (h *handler) PutProfileFile(ctx context.Context, req PutProfileFileRequestObject) (PutProfileFileResponseObject, error) {
@@ -68,7 +66,7 @@ func (h *handler) PutProfileFile(ctx context.Context, req PutProfileFileRequestO
 	mode := uint32(0)
 	if req.Body.Mode != nil {
 		mode = uint32(*req.Body.Mode)
-	} else if files, err := h.profiles.Files(ctx, uid, false); err == nil {
+	} else if files, err := h.profiles.List(ctx, uid, false); err == nil {
 		for _, f := range files {
 			if f.Path == req.Params.Path && !f.Deleted {
 				mode = f.Mode
@@ -85,7 +83,7 @@ func (h *handler) PutProfileFile(ctx context.Context, req PutProfileFileRequestO
 	case err != nil:
 		return nil, err
 	}
-	return PutProfileFile200JSONResponse{Path: f.Path, Size: len(f.Data), Mode: int(f.Mode),
+	return PutProfileFile200JSONResponse{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
 		Secret: profile.Secret(f.Path), UpdatedAt: f.UpdatedAt}, nil
 }
 

@@ -1,13 +1,13 @@
 package registry
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -15,17 +15,34 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/opencontainers/go-digest"
 
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/db"
 )
 
-// blobPath is where a blob's bytes are: blobs/<algorithm>/<first two>/<hex>.
-func (reg *Registry) blobPath(d digest.Digest) string {
-	hex := d.Encoded()
-	return filepath.Join(reg.dir, "blobs", string(d.Algorithm()), hex[:2], hex)
+// blobKey is where a blob's bytes are kept: registry/blobs/<algorithm>/<hex>.
+func blobKey(d digest.Digest) string {
+	return "registry/blobs/" + string(d.Algorithm()) + "/" + d.Encoded()
 }
 
-func (reg *Registry) uploadPath(id string) string {
-	return filepath.Join(reg.dir, "uploads", id)
+// An upload in progress is its chunks, one object each, named by the
+// offset each starts at, padded so they list in order. Any replica can take
+// the next chunk.
+func chunksPrefix(id string) string { return "registry/uploads/" + id + "/" }
+
+func chunkKey(id string, offset int64) string {
+	return fmt.Sprintf("%s%020d", chunksPrefix(id), offset)
+}
+
+// stagingKey is where an upload's whole content is written while its digest
+// is checked, before it becomes the blob.
+func stagingKey() string { return "registry/staging/" + rand.Text() }
+
+// Expiries are the registry's objects its bucket deletes by age: staging
+// copies and chunks of uploads left behind, which no upload uses once it is
+// more than a day old (PruneUploads).
+var Expiries = []blob.Expiry{
+	{Prefix: "registry/staging/", Days: 2},
+	{Prefix: "registry/uploads/", Days: 2},
 }
 
 // parseDigest reads a digest in a supported algorithm.
@@ -57,9 +74,9 @@ func (reg *Registry) blobs(ctx context.Context, w http.ResponseWriter, r *http.R
 			reg.fail(w, r, err)
 			return
 		}
-		f, err := os.Open(reg.blobPath(d))
+		f, err := reg.store.Get(ctx, blobKey(d))
 		if err != nil {
-			reg.fail(w, r, fmt.Errorf("blob %s is recorded but not on disk: %w", d, err))
+			reg.fail(w, r, fmt.Errorf("blob %s is recorded but not in the blob store: %w", d, err))
 			return
 		}
 		defer f.Close()
@@ -142,13 +159,13 @@ func (reg *Registry) uploads(ctx context.Context, w http.ResponseWriter, r *http
 		reg.fail(w, r, err)
 		return
 	}
-	path := reg.uploadPath(id)
 	switch r.Method {
 	case http.MethodPatch:
-		if !inOrder(w, r, name, id, path) {
+		at, ok := reg.inOrder(ctx, w, r, name, id)
+		if !ok {
 			return
 		}
-		size, err := appendTo(path, r.Body)
+		size, err := reg.appendChunk(ctx, id, at, r.Body)
 		if err != nil {
 			reg.fail(w, r, err)
 			return
@@ -163,21 +180,22 @@ func (reg *Registry) uploads(ctx context.Context, w http.ResponseWriter, r *http
 			reg.fail(w, r, err)
 			return
 		}
-		if !inOrder(w, r, name, id, path) {
+		at, ok := reg.inOrder(ctx, w, r, name, id)
+		if !ok {
 			return
 		}
-		if _, err := appendTo(path, r.Body); err != nil {
+		if _, err := reg.appendChunk(ctx, id, at, r.Body); err != nil {
 			reg.fail(w, r, err)
 			return
 		}
-		if err := reg.finish(ctx, a.id, path, d); err != nil {
+		if err := reg.finish(ctx, a.id, reg.chunks(ctx, id), d); err != nil {
 			reg.fail(w, r, err)
 			return
 		}
 		reg.endUpload(ctx, id)
 		blobCreated(w, name, d)
 	case http.MethodGet:
-		size, err := fileSize(path)
+		size, err := reg.uploadSize(ctx, id)
 		if err != nil {
 			reg.fail(w, r, err)
 			return
@@ -188,7 +206,6 @@ func (reg *Registry) uploads(ctx context.Context, w http.ResponseWriter, r *http
 		w.WriteHeader(http.StatusNoContent)
 	case http.MethodDelete:
 		reg.endUpload(ctx, id)
-		os.Remove(path)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "UNSUPPORTED", "method not allowed")
@@ -213,20 +230,7 @@ func (reg *Registry) startUpload(ctx context.Context, w http.ResponseWriter, r *
 			reg.fail(w, r, err)
 			return
 		}
-		f, err := os.CreateTemp(filepath.Join(reg.dir, "uploads"), "whole-")
-		if err != nil {
-			reg.fail(w, r, err)
-			return
-		}
-		_, err = io.Copy(f, r.Body)
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
-		if err == nil {
-			err = reg.finish(ctx, a.id, f.Name(), d)
-		}
-		os.Remove(f.Name())
-		if err != nil {
+		if err := reg.finish(ctx, a.id, r.Body, d); err != nil {
 			reg.fail(w, r, err)
 			return
 		}
@@ -238,9 +242,6 @@ func (reg *Registry) startUpload(ctx context.Context, w http.ResponseWriter, r *
 		return tx.QueryRow(ctx, `INSERT INTO registry_uploads (repository_id) VALUES ($1) RETURNING id::text`,
 			a.id).Scan(&id)
 	})
-	if err == nil {
-		err = os.WriteFile(reg.uploadPath(id), nil, 0o644)
-	}
 	if err != nil {
 		reg.fail(w, r, err)
 		return
@@ -293,41 +294,56 @@ func (reg *Registry) endUpload(ctx context.Context, id string) {
 		_, err := tx.Exec(ctx, `DELETE FROM registry_uploads WHERE id = $1`, id)
 		return err
 	})
+	if err == nil {
+		err = reg.dropChunks(ctx, id)
+	}
 	if err != nil {
 		reg.log.Warn("registry: ending an upload", "upload", id, "err", err)
 	}
 }
 
-// finish checks that the file at path has digest d, moves it into place as
-// that blob -- or drops it, if the blob is already there -- and gives the
-// repository the blob.
-func (reg *Registry) finish(ctx context.Context, repo, path string, d digest.Digest) error {
-	f, err := os.Open(path)
+func (reg *Registry) dropChunks(ctx context.Context, id string) error {
+	chunks, err := reg.store.List(ctx, chunksPrefix(id))
 	if err != nil {
 		return err
 	}
+	var errs []error
+	for _, c := range chunks {
+		errs = append(errs, reg.store.Delete(ctx, c.Key))
+	}
+	return errors.Join(errs...)
+}
+
+// finish checks that content has digest d, makes it that blob -- unless
+// the blob is there already -- and gives the repository the blob. The
+// content is written to a staging object while its digest is checked, so
+// what is kept under a digest is only ever content that has it.
+func (reg *Registry) finish(ctx context.Context, repo string, content io.Reader, d digest.Digest) error {
+	staging := stagingKey()
+	defer reg.store.Delete(context.WithoutCancel(ctx), staging)
 	v := d.Verifier()
-	size, err := io.Copy(v, f)
-	f.Close()
-	if err != nil {
+	counted := &counter{r: io.TeeReader(content, v)}
+	if err := reg.store.Put(ctx, staging, counted, -1); err != nil {
 		return err
 	}
 	if !v.Verified() {
-		os.Remove(path)
 		return failure(http.StatusBadRequest, "DIGEST_INVALID", "the upload's content does not match its digest")
 	}
-	dst := reg.blobPath(d)
 	return reg.db.Transact(ctx, func(tx db.Tx) error {
-		// Held while the file is put in place and recorded, so collecting
-		// the blob cannot delete it meanwhile (see Collect).
+		// Held while the blob is put in place and recorded, so collecting
+		// it cannot delete it meanwhile (see Collect).
 		if err := lockBlob(ctx, tx, d); err != nil {
 			return err
 		}
-		if err := place(path, dst); err != nil {
+		if _, err := reg.store.Stat(ctx, blobKey(d)); errors.Is(err, blob.ErrNotFound) {
+			if err := reg.store.Copy(ctx, staging, blobKey(d)); err != nil {
+				return err
+			}
+		} else if err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO registry_blobs (digest, size) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-			d.String(), size); err != nil {
+			d.String(), counted.n); err != nil {
 			return err
 		}
 		_, err := tx.Exec(ctx, `INSERT INTO image_repository_blobs (repository_id, digest) VALUES ($1, $2)
@@ -336,19 +352,15 @@ func (reg *Registry) finish(ctx context.Context, repo, path string, d digest.Dig
 	})
 }
 
-// place moves a verified upload to where its blob is kept, or drops it if
-// the blob is there already. Done again, it does nothing more.
-func place(path, dst string) error {
-	if _, err := os.Stat(dst); err == nil {
-		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-		return nil
-	}
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		return err
-	}
-	return os.Rename(path, dst)
+type counter struct {
+	r io.Reader
+	n int64
+}
+
+func (c *counter) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // lockBlob holds, until the transaction ends, the lock that putting a blob
@@ -358,26 +370,28 @@ func lockBlob(ctx context.Context, tx db.Tx, d digest.Digest) error {
 	return err
 }
 
-// inOrder checks that a chunk's Content-Range, if it has one, starts where
-// the upload has got to, and answers 416 if not.
-func inOrder(w http.ResponseWriter, r *http.Request, name, id, path string) bool {
+// inOrder returns where an upload has got to, which a chunk's
+// Content-Range, if it has one, must start at; if it does not, it answers
+// 416.
+func (reg *Registry) inOrder(ctx context.Context, w http.ResponseWriter, r *http.Request, name, id string) (int64, bool) {
+	size, err := reg.uploadSize(ctx, id)
+	if err != nil {
+		reg.fail(w, r, err)
+		return 0, false
+	}
 	cr := r.Header.Get("Content-Range")
 	if cr == "" {
-		return true
-	}
-	size, err := fileSize(path)
-	if err != nil {
-		size = 0
+		return size, true
 	}
 	start, _, ok := strings.Cut(cr, "-")
 	if n, err := strconv.ParseInt(start, 10, 64); ok && err == nil && n == size {
-		return true
+		return size, true
 	}
 	w.Header().Set("Range", rangeOf(size))
 	w.Header().Set("Location", uploadLocation(name, id))
 	writeErr(w, http.StatusRequestedRangeNotSatisfiable, "BLOB_UPLOAD_INVALID",
 		fmt.Sprintf("the chunk starts at %s, and the upload has %d bytes", start, size))
-	return false
+	return 0, false
 }
 
 func blobCreated(w http.ResponseWriter, name string, d digest.Digest) {
@@ -398,37 +412,52 @@ func rangeOf(size int64) string {
 	return "0-" + strconv.FormatInt(size-1, 10)
 }
 
-func fileSize(path string) (int64, error) {
-	st, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, failure(http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "upload not found")
-	}
+// uploadSize is how many bytes an upload holds: its chunks' sizes.
+func (reg *Registry) uploadSize(ctx context.Context, id string) (int64, error) {
+	chunks, err := reg.store.List(ctx, chunksPrefix(id))
 	if err != nil {
 		return 0, err
 	}
-	return st.Size(), nil
+	var size int64
+	for _, c := range chunks {
+		size += c.Size
+	}
+	return size, nil
 }
 
-// appendTo adds what r holds to the end of the file at path, returning its
-// new size.
-func appendTo(path string, r io.Reader) (int64, error) {
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, failure(http.StatusNotFound, "BLOB_UPLOAD_UNKNOWN", "upload not found")
-	}
-	if err != nil {
+// appendChunk keeps what r holds as the upload's chunk starting at offset,
+// returning the upload's new size. An empty chunk is not kept.
+func (reg *Registry) appendChunk(ctx context.Context, id string, offset int64, r io.Reader) (int64, error) {
+	c := &counter{r: r}
+	first := make([]byte, 1)
+	if _, err := io.ReadFull(c, first); err == io.EOF {
+		return offset, nil
+	} else if err != nil {
 		return 0, err
 	}
-	if _, err := io.Copy(f, r); err != nil {
-		f.Close()
+	if err := reg.store.Put(ctx, chunkKey(id, offset), io.MultiReader(bytes.NewReader(first), c), -1); err != nil {
 		return 0, err
 	}
-	st, err := f.Stat()
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		return 0, err
-	}
-	return st.Size(), nil
+	return offset + c.n, nil
+}
+
+// chunks reads an upload's chunks in order, as one stream.
+func (reg *Registry) chunks(ctx context.Context, id string) io.Reader {
+	pr, pw := io.Pipe()
+	go func() {
+		list, err := reg.store.List(ctx, chunksPrefix(id))
+		for _, c := range list {
+			if err != nil {
+				break
+			}
+			var f blob.Reader
+			if f, err = reg.store.Get(ctx, c.Key); err != nil {
+				break
+			}
+			_, err = io.Copy(pw, f)
+			f.Close()
+		}
+		pw.CloseWithError(err)
+	}()
+	return pr
 }

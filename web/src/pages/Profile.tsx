@@ -70,7 +70,7 @@ export function ProfilePage() {
       />
       {!secrets && (
         <div className="alert">
-          This server has no secret key (HANGAR_SECRET_KEY_FILE), so it cannot keep Claude's sign-in or SSH keys.
+          This server has no secret key (HANGAR_SECRET_KEY_FILE), so it cannot keep SSH keys.
         </div>
       )}
       <section className="section">

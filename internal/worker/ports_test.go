@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/server"
 	"github.com/csnewman/hangar/internal/worker"
@@ -24,7 +25,7 @@ import (
 func TestPorts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	srv, err := server.New(server.Config{DB: dbtest.Open(t), BootstrapToken: token, PublicURL: "http://hangar.test", Log: quiet()})
+	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), ProfileBlobs: blob.NewMemory(), BootstrapToken: token, PublicURL: "http://hangar.test", Log: quiet()})
 	if err != nil {
 		t.Fatal(err)
 	}

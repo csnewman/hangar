@@ -15,10 +15,9 @@
 // environment's credential acts as its owner, but never as an
 // administrator.
 //
-// Blobs are files in the registry's directory, kept once however many
-// repositories have them; what each repository has, its manifests and its
-// tags are rows in the database, so several servers can share one directory
-// and one database.
+// Blobs are objects in the blob store, kept once however many repositories
+// have them; what each repository has, its manifests and its tags are rows
+// in the database, so several servers can share one store and one database.
 package registry
 
 import (
@@ -27,14 +26,13 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/users"
 )
@@ -58,8 +56,8 @@ type Credentials interface {
 // Config is what the registry needs.
 type Config struct {
 	DB *db.DB
-	// Dir holds the blobs and uploads in progress.
-	Dir string
+	// Blobs holds the blobs and uploads in progress.
+	Blobs blob.Store
 	// Host is the registry's own host, port included, which image
 	// references to it start with.
 	Host    string
@@ -74,7 +72,7 @@ type Config struct {
 type Registry struct {
 	host    string
 	db      *db.DB
-	dir     string
+	store   blob.Store
 	tokens  Tokens
 	workers Workers
 	creds   Credentials
@@ -82,16 +80,11 @@ type Registry struct {
 }
 
 func New(cfg Config) (*Registry, error) {
-	for _, d := range []string{"blobs", "uploads"} {
-		if err := os.MkdirAll(filepath.Join(cfg.Dir, d), 0o755); err != nil {
-			return nil, err
-		}
-	}
 	log := cfg.Log
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Registry{host: cfg.Host, db: cfg.DB, dir: cfg.Dir, tokens: cfg.Tokens, workers: cfg.Workers,
+	return &Registry{host: cfg.Host, db: cfg.DB, store: cfg.Blobs, tokens: cfg.Tokens, workers: cfg.Workers,
 		creds: cfg.Credentials, log: log}, nil
 }
 
@@ -286,7 +279,9 @@ func (reg *Registry) PruneUploads(ctx context.Context) (int, error) {
 		return rows.Err()
 	})
 	for _, id := range ids {
-		os.Remove(reg.uploadPath(id))
+		if derr := reg.dropChunks(ctx, id); derr != nil {
+			err = errors.Join(err, derr)
+		}
 	}
 	return len(ids), err
 }

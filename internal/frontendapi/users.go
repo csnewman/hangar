@@ -69,6 +69,11 @@ func (h *handler) DeleteUser(ctx context.Context, req DeleteUserRequestObject) (
 	case err != nil:
 		return nil, err
 	}
+	// Their profile's rows went with them; its files are in the object
+	// store, where nothing else would delete them.
+	if err := h.profiles.DeleteUser(ctx, req.ID); err != nil {
+		h.log.Warn("deleting a deleted user's profile files", "user", req.ID, "err", err)
+	}
 	return DeleteUser204Response{}, nil
 }
 

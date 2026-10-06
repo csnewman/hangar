@@ -20,6 +20,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"github.com/csnewman/hangar/internal/audit"
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
@@ -79,7 +80,7 @@ func TestGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	d := dbtest.Open(t)
-	store := profile.NewStore(d, nil)
+	store := profile.NewStore(d, blob.NewMemory(), nil)
 
 	var alice, bob, worker, running, stopped string
 	err := d.Transact(ctx, func(tx db.Tx) error {

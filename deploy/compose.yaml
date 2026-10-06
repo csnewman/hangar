@@ -11,6 +11,10 @@
 #
 #   IMAGE=ubuntu-26.04 docker compose --profile images run --rm build-image
 #
+# The control plane keeps profiles' files and the registry's blobs in an
+# S3-compatible object store: RustFS here (blobs), or one of your own named
+# by HANGAR_BLOB_URL.
+#
 # One machine can run every profile; a worker machine runs only `worker` and
 # `images`, pointed at the control plane in worker.yaml, and needs none of
 # the control plane's settings. See README.md for what the host needs first.
@@ -35,6 +39,28 @@ services:
       interval: 5s
       timeout: 3s
       retries: 30
+
+  # The object store, encrypting what it keeps with blob-sse-key, which
+  # RustFS reads only from its environment.
+  blobs:
+    profiles: [control-plane]
+    image: rustfs/rustfs:1.0.1
+    restart: unless-stopped
+    entrypoint: [sh, -c, 'export RUSTFS_SSE_S3_MASTER_KEY=$$(cat /run/secrets/blob-sse-key); exec /entrypoint.sh rustfs /data']
+    environment:
+      RUSTFS_ACCESS_KEY: hangar
+      RUSTFS_SECRET_KEY_FILE: /run/secrets/blob-secret-key
+    volumes:
+      - ${HANGAR_DATA_DIR:-/var/lib/hangar-server}/blobs:/data
+    secrets: [blob-secret-key, blob-sse-key]
+    healthcheck:
+      test: [CMD, curl, -sf, http://localhost:9000/health/ready]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    depends_on:
+      data-dirs:
+        condition: service_completed_successfully
 
   server:
     profiles: [control-plane]
@@ -74,9 +100,20 @@ services:
       # <environment>@<host> -p 2222. Empty turns it off.
       HANGAR_SSH_LISTEN: ${HANGAR_SSH_LISTEN-:2222}
       HANGAR_SSH_ADDRESS: ${HANGAR_SSH_ADDRESS:-}
+      # Where profiles' files and the registry's blobs are kept: the blobs
+      # service, or an S3-compatible store of your own,
+      # http(s)://<access key>@host[:port]/<bucket>, with its secret key in
+      # blob-secret-key. ENCRYPT has the store encrypt what it keeps.
+      HANGAR_BLOB_URL: ${HANGAR_BLOB_URL:-http://hangar@blobs:9000/hangar}
+      HANGAR_BLOB_PROFILE_BUCKET: ${HANGAR_BLOB_PROFILE_BUCKET:-}
+      HANGAR_BLOB_SECRET_KEY_FILE: /run/secrets/blob-secret-key
+      HANGAR_BLOB_ENCRYPT: ${HANGAR_BLOB_ENCRYPT:-true}
       # Hangar's own container registry, at registry.<HANGAR_PUBLIC_URL's
-      # host> (registry-<host> in the prefix style). Empty turns it off.
-      HANGAR_REGISTRY_DIR: ${HANGAR_REGISTRY_DIR-/var/lib/hangar-server/registry}
+      # host> (registry-<host> in the prefix style). false turns it off.
+      HANGAR_REGISTRY_ENABLED: ${HANGAR_REGISTRY_ENABLED:-true}
+      # Registry blobs in this directory are moved into the object store at
+      # start.
+      HANGAR_REGISTRY_DIR: /var/lib/hangar-server/registry
       # Paths shared in every user's profile beside the built-in ones. See
       # README.md.
       HANGAR_PROFILE_PATHS: ${HANGAR_PROFILE_PATHS:-}
@@ -85,7 +122,7 @@ services:
       # The directory, not the files, so that files replaced by renaming
       # new ones into place are seen.
       - ${HANGAR_TLS_DIR:-./tls}:/etc/hangar-server/tls:ro
-    secrets: [bootstrap-token, secret-key]
+    secrets: [bootstrap-token, secret-key, blob-secret-key]
     ports:
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/udp
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/tcp
@@ -98,18 +135,22 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      blobs:
+        condition: service_healthy
       data-dirs:
         condition: service_completed_successfully
 
-  # The server runs as an unprivileged user (65532, the image's nonroot),
-  # and a directory Docker makes on the host for a bind mount belongs to
-  # root: this gives the server its own before it starts.
+  # The server and RustFS run as unprivileged users (65532, the server
+  # image's nonroot; 10001, RustFS's), and a directory Docker makes on the
+  # host for a bind mount belongs to root: this gives each its own before
+  # it starts.
   data-dirs:
     profiles: [control-plane]
     image: busybox:1.37
-    command: [chown, "65532:65532", /registry]
+    command: [sh, -c, 'chown 65532:65532 /registry && chown 10001:10001 /blobs']
     volumes:
       - ${HANGAR_DATA_DIR:-/var/lib/hangar-server}/registry:/registry
+      - ${HANGAR_DATA_DIR:-/var/lib/hangar-server}/blobs:/blobs
 
   worker:
     profiles: [worker]
@@ -163,3 +204,7 @@ secrets:
     file: ${HANGAR_BOOTSTRAP_TOKEN_FILE:-./bootstrap-token}
   secret-key:
     file: ${HANGAR_SECRET_KEY_FILE:-./secret-key}
+  blob-secret-key:
+    file: ${HANGAR_BLOB_SECRET_KEY_FILE:-./blob-secret-key}
+  blob-sse-key:
+    file: ${HANGAR_BLOB_SSE_KEY_FILE:-./blob-sse-key}

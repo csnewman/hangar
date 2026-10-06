@@ -14,7 +14,7 @@ import (
 
 // ErrNoKey is returned for a secret when the server has no key to encrypt
 // it with.
-var ErrNoKey = errors.New("the server has no secret key (HANGAR_SECRET_KEY_FILE), so it cannot keep credentials")
+var ErrNoKey = errors.New("the server has no secret key (HANGAR_SECRET_KEY_FILE), so it cannot keep SSH keys")
 
 // Sealer encrypts secrets at rest with AES-256-GCM. Each sealed value is
 // bound to what it is -- the user and path it belongs to -- so a value

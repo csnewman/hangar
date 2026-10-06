@@ -25,6 +25,7 @@ import (
 
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/audit"
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/clientapi"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/editor"
@@ -64,18 +65,23 @@ type Config struct {
 	// AutoSignIn, for development only, signs every visitor in as this
 	// existing user without a password. Empty requires signing in.
 	AutoSignIn string
-	// Sealer encrypts the secrets users keep in their profiles. Nil keeps
-	// none: credentials and SSH keys are refused.
+	// Sealer encrypts users' SSH keys. Nil keeps none: they are refused.
 	Sealer *profile.Sealer
+	// Blobs keeps the registry's blobs, and ProfileBlobs, a versioned
+	// bucket, profiles' files.
+	Blobs        blob.Store
+	ProfileBlobs blob.Versioned
 	// SSHListen, if set, is where the SSH gateway listens (internal/sshgw).
 	SSHListen string
 	// SSHAddress is where people reach the gateway, as host:port, for the
 	// UI to show. Empty is PublicURL's host at SSHListen's port.
 	SSHAddress string
-	// RegistryDir, if set, keeps the blobs of Hangar's own container
-	// registry, served on its own host named after PublicURL's, which image
-	// names start with: registry.<host>, or registry-<host> in the prefix
-	// style. Empty turns it off.
+	// Registry turns on Hangar's own container registry, served on its own
+	// host named after PublicURL's, which image names start with:
+	// registry.<host>, or registry-<host> in the prefix style.
+	Registry bool
+	// RegistryDir, if set, is a directory of registry blobs, whose blobs
+	// are moved into Blobs at start.
 	RegistryDir string
 	// ProfilePaths are shared in every user's profile beside the defaults
 	// (profile.DefaultPaths).
@@ -106,6 +112,7 @@ type Server struct {
 	registry  *registry.Registry
 	// registryHost is the registry's host, port included.
 	registryHost string
+	registryDir  string
 }
 
 func New(cfg Config) (*Server, error) {
@@ -117,7 +124,10 @@ func New(cfg Config) (*Server, error) {
 	um := users.NewManager(cfg.DB)
 	tunnels := tunnel.NewRegistry(log)
 	edits := editor.NewManager(cfg.DB)
-	profiles := profile.NewStore(cfg.DB, cfg.Sealer)
+	if cfg.Blobs == nil || cfg.ProfileBlobs == nil {
+		return nil, errors.New("no blob store")
+	}
+	profiles := profile.NewStore(cfg.DB, cfg.ProfileBlobs, cfg.Sealer)
 	if err := profiles.ShareForEveryone(cfg.ProfilePaths); err != nil {
 		return nil, fmt.Errorf("profile paths: %w", err)
 	}
@@ -131,13 +141,13 @@ func New(cfg Config) (*Server, error) {
 	}
 	var reg *registry.Registry
 	var registryHost string
-	if cfg.RegistryDir != "" {
+	if cfg.Registry {
 		if public == nil {
 			return nil, errors.New("the registry needs a public URL, whose host it names its own after")
 		}
 		registryHost = public.Name("registry")
 		var err error
-		if reg, err = registry.New(registry.Config{DB: cfg.DB, Dir: cfg.RegistryDir, Host: registryHost, Tokens: um,
+		if reg, err = registry.New(registry.Config{DB: cfg.DB, Blobs: cfg.Blobs, Host: registryHost, Tokens: um,
 			Workers: wm, Credentials: profiles,
 			Log: log}); err != nil {
 			return nil, fmt.Errorf("registry: %w", err)
@@ -223,6 +233,7 @@ func New(cfg Config) (*Server, error) {
 		sshKey:       sshKey,
 		registry:     reg,
 		registryHost: registryHost,
+		registryDir:  cfg.RegistryDir,
 	}, nil
 }
 
@@ -253,6 +264,7 @@ func (s *Server) Run(ctx context.Context) {
 	if s.sshListen != "" {
 		go s.serveSSH(ctx)
 	}
+	go s.moveToBlobs(ctx)
 	go s.pruneSessions(ctx)
 	s.placementLoop(ctx)
 }
@@ -260,6 +272,24 @@ func (s *Server) Run(ctx context.Context) {
 // Users returns the server's user manager, for creating the first
 // administrator before the server is serving.
 func (s *Server) Users() *users.Manager { return s.users }
+
+// moveToBlobs moves into the blob store what is kept elsewhere: profile
+// files' contents in the database, and blobs in a registry directory. Every
+// replica may do it at once; each step is done once.
+func (s *Server) moveToBlobs(ctx context.Context) {
+	if n, err := s.profiles.MoveToBlobs(ctx); err != nil && ctx.Err() == nil {
+		s.log.Warn("moving profile files into the blob store", "moved", n, "err", err)
+	} else if n > 0 {
+		s.log.Info("moved profile files into the blob store", "count", n)
+	}
+	if s.registry != nil && s.registryDir != "" {
+		if n, err := s.registry.MoveFromDir(ctx, s.registryDir); err != nil && ctx.Err() == nil {
+			s.log.Warn("moving registry blobs into the blob store", "moved", n, "dir", s.registryDir, "err", err)
+		} else if n > 0 {
+			s.log.Info("moved registry blobs into the blob store", "count", n, "dir", s.registryDir)
+		}
+	}
+}
 
 // pruneSessions deletes expired sessions now and then. They are refused
 // whether or not they are deleted; this only keeps the table small.

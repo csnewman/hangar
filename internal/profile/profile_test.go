@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"os/user"
@@ -20,6 +22,7 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/profile"
@@ -71,6 +74,7 @@ func (c *slowFiles) Write(b []byte) (int, error) {
 
 type plane struct {
 	d        *db.DB
+	blobs    *blob.Memory
 	store    *profile.Store
 	guests   *guests
 	owner    string
@@ -87,7 +91,8 @@ func newPlane(t *testing.T) *plane {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := &plane{d: d, store: profile.NewStore(d, sealer), homes: map[string]string{}, envNames: map[string]string{}}
+	blobs := blob.NewMemory()
+	p := &plane{d: d, blobs: blobs, store: profile.NewStore(d, blobs, sealer), homes: map[string]string{}, envNames: map[string]string{}}
 	err = d.Transact(ctx, func(tx db.Tx) error {
 		if err := tx.QueryRow(ctx, `INSERT INTO users (username) VALUES ('alice') RETURNING id`).Scan(&p.owner); err != nil {
 			return err
@@ -699,25 +704,158 @@ func TestUntrustedEnvironmentsGetNoCredentials(t *testing.T) {
 	}
 }
 
-func TestSecretsAreSealed(t *testing.T) {
+// versions are how many versions the blob store keeps of each of the
+// owner's files.
+func (p *plane) versions(t *testing.T) map[string]int {
+	t.Helper()
+	out := map[string]int{}
+	for k, n := range p.blobs.Versions() {
+		if path, ok := strings.CutPrefix(k, p.owner+"/"); ok {
+			out[path] = n
+		}
+	}
+	return out
+}
+
+func TestContentsAreKeptInTheBlobStore(t *testing.T) {
 	ctx := context.Background()
 	p := newPlane(t)
-	if _, err := p.store.Put(ctx, p.owner, ".claude/.credentials.json", []byte("token-123"), 0o600); err != nil {
+	const creds = ".claude/.credentials.json"
+	if _, err := p.store.Put(ctx, p.owner, creds, []byte("token-123"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var raw []byte
+	var inDB int
 	p.d.Transact(ctx, func(tx db.Tx) error {
-		return tx.QueryRow(ctx, `SELECT data FROM profile_files WHERE path = '.claude/.credentials.json'`).Scan(&raw)
+		return tx.QueryRow(ctx, `SELECT count(*) FROM profile_files WHERE data IS NOT NULL`).Scan(&inDB)
 	})
-	if bytes.Contains(raw, []byte("token-123")) {
-		t.Fatal("a credential is stored in the clear")
+	if inDB != 0 {
+		t.Errorf("%d files' contents are in the database", inDB)
 	}
-	withoutKey := profile.NewStore(p.d, nil)
-	if _, err := withoutKey.Put(ctx, p.owner, ".claude/.credentials.json", []byte("x"), 0o600); !errors.Is(err, profile.ErrNoKey) {
-		t.Errorf("a store without a key kept a secret: %v", err)
+	if got := p.versions(t); !maps.Equal(got, map[string]int{creds: 1}) {
+		t.Errorf("the blob store holds %v", got)
 	}
+
+	// A change keeps the new version and lets go of the one it replaced.
+	if _, err := p.store.Put(ctx, p.owner, creds, []byte("token-456"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.store.Put(ctx, p.owner, ".claude/settings.json", []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.versions(t); !maps.Equal(got, map[string]int{creds: 1, ".claude/settings.json": 1}) {
+		t.Errorf("after a change, the blob store holds %v", got)
+	}
+	f, err := p.store.File(ctx, p.owner, creds, true)
+	if err != nil || string(f.Data) != "token-456" || f.Size != 9 {
+		t.Errorf("read back %q (%d bytes), %v", f.Data, f.Size, err)
+	}
+
+	// A removed file keeps nothing.
+	if _, err := p.store.Delete(ctx, p.owner, ".claude/settings.json"); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.versions(t); !maps.Equal(got, map[string]int{creds: 1}) {
+		t.Errorf("after a removal, the blob store holds %v", got)
+	}
+	if _, err := p.store.File(ctx, p.owner, ".claude/settings.json", true); !errors.Is(err, profile.ErrNotFound) {
+		t.Errorf("a removed file: %v", err)
+	}
+	if _, err := p.store.File(ctx, p.owner, creds, false); !errors.Is(err, profile.ErrNotFound) {
+		t.Errorf("a credential read without secrets: %v", err)
+	}
+	list, err := p.store.List(ctx, p.owner, true)
+	if err != nil || len(list) != 2 || list[0].Data != nil || list[0].Size != 9 || !list[1].Deleted {
+		t.Errorf("listed %+v, %v", list, err)
+	}
+
+	// A write refused leaves nothing behind.
+	big := make([]byte, profile.MaxFileSize)
+	for i := range profile.MaxProfileSize/profile.MaxFileSize - 1 {
+		if _, err := p.store.Put(ctx, p.owner, fmt.Sprintf(".claude/agents/%d.md", i), big, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before := p.versions(t)
+	if _, err := p.store.Put(ctx, p.owner, ".claude/agents/over.md", big, 0o644); !errors.Is(err, profile.ErrInvalid) {
+		t.Errorf("a write over the limit: %v", err)
+	}
+	if got := p.versions(t); !maps.Equal(got, before) {
+		t.Errorf("a refused write left %v, before %v", got, before)
+	}
+
+	// Unsharing a path lets go of its files.
+	if err := p.store.AddPath(ctx, p.owner, ".config/tool/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.store.Put(ctx, p.owner, ".config/tool/rc", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.RemovePath(ctx, p.owner, ".config/tool/"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.versions(t)[".config/tool/rc"]; ok {
+		t.Error("an unshared file is still kept")
+	}
+
+	// And a user gone takes everything with them.
+	if err := p.store.DeleteUser(ctx, p.owner); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.versions(t); len(got) != 0 {
+		t.Errorf("after the user went, the blob store holds %v", got)
+	}
+
 	if _, err := p.store.Put(ctx, p.owner, "../etc/passwd", []byte("x"), 0o644); !errors.Is(err, profile.ErrInvalid) {
 		t.Errorf("a path outside the profile: %v", err)
+	}
+}
+
+func TestFilesInTheDatabaseMove(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	// The plane's sealer, whose key is all zeros.
+	sealer, err := profile.NewSealer(make([]byte, 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sealed, err := sealer.Seal([]byte("token-789"), p.owner+"/.claude/.credentials.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = p.d.Transact(ctx, func(tx db.Tx) error {
+		if _, err := tx.Exec(ctx, `INSERT INTO profile_files (user_id, path, data, size, mode, version)
+			VALUES ($1, '.gitconfig', 'old contents', 12, 420, 7)`, p.owner); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO profile_files (user_id, path, data, size, mode, version)
+			VALUES ($1, '.claude/.credentials.json', $2, 9, 384, 9)`, p.owner, sealed); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO profile_files (user_id, path, data, mode, version, deleted)
+			VALUES ($1, '.aws/config', '', 420, 8, true)`, p.owner)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := p.store.MoveToBlobs(ctx); err != nil || n != 2 {
+		t.Fatalf("moved %d, %v", n, err)
+	}
+	if n, err := p.store.MoveToBlobs(ctx); err != nil || n != 0 {
+		t.Errorf("moved %d again, %v", n, err)
+	}
+	files, err := p.store.Files(ctx, p.owner, true)
+	if err != nil || len(files) != 3 {
+		t.Fatalf("files %+v, %v", files, err)
+	}
+	if f := files[0]; f.Path != ".gitconfig" || string(f.Data) != "old contents" || f.Version != 7 {
+		t.Errorf("moved file %+v", f)
+	}
+	if f := files[2]; f.Path != ".claude/.credentials.json" || string(f.Data) != "token-789" {
+		t.Errorf("moved credential %+v", f)
+	}
+	if got := p.versions(t); !maps.Equal(got, map[string]int{".gitconfig": 1, ".claude/.credentials.json": 1}) {
+		t.Errorf("the blob store holds %v", got)
 	}
 }
 

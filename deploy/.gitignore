@@ -1,3 +1,6 @@
 .env
 bootstrap-token
 tls/
+secret-key
+blob-secret-key
+blob-sse-key

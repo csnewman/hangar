@@ -1,8 +1,8 @@
 # Deploying Hangar
 
-`compose.yaml` runs Hangar on real machines: the control plane (Postgres and
-`hangar-server`) on one, and a worker on every machine that runs
-environments. One machine can be both.
+`compose.yaml` runs Hangar on real machines: the control plane (Postgres,
+`hangar-server` and RustFS, an S3-compatible object store) on one, and a
+worker on every machine that runs environments. One machine can be both.
 
 ## The host
 
@@ -160,10 +160,9 @@ credential: they need no `vm.registries` entry for it, and nothing in
 their network reaches the registry's name. A template may name only images
 whoever saves it can pull.
 
-Blobs are kept in `HANGAR_REGISTRY_DIR` (`registry/` under `HANGAR_DATA_DIR`), and
-everything else about them in Postgres, so every replica of the control
-plane must share that directory. Setting it to empty turns the registry
-off. Once an hour the control plane deletes what nothing needs: manifests
+Blobs are kept in the object store (below), and everything else about
+them in Postgres, so every replica of the control plane shares them.
+`HANGAR_REGISTRY_ENABLED=false` turns the registry off. Once an hour the control plane deletes what nothing needs: manifests
 no tag, index or environment keeps, and blobs no repository uses, leaving
 anything pushed within the hour. Deleting a tag or a repository frees its
 space then.
@@ -268,6 +267,33 @@ shares everything under it. A path no one may share -- caches, and what
 programs rewrite per machine, such as `.claude.json` -- stops the server
 starting, and says why.
 
+A profile's files are kept in the object store, and their paths and
+versions, and which version of each object holds a file, in Postgres.
+
+## The object store
+
+Profiles' files and the registry's blobs are kept in an S3-compatible
+object store: the `blobs` service, RustFS, with its data in
+`$HANGAR_DATA_DIR/blobs`. It encrypts what it keeps with `blob-sse-key`
+(`HANGAR_BLOB_ENCRYPT`), and the server signs in to it as `hangar` with
+`blob-secret-key`. To use a store of your own, such as S3 or a RustFS
+cluster, set `HANGAR_BLOB_URL` to `http(s)://<access key>@host[:port]/<bucket>`
+and put its secret key in `blob-secret-key`. Every replica of the control
+plane uses the same store.
+
+The server uses two buckets, making them if they are not there, and sets
+their rules itself on every start:
+
+| bucket | holds | rules |
+|---|---|---|
+| `<bucket>` | the registry's blobs, by digest | uploads' leftovers deleted after two days |
+| `<bucket>-profiles` (`HANGAR_BLOB_PROFILE_BUCKET`) | profiles' files, as `<user>/<path>` | versioned; a version replaced is deleted after a day |
+
+Each write of a profile file is a new version, and the server deletes the
+one it replaced once the write is in the database; the versioning rule is
+for the rare one it could not. So the store needs object versioning and
+lifecycle rules, which S3, MinIO and RustFS have.
+
 ## Where the data is
 
 Everything that lasts is in directories on the host, not Docker volumes,
@@ -277,9 +303,9 @@ it:
 | | host directory |
 |---|---|
 | control plane's database | `$HANGAR_DATA_DIR/postgres` |
-| registry's blobs | `$HANGAR_DATA_DIR/registry` |
+| profiles' files and the registry's blobs | `$HANGAR_DATA_DIR/blobs` (RustFS) |
 | a worker's environments, images and caches | `$HANGAR_WORKER_DATA_DIR` |
-| secrets | `bootstrap-token` and `secret-key` beside `compose.yaml` |
+| secrets | `bootstrap-token`, `secret-key`, `blob-secret-key` and `blob-sse-key` beside `compose.yaml` |
 
 `HANGAR_DATA_DIR` is `/var/lib/hangar-server` and `HANGAR_WORKER_DATA_DIR`
 `/var/lib/hangar` unless `.env` says otherwise; the worker sees its own as
@@ -291,8 +317,9 @@ worker already in use is moved with it stopped:
     docker compose --profile worker down
     sudo mv /var/lib/hangar /var/lib/hangar-server/worker
     docker compose --profile worker up -d
- Back up the database with the secret key: a copy of one without
-the other loses users' credentials. Stop the control plane first, or dump
+ Back up the database, the object store's directory and the secrets
+together: the database without `secret-key` loses users' SSH keys, and the
+object store's directory without `blob-sse-key` loses every file in it. Stop the control plane first, or dump
 the database live:
 
     docker compose exec -T postgres pg_dump -U hangar hangar > hangar.sql
@@ -332,6 +359,8 @@ mkosi.
     cp .env.example .env                  # then edit it
     openssl rand -hex 32 > bootstrap-token
     openssl rand -hex 32 > secret-key     # control plane only; back it up
+    openssl rand -hex 32 > blob-secret-key                 # control plane only
+    openssl rand -base64 32 > blob-sse-key                 # control plane only; back it up
 
 Control plane:
 
@@ -367,6 +396,11 @@ across too when it has changed. Nothing else is needed:
 
 - The server brings the database up to date as it starts, and workers
   reconnect to it on their own.
+- A control plane from before the object store needs `blob-secret-key` and
+  `blob-sse-key` made first (see Setting up). On its first start it moves
+  profiles' files out of the database and the registry's blobs out of
+  `$HANGAR_DATA_DIR/registry` into the object store; the server's log says
+  how many.
 - A worker that is replaced powers its environments off first; their disks
   are kept, and those that were running start again once it is back,
   booting the new worker's kernel and agent. Anything unsaved in them is

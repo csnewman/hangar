@@ -873,7 +873,7 @@ type Profile struct {
 	// Paths What a profile holds, relative to the home directory. One ending in a slash holds everything under it.
 	Paths []string `json:"paths"`
 
-	// Secrets Whether the server can keep secrets: without its key, credentials and SSH keys are refused.
+	// Secrets Whether the server can keep SSH keys: without its key, they are refused.
 	Secrets bool `json:"secrets"`
 }
 

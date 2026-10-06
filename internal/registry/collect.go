@@ -3,7 +3,6 @@ package registry
 import (
 	"context"
 	"errors"
-	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -106,7 +105,7 @@ func (reg *Registry) Collect(ctx context.Context, grace time.Duration) (Collecte
 			if err != nil {
 				return err
 			}
-			if err := os.Remove(reg.blobPath(d)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			if err := reg.store.Delete(ctx, blobKey(d)); err != nil {
 				return err
 			}
 			deleted = true

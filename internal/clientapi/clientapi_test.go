@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/clientapi"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
@@ -55,7 +56,7 @@ func TestClientAPI(t *testing.T) {
 	srv := httptest.NewServer(clientapi.New(clientapi.Config{
 		Environments: em,
 		Users:        um,
-		Profiles:     profile.NewStore(d, nil),
+		Profiles:     profile.NewStore(d, blob.NewMemory(), nil),
 		SSH:          &clientapi.SSHGateway{Host: "hangar.example.com", Port: 2222, HostKey: "ssh-ed25519 AAAA"},
 		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}))

@@ -1,6 +1,7 @@
 package profile
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -9,12 +10,14 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/csnewman/hangar/internal/audit"
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/db"
 )
 
@@ -35,8 +38,10 @@ var (
 
 // File is one file of a profile.
 type File struct {
-	Path      string
+	Path string
+	// Data is the file's contents, where they were asked for.
 	Data      []byte
+	Size      int64
 	Mode      uint32
 	Version   int64
 	Deleted   bool
@@ -53,9 +58,12 @@ type Key struct {
 	CreatedAt   time.Time
 }
 
-// Store keeps profiles.
+// Store keeps profiles: each file's path, mode and version in the database,
+// its contents in a versioned bucket as <user>/<path> (blobKey), the row
+// naming the version that holds them.
 type Store struct {
 	db     *db.DB
+	blobs  blob.Versioned
 	sealer *Sealer
 	// everyone are the paths the server shares for every user beside the
 	// DefaultPaths.
@@ -82,72 +90,122 @@ func (s *Store) UserPaths(own []string) Paths {
 	return UserPaths(append(slices.Clone(s.everyone), own...))
 }
 
-// NewStore returns a store. A nil sealer keeps no secrets: credentials and
-// SSH keys are refused.
-func NewStore(d *db.DB, sealer *Sealer) *Store {
-	return &Store{db: d, sealer: sealer}
+// NewStore returns a store keeping files' contents in blobs. A nil sealer
+// keeps no SSH keys: they are refused.
+func NewStore(d *db.DB, blobs blob.Versioned, sealer *Sealer) *Store {
+	return &Store{db: d, blobs: blobs, sealer: sealer}
 }
 
-// KeepsSecrets reports whether the store has a key to keep secrets with.
+// KeepsSecrets reports whether the store has a key to keep SSH keys with.
 func (s *Store) KeepsSecrets() bool { return s.sealer != nil }
 
-// Files returns a user's files, removed ones included, with secrets opened.
+// blobKey is where a user's file is kept.
+func blobKey(userID, path string) string { return userID + "/" + path }
+
+// profileLock serializes a user's writes until the transaction ends.
+func profileLock(ctx context.Context, tx db.Tx, userID string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "profile:"+userID)
+	return err
+}
+
+// Files returns a user's files, removed ones included, with their contents.
 // Without secrets, secret files are left out.
 func (s *Store) Files(ctx context.Context, userID string, secrets bool) ([]File, error) {
-	return s.files(ctx, userID, secrets, 0, "")
+	return s.files(ctx, userID, secrets, 0, "", true)
+}
+
+// List returns, as Files does, a user's files, without their contents.
+func (s *Store) List(ctx context.Context, userID string, secrets bool) ([]File, error) {
+	return s.files(ctx, userID, secrets, 0, "", false)
 }
 
 // FilesUnder returns, as Files does, a user's files whose paths start with
 // dir: those in a directory and below, for a dir ending in a slash.
 func (s *Store) FilesUnder(ctx context.Context, userID, dir string, secrets bool) ([]File, error) {
-	return s.files(ctx, userID, secrets, 0, dir)
+	return s.files(ctx, userID, secrets, 0, dir, true)
+}
+
+// File returns one of a user's files, with its contents, or ErrNotFound if
+// it is not there or was removed.
+func (s *Store) File(ctx context.Context, userID, path string, secrets bool) (File, error) {
+	files, err := s.files(ctx, userID, secrets, 0, path, true)
+	if err != nil {
+		return File{}, err
+	}
+	for _, f := range files {
+		if f.Path == path && !f.Deleted {
+			return f, nil
+		}
+	}
+	return File{}, ErrNotFound
 }
 
 // Since returns the files changed after version.
 func (s *Store) Since(ctx context.Context, userID string, secrets bool, version int64) ([]File, error) {
-	return s.files(ctx, userID, secrets, version, "")
+	return s.files(ctx, userID, secrets, version, "", true)
 }
 
-func (s *Store) files(ctx context.Context, userID string, secrets bool, after int64, prefix string) ([]File, error) {
+func (s *Store) files(ctx context.Context, userID string, secrets bool, after int64, prefix string, contents bool) ([]File, error) {
 	if !db.ValidUUID(userID) {
 		return nil, ErrNotFound
 	}
 	var out []File
+	var versions []string
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT path, data, mode, version, deleted, updated_at FROM profile_files
+		rows, err := tx.Query(ctx, `SELECT path, coalesce(version_id, ''), size, mode, version, deleted, updated_at
+			FROM profile_files
 			WHERE user_id = $1 AND version > $2 AND starts_with(path, $3) ORDER BY version`, userID, after, prefix)
 		if err != nil {
 			return err
 		}
-		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (File, error) {
+		out, versions = nil, nil
+		for rows.Next() {
 			var f File
 			var mode int32
-			err := r.Scan(&f.Path, &f.Data, &mode, &f.Version, &f.Deleted, &f.UpdatedAt)
+			var vid string
+			if err := rows.Scan(&f.Path, &vid, &f.Size, &mode, &f.Version, &f.Deleted, &f.UpdatedAt); err != nil {
+				return err
+			}
 			f.Mode = uint32(mode)
-			return f, err
-		})
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	kept := out[:0]
-	for _, f := range out {
-		if Secret(f.Path) {
-			if !secrets {
+			if Secret(f.Path) && !secrets {
 				continue
 			}
-			if !f.Deleted {
-				plain, err := s.sealer.open(f.Data, userID+"/"+f.Path)
-				if err != nil {
-					return nil, fmt.Errorf("%s: %w", f.Path, err)
-				}
-				f.Data = plain
-			}
+			out = append(out, f)
+			versions = append(versions, vid)
 		}
-		kept = append(kept, f)
+		return rows.Err()
+	})
+	if err != nil || !contents {
+		return out, err
 	}
-	return kept, nil
+	// Read side by side: a whole profile is hundreds of small objects.
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var errs []error
+	sem := make(chan struct{}, 16)
+	for i := range out {
+		if out[i].Deleted || versions[i] == "" {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			data, err := blob.ReadVersion(ctx, s.blobs, blobKey(userID, out[i].Path), versions[i])
+			if err != nil {
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("%s: %w", out[i].Path, err))
+				mu.Unlock()
+				return
+			}
+			out[i].Data = data
+		}()
+	}
+	wg.Wait()
+	if len(errs) > 0 {
+		return nil, errors.Join(errs...)
+	}
+	return out, nil
 }
 
 // Put writes a file, returning it as stored.
@@ -162,17 +220,11 @@ func (s *Store) Put(ctx context.Context, userID, path string, data []byte, mode 
 	if len(data) > MaxFileSize {
 		return File{}, fmt.Errorf("%w: %s is larger than %d bytes", ErrInvalid, path, MaxFileSize)
 	}
-	stored := data
-	if Secret(path) {
-		if stored, err = s.sealer.seal(data, userID+"/"+path); err != nil {
-			return File{}, err
-		}
-	}
 	mode &= 0o777
 	if mode == 0 {
 		mode = 0o644
 	}
-	return s.write(ctx, userID, path, stored, mode, false, data)
+	return s.write(ctx, userID, path, data, mode, false)
 }
 
 // Delete removes a file, leaving a mark that it is gone.
@@ -180,33 +232,47 @@ func (s *Store) Delete(ctx context.Context, userID, path string) (File, error) {
 	if !Valid(path) {
 		return File{}, fmt.Errorf("%w: %q is not a path in the home directory", ErrInvalid, path)
 	}
-	return s.write(ctx, userID, path, []byte{}, 0o644, true, nil)
+	return s.write(ctx, userID, path, nil, 0o644, true)
 }
 
-func (s *Store) write(ctx context.Context, userID, path string, stored []byte, mode uint32, deleted bool, plain []byte) (File, error) {
+func (s *Store) write(ctx context.Context, userID, path string, data []byte, mode uint32, deleted bool) (File, error) {
 	if !db.ValidUUID(userID) {
 		return File{}, ErrNotFound
 	}
-	// An empty file arrives with no data at all, which would be stored as
-	// NULL.
-	if stored == nil {
-		stored = []byte{}
-	}
-	f := File{Path: path, Data: plain, Mode: mode, Deleted: deleted}
+	key := blobKey(userID, path)
+	f := File{Path: path, Data: data, Size: int64(len(data)), Mode: mode, Deleted: deleted}
+	// Every version put, one per attempt the transaction makes: all but
+	// the one it commits are let go of after.
+	var put []string
+	var old, kept string
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		old, kept = "", ""
 		// One sequence per user (profile_versions), so a session asks for
 		// everything after the last version it sent. A user's writes take
 		// turns, so no two take the same number.
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "profile:"+userID); err != nil {
+		if err := profileLock(ctx, tx, userID); err != nil {
 			return err
 		}
 		var total int64
-		if err := tx.QueryRow(ctx, `SELECT coalesce(sum(length(data)), 0) FROM profile_files
+		if err := tx.QueryRow(ctx, `SELECT coalesce(sum(size), 0) FROM profile_files
 			WHERE user_id = $1 AND path <> $2`, userID, path).Scan(&total); err != nil {
 			return err
 		}
-		if total+int64(len(stored)) > MaxProfileSize {
+		if total+f.Size > MaxProfileSize {
 			return fmt.Errorf("%w: the profile would hold more than %d MiB", ErrInvalid, MaxProfileSize>>20)
+		}
+		err := tx.QueryRow(ctx, `SELECT coalesce(version_id, '') FROM profile_files WHERE user_id = $1 AND path = $2`,
+			userID, path).Scan(&old)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		if !deleted {
+			vid, err := s.blobs.PutVersion(ctx, key, bytes.NewReader(data), f.Size)
+			if err != nil {
+				return fmt.Errorf("keeping %s: %w", path, err)
+			}
+			put = append(put, vid)
+			kept = vid
 		}
 		var version int64
 		if err := tx.QueryRow(ctx, `INSERT INTO profile_versions (user_id, version) VALUES ($1, 1)
@@ -214,12 +280,13 @@ func (s *Store) write(ctx context.Context, userID, path string, stored []byte, m
 			RETURNING version`, userID).Scan(&version); err != nil {
 			return err
 		}
-		err := tx.QueryRow(ctx, `
-			INSERT INTO profile_files (user_id, path, data, mode, deleted, version)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			ON CONFLICT (user_id, path) DO UPDATE SET data = EXCLUDED.data, mode = EXCLUDED.mode,
-				deleted = EXCLUDED.deleted, version = EXCLUDED.version, updated_at = now()
-			RETURNING version, updated_at`, userID, path, stored, int32(mode), deleted, version).
+		err = tx.QueryRow(ctx, `
+			INSERT INTO profile_files (user_id, path, version_id, size, mode, deleted, version)
+			VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7)
+			ON CONFLICT (user_id, path) DO UPDATE SET version_id = EXCLUDED.version_id, size = EXCLUDED.size,
+				data = NULL, mode = EXCLUDED.mode, deleted = EXCLUDED.deleted, version = EXCLUDED.version,
+				updated_at = now()
+			RETURNING version, updated_at`, userID, path, kept, f.Size, int32(mode), deleted, version).
 			Scan(&f.Version, &f.UpdatedAt)
 		if err != nil {
 			return err
@@ -231,12 +298,108 @@ func (s *Store) write(ctx context.Context, userID, path string, stored []byte, m
 		if err := audit.Record(ctx, tx, audit.Event{Action: action,
 			Target:  audit.Ref{Type: audit.KindFile, ID: userID + ":" + path, Name: path},
 			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}},
-			Details: map[string]any{"size": len(plain), "secret": Secret(path)}}); err != nil {
+			Details: map[string]any{"size": f.Size, "secret": Secret(path)}}); err != nil {
 			return err
 		}
 		return db.Notify(ctx, tx, Channel, userID)
 	})
+	// What the row no longer names: the version it named before, if the
+	// write committed, and every version an attempt put and did not keep.
+	// One a failure here leaves is deleted by the bucket's lifecycle once
+	// another version replaces it.
+	var drop []string
+	if err == nil && old != "" {
+		drop = append(drop, old)
+	}
+	for _, v := range put {
+		if err != nil || v != kept {
+			drop = append(drop, v)
+		}
+	}
+	for _, v := range drop {
+		s.blobs.DeleteVersion(context.WithoutCancel(ctx), key, v)
+	}
 	return f, err
+}
+
+// DeleteUser deletes every file kept for a user, once they are gone.
+func (s *Store) DeleteUser(ctx context.Context, userID string) error {
+	if !db.ValidUUID(userID) {
+		return ErrNotFound
+	}
+	return s.blobs.DeleteAll(ctx, userID+"/")
+}
+
+// MoveToBlobs moves the contents of files kept in the database into the
+// blob store, opening the secrets among them, which were sealed there. A
+// file's version is left as it is: its contents do not change.
+func (s *Store) MoveToBlobs(ctx context.Context) (int, error) {
+	type row struct {
+		user, path string
+		data       []byte
+	}
+	var rows []row
+	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		if _, err := tx.Exec(ctx, `UPDATE profile_files SET data = NULL WHERE data IS NOT NULL AND deleted`); err != nil {
+			return err
+		}
+		r, err := tx.Query(ctx, `SELECT user_id::text, path, data FROM profile_files WHERE data IS NOT NULL`)
+		if err != nil {
+			return err
+		}
+		rows, err = pgx.CollectRows(r, func(r pgx.CollectableRow) (row, error) {
+			var x row
+			return x, r.Scan(&x.user, &x.path, &x.data)
+		})
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	moved := 0
+	var errs []error
+	for _, r := range rows {
+		data := r.data
+		if Secret(r.path) {
+			if data, err = s.sealer.open(r.data, r.user+"/"+r.path); err != nil {
+				errs = append(errs, fmt.Errorf("%s of %s: %w", r.path, r.user, err))
+				continue
+			}
+		}
+		key := blobKey(r.user, r.path)
+		var put []string
+		var kept string
+		err := s.db.Transact(ctx, func(tx db.Tx) error {
+			kept = ""
+			if err := profileLock(ctx, tx, r.user); err != nil {
+				return err
+			}
+			vid, err := s.blobs.PutVersion(ctx, key, bytes.NewReader(data), int64(len(data)))
+			if err != nil {
+				return err
+			}
+			put = append(put, vid)
+			tag, err := tx.Exec(ctx, `UPDATE profile_files SET version_id = $3, size = $4, data = NULL
+				WHERE user_id = $1 AND path = $2 AND data IS NOT NULL`, r.user, r.path, vid, int64(len(data)))
+			if err == nil && tag.RowsAffected() == 1 {
+				kept = vid
+			}
+			return err
+		})
+		for _, v := range put {
+			if v != kept {
+				s.blobs.DeleteVersion(context.WithoutCancel(ctx), key, v)
+			}
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s of %s: %w", r.path, r.user, err))
+			continue
+		}
+		if kept != "" {
+			moved++
+		}
+	}
+	return moved, errors.Join(errs...)
 }
 
 // Keys returns a user's SSH keys.
@@ -502,7 +665,10 @@ func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
 	if !db.ValidUUID(userID) {
 		return ErrNotFound
 	}
-	return s.db.Transact(ctx, func(tx db.Tx) error {
+	type file struct{ path, version string }
+	var dropped []file
+	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		dropped = nil
 		tag, err := tx.Exec(ctx, `DELETE FROM profile_paths WHERE user_id = $1 AND path = $2`, userID, path)
 		if err != nil {
 			return err
@@ -524,23 +690,35 @@ func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
 			return err
 		}
 		still := s.UserPaths(own)
-		rows, err = tx.Query(ctx, `SELECT path FROM profile_files WHERE user_id = $1`, userID)
+		rows, err = tx.Query(ctx, `SELECT path, coalesce(version_id, '') FROM profile_files WHERE user_id = $1`, userID)
 		if err != nil {
 			return err
 		}
-		files, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		files, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (file, error) {
+			var f file
+			return f, r.Scan(&f.path, &f.version)
+		})
 		if err != nil {
 			return err
 		}
 		for _, f := range files {
-			if !still.Synced(f) {
-				if _, err := tx.Exec(ctx, `DELETE FROM profile_files WHERE user_id = $1 AND path = $2`, userID, f); err != nil {
+			if !still.Synced(f.path) {
+				if _, err := tx.Exec(ctx, `DELETE FROM profile_files WHERE user_id = $1 AND path = $2`, userID, f.path); err != nil {
 					return err
+				}
+				if f.version != "" {
+					dropped = append(dropped, f)
 				}
 			}
 		}
 		return db.Notify(ctx, tx, Channel, userID)
 	})
+	if err == nil {
+		for _, f := range dropped {
+			s.blobs.DeleteVersion(context.WithoutCancel(ctx), blobKey(userID, f.path), f.version)
+		}
+	}
+	return err
 }
 
 // RecordSignature records that a user's key signed something on their

@@ -1506,8 +1506,8 @@ components:
         secrets:
           type: boolean
           description: >-
-            Whether the server can keep secrets: without its key, credentials
-            and SSH keys are refused.
+            Whether the server can keep SSH keys: without its key, they are
+            refused.
 
     ProfileFile:
       type: object

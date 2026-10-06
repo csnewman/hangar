@@ -24,8 +24,24 @@ jobs:
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30
+      # The object store the blob tests and the registry's conformance run
+      # use.
+      rustfs:
+        image: rustfs/rustfs:1.0.1
+        env:
+          RUSTFS_ACCESS_KEY: hangar
+          RUSTFS_SECRET_KEY: hangar-ci-secret
+          RUSTFS_SSE_S3_MASTER_KEY: aGFuZ2FyLWNpLW9ubHktc3NlLWtleS0wMTIzNDU2Nzg=
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "curl -sf http://localhost:9000/health/ready"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
     env:
       HANGAR_TEST_DATABASE_URL: postgres://hangar:hangar@localhost:5432/hangar?sslmode=disable
+      HANGAR_TEST_S3_URL: http://hangar:hangar-ci-secret@localhost:9000/hangar-test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -54,6 +70,7 @@ jobs:
           echo "127.0.0.1 hangar.test registry.hangar.test" | sudo tee -a /etc/hosts
           PGPASSWORD=hangar createdb -h localhost -U hangar conformance
           HANGAR_DATABASE_URL=postgres://hangar:hangar@localhost:5432/conformance?sslmode=disable \
+          HANGAR_BLOB_URL=http://hangar:hangar-ci-secret@localhost:9000/conformance \
             dev/registry-conformance.sh
       # A function no program or test reaches is one a refactor left behind.
       # deadcode reports them and exits 0 either way, so any output fails.

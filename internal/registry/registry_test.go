@@ -10,10 +10,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/profile"
@@ -34,6 +37,7 @@ type world struct {
 	db    *db.DB
 	srv   *httptest.Server
 	reg   *registry.Registry
+	blobs *blob.Memory
 	users *users.Manager
 	teams *teams.Manager
 	admin users.Principal
@@ -56,15 +60,16 @@ func open(t *testing.T) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := profile.NewStore(d, sealer)
-	reg, err := registry.New(registry.Config{DB: d, Dir: t.TempDir(), Host: host, Tokens: um,
+	store := profile.NewStore(d, blob.NewMemory(), sealer)
+	blobs := blob.NewMemory()
+	reg, err := registry.New(registry.Config{DB: d, Blobs: blobs, Host: host, Tokens: um,
 		Workers: workers.NewManager(d), Credentials: store})
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(reg)
 	t.Cleanup(srv.Close)
-	w := &world{t: t, db: d, srv: srv, reg: reg, users: um, teams: teams.NewManager(d), profiles: store}
+	w := &world{t: t, db: d, srv: srv, reg: reg, blobs: blobs, users: um, teams: teams.NewManager(d), profiles: store}
 	w.admin = w.person("root", true).p
 	return w
 }
@@ -412,5 +417,92 @@ func TestEnvironmentCredential(t *testing.T) {
 	}
 	if got := w.push(login{name: "root", password: rootCred}, "alice/other", "v1"); got != 403 {
 		t.Errorf("an administrator's environment pushing to alice's namespace: %d, want 403", got)
+	}
+}
+
+// keys are the blob store's keys under prefix.
+func (w *world) keys(prefix string) []string {
+	w.t.Helper()
+	list, err := w.blobs.List(ctx, prefix)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	var out []string
+	for _, o := range list {
+		out = append(out, o.Key)
+	}
+	return out
+}
+
+func TestChunkedUpload(t *testing.T) {
+	w := open(t)
+	alice := w.person("alice", false)
+	start := w.do(alice, http.MethodPost, "/v2/alice/app/blobs/uploads/", nil)
+	if start.StatusCode != http.StatusAccepted {
+		t.Fatalf("starting an upload: %d", start.StatusCode)
+	}
+	at := start.Header.Get("Location")
+	content := []byte("first part, second part")
+	if r := w.do(alice, http.MethodPatch, at, content[:11], "Content-Range", "0-10"); r.StatusCode != http.StatusAccepted || r.Header.Get("Range") != "0-10" {
+		t.Fatalf("first chunk: %d, range %q", r.StatusCode, r.Header.Get("Range"))
+	}
+	if r := w.do(alice, http.MethodPatch, at, content[11:], "Content-Range", "5-20"); r.StatusCode != http.StatusRequestedRangeNotSatisfiable || r.Header.Get("Range") != "0-10" {
+		t.Errorf("a chunk out of order: %d, range %q", r.StatusCode, r.Header.Get("Range"))
+	}
+	if r := w.do(alice, http.MethodGet, at, nil); r.StatusCode != http.StatusNoContent || r.Header.Get("Range") != "0-10" {
+		t.Errorf("asking how far: %d, range %q", r.StatusCode, r.Header.Get("Range"))
+	}
+	if r := w.do(alice, http.MethodPut, at+"?digest="+sha(content), content[11:]); r.StatusCode != http.StatusCreated {
+		t.Fatalf("finishing: %d", r.StatusCode)
+	}
+	data, err := blob.ReadAll(ctx, w.blobs, "registry/blobs/sha256/"+sha(content)[len("sha256:"):])
+	if err != nil || !bytes.Equal(data, content) {
+		t.Errorf("kept %q, %v", data, err)
+	}
+	if left := w.keys("registry/uploads/"); len(left) != 0 {
+		t.Errorf("chunks left: %v", left)
+	}
+	if left := w.keys("registry/staging/"); len(left) != 0 {
+		t.Errorf("staging left: %v", left)
+	}
+}
+
+func TestContentWithTheWrongDigestIsNotKept(t *testing.T) {
+	w := open(t)
+	alice := w.person("alice", false)
+	r := w.do(alice, http.MethodPost, "/v2/alice/app/blobs/uploads/?digest="+sha([]byte("claimed")), []byte("actual"))
+	if r.StatusCode != http.StatusBadRequest {
+		t.Errorf("status %d", r.StatusCode)
+	}
+	if left := w.keys("registry/"); len(left) != 0 {
+		t.Errorf("kept: %v", left)
+	}
+}
+
+func TestMoveFromDir(t *testing.T) {
+	w := open(t)
+	dir := t.TempDir()
+	content := []byte("a layer from a directory")
+	hex := sha(content)[len("sha256:"):]
+	path := filepath.Join(dir, "blobs", "sha256", hex[:2], hex)
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	os.WriteFile(path, content, 0o644)
+	os.MkdirAll(filepath.Join(dir, "uploads"), 0o755)
+	os.WriteFile(filepath.Join(dir, "uploads", "abandoned"), []byte("x"), 0o644)
+	if n, err := w.reg.MoveFromDir(ctx, dir); err != nil || n != 1 {
+		t.Fatalf("moved %d, %v", n, err)
+	}
+	data, err := blob.ReadAll(ctx, w.blobs, "registry/blobs/sha256/"+hex)
+	if err != nil || !bytes.Equal(data, content) {
+		t.Errorf("kept %q, %v", data, err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the file is still there: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "uploads")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the uploads are still there: %v", err)
+	}
+	if n, err := w.reg.MoveFromDir(ctx, dir); err != nil || n != 0 {
+		t.Errorf("moved %d again, %v", n, err)
 	}
 }

@@ -23,10 +23,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/certs"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/publichost"
+	"github.com/csnewman/hangar/internal/registry"
 	"github.com/csnewman/hangar/internal/server"
 	"github.com/csnewman/hangar/internal/webui"
 	"github.com/csnewman/hangar/internal/zone"
@@ -98,14 +100,19 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 		slog.Warn("AUTHENTICATION IS OFF: every visitor is signed in as this user (HANGAR_DEV_AUTO_SIGN_IN)", "username", autoSignIn)
 	}
 
-	// Users' credentials and SSH keys are encrypted with this key.
+	// Users' SSH keys are encrypted with this key.
 	var sealer *profile.Sealer
 	if f := os.Getenv("HANGAR_SECRET_KEY_FILE"); f != "" {
 		if sealer, err = profile.LoadSealer(f); err != nil {
 			return err
 		}
 	} else {
-		slog.Warn("no secret key (HANGAR_SECRET_KEY_FILE); users cannot keep credentials or SSH keys")
+		slog.Warn("no secret key (HANGAR_SECRET_KEY_FILE); users cannot keep SSH keys")
+	}
+
+	blobs, profileBlobs, err := openBlobs(ctx)
+	if err != nil {
+		return err
 	}
 
 	// Editors and the registry have hosts named after the public one, as its
@@ -118,7 +125,8 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 	srv, err := server.New(server.Config{DB: d, BootstrapToken: token, Web: web,
 		PublicURL: os.Getenv("HANGAR_PUBLIC_URL"), HostStyle: style, AutoSignIn: autoSignIn, Sealer: sealer,
 		SSHListen: os.Getenv("HANGAR_SSH_LISTEN"), SSHAddress: os.Getenv("HANGAR_SSH_ADDRESS"),
-		RegistryDir: os.Getenv("HANGAR_REGISTRY_DIR"), ProfilePaths: splitList(os.Getenv("HANGAR_PROFILE_PATHS"))})
+		Blobs: blobs, ProfileBlobs: profileBlobs, Registry: registryOn(), RegistryDir: os.Getenv("HANGAR_REGISTRY_DIR"),
+		ProfilePaths: splitList(os.Getenv("HANGAR_PROFILE_PATHS"))})
 	if err != nil {
 		return err
 	}
@@ -330,7 +338,7 @@ func serveEdge(ctx context.Context, d *db.DB, handler http.Handler, environmentH
 // certificate from files does not cover: a browser would refuse them.
 func warnUncovered(leaf *x509.Certificate, names *publichost.Public) {
 	hosts := []string{names.Host(), names.Name("code00000000-0000-0000-0000-000000000000"), names.Name("app-env00000000-0000-0000-0000-000000000000")}
-	if os.Getenv("HANGAR_REGISTRY_DIR") != "" {
+	if registryOn() {
 		hosts = append(hosts, names.Name("registry"))
 	}
 	for _, h := range hosts {
@@ -342,6 +350,63 @@ func warnUncovered(leaf *x509.Certificate, names *publichost.Public) {
 				"host", h, "covers", leaf.DNSNames)
 		}
 	}
+}
+
+// openBlobs connects to the object store the server keeps the registry's
+// blobs and profiles' files in: HANGAR_BLOB_URL,
+// http(s)://[key:secret@]host[:port]/bucket, with the keys there or in
+// HANGAR_BLOB_ACCESS_KEY and HANGAR_BLOB_SECRET_KEY(_FILE). The registry
+// uses that bucket; profiles a versioned one beside it,
+// HANGAR_BLOB_PROFILE_BUCKET, <bucket>-profiles unless set.
+// HANGAR_BLOB_ENCRYPT=true has the store encrypt what it keeps (SSE-S3).
+func openBlobs(ctx context.Context) (blob.Store, blob.Versioned, error) {
+	raw := os.Getenv("HANGAR_BLOB_URL")
+	if raw == "" {
+		return nil, nil, errors.New("HANGAR_BLOB_URL is not set: the server keeps files in an S3-compatible object store")
+	}
+	cfg, err := blob.ParseS3URL(raw)
+	if err != nil {
+		return nil, nil, fmt.Errorf("HANGAR_BLOB_URL: %w", err)
+	}
+	if v := os.Getenv("HANGAR_BLOB_ACCESS_KEY"); v != "" {
+		cfg.AccessKey = v
+	}
+	if v := os.Getenv("HANGAR_BLOB_SECRET_KEY"); v != "" {
+		cfg.SecretKey = v
+	}
+	if f := os.Getenv("HANGAR_BLOB_SECRET_KEY_FILE"); f != "" {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, nil, err
+		}
+		cfg.SecretKey = strings.TrimSpace(string(b))
+	}
+	cfg.Region = os.Getenv("HANGAR_BLOB_REGION")
+	cfg.Encrypt = os.Getenv("HANGAR_BLOB_ENCRYPT") == "true"
+
+	profiles := cfg
+	bucket := cfg.URL[strings.LastIndex(cfg.URL, "/")+1:]
+	profiles.URL = cfg.URL[:strings.LastIndex(cfg.URL, "/")+1] + envOr("HANGAR_BLOB_PROFILE_BUCKET", bucket+"-profiles")
+	// A version another replaces is kept a day: the store deletes it then
+	// if the server did not, after a write whose clean-up failed.
+	profiles.Versioned, profiles.NoncurrentDays = true, 1
+	cfg.Expire = registry.Expiries
+	reg, err := blob.NewS3(ctx, cfg)
+	if err != nil {
+		return nil, nil, err
+	}
+	prof, err := blob.NewS3(ctx, profiles)
+	if err != nil {
+		return nil, nil, err
+	}
+	return reg, prof, nil
+}
+
+// registryOn is whether the server runs its registry: unless
+// HANGAR_REGISTRY_ENABLED is false, whenever it has a public URL to name the
+// registry's host after.
+func registryOn() bool {
+	return os.Getenv("HANGAR_REGISTRY_ENABLED") != "false" && os.Getenv("HANGAR_PUBLIC_URL") != ""
 }
 
 func splitList(s string) []string {
