@@ -24,7 +24,7 @@ static int hfs_inode_set(struct inode *inode, void *data)
 
 	HFS_I(inode)->lower = lower;
 	inode->i_ino = lower->i_ino;
-	fsstack_copy_attr_all(inode, lower);
+	hfs_copy_attr(inode, lower);
 	fsstack_copy_inode_size(inode, lower);
 
 	if (S_ISDIR(inode->i_mode)) {
@@ -339,10 +339,10 @@ static int hfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 	err = vfs_rename(&rd);
 	if (!err) {
 		if (target)
-			fsstack_copy_attr_all(target, hfs_lower_inode(target));
-		fsstack_copy_attr_all(new_dir, d_inode(rd.new_parent));
+			hfs_copy_attr(target, hfs_lower_inode(target));
+		hfs_copy_attr(new_dir, d_inode(rd.new_parent));
 		if (new_dir != old_dir)
-			fsstack_copy_attr_all(old_dir, d_inode(rd.old_parent));
+			hfs_copy_attr(old_dir, d_inode(rd.old_parent));
 	}
 	end_renaming(&rd);
 	return err;
@@ -356,10 +356,20 @@ static const char *hfs_get_link(struct dentry *dentry, struct inode *inode,
 	return vfs_get_link(hfs_lower_dentry(dentry), done);
 }
 
+/*
+ * The lower filesystem's own permission check. The VFS has made the rest of
+ * its checks on this inode already, the security module's among them, with
+ * the lower inode's flags copied up (HFS_COPY_I_FLAGS); a path walk asks
+ * this of every directory, so it is not done twice.
+ */
 static int hfs_permission(struct mnt_idmap *idmap, struct inode *inode,
 			  int mask)
 {
-	return inode_permission(&nop_mnt_idmap, hfs_lower_inode(inode), mask);
+	struct inode *lower = hfs_lower_inode(inode);
+
+	if (lower->i_op->permission)
+		return lower->i_op->permission(&nop_mnt_idmap, lower, mask);
+	return generic_permission(&nop_mnt_idmap, lower, mask);
 }
 
 static int hfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
@@ -384,7 +394,7 @@ static int hfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 	inode_lock(d_inode(lower));
 	err = notify_change(&nop_mnt_idmap, lower, &lower_ia, NULL);
 	inode_unlock(d_inode(lower));
-	fsstack_copy_attr_all(inode, hfs_lower_inode(inode));
+	hfs_copy_attr(inode, hfs_lower_inode(inode));
 	fsstack_copy_inode_size(inode, hfs_lower_inode(inode));
 	return err;
 }
@@ -402,7 +412,7 @@ static int hfs_getattr(struct mnt_idmap *idmap, const struct path *path,
 	err = vfs_getattr_nosec(&lower, stat, request_mask, flags);
 	if (err)
 		return err;
-	fsstack_copy_attr_all(inode, hfs_lower_inode(inode));
+	hfs_copy_attr(inode, hfs_lower_inode(inode));
 	fsstack_copy_inode_size(inode, hfs_lower_inode(inode));
 	/* The lower attributes, under this filesystem's device. */
 	stat->dev = inode->i_sb->s_dev;
@@ -426,7 +436,7 @@ static int hfs_fileattr_set(struct mnt_idmap *idmap, struct dentry *dentry,
 	int err;
 
 	err = vfs_fileattr_set(&nop_mnt_idmap, lower, fa);
-	fsstack_copy_attr_all(d_inode(dentry), d_inode(lower));
+	hfs_copy_attr(d_inode(dentry), d_inode(lower));
 	return err;
 }
 
@@ -446,7 +456,7 @@ static int hfs_set_acl(struct mnt_idmap *idmap, struct dentry *dentry,
 	err = vfs_set_acl(&nop_mnt_idmap, lower, posix_acl_xattr_name(type),
 			  acl);
 	if (!err)
-		fsstack_copy_attr_all(d_inode(dentry), d_inode(lower));
+		hfs_copy_attr(d_inode(dentry), d_inode(lower));
 	return err;
 }
 
@@ -523,7 +533,7 @@ static int hfs_xattr_set(const struct xattr_handler *handler,
 					       NULL);
 	inode_unlock(lower_inode);
 	if (!err)
-		fsstack_copy_attr_all(inode, lower_inode);
+		hfs_copy_attr(inode, lower_inode);
 	return err;
 }
 

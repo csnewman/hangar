@@ -110,7 +110,7 @@ static int hfs_d_revalidate(struct inode *dir, const struct qstr *name,
 	if (d_really_is_positive(dentry)) {
 		struct inode *inode = d_inode(dentry);
 
-		fsstack_copy_attr_all(inode, hfs_lower_inode(inode));
+		hfs_copy_attr(inode, hfs_lower_inode(inode));
 		if (!inode->i_nlink)
 			return 0;
 	}

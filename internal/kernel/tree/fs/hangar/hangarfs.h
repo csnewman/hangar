@@ -15,6 +15,7 @@
 #define _FS_HANGAR_HANGARFS_H
 
 #include <linux/fs.h>
+#include <linux/fs_stack.h>
 #include <linux/path.h>
 
 #define HANGARFS_SUPER_MAGIC 0x48414e47 /* "HANG" */
@@ -63,6 +64,22 @@ static inline void hfs_lower_path(struct dentry *dentry, struct path *path)
 static inline struct file *hfs_lower_file(struct file *file)
 {
 	return ((struct hfs_file *)file->private_data)->lower;
+}
+
+/*
+ * The inode flags the VFS checks on this filesystem's inode for what the
+ * lower one allows -- writing to an immutable file, truncating an
+ * append-only one -- and those that change how it is written: copied up, as
+ * overlayfs does, since hfs_permission asks the lower filesystem only its
+ * own question.
+ */
+#define HFS_COPY_I_FLAGS (S_APPEND | S_IMMUTABLE | S_SYNC | S_NOATIME | S_CASEFOLD)
+
+/* Brings an inode's attributes and flags in step with the lower one's. */
+static inline void hfs_copy_attr(struct inode *inode, struct inode *lower)
+{
+	fsstack_copy_attr_all(inode, lower);
+	inode_set_flags(inode, lower->i_flags & HFS_COPY_I_FLAGS, HFS_COPY_I_FLAGS);
 }
 
 extern const struct inode_operations hfs_dir_iops;
