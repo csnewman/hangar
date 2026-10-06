@@ -45,15 +45,13 @@ services:
       timeout: 3s
       retries: 30
 
-  # The object store profiles' files and the registry's blobs are kept in,
-  # encrypting them with a development key. The S3 API is on
-  # 127.0.0.1:59000 for looking inside.
+  # The object store profiles' files and the registry's blobs are kept in.
+  # The S3 API is on 127.0.0.1:59000 for looking inside.
   rustfs:
     image: rustfs/rustfs:1.0.1
     environment:
       RUSTFS_ACCESS_KEY: hangar
       RUSTFS_SECRET_KEY: hangar-dev-secret
-      RUSTFS_SSE_S3_MASTER_KEY: aGFuZ2FyLWRldmVsb3BtZW50LW9ubHktc3NlLWtleSE=
     volumes:
       - blobs:/data
     ports:
@@ -87,7 +85,6 @@ services:
       HANGAR_SSH_LISTEN: ":2222"
       # Hangar's own container registry, at registry.hangar.localhost:8080.
       HANGAR_BLOB_URL: http://hangar:hangar-dev-secret@rustfs:9000/hangar
-      HANGAR_BLOB_ENCRYPT: "true"
       HANGAR_REGISTRY_DIR: /var/lib/hangar-server/registry
     volumes:
       - .:/src

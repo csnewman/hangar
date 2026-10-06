@@ -7,8 +7,10 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -355,7 +357,8 @@ func warnUncovered(leaf *x509.Certificate, names *publichost.Public) {
 // openBlobs connects to the object store the server keeps the registry's
 // blobs and profiles' files in: HANGAR_BLOB_URL,
 // http(s)://[key:secret@]host[:port]/bucket, with the keys there or in
-// HANGAR_BLOB_ACCESS_KEY and HANGAR_BLOB_SECRET_KEY(_FILE). The registry
+// HANGAR_BLOB_ACCESS_KEY and HANGAR_BLOB_SECRET_KEY(_FILE); without a secret
+// key, the one derived from the server's own (blobSecret). The registry
 // uses that bucket; profiles a versioned one beside it,
 // HANGAR_BLOB_PROFILE_BUCKET, <bucket>-profiles unless set.
 // HANGAR_BLOB_ENCRYPT=true has the store encrypt what it keeps (SSE-S3).
@@ -381,6 +384,15 @@ func openBlobs(ctx context.Context) (blob.Store, blob.Versioned, error) {
 		}
 		cfg.SecretKey = strings.TrimSpace(string(b))
 	}
+	if cfg.SecretKey == "" {
+		f := os.Getenv("HANGAR_SECRET_KEY_FILE")
+		if f == "" {
+			return nil, nil, errors.New("no secret key for the object store: HANGAR_BLOB_SECRET_KEY, or HANGAR_SECRET_KEY_FILE to derive it from")
+		}
+		if cfg.SecretKey, err = blobSecret(f); err != nil {
+			return nil, nil, err
+		}
+	}
 	cfg.Region = os.Getenv("HANGAR_BLOB_REGION")
 	cfg.Encrypt = os.Getenv("HANGAR_BLOB_ENCRYPT") == "true"
 
@@ -400,6 +412,19 @@ func openBlobs(ctx context.Context) (blob.Store, blob.Versioned, error) {
 		return nil, nil, err
 	}
 	return reg, prof, nil
+}
+
+// blobSecret is the object store's secret key derived from the server's
+// own, so the deployment has one secret: the SHA-256, in hex, of
+// "hangar-blob-access\n" and the key file's contents, trimmed. The compose
+// file's data-dirs step derives the same for RustFS.
+func blobSecret(file string) (string, error) {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256([]byte("hangar-blob-access\n" + strings.TrimSpace(string(b))))
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // registryOn is whether the server runs its registry: unless

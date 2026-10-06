@@ -42,6 +42,7 @@ jobs:
     env:
       HANGAR_TEST_DATABASE_URL: postgres://hangar:hangar@localhost:5432/hangar?sslmode=disable
       HANGAR_TEST_S3_URL: http://hangar:hangar-ci-secret@localhost:9000/hangar-test
+      HANGAR_TEST_S3_ENCRYPT: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

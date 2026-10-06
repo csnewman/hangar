@@ -16,7 +16,7 @@ import (
 
 // stores are the stores to hold to the contract: memory always, and an S3
 // one at HANGAR_TEST_S3_URL (http://key:secret@host:port/bucket) if set,
-// with and without encryption by the store.
+// and with encryption by the store too if HANGAR_TEST_S3_ENCRYPT is true.
 func stores(t *testing.T) map[string]blob.Store {
 	out := map[string]blob.Store{"memory": blob.NewMemory()}
 	raw := os.Getenv("HANGAR_TEST_S3_URL")
@@ -27,7 +27,11 @@ func stores(t *testing.T) map[string]blob.Store {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, enc := range []bool{false, true} {
+	encs := []bool{false}
+	if os.Getenv("HANGAR_TEST_S3_ENCRYPT") == "true" {
+		encs = append(encs, true)
+	}
+	for _, enc := range encs {
 		c := cfg
 		c.Encrypt = enc
 		s, err := blob.NewS3(context.Background(), c)
