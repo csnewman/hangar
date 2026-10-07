@@ -1092,7 +1092,7 @@ export interface components {
             path: string;
             size: number;
             mode: number;
-            /** @description A credential, whose content is never shown. */
+            /** @description A credential, which environments not trusted with their owner's credentials are not given. */
             secret: boolean;
             /** Format: date-time */
             updated_at: string;
@@ -1890,7 +1890,6 @@ export interface operations {
                 };
             };
             401: components["responses"]["Unauthorized"];
-            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };

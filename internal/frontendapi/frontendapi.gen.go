@@ -885,7 +885,7 @@ type ProfileFile struct {
 	Mode int    `json:"mode"`
 	Path string `json:"path"`
 
-	// Secret A credential, whose content is never shown.
+	// Secret A credential, which environments not trusted with their owner's credentials are not given.
 	Secret    bool      `json:"secret"`
 	Size      int       `json:"size"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -5734,20 +5734,6 @@ func (response GetProfileFile401JSONResponse) VisitGetProfileFileResponse(w http
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetProfileFile403JSONResponse struct{ ForbiddenJSONResponse }
-
-func (response GetProfileFile403JSONResponse) VisitGetProfileFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
 	_, err := buf.WriteTo(w)
 	return err
 }

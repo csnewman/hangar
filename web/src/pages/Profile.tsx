@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, Copy, FileText, Folder, FolderOpen, KeyRound, Lock, Plus, Search } from 'lucide-react'
+import { ChevronRight, Copy, FileText, Folder, FolderOpen, KeyRound, Plus, Search } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 
 import { api, type LoginKey, type ProfileFile, type SSHKey } from '../api'
@@ -297,10 +297,10 @@ function FolderRows({
             style={{ paddingLeft: 8 + depth * 16 + 19 }}
             onClick={() => choose(f.path)}
           >
-            {f.secret ? <Lock size={14} /> : <FileText size={14} />}
+            <FileText size={14} />
             <span className="fb-name mono">{f.path.split('/').at(-1)}</span>
             {what && <span className="fb-what">{what}</span>}
-            <span className="fb-meta">{f.secret ? 'hidden' : bytes(f.size)}</span>
+            <span className="fb-meta">{bytes(f.size)}</span>
           </button>
         )
       })}
@@ -308,8 +308,7 @@ function FolderRows({
   )
 }
 
-// FileDetail is one file: what it is, and its contents to edit; for a
-// credential, which is not shown, a way to sign out of it.
+// FileDetail is one file: what it is, and its contents to edit.
 function FileDetail({ file, onRemoved }: { file: ProfileFile; onRemoved: () => void }) {
   const qc = useQueryClient()
   const remove = useMutation({
@@ -325,24 +324,17 @@ function FileDetail({ file, onRemoved }: { file: ProfileFile; onRemoved: () => v
           <div className="mono fb-path">{file.path}</div>
           <div className="muted small">
             {what && `${what} · `}
-            {file.secret ? 'contents hidden' : bytes(file.size)} · changed {new Date(file.updated_at).toLocaleString()}
+            {bytes(file.size)} · changed {new Date(file.updated_at).toLocaleString()}
           </div>
         </div>
         <ConfirmButton
-          label={file.secret ? 'Sign out' : 'Remove'}
-          confirmLabel={file.secret ? 'Sign out everywhere?' : 'Remove everywhere?'}
+          label="Remove"
+          confirmLabel="Remove everywhere?"
           onConfirm={() => remove.mutate()}
           disabled={remove.isPending}
         />
       </div>
-      {file.secret ? (
-        <div className="muted small">
-          A credential: environments trusted with your credentials have it, and it is not shown here. Signing out
-          removes it from all of them.
-        </div>
-      ) : (
-        <FileEditor path={file.path} updatedAt={file.updated_at} />
-      )}
+      <FileEditor path={file.path} updatedAt={file.updated_at} />
     </div>
   )
 }
@@ -419,7 +411,7 @@ function AddFile({
   onAdded: (p: string) => void
 }) {
   const qc = useQueryClient()
-  const choices = paths.filter((p) => !existing.includes(p) && !p.endsWith('.credentials.json'))
+  const choices = paths.filter((p) => !existing.includes(p))
   const [path, setPath] = useState('')
   const add = useMutation({
     mutationFn: (p: string) => api.putProfileFile(p, ''),

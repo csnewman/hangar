@@ -302,9 +302,8 @@ func (ps Paths) InTree(dir string) bool {
 	return false
 }
 
-// Secret reports whether a path holds a credential: never shown back in the
-// web UI, and not sent to environments that are not trusted with the
-// owner's credentials.
+// Secret reports whether a path holds a credential: not sent to
+// environments that are not trusted with the owner's credentials.
 func Secret(p string) bool { return slices.Contains(secretPaths, p) }
 
 // Valid reports whether p is a clean relative path that stays inside the

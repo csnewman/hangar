@@ -154,7 +154,6 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ProfileFileContent" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:
       operationId: putProfileFile
@@ -1518,7 +1517,9 @@ components:
         mode: { type: integer }
         secret:
           type: boolean
-          description: A credential, whose content is never shown.
+          description: >-
+            A credential, which environments not trusted with their owner's
+            credentials are not given.
         updated_at: { type: string, format: date-time }
 
     ProfileFileContent:
