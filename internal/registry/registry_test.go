@@ -58,7 +58,10 @@ func open(t *testing.T) *world {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store := profile.NewStore(d, blob.NewMemory(), sealer)
+	store, err := profile.NewStore(d, t.TempDir(), sealer)
+	if err != nil {
+		t.Fatal(err)
+	}
 	blobs := blob.NewMemory()
 	reg, err := registry.New(registry.Config{DB: d, Blobs: blobs, Host: host, Tokens: um,
 		Workers: workers.NewManager(d), Credentials: store})

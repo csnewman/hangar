@@ -32,7 +32,7 @@ func TestEditor(t *testing.T) {
 func testEditor(t *testing.T, style publichost.Style, public string, name func(label string) string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), ProfileBlobs: blob.NewMemory(), BootstrapToken: token, PublicURL: public, HostStyle: style,
+	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), ProfileBlobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, PublicURL: public, HostStyle: style,
 		Log: quiet()})
 	if err != nil {
 		t.Fatal(err)

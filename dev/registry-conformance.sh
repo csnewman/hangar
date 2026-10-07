@@ -2,7 +2,8 @@
 # Runs the OCI distribution-spec conformance suite against Hangar's registry.
 #
 # It starts a hangar-server of its own on 127.0.0.1:8099, against
-# HANGAR_DATABASE_URL and the object store at HANGAR_BLOB_URL, signs in as
+# HANGAR_DATABASE_URL and the object store at HANGAR_BLOB_URL, with a files
+# root of its own in a scratch directory, signs in as
 # the first administrator it creates and makes an access token for the
 # suite. The registry is registry.<host>, so that name must reach this
 # machine: CI adds registry.hangar.test to /etc/hosts, and on a Mac
@@ -22,7 +23,7 @@ work=$(mktemp -d)
 trap 'kill "$server" 2>/dev/null; rm -rf "$work"' EXIT
 
 go build -o "$work/hangar-server" ./cmd/hangar-server
-HANGAR_PUBLIC_URL="http://$host" \
+HANGAR_PUBLIC_URL="http://$host" HANGAR_FILES_DIR="$work/files" \
 	HANGAR_INITIAL_ADMIN_USERNAME=admin HANGAR_INITIAL_ADMIN_PASSWORD=conformance-password \
 	"$work/hangar-server" -listen 127.0.0.1:8099 > "$work/server.log" 2>&1 &
 server=$!

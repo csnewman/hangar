@@ -396,5 +396,4 @@ func randomBytes(n int) []byte {
 	return b
 }
 
-func be64(b []byte) uint64 { return binary.BigEndian.Uint64(b) }
 func be32(b []byte) uint32 { return binary.BigEndian.Uint32(b) }
