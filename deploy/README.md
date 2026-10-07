@@ -328,16 +328,6 @@ the database live:
 
     docker compose exec -T postgres pg_dump -U hangar hangar > hangar.sql
 
-A deployment from before these were directories kept them in the volumes
-`hangar_pgdata` and `hangar_registry`. Stop it, copy them across, and
-start it again:
-
-    docker compose --profile control-plane down
-    sudo mkdir -p /var/lib/hangar-server
-    docker run --rm -v hangar_pgdata:/from -v /var/lib/hangar-server/postgres:/to busybox cp -a /from/. /to/
-    docker run --rm -v hangar_registry:/from -v /var/lib/hangar-server/registry:/to busybox cp -a /from/. /to/
-    docker compose --profile control-plane up -d
-
 ## Does the worker need `--privileged`?
 
 No. It needs:
@@ -398,10 +388,6 @@ across too when it has changed. Nothing else is needed:
 
 - The server brings the database up to date as it starts, and workers
   reconnect to it on their own.
-- A control plane from before the object store moves, on its first start,
-  profiles' files out of the database and the registry's blobs out of
-  `$HANGAR_DATA_DIR/registry` into the object store; the server's log says
-  how many.
 - A worker that is replaced powers its environments off first; their disks
   are kept, and those that were running start again once it is back,
   booting the new worker's kernel and agent. Anything unsaved in them is

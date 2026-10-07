@@ -284,7 +284,7 @@ func (s *Store) write(ctx context.Context, userID, path string, data []byte, mod
 			INSERT INTO profile_files (user_id, path, version_id, size, mode, deleted, version)
 			VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7)
 			ON CONFLICT (user_id, path) DO UPDATE SET version_id = EXCLUDED.version_id, size = EXCLUDED.size,
-				data = NULL, mode = EXCLUDED.mode, deleted = EXCLUDED.deleted, version = EXCLUDED.version,
+				mode = EXCLUDED.mode, deleted = EXCLUDED.deleted, version = EXCLUDED.version,
 				updated_at = now()
 			RETURNING version, updated_at`, userID, path, kept, f.Size, int32(mode), deleted, version).
 			Scan(&f.Version, &f.UpdatedAt)
@@ -328,78 +328,6 @@ func (s *Store) DeleteUser(ctx context.Context, userID string) error {
 		return ErrNotFound
 	}
 	return s.blobs.DeleteAll(ctx, userID+"/")
-}
-
-// MoveToBlobs moves the contents of files kept in the database into the
-// blob store, opening the secrets among them, which were sealed there. A
-// file's version is left as it is: its contents do not change.
-func (s *Store) MoveToBlobs(ctx context.Context) (int, error) {
-	type row struct {
-		user, path string
-		data       []byte
-	}
-	var rows []row
-	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		if _, err := tx.Exec(ctx, `UPDATE profile_files SET data = NULL WHERE data IS NOT NULL AND deleted`); err != nil {
-			return err
-		}
-		r, err := tx.Query(ctx, `SELECT user_id::text, path, data FROM profile_files WHERE data IS NOT NULL`)
-		if err != nil {
-			return err
-		}
-		rows, err = pgx.CollectRows(r, func(r pgx.CollectableRow) (row, error) {
-			var x row
-			return x, r.Scan(&x.user, &x.path, &x.data)
-		})
-		return err
-	})
-	if err != nil {
-		return 0, err
-	}
-	moved := 0
-	var errs []error
-	for _, r := range rows {
-		data := r.data
-		if Secret(r.path) {
-			if data, err = s.sealer.open(r.data, r.user+"/"+r.path); err != nil {
-				errs = append(errs, fmt.Errorf("%s of %s: %w", r.path, r.user, err))
-				continue
-			}
-		}
-		key := blobKey(r.user, r.path)
-		var put []string
-		var kept string
-		err := s.db.Transact(ctx, func(tx db.Tx) error {
-			kept = ""
-			if err := profileLock(ctx, tx, r.user); err != nil {
-				return err
-			}
-			vid, err := s.blobs.PutVersion(ctx, key, bytes.NewReader(data), int64(len(data)))
-			if err != nil {
-				return err
-			}
-			put = append(put, vid)
-			tag, err := tx.Exec(ctx, `UPDATE profile_files SET version_id = $3, size = $4, data = NULL
-				WHERE user_id = $1 AND path = $2 AND data IS NOT NULL`, r.user, r.path, vid, int64(len(data)))
-			if err == nil && tag.RowsAffected() == 1 {
-				kept = vid
-			}
-			return err
-		})
-		for _, v := range put {
-			if v != kept {
-				s.blobs.DeleteVersion(context.WithoutCancel(ctx), key, v)
-			}
-		}
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s of %s: %w", r.path, r.user, err))
-			continue
-		}
-		if kept != "" {
-			moved++
-		}
-	}
-	return moved, errors.Join(errs...)
 }
 
 // Keys returns a user's SSH keys.

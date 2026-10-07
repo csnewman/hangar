@@ -724,13 +724,6 @@ func TestContentsAreKeptInTheBlobStore(t *testing.T) {
 	if _, err := p.store.Put(ctx, p.owner, creds, []byte("token-123"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	var inDB int
-	p.d.Transact(ctx, func(tx db.Tx) error {
-		return tx.QueryRow(ctx, `SELECT count(*) FROM profile_files WHERE data IS NOT NULL`).Scan(&inDB)
-	})
-	if inDB != 0 {
-		t.Errorf("%d files' contents are in the database", inDB)
-	}
 	if got := p.versions(t); !maps.Equal(got, map[string]int{creds: 1}) {
 		t.Errorf("the blob store holds %v", got)
 	}
@@ -807,55 +800,6 @@ func TestContentsAreKeptInTheBlobStore(t *testing.T) {
 
 	if _, err := p.store.Put(ctx, p.owner, "../etc/passwd", []byte("x"), 0o644); !errors.Is(err, profile.ErrInvalid) {
 		t.Errorf("a path outside the profile: %v", err)
-	}
-}
-
-func TestFilesInTheDatabaseMove(t *testing.T) {
-	ctx := context.Background()
-	p := newPlane(t)
-	// The plane's sealer, whose key is all zeros.
-	sealer, err := profile.NewSealer(make([]byte, 32))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sealed, err := sealer.Seal([]byte("token-789"), p.owner+"/.claude/.credentials.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = p.d.Transact(ctx, func(tx db.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO profile_files (user_id, path, data, size, mode, version)
-			VALUES ($1, '.gitconfig', 'old contents', 12, 420, 7)`, p.owner); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO profile_files (user_id, path, data, size, mode, version)
-			VALUES ($1, '.claude/.credentials.json', $2, 9, 384, 9)`, p.owner, sealed); err != nil {
-			return err
-		}
-		_, err := tx.Exec(ctx, `INSERT INTO profile_files (user_id, path, data, mode, version, deleted)
-			VALUES ($1, '.aws/config', '', 420, 8, true)`, p.owner)
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n, err := p.store.MoveToBlobs(ctx); err != nil || n != 2 {
-		t.Fatalf("moved %d, %v", n, err)
-	}
-	if n, err := p.store.MoveToBlobs(ctx); err != nil || n != 0 {
-		t.Errorf("moved %d again, %v", n, err)
-	}
-	files, err := p.store.Files(ctx, p.owner, true)
-	if err != nil || len(files) != 3 {
-		t.Fatalf("files %+v, %v", files, err)
-	}
-	if f := files[0]; f.Path != ".gitconfig" || string(f.Data) != "old contents" || f.Version != 7 {
-		t.Errorf("moved file %+v", f)
-	}
-	if f := files[2]; f.Path != ".claude/.credentials.json" || string(f.Data) != "token-789" {
-		t.Errorf("moved credential %+v", f)
-	}
-	if got := p.versions(t); !maps.Equal(got, map[string]int{".gitconfig": 1, ".claude/.credentials.json": 1}) {
-		t.Errorf("the blob store holds %v", got)
 	}
 }
 

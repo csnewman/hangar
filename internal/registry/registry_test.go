@@ -10,8 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -406,7 +404,14 @@ func TestEnvironmentCredential(t *testing.T) {
 	if got := w.do(login{name: "root", password: cred}, http.MethodGet, "/v2/", nil).StatusCode; got != 401 {
 		t.Errorf("the credential under another username: %d, want 401", got)
 	}
-	tampered := cred[:len(cred)-2] + "AA"
+	// One character in the middle changed: the last ones may carry bits a
+	// base64 decoder ignores, and changing them changes nothing.
+	mid := len(cred) / 2
+	swap := byte('A')
+	if cred[mid] == 'A' {
+		swap = 'B'
+	}
+	tampered := cred[:mid] + string(swap) + cred[mid+1:]
 	if got := w.do(login{name: "alice", password: tampered}, http.MethodGet, "/v2/", nil).StatusCode; got != 401 {
 		t.Errorf("a tampered credential: %d, want 401", got)
 	}
@@ -476,33 +481,5 @@ func TestContentWithTheWrongDigestIsNotKept(t *testing.T) {
 	}
 	if left := w.keys("registry/"); len(left) != 0 {
 		t.Errorf("kept: %v", left)
-	}
-}
-
-func TestMoveFromDir(t *testing.T) {
-	w := open(t)
-	dir := t.TempDir()
-	content := []byte("a layer from a directory")
-	hex := sha(content)[len("sha256:"):]
-	path := filepath.Join(dir, "blobs", "sha256", hex[:2], hex)
-	os.MkdirAll(filepath.Dir(path), 0o755)
-	os.WriteFile(path, content, 0o644)
-	os.MkdirAll(filepath.Join(dir, "uploads"), 0o755)
-	os.WriteFile(filepath.Join(dir, "uploads", "abandoned"), []byte("x"), 0o644)
-	if n, err := w.reg.MoveFromDir(ctx, dir); err != nil || n != 1 {
-		t.Fatalf("moved %d, %v", n, err)
-	}
-	data, err := blob.ReadAll(ctx, w.blobs, "registry/blobs/sha256/"+hex)
-	if err != nil || !bytes.Equal(data, content) {
-		t.Errorf("kept %q, %v", data, err)
-	}
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the file is still there: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(dir, "uploads")); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the uploads are still there: %v", err)
-	}
-	if n, err := w.reg.MoveFromDir(ctx, dir); err != nil || n != 0 {
-		t.Errorf("moved %d again, %v", n, err)
 	}
 }

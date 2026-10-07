@@ -85,12 +85,10 @@ services:
       HANGAR_SSH_LISTEN: ":2222"
       # Hangar's own container registry, at registry.hangar.localhost:8080.
       HANGAR_BLOB_URL: http://hangar:hangar-dev-secret@rustfs:9000/hangar
-      HANGAR_REGISTRY_DIR: /var/lib/hangar-server/registry
     volumes:
       - .:/src
       - gomod:/go/pkg/mod
       - gocache:/root/.cache/go-build
-      - registry:/var/lib/hangar-server/registry
     ports:
       - 127.0.0.1:2222:2222
     depends_on:
@@ -139,5 +137,4 @@ volumes:
   gocache:
   workerstate:
   webmodules:
-  registry:
   blobs:

@@ -111,14 +111,10 @@ services:
       # Hangar's own container registry, at registry.<HANGAR_PUBLIC_URL's
       # host> (registry-<host> in the prefix style). false turns it off.
       HANGAR_REGISTRY_ENABLED: ${HANGAR_REGISTRY_ENABLED:-true}
-      # Registry blobs in this directory are moved into the object store at
-      # start.
-      HANGAR_REGISTRY_DIR: /var/lib/hangar-server/registry
       # Paths shared in every user's profile beside the built-in ones. See
       # README.md.
       HANGAR_PROFILE_PATHS: ${HANGAR_PROFILE_PATHS:-}
     volumes:
-      - ${HANGAR_DATA_DIR:-/var/lib/hangar-server}/registry:/var/lib/hangar-server/registry
       # The directory, not the files, so that files replaced by renaming
       # new ones into place are seen.
       - ${HANGAR_TLS_DIR:-./tls}:/etc/hangar-server/tls:ro
@@ -137,14 +133,12 @@ services:
         condition: service_healthy
       blobs:
         condition: service_healthy
-      data-dirs:
-        condition: service_completed_successfully
 
-  # The server and RustFS run as unprivileged users (65532, the server
-  # image's nonroot; 10001, RustFS's), and a directory Docker makes on the
-  # host for a bind mount belongs to root: this gives each its own before
-  # it starts. It also derives RustFS's secret key from secret-key, as the
-  # server does: the SHA-256 of "hangar-blob-access", a newline and the key.
+  # RustFS runs as an unprivileged user (10001), and a directory Docker
+  # makes on the host for a bind mount belongs to root: this gives it its
+  # own before it starts. It also derives RustFS's secret key from
+  # secret-key, as the server does: the SHA-256 of "hangar-blob-access", a
+  # newline and the key.
   data-dirs:
     profiles: [control-plane]
     image: busybox:1.37
@@ -152,11 +146,10 @@ services:
       - sh
       - -c
       - >-
-        chown 65532:65532 /registry && chown 10001:10001 /blobs &&
+        chown 10001:10001 /blobs &&
         { echo hangar-blob-access; tr -d ' \t\r\n' < /run/secrets/secret-key; } | sha256sum | cut -d' ' -f1 > /credential/secret &&
         chown 10001:10001 /credential/secret && chmod 400 /credential/secret
     volumes:
-      - ${HANGAR_DATA_DIR:-/var/lib/hangar-server}/registry:/registry
       - ${HANGAR_DATA_DIR:-/var/lib/hangar-server}/blobs:/blobs
       - blob-credential:/credential
     secrets: [secret-key]
