@@ -29,6 +29,7 @@ struct hfs_route {
 	const char *target;	/* under the shared directory */
 	unsigned int len;	/* of path */
 	bool dir;
+	bool lock;
 };
 
 struct hfs_routes {
@@ -52,8 +53,18 @@ struct hfs_sb_info {
 enum hfs_route_kind {
 	HFS_LOCAL,	/* the lower directory */
 	HFS_ROUTED,	/* a route's target */
+	HFS_LOCK,	/* a route's target, a lock: looked up there every time */
 	HFS_UNDER,	/* within a routed directory, by its parent */
 };
+
+/*
+ * A dentry's d_time: the generation of the routes it was looked up under,
+ * and whether it is a lock.
+ */
+static inline unsigned long hfs_stamp(unsigned long gen, bool lock)
+{
+	return gen << 1 | lock;
+}
 
 struct hfs_inode_info {
 	struct inode *lower;

@@ -154,7 +154,7 @@ static void hfs_set_lower(struct dentry *dentry, struct dentry *lower)
  * A routed name's lower dentry: its target's. NULL for one that is not
  * routed, found in the lower parent as usual.
  */
-static struct dentry *hfs_lookup_routed(struct dentry *dentry)
+static struct dentry *hfs_lookup_routed(struct dentry *dentry, bool *lock)
 {
 	struct dentry *lower = NULL;
 	char *target;
@@ -166,8 +166,9 @@ static struct dentry *hfs_lookup_routed(struct dentry *dentry)
 	kind = hfs_route(dentry, target);
 	if (kind < 0)
 		lower = ERR_PTR(kind);
-	else if (kind == HFS_ROUTED)
+	else if (kind == HFS_ROUTED || kind == HFS_LOCK)
 		lower = hfs_route_lookup(dentry->d_sb, target);
+	*lock = kind == HFS_LOCK;
 	__putname(target);
 	return lower;
 }
@@ -181,8 +182,11 @@ static struct dentry *hfs_lookup(struct inode *dir, struct dentry *dentry,
 	struct qstr name = QSTR_INIT(dentry->d_name.name, dentry->d_name.len);
 
 	/* Read first: routes changing during the lookup are checked again. */
-	dentry->d_time = atomic_long_read(&HFS_SB(dentry->d_sb)->routes_gen);
-	lower = hfs_lookup_routed(dentry);
+	unsigned long gen = atomic_long_read(&HFS_SB(dentry->d_sb)->routes_gen);
+	bool lock;
+
+	lower = hfs_lookup_routed(dentry, &lock);
+	dentry->d_time = hfs_stamp(gen, lock);
 	if (!lower) {
 		lower = lookup_noperm_unlocked(&name, lower_parent);
 		if (!IS_ERR(lower))

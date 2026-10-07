@@ -75,7 +75,8 @@ static struct hfs_routes *hfs_routes_parse(const char *buf, size_t len)
 	while (p < end) {
 		const char *path, *target;
 
-		if (*p != HANGARFS_ROUTE_FILE && *p != HANGARFS_ROUTE_DIR)
+		if (*p != HANGARFS_ROUTE_FILE && *p != HANGARFS_ROUTE_DIR &&
+		    *p != HANGARFS_ROUTE_LOCK)
 			return ERR_PTR(-EINVAL);
 		path = p + 1;
 		target = memchr(path, '\0', end - path);
@@ -103,6 +104,7 @@ static struct hfs_routes *hfs_routes_parse(const char *buf, size_t len)
 		struct hfs_route *r = &routes->r[i];
 
 		r->dir = *p == HANGARFS_ROUTE_DIR;
+		r->lock = *p == HANGARFS_ROUTE_LOCK;
 		r->path = p + 1;
 		r->len = strlen(r->path);
 		r->target = r->path + r->len + 1;
@@ -186,12 +188,12 @@ static enum hfs_route_kind hfs_route_match(const struct hfs_route *r,
 	if (len == r->len) {
 		if (target && strscpy(target, r->target, PATH_MAX) < 0)
 			return HFS_LOCAL;
-		return HFS_ROUTED;
+		return r->lock ? HFS_LOCK : HFS_ROUTED;
 	}
 	if (r->dir)
 		return p[r->len] == '/' ? HFS_UNDER : HFS_LOCAL;
 	/* A file's lock file, beside it, so making it is exclusive everywhere. */
-	if (len != r->len + HFS_LOCK_SUFFIX_LEN ||
+	if (r->lock || len != r->len + HFS_LOCK_SUFFIX_LEN ||
 	    memcmp(p + r->len, HFS_LOCK_SUFFIX, HFS_LOCK_SUFFIX_LEN))
 		return HFS_LOCAL;
 	if (target) {
@@ -202,7 +204,7 @@ static enum hfs_route_kind hfs_route_match(const struct hfs_route *r,
 		memcpy(target, r->target, tlen);
 		memcpy(target + tlen, HFS_LOCK_SUFFIX, HFS_LOCK_SUFFIX_LEN + 1);
 	}
-	return HFS_ROUTED;
+	return HFS_LOCK;
 }
 
 /*
