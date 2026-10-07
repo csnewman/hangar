@@ -2,27 +2,53 @@
 /*
  * hangarfs: open files. Each has the lower file open beside it, through
  * which its contents are read, written and mapped, and its directory read.
- * Closing one opened for writing reports it changed (hangar_sync_notify).
- * Locks are this filesystem's own: one on a file under a shared path is
- * first taken for the environment (sync.c), and every way a lock is let go
- * of -- unlocking, closing, the last reference going -- arrives here.
+ * Locks on a routed file are the shared filesystem's, so they hold between
+ * environments; on any other, this filesystem's own. A directory holding
+ * route points is listed with them, from their targets.
  */
 
 #include "hangarfs.h"
 #include <linux/backing-file.h>
+#include <linux/compat.h>
 #include <linux/fadvise.h>
 #include <linux/file.h>
 #include <linux/filelock.h>
 #include <linux/fs_stack.h>
-#include <linux/hangar_sync.h>
+#include <linux/fs_dirent.h>
 #include <linux/slab.h>
 #include <linux/splice.h>
+
+struct hfs_dirent {
+	u64 ino;
+	unsigned int type;
+	int len;
+	char name[];
+};
+
+static void hfs_free_entries(struct hfs_file *hf)
+{
+	unsigned int i;
+
+	for (i = 0; i < hf->nentries; i++)
+		kfree(hf->entries[i]);
+	kfree(hf->entries);
+	hf->entries = NULL;
+	hf->nentries = 0;
+}
+
+static void hfs_free_file(struct hfs_file *hf)
+{
+	hfs_free_entries(hf);
+	kfree(hf->routed);
+	kfree(hf);
+}
 
 static int hfs_open(struct inode *inode, struct file *file)
 {
 	struct hfs_file *hf;
 	struct file *lower;
 	struct path path;
+	int n;
 
 	hf = kzalloc(sizeof(*hf), GFP_KERNEL);
 	if (!hf)
@@ -38,6 +64,15 @@ static int hfs_open(struct inode *inode, struct file *file)
 		return PTR_ERR(lower);
 	}
 	hf->lower = lower;
+	if (S_ISDIR(inode->i_mode)) {
+		n = hfs_route_children(file->f_path.dentry, &hf->routed,
+				       &hf->routed_len);
+		if (n < 0) {
+			fput(lower);
+			kfree(hf);
+			return n;
+		}
+	}
 	file->private_data = hf;
 	/* Direct I/O is the lower file's to do, where it can. */
 	if (lower->f_mode & FMODE_CAN_ODIRECT)
@@ -100,14 +135,7 @@ static int hfs_release(struct inode *inode, struct file *file)
 	struct hfs_file *hf = file->private_data;
 
 	fput(hf->lower);
-	kfree(hf);
-	/*
-	 * Its writes, reported once they are all made, as inotify's
-	 * IN_CLOSE_WRITE: a writer is seen when it is done, not at every
-	 * write. One holding the file open sees it reported at its close.
-	 */
-	if ((file->f_mode & FMODE_WRITE) && S_ISREG(inode->i_mode))
-		hangar_sync_notify(file->f_path.dentry);
+	hfs_free_file(hf);
 	return 0;
 }
 
@@ -202,11 +230,26 @@ static int hfs_mmap(struct file *file, struct vm_area_struct *vma)
 	return backing_file_mmap(hfs_lower_file(file), vma, &ctx);
 }
 
-/* The lower file's position is the one that counts: kept in step. */
+/*
+ * The lower file's position is the one that counts: kept in step. A
+ * directory listed with its routed names has positions of its own.
+ */
 static loff_t hfs_llseek(struct file *file, loff_t offset, int whence)
 {
+	struct hfs_file *hf = file->private_data;
 	struct file *lower = hfs_lower_file(file);
 	loff_t ret;
+
+	if (hf->routed) {
+		if (whence == SEEK_CUR)
+			offset += file->f_pos;
+		else if (whence != SEEK_SET)
+			return -EINVAL;
+		if (offset < 0)
+			return -EINVAL;
+		file->f_pos = offset;
+		return offset;
+	}
 
 	lower->f_pos = file->f_pos;
 	ret = vfs_llseek(lower, offset, whence);
@@ -223,10 +266,17 @@ static int hfs_fsync(struct file *file, loff_t start, loff_t end,
 static int hfs_flush(struct file *file, fl_owner_t id)
 {
 	struct file *lower = hfs_lower_file(file);
+	int err = 0;
 
 	if (lower->f_op->flush)
-		return lower->f_op->flush(lower, id);
-	return 0;
+		err = lower->f_op->flush(lower, id);
+	/*
+	 * Closing any descriptor of a file lets go of the process's locks on
+	 * it: those on a routed file are the lower one's (hfs_lock).
+	 */
+	if (lower->f_op->lock)
+		locks_remove_posix(lower, id);
+	return err;
 }
 
 static long hfs_fallocate(struct file *file, int mode, loff_t offset,
@@ -251,6 +301,8 @@ static long hfs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
 	struct file *lower = hfs_lower_file(file);
 
+	if (cmd == HANGARFS_IOC_ROUTES)
+		return hfs_set_routes(file, (void __user *)arg);
 	if (!lower->f_op->unlocked_ioctl)
 		return -ENOTTY;
 	return lower->f_op->unlocked_ioctl(lower, cmd, arg);
@@ -262,6 +314,8 @@ static long hfs_compat_ioctl(struct file *file, unsigned int cmd,
 {
 	struct file *lower = hfs_lower_file(file);
 
+	if (cmd == HANGARFS_IOC_ROUTES)
+		return hfs_set_routes(file, compat_ptr(arg));
 	if (!lower->f_op->compat_ioctl)
 		return -ENOIOCTLCMD;
 	return lower->f_op->compat_ioctl(lower, cmd, arg);
@@ -269,41 +323,46 @@ static long hfs_compat_ioctl(struct file *file, unsigned int cmd,
 #endif
 
 /*
- * POSIX and OFD locks. The lock is this inode's, kept by the VFS as for any
- * filesystem; taking one on a shared file is first the environment's.
- * Closing a file and its last reference going both unlock through here.
+ * POSIX and OFD locks. On a routed file the lock is the shared filesystem's,
+ * taken there, which makes it every environment's: the request names the
+ * lower file while it is passed down, since NFS keeps it to take the lock
+ * again after a server restart. On any other file the lock is this inode's,
+ * kept by the VFS as for any filesystem.
  */
 static int hfs_lock(struct file *file, int cmd, struct file_lock *fl)
 {
+	struct file *lower = hfs_lower_file(file);
 	int err;
 
+	if (lower->f_op->lock) {
+		fl->c.flc_file = lower;
+		err = lower->f_op->lock(lower, cmd, fl);
+		fl->c.flc_file = file;
+		return err;
+	}
 	if (IS_GETLK(cmd)) {
 		posix_test_lock(file, fl);
 		return 0;
 	}
-	if (fl->c.flc_type != F_UNLCK) {
-		err = hangar_sync_lock(file, fl, IS_SETLKW(cmd));
-		if (err)
-			return err;
-	}
-	err = posix_lock_file(file, fl, NULL);
-	hangar_sync_changed(file);
-	return err;
+	return posix_lock_file(file, fl, NULL);
 }
 
-/* flock(2) locks, likewise; letting go of the last reference unlocks too. */
+/*
+ * flock(2) locks, likewise. A routed file's is let go of with the lower
+ * file, when this one's last reference goes.
+ */
 static int hfs_flock(struct file *file, int cmd, struct file_lock *fl)
 {
+	struct file *lower = hfs_lower_file(file);
 	int err;
 
-	if (fl->c.flc_type != F_UNLCK) {
-		err = hangar_sync_lock(file, fl, fl->c.flc_flags & FL_SLEEP);
-		if (err)
-			return err;
+	if (lower->f_op->flock) {
+		fl->c.flc_file = lower;
+		err = lower->f_op->flock(lower, cmd, fl);
+		fl->c.flc_file = file;
+		return err;
 	}
-	err = locks_lock_file_wait(file, fl);
-	hangar_sync_changed(file);
-	return err;
+	return locks_lock_file_wait(file, fl);
 }
 
 const struct file_operations hfs_file_fops = {
@@ -327,11 +386,140 @@ const struct file_operations hfs_file_fops = {
 	.flock = hfs_flock,
 };
 
+struct hfs_merge {
+	struct dir_context ctx;
+	struct hfs_file *hf;
+	unsigned int cap;
+	int err;
+};
+
+static int hfs_add_entry(struct hfs_merge *m, const char *name, int len,
+			 u64 ino, unsigned int type)
+{
+	struct hfs_file *hf = m->hf;
+	struct hfs_dirent *e;
+
+	if (hf->nentries == m->cap) {
+		unsigned int cap = m->cap ? m->cap * 2 : 64;
+		struct hfs_dirent **entries;
+
+		entries = krealloc_array(hf->entries, cap, sizeof(*entries),
+					 GFP_KERNEL);
+		if (!entries)
+			return -ENOMEM;
+		hf->entries = entries;
+		m->cap = cap;
+	}
+	e = kmalloc(struct_size(e, name, len), GFP_KERNEL);
+	if (!e)
+		return -ENOMEM;
+	e->ino = ino;
+	e->type = type;
+	e->len = len;
+	memcpy(e->name, name, len);
+	hf->entries[hf->nentries++] = e;
+	return 0;
+}
+
+/* Whether a name in the directory is a route point, served elsewhere. */
+static bool hfs_is_routed_name(const struct hfs_file *hf, const char *name,
+			       int len)
+{
+	const char *p = hf->routed, *end = hf->routed + hf->routed_len;
+
+	while (p < end) {
+		size_t n = strlen(p);
+
+		if (n == len && !memcmp(p, name, len))
+			return true;
+		p += n + 1;
+		p += strlen(p) + 1;
+	}
+	return false;
+}
+
+static bool hfs_merge_actor(struct dir_context *ctx, const char *name,
+			    int len, loff_t offset, u64 ino, unsigned int type)
+{
+	struct hfs_merge *m = container_of(ctx, struct hfs_merge, ctx);
+
+	if (hfs_is_routed_name(m->hf, name, len))
+		return true;
+	m->err = hfs_add_entry(m, name, len, ino, type);
+	return !m->err;
+}
+
+/*
+ * Lists a directory holding route points whole: the lower directory's
+ * names but those, then each route point whose target is there, as the
+ * target is.
+ */
+static int hfs_list_merged(struct file *file)
+{
+	struct hfs_file *hf = file->private_data;
+	struct file *lower = hf->lower;
+	struct hfs_merge m = { .ctx.actor = hfs_merge_actor, .hf = hf };
+	const char *p, *end = hf->routed + hf->routed_len;
+	unsigned int before;
+	char *target;
+	int err;
+
+	hfs_free_entries(hf);
+	lower->f_pos = 0;
+	do {
+		before = hf->nentries;
+		m.ctx.pos = lower->f_pos;
+		err = iterate_dir(lower, &m.ctx);
+		if (!err)
+			err = m.err;
+	} while (!err && hf->nentries != before);
+	if (err)
+		return err;
+
+	target = __getname();
+	if (!target)
+		return -ENOMEM;
+	for (p = hf->routed; p < end && !err; ) {
+		const char *name = p, *t = p + strlen(p) + 1;
+		struct dentry *d;
+
+		p = t + strlen(t) + 1;
+		strscpy(target, t, PATH_MAX);
+		d = hfs_route_lookup(file_inode(file)->i_sb, target);
+		if (IS_ERR(d))
+			continue;
+		if (d_really_is_positive(d))
+			err = hfs_add_entry(&m, name, strlen(name),
+					    d_inode(d)->i_ino,
+					    fs_umode_to_dtype(d_inode(d)->i_mode));
+		dput(d);
+	}
+	__putname(target);
+	return err;
+}
+
 /* A directory is read from the lower one, its position kept in step. */
 static int hfs_iterate(struct file *file, struct dir_context *ctx)
 {
+	struct hfs_file *hf = file->private_data;
 	struct file *lower = hfs_lower_file(file);
 	int err;
+
+	if (hf->routed) {
+		if (ctx->pos == 0 || !hf->entries) {
+			err = hfs_list_merged(file);
+			if (err)
+				return err;
+		}
+		while (ctx->pos < hf->nentries) {
+			struct hfs_dirent *e = hf->entries[ctx->pos];
+
+			if (!dir_emit(ctx, e->name, e->len, e->ino, e->type))
+				break;
+			ctx->pos++;
+		}
+		return 0;
+	}
 
 	lower->f_pos = ctx->pos;
 	err = iterate_dir(lower, ctx);
@@ -347,6 +535,7 @@ const struct file_operations hfs_dir_fops = {
 	.read = generic_read_dir,
 	.llseek = hfs_llseek,
 	.fsync = hfs_fsync,
+	.flush = hfs_flush,
 	.unlocked_ioctl = hfs_ioctl,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = hfs_compat_ioctl,

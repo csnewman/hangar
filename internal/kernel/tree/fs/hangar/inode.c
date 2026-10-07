@@ -3,15 +3,22 @@
  * hangarfs: names, attributes and extended attributes, each passed to the
  * lower filesystem. A hangarfs inode stands for one lower inode, found again
  * by it, so hard links stay one inode here as they are below.
+ *
+ * A routed name's lower dentry is in the shared directory (route.c), so a
+ * name's lower parent is its lower dentry's, which need not be its parent's
+ * lower dentry. A rename or link between the two filesystems is EXDEV, but
+ * for a file renamed onto a routed name (hfs_rename_in).
  */
 
 #include "hangarfs.h"
+#include <linux/file.h>
 #include <linux/fileattr.h>
 #include <linux/fs_stack.h>
-#include <linux/hangar_sync.h>
 #include <linux/namei.h>
 #include <linux/posix_acl.h>
 #include <linux/posix_acl_xattr.h>
+#include <linux/random.h>
+#include <linux/sizes.h>
 #include <linux/xattr.h>
 
 static int hfs_inode_test(struct inode *inode, void *lower)
@@ -93,29 +100,42 @@ static int hfs_interpose(struct dentry *lower, struct dentry *dentry)
 }
 
 /*
- * The lower dentry for a name being made, its parent locked: the dentry
- * the lookup found, which a create replaces with the lower one it makes.
+ * The lower dentry for a name being made, its lower parent locked: the
+ * dentry the lookup found, which a create replaces with the lower one it
+ * makes.
  */
 static struct dentry *hfs_start_creating(struct dentry *dentry)
 {
-	struct dentry *parent = dget_parent(dentry);
+	struct dentry *lower = hfs_lower_dentry(dentry);
+	struct dentry *parent = dget_parent(lower);
 	struct dentry *ret;
 
-	ret = start_creating_dentry(hfs_lower_dentry(parent),
-				    hfs_lower_dentry(dentry));
+	ret = start_creating_dentry(parent, lower);
 	dput(parent);
 	return ret;
 }
 
 static struct dentry *hfs_start_removing(struct dentry *dentry)
 {
-	struct dentry *parent = dget_parent(dentry);
+	struct dentry *lower = hfs_lower_dentry(dentry);
+	struct dentry *parent = dget_parent(lower);
 	struct dentry *ret;
 
-	ret = start_removing_dentry(hfs_lower_dentry(parent),
-				    hfs_lower_dentry(dentry));
+	ret = start_removing_dentry(parent, lower);
 	dput(parent);
 	return ret;
+}
+
+/*
+ * A directory's times and size, after a change in it, from its lower one --
+ * unless the change was in a route's target, another directory.
+ */
+static void hfs_dir_changed(struct inode *dir, struct inode *lower_dir)
+{
+	if (hfs_lower_inode(dir) != lower_dir)
+		return;
+	fsstack_copy_attr_times(dir, lower_dir);
+	fsstack_copy_inode_size(dir, lower_dir);
 }
 
 /* After a create: the new name's dentry points at the lower one made. */
@@ -130,6 +150,28 @@ static void hfs_set_lower(struct dentry *dentry, struct dentry *lower)
 	}
 }
 
+/*
+ * A routed name's lower dentry: its target's. NULL for one that is not
+ * routed, found in the lower parent as usual.
+ */
+static struct dentry *hfs_lookup_routed(struct dentry *dentry)
+{
+	struct dentry *lower = NULL;
+	char *target;
+	int kind;
+
+	target = __getname();
+	if (!target)
+		return ERR_PTR(-ENOMEM);
+	kind = hfs_route(dentry, target);
+	if (kind < 0)
+		lower = ERR_PTR(kind);
+	else if (kind == HFS_ROUTED)
+		lower = hfs_route_lookup(dentry->d_sb, target);
+	__putname(target);
+	return lower;
+}
+
 static struct dentry *hfs_lookup(struct inode *dir, struct dentry *dentry,
 				 unsigned int flags)
 {
@@ -138,11 +180,17 @@ static struct dentry *hfs_lookup(struct inode *dir, struct dentry *dentry,
 	struct inode *inode, *lower_inode;
 	struct qstr name = QSTR_INIT(dentry->d_name.name, dentry->d_name.len);
 
-	lower = lookup_noperm_unlocked(&name, lower_parent);
+	/* Read first: routes changing during the lookup are checked again. */
+	dentry->d_time = atomic_long_read(&HFS_SB(dentry->d_sb)->routes_gen);
+	lower = hfs_lookup_routed(dentry);
+	if (!lower) {
+		lower = lookup_noperm_unlocked(&name, lower_parent);
+		if (!IS_ERR(lower))
+			fsstack_copy_attr_atime(dir, d_inode(lower_parent));
+	}
 	if (IS_ERR(lower))
 		return ERR_CAST(lower);
 	dentry->d_fsdata = lower;
-	fsstack_copy_attr_atime(dir, d_inode(lower_parent));
 
 	/* Read once: the parent is not locked, so it may become positive. */
 	lower_inode = READ_ONCE(lower->d_inode);
@@ -171,12 +219,9 @@ static int hfs_create(struct mnt_idmap *idmap, struct inode *dir,
 	if (!err) {
 		hfs_set_lower(dentry, lower);
 		err = hfs_interpose(lower, dentry);
-		fsstack_copy_attr_times(dir, lower_dir);
-		fsstack_copy_inode_size(dir, lower_dir);
+		hfs_dir_changed(dir, lower_dir);
 	}
 	end_creating(lower);
-	if (!err)
-		hangar_sync_notify(dentry);
 	return err;
 }
 
@@ -195,13 +240,11 @@ static int hfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 	if (!err && d_really_is_positive(lower)) {
 		hfs_set_lower(dentry, lower);
 		err = hfs_interpose(lower, dentry);
-		fsstack_copy_attr_times(dir, lower_dir);
+		hfs_dir_changed(dir, lower_dir);
 	}
 	end_creating(lower);
 	if (d_really_is_negative(dentry))
 		d_drop(dentry);
-	else if (!err)
-		hangar_sync_notify(dentry);
 	return err;
 }
 
@@ -220,14 +263,11 @@ static int hfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
 	if (!err && d_really_is_positive(lower)) {
 		hfs_set_lower(dentry, lower);
 		err = hfs_interpose(lower, dentry);
-		fsstack_copy_attr_times(dir, lower_dir);
-		fsstack_copy_inode_size(dir, lower_dir);
+		hfs_dir_changed(dir, lower_dir);
 	}
 	end_creating(lower);
 	if (d_really_is_negative(dentry))
 		d_drop(dentry);
-	else if (!err)
-		hangar_sync_notify(dentry);
 	return err;
 }
 
@@ -249,16 +289,15 @@ static struct dentry *hfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	if (!err && !d_unhashed(lower)) {
 		hfs_set_lower(dentry, lower);
 		err = hfs_interpose(lower, dentry);
-		fsstack_copy_attr_times(dir, lower_dir);
-		fsstack_copy_inode_size(dir, lower_dir);
-		set_nlink(dir, lower_dir->i_nlink);
+		if (hfs_lower_inode(dir) == lower_dir) {
+			hfs_dir_changed(dir, lower_dir);
+			set_nlink(dir, lower_dir->i_nlink);
+		}
 	}
 	dput(parent);
 	end_creating(lower);
 	if (d_really_is_negative(dentry))
 		d_drop(dentry);
-	else if (!err)
-		hangar_sync_notify(dentry);
 	return ERR_PTR(err);
 }
 
@@ -269,6 +308,8 @@ static int hfs_link(struct dentry *old, struct inode *dir, struct dentry *new)
 	struct inode *lower_dir;
 	int err;
 
+	if (lower_old->d_sb != hfs_lower_dentry(new)->d_sb)
+		return -EXDEV;
 	lower = hfs_start_creating(new);
 	if (IS_ERR(lower))
 		return PTR_ERR(lower);
@@ -277,12 +318,10 @@ static int hfs_link(struct dentry *old, struct inode *dir, struct dentry *new)
 	if (!err && d_really_is_positive(lower)) {
 		hfs_set_lower(new, lower);
 		err = hfs_interpose(lower, new);
-		fsstack_copy_attr_times(dir, lower_dir);
+		hfs_dir_changed(dir, lower_dir);
 		set_nlink(d_inode(old), hfs_lower_inode(d_inode(old))->i_nlink);
 	}
 	end_creating(lower);
-	if (!err && d_really_is_positive(new))
-		hangar_sync_notify(new);
 	return err;
 }
 
@@ -299,15 +338,13 @@ static int hfs_unlink(struct inode *dir, struct dentry *dentry)
 	lower_dir = d_inode(lower->d_parent);
 	err = vfs_unlink(&nop_mnt_idmap, lower_dir, lower, NULL);
 	if (!err) {
-		fsstack_copy_attr_times(dir, lower_dir);
+		hfs_dir_changed(dir, lower_dir);
 		set_nlink(inode, hfs_lower_inode(inode)->i_nlink);
 		inode_set_ctime_to_ts(inode, inode_get_ctime(dir));
 	}
 	end_removing(lower);
-	if (!err) {
-		hangar_sync_notify(dentry);
+	if (!err)
 		d_drop(dentry);
-	}
 	return err;
 }
 
@@ -324,47 +361,185 @@ static int hfs_rmdir(struct inode *dir, struct dentry *dentry)
 	err = vfs_rmdir(&nop_mnt_idmap, lower_dir, lower, NULL);
 	if (!err) {
 		clear_nlink(d_inode(dentry));
-		fsstack_copy_attr_times(dir, lower_dir);
-		set_nlink(dir, lower_dir->i_nlink);
+		if (hfs_lower_inode(dir) == lower_dir) {
+			hfs_dir_changed(dir, lower_dir);
+			set_nlink(dir, lower_dir->i_nlink);
+		}
 	}
 	end_removing(lower);
-	if (!err) {
-		hangar_sync_notify(dentry);
+	if (!err)
 		d_drop(dentry);
-	}
 	return err;
 }
 
+static int hfs_copy_data(struct file *in, struct file *out)
+{
+	loff_t in_pos = 0, out_pos = 0;
+	ssize_t n, w;
+	void *buf;
+	int err = 0;
+
+	buf = kvmalloc(SZ_64K, GFP_KERNEL);
+	if (!buf)
+		return -ENOMEM;
+	for (;;) {
+		n = kernel_read(in, buf, SZ_64K, &in_pos);
+		if (n <= 0) {
+			err = n;
+			break;
+		}
+		w = kernel_write(out, buf, n, &out_pos);
+		if (w != n) {
+			err = w < 0 ? w : -EIO;
+			break;
+		}
+	}
+	kvfree(buf);
+	/* Written through before it takes the name, as close would. */
+	return err ?: vfs_fsync(out, 0);
+}
+
+static void hfs_unlink_lower(struct dentry *lower)
+{
+	struct dentry *parent = dget_parent(lower);
+	struct dentry *child;
+
+	child = start_removing_dentry(parent, lower);
+	if (!IS_ERR(child)) {
+		vfs_unlink(&nop_mnt_idmap, d_inode(parent), child, NULL);
+		end_removing(child);
+	}
+	dput(parent);
+}
+
+/*
+ * A file renamed from here onto a routed name: a save written beside the
+ * name and renamed over it, which is how most programs save atomically.
+ * The file is copied to a new one beside the target, which is renamed over
+ * the target there -- as atomic, in the shared filesystem, as the save
+ * meant to be -- and then removed here. This dentry, left on a removed
+ * lower one, is looked up again (hfs_d_revalidate).
+ */
+static int hfs_rename_in(struct dentry *old, struct dentry *new,
+			 unsigned int flags)
+{
+	struct hfs_sb_info *sbi = HFS_SB(old->d_sb);
+	struct dentry *lower_old = hfs_lower_dentry(old);
+	struct dentry *lower_new = hfs_lower_dentry(new);
+	struct dentry *dir = dget_parent(lower_new);
+	struct path src = { .mnt = sbi->lower.mnt, .dentry = lower_old };
+	struct path dst = { .mnt = sbi->shared.mnt };
+	struct renamedata rd = {};
+	struct file *in, *out;
+	struct dentry *tmp;
+	char name[24];
+	int err;
+
+	if ((flags & RENAME_NOREPLACE) && d_really_is_positive(lower_new)) {
+		err = -EEXIST;
+		goto out;
+	}
+	snprintf(name, sizeof(name), ".hangarfs-%08x", get_random_u32());
+	tmp = start_creating(&nop_mnt_idmap, dir, &QSTR(name));
+	if (IS_ERR(tmp)) {
+		err = PTR_ERR(tmp);
+		goto out;
+	}
+	err = d_really_is_positive(tmp) ? -EEXIST :
+		vfs_create(&nop_mnt_idmap, tmp,
+			   d_inode(lower_old)->i_mode & S_IALLUGO, NULL);
+	tmp = end_creating_keep(tmp);
+	if (err) {
+		dput(tmp);
+		goto out;
+	}
+
+	dst.dentry = tmp;
+	in = kernel_file_open(&src, O_RDONLY, current_cred());
+	out = kernel_file_open(&dst, O_WRONLY, current_cred());
+	if (IS_ERR(in))
+		err = PTR_ERR(in);
+	else if (IS_ERR(out))
+		err = PTR_ERR(out);
+	else
+		err = hfs_copy_data(in, out);
+	if (!IS_ERR(in))
+		fput(in);
+	if (!IS_ERR(out))
+		fput(out);
+
+	if (!err) {
+		rd.mnt_idmap = &nop_mnt_idmap;
+		rd.old_parent = dir;
+		rd.new_parent = dir;
+		err = start_renaming_two_dentries(&rd, tmp, lower_new);
+		if (!err) {
+			err = vfs_rename(&rd);
+			end_renaming(&rd);
+		}
+	}
+	if (err)
+		hfs_unlink_lower(tmp);
+	else
+		hfs_unlink_lower(lower_old);
+	dput(tmp);
+out:
+	dput(dir);
+	return err;
+}
+
+/*
+ * A rename in one filesystem, either this one's lower or the shared one.
+ * A directory moved to or from where a route points has every name under
+ * it checked again: they may be routed differently where it lands.
+ */
 static int hfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 		      struct dentry *old, struct inode *new_dir,
 		      struct dentry *new, unsigned int flags)
 {
+	struct dentry *lower_old = hfs_lower_dentry(old);
+	struct dentry *lower_new = hfs_lower_dentry(new);
+	struct dentry *old_parent, *new_parent;
 	struct inode *target = d_inode(new);
 	struct renamedata rd = {};
+	bool recheck;
 	int err;
 
+	if (lower_old->d_sb != lower_new->d_sb) {
+		if (hfs_is_shared(new) && d_is_reg(old) &&
+		    !(flags & (RENAME_EXCHANGE | RENAME_WHITEOUT)))
+			return hfs_rename_in(old, new, flags);
+		return -EXDEV;
+	}
+	recheck = (d_is_dir(old) || (target && d_is_dir(new))) &&
+		  (hfs_routes_cover(old) || hfs_routes_cover(new));
+
+	/* start_renaming_two_dentries() takes its own reference to old's. */
+	old_parent = dget_parent(lower_old);
+	new_parent = dget_parent(lower_new);
 	rd.mnt_idmap = &nop_mnt_idmap;
-	rd.old_parent = hfs_lower_dentry(old->d_parent);
-	rd.new_parent = hfs_lower_dentry(new->d_parent);
+	rd.old_parent = old_parent;
+	rd.new_parent = new_parent;
 	rd.flags = flags;
-	err = start_renaming_two_dentries(&rd, hfs_lower_dentry(old),
-					  hfs_lower_dentry(new));
+	err = start_renaming_two_dentries(&rd, lower_old, lower_new);
 	if (err)
-		return err;
+		goto out;
 	err = vfs_rename(&rd);
 	if (!err) {
 		if (target)
 			hfs_copy_attr(target, hfs_lower_inode(target));
-		hfs_copy_attr(new_dir, d_inode(rd.new_parent));
-		if (new_dir != old_dir)
+		if (hfs_lower_inode(new_dir) == d_inode(rd.new_parent))
+			hfs_copy_attr(new_dir, d_inode(rd.new_parent));
+		if (new_dir != old_dir &&
+		    hfs_lower_inode(old_dir) == d_inode(rd.old_parent))
 			hfs_copy_attr(old_dir, d_inode(rd.old_parent));
 	}
 	end_renaming(&rd);
-	/* Both still at their old places: the VFS moves them after. */
-	if (!err) {
-		hangar_sync_notify(old);
-		hangar_sync_notify(new);
-	}
+	if (!err && recheck)
+		atomic_long_inc(&HFS_SB(old->d_sb)->routes_gen);
+out:
+	dput(old_parent);
+	dput(new_parent);
 	return err;
 }
 
@@ -416,9 +591,6 @@ static int hfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 	inode_unlock(d_inode(lower));
 	hfs_copy_attr(inode, hfs_lower_inode(inode));
 	fsstack_copy_inode_size(inode, hfs_lower_inode(inode));
-	/* What a profile keeps of a file: its contents and its mode. */
-	if (!err && (ia->ia_valid & (ATTR_MODE | ATTR_SIZE)))
-		hangar_sync_notify(dentry);
 	return err;
 }
 

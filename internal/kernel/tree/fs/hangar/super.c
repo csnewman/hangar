@@ -75,21 +75,34 @@ static const struct super_operations hfs_sops = {
 };
 
 /*
- * A cached name is still right if the lower one is, and the file is there.
- * The lower filesystem is reached only through this one, whose operations
- * keep the inodes' attributes in step, so a walk under RCU needs only the
- * lower dentry's own word: it stays a walk under RCU unless the lower
- * dentry was dropped or has a revalidation of its own.
+ * A cached name is still right if it is routed as when it was looked up, the
+ * lower one is right, and the file is there. The lower filesystem is reached
+ * only through this one, whose operations keep the inodes' attributes in
+ * step, so a walk under RCU needs only the lower dentry's own word: it stays
+ * a walk under RCU unless the routes changed, the lower dentry was dropped,
+ * or it has a revalidation of its own -- as a routed one, over NFS, does.
  */
 static int hfs_d_revalidate(struct inode *dir, const struct qstr *name,
 			    struct dentry *dentry, unsigned int flags)
 {
+	struct hfs_sb_info *sbi = HFS_SB(dentry->d_sb);
 	struct dentry *lower = READ_ONCE(dentry->d_fsdata);
+	unsigned long gen = atomic_long_read(&sbi->routes_gen);
 	int ret = 1;
 
 	/* The lower filesystem dropped its dentry: look the name up again. */
 	if (d_unhashed(lower))
 		return flags & LOOKUP_RCU ? -ECHILD : 0;
+	if (READ_ONCE(dentry->d_time) != gen) {
+		int kind;
+
+		if (flags & LOOKUP_RCU)
+			return -ECHILD;
+		kind = hfs_route(dentry, NULL);
+		if (kind < 0 || (kind != HFS_LOCAL) != hfs_is_shared(dentry))
+			return 0;
+		WRITE_ONCE(dentry->d_time, gen);
+	}
 	if (flags & LOOKUP_RCU) {
 		struct inode *inode = d_inode_rcu(dentry);
 
@@ -100,12 +113,15 @@ static int hfs_d_revalidate(struct inode *dir, const struct qstr *name,
 		return 1;
 	}
 	if (lower->d_flags & DCACHE_OP_REVALIDATE) {
+		/* A routed name's lower parent is the target's, not dir's. */
+		struct dentry *parent = dget_parent(lower);
 		struct name_snapshot n;
 
 		take_dentry_name_snapshot(&n, lower);
-		ret = lower->d_op->d_revalidate(hfs_lower_inode(dir), &n.name,
+		ret = lower->d_op->d_revalidate(d_inode(parent), &n.name,
 						lower, flags);
 		release_dentry_name_snapshot(&n);
+		dput(parent);
 	}
 	if (d_really_is_positive(dentry)) {
 		struct inode *inode = d_inode(dentry);
@@ -196,6 +212,7 @@ static int hfs_fill_super(struct super_block *sb, struct fs_context *fc)
 	if (!sb->s_root)
 		return -ENOMEM;
 	sb->s_root->d_fsdata = dget(sbi->lower.dentry);
+	mutex_init(&sbi->routes_mutex);
 	return 0;
 }
 
@@ -234,6 +251,7 @@ static void hfs_kill_sb(struct super_block *sb)
 
 	kill_anon_super(sb);
 	if (sbi) {
+		hfs_free_routes(sbi);
 		path_put(&sbi->lower);
 		kfree(sbi);
 	}
