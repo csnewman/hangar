@@ -30,6 +30,13 @@ func (g *Guest) ServeLocks(dev io.ReadWriter, changes bool) error {
 	done := make(chan struct{})
 	defer close(done)
 	go sl.registerPaths(done)
+	// A kernel from before the reports refuses ADD_WATCH: then the files
+	// are watched. The path watched matches nothing, and goes with the
+	// next registration.
+	if changes && sl.write(hangarsync.Msg{Op: hangarsync.OpAddWatch, Path: "/\x00hangar-probe"}) != nil {
+		g.log.Info("profile: the kernel does not report changes; watching shared files")
+		changes = false
+	}
 	if changes {
 		g.log.Info("profile: the kernel reports changes to shared files; nothing watches them")
 		g.kernelChanges.Store(true)
