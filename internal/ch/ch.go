@@ -21,6 +21,12 @@ import (
 	"strings"
 )
 
+// maxDiskQueues bounds a disk's queues. Each is a thread in the monitor with
+// an io_uring and its own descriptors, half a dozen of them: past a few
+// queues the guest gains little, and every disk of a large machine having one
+// per vCPU costs hundreds of threads and thousands of descriptors.
+const maxDiskQueues = 8
+
 // QUEUE_SIZE is the depth of each of the GPU's two virtqueues, and has to
 // match what the backend offers.
 const QUEUE_SIZE = 256
@@ -187,8 +193,8 @@ func (c *Config) Args() ([]string, error) {
 			// guest-writable file as a QCOW header.
 			spec := "path=" + d.Path + ",image_type=raw"
 			// A queue per vCPU, so each submits its own I/O without a lock
-			// shared with the others.
-			spec += ",num_queues=" + strconv.Itoa(c.CPUs)
+			// shared with the others, up to maxDiskQueues.
+			spec += ",num_queues=" + strconv.Itoa(min(c.CPUs, maxDiskQueues))
 			if d.ReadOnly {
 				spec += ",readonly=on"
 			}

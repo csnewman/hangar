@@ -18,6 +18,7 @@ import (
 )
 
 func main() {
+	raiseFileLimit()
 	config := flag.String("config", "/etc/hangar/worker.yaml", "worker configuration file")
 	debug := flag.Bool("debug", false, "log at debug level")
 	flag.Parse()
@@ -113,4 +114,19 @@ func run(path string, log *slog.Logger, rings *logs.Rings) error {
 		return nil
 	}
 	return err
+}
+
+// raiseFileLimit raises the limit on open files to the most allowed, for the
+// worker and what it starts. Go raises its own soft limit on its own, but
+// gives the processes it starts the limit it was given -- often 1024 in a
+// container -- unless it sets the limit itself. Cloud Hypervisor holds
+// several descriptors for every queue of every device, and a large machine
+// passes 1024.
+func raiseFileLimit() {
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		return
+	}
+	lim.Cur = lim.Max
+	syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim)
 }
