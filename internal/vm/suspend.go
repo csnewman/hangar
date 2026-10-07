@@ -60,9 +60,6 @@ func fingerprint(path string) string {
 // record is what the machine runs against.
 func (c InstanceConfig) record() suspendRecord {
 	r := suspendRecord{Base: fingerprint(c.Base)}
-	if c.BaseID != "" {
-		r.Base = "image:" + c.BaseID
-	}
 	if c.BaseDevice != "" {
 		r.Image = fmt.Sprintf("%s:%t:%s", c.BaseDevice, c.BaseDAX, fingerprint(c.BaseFile))
 	}

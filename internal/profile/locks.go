@@ -20,34 +20,16 @@ import (
 //
 // The shared paths are registered with the kernel and kept up to date, but
 // for the directories LockFS serves, whose locks it decides itself; their
-// backing is watched instead.
-//
-// With changes, the kernel also reports changes to shared files (the root
-// is hangarfs), and nothing here watches them while it does.
-func (g *Guest) ServeLocks(dev io.ReadWriter, changes bool) error {
+// backing is watched instead. The kernel reports changes to shared files,
+// which is how they are noticed: whatever changed while it could not report
+// is looked for when it starts.
+func (g *Guest) ServeLocks(dev io.ReadWriter) error {
 	sl := &lockServer{g: g, dev: dev, queues: map[string]chan hangarsync.Msg{},
 		cancels: map[uint64]chan struct{}{}}
 	done := make(chan struct{})
 	defer close(done)
 	go sl.registerPaths(done)
-	// A kernel from before the reports refuses ADD_WATCH: then the files
-	// are watched. The path watched matches nothing, and goes with the
-	// next registration.
-	if changes && sl.write(hangarsync.Msg{Op: hangarsync.OpAddWatch, Path: "/\x00hangar-probe"}) != nil {
-		g.log.Info("profile: the kernel does not report changes; watching shared files")
-		changes = false
-	}
-	if changes {
-		g.log.Info("profile: the kernel reports changes to shared files; nothing watches them")
-		g.kernelChanges.Store(true)
-		defer func() {
-			g.kernelChanges.Store(false)
-			select {
-			case g.kernelGone <- struct{}{}:
-			default:
-			}
-		}()
-	}
+	sl.changed("")
 	rd := hangarsync.NewReader(dev)
 	for {
 		m, err := rd.Next()

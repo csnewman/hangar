@@ -73,7 +73,10 @@ func (c *slowFiles) Write(b []byte) (int, error) {
 }
 
 type plane struct {
-	d        *db.DB
+	d *db.DB
+	// kernels are each guest's hangar-sync.
+	kmu      sync.Mutex
+	kernels  map[*profile.Guest]*fakeKernel
 	blobs    *blob.Memory
 	store    *profile.Store
 	guests   *guests
@@ -92,7 +95,7 @@ func newPlane(t *testing.T) *plane {
 		t.Fatal(err)
 	}
 	blobs := blob.NewMemory()
-	p := &plane{d: d, blobs: blobs, store: profile.NewStore(d, blobs, sealer), homes: map[string]string{}, envNames: map[string]string{}}
+	p := &plane{d: d, blobs: blobs, kernels: map[*profile.Guest]*fakeKernel{}, store: profile.NewStore(d, blobs, sealer), homes: map[string]string{}, envNames: map[string]string{}}
 	err = d.Transact(ctx, func(tx db.Tx) error {
 		if err := tx.QueryRow(ctx, `INSERT INTO users (username) VALUES ('alice') RETURNING id`).Scan(&p.owner); err != nil {
 			return err
@@ -155,10 +158,21 @@ func (p *plane) guestFor(t *testing.T, id, home string) *profile.Guest {
 	if err := g.KeepStateIn(home + ".state.json"); err != nil {
 		t.Fatal(err)
 	}
+	k := serveFakeKernel(t, g, home)
+	p.kmu.Lock()
+	p.kernels[g] = k
+	p.kmu.Unlock()
 	p.guests.mu.Lock()
 	p.guests.by[id] = g
 	p.guests.mu.Unlock()
 	return g
+}
+
+// kernel is a guest's hangar-sync.
+func (p *plane) kernel(g *profile.Guest) *fakeKernel {
+	p.kmu.Lock()
+	defer p.kmu.Unlock()
+	return p.kernels[g]
 }
 
 // socketPath is somewhere short enough for a unix socket: a test's own

@@ -67,11 +67,6 @@ func preflight(cfg *Config) error {
 	default:
 		return fmt.Errorf("vm.image_device %q is none of %s, %s or %s", cfg.ImageDevice, ImageDisk, ImagePmem, ImageVirtiofs)
 	}
-	switch cfg.Root {
-	case RootOverlay, RootHangarfs:
-	default:
-		return fmt.Errorf("vm.root %q is neither %s nor %s", cfg.Root, RootHangarfs, RootOverlay)
-	}
 	for ref, img := range cfg.Images {
 		st, err := os.Stat(img.Base)
 		if err != nil {
@@ -129,15 +124,10 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	}
 	// One writable disk holds both the root's layer and Docker's store,
 	// which the agent mounts at /var/lib/docker beside the root rather than
-	// in it: overlay2 cannot stack on the overlay root. An environment made
-	// with a separate Docker disk keeps it.
+	// in it: overlay2 cannot stack on the overlay root.
 	upper := filepath.Join(m.dir, "upper.ext4")
 	if err := EnsureDisk(ctx, upper, "hangar-upper", m.rt.cfg.UpperGiB+m.rt.cfg.DockerGiB); err != nil {
 		return nil, err
-	}
-	docker := filepath.Join(m.dir, "docker.ext4")
-	if _, err := os.Stat(docker); err != nil {
-		docker = ""
 	}
 	var baseFile, baseDevice string
 	if dev := m.rt.cfg.ImageDevice; dev == ImageDisk || dev == ImagePmem {
@@ -153,13 +143,9 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	}
 	m.makeRoomForHugePages(s.MemoryMiB)
 	// The writable layer is the first disk: the agent, as init, mounts
-	// /dev/vda, and a separate Docker disk, where there is one, /dev/vdb.
-	// The editor disk, shared read-only by every environment, is mounted by
-	// label.
+	// /dev/vda. The editor disk, shared read-only by every environment, is
+	// mounted by label.
 	disks := []ch.Disk{{Path: upper}}
-	if docker != "" {
-		disks = append(disks, ch.Disk{Path: docker})
-	}
 	if m.rt.cfg.Editor != "" {
 		disks = append(disks, ch.Disk{Path: m.rt.cfg.Editor, ReadOnly: true})
 	}
@@ -169,9 +155,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		Dir:         m.dir,
 		Kernel:      m.rt.cfg.Kernel,
 		Agent:       m.rt.cfg.Agent,
-		Hangarfs:    m.rt.cfg.Root == RootHangarfs,
 		Base:        img.Base,
-		BaseID:      img.ID,
 		BaseFile:    baseFile,
 		BaseDevice:  baseDevice,
 		BaseDAX:     baseDevice == ImagePmem && s.DAX,
@@ -200,9 +184,6 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		cfg.ExtraCmdline = "systemd.unit=multi-user.target systemd.mask=hangar-desktop.service"
 	} else {
 		cfg.ExtraCmdline = "systemd.unit=graphical.target"
-	}
-	if docker != "" {
-		cfg.ExtraCmdline += " hangar.docker=/dev/vdb"
 	}
 	inst, err := Boot(ctx, cfg)
 	if err != nil {

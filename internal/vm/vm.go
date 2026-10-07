@@ -59,10 +59,6 @@ type Image struct {
 	// Copy is the store's directory for the copy, where its EROFS image is
 	// kept.
 	Copy string `yaml:"-"`
-	// ID names what Base holds when the directory itself cannot: a stack of
-	// layers is mounted afresh after a restart, and is the same image. Empty
-	// for a directory that is the image.
-	ID string `yaml:"-"`
 }
 
 // Config is what the runtime needs from the worker's configuration.
@@ -98,9 +94,6 @@ type Config struct {
 	// ImageDevice is how the base reaches the guest: ImageDisk (the
 	// default), ImagePmem, or ImageVirtiofs.
 	ImageDevice string
-	// Root is what merges the writable layer over the base as the guest's
-	// root: RootHangarfs (the default) or RootOverlay.
-	Root string
 	// DaxMiB sizes the window a virtio-fs base is mapped through, for an
 	// environment that asks for DAX. Zero reads every file through the
 	// backend, whatever an environment asks.
@@ -119,19 +112,6 @@ type Config struct {
 	BootTimeout time.Duration
 	Log         *slog.Logger
 }
-
-// What the guest's root is.
-const (
-	// RootOverlay is the kernel's overlayfs over the base and the writable
-	// disk, and nothing over it: locks on shared files hold within one
-	// environment.
-	RootOverlay = "overlay"
-	// RootHangarfs is overlayfs with hangarfs (the guest kernel's own,
-	// internal/kernel/tree/fs/hangar) mounted over it as the root, so that
-	// locks on shared files are taken across environments. A guest kernel
-	// without hangarfs gets the overlay alone.
-	RootHangarfs = "hangarfs"
-)
 
 // How the base reaches the guest.
 const (
@@ -153,9 +133,6 @@ const (
 func (c *Config) defaults() {
 	if c.ImageDevice == "" {
 		c.ImageDevice = ImageDisk
-	}
-	if c.Root == "" {
-		c.Root = RootHangarfs
 	}
 	if c.UpperGiB == 0 {
 		c.UpperGiB = 16

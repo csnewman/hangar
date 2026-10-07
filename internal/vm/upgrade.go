@@ -18,8 +18,7 @@ import (
 // files it has changed stay as they are, over the newer image. The writable
 // disk is copied first, into rollbackDir, and going back restores that copy
 // and the old pin. Docker's store, on the same disk beside the layer, goes
-// with it into the copy; a separate Docker disk, where an environment has
-// one, is left alone either way.
+// with it into the copy.
 
 // rollbackDir, in an environment's directory, holds the copy of its writable
 // disk from before its last upgrade and the pin it had then.

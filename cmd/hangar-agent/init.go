@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -27,19 +26,19 @@ import (
 //	       command line names (hangar.image=), mounted with DAX if
 //	       hangar.image_dax=1, or else over virtiofs (tag hangar-base)
 //	/rw    the environment's writable disk, the first virtio-blk device
-//	/root  overlayfs of the two, which becomes /; with hangar.root=hangarfs
-//	       on the command line, hangarfs over that overlayfs (mounted at
-//	       /lower)
+//	/lower overlayfs of the two
+//	/root  hangarfs over /lower, which becomes /
 //
 // /var/lib/docker is not part of the root: overlay2 cannot stack on
-// overlayfs. It is /rw/docker, a directory on the same
-// writable disk, mounted there beside the root; or, for an environment made
-// with a disk of its own for Docker, that disk (hangar.docker=).
+// overlayfs. It is /rw/docker, a directory on the same writable disk,
+// mounted there beside the root.
 
 const (
 	baseTag   = "hangar-base"
 	upperDisk = "/dev/vda"
 	newRoot   = "/root"
+	// lowerDir is where the overlay hangarfs serves is mounted.
+	lowerDir = "/lower"
 	// diskWait covers the kernel still probing the virtio-blk device when
 	// init starts.
 	diskWait = 10 * time.Second
@@ -86,44 +85,17 @@ func mountBase() error {
 	return nil
 }
 
-// cmdlineValue is the value of a key=value parameter on the kernel command
-// line, or "" without it.
-func cmdlineValue(key string) string {
-	b, err := os.ReadFile("/proc/cmdline")
-	if err != nil {
-		return ""
-	}
-	for _, f := range strings.Fields(string(b)) {
-		if v, ok := strings.CutPrefix(f, key+"="); ok {
-			return v
-		}
-	}
-	return ""
-}
-
 // mountDocker gives the new root its Docker store at /var/lib/docker.
 func mountDocker() error {
 	target := filepath.Join(newRoot, "var", "lib", "docker")
 	if err := os.MkdirAll(target, 0o710); err != nil {
 		return err
 	}
-	if dev := cmdlineValue("hangar.docker"); dev != "" {
-		if err := waitFor(dev); err != nil {
-			return err
-		}
-		return unix.Mount(dev, target, "ext4", 0, "discard")
-	}
 	src := "/rw/docker"
 	if err := os.MkdirAll(src, 0o710); err != nil {
 		return err
 	}
 	return unix.Mount(src, target, "", unix.MS_BIND, "")
-}
-
-// cmdlineHas is whether the kernel command line has a parameter.
-func cmdlineHas(param string) bool {
-	b, err := os.ReadFile("/proc/cmdline")
-	return err == nil && slices.Contains(strings.Fields(string(b)), param)
 }
 
 // waitFor waits for a device node, which the kernel may still be probing
@@ -191,37 +163,19 @@ func assembleRoot() error {
 			return err
 		}
 	}
-	hangarfsRoot := cmdlineHas("hangar.root=hangarfs")
-	// Under hangarfs, the overlay is its lower directory, left in the
-	// initramfs: hangarfs holds it for as long as it is mounted.
-	at := newRoot
-	if hangarfsRoot {
-		at = "/lower"
-		if err := os.MkdirAll(at, 0o755); err != nil {
-			return err
-		}
+	// The overlay is hangarfs's lower directory, left in the initramfs:
+	// hangarfs holds it for as long as it is mounted. transparent: hangarfs
+	// takes no stacking depth of its own, so an overlay can still be
+	// mounted on the root.
+	if err := os.MkdirAll(lowerDir, 0o755); err != nil {
+		return err
 	}
-	if err := unix.Mount("overlay", at, "overlay", 0,
+	if err := unix.Mount("overlay", lowerDir, "overlay", 0,
 		"lowerdir=/base,upperdir=/rw/upper,workdir=/rw/work"); err != nil {
 		return fmt.Errorf("stacking overlayfs: %w", err)
 	}
-	if hangarfsRoot {
-		// transparent: hangarfs takes no stacking depth of its own,
-		// so an overlay can still be mounted on the root.
-		err := unix.Mount(at, newRoot, "hangarfs", 0, "transparent")
-		switch {
-		case errors.Is(err, unix.ENODEV):
-			// A kernel built without hangarfs: the overlay is the
-			// root, and locks on shared files are this guest's own.
-			if err := unix.Mount(at, newRoot, "", unix.MS_MOVE, ""); err != nil {
-				return fmt.Errorf("moving the overlay to the root: %w", err)
-			}
-			fmt.Fprintln(os.Stderr, "INITRAMFS: this kernel has no hangarfs; root by overlayfs alone")
-		case err != nil:
-			return fmt.Errorf("mounting hangarfs over the overlay: %w", err)
-		default:
-			fmt.Fprintln(os.Stderr, "INITRAMFS: root by hangarfs over overlayfs")
-		}
+	if err := unix.Mount(lowerDir, newRoot, "hangarfs", 0, "transparent"); err != nil {
+		return fmt.Errorf("mounting hangarfs over the overlay: %w", err)
 	}
 
 	// Without it Docker cannot start, but the environment is still usable.

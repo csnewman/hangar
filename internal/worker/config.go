@@ -87,11 +87,6 @@ type VMConfig struct {
 	// same image as virtio-pmem, mapped with DAX for an environment that
 	// asks; or "virtiofs", the image's directory served over virtio-fs.
 	ImageDevice string `yaml:"image_device"`
-	// Root is what an environment's root is: "hangarfs" (the default), the
-	// guest kernel's hangarfs over the kernel's overlayfs, which takes locks
-	// on shared files across an owner's environments; or "overlay", the
-	// overlayfs alone, where such locks hold within one environment.
-	Root string `yaml:"root"`
 	// DaxMiB sizes the DAX window through which an environment that asks
 	// for DAX maps its base's files from this machine's page cache, with
 	// image_device virtiofs. 0 serves every base without one, whatever an

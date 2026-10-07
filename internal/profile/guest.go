@@ -23,7 +23,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -45,16 +44,11 @@ type Guest struct {
 	held    map[string]bool   // locks held here, renewed while they are
 	backing map[string]string // LockFS's backing for each directory it serves
 
-	// kernelChanges is whether the kernel reports changes to shared files
-	// (ServeLocks), in which case nothing here watches them. Its reports,
-	// relative to the home directory, wait in changes; one that did not
-	// fit is changesLost, and everything is looked at again.
-	kernelChanges atomic.Bool
-	changes       chan string
-	changesLost   atomic.Bool
-	// kernelGone is told when the kernel stops reporting, and watching
-	// starts again.
-	kernelGone chan struct{}
+	// changes are the kernel's reports of changes to shared files
+	// (ServeLocks), relative to the home directory; one that did not fit
+	// is changesLost, and everything is looked at again.
+	changes     chan string
+	changesLost atomic.Bool
 
 	synced     chan struct{} // closed once a session has had the profile whole
 	syncedOnce sync.Once
@@ -131,7 +125,7 @@ func (g *Guest) SetBacking(backing map[string]string) {
 func NewGuest(u *user.User, log *slog.Logger) *Guest {
 	g := &Guest{user: u, log: log, changed: make(chan struct{}), held: map[string]bool{},
 		synced: make(chan struct{}), agreed: map[string]string{},
-		changes: make(chan string, 4096), kernelGone: make(chan struct{}, 1)}
+		changes: make(chan string, 4096)}
 	go g.renew()
 	return g
 }
@@ -145,7 +139,7 @@ func (g *Guest) Serve(conn io.ReadWriteCloser) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s := &guestSession{g: g, conn: conn, home: u.HomeDir,
-		dirty: map[string]bool{}, watched: map[string]bool{}, pending: map[int64]chan Message{},
+		dirty: map[string]bool{}, pending: map[int64]chan Message{},
 	}
 	s.uid, _ = strconv.Atoi(u.Uid)
 	s.gid, _ = strconv.Atoi(u.Gid)
@@ -280,7 +274,7 @@ func (g *Guest) renew() {
 	}
 }
 
-// guestSession is one session, and the watch on the home directory it
+// guestSession is one session, and what it knows of the home directory it
 // keeps while it lasts.
 type guestSession struct {
 	g        *Guest
@@ -295,9 +289,7 @@ type guestSession struct {
 	paths Paths
 
 	// Owned by run's goroutine.
-	dirty   map[string]bool // paths changed here, not yet looked at
-	watched map[string]bool // directories watched
-	watcher *fsnotify.Watcher
+	dirty map[string]bool // paths changed here, not yet looked at
 
 	rmu      sync.Mutex
 	ready    bool // the profile has been sent whole
@@ -381,13 +373,6 @@ func (s *guestSession) setKnown(rel, h string) {
 }
 
 func (s *guestSession) run(ctx context.Context) error {
-	w, err := fsnotify.NewWatcher()
-	if err != nil {
-		return err
-	}
-	s.watcher = w
-	defer w.Close()
-
 	// Buffered well past anything a session sends at once: the reader
 	// must never wait on run, which can itself be waiting on a directory
 	// a lock handler holds, while the lock handler waits on the reader.
@@ -438,36 +423,9 @@ func (s *guestSession) run(ctx context.Context) error {
 			if err := s.handle(m); err != nil {
 				return err
 			}
-		case ev, ok := <-w.Events:
-			if !ok {
-				return errors.New("the file watch ended")
-			}
-			rel, err := filepath.Rel(s.home, ev.Name)
-			if err != nil {
-				continue
-			}
-			if ev.Has(fsnotify.Create) && s.sharedPaths().InTree(rel) {
-				if st, err := os.Lstat(ev.Name); err == nil && st.IsDir() {
-					s.watchTree(ev.Name)
-				}
-			}
-			s.dirty[rel] = true
-			// A directory moved or removed is one event, not one for each
-			// file in it: what the profile holds under it is looked at too.
-			if ev.Has(fsnotify.Rename) || ev.Has(fsnotify.Remove) {
-				for _, p := range s.knownUnder(rel) {
-					s.dirty[p] = true
-				}
-			}
-			debounce.Reset(100 * time.Millisecond)
 		case rel := <-s.g.changes:
 			s.changedHere(rel)
 			debounce.Reset(100 * time.Millisecond)
-		case <-s.g.kernelGone:
-			s.watchAll()
-			debounce.Reset(100 * time.Millisecond)
-		case err := <-w.Errors:
-			s.g.log.Warn("profile: watching files", "err", err)
 		case <-debounce.C:
 			if s.g.changesLost.Swap(false) {
 				s.rescan()
@@ -526,7 +484,7 @@ func (s *guestSession) handle(m Message) error {
 	return nil
 }
 
-// setPaths watches what the profile shares. A path the profile stops sharing is
+// setPaths takes what the profile shares. A path the profile stops sharing is
 // left as it is, a file of this environment's own.
 func (s *guestSession) setPaths(paths Paths) {
 	if slices.Equal(paths, s.sharedPaths()) {
@@ -541,23 +499,10 @@ func (s *guestSession) setPaths(paths Paths) {
 			s.g.log.Warn("profile: making a directory", "dir", d, "err", err)
 		}
 	}
-	s.watchAll()
+	s.rescan()
 	if s.isReady() {
 		s.flush()
 	}
-}
-
-// watchAll watches every shared path, and marks every shared file to be
-// looked at.
-func (s *guestSession) watchAll() {
-	parents, trees := s.sharedPaths().Dirs()
-	for _, d := range parents {
-		s.watch(filepath.Join(s.home, d))
-	}
-	for _, d := range trees {
-		s.watchTree(filepath.Join(s.home, d))
-	}
-	s.rescan()
 }
 
 // changedHere marks what the kernel reported changed to be looked at: the
@@ -575,7 +520,7 @@ func (s *guestSession) changedHere(rel string) {
 	}
 	if s.sharedPaths().InTree(rel) {
 		if st, err := os.Lstat(filepath.Join(s.home, rel)); err == nil && st.IsDir() {
-			s.watchTree(filepath.Join(s.home, rel))
+			s.markTree(filepath.Join(s.home, rel))
 		}
 	}
 }
@@ -816,26 +761,11 @@ func (s *guestSession) mkdirAll(dir string) error {
 	return os.Lchown(dir, s.uid, s.gid)
 }
 
-func (s *guestSession) watch(dir string) {
-	if s.watched[dir] || s.g.kernelChanges.Load() {
-		return
-	}
-	if err := s.watcher.Add(dir); err != nil {
-		s.g.log.Warn("profile: watching a directory", "dir", dir, "err", err)
-		return
-	}
-	s.watched[dir] = true
-}
-
-// watchTree watches a directory and every directory under it, marking what
-// is in them to be looked at.
-func (s *guestSession) watchTree(dir string) {
+// markTree marks what is in a directory and every directory under it to be
+// looked at.
+func (s *guestSession) markTree(dir string) {
 	filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if e.IsDir() {
-			s.watch(p)
+		if err != nil || e.IsDir() {
 			return nil
 		}
 		if rel, err := filepath.Rel(s.home, p); err == nil {

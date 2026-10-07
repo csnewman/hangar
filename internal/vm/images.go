@@ -16,8 +16,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/opencontainers/go-digest"
-
 	"github.com/csnewman/hangar/internal/api"
 )
 
@@ -37,8 +35,8 @@ import (
 // configuration names a local source for the reference, which is copied.
 //
 // Each copy is a directory holding files naming its reference and digest,
-// and its root filesystem as rootfs/: for a pulled image, its layers stacked
-// there (see layers.go); for a local build, a copy of it. A directory being
+// and its root filesystem as rootfs/: for a pulled image, its EROFS image
+// mounted there (see copies.go); for a local build, a copy of it. A directory being
 // fetched is named with ".fetching" and renamed into place when complete,
 // so a copy interrupted half made is fetched again rather than booted.
 type ImageStore struct {
@@ -82,10 +80,6 @@ type heldCopy struct {
 	dir string
 	// at is when the copy was taken, which orders copies of one reference.
 	at time.Time
-	// layers are the copy's layers, bottom first, for a copy pulled before
-	// pulls wrote EROFS images: they are unpacked and stacked. None for any
-	// other copy.
-	layers []digest.Digest
 	// image is whether the copy's root filesystem is its EROFS image,
 	// mounted, as a pulled copy's is.
 	image bool
@@ -194,15 +188,8 @@ func NewImageStore(dir string, sources map[string]Image, auth map[string]Registr
 		// A copy with no digest file is a copy of its own, digest "",
 		// which no lookup of its reference names.
 		dgst, _ := os.ReadFile(filepath.Join(path, "digest"))
-		layers, err := readLayers(path)
-		if err != nil {
-			return nil, err
-		}
 		c := api.ImageCopy{Ref: string(ref), Digest: strings.TrimSpace(string(dgst))}
-		s.held[c] = heldCopy{dir: path, at: st.ModTime(), layers: layers, image: hasImageMark(path)}
-	}
-	if err := s.pruneLayers(); err != nil {
-		return nil, err
+		s.held[c] = heldCopy{dir: path, at: st.ModTime(), image: hasImageMark(path)}
 	}
 	return s, nil
 }
@@ -313,11 +300,7 @@ func (s *ImageStore) Get(ctx context.Context, c api.ImageCopy, watch func(FetchP
 			if err != nil {
 				return Image{}, err
 			}
-			img := Image{Base: base, Copy: h.dir}
-			if len(h.layers) > 1 {
-				img.ID = c.Ref + "@" + c.Digest
-			}
-			return img, nil
+			return Image{Base: base, Copy: h.dir}, nil
 		}
 		f, busy := s.fetching[c]
 		if !busy {
@@ -440,17 +423,10 @@ func (s *ImageStore) List() []api.LocalImage {
 		dir     string
 		state   string
 		current bool
-		// layers are a stacked copy's, whose size is theirs; shared ones
-		// count in every copy that has them.
-		layers []string
 	}
 	var entries []entry
 	for c, h := range s.held {
-		e := entry{c: c, dir: h.dir, state: "ready", current: s.isCurrent(c)}
-		for _, d := range h.layers {
-			e.layers = append(e.layers, s.layerDir(d))
-		}
-		entries = append(entries, e)
+		entries = append(entries, entry{c: c, dir: h.dir, state: "ready", current: s.isCurrent(c)})
 	}
 	for c := range s.fetching {
 		entries = append(entries, entry{c: c, dir: s.path(c) + ".fetching", state: "fetching", current: s.current[c.Ref] == c.Digest})
@@ -459,15 +435,7 @@ func (s *ImageStore) List() []api.LocalImage {
 
 	out := make([]api.LocalImage, 0, len(entries))
 	for _, e := range entries {
-		size := allocated(e.dir)
-		if len(e.layers) > 0 {
-			// The stack itself is the layers' files, seen again.
-			size = 0
-			for _, l := range e.layers {
-				size += allocated(l)
-			}
-		}
-		out = append(out, api.LocalImage{Ref: e.c.Ref, Digest: e.c.Digest, SizeBytes: size,
+		out = append(out, api.LocalImage{Ref: e.c.Ref, Digest: e.c.Digest, SizeBytes: allocated(e.dir),
 			State: e.state, Current: e.current, Environments: []string{}})
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -496,7 +464,7 @@ func (s *ImageStore) Remove(c api.ImageCopy) error {
 		s.mu.Unlock()
 		return err
 	}
-	return s.pruneLayers()
+	return nil
 }
 
 // Prune deletes every copy that is not current and that inUse says no

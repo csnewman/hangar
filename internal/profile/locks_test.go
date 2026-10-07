@@ -2,36 +2,44 @@ package profile_test
 
 import (
 	"context"
+	"io/fs"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 
 	"github.com/csnewman/hangar/internal/hangarsync"
 	"github.com/csnewman/hangar/internal/profile"
 )
 
-// fakeKernel is the kernel's end of /dev/hangar-sync for one guest.
+// fakeKernel is the kernel's end of /dev/hangar-sync for one guest. It
+// reports what changes in the guest's home directory, as hangarfs does for
+// the files written through it, until told not to (quiet).
 type fakeKernel struct {
 	conn    net.Conn
+	wmu     sync.Mutex // one message written at a time
 	mu      sync.Mutex
 	paths   []string
 	watches []string
 	cleared int // ClearPaths messages read
 	replies map[uint64]chan int32
+	quiet   atomic.Bool
 }
 
-// serveFakeKernel serves a guest's locks; with changes, the kernel reports
-// changes to shared files too, as under hangarfs.
-func serveFakeKernel(t *testing.T, g *profile.Guest, changes bool) *fakeKernel {
+// serveFakeKernel is the kernel for a guest whose home directory is home.
+func serveFakeKernel(t *testing.T, g *profile.Guest, home string) *fakeKernel {
 	kernel, agent := net.Pipe()
 	t.Cleanup(func() { kernel.Close(); agent.Close() })
 	k := &fakeKernel{conn: kernel, replies: map[uint64]chan int32{}}
-	go g.ServeLocks(agent, changes)
+	go g.ServeLocks(agent)
+	k.report(t, home)
 	go func() {
 		rd := hangarsync.NewReader(kernel)
 		for {
@@ -59,6 +67,44 @@ func serveFakeKernel(t *testing.T, g *profile.Guest, changes bool) *fakeKernel {
 	return k
 }
 
+// report reports what changes under home, watching it as hangarfs would
+// see it written.
+func (k *fakeKernel) report(t *testing.T, home string) {
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { w.Close() })
+	watchTree := func(dir string) {
+		filepath.WalkDir(dir, func(p string, e fs.DirEntry, err error) error {
+			if err == nil && e.IsDir() {
+				w.Add(p)
+			}
+			return nil
+		})
+	}
+	watchTree(home)
+	go func() {
+		for ev := range w.Events {
+			if ev.Has(fsnotify.Create) {
+				if st, err := os.Lstat(ev.Name); err == nil && st.IsDir() {
+					watchTree(ev.Name)
+				}
+			}
+			if !k.quiet.Load() {
+				k.send(hangarsync.Msg{Op: hangarsync.OpChanged, Path: ev.Name})
+			}
+		}
+	}()
+}
+
+func (k *fakeKernel) send(m hangarsync.Msg) error {
+	k.wmu.Lock()
+	defer k.wmu.Unlock()
+	_, err := k.conn.Write(m.Marshal())
+	return err
+}
+
 func (k *fakeKernel) shares(p string) bool {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -81,7 +127,7 @@ func (k *fakeKernel) lock(t *testing.T, id uint64, path string, wait bool) chan 
 	if wait {
 		m.Flags = hangarsync.FlagWait
 	}
-	if _, err := k.conn.Write(m.Marshal()); err != nil {
+	if err := k.send(m); err != nil {
 		t.Fatal(err)
 	}
 	return c
@@ -100,14 +146,14 @@ func (k *fakeKernel) watching(p string) bool {
 
 func (k *fakeKernel) changed(t *testing.T, path string) {
 	t.Helper()
-	if _, err := k.conn.Write(hangarsync.Msg{Op: hangarsync.OpChanged, Path: path}.Marshal()); err != nil {
+	if err := k.send(hangarsync.Msg{Op: hangarsync.OpChanged, Path: path}); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func (k *fakeKernel) idle(t *testing.T, path string) {
 	t.Helper()
-	if _, err := k.conn.Write(hangarsync.Msg{Op: hangarsync.OpIdle, Path: path}.Marshal()); err != nil {
+	if err := k.send(hangarsync.Msg{Op: hangarsync.OpIdle, Path: path}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -134,7 +180,7 @@ func TestKernelLocksAreTheServers(t *testing.T) {
 	}
 	_, a, ga := p.env(t, "a", false)
 	_, b, gb := p.env(t, "b", false)
-	ka, kb := serveFakeKernel(t, ga, false), serveFakeKernel(t, gb, false)
+	ka, kb := p.kernel(ga), p.kernel(gb)
 	dbA, dbB := filepath.Join(a, "proj", "db"), filepath.Join(b, "proj", "db")
 	eventually(t, "the shared directory to be registered", func() bool { return ka.shares(dbA) && kb.shares(dbB) })
 	if ka.shares(filepath.Join(a, ".claude", "x")) {
@@ -176,8 +222,8 @@ func TestKernelLocksAreTheServers(t *testing.T) {
 	}
 }
 
-// Under hangarfs the kernel reports what changes, and the files are not
-// watched: a change reaches the profile when it is reported.
+// The kernel reports what changes, and nothing else notices: a change
+// reaches the profile when it is reported.
 func TestKernelReportsChanges(t *testing.T) {
 	ctx := context.Background()
 	p := newPlane(t)
@@ -185,13 +231,8 @@ func TestKernelReportsChanges(t *testing.T) {
 	_, b, _ := p.env(t, "b", false)
 	backing := t.TempDir()
 	ga.SetBacking(map[string]string{".claude": backing})
-	ka := serveFakeKernel(t, ga, true)
-	eventually(t, "the kernel to be spoken to", func() bool {
-		ka.mu.Lock()
-		defer ka.mu.Unlock()
-		return ka.cleared > 0
-	})
-	// Shared once the kernel reports changes, so nothing watches it.
+	ka := p.kernel(ga)
+	ka.quiet.Store(true)
 	if err := p.store.AddPath(ctx, p.owner, "proj/"); err != nil {
 		t.Fatal(err)
 	}

@@ -40,8 +40,7 @@ func (m *machine) sample(inst *Instance, cpus int) {
 	defer t.Stop()
 	for {
 		now := counters{at: time.Now()}
-		st := &api.EnvironmentStats{DiskUsedBytes: allocated(filepath.Join(m.dir, "upper.ext4")) +
-			allocated(filepath.Join(m.dir, "docker.ext4"))}
+		st := &api.EnvironmentStats{DiskUsedBytes: allocated(filepath.Join(m.dir, "upper.ext4"))}
 
 		if pid := inst.Pid(); pid != 0 {
 			now.cpuTicks = processTicks(pid)

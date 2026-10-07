@@ -35,12 +35,8 @@ type InstanceConfig struct {
 	Kernel string `json:"kernel"`
 	// Agent is the guest agent, each boot's initramfs and then its init.
 	Agent string `json:"agent"`
-	// Hangarfs mounts hangarfs over the overlay root (RootHangarfs).
-	Hangarfs bool `json:"hangarfs,omitempty"`
-	// Base is the image's root filesystem, and BaseID what it holds, when
-	// the directory does not say (Image.ID).
-	Base   string `json:"base"`
-	BaseID string `json:"base_id,omitempty"`
+	// Base is the image's root filesystem.
+	Base string `json:"base"`
 	// BaseFile is an EROFS image of Base, attached as BaseDevice
 	// (ImageDisk or ImagePmem), which the guest mounts with DAX if BaseDAX.
 	// Empty serves Base itself over virtio-fs.
@@ -48,8 +44,7 @@ type InstanceConfig struct {
 	BaseDevice string `json:"base_device,omitempty"`
 	BaseDAX    bool   `json:"base_dax,omitempty"`
 	// Disks follow: the writable layer first, which the agent mounts as
-	// /dev/vda, then a separate Docker disk where an environment has one,
-	// then any read-only ones.
+	// /dev/vda, then any read-only ones.
 	Disks []ch.Disk `json:"disks"`
 
 	MemoryMiB int `json:"memory_mib"`
@@ -252,9 +247,6 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 		APISocket:    filepath.Join(run, "api.sock"),
 	}
 
-	if cfg.Hangarfs {
-		ccfg.ExtraCmdline += " hangar.root=hangarfs"
-	}
 	// The guest's initramfs mounts the base as the lower layer: the EROFS
 	// image from the device named on the command line, or, with no image,
 	// the directory over virtio-fs.

@@ -55,11 +55,6 @@ vm:
   # reads it. "virtiofs": the image's directory served over virtio-fs, where
   # every lookup is a round trip to this machine.
   image_device: disk
-  # An environment's root is hangarfs, the guest kernel's own filesystem,
-  # over the kernel's overlayfs: a lock taken on a file under a shared path
-  # holds across the owner's environments. "overlay" leaves hangarfs out,
-  # and such locks hold within one environment only.
-  # root: overlay
   # With image_device virtiofs, environments whose template asks for DAX map
   # their base's files from this machine's page cache through a window of
   # this size, rather than each keeping a copy. Programs that run from large

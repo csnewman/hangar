@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,8 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"golang.org/x/sys/unix"
 
 	"github.com/csnewman/hangar/internal/hangarsync"
 	"github.com/csnewman/hangar/internal/profile"
@@ -160,28 +157,18 @@ func credentialHelper(args []string) int {
 	return 2
 }
 
-// hangarfsMagic is the filesystem type statfs reports for hangarfs
-// (HANGARFS_SUPER_MAGIC in internal/kernel/tree/fs/hangar).
-const hangarfsMagic = 0x48414e47
-
-// serveKernelLocks answers the kernel about locks on shared files, where it
-// can ask (hangar-sync, in Hangar's kernel), and takes its reports of
-// changes to them when the root is hangarfs, which makes them. A kernel
-// without it keeps those locks local, and the files are watched.
+// serveKernelLocks answers the kernel about locks on shared files, and
+// takes its reports of changes to them, over hangar-sync, for as long as the
+// agent runs.
 func serveKernelLocks(g *profile.Guest, log *slog.Logger) {
-	var st unix.Statfs_t
-	changes := unix.Statfs("/", &st) == nil && uint32(st.Type) == hangarfsMagic
 	for {
 		dev, err := os.OpenFile(hangarsync.Device, os.O_RDWR, 0)
-		if errors.Is(err, os.ErrNotExist) {
-			return
-		}
 		if err != nil {
-			log.Warn("profile: opening the kernel's lock device", "err", err)
+			log.Error("profile: opening the kernel's hangar-sync device; shared files are neither locked nor sent", "err", err)
 			time.Sleep(5 * time.Second)
 			continue
 		}
-		err = g.ServeLocks(dev, changes)
+		err = g.ServeLocks(dev)
 		dev.Close()
 		log.Warn("profile: serving the kernel's locks", "err", err)
 		time.Sleep(time.Second)

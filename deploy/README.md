@@ -9,9 +9,7 @@ worker on every machine that runs environments. One machine can be both.
 A worker machine needs, before its container starts:
 
 - **Linux 6.8 or later, with KVM**: `/dev/kvm` present and usable (bare
-  metal, or a VM with nested virtualisation). arm64 and x86_64. A pulled
-  image is its layers stacked with overlayfs, one layer at a time, which
-  overlayfs takes from 6.8.
+  metal, or a VM with nested virtualisation). arm64 and x86_64.
 - **Transparent huge pages for shared memory set to `advise`**. Guest memory is
   a shared memfd; without this, guests run three to five times slower, and the
   worker refuses to start. The setting belongs to the host kernel, so it is set
@@ -32,9 +30,8 @@ A worker machine needs, before its container starts:
 
 - **`HANGAR_WORKER_DATA_DIR`** (`/var/lib/hangar` unless set) on a fast local Linux filesystem with room for every
   environment's disk (sparse, up to `upper_gib + docker_gib`) and
-  the images. Each image layer is unpacked there once, however many images
-  share it, and stacked into their root filesystems, from which each image
-  gets an EROFS image its environments mount (`image_device` in
+  the images. Each image is pulled straight into an EROFS image there,
+  once, which every environment on it mounts (`image_device` in
   `worker.yaml`); it must keep its owners: not a network or foreign
   filesystem that maps them.
 - Docker with Compose v2 and Buildx.
@@ -218,8 +215,8 @@ in a template. Any registry works the same way; a private one needs
   machine boots its own init instead: put environment variables in
   `/etc/environment` or `/etc/profile.d/`, and what should run in a systemd
   unit.
-- Workers keep each layer once, so an image on top of the base costs them
-  only its own layers, and pulls only those.
+- A worker keeps one EROFS image for each image it pulls, shared by every
+  environment on it.
 - Pushing a new build to the same tag reaches new environments by itself.
   One made from the old build keeps it, and its page offers the upgrade
   (see Updating). Tag builds, or pin the base by digest, to know what an
@@ -402,12 +399,11 @@ across too when it has changed. Nothing else is needed:
 Images are pulled too, by the worker, the first time an environment needs
 one: a template names an image reference, such as
 `ghcr.io/csnewman/hangar/base:ubuntu-26.04`, and the worker pulls its own
-platform and unpacks it into `/var/lib/hangar/images`. Each distribution
+platform as an EROFS image in `/var/lib/hangar/images`. Each distribution
 (`ubuntu-26.04`, `rocky-10`) comes in two tiers: `minimal`, which boots,
 clones repositories and has the package manager to add the rest, and
 `base`, which adds Docker, the GPU's drivers, a desktop, a browser and the
-everyday tools. `base` is `minimal` plus one layer, so a worker that has
-one fetches only the difference for the other. `:ubuntu` and `:rocky`
+everyday tools; `base` is `minimal` plus one layer. `:ubuntu` and `:rocky`
 follow the newest release of each.
 
 The worker looks the tag up each time it makes an environment, and pulls
