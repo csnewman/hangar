@@ -21,15 +21,9 @@ import (
 	"github.com/csnewman/hangar/internal/db"
 )
 
-// Channel carries a user's ID when their profile, or who holds one of
-// their locks, changes.
+// Channel carries a file set's ID when its files, or the paths it shares,
+// change; an empty one when any may have.
 const Channel = "hangar_profile"
-
-// lockLease is how long a lock is held for an environment without being
-// renewed. Its agent renews it while the lock is there; one that stops, by
-// dying or being suspended, lets it go when this runs out. It matches
-// Claude's own staleness for its lock.
-const lockLease = 60 * time.Second
 
 var (
 	ErrNotFound = errors.New("not found")
@@ -128,12 +122,6 @@ func (s *Store) List(ctx context.Context, set string, trusted bool) ([]File, err
 	return s.files(ctx, set, trusted, 0, "", false)
 }
 
-// FilesUnder returns, as Files does, a user's files whose paths start with
-// dir: those in a directory and below, for a dir ending in a slash.
-func (s *Store) FilesUnder(ctx context.Context, set, dir string, trusted bool) ([]File, error) {
-	return s.files(ctx, set, trusted, 0, dir, true)
-}
-
 // File returns one of a user's files, with its contents, or ErrNotFound if
 // it is not there or was removed.
 func (s *Store) File(ctx context.Context, set, path string, trusted bool) (File, error) {
@@ -147,11 +135,6 @@ func (s *Store) File(ctx context.Context, set, path string, trusted bool) (File,
 		}
 	}
 	return File{}, ErrNotFound
-}
-
-// Since returns the files changed after version.
-func (s *Store) Since(ctx context.Context, set string, trusted bool, version int64) ([]File, error) {
-	return s.files(ctx, set, trusted, version, "", true)
 }
 
 func (s *Store) files(ctx context.Context, set string, trusted bool, after int64, prefix string, contents bool) ([]File, error) {
@@ -618,42 +601,6 @@ func (s *Store) Signers(ctx context.Context, userID string) ([]ssh.Signer, error
 		out = append(out, signer)
 	}
 	return out, nil
-}
-
-// Lock takes or renews one of a user's locks on behalf of one environment,
-// reporting whether that environment holds it.
-func (s *Store) Lock(ctx context.Context, set, path, environment string) (bool, error) {
-	var held bool
-	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		var holder string
-		err := tx.QueryRow(ctx, `
-			INSERT INTO set_locks (set_id, path, environment, expires_at) VALUES ($1, $2, $3, now() + $4::interval)
-			ON CONFLICT (set_id, path) DO UPDATE SET environment = EXCLUDED.environment, expires_at = EXCLUDED.expires_at
-				WHERE set_locks.environment = EXCLUDED.environment OR set_locks.expires_at < now()
-			RETURNING environment::text`, set, path, environment, lockLease).Scan(&holder)
-		if errors.Is(err, pgx.ErrNoRows) {
-			held = false
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		held = true
-		return db.Notify(ctx, tx, Channel, set)
-	})
-	return held, err
-}
-
-// Unlock releases one of a user's locks if the environment holds it.
-func (s *Store) Unlock(ctx context.Context, set, path, environment string) error {
-	return s.db.Transact(ctx, func(tx db.Tx) error {
-		tag, err := tx.Exec(ctx, `DELETE FROM set_locks WHERE set_id = $1 AND path = $2 AND environment = $3`,
-			set, path, environment)
-		if err != nil || tag.RowsAffected() == 0 {
-			return err
-		}
-		return db.Notify(ctx, tx, Channel, set)
-	})
 }
 
 // Paths returns the paths a user shares: everyone's, and their own.

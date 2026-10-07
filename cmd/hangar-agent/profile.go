@@ -12,14 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/csnewman/hangar/internal/hangarsync"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sysuser"
 	"github.com/csnewman/hangar/internal/vsock"
 )
 
-// serveProfile keeps the user's home directory in step with their profile,
-// and serves their SSH agent, for as long as the guest runs.
+// serveProfile routes the files the user shares between environments to
+// the worker's, and serves their SSH agent, for as long as the guest runs.
 func serveProfile() {
 	sshSetup()
 	u, err := user.Lookup("dev")
@@ -34,20 +33,7 @@ func serveProfile() {
 		level = slog.LevelDebug
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	g := profile.NewGuest(u, log)
-	// Beside LockFS's backing, on the environment's own disk, so it
-	// outlasts a reboot.
-	if err := g.KeepStateIn("/var/lib/hangar/profile-state.json"); err != nil {
-		log.Warn("profile: reading what it knew", "err", err)
-	}
-	// Before anything of the user's runs: a program must never take a lock
-	// the server has not been asked about.
-	if l, err := profile.MountLockFS(u, "/var/lib/hangar/lockfs", g); err != nil {
-		log.Warn("profile: serving lock directories", "err", err)
-	} else {
-		g.SetBacking(l.Backing)
-	}
-	go serveKernelLocks(g, log)
+	g := profile.NewGuest(u, newRouter(u).apply, log)
 	go func() {
 		<-g.Synced()
 		os.MkdirAll(filepath.Dir(sysuser.ProfileSynced), 0o755)
@@ -155,22 +141,4 @@ func credentialHelper(args []string) int {
 	}
 	fmt.Fprintln(os.Stderr, "unknown action", args[0])
 	return 2
-}
-
-// serveKernelLocks answers the kernel about locks on shared files, and
-// takes its reports of changes to them, over hangar-sync, for as long as the
-// agent runs.
-func serveKernelLocks(g *profile.Guest, log *slog.Logger) {
-	for {
-		dev, err := os.OpenFile(hangarsync.Device, os.O_RDWR, 0)
-		if err != nil {
-			log.Error("profile: opening the kernel's hangar-sync device; shared files are neither locked nor sent", "err", err)
-			time.Sleep(5 * time.Second)
-			continue
-		}
-		err = g.ServeLocks(dev)
-		dev.Close()
-		log.Warn("profile: serving the kernel's locks", "err", err)
-		time.Sleep(time.Second)
-	}
 }

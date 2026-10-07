@@ -74,22 +74,16 @@ const Port uint32 = 8105
 // Message types.
 const (
 	// Server to agent.
-	TypePaths  = "paths"  // the paths shared, the profile's and packs'; sent first, and again when they change
-	TypeFile   = "file"   // a file's content, or that it is gone
-	TypeSynced = "synced" // every file has been sent; the agent may send its own
+	TypePaths  = "paths"  // the file sets given, the profile's and packs', and their paths; again when they change
 	TypeKeys   = "keys"   // the public keys the SSH agent offers
 	TypeSigned = "signed" // the answer to a sign
-	TypeLocked = "locked" // the answer to a lock or unlock
 	// Hangar's registry's host, sent first when there is one and the
 	// environment is trusted with its owner's credentials.
 	TypeRegistry   = "registry"
 	TypeCredential = "credential" // the answer to a get_credential
 
 	// Agent to server.
-	TypePut    = "put"    // a file changed here
-	TypeDelete = "delete" // a file was removed here
-	TypeLock   = "lock"   // take, renew or let go of one of the Locks
-	TypeSign   = "sign"   // sign with one of the keys
+	TypeSign = "sign" // sign with one of the keys
 	// A credential for Hangar's registry, as the environment's owner.
 	TypeGetCredential = "get_credential"
 )
@@ -98,33 +92,18 @@ const (
 type Message struct {
 	Type string `json:"type"`
 
-	// A file: its path, relative to the home directory for the profile's
-	// or absolute for a pack's, its content and mode, and the version the
-	// server holds. Deleted marks one removed.
-	Path    string `json:"path,omitempty"`
-	Data    []byte `json:"data,omitempty"`
-	Mode    uint32 `json:"mode,omitempty"`
-	Version int64  `json:"version,omitempty"`
-	Deleted bool   `json:"deleted,omitempty"`
-
-	// Paths are the shared paths.
-	Paths []string `json:"paths,omitempty"`
+	// Sets are the file sets the environment is given, the owner's
+	// profile first, with the paths each shares.
+	Sets []SetPaths `json:"sets,omitempty"`
 
 	// Keys are authorized-keys lines.
 	Keys []string `json:"keys,omitempty"`
 
-	// Files come with a granted lock: the profile's files in the lock's
-	// directory, which its holder must find on disk.
-	Files []Message `json:"files,omitempty"`
-
-	// Held asks to hold the lock at Path, or not; in an answer, whether it
-	// is held. A lock asked for with no ID is a renewal, and has no answer.
-	Held bool `json:"held,omitempty"`
-
 	// A request and its answer share an ID. For a signature, Key is the
-	// public key in SSH wire form and Signature an ssh.Signature,
-	// marshalled.
+	// public key in SSH wire form, Data what to sign, and Signature an
+	// ssh.Signature, marshalled.
 	ID        int64  `json:"id,omitempty"`
+	Data      []byte `json:"data,omitempty"`
 	Key       []byte `json:"key,omitempty"`
 	Flags     uint32 `json:"flags,omitempty"`
 	Signature []byte `json:"signature,omitempty"`
@@ -198,39 +177,20 @@ const vscodeUser = ".vscode-server-oss/data/User/"
 // CredentialsPath is Claude's sign-in.
 const CredentialsPath = ".claude/.credentials.json"
 
-// Lock is a lock a program takes by creating a path.
+// Lock is a lock a program takes by creating a path: a directory, or a
+// file made exclusively. Routed to the shared files with the profile
+// (RoutesFor), making it is exclusive between environments.
 type Lock struct {
-	// Path is relative to the home directory. Its directory is served by
-	// LockFS.
+	// Path is relative to the home directory.
 	Path string
 }
 
-// Locks are the locks the server decides.
+// Locks are the locks shared between environments beside the profile's
+// files, which are not themselves shared.
 var Locks = []Lock{
 	// Claude takes this with proper-lockfile: mkdir, touched every five
 	// seconds, stale after sixty.
 	{Path: ".claude/.oauth_refresh.lock"},
-}
-
-// LockAt returns the lock at a path.
-func LockAt(p string) (Lock, bool) {
-	for _, l := range Locks {
-		if l.Path == p {
-			return l, true
-		}
-	}
-	return Lock{}, false
-}
-
-// LockDirs are the directories LockFS serves: those the Locks are made in.
-func LockDirs() []string {
-	var out []string
-	for _, l := range Locks {
-		if d := path.Dir(l.Path); !slices.Contains(out, d) {
-			out = append(out, d)
-		}
-	}
-	return out
 }
 
 // Paths is a set of shared paths, relative to the home directory. One

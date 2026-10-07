@@ -10,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"path"
 	"slices"
 	"strings"
 	"sync"
@@ -165,8 +164,7 @@ func (s *Sessions) reconcile(ctx context.Context) {
 			s.tries[id] = tr
 		}
 		tr.n++
-		sess := &session{target: t, s: s, nudges: make(chan struct{}, 1), done: make(chan struct{}),
-			own: map[string]bool{}, sent: map[string]int64{}, tries: *tr}
+		sess := &session{target: t, s: s, nudges: make(chan struct{}, 1), done: make(chan struct{}), tries: *tr}
 		sessCtx, cancel := context.WithCancel(ctx)
 		sess.cancel = cancel
 		s.sessions[id] = sess
@@ -185,17 +183,10 @@ type session struct {
 	wmu  sync.Mutex
 	conn net.Conn
 
-	// own are the versions this session's own writes made, as
-	// <set>:<version>. They are not sent back: the agent has them, and a
-	// later change it has made since must not be overwritten by the echo
-	// of an earlier one.
-	own map[string]bool
-	// sets are the file sets the environment is kept in step with, the
-	// owner's profile first (Store.EnvironmentSets); sent the last version
-	// of each sent, and paths every set's paths, as last sent.
-	sets  []FileSet
-	sent  map[string]int64
-	paths Paths
+	// sets are the file sets the environment is given, the owner's
+	// profile first (Store.EnvironmentSets), as last sent.
+	sets     []FileSet
+	setsSent bool
 	// setIDs are the sets' IDs, for Changed.
 	smu    sync.Mutex
 	setIDs []string
@@ -207,21 +198,11 @@ type session struct {
 	tries tries
 }
 
-// uses reports whether the session keeps a set other than the profile.
+// uses reports whether the session gives a set other than the profile.
 func (x *session) uses(set string) bool {
 	x.smu.Lock()
 	defer x.smu.Unlock()
 	return slices.Contains(x.setIDs, set)
-}
-
-// setFor is the set a file is kept in: the first whose paths include it.
-func (x *session) setFor(key string) (FileSet, bool) {
-	for _, s := range x.sets {
-		if s.Paths.Synced(key) {
-			return s, true
-		}
-	}
-	return FileSet{}, false
 }
 
 func (x *session) nudge() {
@@ -258,22 +239,13 @@ func (x *session) send(m Message) error {
 // starts another if the environment still wants one.
 func (x *session) run(ctx context.Context) {
 	defer close(x.done)
-	log := x.s.log.With("environment", x.env)
 	err := x.serve(ctx)
 	if err != nil && ctx.Err() == nil && !errors.Is(err, io.EOF) {
-		log.Warn("profile session ended", "err", err)
-	}
-	// A lock the environment held goes with the session.
-	unlockCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	for _, l := range Locks {
-		x.s.store.Unlock(unlockCtx, x.owner, l.Path, x.env)
+		x.s.log.Warn("profile session ended", "environment", x.env, "err", err)
 	}
 }
 
 func (x *session) serve(ctx context.Context) error {
-	// What arrives from the environment is its owner's doing, through it.
-	ctx = audit.WithActor(ctx, audit.Actor{UserID: x.owner, Name: x.ownerName, Via: "environment:" + x.env + " (" + x.name + ")"})
 	conn, err := x.s.tunnels.Open(x.worker, tunnel.Header{Kind: tunnel.KindProfile, Environment: x.env})
 	if err != nil {
 		return err
@@ -284,7 +256,6 @@ func (x *session) serve(ctx context.Context) error {
 	delete(x.s.tries, x.env)
 	x.s.mu.Unlock()
 	log.Info("profile session opened", "attempts", x.tries.n, "waited", time.Since(x.tries.first).Round(time.Millisecond))
-	start := time.Now()
 	defer conn.Close()
 	go func() {
 		<-ctx.Done()
@@ -306,9 +277,8 @@ func (x *session) serve(ctx context.Context) error {
 				readErr <- fmt.Errorf("a malformed message from the agent: %w", err)
 				return
 			}
-			// Signatures and credentials are answered at once, not after
-			// the profile's files: a clone signs in while a large profile
-			// is still being sent.
+			// Each is answered on its own: a clone signing in is not
+			// held up behind another request.
 			if m.Type == TypeSign || m.Type == TypeGetCredential {
 				go func() {
 					if err := x.handle(ctx, m); err != nil {
@@ -326,13 +296,8 @@ func (x *session) serve(ctx context.Context) error {
 	}()
 
 	// The keys first, which a clone as the environment starts waits for;
-	// then what is shared, everything in it, and that it is everything: the
-	// agent sends what it has that the profile does not only once it knows
-	// what the profile has.
+	// then the shared files, which the agent routes to the worker's.
 	if err := x.sendKeys(ctx); err != nil {
-		return err
-	}
-	if err := x.sendPaths(ctx); err != nil {
 		return err
 	}
 	if x.s.registry != "" && x.trusted {
@@ -340,15 +305,9 @@ func (x *session) serve(ctx context.Context) error {
 			return err
 		}
 	}
-	sent := &sentFiles{paths: x.paths}
-	if err := x.sendFiles(ctx, sent); err != nil {
+	if err := x.sendSets(ctx); err != nil {
 		return err
 	}
-	if err := x.send(Message{Type: TypeSynced}); err != nil {
-		return err
-	}
-	log.Info("profile sent", "took", time.Since(start).Round(time.Millisecond), "files", sent.files,
-		"bytes", sent.bytes, "largest", sent.largest(5))
 
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
@@ -358,17 +317,11 @@ func (x *session) serve(ctx context.Context) error {
 			return ctx.Err()
 		case err := <-readErr:
 			return err
-		case m := <-incoming:
-			if err := x.handle(ctx, m); err != nil {
-				return err
-			}
+		case <-incoming:
 		case <-x.nudges:
 		case <-tick.C:
 		}
-		if err := x.sendPaths(ctx); err != nil {
-			return err
-		}
-		if err := x.sendFiles(ctx, nil); err != nil {
+		if err := x.sendSets(ctx); err != nil {
 			return err
 		}
 		if err := x.sendKeys(ctx); err != nil {
@@ -377,9 +330,9 @@ func (x *session) serve(ctx context.Context) error {
 	}
 }
 
-// sendPaths looks up the sets again, and sends their paths when they are
-// not what was last sent.
-func (x *session) sendPaths(ctx context.Context) error {
+// sendSets looks up the sets again, and sends them when they are not what
+// was last sent.
+func (x *session) sendSets(ctx context.Context) error {
 	var packs []string
 	if x.packs != "" {
 		packs = strings.Split(x.packs, ",")
@@ -388,94 +341,24 @@ func (x *session) sendPaths(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	x.sets = sets
 	ids := make([]string, 0, len(sets))
-	paths := Paths{}
 	for _, s := range sets {
 		ids = append(ids, s.ID)
-		for _, p := range s.Paths {
-			if !slices.Contains(paths, p) {
-				paths = append(paths, p)
-			}
-		}
 	}
 	x.smu.Lock()
 	x.setIDs = ids
 	x.smu.Unlock()
-	if slices.Equal(paths, x.paths) {
+	if x.setsSent && slices.EqualFunc(sets, x.sets, func(a, b FileSet) bool {
+		return a.ID == b.ID && slices.Equal(a.Paths, b.Paths)
+	}) {
 		return nil
 	}
-	x.paths = paths
-	return x.send(Message{Type: TypePaths, Paths: paths})
-}
-
-// sentFiles counts what is sent, by the shared path each file is under.
-type sentFiles struct {
-	paths        Paths
-	files, bytes int
-	by           map[string][2]int // shared path: files, bytes
-}
-
-func (s *sentFiles) add(p string, size int) {
-	s.files++
-	s.bytes += size
-	under := p
-	for _, sp := range s.paths {
-		if p == sp || (strings.HasSuffix(sp, "/") && strings.HasPrefix(p, sp)) {
-			under = sp
-			break
-		}
+	x.sets, x.setsSent = sets, true
+	m := Message{Type: TypePaths}
+	for _, s := range sets {
+		m.Sets = append(m.Sets, SetPaths{ID: s.ID, Paths: s.Paths})
 	}
-	if s.by == nil {
-		s.by = map[string][2]int{}
-	}
-	c := s.by[under]
-	s.by[under] = [2]int{c[0] + 1, c[1] + size}
-}
-
-// largest names the n shared paths the most was sent of.
-func (s *sentFiles) largest(n int) string {
-	keys := make([]string, 0, len(s.by))
-	for k := range s.by {
-		keys = append(keys, k)
-	}
-	slices.SortFunc(keys, func(a, b string) int { return s.by[b][1] - s.by[a][1] })
-	var out []string
-	for _, k := range keys[:min(n, len(keys))] {
-		out = append(out, fmt.Sprintf("%s (%d files, %d bytes)", k, s.by[k][0], s.by[k][1]))
-	}
-	return strings.Join(out, ", ")
-}
-
-// sendFiles sends what changed in each set since the last it sent,
-// counting it in sent when that is given. A file another set keeps, being
-// earlier in the list, is not sent.
-func (x *session) sendFiles(ctx context.Context, sent *sentFiles) error {
-	for _, set := range x.sets {
-		files, err := x.s.store.Since(ctx, set.ID, x.trusted, x.sent[set.ID])
-		if err != nil {
-			return err
-		}
-		for _, f := range files {
-			x.sent[set.ID] = max(x.sent[set.ID], f.Version)
-			own := fmt.Sprintf("%s:%d", set.ID, f.Version)
-			if x.own[own] {
-				delete(x.own, own)
-				continue
-			}
-			if by, ok := x.setFor(f.Path); !ok || by.ID != set.ID {
-				continue
-			}
-			if err := x.send(Message{Type: TypeFile, Path: f.Path, Data: f.Data, Mode: f.Mode,
-				Version: f.Version, Deleted: f.Deleted}); err != nil {
-				return err
-			}
-			if sent != nil {
-				sent.add(f.Path, len(f.Data))
-			}
-		}
-	}
-	return nil
+	return x.send(m)
 }
 
 // sendKeys sends the public keys the environment's SSH agent offers, when
@@ -500,94 +383,9 @@ func (x *session) sendKeys(ctx context.Context) error {
 }
 
 func (x *session) handle(ctx context.Context, m Message) error {
-	log := x.s.log.With("environment", x.env)
+	// What arrives from the environment is its owner's doing, through it.
+	ctx = audit.WithActor(ctx, audit.Actor{UserID: x.owner, Name: x.ownerName, Via: "environment:" + x.env + " (" + x.name + ")"})
 	switch m.Type {
-	case TypePut, TypeDelete:
-		set, ok := x.setFor(m.Path)
-		if !ok {
-			return nil
-		}
-		if !x.trusted {
-			only, err := x.s.store.TrustedOnly(ctx, set.ID, m.Path)
-			if err != nil {
-				return err
-			}
-			if only {
-				return nil
-			}
-		}
-		var f File
-		var err error
-		if m.Type == TypePut {
-			f, err = x.s.store.Put(ctx, set.ID, m.Path, m.Data, m.Mode)
-		} else {
-			f, err = x.s.store.Delete(ctx, set.ID, m.Path)
-		}
-		if err == nil {
-			x.own[fmt.Sprintf("%s:%d", set.ID, f.Version)] = true
-		}
-		if errors.Is(err, ErrInvalid) || errors.Is(err, ErrNoKey) {
-			log.Warn("profile: refused a file from the environment", "path", m.Path, "err", err)
-			return nil
-		}
-		return err
-	case TypeLock:
-		// One of the Locks LockFS serves, in the profile, or a lock the
-		// guest's kernel takes on a shared file for a program there, in
-		// the file's set; a path just shared may be in none yet of those
-		// last looked up.
-		set := FileSet{ID: x.owner}
-		if _, ok := LockAt(m.Path); !ok {
-			var found bool
-			if set, found = x.setFor(m.Path); !found {
-				if err := x.sendPaths(ctx); err != nil {
-					return err
-				}
-				set, found = x.setFor(m.Path)
-			}
-			if !found {
-				if m.ID == 0 {
-					return nil
-				}
-				return x.send(Message{Type: TypeLocked, ID: m.ID, Path: m.Path})
-			}
-		}
-		if m.ID == 0 {
-			// A renewal from the holder.
-			if m.Held {
-				_, err := x.s.store.Lock(ctx, set.ID, m.Path, x.env)
-				return err
-			}
-			return nil
-		}
-		reply := Message{Type: TypeLocked, ID: m.ID, Path: m.Path}
-		if !m.Held {
-			// The agent sent what changed under the lock before asking
-			// to let it go, and those have been written above.
-			if err := x.s.store.Unlock(ctx, set.ID, m.Path, x.env); err != nil {
-				return err
-			}
-			return x.send(reply)
-		}
-		got, err := x.s.store.Lock(ctx, set.ID, m.Path, x.env)
-		if err != nil {
-			return err
-		}
-		if got {
-			// The holder starts from the profile as it stands: what it
-			// is about to read, another environment may have just
-			// written.
-			files, err := x.s.store.FilesUnder(ctx, set.ID, path.Dir(m.Path)+"/", x.trusted)
-			if err != nil {
-				return err
-			}
-			for _, f := range files {
-				reply.Files = append(reply.Files, Message{Type: TypeFile, Path: f.Path, Data: f.Data,
-					Mode: f.Mode, Version: f.Version, Deleted: f.Deleted})
-			}
-		}
-		reply.Held = got
-		return x.send(reply)
 	case TypeGetCredential:
 		reply := Message{Type: TypeCredential, ID: m.ID}
 		switch {

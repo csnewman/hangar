@@ -4,11 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/db"
@@ -54,100 +53,6 @@ func (p *plane) team(t *testing.T, slug string, members map[string]string) strin
 }
 
 func as(id string) users.Principal { return users.Principal{UserID: id} }
-
-// A pack's files go to their absolute paths in an environment whose spec
-// lists it, once the directory the pack's path is in exists, and what
-// changes there goes back to the pack.
-func TestPackFilesFollowTheirPaths(t *testing.T) {
-	ctx := context.Background()
-	p := newPlane(t)
-	ws := t.TempDir()
-	proj := filepath.Join(ws, "proj")
-
-	pack, err := p.store.CreatePack(ctx, as(p.owner), profile.PackInput{Name: "proj",
-		Paths: []string{proj + "/.env", proj + "/secrets/"}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	set, err := p.store.PackSet(ctx, as(p.owner), pack.ID, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := p.store.Put(ctx, set, proj+"/.env", []byte("A=1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := p.store.Put(ctx, set, proj+"/other", []byte("x"), 0); !errors.Is(err, profile.ErrInvalid) {
-		t.Errorf("a file outside the pack's paths was taken: %v", err)
-	}
-	if _, err := p.store.Put(ctx, p.owner, ".gitconfig", []byte("[user]\n"), 0); err != nil {
-		t.Fatal(err)
-	}
-
-	_, home, g := p.envSpec(t, "a", fmt.Sprintf(`{"file_packs": [%q]}`, pack.ID), api.PhaseRunning)
-	p.kernel(g).report(t, ws)
-	eventually(t, "the profile to arrive", func() bool { return read(home, ".gitconfig") == "[user]\n" })
-
-	// Nothing is made where the workspace's clone is yet to go.
-	time.Sleep(500 * time.Millisecond)
-	if _, err := os.Stat(proj); err == nil {
-		t.Fatal("the pack made the directory a clone would go to")
-	}
-	if err := os.Mkdir(proj, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "the pack's file once its directory exists", func() bool { return read(proj, ".env") == "A=1\n" })
-	if st, err := os.Stat(filepath.Join(proj, ".env")); err != nil || st.Mode().Perm() != 0o600 {
-		t.Errorf("the pack's file has mode %v, %v", st.Mode().Perm(), err)
-	}
-
-	// Changed there, it goes back to the pack; a file the pack does not
-	// name stays.
-	if err := os.WriteFile(filepath.Join(proj, ".env"), []byte("A=2\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	os.MkdirAll(filepath.Join(proj, "secrets"), 0o755)
-	if err := os.WriteFile(filepath.Join(proj, "secrets", "key"), []byte("k"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	os.WriteFile(filepath.Join(proj, "README"), []byte("r"), 0o644)
-	eventually(t, "changes to reach the pack", func() bool {
-		env, err1 := p.store.File(ctx, set, proj+"/.env", true)
-		key, err2 := p.store.File(ctx, set, proj+"/secrets/key", true)
-		return err1 == nil && err2 == nil && string(env.Data) == "A=2\n" && string(key.Data) == "k"
-	})
-	files, _ := p.store.Files(ctx, set, true)
-	for _, f := range files {
-		if strings.HasSuffix(f.Path, "README") {
-			t.Error("a file outside the pack was stored")
-		}
-	}
-	profileFiles, _ := p.store.Files(ctx, p.owner, true)
-	for _, f := range profileFiles {
-		if strings.HasPrefix(f.Path, "/") {
-			t.Errorf("a pack's file %s was stored in the profile", f.Path)
-		}
-	}
-
-	// Written from the web UI, it reaches the environment.
-	if _, err := p.store.Put(ctx, set, proj+"/secrets/key", []byte("k2"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	eventually(t, "a change to the pack to arrive", func() bool { return read(proj, "secrets/key") == "k2" })
-
-	// A path the pack no longer names is dropped from it; the
-	// environment keeps its file.
-	if _, err := p.store.UpdatePack(ctx, as(p.owner), pack.ID, profile.PackInput{Name: "proj",
-		Paths: []string{proj + "/.env"}}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := p.store.File(ctx, set, proj+"/secrets/key", true); !errors.Is(err, profile.ErrNotFound) {
-		t.Errorf("a file under a path the pack dropped is still in it: %v", err)
-	}
-	time.Sleep(500 * time.Millisecond)
-	if read(proj, "secrets/key") != "k2" {
-		t.Error("the environment lost a file the pack stopped naming")
-	}
-}
 
 // Who may use, change and delete a pack, and whose copy of its files they
 // have.
@@ -262,4 +167,72 @@ func TestPackAccess(t *testing.T) {
 	if got := sets(bob); got != 2 {
 		t.Errorf("bob's environment keeps %d sets after a pack was deleted", got)
 	}
+}
+
+// The routes an environment's sets give it: the profile's paths under the
+// home directory, with the Locks; a pack's where they are; a path two sets
+// name, the first's.
+func TestRoutesFor(t *testing.T) {
+	routes := profile.RoutesFor("/home/dev", []profile.SetPaths{
+		{ID: "me", Paths: []string{".gitconfig", ".claude/skills/"}},
+		{ID: "pack1", Paths: []string{"/workspace/app/.env", "/home/dev/.gitconfig", "/srv/conf/"}},
+		{ID: "pack2", Paths: []string{"/workspace/app/.env", "../bad", "/x/../y"}},
+	})
+	want := []profile.Route{
+		{Path: "/home/dev/.gitconfig", Target: "me/.gitconfig"},
+		{Path: "/home/dev/.claude/skills", Target: "me/.claude/skills", Dir: true},
+		{Path: "/home/dev/.claude/.oauth_refresh.lock", Target: "me/.claude/.oauth_refresh.lock", Lock: true},
+		{Path: "/workspace/app/.env", Target: "pack1/workspace/app/.env"},
+		{Path: "/srv/conf", Target: "pack1/srv/conf", Dir: true},
+	}
+	if !slices.Equal(routes, want) {
+		t.Errorf("routes:\n got %+v\nwant %+v", routes, want)
+	}
+}
+
+// An environment's guest is routed to its owner's profile and the packs its
+// template lists that its owner may use, and routed again as they change.
+func TestEnvironmentsAreRoutedToTheirSets(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	carol := p.user(t, "carol")
+	team := p.team(t, "web", map[string]string{carol: "admin"})
+	own, err := p.store.CreatePack(ctx, as(p.owner), profile.PackInput{Name: "app",
+		Paths: []string{"/workspace/app/.env"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := p.store.CreatePack(ctx, as(carol), profile.PackInput{Name: "secret", TeamID: team,
+		Paths: []string{"/workspace/app/secret"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := p.store.PackSet(ctx, as(p.owner), own.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	id, home, _ := p.envSpec(t, "a", fmt.Sprintf(`{"file_packs": [%q, %q]}`, own.ID, theirs.ID), api.PhaseRunning)
+	has := func(guestPath, target string) bool {
+		return slices.ContainsFunc(p.routesOf(id), func(r profile.Route) bool {
+			return r.Path == guestPath && r.Target == target
+		})
+	}
+	eventually(t, "the profile and the pack to be routed", func() bool {
+		return has(filepath.Join(home, ".gitconfig"), p.owner+"/.gitconfig") &&
+			has("/workspace/app/.env", set+"/workspace/app/.env")
+	})
+	if slices.ContainsFunc(p.routesOf(id), func(r profile.Route) bool { return r.Path == "/workspace/app/secret" }) {
+		t.Error("routed to a pack its owner may not use")
+	}
+
+	// A path the pack gains is routed too.
+	if _, err := p.store.UpdatePack(ctx, as(p.owner), own.ID, profile.PackInput{Name: "app",
+		Paths: []string{"/workspace/app/.env", "/workspace/app/config/"}}); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a pack's new path to be routed", func() bool {
+		return slices.Contains(p.routesOf(id), profile.Route{Path: "/workspace/app/config",
+			Target: set + "/workspace/app/config", Dir: true})
+	})
 }
