@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * hangar-sync: locks on files an environment shares with others.
+ * hangar-sync: locks on files an environment shares with others, and changes
+ * to them.
  *
  * Hangar's guest agent opens /dev/hangar-sync and registers the paths whose
  * files are shared. A process taking a lock on one of them, with flock(2) or
@@ -16,6 +17,13 @@
  *
  * With no agent connected, or no paths registered, locks are local only, and
  * a lock on any other file costs nothing more than a check of a counter.
+ *
+ * Changes to files under a registered path, or a watched one (ADD_WATCH,
+ * which leaves locks alone), are reported to the agent with CHANGED, so it
+ * learns what to send the server without watching the files itself:
+ * hangarfs reports them (hangar_sync_notify) as they happen through it. A
+ * report already waiting to be read is not queued again, and past
+ * HS_MAX_CHANGED waiting, one report with no path stands for all the rest.
  */
 
 #include <linux/dcache.h>
@@ -70,22 +78,29 @@ struct hs_held {
 	char path[];
 };
 
+/* The most CHANGED reports kept waiting to be read. */
+#define HS_MAX_CHANGED 8192
+
 static DEFINE_SPINLOCK(hs_lock);
 static bool hs_connected;
 static unsigned int hs_npaths;
+static unsigned int hs_nwatches;
+static unsigned int hs_nchanged;	/* CHANGED reports waiting */
+static bool hs_overflowed;		/* the report for the rest is waiting */
 static u64 hs_next_id;
 static LIST_HEAD(hs_paths);
+static LIST_HEAD(hs_watches);
 static LIST_HEAD(hs_out);
 static LIST_HEAD(hs_waits);
 static LIST_HEAD(hs_helds);
 static DECLARE_WAIT_QUEUE_HEAD(hs_readq);
 
-/* Whether path is a registered path or under one. Called with hs_lock. */
-static bool hs_matches(const char *path, size_t len)
+/* Whether path is one of a list's paths or under one. Called with hs_lock. */
+static bool hs_matches(struct list_head *paths, const char *path, size_t len)
 {
 	struct hs_path *p;
 
-	list_for_each_entry(p, &hs_paths, list) {
+	list_for_each_entry(p, paths, list) {
 		if (len < p->len || memcmp(path, p->path, p->len))
 			continue;
 		if (len == p->len || path[p->len] == '/' ||
@@ -179,7 +194,7 @@ int hangar_sync_lock(struct file *filp, struct file_lock *fl, bool wait)
 	init_waitqueue_head(&w.wq);
 
 	spin_lock(&hs_lock);
-	if (!hs_connected || !hs_matches(m->path, len)) {
+	if (!hs_connected || !hs_matches(&hs_paths, m->path, len)) {
 		spin_unlock(&hs_lock);
 		kfree(m);
 		kfree(held);
@@ -269,24 +284,92 @@ void hangar_sync_changed(struct file *filp)
 	kfree(h);
 }
 
-/* Lets every waiting LOCK go ahead and forgets everything: the agent is
- * gone, and locks are local only until it is back. Called with hs_lock. */
-static void hs_reset(void)
+/**
+ * hangar_sync_notify - something at a path may have changed
+ * @dentry: what changed, on the root filesystem (hangarfs)
+ *
+ * Reports it to the agent if it is at or under a registered or watched
+ * path. Its path is from the filesystem's root, which is the environment's.
+ */
+void hangar_sync_notify(struct dentry *dentry)
+{
+	struct hs_msg *m, *q;
+	char *buf, *path;
+	size_t len;
+
+	if (!READ_ONCE(hs_npaths) && !READ_ONCE(hs_nwatches))
+		return;
+	buf = __getname();
+	if (!buf)
+		return;
+	path = dentry_path_raw(dentry, buf, PATH_MAX);
+	if (IS_ERR(path)) {
+		__putname(buf);
+		return;
+	}
+	len = strlen(path);
+	m = hs_msg_new(HANGAR_SYNC_CHANGED, path, len, GFP_KERNEL);
+	if (!m) {
+		__putname(buf);
+		return;
+	}
+
+	spin_lock(&hs_lock);
+	if (!hs_connected || !(hs_matches(&hs_paths, path, len) ||
+			       hs_matches(&hs_watches, path, len)))
+		goto drop;
+	if (hs_overflowed)
+		goto drop;
+	list_for_each_entry(q, &hs_out, list)
+		if (q->hdr.op == HANGAR_SYNC_CHANGED && q->hdr.path_len == len &&
+		    !memcmp(q->path, path, len))
+			goto drop;
+	if (hs_nchanged >= HS_MAX_CHANGED) {
+		/* This one, emptied, stands for it and all that follow. */
+		m->hdr.len = sizeof(m->hdr);
+		m->hdr.path_len = 0;
+		hs_overflowed = true;
+	}
+	hs_nchanged++;
+	hs_queue(m);
+	m = NULL;
+drop:
+	spin_unlock(&hs_lock);
+	kfree(m);
+	__putname(buf);
+}
+
+static void hs_clear_paths(void)
 {
 	struct hs_path *p, *pn;
-	struct hs_msg *m, *mn;
-	struct hs_wait *w, *wn;
-	struct hs_held *h, *hn;
 
 	list_for_each_entry_safe(p, pn, &hs_paths, list) {
 		list_del(&p->list);
 		kfree(p);
 	}
+	list_for_each_entry_safe(p, pn, &hs_watches, list) {
+		list_del(&p->list);
+		kfree(p);
+	}
 	WRITE_ONCE(hs_npaths, 0);
+	WRITE_ONCE(hs_nwatches, 0);
+}
+
+/* Lets every waiting LOCK go ahead and forgets everything: the agent is
+ * gone, and locks are local only until it is back. Called with hs_lock. */
+static void hs_reset(void)
+{
+	struct hs_msg *m, *mn;
+	struct hs_wait *w, *wn;
+	struct hs_held *h, *hn;
+
+	hs_clear_paths();
 	list_for_each_entry_safe(m, mn, &hs_out, list) {
 		list_del(&m->list);
 		kfree(m);
 	}
+	hs_nchanged = 0;
+	hs_overflowed = false;
 	list_for_each_entry_safe(w, wn, &hs_waits, list) {
 		list_del_init(&w->list);
 		w->result = 0;
@@ -338,6 +421,11 @@ static ssize_t hs_read(struct file *file, char __user *ubuf, size_t count,
 				return -EINVAL;
 			}
 			list_del(&m->list);
+			if (m->hdr.op == HANGAR_SYNC_CHANGED) {
+				hs_nchanged--;
+				if (!m->hdr.path_len)
+					hs_overflowed = false;
+			}
 			spin_unlock(&hs_lock);
 			break;
 		}
@@ -386,6 +474,7 @@ static ssize_t hs_write(struct file *file, const char __user *ubuf,
 		spin_unlock(&hs_lock);
 		return count;
 	case HANGAR_SYNC_ADD_PATH:
+	case HANGAR_SYNC_ADD_WATCH:
 		if (!hdr.path_len)
 			return -EINVAL;
 		p = kzalloc(sizeof(*p) + hdr.path_len, GFP_KERNEL);
@@ -397,22 +486,20 @@ static ssize_t hs_write(struct file *file, const char __user *ubuf,
 		}
 		p->len = hdr.path_len;
 		spin_lock(&hs_lock);
-		list_add_tail(&p->list, &hs_paths);
-		WRITE_ONCE(hs_npaths, hs_npaths + 1);
-		spin_unlock(&hs_lock);
-		return count;
-	case HANGAR_SYNC_CLEAR_PATHS: {
-		struct hs_path *pn;
-
-		spin_lock(&hs_lock);
-		list_for_each_entry_safe(p, pn, &hs_paths, list) {
-			list_del(&p->list);
-			kfree(p);
+		if (hdr.op == HANGAR_SYNC_ADD_PATH) {
+			list_add_tail(&p->list, &hs_paths);
+			WRITE_ONCE(hs_npaths, hs_npaths + 1);
+		} else {
+			list_add_tail(&p->list, &hs_watches);
+			WRITE_ONCE(hs_nwatches, hs_nwatches + 1);
 		}
-		WRITE_ONCE(hs_npaths, 0);
 		spin_unlock(&hs_lock);
 		return count;
-	}
+	case HANGAR_SYNC_CLEAR_PATHS:
+		spin_lock(&hs_lock);
+		hs_clear_paths();
+		spin_unlock(&hs_lock);
+		return count;
 	}
 	return -EINVAL;
 }

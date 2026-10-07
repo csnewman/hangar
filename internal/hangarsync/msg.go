@@ -1,6 +1,6 @@
 // Package hangarsync speaks /dev/hangar-sync, through which the guest kernel
 // (fs/hangar/sync.c in internal/kernel/tree) has the agent take locks on
-// shared files for the environment as a whole.
+// shared files for the environment as a whole, and reports changes to them.
 //
 // The layout is struct hangar_sync_msg in include/uapi/linux/hangar_sync.h:
 // a fixed header, then the path. Each read of the device returns one message
@@ -23,11 +23,15 @@ const (
 	OpLock   = 1 // take the file's lock for the environment; reply
 	OpIdle   = 2 // no process here holds a lock on the file
 	OpCancel = 3 // the Lock with this ID is no longer wanted
+	// OpChanged: something at the path may have changed; with no path,
+	// more than the kernel kept count of, so everything.
+	OpChanged = 4
 
 	// Agent to kernel.
 	OpReply      = 16 // the answer to a Lock
 	OpAddPath    = 17 // files at or under the path are shared
-	OpClearPaths = 18 // no path is shared
+	OpClearPaths = 18 // no path is shared or watched
+	OpAddWatch   = 19 // changes at or under the path are reported; its locks are left alone
 )
 
 // Flags on a Lock.

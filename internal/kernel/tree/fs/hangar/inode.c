@@ -8,6 +8,7 @@
 #include "hangarfs.h"
 #include <linux/fileattr.h>
 #include <linux/fs_stack.h>
+#include <linux/hangar_sync.h>
 #include <linux/namei.h>
 #include <linux/posix_acl.h>
 #include <linux/posix_acl_xattr.h>
@@ -174,6 +175,8 @@ static int hfs_create(struct mnt_idmap *idmap, struct inode *dir,
 		fsstack_copy_inode_size(dir, lower_dir);
 	}
 	end_creating(lower);
+	if (!err)
+		hangar_sync_notify(dentry);
 	return err;
 }
 
@@ -197,6 +200,8 @@ static int hfs_mknod(struct mnt_idmap *idmap, struct inode *dir,
 	end_creating(lower);
 	if (d_really_is_negative(dentry))
 		d_drop(dentry);
+	else if (!err)
+		hangar_sync_notify(dentry);
 	return err;
 }
 
@@ -221,6 +226,8 @@ static int hfs_symlink(struct mnt_idmap *idmap, struct inode *dir,
 	end_creating(lower);
 	if (d_really_is_negative(dentry))
 		d_drop(dentry);
+	else if (!err)
+		hangar_sync_notify(dentry);
 	return err;
 }
 
@@ -250,6 +257,8 @@ static struct dentry *hfs_mkdir(struct mnt_idmap *idmap, struct inode *dir,
 	end_creating(lower);
 	if (d_really_is_negative(dentry))
 		d_drop(dentry);
+	else if (!err)
+		hangar_sync_notify(dentry);
 	return ERR_PTR(err);
 }
 
@@ -272,6 +281,8 @@ static int hfs_link(struct dentry *old, struct inode *dir, struct dentry *new)
 		set_nlink(d_inode(old), hfs_lower_inode(d_inode(old))->i_nlink);
 	}
 	end_creating(lower);
+	if (!err && d_really_is_positive(new))
+		hangar_sync_notify(new);
 	return err;
 }
 
@@ -293,8 +304,10 @@ static int hfs_unlink(struct inode *dir, struct dentry *dentry)
 		inode_set_ctime_to_ts(inode, inode_get_ctime(dir));
 	}
 	end_removing(lower);
-	if (!err)
+	if (!err) {
+		hangar_sync_notify(dentry);
 		d_drop(dentry);
+	}
 	return err;
 }
 
@@ -315,8 +328,10 @@ static int hfs_rmdir(struct inode *dir, struct dentry *dentry)
 		set_nlink(dir, lower_dir->i_nlink);
 	}
 	end_removing(lower);
-	if (!err)
+	if (!err) {
+		hangar_sync_notify(dentry);
 		d_drop(dentry);
+	}
 	return err;
 }
 
@@ -345,6 +360,11 @@ static int hfs_rename(struct mnt_idmap *idmap, struct inode *old_dir,
 			hfs_copy_attr(old_dir, d_inode(rd.old_parent));
 	}
 	end_renaming(&rd);
+	/* Both still at their old places: the VFS moves them after. */
+	if (!err) {
+		hangar_sync_notify(old);
+		hangar_sync_notify(new);
+	}
 	return err;
 }
 
@@ -396,6 +416,9 @@ static int hfs_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 	inode_unlock(d_inode(lower));
 	hfs_copy_attr(inode, hfs_lower_inode(inode));
 	fsstack_copy_inode_size(inode, hfs_lower_inode(inode));
+	/* What a profile keeps of a file: its contents and its mode. */
+	if (!err && (ia->ia_valid & (ATTR_MODE | ATTR_SIZE)))
+		hangar_sync_notify(dentry);
 	return err;
 }
 

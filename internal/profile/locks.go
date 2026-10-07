@@ -19,13 +19,28 @@ import (
 // process here holds one any more, the environment lets it go.
 //
 // The shared paths are registered with the kernel and kept up to date, but
-// for the directories LockFS serves, whose locks it decides itself.
-func (g *Guest) ServeLocks(dev io.ReadWriter) error {
+// for the directories LockFS serves, whose locks it decides itself; their
+// backing is watched instead.
+//
+// With changes, the kernel also reports changes to shared files (the root
+// is hangarfs), and nothing here watches them while it does.
+func (g *Guest) ServeLocks(dev io.ReadWriter, changes bool) error {
 	sl := &lockServer{g: g, dev: dev, queues: map[string]chan hangarsync.Msg{},
 		cancels: map[uint64]chan struct{}{}}
 	done := make(chan struct{})
 	defer close(done)
 	go sl.registerPaths(done)
+	if changes {
+		g.log.Info("profile: the kernel reports changes to shared files; nothing watches them")
+		g.kernelChanges.Store(true)
+		defer func() {
+			g.kernelChanges.Store(false)
+			select {
+			case g.kernelGone <- struct{}{}:
+			default:
+			}
+		}()
+	}
 	rd := hangarsync.NewReader(dev)
 	for {
 		m, err := rd.Next()
@@ -40,6 +55,8 @@ func (g *Guest) ServeLocks(dev io.ReadWriter) error {
 				delete(sl.cancels, m.ID)
 			}
 			sl.mu.Unlock()
+		case hangarsync.OpChanged:
+			sl.changed(m.Path)
 		case hangarsync.OpLock, hangarsync.OpIdle:
 			if m.Op == hangarsync.OpLock {
 				sl.mu.Lock()
@@ -160,16 +177,48 @@ func (sl *lockServer) rel(p string) (string, bool) {
 	return r, true
 }
 
-// registerPaths keeps the kernel's shared paths those of the current
-// session, until done.
+// changed passes on the kernel's report of a change, as a path relative to
+// the home directory: a shared path's own, or, in LockFS's backing, the
+// path it is served at. An empty one is everything.
+func (sl *lockServer) changed(p string) {
+	rel, ok := "", p == ""
+	if !ok {
+		rel, ok = sl.rel(p)
+	}
+	if !ok {
+		sl.g.mu.Lock()
+		for dir, b := range sl.g.backing {
+			if r, err := filepath.Rel(b, p); err == nil && r != ".." && !strings.HasPrefix(r, "../") {
+				rel, ok = path.Join(dir, r), true
+				break
+			}
+		}
+		sl.g.mu.Unlock()
+	}
+	if !ok {
+		return
+	}
+	select {
+	case sl.g.changes <- rel:
+	default:
+		sl.g.changesLost.Store(true)
+	}
+}
+
+// registerPaths keeps the kernel's shared and watched paths those of the
+// current session, until done.
 func (sl *lockServer) registerPaths(done <-chan struct{}) {
 	var have []string
 	for {
-		want := sl.kernelPaths()
+		shared, watched := sl.kernelPaths()
+		want := append(append([]string{}, shared...), watched...)
 		if !slices.Equal(want, have) {
 			msgs := []hangarsync.Msg{{Op: hangarsync.OpClearPaths}}
-			for _, p := range want {
+			for _, p := range shared {
 				msgs = append(msgs, hangarsync.Msg{Op: hangarsync.OpAddPath, Path: p})
+			}
+			for _, p := range watched {
+				msgs = append(msgs, hangarsync.Msg{Op: hangarsync.OpAddWatch, Path: p})
 			}
 			ok := true
 			for _, m := range msgs {
@@ -191,32 +240,47 @@ func (sl *lockServer) registerPaths(done <-chan struct{}) {
 	}
 }
 
-// kernelPaths are the shared paths as the kernel matches them: absolute,
-// a directory's with its trailing slash, without LockFS's directories.
-func (sl *lockServer) kernelPaths() []string {
+// kernelPaths are the shared paths as the kernel matches them: absolute, a
+// directory's with its trailing slash. Those LockFS serves, whose locks it
+// decides itself, are watched rather than shared: at their backing, where
+// the kernel sees them written, or, for a directory holding one of LockFS's,
+// where it is.
+func (sl *lockServer) kernelPaths() (shared, watched []string) {
 	sl.g.mu.Lock()
 	s := sl.g.current
+	backing := sl.g.backing
 	sl.g.mu.Unlock()
 	if s == nil {
-		return nil
+		return nil, nil
 	}
 	lockDirs := LockDirs()
-	var out []string
 	for _, p := range s.sharedPaths() {
 		clean := strings.TrimSuffix(p, "/")
-		if slices.ContainsFunc(lockDirs, func(d string) bool {
-			return clean == d || strings.HasPrefix(clean, d+"/") || strings.HasPrefix(d, clean+"/")
-		}) {
-			continue
-		}
 		abs := path.Join(sl.g.user.HomeDir, clean)
 		if strings.HasSuffix(p, "/") {
 			abs += "/"
 		}
-		out = append(out, abs)
+		in := slices.IndexFunc(lockDirs, func(d string) bool { return clean == d || strings.HasPrefix(clean, d+"/") })
+		holds := slices.ContainsFunc(lockDirs, func(d string) bool { return strings.HasPrefix(d, clean+"/") })
+		switch {
+		case in >= 0:
+			d := lockDirs[in]
+			if b, ok := backing[d]; ok {
+				w := b + strings.TrimPrefix(clean, d)
+				if strings.HasSuffix(p, "/") {
+					w += "/"
+				}
+				watched = append(watched, w)
+			}
+		case holds:
+			watched = append(watched, abs)
+		default:
+			shared = append(shared, abs)
+		}
 	}
-	slices.Sort(out)
-	return out
+	slices.Sort(shared)
+	slices.Sort(watched)
+	return shared, watched
 }
 
 // Holds reports whether the environment holds a lock on a path, relative to

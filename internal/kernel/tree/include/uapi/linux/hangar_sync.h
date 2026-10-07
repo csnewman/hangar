@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * /dev/hangar-sync: the messages between the kernel and Hangar's guest agent
- * about locks on files an environment shares with others.
+ * about files an environment shares with others: locks on them, and
+ * changes to them.
  *
  * Each read returns one message from the kernel and each write takes one from
  * the agent: a struct hangar_sync_msg, then path_len bytes of path with no
@@ -21,6 +22,11 @@
 /* The LOCK with this id is no longer wanted: the process was interrupted.
  * No reply. */
 #define HANGAR_SYNC_CANCEL	3
+/* Something at path, at or under a registered or watched path, may have
+ * changed: made, written and closed, given new attributes, removed, or
+ * renamed from or to there. With no path, more changed than the kernel
+ * kept count of: everything is to be looked at. No reply. */
+#define HANGAR_SYNC_CHANGED	4
 
 /* Agent to kernel. */
 /* The answer to a LOCK: result is 0 if this environment holds the lock, or
@@ -29,8 +35,11 @@
 #define HANGAR_SYNC_REPLY	16
 /* Locks on files at or under path are this environment's to share. */
 #define HANGAR_SYNC_ADD_PATH	17
-/* No path is shared any more. */
+/* No path is shared or watched any more. */
 #define HANGAR_SYNC_CLEAR_PATHS	18
+/* Changes at or under path are reported (CHANGED), and locks on it are
+ * left alone. A path added with ADD_PATH is reported too. */
+#define HANGAR_SYNC_ADD_WATCH	19
 
 /* flags on a LOCK. */
 #define HANGAR_SYNC_WAIT	1	/* the caller waits for the lock */

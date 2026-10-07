@@ -2,6 +2,7 @@
 /*
  * hangarfs: open files. Each has the lower file open beside it, through
  * which its contents are read, written and mapped, and its directory read.
+ * Closing one opened for writing reports it changed (hangar_sync_notify).
  * Locks are this filesystem's own: one on a file under a shared path is
  * first taken for the environment (sync.c), and every way a lock is let go
  * of -- unlocking, closing, the last reference going -- arrives here.
@@ -100,6 +101,13 @@ static int hfs_release(struct inode *inode, struct file *file)
 
 	fput(hf->lower);
 	kfree(hf);
+	/*
+	 * Its writes, reported once they are all made, as inotify's
+	 * IN_CLOSE_WRITE: a writer is seen when it is done, not at every
+	 * write. One holding the file open sees it reported at its close.
+	 */
+	if ((file->f_mode & FMODE_WRITE) && S_ISREG(inode->i_mode))
+		hangar_sync_notify(file->f_path.dentry);
 	return 0;
 }
 

@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
@@ -43,6 +44,17 @@ type Guest struct {
 	keys    []ssh.PublicKey
 	held    map[string]bool   // locks held here, renewed while they are
 	backing map[string]string // LockFS's backing for each directory it serves
+
+	// kernelChanges is whether the kernel reports changes to shared files
+	// (ServeLocks), in which case nothing here watches them. Its reports,
+	// relative to the home directory, wait in changes; one that did not
+	// fit is changesLost, and everything is looked at again.
+	kernelChanges atomic.Bool
+	changes       chan string
+	changesLost   atomic.Bool
+	// kernelGone is told when the kernel stops reporting, and watching
+	// starts again.
+	kernelGone chan struct{}
 
 	synced     chan struct{} // closed once a session has had the profile whole
 	syncedOnce sync.Once
@@ -118,7 +130,8 @@ func (g *Guest) SetBacking(backing map[string]string) {
 // NewGuest keeps u's home directory, and serves u's SSH agent.
 func NewGuest(u *user.User, log *slog.Logger) *Guest {
 	g := &Guest{user: u, log: log, changed: make(chan struct{}), held: map[string]bool{},
-		synced: make(chan struct{}), agreed: map[string]string{}}
+		synced: make(chan struct{}), agreed: map[string]string{},
+		changes: make(chan string, 4096), kernelGone: make(chan struct{}, 1)}
 	go g.renew()
 	return g
 }
@@ -447,9 +460,18 @@ func (s *guestSession) run(ctx context.Context) error {
 				}
 			}
 			debounce.Reset(100 * time.Millisecond)
+		case rel := <-s.g.changes:
+			s.changedHere(rel)
+			debounce.Reset(100 * time.Millisecond)
+		case <-s.g.kernelGone:
+			s.watchAll()
+			debounce.Reset(100 * time.Millisecond)
 		case err := <-w.Errors:
 			s.g.log.Warn("profile: watching files", "err", err)
 		case <-debounce.C:
+			if s.g.changesLost.Swap(false) {
+				s.rescan()
+			}
 			if err := s.flush(); err != nil {
 				return err
 			}
@@ -519,6 +541,16 @@ func (s *guestSession) setPaths(paths Paths) {
 			s.g.log.Warn("profile: making a directory", "dir", d, "err", err)
 		}
 	}
+	s.watchAll()
+	if s.isReady() {
+		s.flush()
+	}
+}
+
+// watchAll watches every shared path, and marks every shared file to be
+// looked at.
+func (s *guestSession) watchAll() {
+	parents, trees := s.sharedPaths().Dirs()
 	for _, d := range parents {
 		s.watch(filepath.Join(s.home, d))
 	}
@@ -526,8 +558,25 @@ func (s *guestSession) setPaths(paths Paths) {
 		s.watchTree(filepath.Join(s.home, d))
 	}
 	s.rescan()
-	if s.isReady() {
-		s.flush()
+}
+
+// changedHere marks what the kernel reported changed to be looked at: the
+// path, what the profile has under it, which a directory removed or renamed
+// took with it, and what is under it here, which one made or renamed
+// brought.
+func (s *guestSession) changedHere(rel string) {
+	if rel == "" {
+		s.rescan()
+		return
+	}
+	s.dirty[rel] = true
+	for _, p := range s.knownUnder(rel) {
+		s.dirty[p] = true
+	}
+	if s.sharedPaths().InTree(rel) {
+		if st, err := os.Lstat(filepath.Join(s.home, rel)); err == nil && st.IsDir() {
+			s.watchTree(filepath.Join(s.home, rel))
+		}
 	}
 }
 
@@ -768,7 +817,7 @@ func (s *guestSession) mkdirAll(dir string) error {
 }
 
 func (s *guestSession) watch(dir string) {
-	if s.watched[dir] {
+	if s.watched[dir] || s.g.kernelChanges.Load() {
 		return
 	}
 	if err := s.watcher.Add(dir); err != nil {
