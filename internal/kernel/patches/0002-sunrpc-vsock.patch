@@ -1,0 +1,717 @@
+diff --git a/fs/nfs/client.c b/fs/nfs/client.c
+index 60386330a..b07cd9eef 100644
+--- a/fs/nfs/client.c
++++ b/fs/nfs/client.c
+@@ -496,6 +496,7 @@ void nfs_init_timeout_values(struct rpc_timeout *to, int proto,
+ 	case XPRT_TRANSPORT_TCP:
+ 	case XPRT_TRANSPORT_TCP_TLS:
+ 	case XPRT_TRANSPORT_RDMA:
++	case XPRT_TRANSPORT_VSOCK:
+ 		if (retrans == NFS_UNSPEC_RETRANS)
+ 			to->to_retries = NFS_DEF_TCP_RETRANS;
+ 		if (timeo == NFS_UNSPEC_TIMEO || to->to_initval == 0)
+diff --git a/fs/nfs/fs_context.c b/fs/nfs/fs_context.c
+index 1967de7d1..b5da0c42c 100644
+--- a/fs/nfs/fs_context.c
++++ b/fs/nfs/fs_context.c
+@@ -18,6 +18,7 @@
+ #include <linux/nfs_fs.h>
+ #include <linux/nfs_mount.h>
+ #include <linux/nfs4_mount.h>
++#include <linux/vm_sockets.h>
+ 
+ #include <net/handshake.h>
+ 
+@@ -254,6 +255,7 @@ enum {
+ 	Opt_xprt_tcp6,
+ 	Opt_xprt_udp,
+ 	Opt_xprt_udp6,
++	Opt_xprt_vsock,
+ 	nr__Opt_xprt
+ };
+ 
+@@ -264,6 +266,7 @@ static const struct constant_table nfs_xprt_protocol_tokens[] = {
+ 	{ "tcp6",	Opt_xprt_tcp6 },
+ 	{ "udp",	Opt_xprt_udp },
+ 	{ "udp6",	Opt_xprt_udp6 },
++	{ "vsock",	Opt_xprt_vsock },
+ 	{}
+ };
+ 
+@@ -335,6 +338,8 @@ static int nfs_verify_server_address(struct sockaddr_storage *addr)
+ 		struct in6_addr *sa = &((struct sockaddr_in6 *)addr)->sin6_addr;
+ 		return !ipv6_addr_any(sa);
+ 	}
++	case AF_VSOCK:
++		return ((struct sockaddr_vm *)addr)->svm_cid != VMADDR_CID_ANY;
+ 	}
+ 
+ 	return 0;
+@@ -368,6 +373,10 @@ static int nfs_validate_transport_protocol(struct fs_context *fc,
+ 	case XPRT_TRANSPORT_TCP:
+ 	case XPRT_TRANSPORT_RDMA:
+ 		break;
++	case XPRT_TRANSPORT_VSOCK:
++		if (ctx->version != 4 || ctx->minorversion == 0)
++			goto out_invalid_transport_vsock;
++		break;
+ 	default:
+ 		ctx->nfs_server.protocol = XPRT_TRANSPORT_TCP;
+ 	}
+@@ -384,6 +393,8 @@ static int nfs_validate_transport_protocol(struct fs_context *fc,
+ 	return 0;
+ out_invalid_transport_udp:
+ 	return nfs_invalf(fc, "NFS: Unsupported transport protocol udp");
++out_invalid_transport_vsock:
++	return nfs_invalf(fc, "NFS: vsock needs NFSv4.1 or later");
+ out_invalid_xprtsec_policy:
+ 	return nfs_invalf(fc, "NFS: Transport does not support xprtsec");
+ }
+@@ -882,6 +893,11 @@ static int nfs_fs_context_parse_param(struct fs_context *fc,
+ 				goto out_bad_transport;
+ 			ctx->nfs_server.protocol = ret;
+ 			break;
++		case Opt_xprt_vsock:
++			protofamily = AF_VSOCK;
++			ctx->flags |= NFS_MOUNT_TCP;
++			ctx->nfs_server.protocol = XPRT_TRANSPORT_VSOCK;
++			break;
+ 		default:
+ 			goto out_bad_transport;
+ 		}
+diff --git a/include/linux/sunrpc/addr.h b/include/linux/sunrpc/addr.h
+index 07d454873..3644d635a 100644
+--- a/include/linux/sunrpc/addr.h
++++ b/include/linux/sunrpc/addr.h
+@@ -11,6 +11,7 @@
+ #include <linux/socket.h>
+ #include <linux/in.h>
+ #include <linux/in6.h>
++#include <linux/vm_sockets.h>
+ #include <net/ipv6.h>
+ 
+ size_t		rpc_ntop(const struct sockaddr *, char *, const size_t);
+@@ -27,6 +28,8 @@ static inline unsigned short rpc_get_port(const struct sockaddr *sap)
+ 		return ntohs(((struct sockaddr_in *)sap)->sin_port);
+ 	case AF_INET6:
+ 		return ntohs(((struct sockaddr_in6 *)sap)->sin6_port);
++	case AF_VSOCK:
++		return ((struct sockaddr_vm *)sap)->svm_port;
+ 	}
+ 	return 0;
+ }
+@@ -41,6 +44,9 @@ static inline void rpc_set_port(struct sockaddr *sap,
+ 	case AF_INET6:
+ 		((struct sockaddr_in6 *)sap)->sin6_port = htons(port);
+ 		break;
++	case AF_VSOCK:
++		((struct sockaddr_vm *)sap)->svm_port = port;
++		break;
+ 	}
+ }
+ 
+@@ -117,6 +123,26 @@ static inline bool __rpc_copy_addr6(struct sockaddr *dst,
+  *
+  * Returns true if the addrs are equal, false if they aren't.
+  */
++static inline bool rpc_cmp_vsock_addr(const struct sockaddr *sap1,
++				      const struct sockaddr *sap2)
++{
++	const struct sockaddr_vm *svm1 = (const struct sockaddr_vm *)sap1;
++	const struct sockaddr_vm *svm2 = (const struct sockaddr_vm *)sap2;
++
++	return svm1->svm_cid == svm2->svm_cid;
++}
++
++static inline bool __rpc_copy_vsock_addr(struct sockaddr *dst,
++					 const struct sockaddr *src)
++{
++	const struct sockaddr_vm *ssvm = (const struct sockaddr_vm *)src;
++	struct sockaddr_vm *dsvm = (struct sockaddr_vm *)dst;
++
++	dsvm->svm_family = ssvm->svm_family;
++	dsvm->svm_cid = ssvm->svm_cid;
++	return true;
++}
++
+ static inline bool rpc_cmp_addr(const struct sockaddr *sap1,
+ 				const struct sockaddr *sap2)
+ {
+@@ -126,6 +152,8 @@ static inline bool rpc_cmp_addr(const struct sockaddr *sap1,
+ 			return rpc_cmp_addr4(sap1, sap2);
+ 		case AF_INET6:
+ 			return rpc_cmp_addr6(sap1, sap2);
++		case AF_VSOCK:
++			return rpc_cmp_vsock_addr(sap1, sap2);
+ 		}
+ 	}
+ 	return false;
+@@ -162,6 +190,8 @@ static inline bool rpc_copy_addr(struct sockaddr *dst,
+ 		return __rpc_copy_addr4(dst, src);
+ 	case AF_INET6:
+ 		return __rpc_copy_addr6(dst, src);
++	case AF_VSOCK:
++		return __rpc_copy_vsock_addr(dst, src);
+ 	}
+ 	return false;
+ }
+diff --git a/include/linux/sunrpc/xprt.h b/include/linux/sunrpc/xprt.h
+index a82045804..d47d98f8e 100644
+--- a/include/linux/sunrpc/xprt.h
++++ b/include/linux/sunrpc/xprt.h
+@@ -207,6 +207,7 @@ enum xprt_transports {
+ 	XPRT_TRANSPORT_BC_RDMA	= XPRT_TRANSPORT_RDMA | XPRT_TRANSPORT_BC,
+ 	XPRT_TRANSPORT_LOCAL	= 257,
+ 	XPRT_TRANSPORT_TCP_TLS	= 258,
++	XPRT_TRANSPORT_VSOCK	= 259,
+ };
+ 
+ struct rpc_sysfs_xprt;
+diff --git a/net/sunrpc/addr.c b/net/sunrpc/addr.c
+index 97ff11973..f1aff9b60 100644
+--- a/net/sunrpc/addr.c
++++ b/net/sunrpc/addr.c
+@@ -126,6 +126,14 @@ static int rpc_ntop4(const struct sockaddr *sap,
+  * Plants a %NUL-terminated string in @buf and returns the length
+  * of the string, excluding the %NUL.  Otherwise zero is returned.
+  */
++static size_t rpc_ntop_vsock(const struct sockaddr *sap,
++			     char *buf, const size_t buflen)
++{
++	const struct sockaddr_vm *svm = (const struct sockaddr_vm *)sap;
++
++	return snprintf(buf, buflen, "vsock:%u", svm->svm_cid);
++}
++
+ size_t rpc_ntop(const struct sockaddr *sap, char *buf, const size_t buflen)
+ {
+ 	switch (sap->sa_family) {
+@@ -133,6 +141,8 @@ size_t rpc_ntop(const struct sockaddr *sap, char *buf, const size_t buflen)
+ 		return rpc_ntop4(sap, buf, buflen);
+ 	case AF_INET6:
+ 		return rpc_ntop6(sap, buf, buflen);
++	case AF_VSOCK:
++		return rpc_ntop_vsock(sap, buf, buflen);
+ 	}
+ 
+ 	return 0;
+@@ -241,11 +251,39 @@ static size_t rpc_pton6(struct net *net, const char *buf, const size_t buflen,
+  * socket address, if successful.  Returns zero if an error
+  * occurred.
+  */
++#define RPC_VSOCK_PREFIX	"vsock:"
++
++static size_t rpc_pton_vsock(const char *buf, const size_t buflen,
++			     struct sockaddr *sap, const size_t salen)
++{
++	struct sockaddr_vm *svm = (struct sockaddr_vm *)sap;
++	const size_t plen = sizeof(RPC_VSOCK_PREFIX) - 1;
++	char cid[sizeof("4294967295")];
++	unsigned int val;
++
++	if (salen < sizeof(*svm) || buflen <= plen ||
++	    buflen - plen >= sizeof(cid))
++		return 0;
++	memcpy(cid, buf + plen, buflen - plen);
++	cid[buflen - plen] = '\0';
++	if (kstrtouint(cid, 10, &val) || val == VMADDR_CID_ANY)
++		return 0;
++
++	memset(svm, 0, sizeof(*svm));
++	svm->svm_family = AF_VSOCK;
++	svm->svm_cid = val;
++	return sizeof(*svm);
++}
++
+ size_t rpc_pton(struct net *net, const char *buf, const size_t buflen,
+ 		struct sockaddr *sap, const size_t salen)
+ {
+ 	unsigned int i;
+ 
++	if (buflen > sizeof(RPC_VSOCK_PREFIX) - 1 &&
++	    !strncmp(buf, RPC_VSOCK_PREFIX, sizeof(RPC_VSOCK_PREFIX) - 1))
++		return rpc_pton_vsock(buf, buflen, sap, salen);
++
+ 	for (i = 0; i < buflen; i++)
+ 		if (buf[i] == ':')
+ 			return rpc_pton6(net, buf, buflen, sap, salen);
+diff --git a/net/sunrpc/clnt.c b/net/sunrpc/clnt.c
+index 6cedc824c..eb335762a 100644
+--- a/net/sunrpc/clnt.c
++++ b/net/sunrpc/clnt.c
+@@ -1549,6 +1549,16 @@ static int rpc_anyaddr(int family, struct sockaddr *buf, size_t buflen)
+ 		memcpy(buf, &rpc_in6addr_loopback,
+ 				sizeof(rpc_in6addr_loopback));
+ 		break;
++	case AF_VSOCK: {
++		struct sockaddr_vm *svm = (struct sockaddr_vm *)buf;
++
++		if (buflen < sizeof(*svm))
++			return -EINVAL;
++		memset(svm, 0, sizeof(*svm));
++		svm->svm_family = AF_VSOCK;
++		svm->svm_cid = VMADDR_CID_ANY;
++		break;
++	}
+ 	default:
+ 		dprintk("RPC:       %s: address family not supported\n",
+ 			__func__);
+diff --git a/net/sunrpc/xprtsock.c b/net/sunrpc/xprtsock.c
+index 7f60723fa..c1d577d60 100644
+--- a/net/sunrpc/xprtsock.c
++++ b/net/sunrpc/xprtsock.c
+@@ -49,6 +49,7 @@
+ #include <net/tcp.h>
+ #include <net/tls_prot.h>
+ #include <net/handshake.h>
++#include <net/af_vsock.h>
+ 
+ #include <linux/bvec.h>
+ #include <linux/highmem.h>
+@@ -102,6 +103,7 @@ static struct xprt_class xs_udp_transport;
+ static struct xprt_class xs_tcp_transport;
+ static struct xprt_class xs_tcp_tls_transport;
+ static struct xprt_class xs_bc_tcp_transport;
++static struct xprt_class xs_vsock_transport;
+ 
+ /*
+  * FIXME: changing the UDP slot table size should also resize the UDP
+@@ -285,6 +287,13 @@ static void xs_format_common_peer_addresses(struct rpc_xprt *xprt)
+ 		sin6 = xs_addr_in6(xprt);
+ 		snprintf(buf, sizeof(buf), "%pi6", &sin6->sin6_addr);
+ 		break;
++	case AF_VSOCK:
++		(void)rpc_ntop(sap, buf, sizeof(buf));
++		xprt->address_strings[RPC_DISPLAY_ADDR] =
++						kstrdup(buf, GFP_KERNEL);
++		snprintf(buf, sizeof(buf), "%08x",
++			 ((struct sockaddr_vm *)sap)->svm_cid);
++		break;
+ 	default:
+ 		BUG();
+ 	}
+@@ -3078,6 +3087,268 @@ static void bc_destroy(struct rpc_xprt *xprt)
+ 	module_put(THIS_MODULE);
+ }
+ 
++#if IS_REACHABLE(CONFIG_VSOCKETS)
++/*
++ * AF_VSOCK is a stream between a virtual machine and its host, carrying
++ * RPC records exactly as TCP does: reading, record marking and the
++ * backchannel are the stream code above. What differs is the socket
++ * itself -- no TCP options, vsock's own states and send credit -- and
++ * that a vsock client never binds a source port.
++ */
++
++/**
++ * xs_vsock_state_change - callback to handle vsock socket state changes
++ * @sk: socket whose state has changed
++ *
++ * vsock reports the TCP states it shares: TCP_ESTABLISHED once the peer
++ * accepts, TCP_CLOSING or TCP_CLOSE once either end shuts the stream or
++ * the peer resets it.
++ */
++static void xs_vsock_state_change(struct sock *sk)
++{
++	struct rpc_xprt *xprt;
++	struct sock_xprt *transport;
++
++	if (!(xprt = xprt_from_sock(sk)))
++		return;
++	transport = container_of(xprt, struct sock_xprt, xprt);
++	trace_rpc_socket_state_change(xprt, sk->sk_socket);
++
++	if (sk->sk_state == TCP_ESTABLISHED &&
++	    !(sk->sk_shutdown & SHUTDOWN_MASK) && !sock_flag(sk, SOCK_DONE)) {
++		if (!xprt_test_and_set_connected(xprt)) {
++			xprt->connect_cookie++;
++			clear_bit(XPRT_SOCK_CONNECTING, &transport->sock_state);
++			xprt_clear_connecting(xprt);
++
++			xprt->stat.connect_count++;
++			xprt->stat.connect_time += (long)jiffies -
++						   xprt->stat.connect_start;
++			xs_run_error_worker(transport, XPRT_SOCK_WAKE_PENDING);
++		}
++		return;
++	}
++	if (sk->sk_state == TCP_SYN_SENT)
++		return;
++
++	xprt->connect_cookie++;
++	if (test_and_clear_bit(XPRT_SOCK_CONNECTING, &transport->sock_state))
++		xprt_clear_connecting(xprt);
++	clear_bit(XPRT_CONNECTED, &xprt->state);
++	if (xprt->reestablish_timeout < XS_TCP_INIT_REEST_TO)
++		xprt->reestablish_timeout = XS_TCP_INIT_REEST_TO;
++	/* Trigger the socket release */
++	xs_run_error_worker(transport, XPRT_SOCK_WAKE_DISCONNECT);
++}
++
++/*
++ * vsock sends against the peer's credit, which sk_wmem accounting does
++ * not see: the stream has room when the peer has granted some. Credit
++ * arrives under the socket lock, so checking it under that lock cannot
++ * miss the wakeup.
++ */
++static int xs_vsock_nospace(struct rpc_rqst *req)
++{
++	struct sock_xprt *transport =
++		container_of(req->rq_xprt, struct sock_xprt, xprt);
++	struct sock *sk = transport->inet;
++	int ret = -EAGAIN;
++
++	lock_sock(sk);
++	if (vsock_stream_has_space(vsock_sk(sk)) <= 0)
++		ret = xs_nospace(req, transport);
++	release_sock(sk);
++	return ret;
++}
++
++/**
++ * xs_vsock_send_request - write an RPC request to a vsock socket
++ * @req: pointer to RPC request
++ *
++ * Return values:
++ *        0:	The request has been sent
++ *   EAGAIN:	The socket was blocked, please call again later to
++ *		complete the request
++ * ENOTCONN:	Caller needs to invoke connect logic then call again
++ *    other:	Some other error occurred, the request was not sent
++ */
++static int xs_vsock_send_request(struct rpc_rqst *req)
++{
++	struct rpc_xprt *xprt = req->rq_xprt;
++	struct sock_xprt *transport = container_of(xprt, struct sock_xprt, xprt);
++	struct xdr_buf *xdr = &req->rq_snd_buf;
++	rpc_fraghdr rm = xs_stream_record_marker(xdr);
++	unsigned int msglen = rm ? req->rq_slen + sizeof(rm) : req->rq_slen;
++	struct msghdr msg = {
++		.msg_flags	= XS_SENDMSG_FLAGS,
++	};
++	unsigned int sent;
++	int status;
++
++	/* Close the stream if the previous transmission was incomplete */
++	if (xs_send_request_was_aborted(transport, req)) {
++		if (transport->sock != NULL)
++			kernel_sock_shutdown(transport->sock, SHUT_RDWR);
++		return -ENOTCONN;
++	}
++	if (!transport->inet)
++		return -ENOTCONN;
++
++	xs_pktdump("packet data:",
++				req->rq_svec->iov_base,
++				req->rq_svec->iov_len);
++
++	req->rq_xtime = ktime_get();
++	do {
++		status = xprt_sock_sendmsg(transport->sock, &msg, xdr,
++					   transport->xmit.offset, rm, &sent);
++		transport->xmit.offset += sent;
++		req->rq_bytes_sent = transport->xmit.offset;
++		if (likely(req->rq_bytes_sent >= msglen)) {
++			req->rq_xmit_bytes_sent += transport->xmit.offset;
++			transport->xmit.offset = 0;
++			return 0;
++		}
++		WARN_ON_ONCE(sent == 0 && status == 0);
++	} while (status == 0);
++
++	switch (status) {
++	case -EAGAIN:
++		status = xs_vsock_nospace(req);
++		break;
++	case -ENOTSOCK:
++		status = -ENOTCONN;
++		break;
++	case -ECONNRESET:
++	case -ECONNREFUSED:
++	case -ENOTCONN:
++	case -ENOBUFS:
++	case -EPIPE:
++		break;
++	default:
++		dprintk("RPC:       sendmsg returned unrecognized error %d\n",
++			-status);
++	}
++	return status;
++}
++
++static int xs_vsock_finish_connecting(struct rpc_xprt *xprt,
++				      struct socket *sock)
++{
++	struct sock_xprt *transport = container_of(xprt, struct sock_xprt, xprt);
++
++	if (!transport->inet) {
++		struct sock *sk = sock->sk;
++
++		lock_sock(sk);
++
++		xs_save_old_callbacks(transport, sk);
++
++		sk->sk_user_data = xprt;
++		WRITE_ONCE(sk->sk_data_ready, xs_data_ready);
++		sk->sk_state_change = xs_vsock_state_change;
++		WRITE_ONCE(sk->sk_write_space, xs_write_space);
++		sk->sk_error_report = xs_error_report;
++		sk->sk_use_task_frag = false;
++
++		xprt_clear_connected(xprt);
++
++		/* Reset to new socket */
++		transport->sock = sock;
++		transport->inet = sk;
++
++		release_sock(sk);
++	}
++
++	xs_stream_start_connect(transport);
++
++	set_bit(XPRT_SOCK_CONNECTING, &transport->sock_state);
++	return kernel_connect(sock, (struct sockaddr_unsized *)xs_addr(xprt),
++			      xprt->addrlen, O_NONBLOCK);
++}
++
++/**
++ * xs_vsock_setup_socket - create a vsock socket and connect to the peer
++ * @work: queued work item
++ *
++ * Invoked by a work queue tasklet.
++ */
++static void xs_vsock_setup_socket(struct work_struct *work)
++{
++	struct sock_xprt *transport =
++		container_of(work, struct sock_xprt, connect_worker.work);
++	struct socket *sock = transport->sock;
++	struct rpc_xprt *xprt = &transport->xprt;
++	unsigned int pflags = current->flags;
++	struct file *filp;
++	int status;
++
++	if (atomic_read(&xprt->swapper))
++		current->flags |= PF_MEMALLOC;
++
++	if (xprt_connected(xprt))
++		goto out;
++	if (test_and_clear_bit(XPRT_SOCK_CONNECT_SENT,
++			       &transport->sock_state) ||
++	    !sock) {
++		xs_reset_transport(transport);
++		status = __sock_create(xprt->xprt_net, AF_VSOCK, SOCK_STREAM,
++				       0, &sock, 1);
++		if (status < 0) {
++			xprt_wake_pending_tasks(xprt, status);
++			goto out;
++		}
++		filp = sock_alloc_file(sock, O_NONBLOCK, NULL);
++		if (IS_ERR(filp)) {
++			xprt_wake_pending_tasks(xprt, PTR_ERR(filp));
++			goto out;
++		}
++		transport->file = filp;
++	}
++
++	dprintk("RPC:       worker connecting xprt %p via vsock to %s (port %s)\n",
++		xprt, xprt->address_strings[RPC_DISPLAY_ADDR],
++		xprt->address_strings[RPC_DISPLAY_PORT]);
++
++	status = xs_vsock_finish_connecting(xprt, sock);
++	trace_rpc_socket_connect(xprt, sock, status);
++	switch (status) {
++	case 0:
++	case -EINPROGRESS:
++		set_bit(XPRT_SOCK_CONNECT_SENT, &transport->sock_state);
++		if (xprt->reestablish_timeout < XS_TCP_INIT_REEST_TO)
++			xprt->reestablish_timeout = XS_TCP_INIT_REEST_TO;
++		fallthrough;
++	case -EALREADY:
++		goto out_unlock;
++	case -ECONNREFUSED:
++	case -ECONNRESET:
++	case -ENETUNREACH:
++	case -EHOSTUNREACH:
++	case -ENODEV:
++	case -ENOBUFS:
++	case -ENOTCONN:
++	case -ETIMEDOUT:
++		break;
++	default:
++		printk("%s: connect returned unhandled error %d\n",
++			__func__, status);
++		status = -EAGAIN;
++	}
++
++	/* xs_tcp_force_close() wakes tasks with a fixed error code.
++	 * We need to wake them first to ensure the correct error code.
++	 */
++	xprt_wake_pending_tasks(xprt, status);
++	xs_tcp_force_close(xprt);
++out:
++	xprt_clear_connecting(xprt);
++out_unlock:
++	xprt_unlock_connect(xprt, transport);
++	current_restore_flags(pflags, PF_MEMALLOC);
++}
++#endif /* IS_REACHABLE(CONFIG_VSOCKETS) */
++
+ static const struct rpc_xprt_ops xs_local_ops = {
+ 	.reserve_xprt		= xprt_reserve_xprt,
+ 	.release_xprt		= xprt_release_xprt,
+@@ -3156,6 +3427,37 @@ static const struct rpc_xprt_ops xs_tcp_ops = {
+ #endif
+ };
+ 
++#if IS_REACHABLE(CONFIG_VSOCKETS)
++static const struct rpc_xprt_ops xs_vsock_ops = {
++	.reserve_xprt		= xprt_reserve_xprt,
++	.release_xprt		= xprt_release_xprt,
++	.alloc_slot		= xprt_alloc_slot,
++	.free_slot		= xprt_free_slot,
++	.rpcbind		= xs_local_rpcbind,
++	.set_port		= xs_set_port,
++	.connect		= xs_connect,
++	.buf_alloc		= rpc_malloc,
++	.buf_free		= rpc_free,
++	.prepare_request	= xs_stream_prepare_request,
++	.send_request		= xs_vsock_send_request,
++	.abort_send_request	= xs_stream_abort_send_request,
++	.wait_for_reply_request	= xprt_wait_for_reply_request_def,
++	.close			= xs_close,
++	.destroy		= xs_destroy,
++	.print_stats		= xs_local_print_stats,
++	.enable_swap		= xs_enable_swap,
++	.disable_swap		= xs_disable_swap,
++	.inject_disconnect	= xs_inject_disconnect,
++#ifdef CONFIG_SUNRPC_BACKCHANNEL
++	.bc_setup		= xprt_setup_bc,
++	.bc_maxpayload		= xs_tcp_bc_maxpayload,
++	.bc_num_slots		= xprt_bc_max_slots,
++	.bc_free_rqst		= xprt_free_bc_rqst,
++	.bc_destroy		= xprt_destroy_bc,
++#endif
++};
++#endif /* IS_REACHABLE(CONFIG_VSOCKETS) */
++
+ /*
+  * The rpc_xprt_ops for the server backchannel
+  */
+@@ -3197,6 +3499,11 @@ static int xs_init_anyaddr(const int family, struct sockaddr *sap)
+ 	case AF_INET6:
+ 		memcpy(sap, &sin6, sizeof(sin6));
+ 		break;
++	case AF_VSOCK:
++		memset(sap, 0, sizeof(struct sockaddr_vm));
++		((struct sockaddr_vm *)sap)->svm_family = AF_VSOCK;
++		((struct sockaddr_vm *)sap)->svm_cid = VMADDR_CID_ANY;
++		break;
+ 	default:
+ 		dprintk("RPC:       %s: Bad address family\n", __func__);
+ 		return -EAFNOSUPPORT;
+@@ -3394,6 +3701,67 @@ static const struct rpc_timeout xs_tcp_default_timeout = {
+ 	.to_retries = 2,
+ };
+ 
++#if IS_REACHABLE(CONFIG_VSOCKETS)
++/**
++ * xs_setup_vsock - Set up transport to use a vsock socket
++ * @args: rpc transport creation arguments
++ *
++ * The peer is a CID and a port; the port is the service's own, so there
++ * is no rpcbind.
++ */
++static struct rpc_xprt *xs_setup_vsock(struct xprt_create *args)
++{
++	struct sockaddr_vm *svm = (struct sockaddr_vm *)args->dstaddr;
++	struct rpc_xprt *xprt;
++	struct sock_xprt *transport;
++	unsigned int max_slot_table_size = xprt_max_tcp_slot_table_entries;
++
++	if (svm->svm_family != AF_VSOCK)
++		return ERR_PTR(-EAFNOSUPPORT);
++	if (args->flags & XPRT_CREATE_INFINITE_SLOTS)
++		max_slot_table_size = RPC_MAX_SLOT_TABLE_LIMIT;
++
++	xprt = xs_setup_xprt(args, xprt_tcp_slot_table_entries,
++			max_slot_table_size);
++	if (IS_ERR(xprt))
++		return xprt;
++	transport = container_of(xprt, struct sock_xprt, xprt);
++
++	xprt->prot = 0;
++	xprt->xprt_class = &xs_vsock_transport;
++	xprt->max_payload = RPC_MAX_FRAGMENT_SIZE;
++
++	xprt->bind_timeout = XS_BIND_TO;
++	xprt->reestablish_timeout = XS_TCP_INIT_REEST_TO;
++	xprt->idle_timeout = XS_IDLE_DISC_TO;
++
++	xprt->ops = &xs_vsock_ops;
++	xprt->timeout = &xs_tcp_default_timeout;
++
++	xprt->max_reconnect_timeout = xprt->timeout->to_maxval;
++	if (args->reconnect_timeout)
++		xprt->max_reconnect_timeout = args->reconnect_timeout;
++	xprt->connect_timeout = xprt->timeout->to_initval *
++		(xprt->timeout->to_retries + 1);
++
++	INIT_WORK(&transport->recv_worker, xs_stream_data_receive_workfn);
++	INIT_WORK(&transport->error_worker, xs_error_handle);
++	INIT_DELAYED_WORK(&transport->connect_worker, xs_vsock_setup_socket);
++
++	xprt_set_bound(xprt);
++	xs_format_peer_addresses(xprt, "vsock", "vsock");
++
++	dprintk("RPC:       set up xprt to %s (port %s) via vsock\n",
++		xprt->address_strings[RPC_DISPLAY_ADDR],
++		xprt->address_strings[RPC_DISPLAY_PORT]);
++
++	if (try_module_get(THIS_MODULE))
++		return xprt;
++	xs_xprt_free(xprt);
++	return ERR_PTR(-EINVAL);
++}
++#endif /* IS_REACHABLE(CONFIG_VSOCKETS) */
++
+ /**
+  * xs_setup_tcp - Set up transport to use a TCP socket
+  * @args: rpc transport creation arguments
+@@ -3691,6 +4059,17 @@ static struct xprt_class	xs_bc_tcp_transport = {
+ 	.netid		= { "" },
+ };
+ 
++#if IS_REACHABLE(CONFIG_VSOCKETS)
++static struct xprt_class	xs_vsock_transport = {
++	.list		= LIST_HEAD_INIT(xs_vsock_transport.list),
++	.name		= "vsock",
++	.owner		= THIS_MODULE,
++	.ident		= XPRT_TRANSPORT_VSOCK,
++	.setup		= xs_setup_vsock,
++	.netid		= { "vsock", "" },
++};
++#endif
++
+ /**
+  * init_socket_xprt - set up xprtsock's sysctls, register with RPC client
+  *
+@@ -3705,6 +4084,9 @@ int init_socket_xprt(void)
+ 	xprt_register_transport(&xs_tcp_transport);
+ 	xprt_register_transport(&xs_tcp_tls_transport);
+ 	xprt_register_transport(&xs_bc_tcp_transport);
++#if IS_REACHABLE(CONFIG_VSOCKETS)
++	xprt_register_transport(&xs_vsock_transport);
++#endif
+ 
+ 	return 0;
+ }
+@@ -3725,6 +4107,9 @@ void cleanup_socket_xprt(void)
+ 	xprt_unregister_transport(&xs_tcp_transport);
+ 	xprt_unregister_transport(&xs_tcp_tls_transport);
+ 	xprt_unregister_transport(&xs_bc_tcp_transport);
++#if IS_REACHABLE(CONFIG_VSOCKETS)
++	xprt_unregister_transport(&xs_vsock_transport);
++#endif
+ }
+ 
+ static int param_set_portnr(const char *val, const struct kernel_param *kp)
