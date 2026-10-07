@@ -124,7 +124,7 @@ services:
       # The files environments share -- profiles and packs -- which every
       # worker serves its environments too: the workers' storage.files, the
       # same directory (on one host) or the same NFS share (on several).
-      - ${HANGAR_FILES_DIR:-/var/lib/hangar/files}:/var/lib/hangar/files
+      - ${HANGAR_FILES_DIR:-${HANGAR_WORKER_DATA_DIR:-/var/lib/hangar}/files}:/var/lib/hangar/files
     secrets: [bootstrap-token, secret-key]
     ports:
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/udp

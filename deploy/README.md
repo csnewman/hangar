@@ -271,8 +271,8 @@ starting, and says why.
 The files environments share -- profiles, and the packs templates give
 them -- are kept on the files root, a directory of one directory per file
 set, named by the set's ID. The control plane mounts it at
-`/var/lib/hangar/files`, from `HANGAR_FILES_DIR` on the host
-(`/var/lib/hangar/files`); each worker names it as `storage.files` in
+`/var/lib/hangar/files`, from `HANGAR_FILES_DIR` on the host (the worker
+data directory's `files/`); each worker names it as `storage.files` in
 `worker.yaml`, and serves each environment what of it the control plane
 says it may reach. On one host, the worker's and the control plane's are
 the same directory. With several, every one mounts the same NFS share
