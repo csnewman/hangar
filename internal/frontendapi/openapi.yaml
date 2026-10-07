@@ -173,6 +173,25 @@ paths:
               schema: { $ref: "#/components/schemas/ProfileFile" }
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+    patch:
+      operationId: updateProfileFileSettings
+      description: >-
+        Change a file's settings. They reach every environment as a change
+        to the file does.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfileFileSettings" }
+      responses:
+        "200":
+          description: The file as stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProfileFile" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
     delete:
       operationId: deleteProfileFile
       description: Remove a file, from the profile and every environment.
@@ -1510,17 +1529,29 @@ components:
 
     ProfileFile:
       type: object
-      required: [path, size, mode, secret, updated_at]
+      required: [path, size, mode, trusted_only, updated_at]
       properties:
         path: { type: string }
         size: { type: integer }
         mode: { type: integer }
-        secret:
+        trusted_only:
           type: boolean
           description: >-
-            A credential, which environments not trusted with their owner's
-            credentials are not given.
+            Kept from environments not trusted with their owner's
+            credentials. Known credentials start so.
         updated_at: { type: string, format: date-time }
+
+    ProfileFileSettings:
+      type: object
+      required: [mode, trusted_only]
+      additionalProperties: false
+      properties:
+        mode:
+          type: integer
+          minimum: 1
+          maximum: 511
+          description: Its permissions, as chmod takes them (0o600 is 384).
+        trusted_only: { type: boolean }
 
     ProfileFileContent:
       type: object

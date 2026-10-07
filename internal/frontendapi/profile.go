@@ -38,7 +38,7 @@ func (h *handler) GetProfile(ctx context.Context, _ GetProfileRequestObject) (Ge
 			continue
 		}
 		out.Files = append(out.Files, ProfileFile{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
-			Secret: profile.Secret(f.Path), UpdatedAt: f.UpdatedAt})
+			TrustedOnly: f.TrustedOnly, UpdatedAt: f.UpdatedAt})
 	}
 	for _, k := range keys {
 		out.Keys = append(out.Keys, sshKey(k))
@@ -70,9 +70,6 @@ func (h *handler) PutProfileFile(ctx context.Context, req PutProfileFileRequestO
 			}
 		}
 	}
-	if mode == 0 && profile.Secret(req.Params.Path) {
-		mode = 0o600
-	}
 	f, err := h.profiles.Put(ctx, uid, req.Params.Path, []byte(req.Body.Content), mode)
 	switch {
 	case errors.Is(err, profile.ErrInvalid), errors.Is(err, profile.ErrNoKey):
@@ -81,7 +78,21 @@ func (h *handler) PutProfileFile(ctx context.Context, req PutProfileFileRequestO
 		return nil, err
 	}
 	return PutProfileFile200JSONResponse{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
-		Secret: profile.Secret(f.Path), UpdatedAt: f.UpdatedAt}, nil
+		TrustedOnly: f.TrustedOnly, UpdatedAt: f.UpdatedAt}, nil
+}
+
+func (h *handler) UpdateProfileFileSettings(ctx context.Context, req UpdateProfileFileSettingsRequestObject) (UpdateProfileFileSettingsResponseObject, error) {
+	f, err := h.profiles.SetSettings(ctx, principal(ctx).UserID, req.Params.Path, uint32(req.Body.Mode), req.Body.TrustedOnly)
+	switch {
+	case errors.Is(err, profile.ErrNotFound):
+		return UpdateProfileFileSettings404JSONResponse{NotFoundJSONResponse{Error: "no such file in the profile"}}, nil
+	case errors.Is(err, profile.ErrInvalid):
+		return UpdateProfileFileSettings400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return UpdateProfileFileSettings200JSONResponse{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
+		TrustedOnly: f.TrustedOnly, UpdatedAt: f.UpdatedAt}, nil
 }
 
 func (h *handler) DeleteProfileFile(ctx context.Context, req DeleteProfileFileRequestObject) (DeleteProfileFileResponseObject, error) {

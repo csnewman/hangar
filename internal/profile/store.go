@@ -40,12 +40,15 @@ var (
 type File struct {
 	Path string
 	// Data is the file's contents, where they were asked for.
-	Data      []byte
-	Size      int64
-	Mode      uint32
-	Version   int64
-	Deleted   bool
-	UpdatedAt time.Time
+	Data []byte
+	Size int64
+	Mode uint32
+	// TrustedOnly keeps the file from environments not trusted with their
+	// owner's credentials: they are told it is removed.
+	TrustedOnly bool
+	Version     int64
+	Deleted     bool
+	UpdatedAt   time.Time
 }
 
 // Key is one of a user's SSH keys, as anyone may see it.
@@ -109,26 +112,26 @@ func profileLock(ctx context.Context, tx db.Tx, userID string) error {
 }
 
 // Files returns a user's files, removed ones included, with their contents.
-// Without secrets, secret files are left out.
-func (s *Store) Files(ctx context.Context, userID string, secrets bool) ([]File, error) {
-	return s.files(ctx, userID, secrets, 0, "", true)
+// Without trusted, a trusted-only file is given as removed.
+func (s *Store) Files(ctx context.Context, userID string, trusted bool) ([]File, error) {
+	return s.files(ctx, userID, trusted, 0, "", true)
 }
 
 // List returns, as Files does, a user's files, without their contents.
-func (s *Store) List(ctx context.Context, userID string, secrets bool) ([]File, error) {
-	return s.files(ctx, userID, secrets, 0, "", false)
+func (s *Store) List(ctx context.Context, userID string, trusted bool) ([]File, error) {
+	return s.files(ctx, userID, trusted, 0, "", false)
 }
 
 // FilesUnder returns, as Files does, a user's files whose paths start with
 // dir: those in a directory and below, for a dir ending in a slash.
-func (s *Store) FilesUnder(ctx context.Context, userID, dir string, secrets bool) ([]File, error) {
-	return s.files(ctx, userID, secrets, 0, dir, true)
+func (s *Store) FilesUnder(ctx context.Context, userID, dir string, trusted bool) ([]File, error) {
+	return s.files(ctx, userID, trusted, 0, dir, true)
 }
 
 // File returns one of a user's files, with its contents, or ErrNotFound if
 // it is not there or was removed.
-func (s *Store) File(ctx context.Context, userID, path string, secrets bool) (File, error) {
-	files, err := s.files(ctx, userID, secrets, 0, path, true)
+func (s *Store) File(ctx context.Context, userID, path string, trusted bool) (File, error) {
+	files, err := s.files(ctx, userID, trusted, 0, path, true)
 	if err != nil {
 		return File{}, err
 	}
@@ -141,18 +144,18 @@ func (s *Store) File(ctx context.Context, userID, path string, secrets bool) (Fi
 }
 
 // Since returns the files changed after version.
-func (s *Store) Since(ctx context.Context, userID string, secrets bool, version int64) ([]File, error) {
-	return s.files(ctx, userID, secrets, version, "", true)
+func (s *Store) Since(ctx context.Context, userID string, trusted bool, version int64) ([]File, error) {
+	return s.files(ctx, userID, trusted, version, "", true)
 }
 
-func (s *Store) files(ctx context.Context, userID string, secrets bool, after int64, prefix string, contents bool) ([]File, error) {
+func (s *Store) files(ctx context.Context, userID string, trusted bool, after int64, prefix string, contents bool) ([]File, error) {
 	if !db.ValidUUID(userID) {
 		return nil, ErrNotFound
 	}
 	var out []File
 	var versions []string
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT path, coalesce(version_id, ''), size, mode, version, deleted, updated_at
+		rows, err := tx.Query(ctx, `SELECT path, coalesce(version_id, ''), size, mode, version, deleted, trusted_only, updated_at
 			FROM profile_files
 			WHERE user_id = $1 AND version > $2 AND starts_with(path, $3) ORDER BY version`, userID, after, prefix)
 		if err != nil {
@@ -163,12 +166,14 @@ func (s *Store) files(ctx context.Context, userID string, secrets bool, after in
 			var f File
 			var mode int32
 			var vid string
-			if err := rows.Scan(&f.Path, &vid, &f.Size, &mode, &f.Version, &f.Deleted, &f.UpdatedAt); err != nil {
+			if err := rows.Scan(&f.Path, &vid, &f.Size, &mode, &f.Version, &f.Deleted, &f.TrustedOnly, &f.UpdatedAt); err != nil {
 				return err
 			}
 			f.Mode = uint32(mode)
-			if Secret(f.Path) && !secrets {
-				continue
+			if f.TrustedOnly && !trusted {
+				// Gone, as far as such an environment knows: one that was
+				// given it before it was made trusted-only removes it.
+				f.Deleted, f.Size, vid = true, 0, ""
 			}
 			out = append(out, f)
 			versions = append(versions, vid)
@@ -223,8 +228,74 @@ func (s *Store) Put(ctx context.Context, userID, path string, data []byte, mode 
 	mode &= 0o777
 	if mode == 0 {
 		mode = 0o644
+		if TrustedOnlyByDefault(path) {
+			mode = 0o600
+		}
 	}
 	return s.write(ctx, userID, path, data, mode, false)
+}
+
+// TrustedOnly reports whether a file is kept from untrusted environments: as
+// its setting says, or, for one not made yet, as its path's default.
+func (s *Store) TrustedOnly(ctx context.Context, userID, path string) (bool, error) {
+	if !db.ValidUUID(userID) {
+		return false, ErrNotFound
+	}
+	only := TrustedOnlyByDefault(path)
+	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT trusted_only FROM profile_files WHERE user_id = $1 AND path = $2`,
+			userID, path).Scan(&only)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil
+		}
+		return err
+	})
+	return only, err
+}
+
+// SetSettings changes a file's mode and whether it is trusted-only, as a
+// new version, which reaches every environment as any change does.
+func (s *Store) SetSettings(ctx context.Context, userID, path string, mode uint32, trustedOnly bool) (File, error) {
+	if !db.ValidUUID(userID) {
+		return File{}, ErrNotFound
+	}
+	mode &= 0o777
+	if mode == 0 {
+		return File{}, fmt.Errorf("%w: a file needs a mode", ErrInvalid)
+	}
+	var f File
+	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		if err := profileLock(ctx, tx, userID); err != nil {
+			return err
+		}
+		var version int64
+		if err := tx.QueryRow(ctx, `INSERT INTO profile_versions (user_id, version) VALUES ($1, 1)
+			ON CONFLICT (user_id) DO UPDATE SET version = profile_versions.version + 1
+			RETURNING version`, userID).Scan(&version); err != nil {
+			return err
+		}
+		var m int32
+		err := tx.QueryRow(ctx, `UPDATE profile_files SET mode = $3, trusted_only = $4, version = $5, updated_at = now()
+			WHERE user_id = $1 AND path = $2 AND NOT deleted
+			RETURNING path, size, mode, version, trusted_only, updated_at`,
+			userID, path, int32(mode), trustedOnly, version).
+			Scan(&f.Path, &f.Size, &m, &f.Version, &f.TrustedOnly, &f.UpdatedAt)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		f.Mode = uint32(m)
+		if err := audit.Record(ctx, tx, audit.Event{Action: "profile.file_settings",
+			Target:  audit.Ref{Type: audit.KindFile, ID: userID + ":" + path, Name: path},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}},
+			Details: map[string]any{"mode": fmt.Sprintf("%#o", mode), "trusted_only": trustedOnly}}); err != nil {
+			return err
+		}
+		return db.Notify(ctx, tx, Channel, userID)
+	})
+	return f, err
 }
 
 // Delete removes a file, leaving a mark that it is gone.
@@ -281,13 +352,14 @@ func (s *Store) write(ctx context.Context, userID, path string, data []byte, mod
 			return err
 		}
 		err = tx.QueryRow(ctx, `
-			INSERT INTO profile_files (user_id, path, version_id, size, mode, deleted, version)
-			VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7)
+			INSERT INTO profile_files (user_id, path, version_id, size, mode, deleted, version, trusted_only)
+			VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7, $8)
 			ON CONFLICT (user_id, path) DO UPDATE SET version_id = EXCLUDED.version_id, size = EXCLUDED.size,
 				mode = EXCLUDED.mode, deleted = EXCLUDED.deleted, version = EXCLUDED.version,
 				updated_at = now()
-			RETURNING version, updated_at`, userID, path, kept, f.Size, int32(mode), deleted, version).
-			Scan(&f.Version, &f.UpdatedAt)
+			RETURNING version, updated_at, trusted_only`, userID, path, kept, f.Size, int32(mode), deleted, version,
+			TrustedOnlyByDefault(path)).
+			Scan(&f.Version, &f.UpdatedAt, &f.TrustedOnly)
 		if err != nil {
 			return err
 		}
@@ -298,7 +370,7 @@ func (s *Store) write(ctx context.Context, userID, path string, data []byte, mod
 		if err := audit.Record(ctx, tx, audit.Event{Action: action,
 			Target:  audit.Ref{Type: audit.KindFile, ID: userID + ":" + path, Name: path},
 			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}},
-			Details: map[string]any{"size": f.Size, "secret": Secret(path)}}); err != nil {
+			Details: map[string]any{"size": f.Size}}); err != nil {
 			return err
 		}
 		return db.Notify(ctx, tx, Channel, userID)

@@ -825,14 +825,19 @@ func TestFilesUnderADirectory(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	paths := func(secrets bool, dir string) []string {
+	// The paths under dir, a removed one marked so.
+	paths := func(trusted bool, dir string) []string {
 		t.Helper()
-		files, err := p.store.FilesUnder(ctx, p.owner, dir, secrets)
+		files, err := p.store.FilesUnder(ctx, p.owner, dir, trusted)
 		if err != nil {
 			t.Fatal(err)
 		}
 		var out []string
 		for _, f := range files {
+			if f.Deleted {
+				out = append(out, f.Path+"(removed)")
+				continue
+			}
 			if string(f.Data) != "data of "+f.Path {
 				t.Errorf("%s holds %q", f.Path, f.Data)
 			}
@@ -843,13 +848,82 @@ func TestFilesUnderADirectory(t *testing.T) {
 	if got := strings.Join(paths(true, ".claude/"), " "); got != ".claude/settings.json .claude/agents/a.md .claude/.credentials.json" {
 		t.Errorf("under .claude/: %s", got)
 	}
-	if got := strings.Join(paths(false, ".claude/"), " "); got != ".claude/settings.json .claude/agents/a.md" {
-		t.Errorf("under .claude/ without secrets: %s", got)
+	if got := strings.Join(paths(false, ".claude/"), " "); got != ".claude/settings.json .claude/agents/a.md .claude/.credentials.json(removed)" {
+		t.Errorf("under .claude/ for an untrusted environment: %s", got)
 	}
 	if got := strings.Join(paths(true, ".config/"), " "); got != ".config/gh/config.yml" {
 		t.Errorf("under .config/: %s", got)
 	}
 	if got := strings.Join(paths(true, ".c%/"), " "); got != "" {
 		t.Errorf("a pattern character matched: %s", got)
+	}
+}
+
+// A file's mode and whether it is trusted-only are its settings: changing
+// them reaches environments as a change to it does, and an untrusted
+// environment loses a file made trusted-only, and gets one that stops being.
+func TestFileSettings(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	if _, err := p.store.Put(ctx, p.owner, ".gitconfig", []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f, err := p.store.Put(ctx, p.owner, ".netrc", []byte("machine m"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.TrustedOnly || f.Mode != 0o600 {
+		t.Errorf("a known credential starts as %#o, trusted-only %t", f.Mode, f.TrustedOnly)
+	}
+	_, trustedHome, _ := p.env(t, "dev", false)
+	_, untrustedHome, _ := p.env(t, "review", true)
+	eventually(t, "the profile to arrive", func() bool {
+		return read(trustedHome, ".netrc") == "machine m" && read(untrustedHome, ".gitconfig") == "x"
+	})
+	if exists(untrustedHome, ".netrc") {
+		t.Error("an untrusted environment was given a trusted-only file")
+	}
+	mode := func(home, rel string) os.FileMode {
+		st, err := os.Stat(filepath.Join(home, rel))
+		if err != nil {
+			return 0
+		}
+		return st.Mode().Perm()
+	}
+
+	// A mode reaches the file as it is.
+	if _, err := p.store.SetSettings(ctx, p.owner, ".gitconfig", 0o640, false); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the mode to reach the environments", func() bool {
+		return mode(trustedHome, ".gitconfig") == 0o640 && mode(untrustedHome, ".gitconfig") == 0o640
+	})
+
+	// Trusted-only, it leaves the untrusted environment; not, it arrives.
+	if _, err := p.store.SetSettings(ctx, p.owner, ".gitconfig", 0o640, true); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a trusted-only file to leave the untrusted environment", func() bool {
+		return !exists(untrustedHome, ".gitconfig")
+	})
+	if read(trustedHome, ".gitconfig") != "x" {
+		t.Error("a trusted environment lost a trusted-only file")
+	}
+	if _, err := p.store.SetSettings(ctx, p.owner, ".netrc", 0o600, false); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "a file no longer trusted-only to reach the untrusted environment", func() bool {
+		return read(untrustedHome, ".netrc") == "machine m"
+	})
+
+	// The untrusted environment writing a trusted-only file changes nothing.
+	os.WriteFile(filepath.Join(untrustedHome, ".gitconfig"), []byte("from review"), 0o644)
+	time.Sleep(time.Second)
+	if g, err := p.store.File(ctx, p.owner, ".gitconfig", true); err != nil || string(g.Data) != "x" {
+		t.Errorf("an untrusted environment changed a trusted-only file: %q, %v", g.Data, err)
+	}
+
+	if _, err := p.store.SetSettings(ctx, p.owner, ".missing", 0o600, false); !errors.Is(err, profile.ErrNotFound) {
+		t.Errorf("settings of a file not there: %v", err)
 	}
 }

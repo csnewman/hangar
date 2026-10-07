@@ -86,13 +86,24 @@ func (k *fakeKernel) report(t *testing.T, home string) {
 	watchTree(home)
 	go func() {
 		for ev := range w.Events {
+			changed := []string{ev.Name}
 			if ev.Has(fsnotify.Create) {
 				if st, err := os.Lstat(ev.Name); err == nil && st.IsDir() {
+					// Watched only now: what was made in it before is
+					// reported as hangarfs would have, one by one.
 					watchTree(ev.Name)
+					filepath.WalkDir(ev.Name, func(p string, _ fs.DirEntry, err error) error {
+						if err == nil && p != ev.Name {
+							changed = append(changed, p)
+						}
+						return nil
+					})
 				}
 			}
 			if !k.quiet.Load() {
-				k.send(hangarsync.Msg{Op: hangarsync.OpChanged, Path: ev.Name})
+				for _, p := range changed {
+					k.send(hangarsync.Msg{Op: hangarsync.OpChanged, Path: p})
+				}
 			}
 		}
 	}()

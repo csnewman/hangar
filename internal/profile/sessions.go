@@ -449,8 +449,17 @@ func (x *session) handle(ctx context.Context, m Message) error {
 	log := x.s.log.With("environment", x.env)
 	switch m.Type {
 	case TypePut, TypeDelete:
-		if !x.paths.Synced(m.Path) || (Secret(m.Path) && !x.trusted) {
+		if !x.paths.Synced(m.Path) {
 			return nil
+		}
+		if !x.trusted {
+			only, err := x.s.store.TrustedOnly(ctx, x.owner, m.Path)
+			if err != nil {
+				return err
+			}
+			if only {
+				return nil
+			}
 		}
 		var f File
 		var err error

@@ -95,6 +95,10 @@ export const api = {
   profileFile: (path: string) => unwrap(client.GET('/api/frontend/me/profile/file', { params: { query: { path } } })),
   putProfileFile: (path: string, content: string) =>
     unwrap(client.PUT('/api/frontend/me/profile/file', { params: { query: { path } }, body: { content } })),
+  setProfileFileSettings: (path: string, mode: number, trusted_only: boolean) =>
+    unwrap(
+      client.PATCH('/api/frontend/me/profile/file', { params: { query: { path } }, body: { mode, trusted_only } }),
+    ),
   deleteProfileFile: (path: string) =>
     unwrap(client.DELETE('/api/frontend/me/profile/file', { params: { query: { path } } })),
   addProfilePath: (path: string) => unwrap(client.POST('/api/frontend/me/profile/paths', { body: { path } })),

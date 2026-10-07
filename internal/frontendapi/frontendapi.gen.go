@@ -884,11 +884,11 @@ type Profile struct {
 type ProfileFile struct {
 	Mode int    `json:"mode"`
 	Path string `json:"path"`
+	Size int    `json:"size"`
 
-	// Secret A credential, which environments not trusted with their owner's credentials are not given.
-	Secret    bool      `json:"secret"`
-	Size      int       `json:"size"`
-	UpdatedAt time.Time `json:"updated_at"`
+	// TrustedOnly Kept from environments not trusted with their owner's credentials. Known credentials start so.
+	TrustedOnly bool      `json:"trusted_only"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // ProfileFileContent defines model for ProfileFileContent.
@@ -897,6 +897,13 @@ type ProfileFileContent struct {
 	Mode      int       `json:"mode"`
 	Path      string    `json:"path"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ProfileFileSettings defines model for ProfileFileSettings.
+type ProfileFileSettings struct {
+	// Mode Its permissions, as chmod takes them (0o600 is 384).
+	Mode        int  `json:"mode"`
+	TrustedOnly bool `json:"trusted_only"`
 }
 
 // ProfilePath defines model for ProfilePath.
@@ -1257,6 +1264,12 @@ type GetProfileFileParams struct {
 	Path string `form:"path" json:"path"`
 }
 
+// UpdateProfileFileSettingsParams defines parameters for UpdateProfileFileSettings.
+type UpdateProfileFileSettingsParams struct {
+	// Path The file's path, relative to the home directory.
+	Path string `form:"path" json:"path"`
+}
+
 // PutProfileFileParams defines parameters for PutProfileFile.
 type PutProfileFileParams struct {
 	// Path The file's path, relative to the home directory.
@@ -1302,6 +1315,9 @@ type SetImageRepositoryCollaboratorsJSONRequestBody = Collaborators
 
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePassword
+
+// UpdateProfileFileSettingsJSONRequestBody defines body for UpdateProfileFileSettings for application/json ContentType.
+type UpdateProfileFileSettingsJSONRequestBody = ProfileFileSettings
 
 // PutProfileFileJSONRequestBody defines body for PutProfileFile for application/json ContentType.
 type PutProfileFileJSONRequestBody = PutProfileFile
@@ -1458,6 +1474,9 @@ type ServerInterface interface {
 
 	// (GET /api/frontend/me/profile/file)
 	GetProfileFile(w http.ResponseWriter, r *http.Request, params GetProfileFileParams)
+
+	// (PATCH /api/frontend/me/profile/file)
+	UpdateProfileFileSettings(w http.ResponseWriter, r *http.Request, params UpdateProfileFileSettingsParams)
 
 	// (PUT /api/frontend/me/profile/file)
 	PutProfileFile(w http.ResponseWriter, r *http.Request, params PutProfileFileParams)
@@ -2529,6 +2548,39 @@ func (siw *ServerInterfaceWrapper) GetProfileFile(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// UpdateProfileFileSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateProfileFileSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateProfileFileSettingsParams
+
+	// ------------- Required query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateProfileFileSettings(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // PutProfileFile operation middleware
 func (siw *ServerInterfaceWrapper) PutProfileFile(w http.ResponseWriter, r *http.Request) {
 
@@ -3461,6 +3513,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/profile", wrapper.GetProfile)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.DeleteProfileFile)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.GetProfileFile)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.UpdateProfileFileSettings)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.PutProfileFile)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.RemoveProfilePath)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.AddProfilePath)
@@ -5752,6 +5805,71 @@ func (response GetProfileFile404JSONResponse) VisitGetProfileFileResponse(w http
 	return err
 }
 
+type UpdateProfileFileSettingsRequestObject struct {
+	Params UpdateProfileFileSettingsParams
+	Body   *UpdateProfileFileSettingsJSONRequestBody
+}
+
+type UpdateProfileFileSettingsResponseObject interface {
+	VisitUpdateProfileFileSettingsResponse(w http.ResponseWriter) error
+}
+
+type UpdateProfileFileSettings200JSONResponse ProfileFile
+
+func (response UpdateProfileFileSettings200JSONResponse) VisitUpdateProfileFileSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateProfileFileSettings400JSONResponse struct{ InvalidJSONResponse }
+
+func (response UpdateProfileFileSettings400JSONResponse) VisitUpdateProfileFileSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateProfileFileSettings401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateProfileFileSettings401JSONResponse) VisitUpdateProfileFileSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateProfileFileSettings404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateProfileFileSettings404JSONResponse) VisitUpdateProfileFileSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type PutProfileFileRequestObject struct {
 	Params PutProfileFileParams
 	Body   *PutProfileFileJSONRequestBody
@@ -7966,6 +8084,9 @@ type StrictServerInterface interface {
 	// (GET /api/frontend/me/profile/file)
 	GetProfileFile(ctx context.Context, request GetProfileFileRequestObject) (GetProfileFileResponseObject, error)
 
+	// (PATCH /api/frontend/me/profile/file)
+	UpdateProfileFileSettings(ctx context.Context, request UpdateProfileFileSettingsRequestObject) (UpdateProfileFileSettingsResponseObject, error)
+
 	// (PUT /api/frontend/me/profile/file)
 	PutProfileFile(ctx context.Context, request PutProfileFileRequestObject) (PutProfileFileResponseObject, error)
 
@@ -9103,6 +9224,39 @@ func (sh *strictHandler) GetProfileFile(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetProfileFileResponseObject); ok {
 		if err := validResponse.VisitGetProfileFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateProfileFileSettings operation middleware
+func (sh *strictHandler) UpdateProfileFileSettings(w http.ResponseWriter, r *http.Request, params UpdateProfileFileSettingsParams) {
+	var request UpdateProfileFileSettingsRequestObject
+
+	request.Params = params
+
+	var body UpdateProfileFileSettingsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateProfileFileSettings(ctx, request.(UpdateProfileFileSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateProfileFileSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateProfileFileSettingsResponseObject); ok {
+		if err := validResponse.VisitUpdateProfileFileSettingsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -655,7 +655,15 @@ func (s *guestSession) applyAt(full string, m Message) error {
 	}
 	h := hash(m.Data)
 	s.setKnown(m.Path, h)
+	mode := fs.FileMode(m.Mode & 0o777)
+	if mode == 0 {
+		mode = 0o644
+	}
 	if cur, err := os.ReadFile(full); err == nil && hash(cur) == h {
+		// The same contents: its mode is all that may have changed.
+		if st, err := os.Stat(full); err == nil && st.Mode().Perm() != mode {
+			return os.Chmod(full, mode)
+		}
 		return nil
 	}
 	dir := filepath.Dir(full)
@@ -670,10 +678,6 @@ func (s *guestSession) applyAt(full string, m Message) error {
 	_, err = f.Write(m.Data)
 	if cerr := f.Close(); err == nil {
 		err = cerr
-	}
-	mode := fs.FileMode(m.Mode & 0o777)
-	if mode == 0 {
-		mode = 0o644
 	}
 	if err == nil {
 		err = os.Chmod(tmp, mode)

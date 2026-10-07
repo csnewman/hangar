@@ -139,7 +139,8 @@ export interface paths {
         delete: operations["deleteProfileFile"];
         options?: never;
         head?: never;
-        patch?: never;
+        /** @description Change a file's settings. They reach every environment as a change to the file does. */
+        patch: operations["updateProfileFileSettings"];
         trace?: never;
     };
     "/api/frontend/me/profile/paths": {
@@ -1092,10 +1093,15 @@ export interface components {
             path: string;
             size: number;
             mode: number;
-            /** @description A credential, which environments not trusted with their owner's credentials are not given. */
-            secret: boolean;
+            /** @description Kept from environments not trusted with their owner's credentials. Known credentials start so. */
+            trusted_only: boolean;
             /** Format: date-time */
             updated_at: string;
+        };
+        ProfileFileSettings: {
+            /** @description Its permissions, as chmod takes them (0o600 is 384). */
+            mode: number;
+            trusted_only: boolean;
         };
         ProfileFileContent: {
             path: string;
@@ -1943,6 +1949,36 @@ export interface operations {
             };
             400: components["responses"]["Invalid"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    updateProfileFileSettings: {
+        parameters: {
+            query: {
+                /** @description The file's path, relative to the home directory. */
+                path: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileFileSettings"];
+            };
+        };
+        responses: {
+            /** @description The file as stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileFile"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
         };
     };
     addProfilePath: {

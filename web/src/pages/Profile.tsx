@@ -334,7 +334,61 @@ function FileDetail({ file, onRemoved }: { file: ProfileFile; onRemoved: () => v
           disabled={remove.isPending}
         />
       </div>
+      <FileSettings file={file} />
       <FileEditor path={file.path} updatedAt={file.updated_at} />
+    </div>
+  )
+}
+
+// The modes offered, with what each lets others do; another set elsewhere
+// is offered as it is.
+const modes: [number, string][] = [
+  [0o600, 'only you can read and write it'],
+  [0o644, 'anyone can read it'],
+  [0o640, 'your group can read it'],
+  [0o700, 'only you, and it runs'],
+  [0o755, 'anyone can read and run it'],
+]
+
+// FileSettings are a file's settings, each saved as it is changed.
+function FileSettings({ file }: { file: ProfileFile }) {
+  const qc = useQueryClient()
+  const save = useMutation({
+    mutationFn: (s: { mode: number; trusted_only: boolean }) =>
+      api.setProfileFileSettings(file.path, s.mode, s.trusted_only),
+    onSettled: () => qc.invalidateQueries({ queryKey: profileKey }),
+  })
+  const choices = modes.some(([m]) => m === file.mode) ? modes : [[file.mode, 'as it is'] as [number, string], ...modes]
+  return (
+    <div className="fb-settings">
+      <label className="field-inline">
+        <span>Mode</span>
+        <select
+          className="mono"
+          value={file.mode}
+          disabled={save.isPending}
+          onChange={(e) => save.mutate({ mode: Number(e.target.value), trusted_only: file.trusted_only })}
+        >
+          {choices.map(([m, what]) => (
+            <option key={m} value={m}>
+              {m.toString(8).padStart(3, '0')} — {what}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="check">
+        <input
+          type="checkbox"
+          checked={file.trusted_only}
+          disabled={save.isPending}
+          onChange={(e) => save.mutate({ mode: file.mode, trusted_only: e.target.checked })}
+        />
+        <span>
+          Trusted environments only
+          <small className="muted">Environments made from untrusted templates are not given it.</small>
+        </span>
+      </label>
+      {save.error && <span className="action-error">{save.error.message}</span>}
     </div>
   )
 }
