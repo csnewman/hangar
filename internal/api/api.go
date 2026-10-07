@@ -99,13 +99,11 @@ type Spec struct {
 	Repos     []Repo  `json:"repos"`
 	// EditorPath is the folder the editor opens on.
 	EditorPath string `json:"editor_path,omitempty"`
-	// Untrusted is for code the owner does not trust: the environment is
-	// never given their credentials (internal/profile), and its editor
-	// trusts no folder.
-	Untrusted bool `json:"untrusted,omitempty"`
+	// Access is what of its owner's the environment is kept from.
+	Access
 	// TrustedFolders are trusted by the editor without asking, beyond the
-	// repositories and the editor's folder, which a trusted environment's
-	// editor trusts anyway. Ignored for an untrusted one.
+	// repositories and the editor's folder, which its editor trusts anyway.
+	// Ignored with NoEditorTrust.
 	TrustedFolders []string `json:"trusted_folders,omitempty"`
 	// DAX has the guest map its image's files from the host's page cache,
 	// through the worker's DAX window, rather than read them into its own
@@ -128,12 +126,32 @@ type Spec struct {
 	Placement map[string]string `json:"placement"`
 }
 
+// Access is what of its owner's an environment is kept from, for code they
+// do not trust (internal/profile). The zero value keeps nothing from it.
+type Access struct {
+	// NoProfile gives it none of its owner's profile's files.
+	NoProfile bool `json:"no_profile,omitempty"`
+	// NoSensitiveFiles keeps the sensitive files -- credentials -- of its
+	// owner's profile and of its packs from it.
+	NoSensitiveFiles bool `json:"no_sensitive_files,omitempty"`
+	// NoSSHKeys has its SSH agent offer none of its owner's keys.
+	NoSSHKeys bool `json:"no_ssh_keys,omitempty"`
+	// NoRegistry gives it no credential for Hangar's registry.
+	NoRegistry bool `json:"no_registry,omitempty"`
+	// NoEditorTrust has its editor trust no folder without asking.
+	NoEditorTrust bool `json:"no_editor_trust,omitempty"`
+}
+
+// Untrusted is the access for code its owner does not trust: their files,
+// but none of their credentials, and an editor that trusts nothing.
+var Untrusted = Access{NoSensitiveFiles: true, NoSSHKeys: true, NoRegistry: true, NoEditorTrust: true}
+
 // EditorTrust is the folders an environment's editor trusts without asking:
-// none for one that is untrusted; otherwise its repositories, its editor's
-// folder, and whatever else its template names.
+// none with NoEditorTrust; otherwise its repositories, its editor's folder,
+// and whatever else its template names.
 func (s Spec) EditorTrust() []string {
 	out := []string{}
-	if s.Untrusted {
+	if s.NoEditorTrust {
 		return out
 	}
 	add := func(p string) {
@@ -153,8 +171,8 @@ func (s Spec) EditorTrust() []string {
 
 // EnvironmentFiles is what of the files environments share one may reach,
 // as its worker serves them (internal/nfs): its file sets, by ID, and in
-// each, by path, the files kept from it -- trusted-only ones, from an
-// environment not trusted with its owner's credentials.
+// each, by path, the files kept from it -- sensitive ones, from an
+// environment with NoSensitiveFiles.
 type EnvironmentFiles struct {
 	Sets   []string            `json:"sets"`
 	Hidden map[string][]string `json:"hidden,omitempty"`

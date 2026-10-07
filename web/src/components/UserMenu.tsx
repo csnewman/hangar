@@ -64,9 +64,9 @@ export function UserMenu({ collapsed = false }: { collapsed?: boolean }) {
             <div className="strong">{name}</div>
             <div className="muted small">{me.username}</div>
           </div>
-          <Link to="/profile" className="menu-item" role="menuitem" onClick={() => setOpen(false)}>
+          <Link to="/files" className="menu-item" role="menuitem" onClick={() => setOpen(false)}>
             <FolderSync size={15} />
-            Profile
+            Files
           </Link>
           <Link to="/account" className="menu-item" role="menuitem" onClick={() => setOpen(false)}>
             <UserRound size={15} />

@@ -28,7 +28,7 @@ const (
 	SettingDAX            = "dax"
 	SettingRepos          = "repos"
 	SettingEditorPath     = "editor_path"
-	SettingUntrusted      = "untrusted"
+	SettingAccess         = "access"
 	SettingTrustedFolders = "trusted_folders"
 	SettingWebNames       = "web_names"
 	SettingFilePacks      = "file_packs"
@@ -60,7 +60,7 @@ func templateChanges(e api.Environment, t api.TemplateSpec) []string {
 	add(env.DAX != want.DAX, SettingDAX)
 	add(!slices.Equal(env.Repos, want.Repos), SettingRepos)
 	add(env.EditorPath != want.EditorPath, SettingEditorPath)
-	add(env.Untrusted != want.Untrusted, SettingUntrusted)
+	add(env.Access != want.Access, SettingAccess)
 	add(!slices.Equal(env.TrustedFolders, want.TrustedFolders), SettingTrustedFolders)
 	add(!slices.Equal(env.WebNames, want.WebNames), SettingWebNames)
 	add(!slices.Equal(env.FilePacks, want.FilePacks), SettingFilePacks)

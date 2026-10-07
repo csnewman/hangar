@@ -6,7 +6,6 @@ import {
   LayoutGrid,
   LayoutTemplate,
   MonitorUp,
-  Package,
   PanelLeftClose,
   PanelLeftOpen,
   Plus,
@@ -48,8 +47,7 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
             <SideIcon to="/environments/new" icon={<Plus size={17} />} label="New environment" />
           </nav>
           <nav className="side-nav side-group">
-            <SideIcon to="/profile" icon={<FolderSync size={17} />} label="Profile" />
-            <SideIcon to="/packs" icon={<Package size={17} />} label="File packs" />
+            <SideIcon to="/files" icon={<FolderSync size={17} />} label="Files" />
             <SideIcon to="/account" icon={<UserRound size={17} />} label="Account" />
           </nav>
           {me.admin && (
@@ -115,13 +113,9 @@ export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; 
           <div className="side-heading">
             <span>You</span>
           </div>
-          <NavLink to="/profile" className="side-link">
+          <NavLink to="/files" className="side-link">
             <FolderSync size={16} />
-            <span>Profile</span>
-          </NavLink>
-          <NavLink to="/packs" className="side-link">
-            <Package size={16} />
-            <span>File packs</span>
+            <span>Files</span>
           </NavLink>
           <NavLink to="/account" className="side-link">
             <UserRound size={16} />

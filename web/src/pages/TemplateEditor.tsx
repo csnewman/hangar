@@ -3,7 +3,7 @@ import { Plus, Trash2, UsersRound, X } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
-import { api, type Display, type GPU, type Repo, type Template, type TemplateInput } from '../api'
+import { api, type Access, type Display, type GPU, type Repo, type Template, type TemplateInput } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { PageHeader } from '../components/PageHeader'
 import { useMe } from '../session'
@@ -97,14 +97,14 @@ function Editor({ existing }: { existing?: Template }) {
         ...spec,
         repos: spec.repos.map((r) => ({ ...r, ref: r.ref || undefined, branch: r.branch || undefined })),
         editor_path: spec.editor_path || undefined,
-        untrusted: spec.untrusted || undefined,
+        access: compactAccess(spec.access),
         web_names: (() => {
           const names = (spec.web_names ?? []).map((n) => n.trim()).filter((n) => n !== '')
           return names.length > 0 ? names : undefined
         })(),
         dax: spec.dax || undefined,
         file_packs: spec.file_packs?.length ? spec.file_packs : undefined,
-        trusted_folders: spec.untrusted
+        trusted_folders: spec.access?.no_editor_trust
           ? undefined
           : (spec.trusted_folders ?? []).map((f) => f.trim()).filter((f) => f !== '') || undefined,
         placement: Object.fromEntries(placement.filter(([k]) => k.trim() !== '').map(([k, v]) => [k.trim(), v.trim()])),
@@ -401,21 +401,8 @@ function Editor({ existing }: { existing?: Template }) {
                 placeholder={spec.repos[0]?.path || '/workspace'}
               />
             </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={spec.untrusted ?? false}
-                onChange={(e) => setSpec({ untrusted: e.target.checked })}
-              />
-              <span>
-                Untrusted code
-                <small className="muted">
-                  The owner's credentials never reach it -- no Claude or git sign-ins, no SSH keys -- and VS Code trusts
-                  no folder, so it opens in Restricted Mode. The rest of their profile still arrives.
-                </small>
-              </span>
-            </label>
-            {!spec.untrusted && (
+            <AccessField value={spec.access ?? {}} onChange={(access) => setSpec({ access })} />
+            {!spec.access?.no_editor_trust && (
               <label className="field">
                 <span>VS Code also trusts</span>
                 <textarea
@@ -526,6 +513,66 @@ function Editor({ existing }: { existing?: Template }) {
           <Activity subjects={[`template:${existing.id}`]} />
         </section>
       )}
+    </div>
+  )
+}
+
+// compactAccess is access as a template sends it: only what it keeps from
+// the environment, or nothing.
+function compactAccess(access: Access | undefined): Access | undefined {
+  const out = Object.fromEntries(Object.entries(access ?? {}).filter(([, v]) => v)) as Access
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+// What of its owner's an environment is given, each a setting of its own.
+const accessSettings: { key: keyof Access; label: string; hint: string }[] = [
+  {
+    key: 'no_profile',
+    label: "The owner's profile",
+    hint: "Their shared files: Claude's settings, .gitconfig and the paths they add. File packs arrive either way.",
+  },
+  {
+    key: 'no_sensitive_files',
+    label: 'Sensitive files',
+    hint: "Credentials in the profile and the file packs: Claude's sign-in, git and registry logins, and any file marked sensitive.",
+  },
+  { key: 'no_ssh_keys', label: 'SSH keys', hint: "Signatures from the owner's SSH keys, for git and ssh." },
+  { key: 'no_registry', label: 'Registry sign-in', hint: "Docker signs in to Hangar's registry as the owner." },
+  {
+    key: 'no_editor_trust',
+    label: 'Editor trust',
+    hint: 'VS Code trusts the repositories and the folders below; without it, it opens everything in Restricted Mode.',
+  },
+]
+
+// untrusted is the preset for code the owner does not trust: their files,
+// but none of their credentials, and an editor that trusts nothing.
+const untrusted: Access = { no_sensitive_files: true, no_ssh_keys: true, no_registry: true, no_editor_trust: true }
+
+function AccessField({ value, onChange }: { value: Access; onChange: (a: Access) => void }) {
+  const isUntrusted = accessSettings.every(({ key }) => !!value[key] === !!untrusted[key])
+  return (
+    <div className="field">
+      <span>What it is given of its owner's</span>
+      {accessSettings.map(({ key, label, hint }) => (
+        <label key={key} className="check">
+          <input
+            type="checkbox"
+            checked={!value[key]}
+            onChange={(e) => onChange({ ...value, [key]: !e.target.checked })}
+          />
+          <span>
+            {label}
+            <small className="muted">{hint}</small>
+          </span>
+        </label>
+      ))}
+      <div>
+        <button type="button" className="btn btn-ghost" disabled={isUntrusted} onClick={() => onChange(untrusted)}>
+          Untrusted code
+        </button>
+        <small className="muted"> Their files, but none of their credentials, and an editor that trusts nothing.</small>
+      </div>
     </div>
   )
 }

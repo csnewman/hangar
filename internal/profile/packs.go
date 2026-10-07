@@ -23,9 +23,9 @@ var ErrForbidden = errors.New("forbidden")
 // MaxPackPaths is the most paths one pack names.
 const MaxPackPaths = 32
 
-// Pack is a named set of files at absolute paths, which templates give the
-// environments made from them: the .env files of a project's checkouts,
-// say. A person or a team owns it. A shared pack is one copy of its files
+// Pack is a named set of files at absolute paths, or in the home directory,
+// which templates give the environments made from them: the .env files of
+// a project's checkouts, or a registry's login in ~/.npmrc, say. A person or a team owns it. A shared pack is one copy of its files
 // for everyone who uses it; a personal one is each person's own copy.
 //
 // Whoever may use a pack -- its owner, or any member of its team -- has it
@@ -42,7 +42,8 @@ type Pack struct {
 	OwnerID, Owner string
 	TeamID, Team   string
 	Personal       bool
-	// Paths are absolute; a directory's ends in a slash.
+	// Paths are absolute, or start with Home; a directory's ends in a
+	// slash, and one left out starts with Exclude.
 	Paths []string
 	// What the caller may do: change the pack, its files, and delete it.
 	CanChange, CanWrite, CanDelete bool
@@ -144,6 +145,13 @@ func checkPack(in PackInput) (PackInput, error) {
 		paths = append(paths, p)
 	}
 	for _, p := range paths {
+		if x, ok := strings.CutPrefix(p, Exclude); ok {
+			// Left out of a directory the pack shares.
+			if by, ok := paths.Covering(x); !ok || !strings.HasSuffix(by, "/") {
+				return in, fmt.Errorf("%w: %s is not in a directory the pack shares", ErrInvalid, x)
+			}
+			continue
+		}
 		for _, by := range paths {
 			if by != p && strings.HasSuffix(by, "/") && strings.HasPrefix(p, by) {
 				return in, fmt.Errorf("%w: %s is already in the pack, by %s", ErrInvalid, p, by)
@@ -264,7 +272,7 @@ func (s *Store) UpdatePack(ctx context.Context, p users.Principal, id string, in
 	})
 	if err == nil {
 		for _, set := range sets {
-			s.dropUnshared(set, Paths(in.Paths), true)
+			s.dropUnshared(set, PackPaths(in.Paths), true)
 		}
 	}
 	return k, err
@@ -356,6 +364,17 @@ func packSet(ctx context.Context, tx db.Tx, pack string, personal bool, user str
 	return "", errors.New("a pack's file set could not be made")
 }
 
+// environmentSets are the file sets an environment of owner's with spec
+// is given: EnvironmentSets, without the profile's for one spec keeps it
+// from.
+func (s *Store) environmentSets(ctx context.Context, owner string, spec api.Spec) ([]FileSet, error) {
+	sets, err := s.EnvironmentSets(ctx, owner, spec.FilePacks)
+	if err != nil || !spec.NoProfile {
+		return sets, err
+	}
+	return sets[1:], nil
+}
+
 // FileSet is a set of files an environment is kept in step with, and the
 // paths it keeps.
 type FileSet struct {
@@ -403,7 +422,7 @@ func (s *Store) EnvironmentSets(ctx context.Context, user string, packs []string
 			if err != nil {
 				return err
 			}
-			out = append(out, FileSet{ID: set, Paths: Paths(found[i].Paths)})
+			out = append(out, FileSet{ID: set, Paths: PackPaths(found[i].Paths)})
 		}
 		return nil
 	})
@@ -411,50 +430,46 @@ func (s *Store) EnvironmentSets(ctx context.Context, user string, packs []string
 }
 
 // EnvironmentFiles is what of the shared files an environment placed on a
-// worker may reach: the sets its owner is given (EnvironmentSets), and for
-// an environment not trusted with its owner's credentials, the
-// trusted-only files in them, hidden. An environment placed on another
-// worker, or none, is not found.
+// worker may reach: the sets its owner is given (EnvironmentSets), but the
+// profile's for one its spec keeps it from, and the sensitive files in
+// them hidden from one its spec keeps them from. An environment placed on
+// another worker, or none, is not found.
 func (s *Store) EnvironmentFiles(ctx context.Context, workerID, envID string) (api.EnvironmentFiles, error) {
 	out := api.EnvironmentFiles{Sets: []string{}}
 	if !db.ValidUUID(envID) || !db.ValidUUID(workerID) {
 		return out, ErrNotFound
 	}
 	var owner string
-	var untrusted bool
-	var packs []string
+	var spec api.Spec
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
 		var raw []byte
-		err := tx.QueryRow(ctx, `SELECT owner_id::text, coalesce((spec->>'untrusted')::boolean, false), spec->'file_packs'
-			FROM environments WHERE id = $1 AND worker_id = $2`, envID, workerID).Scan(&owner, &untrusted, &raw)
+		err := tx.QueryRow(ctx, `SELECT owner_id::text, spec FROM environments WHERE id = $1 AND worker_id = $2`,
+			envID, workerID).Scan(&owner, &raw)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
 		if err != nil {
 			return err
 		}
-		if len(raw) > 0 {
-			json.Unmarshal(raw, &packs)
-		}
-		return nil
+		return json.Unmarshal(raw, &spec)
 	})
 	if err != nil {
 		return out, err
 	}
-	sets, err := s.EnvironmentSets(ctx, owner, packs)
+	sets, err := s.environmentSets(ctx, owner, spec)
 	if err != nil {
 		return out, err
 	}
 	for _, set := range sets {
 		out.Sets = append(out.Sets, set.ID)
 	}
-	if !untrusted {
+	if !spec.NoSensitiveFiles {
 		return out, nil
 	}
 	out.Hidden = map[string][]string{}
-	for i, set := range out.Sets {
-		// The first set is the owner's profile; the rest are packs'.
-		hidden, err := s.hidden(ctx, set, i > 0)
+	for _, set := range out.Sets {
+		// The owner's profile's set is theirs by ID; the rest are packs'.
+		hidden, err := s.hidden(ctx, set, set != owner)
 		if err != nil {
 			return out, err
 		}

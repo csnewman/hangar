@@ -55,16 +55,17 @@ type Route struct {
 }
 
 // SetPaths are a file set's ID and the paths it shares, as a session sends
-// them: relative to the home directory for the owner's profile, absolute
-// for a pack.
+// them: relative to the home directory for the owner's profile; absolute,
+// or in the home directory (Home), for a pack.
 type SetPaths struct {
 	ID    string   `json:"id"`
 	Paths []string `json:"paths"`
 }
 
 // RoutesFor are the routes for the sets an environment is given, in the
-// order given: a path two of them name is the first's. The owner's profile
-// -- the set whose paths are relative -- is routed under home.
+// order given: a path two of them name is the first's. The owner's
+// profile's paths, which are relative, and a pack's that start with Home
+// are routed under home.
 func RoutesFor(home string, sets []SetPaths) []Route {
 	var out []Route
 	seen := map[string]bool{}
@@ -82,7 +83,9 @@ func RoutesFor(home string, sets []SetPaths) []Route {
 				continue
 			}
 			guestPath, target := clean, s.ID+clean
-			if !strings.HasPrefix(clean, "/") {
+			if rel, ok := strings.CutPrefix(clean, Home); ok {
+				guestPath, target = path.Join(home, rel), s.ID+"/"+clean
+			} else if !strings.HasPrefix(clean, "/") {
 				guestPath, target = path.Join(home, clean), s.ID+"/"+clean
 			}
 			if exclude {
@@ -415,7 +418,7 @@ const keysWait = 30 * time.Second
 // sshAgent is the SSH agent's keyring: read-only, and backed by the server.
 type sshAgent struct{ g *Guest }
 
-var errReadOnly = errors.New("keys are managed in Hangar, on the Profile page")
+var errReadOnly = errors.New("keys are managed in Hangar, on the Account page")
 
 // List gives the user's keys, waiting a while for the server to send them:
 // a clone made while the environment is still starting asks before the

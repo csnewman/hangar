@@ -323,6 +323,7 @@ func (e TeamRole) Valid() bool {
 
 // Defines values for TemplateSetting.
 const (
+	SettingAccess         TemplateSetting = "access"
 	SettingCPUs           TemplateSetting = "cpus"
 	SettingDAX            TemplateSetting = "dax"
 	SettingDisplay        TemplateSetting = "display"
@@ -335,13 +336,14 @@ const (
 	SettingPlacement      TemplateSetting = "placement"
 	SettingRepos          TemplateSetting = "repos"
 	SettingTrustedFolders TemplateSetting = "trusted_folders"
-	SettingUntrusted      TemplateSetting = "untrusted"
 	SettingWebNames       TemplateSetting = "web_names"
 )
 
 // Valid indicates whether the value is a known member of the TemplateSetting enum.
 func (e TemplateSetting) Valid() bool {
 	switch e {
+	case SettingAccess:
+		return true
 	case SettingCPUs:
 		return true
 	case SettingDAX:
@@ -366,8 +368,6 @@ func (e TemplateSetting) Valid() bool {
 		return true
 	case SettingTrustedFolders:
 		return true
-	case SettingUntrusted:
-		return true
 	case SettingWebNames:
 		return true
 	default:
@@ -391,6 +391,24 @@ func (e Visibility) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// Access What of its owner's the environment is kept from, for code they do not trust. Each is false, giving it everything, when left out.
+type Access struct {
+	// NoEditorTrust VS Code trusts no folder without asking.
+	NoEditorTrust *bool `json:"no_editor_trust,omitempty"`
+
+	// NoProfile None of the owner's profile's files.
+	NoProfile *bool `json:"no_profile,omitempty"`
+
+	// NoRegistry No credential for Hangar's registry.
+	NoRegistry *bool `json:"no_registry,omitempty"`
+
+	// NoSensitiveFiles None of the sensitive files -- credentials, such as Claude's sign-in -- of the owner's profile or of the environment's packs.
+	NoSensitiveFiles *bool `json:"no_sensitive_files,omitempty"`
+
+	// NoSSHKeys No signatures from the owner's SSH keys.
+	NoSSHKeys *bool `json:"no_ssh_keys,omitempty"`
 }
 
 // AccessToken defines model for AccessToken.
@@ -937,11 +955,11 @@ type Profile struct {
 type ProfileFile struct {
 	Mode int    `json:"mode"`
 	Path string `json:"path"`
-	Size int    `json:"size"`
 
-	// TrustedOnly Kept from environments not trusted with their owner's credentials. Known credentials start so.
-	TrustedOnly bool      `json:"trusted_only"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	// Sensitive A credential: kept from environments whose template withholds sensitive files. Known credentials start so.
+	Sensitive bool      `json:"sensitive"`
+	Size      int       `json:"size"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ProfileFileContent defines model for ProfileFileContent.
@@ -955,8 +973,8 @@ type ProfileFileContent struct {
 // ProfileFileSettings defines model for ProfileFileSettings.
 type ProfileFileSettings struct {
 	// Mode Its permissions, as chmod takes them (0o600 is 384).
-	Mode        int  `json:"mode"`
-	TrustedOnly bool `json:"trusted_only"`
+	Mode      int  `json:"mode"`
+	Sensitive bool `json:"sensitive"`
 }
 
 // ProfilePath defines model for ProfilePath.
@@ -1026,7 +1044,9 @@ type SignalProcessSignal string
 
 // Spec defines model for Spec.
 type Spec struct {
-	CPUs int `json:"cpus"`
+	// Access What of its owner's the environment is kept from, for code they do not trust. Each is false, giving it everything, when left out.
+	Access *Access `json:"access,omitempty"`
+	CPUs   int     `json:"cpus"`
 
 	// Dax Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. A worker with DAX turned off (dax_mib 0) reads them in regardless.
 	Dax *bool `json:"dax,omitempty"`
@@ -1049,11 +1069,8 @@ type Spec struct {
 	Placement map[string]string `json:"placement"`
 	Repos     []Repo            `json:"repos"`
 
-	// TrustedFolders Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored when untrusted, where it trusts nothing.
+	// TrustedFolders Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing.
 	TrustedFolders *[]string `json:"trusted_folders,omitempty"`
-
-	// Untrusted For code the owner does not trust: the environment is never given their credentials -- Claude's sign-in, or signatures from their SSH keys -- though the rest of their profile still follows them in.
-	Untrusted *bool `json:"untrusted,omitempty"`
 
 	// WebNames Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<short> after Hangar's host.
 	WebNames *[]string `json:"web_names,omitempty"`

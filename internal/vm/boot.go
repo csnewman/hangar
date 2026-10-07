@@ -478,7 +478,7 @@ func (k *agentKeys) String() string {
 func (k *agentKeys) refused() string {
 	switch len(k.keys) {
 	case 0:
-		return k.why + "; add one under Profile, then SSH keys (an environment of an untrusted template is given none)."
+		return k.why + "; add one under Account, then SSH keys (an environment whose template withholds SSH keys is given none)."
 	case 1:
 		return "the git host refused " + k.String() + ", the key the SSH agent offered; add it to your account there."
 	}

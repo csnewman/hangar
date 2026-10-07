@@ -252,7 +252,7 @@ func (m *Manager) Create(ctx context.Context, p users.Principal, req api.CreateE
 		return audit.Record(ctx, tx, audit.Event{Action: "environment.create", Target: Ref(e.ID, e.Name),
 			Related: []audit.Ref{{Type: audit.KindOwner, ID: e.OwnerID},
 				{Type: audit.KindTemplate, ID: req.TemplateID, Name: tname}, {Type: audit.KindImage, ID: spec.Image}},
-			Details: map[string]any{"cpus": spec.CPUs, "memory_mib": spec.MemoryMiB, "untrusted": spec.Untrusted}})
+			Details: map[string]any{"cpus": spec.CPUs, "memory_mib": spec.MemoryMiB, "access": spec.Access}})
 	})
 	return e, err
 }

@@ -168,6 +168,70 @@ func TestPackAccess(t *testing.T) {
 	}
 }
 
+// A pack names paths in the home directory with ~/, beside absolute ones;
+// its files there are kept under ~/ in its set and routed under the
+// guest's home, and what is never shared is left out of its directories.
+func TestPackHomePaths(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	for _, bad := range []string{"~/../x", "~/.cache/", "/~/x", "!~/.npmrc", "!/w/x/"} {
+		if _, err := p.store.CreatePack(ctx, as(p.owner), profile.PackInput{Name: "bad",
+			Paths: []string{"~/.config/tool/", bad}}); !errors.Is(err, profile.ErrInvalid) {
+			t.Errorf("a pack took the path %q: %v", bad, err)
+		}
+	}
+	pack, err := p.store.CreatePack(ctx, as(p.owner), profile.PackInput{Name: "tools",
+		Paths: []string{"~/.npmrc", "~/.config/tool/", "!~/.config/tool/cache/", "~/.claude/", "/w/.env"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := p.store.PackSet(ctx, as(p.owner), pack.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"~/.npmrc", "/w/.env"} {
+		if _, err := p.store.Put(ctx, set, key, []byte("x"), 0); err != nil {
+			t.Fatalf("writing %s: %v", key, err)
+		}
+	}
+	for _, key := range []string{"~/.config/tool/cache/x", "~/.claude/projects/x"} {
+		if _, err := p.store.Put(ctx, set, key, []byte("x"), 0); err == nil {
+			t.Errorf("wrote %s, which the pack leaves out", key)
+		}
+	}
+	files, err := p.store.List(ctx, set, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, f := range files {
+		keys = append(keys, f.Path)
+	}
+	if !slices.Equal(keys, []string{"/w/.env", "~/.npmrc"}) {
+		t.Errorf("the pack's files: %v", keys)
+	}
+	if _, err := os.Stat(filepath.Join(p.root, set, "~", ".npmrc")); err != nil {
+		t.Errorf("the pack's ~/.npmrc is not under ~/ in its set: %v", err)
+	}
+
+	sets, err := p.store.EnvironmentSets(ctx, p.owner, []string{pack.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	routes := profile.RoutesFor("/home/dev", []profile.SetPaths{{ID: sets[1].ID, Paths: sets[1].Paths}})
+	for _, want := range []profile.Route{
+		{Path: "/home/dev/.npmrc", Target: set + "/~/.npmrc"},
+		{Path: "/home/dev/.config/tool", Target: set + "/~/.config/tool", Dir: true},
+		{Path: "/home/dev/.config/tool/cache", Exclude: true},
+		{Path: "/home/dev/.claude/projects", Exclude: true},
+		{Path: "/w/.env", Target: set + "/w/.env"},
+	} {
+		if !slices.Contains(routes, want) {
+			t.Errorf("no route %+v in %+v", want, routes)
+		}
+	}
+}
+
 // The routes an environment's sets give it: the profile's paths under the
 // home directory, an exclusion as the guest's own; a pack's where they
 // are; a path two sets name, the first's.
@@ -236,9 +300,11 @@ func TestEnvironmentsAreRoutedToTheirSets(t *testing.T) {
 	})
 }
 
-// An untrusted environment is kept from its sets' trusted-only files: the
-// known credentials, and any its owner made trusted-only.
-func TestUntrustedEnvironmentsAreKeptFromTrustedOnlyFiles(t *testing.T) {
+// An environment kept from sensitive files is kept from its sets'
+// sensitive files: the known credentials, its profile's and its packs',
+// and any its owner made sensitive; one kept from its owner's profile is
+// given only its packs.
+func TestEnvironmentsAreKeptFromWhatTheirSpecSays(t *testing.T) {
 	ctx := context.Background()
 	p := newPlane(t)
 	if _, err := p.store.Put(ctx, p.owner, ".gitconfig", []byte("x"), 0); err != nil {
@@ -247,8 +313,19 @@ func TestUntrustedEnvironmentsAreKeptFromTrustedOnlyFiles(t *testing.T) {
 	if _, err := p.store.SetSettings(ctx, p.owner, ".gitconfig", 0o644, true); err != nil {
 		t.Fatal(err)
 	}
-	trusted, _, _ := p.env(t, "dev", false)
-	untrusted, _, _ := p.env(t, "review", true)
+	pack, err := p.store.CreatePack(ctx, as(p.owner), profile.PackInput{Name: "npm", Paths: []string{"~/.npmrc"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := p.store.PackSet(ctx, as(p.owner), pack.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted, _, _ := p.env(t, "dev", api.Access{})
+	untrusted, _, _ := p.envSpec(t, "review", fmt.Sprintf(`{"file_packs": [%q], "no_sensitive_files": true}`, pack.ID),
+		api.PhaseRunning)
+	packOnly, _, _ := p.envSpec(t, "ci", fmt.Sprintf(`{"file_packs": [%q], "no_profile": true}`, pack.ID),
+		api.PhaseRunning)
 	var worker string
 	p.d.Transact(ctx, func(tx db.Tx) error {
 		return tx.QueryRow(ctx, `SELECT worker_id::text FROM environments WHERE id = $1`, trusted).Scan(&worker)
@@ -266,6 +343,13 @@ func TestUntrustedEnvironmentsAreKeptFromTrustedOnlyFiles(t *testing.T) {
 		if !slices.Contains(hidden, want) {
 			t.Errorf("%s is not hidden from an untrusted environment: %v", want, hidden)
 		}
+	}
+	if !slices.Contains(files.Hidden[set], "~/.npmrc") {
+		t.Errorf("a pack's npm login is not hidden from an untrusted environment: %v", files.Hidden[set])
+	}
+	files, err = p.store.EnvironmentFiles(ctx, worker, packOnly)
+	if err != nil || !slices.Equal(files.Sets, []string{set}) {
+		t.Errorf("an environment kept from its owner's profile is given %v (%v)", files.Sets, err)
 	}
 	if _, err := p.store.EnvironmentFiles(ctx, "00000000-0000-0000-0000-000000000000", trusted); !errors.Is(err, profile.ErrNotFound) {
 		t.Errorf("another worker's environment: %v", err)

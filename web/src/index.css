@@ -552,6 +552,19 @@ h1 {
   color: var(--muted);
 }
 
+/* A section's title with an action beside it. */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.section-head .section-title {
+  margin: 0;
+}
+
 .section-count {
   font-size: 11.5px;
   font-weight: 500;

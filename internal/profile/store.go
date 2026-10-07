@@ -35,10 +35,10 @@ type File struct {
 	Data []byte
 	Size int64
 	Mode uint32
-	// TrustedOnly keeps the file from environments not trusted with their
-	// owner's credentials.
-	TrustedOnly bool
-	UpdatedAt   time.Time
+	// Sensitive keeps the file from environments whose template withholds
+	// sensitive files (api.Access).
+	Sensitive bool
+	UpdatedAt time.Time
 }
 
 // Key is one of a user's SSH keys, as anyone may see it.
@@ -147,7 +147,7 @@ func (s *Store) SetPaths(ctx context.Context, set string) (Paths, error) {
 		return nil, err
 	}
 	if pack != nil {
-		return Paths(paths), nil
+		return PackPaths(paths), nil
 	}
 	return s.Paths(ctx, *user)
 }
@@ -330,11 +330,13 @@ func (s *Store) OwnPaths(ctx context.Context, userID string) ([]string, error) {
 }
 
 // AddPath shares another path for a user: a file, or a directory, ending
-// in a slash, and everything under it.
+// in a slash, and everything under it. It may start with Home, as a
+// pack's does.
 func (s *Store) AddPath(ctx context.Context, userID, path string) error {
 	if !db.ValidUUID(userID) {
 		return ErrNotFound
 	}
+	path = profilePath(path)
 	if err := CheckUserPath(path); err != nil {
 		return fmt.Errorf("%w: %v", ErrInvalid, err)
 	}
@@ -388,6 +390,7 @@ func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
 	if !db.ValidUUID(userID) {
 		return ErrNotFound
 	}
+	path = profilePath(path)
 	var still Paths
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
 		tag, err := tx.Exec(ctx, `DELETE FROM profile_paths WHERE user_id = $1 AND path = $2`, userID, path)
@@ -554,4 +557,17 @@ func (s *Store) LoginKeyOwners(ctx context.Context, fingerprint string) ([]KeyOw
 		return err
 	})
 	return out, err
+}
+
+// profilePath is p, a profile's path, relative to the home directory
+// whether or not it starts with Home.
+func profilePath(p string) string {
+	x, exclude := strings.CutPrefix(p, Exclude)
+	if rel, ok := strings.CutPrefix(x, Home); ok {
+		if exclude {
+			return Exclude + rel
+		}
+		return rel
+	}
+	return p
 }

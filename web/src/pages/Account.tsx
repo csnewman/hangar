@@ -7,6 +7,7 @@ import { useMe } from '../session'
 import { PageHeader } from '../components/PageHeader'
 import { Activity } from '../components/Activity'
 import { ConfirmButton } from '../components/ConfirmButton'
+import { Keys } from '../components/Keys'
 import { formatAgo } from '../components/format'
 
 export function AccountPage() {
@@ -31,6 +32,7 @@ export function AccountPage() {
         </dl>
       </div>
       {me.has_password && <ChangePassword />}
+      <Keys />
       <AccessTokens />
       <section className="section">
         <h2 className="section-title">Your activity</h2>

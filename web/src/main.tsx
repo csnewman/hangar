@@ -10,8 +10,8 @@ import { Shell } from './components/Shell'
 import './index.css'
 import { AccountPage } from './pages/Account'
 import { ConnectVSCodePage } from './pages/ConnectVSCode'
-import { ProfilePage } from './pages/Profile'
-import { PackPage, PacksPage } from './pages/Packs'
+import { FilesPage } from './pages/Files'
+import { PackPage, PackRedirect } from './pages/Packs'
 import { AuditPage } from './pages/admin/Audit'
 import { PerformanceTab } from './pages/Performance'
 import { UsersPage } from './pages/admin/Users'
@@ -107,9 +107,12 @@ const router = createBrowserRouter([
           { path: 'teams', element: <TeamsPage /> },
           { path: 'teams/:id', element: <TeamPage /> },
           { path: 'account', element: <AccountPage /> },
-          { path: 'profile', element: <ProfilePage /> },
-          { path: 'packs', element: <PacksPage /> },
-          { path: 'packs/:id', element: <PackPage /> },
+          { path: 'files', element: <FilesPage /> },
+          { path: 'files/packs/:id', element: <PackPage /> },
+          // Where the profile and packs were each a page of their own.
+          { path: 'profile', element: <Navigate to="/files" replace /> },
+          { path: 'packs', element: <Navigate to="/files" replace /> },
+          { path: 'packs/:id', element: <PackRedirect /> },
           {
             path: 'admin/audit',
             element: (

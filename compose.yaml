@@ -81,7 +81,7 @@ services:
       HANGAR_INITIAL_ADMIN_USERNAME: admin
       HANGAR_INITIAL_ADMIN_PASSWORD: hangar-dev
       # The SSH gateway: ssh <environment>@hangar.localhost -p 2222, with a key
-      # added on the Profile page.
+      # added on the Account page.
       HANGAR_SSH_LISTEN: ":2222"
       # Hangar's own container registry, at registry.hangar.localhost:8080.
       HANGAR_BLOB_URL: http://hangar:hangar-dev-secret@rustfs:9000/hangar

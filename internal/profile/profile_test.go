@@ -119,20 +119,21 @@ func newPlane(t *testing.T) *plane {
 	return p
 }
 
-// env makes a running environment with a home directory of its own.
-func (p *plane) env(t *testing.T, name string, untrusted bool) (id, home string, g *profile.Guest) {
+// env makes a running environment with a home directory of its own, kept
+// from what access says.
+func (p *plane) env(t *testing.T, name string, access api.Access) (id, home string, g *profile.Guest) {
 	t.Helper()
-	return p.envIn(t, name, untrusted, api.PhaseRunning)
+	return p.envIn(t, name, access, api.PhaseRunning)
 }
 
 // envIn makes an environment in the given phase, with a guest for it.
-func (p *plane) envIn(t *testing.T, name string, untrusted bool, phase api.Phase) (id, home string, g *profile.Guest) {
+func (p *plane) envIn(t *testing.T, name string, access api.Access, phase api.Phase) (id, home string, g *profile.Guest) {
 	t.Helper()
-	spec := `{}`
-	if untrusted {
-		spec = `{"untrusted": true}`
+	spec, err := json.Marshal(api.Spec{Access: access})
+	if err != nil {
+		t.Fatal(err)
 	}
-	return p.envSpec(t, name, spec, phase)
+	return p.envSpec(t, name, string(spec), phase)
 }
 
 // envSpec makes an environment with the given spec, with a guest for it.
@@ -217,7 +218,7 @@ func TestUserPaths(t *testing.T) {
 	if err := p.store.AddPath(ctx, p.owner, ".config/nvim/"); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.store.AddPath(ctx, p.owner, ".bash_aliases"); err != nil {
+	if err := p.store.AddPath(ctx, p.owner, "~/.bash_aliases"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := p.store.Put(ctx, p.owner, ".bash_aliases", []byte("alias ll='ls -l'\n"), 0); err != nil {
@@ -241,7 +242,7 @@ func TestSSHAgentSignsWithTheOwnersKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, g := p.env(t, "a", false)
+	_, _, g := p.env(t, "a", api.Access{})
 	sock := socketPath(t)
 	go g.ServeSSHAgent(sock)
 
@@ -285,7 +286,7 @@ func TestSSHAgentServesAStartingEnvironment(t *testing.T) {
 	if _, err := p.store.GenerateKey(ctx, p.owner, "laptop"); err != nil {
 		t.Fatal(err)
 	}
-	_, _, g := p.envIn(t, "a", false, api.PhaseStarting)
+	_, _, g := p.envIn(t, "a", api.Access{}, api.PhaseStarting)
 	sock := socketPath(t)
 	go g.ServeSSHAgent(sock)
 	var conn net.Conn
@@ -400,7 +401,7 @@ func TestSSHAgentServesBeforeTheFilesAreRouted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	id, _, g := p.env(t, "a", false)
+	id, _, g := p.env(t, "a", api.Access{})
 	sock := socketPath(t)
 	go g.ServeSSHAgent(sock)
 	var conn net.Conn
@@ -455,7 +456,7 @@ func TestUntrustedEnvironmentsGetNoKeys(t *testing.T) {
 	if _, err := p.store.GenerateKey(ctx, p.owner, "k"); err != nil {
 		t.Fatal(err)
 	}
-	_, _, g := p.env(t, "review", true)
+	_, _, g := p.env(t, "review", api.Access{NoSSHKeys: true})
 	sock := socketPath(t)
 	go g.ServeSSHAgent(sock)
 	eventually(t, "the guest to be routed", func() bool {
@@ -471,12 +472,12 @@ func TestUntrustedEnvironmentsGetNoKeys(t *testing.T) {
 		t.Fatal(err)
 	}
 	if keys, err := agent.NewClient(conn).List(); err != nil || len(keys) != 0 {
-		t.Errorf("an untrusted environment's agent offers %d keys (%v)", len(keys), err)
+		t.Errorf("an environment kept from its owner's keys offers %d keys (%v)", len(keys), err)
 	}
 }
 
-// A file's mode and whether it is trusted-only are its settings; known
-// credentials start trusted-only.
+// A file's mode and whether it is sensitive are its settings; known
+// credentials start sensitive.
 func TestFileSettings(t *testing.T) {
 	ctx := context.Background()
 	p := newPlane(t)
@@ -487,18 +488,18 @@ func TestFileSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !f.TrustedOnly || f.Mode != 0o600 {
-		t.Errorf("a known credential starts as %#o, trusted-only %t", f.Mode, f.TrustedOnly)
+	if !f.Sensitive || f.Mode != 0o600 {
+		t.Errorf("a known credential starts as %#o, sensitive %t", f.Mode, f.Sensitive)
 	}
 	g, err := p.store.SetSettings(ctx, p.owner, ".gitconfig", 0o640, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if g.Mode != 0o640 || !g.TrustedOnly {
-		t.Errorf("settings stored as %#o, trusted-only %t", g.Mode, g.TrustedOnly)
+	if g.Mode != 0o640 || !g.Sensitive {
+		t.Errorf("settings stored as %#o, sensitive %t", g.Mode, g.Sensitive)
 	}
 	if _, err := p.store.File(ctx, p.owner, ".gitconfig", false); !errors.Is(err, profile.ErrNotFound) {
-		t.Errorf("a trusted-only file read without trust: %v", err)
+		t.Errorf("a sensitive file read without trust: %v", err)
 	}
 
 	if _, err := p.store.SetSettings(ctx, p.owner, ".missing", 0o600, false); !errors.Is(err, profile.ErrNotFound) {
@@ -542,8 +543,8 @@ func TestFilesAreKeptOnTheRoot(t *testing.T) {
 		t.Errorf("the profile's .claude holds %d entries, not its 2 files", len(entries))
 	}
 	f, err := p.store.File(ctx, p.owner, creds, true)
-	if err != nil || string(f.Data) != "token-456" || f.Size != 9 || !f.TrustedOnly {
-		t.Errorf("read back %q (%d bytes, trusted-only %t), %v", f.Data, f.Size, f.TrustedOnly, err)
+	if err != nil || string(f.Data) != "token-456" || f.Size != 9 || !f.Sensitive {
+		t.Errorf("read back %q (%d bytes, sensitive %t), %v", f.Data, f.Size, f.Sensitive, err)
 	}
 	if _, err := p.store.File(ctx, p.owner, creds, false); !errors.Is(err, profile.ErrNotFound) {
 		t.Errorf("a credential read without trust: %v", err)

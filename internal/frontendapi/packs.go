@@ -20,7 +20,7 @@ func packInput(in FilePackInput) profile.PackInput {
 }
 
 func profileFile(f profile.File) ProfileFile {
-	return ProfileFile{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode), TrustedOnly: f.TrustedOnly,
+	return ProfileFile{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode), Sensitive: f.Sensitive,
 		UpdatedAt: f.UpdatedAt}
 }
 
@@ -146,7 +146,7 @@ func (h *handler) UpdateFilePackFileSettings(ctx context.Context, req UpdateFile
 	set, err := h.profiles.PackSet(ctx, principal(ctx), req.ID, true)
 	var f profile.File
 	if err == nil {
-		f, err = h.profiles.SetSettings(ctx, set, req.Params.Path, uint32(req.Body.Mode), req.Body.TrustedOnly)
+		f, err = h.profiles.SetSettings(ctx, set, req.Params.Path, uint32(req.Body.Mode), req.Body.Sensitive)
 	}
 	switch {
 	case errors.Is(err, profile.ErrNotFound):

@@ -29,6 +29,7 @@ export type AccessToken = Schemas['AccessToken']
 export type AuditEvent = Schemas['AuditEvent']
 export type ProcessInfo = Schemas['Process']
 export type Spec = Schemas['Spec']
+export type Access = Schemas['Access']
 export type Repo = Schemas['Repo']
 export type Display = Schemas['Display']
 export type GPU = Schemas['GPU']
@@ -98,9 +99,9 @@ export const api = {
   profileFile: (path: string) => unwrap(client.GET('/api/frontend/me/profile/file', { params: { query: { path } } })),
   putProfileFile: (path: string, content: string) =>
     unwrap(client.PUT('/api/frontend/me/profile/file', { params: { query: { path } }, body: { content } })),
-  setProfileFileSettings: (path: string, mode: number, trusted_only: boolean) =>
+  setProfileFileSettings: (path: string, mode: number, sensitive: boolean) =>
     unwrap(
-      client.PATCH('/api/frontend/me/profile/file', { params: { query: { path } }, body: { mode, trusted_only } }),
+      client.PATCH('/api/frontend/me/profile/file', { params: { query: { path } }, body: { mode, sensitive } }),
     ),
   deleteProfileFile: (path: string) =>
     unwrap(client.DELETE('/api/frontend/me/profile/file', { params: { query: { path } } })),
@@ -116,11 +117,11 @@ export const api = {
     unwrap(
       client.PUT('/api/frontend/packs/{id}/file', { params: { path: { id }, query: { path } }, body: { content } }),
     ),
-  setPackFileSettings: (id: string, path: string, mode: number, trusted_only: boolean) =>
+  setPackFileSettings: (id: string, path: string, mode: number, sensitive: boolean) =>
     unwrap(
       client.PATCH('/api/frontend/packs/{id}/file', {
         params: { path: { id }, query: { path } },
-        body: { mode, trusted_only },
+        body: { mode, sensitive },
       }),
     ),
   deletePackFile: (id: string, path: string) =>

@@ -442,8 +442,8 @@ func (m *Manager) Update(ctx context.Context, p users.Principal, id string, in I
 		if cur.Spec.Image != t.Spec.Image {
 			details["image"] = map[string]string{"from": cur.Spec.Image, "to": t.Spec.Image}
 		}
-		if cur.Spec.Untrusted != t.Spec.Untrusted {
-			details["untrusted"] = t.Spec.Untrusted
+		if cur.Spec.Access != t.Spec.Access {
+			details["access"] = t.Spec.Access
 		}
 		if team != curTeam {
 			details["team"] = map[string]string{"from": curTeam, "to": team}

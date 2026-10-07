@@ -68,7 +68,7 @@ open in the app.
   `vscode://hangar.hangar-remote/open?server=…&env=…` link.
 - **Terminal** runs `ssh` to the server's SSH gateway, with the gateway's
   host key taken from the server, so there is nothing to confirm. It needs
-  one of your public keys under Profile → Sign-in keys.
+  one of your public keys under Account → Sign-in keys.
 
 ## Building
 

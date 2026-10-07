@@ -148,7 +148,7 @@ The password is one of the user's access tokens (Account, then Access
 tokens). Inside an environment nobody signs in: Docker there is set up to
 ask Hangar, and is given a credential for the environment's owner that
 lasts an hour, which is never stored and never has an administrator's
-rights. An environment made from an untrusted template is given none. Each user pushes to their own namespace, their username in lower
+rights. An environment whose template withholds registry sign-in is given none. Each user pushes to their own namespace, their username in lower
 case, and to the namespace of any team they are a member or admin of; a
 repository is made private on its first push, and its owner shares it with
 people, teams or everyone on the Images page. Name an image there in a
@@ -231,7 +231,7 @@ environment:
 
     ssh <environment>@<host> -p 2222
 
-It signs people in with the public keys they add under Profile, then
+It signs people in with the public keys they add under Account, then
 Sign-in keys, and reaches the environment over the worker's own connection:
 no environment is reachable from the network, and the workers need no
 ports open for it. A person reaches their own environments by name, and
@@ -255,8 +255,10 @@ Each person's profile -- Claude's settings and sign-in, `.gitconfig`,
 VS Code's settings, CLI sign-ins and the like -- follows them into every
 environment they own: the files are on the files root (below), which each
 worker serves its environments over NFS, so an environment reads and writes
-the one copy, and a lock taken in one holds in every other. The Profile page lists
-what is shared, and each person can add paths of their own there.
+the one copy, and a lock taken in one holds in every other. The Files page lists
+what is shared, and each person can add paths of their own there, or leave
+a path in a shared directory to each environment with `!` (Claude's
+sessions and caches in `~/.claude` are left so already).
 `HANGAR_PROFILE_PATHS` adds paths for everyone, beside the built-in ones:
 
     HANGAR_PROFILE_PATHS=.config/nvim/,.bash_aliases
@@ -265,6 +267,17 @@ Each is relative to the home directory, and a directory, ending in a slash,
 shares everything under it. A path no one may share -- caches, and what
 programs rewrite per machine, such as `.claude.json` -- stops the server
 starting, and says why.
+
+A template says what of its owner's an environment is given: their
+profile, its sensitive files (credentials, in the profile and in packs),
+their SSH keys, a registry sign-in, and an editor that trusts its folders.
+"Untrusted code" in the template editor withholds all but the profile's
+other files.
+
+File packs are files a project's environments need beside the profile,
+such as a `.env` (an absolute path) or a registry login (`~/.npmrc`, in the
+home directory), which the templates listing a pack give their
+environments.
 
 ## The files root
 

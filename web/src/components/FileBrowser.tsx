@@ -136,7 +136,7 @@ export type FileSource = {
   key: readonly unknown[]
   get: (path: string) => Promise<ProfileFileContent>
   put: (path: string, content: string) => Promise<unknown>
-  settings: (path: string, mode: number, trustedOnly: boolean) => Promise<unknown>
+  settings: (path: string, mode: number, sensitive: boolean) => Promise<unknown>
   remove: (path: string) => Promise<unknown>
   // writable is whether the files may be changed here.
   writable: boolean
@@ -340,7 +340,7 @@ const modes: [number, string][] = [
 function FileSettings({ source, file }: { source: FileSource; file: ProfileFile }) {
   const qc = useQueryClient()
   const save = useMutation({
-    mutationFn: (s: { mode: number; trusted_only: boolean }) => source.settings(file.path, s.mode, s.trusted_only),
+    mutationFn: (s: { mode: number; sensitive: boolean }) => source.settings(file.path, s.mode, s.sensitive),
     onSettled: () => qc.invalidateQueries({ queryKey: source.key }),
   })
   const disabled = save.isPending || !source.writable
@@ -356,7 +356,7 @@ function FileSettings({ source, file }: { source: FileSource; file: ProfileFile 
           onChange={(e) =>
             save.mutate({
               mode: Number(e.target.value),
-              trusted_only: file.trusted_only,
+              sensitive: file.sensitive,
             })
           }
         >
@@ -370,13 +370,15 @@ function FileSettings({ source, file }: { source: FileSource; file: ProfileFile 
       <label className="check">
         <input
           type="checkbox"
-          checked={file.trusted_only}
+          checked={file.sensitive}
           disabled={disabled}
-          onChange={(e) => save.mutate({ mode: file.mode, trusted_only: e.target.checked })}
+          onChange={(e) => save.mutate({ mode: file.mode, sensitive: e.target.checked })}
         />
         <span>
-          Trusted environments only
-          <small className="muted">Environments made from untrusted templates are not given it.</small>
+          Sensitive
+          <small className="muted">
+            A credential: environments whose template withholds sensitive files are not given it.
+          </small>
         </span>
       </label>
       {save.error && <span className="action-error">{save.error.message}</span>}

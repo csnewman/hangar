@@ -6,7 +6,7 @@
 //
 // SSH has nothing like HTTP's Host header, so the environment is named in
 // the username. The person is known by their key: one of the sign-in keys
-// on their Profile page. The gateway ends the connection's encryption to
+// on their Account page. The gateway ends the connection's encryption to
 // read both, and carries each channel the client opens -- shells, commands,
 // port forwards -- to the SSH server in the environment's agent, over the
 // worker's tunnel. Nothing reaches an environment from outside but through

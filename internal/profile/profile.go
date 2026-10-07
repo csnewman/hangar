@@ -31,7 +31,7 @@
 // The agent serves a Docker credential helper for Hangar's registry, and
 // asks the server for a credential each time it is used: one good for an
 // hour, as the environment's owner, which nothing stores. An environment
-// not trusted with its owner's credentials is sent none.
+// whose spec has NoRegistry is sent none.
 //
 // # Protocol
 //
@@ -56,7 +56,7 @@ const (
 	TypeKeys   = "keys"   // the public keys the SSH agent offers
 	TypeSigned = "signed" // the answer to a sign
 	// Hangar's registry's host, sent first when there is one and the
-	// environment is trusted with its owner's credentials.
+	// environment's spec does not have NoRegistry.
 	TypeRegistry   = "registry"
 	TypeCredential = "credential" // the answer to a get_credential
 
@@ -150,13 +150,18 @@ const vscodeUser = ".vscode-server-oss/data/User/"
 const CredentialsPath = ".claude/.credentials.json"
 
 // Paths is a set of shared paths: relative to the home directory for a
-// profile, absolute for a pack. One ending in a slash is a directory,
-// shared with everything under it; one starting with "!" is left out of
-// the directory it is in, whatever else says.
+// profile; for a pack, absolute, or in the home directory, starting with
+// Home. One ending in a slash is a directory, shared with everything under
+// it; one starting with "!" is left out of the directory it is in, whatever
+// else says.
 type Paths []string
 
 // Exclude is the prefix of a path left out.
 const Exclude = "!"
+
+// Home starts a pack's path in the home directory: the key of a file
+// there, and where the pack's directory keeps it.
+const Home = "~/"
 
 // UserPaths is the paths a user shares: the defaults and their own, with
 // what is never shared left out of the directories that hold it.
@@ -167,12 +172,25 @@ func UserPaths(own []string) Paths {
 			out = append(out, p)
 		}
 	}
+	return out.leaveOut("")
+}
+
+// PackPaths is the paths a pack shares, with what is never shared left
+// out of the directories in the home directory that hold it.
+func PackPaths(paths []string) Paths {
+	return append(Paths(nil), paths...).leaveOut(Home)
+}
+
+// leaveOut adds an exclusion for each path never shared, under home, that
+// a shared directory holds.
+func (ps Paths) leaveOut(home string) Paths {
 	for _, n := range neverShared {
-		if _, ok := out.Covering(n); ok && !slices.Contains(out, Exclude+n) {
-			out = append(out, Exclude+n)
+		n = home + n
+		if _, ok := ps.Covering(n); ok && !slices.Contains(ps, Exclude+n) {
+			ps = append(ps, Exclude+n)
 		}
 	}
-	return out
+	return ps
 }
 
 // under reports whether p is s, or under s, a directory.
@@ -222,10 +240,12 @@ func (ps Paths) Covering(p string) (string, bool) {
 	return "", false
 }
 
-// TrustedOnlyByDefault reports whether a path holds a credential Hangar
-// knows of, which a file there is made trusted-only for (File.TrustedOnly)
-// until its owner says otherwise.
-func TrustedOnlyByDefault(p string) bool { return slices.Contains(secretPaths, p) }
+// SensitiveByDefault reports whether a path, a profile's or a pack's, holds
+// a credential Hangar knows of, which a file there is made sensitive for
+// (File.Sensitive) until its owner says otherwise.
+func SensitiveByDefault(p string) bool {
+	return slices.Contains(secretPaths, strings.TrimPrefix(p, Home))
+}
 
 // Valid reports whether p is a clean relative path that stays inside the
 // home directory.
@@ -249,12 +269,24 @@ func ValidKey(p string) bool {
 var refusedAbsolute = []string{"/proc/", "/sys/", "/dev/", "/run/", "/boot/"}
 
 // CheckPackPath reports why a path cannot be one of a pack's, or nil. It is
-// absolute, a directory ends in a slash, and one left out starts with "!".
+// absolute, or in the home directory (~/.npmrc), as a profile's may be; a
+// directory ends in a slash, and one left out starts with "!".
 func CheckPackPath(p string) error {
-	p = strings.TrimPrefix(p, Exclude)
+	x, exclude := strings.CutPrefix(p, Exclude)
+	if rel, ok := strings.CutPrefix(x, Home); ok {
+		if exclude {
+			rel = Exclude + rel
+		}
+		return CheckUserPath(rel)
+	}
+	p = x
 	clean := strings.TrimSuffix(p, "/")
 	if !strings.HasPrefix(p, "/") || !ValidKey(clean) || strings.HasSuffix(p, "//") {
-		return fmt.Errorf("%q is not a clean absolute path", p)
+		return fmt.Errorf("%q is neither a clean absolute path nor one in the home directory (~/)", p)
+	}
+	// Where the pack's directory keeps its files in the home directory.
+	if clean == "/~" || strings.HasPrefix(clean, "/~/") {
+		return fmt.Errorf("%s is a path in the home directory, which a pack names with ~/", p)
 	}
 	for _, r := range refusedAbsolute {
 		if strings.HasPrefix(clean+"/", r) {

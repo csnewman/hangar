@@ -33,6 +33,16 @@ const stagingPrefix = ".hangarfs-"
 // keyPath is where a set's file is under the root.
 func keyPath(set, key string) string { return set + "/" + strings.TrimPrefix(key, "/") }
 
+// setKey is the key of the file at p in set's directory: a pack's are
+// absolute but for those in the home directory, under Home.
+func setKey(set, p string, pack bool) string {
+	key := strings.TrimPrefix(p, set+"/")
+	if pack && !strings.HasPrefix(key, Home) {
+		key = "/" + key
+	}
+	return key
+}
+
 // isPack reports whether a set is a pack's, whose paths are absolute.
 func (s *Store) isPack(ctx context.Context, set string) (bool, error) {
 	var pack bool
@@ -46,12 +56,12 @@ func (s *Store) isPack(ctx context.Context, set string) (bool, error) {
 	return pack, err
 }
 
-// trust is which of a set's files are trusted-only where that differs from
-// the default, and trustedOnly what a file is, given it.
-func (s *Store) trust(ctx context.Context, set string) (map[string]bool, error) {
+// sensitivity is which of a set's files are sensitive where that differs
+// from the default, and sensitive what a file is, given it.
+func (s *Store) sensitivity(ctx context.Context, set string) (map[string]bool, error) {
 	out := map[string]bool{}
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT path, trusted_only FROM file_trust WHERE set_id = $1`, set)
+		rows, err := tx.Query(ctx, `SELECT path, sensitive FROM file_sensitivity WHERE set_id = $1`, set)
 		if err != nil {
 			return err
 		}
@@ -69,16 +79,16 @@ func (s *Store) trust(ctx context.Context, set string) (map[string]bool, error) 
 	return out, err
 }
 
-func trustedOnly(trust map[string]bool, key string) bool {
-	if v, ok := trust[key]; ok {
+func sensitive(marks map[string]bool, key string) bool {
+	if v, ok := marks[key]; ok {
 		return v
 	}
-	return TrustedOnlyByDefault(key)
+	return SensitiveByDefault(key)
 }
 
-// List returns a set's files, without their contents. Without trusted, a
-// trusted-only file is left out.
-func (s *Store) List(ctx context.Context, set string, trusted bool) ([]File, error) {
+// List returns a set's files, without their contents. Without
+// withSensitive, a sensitive file is left out.
+func (s *Store) List(ctx context.Context, set string, withSensitive bool) ([]File, error) {
 	if !db.ValidUUID(set) {
 		return nil, ErrNotFound
 	}
@@ -86,7 +96,7 @@ func (s *Store) List(ctx context.Context, set string, trusted bool) ([]File, err
 	if err != nil {
 		return nil, err
 	}
-	trust, err := s.trust(ctx, set)
+	marks, err := s.sensitivity(ctx, set)
 	if err != nil {
 		return nil, err
 	}
@@ -101,12 +111,9 @@ func (s *Store) List(ctx context.Context, set string, trusted bool) ([]File, err
 		if !e.Type().IsRegular() || strings.HasPrefix(e.Name(), stagingPrefix) {
 			return nil
 		}
-		key := strings.TrimPrefix(p, set+"/")
-		if pack {
-			key = "/" + key
-		}
-		only := trustedOnly(trust, key)
-		if only && !trusted {
+		key := setKey(set, p, pack)
+		only := sensitive(marks, key)
+		if only && !withSensitive {
 			return nil
 		}
 		info, err := e.Info()
@@ -114,7 +121,7 @@ func (s *Store) List(ctx context.Context, set string, trusted bool) ([]File, err
 			return nil
 		}
 		out = append(out, File{Path: key, Size: info.Size(), Mode: uint32(info.Mode().Perm()),
-			TrustedOnly: only, UpdatedAt: info.ModTime()})
+			Sensitive: only, UpdatedAt: info.ModTime()})
 		return nil
 	})
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
@@ -122,7 +129,7 @@ func (s *Store) List(ctx context.Context, set string, trusted bool) ([]File, err
 }
 
 // File returns one of a set's files with its contents, or ErrNotFound.
-func (s *Store) File(ctx context.Context, set, key string, trusted bool) (File, error) {
+func (s *Store) File(ctx context.Context, set, key string, withSensitive bool) (File, error) {
 	if !db.ValidUUID(set) || !ValidKey(key) {
 		return File{}, ErrNotFound
 	}
@@ -133,12 +140,12 @@ func (s *Store) File(ctx context.Context, set, key string, trusted bool) (File, 
 	if err != nil {
 		return File{}, err
 	}
-	trust, err := s.trust(ctx, set)
+	marks, err := s.sensitivity(ctx, set)
 	if err != nil {
 		return File{}, err
 	}
-	only := trustedOnly(trust, key)
-	if only && !trusted {
+	only := sensitive(marks, key)
+	if only && !withSensitive {
 		return File{}, ErrNotFound
 	}
 	data, err := s.root.ReadFile(keyPath(set, key))
@@ -146,7 +153,7 @@ func (s *Store) File(ctx context.Context, set, key string, trusted bool) (File, 
 		return File{}, err
 	}
 	return File{Path: key, Data: data, Size: int64(len(data)), Mode: uint32(info.Mode().Perm()),
-		TrustedOnly: only, UpdatedAt: info.ModTime()}, nil
+		Sensitive: only, UpdatedAt: info.ModTime()}, nil
 }
 
 // size is what a set's files take, but the one at except.
@@ -183,7 +190,7 @@ func (s *Store) Put(ctx context.Context, set, key string, data []byte, mode uint
 	mode &= 0o777
 	if mode == 0 {
 		mode = 0o644
-		if TrustedOnlyByDefault(key) {
+		if SensitiveByDefault(key) {
 			mode = 0o600
 		}
 	}
@@ -252,8 +259,8 @@ func (s *Store) ensureSet(ctx context.Context, set string) error {
 	return s.root.MkdirAll(set, 0o755)
 }
 
-// SetSettings changes a file's mode and whether it is trusted-only.
-func (s *Store) SetSettings(ctx context.Context, set, key string, mode uint32, trustedOnly bool) (File, error) {
+// SetSettings changes a file's mode and whether it is sensitive.
+func (s *Store) SetSettings(ctx context.Context, set, key string, mode uint32, sensitive bool) (File, error) {
 	if !db.ValidUUID(set) || !ValidKey(key) {
 		return File{}, ErrNotFound
 	}
@@ -272,15 +279,15 @@ func (s *Store) SetSettings(ctx context.Context, set, key string, mode uint32, t
 		return File{}, err
 	}
 	err = s.db.Transact(ctx, func(tx db.Tx) error {
-		if _, err := tx.Exec(ctx, `INSERT INTO file_trust (set_id, path, trusted_only) VALUES ($1, $2, $3)
-			ON CONFLICT (set_id, path) DO UPDATE SET trusted_only = EXCLUDED.trusted_only`,
-			set, key, trustedOnly); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO file_sensitivity (set_id, path, sensitive) VALUES ($1, $2, $3)
+			ON CONFLICT (set_id, path) DO UPDATE SET sensitive = EXCLUDED.sensitive`,
+			set, key, sensitive); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Event{Action: "profile.file_settings",
 			Target:  audit.Ref{Type: audit.KindFile, ID: set + ":" + key, Name: key},
 			Related: []audit.Ref{{Type: audit.KindOwner, ID: set}},
-			Details: map[string]any{"mode": fmt.Sprintf("%#o", mode), "trusted_only": trustedOnly}})
+			Details: map[string]any{"mode": fmt.Sprintf("%#o", mode), "sensitive": sensitive}})
 	})
 	if err != nil {
 		return File{}, err
@@ -298,7 +305,7 @@ func (s *Store) Delete(ctx context.Context, set, key string) error {
 		return err
 	}
 	return s.db.Transact(ctx, func(tx db.Tx) error {
-		if _, err := tx.Exec(ctx, `DELETE FROM file_trust WHERE set_id = $1 AND path = $2`, set, key); err != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM file_sensitivity WHERE set_id = $1 AND path = $2`, set, key); err != nil {
 			return err
 		}
 		return audit.Record(ctx, tx, audit.Event{Action: "profile.file_delete",
@@ -326,11 +333,7 @@ func (s *Store) dropUnshared(set string, still Paths, pack bool) {
 		if err != nil || e.IsDir() {
 			return nil
 		}
-		key := strings.TrimPrefix(p, set+"/")
-		if pack {
-			key = "/" + key
-		}
-		if !still.Synced(key) {
+		if !still.Synced(setKey(set, p, pack)) {
 			drop = append(drop, p)
 		}
 		return nil
@@ -341,23 +344,25 @@ func (s *Store) dropUnshared(set string, still Paths, pack bool) {
 }
 
 // hidden are the paths in a set, as the set's directory has them, kept
-// from an environment not trusted with its owner's credentials.
+// from an environment given none of its owner's sensitive files.
 func (s *Store) hidden(ctx context.Context, set string, pack bool) ([]string, error) {
-	trust, err := s.trust(ctx, set)
+	marks, err := s.sensitivity(ctx, set)
 	if err != nil {
 		return nil, err
 	}
 	var out []string
-	for key, only := range trust {
+	for key, only := range marks {
 		if only {
 			out = append(out, strings.TrimPrefix(key, "/"))
 		}
 	}
-	if !pack {
-		for _, key := range secretPaths {
-			if _, set := trust[key]; !set {
-				out = append(out, key)
-			}
+	for _, key := range secretPaths {
+		// A pack's are in its home directory.
+		if pack {
+			key = Home + key
+		}
+		if _, set := marks[key]; !set {
+			out = append(out, key)
 		}
 	}
 	return out, nil

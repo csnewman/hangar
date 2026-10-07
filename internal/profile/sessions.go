@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/tunnel"
@@ -64,7 +65,8 @@ func (s *Sessions) UseRegistry(host string) { s.registry = host }
 // target is an environment a session is held with.
 type target struct {
 	env, name, owner, ownerName, worker string
-	trusted                             bool
+	// access is what its spec keeps from it.
+	access api.Access
 	// packs are the file packs its spec lists, joined by commas.
 	packs string
 }
@@ -111,11 +113,7 @@ func (s *Sessions) reconcile(ctx context.Context) {
 	if len(workers) > 0 {
 		err := s.store.db.Transact(ctx, func(tx db.Tx) error {
 			clear(want)
-			rows, err := tx.Query(ctx, `SELECT e.id::text, e.name, e.owner_id::text, u.username, e.worker_id::text,
-					coalesce((e.spec->>'untrusted')::boolean, false),
-					coalesce((SELECT string_agg(p, ',' ORDER BY n) FROM jsonb_array_elements_text(
-						CASE jsonb_typeof(e.spec->'file_packs') WHEN 'array' THEN e.spec->'file_packs' ELSE '[]' END)
-						WITH ORDINALITY AS x(p, n)), '')
+			rows, err := tx.Query(ctx, `SELECT e.id::text, e.name, e.owner_id::text, u.username, e.worker_id::text, e.spec
 				FROM environments e JOIN users u ON u.id = e.owner_id
 				WHERE e.phase IN ('starting', 'running') AND e.desired = 'running' AND e.worker_id = ANY($1::uuid[])`, workers)
 			if err != nil {
@@ -124,11 +122,15 @@ func (s *Sessions) reconcile(ctx context.Context) {
 			defer rows.Close()
 			for rows.Next() {
 				var t target
-				var untrusted bool
-				if err := rows.Scan(&t.env, &t.name, &t.owner, &t.ownerName, &t.worker, &untrusted, &t.packs); err != nil {
+				var raw []byte
+				if err := rows.Scan(&t.env, &t.name, &t.owner, &t.ownerName, &t.worker, &raw); err != nil {
 					return err
 				}
-				t.trusted = !untrusted
+				var spec api.Spec
+				if err := json.Unmarshal(raw, &spec); err != nil {
+					return err
+				}
+				t.access, t.packs = spec.Access, strings.Join(spec.FilePacks, ",")
 				want[t.env] = t
 			}
 			return rows.Err()
@@ -300,7 +302,7 @@ func (x *session) serve(ctx context.Context) error {
 	if err := x.sendKeys(ctx); err != nil {
 		return err
 	}
-	if x.s.registry != "" && x.trusted {
+	if x.s.registry != "" && !x.access.NoRegistry {
 		if err := x.send(Message{Type: TypeRegistry, Host: x.s.registry}); err != nil {
 			return err
 		}
@@ -337,7 +339,7 @@ func (x *session) sendSets(ctx context.Context) error {
 	if x.packs != "" {
 		packs = strings.Split(x.packs, ",")
 	}
-	sets, err := x.s.store.EnvironmentSets(ctx, x.owner, packs)
+	sets, err := x.s.store.environmentSets(ctx, x.owner, api.Spec{Access: x.access, FilePacks: packs})
 	if err != nil {
 		return err
 	}
@@ -366,7 +368,7 @@ func (x *session) sendSets(ctx context.Context) error {
 // are read each time.
 func (x *session) sendKeys(ctx context.Context) error {
 	keys := []string{}
-	if x.trusted {
+	if !x.access.NoSSHKeys {
 		ks, err := x.s.store.Keys(ctx, x.owner)
 		if err != nil {
 			return err
@@ -391,8 +393,8 @@ func (x *session) handle(ctx context.Context, m Message) error {
 		switch {
 		case x.s.registry == "":
 			reply.Error = "this server runs no registry"
-		case !x.trusted:
-			reply.Error = "this environment is not trusted with its owner's credentials"
+		case x.access.NoRegistry:
+			reply.Error = "this environment's template gives it no credential for the registry"
 		default:
 			secret, err := x.s.store.IssueRegistryCredential(x.owner, x.env)
 			if err != nil {
@@ -423,8 +425,8 @@ func (x *session) handle(ctx context.Context, m Message) error {
 // sign signs with the owner's key that matches the one asked for, as an SSH
 // agent would with the flags it was given.
 func (x *session) sign(ctx context.Context, m Message) (*ssh.Signature, error) {
-	if !x.trusted {
-		return nil, errors.New("this environment is not trusted with its owner's keys")
+	if x.access.NoSSHKeys {
+		return nil, errors.New("this environment's template gives it none of its owner's SSH keys")
 	}
 	signers, err := x.s.store.Signers(ctx, x.owner)
 	if err != nil {

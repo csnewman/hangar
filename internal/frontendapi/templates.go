@@ -178,7 +178,7 @@ func toSpec(s api.Spec) Spec {
 		GPU:            GPU(s.GPU),
 		Repos:          repos,
 		EditorPath:     optional(s.EditorPath),
-		Untrusted:      optionalBool(s.Untrusted),
+		Access:         toAccess(s.Access),
 		Dax:            optionalBool(s.DAX),
 		TrustedFolders: optionalSlice(s.TrustedFolders),
 		WebNames:       optionalSlice(s.WebNames),
@@ -200,7 +200,7 @@ func fromSpec(s Spec) api.Spec {
 		GPU:            api.GPU(s.GPU),
 		Repos:          repos,
 		EditorPath:     deref(s.EditorPath),
-		Untrusted:      s.Untrusted != nil && *s.Untrusted,
+		Access:         fromAccess(s.Access),
 		DAX:            s.Dax != nil && *s.Dax,
 		TrustedFolders: derefSlice(s.TrustedFolders),
 		WebNames:       derefSlice(s.WebNames),
@@ -221,6 +221,24 @@ func derefSlice(s *[]string) []string {
 		return nil
 	}
 	return *s
+}
+
+func toAccess(a api.Access) *Access {
+	if a == (api.Access{}) {
+		return nil
+	}
+	return &Access{NoProfile: optionalBool(a.NoProfile), NoSensitiveFiles: optionalBool(a.NoSensitiveFiles),
+		NoSSHKeys: optionalBool(a.NoSSHKeys), NoRegistry: optionalBool(a.NoRegistry),
+		NoEditorTrust: optionalBool(a.NoEditorTrust)}
+}
+
+func fromAccess(a *Access) api.Access {
+	if a == nil {
+		return api.Access{}
+	}
+	is := func(b *bool) bool { return b != nil && *b }
+	return api.Access{NoProfile: is(a.NoProfile), NoSensitiveFiles: is(a.NoSensitiveFiles),
+		NoSSHKeys: is(a.NoSSHKeys), NoRegistry: is(a.NoRegistry), NoEditorTrust: is(a.NoEditorTrust)}
 }
 
 func optionalBool(b bool) *bool {

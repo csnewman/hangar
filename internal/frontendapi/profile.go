@@ -35,7 +35,7 @@ func (h *handler) GetProfile(ctx context.Context, _ GetProfileRequestObject) (Ge
 	}
 	for _, f := range files {
 		out.Files = append(out.Files, ProfileFile{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
-			TrustedOnly: f.TrustedOnly, UpdatedAt: f.UpdatedAt})
+			Sensitive: f.Sensitive, UpdatedAt: f.UpdatedAt})
 	}
 	for _, k := range keys {
 		out.Keys = append(out.Keys, sshKey(k))
@@ -75,11 +75,11 @@ func (h *handler) PutProfileFile(ctx context.Context, req PutProfileFileRequestO
 		return nil, err
 	}
 	return PutProfileFile200JSONResponse{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
-		TrustedOnly: f.TrustedOnly, UpdatedAt: f.UpdatedAt}, nil
+		Sensitive: f.Sensitive, UpdatedAt: f.UpdatedAt}, nil
 }
 
 func (h *handler) UpdateProfileFileSettings(ctx context.Context, req UpdateProfileFileSettingsRequestObject) (UpdateProfileFileSettingsResponseObject, error) {
-	f, err := h.profiles.SetSettings(ctx, principal(ctx).UserID, req.Params.Path, uint32(req.Body.Mode), req.Body.TrustedOnly)
+	f, err := h.profiles.SetSettings(ctx, principal(ctx).UserID, req.Params.Path, uint32(req.Body.Mode), req.Body.Sensitive)
 	switch {
 	case errors.Is(err, profile.ErrNotFound):
 		return UpdateProfileFileSettings404JSONResponse{NotFoundJSONResponse{Error: "no such file in the profile"}}, nil
@@ -89,7 +89,7 @@ func (h *handler) UpdateProfileFileSettings(ctx context.Context, req UpdateProfi
 		return nil, err
 	}
 	return UpdateProfileFileSettings200JSONResponse{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
-		TrustedOnly: f.TrustedOnly, UpdatedAt: f.UpdatedAt}, nil
+		Sensitive: f.Sensitive, UpdatedAt: f.UpdatedAt}, nil
 }
 
 func (h *handler) DeleteProfileFile(ctx context.Context, req DeleteProfileFileRequestObject) (DeleteProfileFileResponseObject, error) {

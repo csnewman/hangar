@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus } from 'lucide-react'
 import { useMemo, useState, type FormEvent } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, Navigate, useNavigate, useParams } from 'react-router'
 
 import { api, type FilePack, type FilePackInput } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
@@ -33,31 +33,36 @@ function pathsOf(text: string): string[] {
     .filter((p) => p !== '')
 }
 
-// PacksPage lists the file packs the caller may use. A pack is files at
-// absolute paths that templates give their environments, beside each
-// owner's profile.
-export function PacksPage() {
+// packPath is where a pack's page is.
+export const packPath = (id: string) => `/files/packs/${id}`
+
+// PackList lists the file packs the caller may use, for the Files page. A
+// pack is files, such as a project's .env or a registry's login in
+// ~/.npmrc, that templates give their environments beside each owner's
+// profile.
+export function PackList() {
   const [creating, setCreating] = useState(false)
   const packs = usePacks()
   const list = packs.data ?? []
 
   return (
-    <div className="page">
-      <PageHeader
-        title="File packs"
-        subtitle="Files at fixed paths, such as a project's .env, that the templates listing a pack give their environments, kept in step as they change there or here."
-        actions={
-          !creating && (
-            <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
-              <Plus size={15} />
-              New pack
-            </button>
-          )
-        }
-      />
+    <section className="section">
+      <div className="section-head">
+        <h2 className="section-title">File packs</h2>
+        {!creating && (
+          <button type="button" className="btn btn-ghost" onClick={() => setCreating(true)}>
+            <Plus size={14} />
+            New pack
+          </button>
+        )}
+      </div>
+      <p className="muted small">
+        Files a project's environments need that are not in its repository, given to the environments of the templates
+        that list a pack.
+      </p>
       {creating && <CreateForm onDone={() => setCreating(false)} />}
       {packs.isError && <div className="alert">Could not load packs: {packs.error.message}</div>}
-      <section className="section">
+      <div>
         {!packs.isPending && list.length === 0 && (
           <div className="panel empty-state">
             No packs. Make one for files a project's environments need that are not in its repository.
@@ -78,7 +83,7 @@ export function PacksPage() {
                 {list.map((k) => (
                   <tr key={k.id}>
                     <td>
-                      <Link to={`/packs/${k.id}`} className="strong">
+                      <Link to={packPath(k.id)} className="strong">
                         {k.name}
                       </Link>
                       {k.description && <div className="muted small">{k.description}</div>}
@@ -97,8 +102,8 @@ export function PacksPage() {
             </table>
           </div>
         )}
-      </section>
-    </div>
+      </div>
+    </section>
   )
 }
 
@@ -117,7 +122,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
     onSuccess: (k) => {
       qc.invalidateQueries({ queryKey: packsKey })
       onDone()
-      navigate(`/packs/${k.id}`)
+      navigate(packPath(k.id))
     },
   })
   const submit = (e: FormEvent) => {
@@ -191,14 +196,22 @@ function PathsField({
         disabled={disabled}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder={'/workspace/app/.env\n/workspace/app/config/secrets/'}
+        placeholder={'/workspace/app/.env\n/workspace/app/config/secrets/\n~/.npmrc'}
       />
       <small className="muted">
-        Absolute. One ending in <code>/</code> holds a directory and everything in it. A file is written once the
-        directory its path is in exists, so a repository cloned there is cloned first.
+        Absolute, or in the home directory, starting <code>~/</code>. One ending in <code>/</code> holds a directory and
+        everything in it; one starting <code>!</code> leaves a path in such a directory to each environment. A file is
+        written once the directory its path is in exists, so a repository cloned there is cloned first.
       </small>
     </label>
   )
+}
+
+// PackRedirect sends a pack's address from before it was under Files to
+// its page.
+export function PackRedirect() {
+  const { id = '' } = useParams()
+  return <Navigate to={packPath(id)} replace />
 }
 
 // PackPage is one pack: its files, and its settings for those who may
@@ -219,7 +232,7 @@ export function PackPage() {
       key,
       get: (path) => api.packFile(id, path),
       put: (path, content) => api.putPackFile(id, path, content),
-      settings: (path, mode, trustedOnly) => api.setPackFileSettings(id, path, mode, trustedOnly),
+      settings: (path, mode, sensitive) => api.setPackFileSettings(id, path, mode, sensitive),
       remove: (path) => api.deletePackFile(id, path),
       writable: k.can_write,
       empty: 'No files yet. Add one here, or write one at a pack path in an environment that has the pack.',
@@ -234,6 +247,7 @@ export function PackPage() {
   return (
     <div className="page">
       <PageHeader
+        crumbs={[{ label: 'Files', to: '/files' }]}
         title={k.name}
         subtitle={[
           `Owned by ${ownerOf(k)}`,
@@ -272,7 +286,7 @@ function PackSettings({ pack }: { pack: FilePack }) {
     mutationFn: () => api.deletePack(pack.id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: packsKey })
-      navigate('/packs')
+      navigate('/files')
     },
   })
   const disabled = !pack.can_change
@@ -333,7 +347,7 @@ export function FilePacksField({ value, onChange }: { value: string[]; onChange:
       <span>File packs</span>
       {list.length === 0 && unseen.length === 0 && (
         <small className="muted">
-          No packs. <Link to="/packs">Make one</Link> for files at fixed paths that environments made from this template
+          No packs. <Link to="/files">Make one</Link> for files at fixed paths that environments made from this template
           should have, such as a project's <code>.env</code>.
         </small>
       )}

@@ -267,7 +267,7 @@ function SSHCommand({ command }: { command: string }) {
         <Copy size={13} />
         {copied ? 'Copied' : 'Copy'}
       </button>
-      <Link to="/profile#sign-in-keys" className="muted small">
+      <Link to="/account#sign-in-keys" className="muted small">
         with a sign-in key
       </Link>
     </span>

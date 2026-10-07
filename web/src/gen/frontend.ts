@@ -1193,15 +1193,15 @@ export interface components {
             path: string;
             size: number;
             mode: number;
-            /** @description Kept from environments not trusted with their owner's credentials. Known credentials start so. */
-            trusted_only: boolean;
+            /** @description A credential: kept from environments whose template withholds sensitive files. Known credentials start so. */
+            sensitive: boolean;
             /** Format: date-time */
             updated_at: string;
         };
         ProfileFileSettings: {
             /** @description Its permissions, as chmod takes them (0o600 is 384). */
             mode: number;
-            trusted_only: boolean;
+            sensitive: boolean;
         };
         ProfileFileContent: {
             path: string;
@@ -1309,7 +1309,7 @@ export interface components {
          * @description A setting an environment takes from its template.
          * @enum {string}
          */
-        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "untrusted" | "trusted_folders" | "web_names" | "file_packs" | "placement" | "name";
+        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "access" | "trusted_folders" | "web_names" | "file_packs" | "placement" | "name";
         /**
          * @description console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; fs the backend serving the image; gpu the virtual GPU's backend.
          * @enum {string}
@@ -1380,6 +1380,19 @@ export interface components {
             /** @description A new branch to create after cloning. In a template it may use variables, filled in as each environment is made: {name}, {owner}, {short_id}, {template}, and each named group of the name pattern, such as {ticket} from (?P<ticket>[A-Z]+-[0-9]+); a group the name leaves out is empty. {variable:lower} and {variable:upper} change the case. */
             branch?: string;
         };
+        /** @description What of its owner's the environment is kept from, for code they do not trust. Each is false, giving it everything, when left out. */
+        Access: {
+            /** @description None of the owner's profile's files. */
+            no_profile?: boolean;
+            /** @description None of the sensitive files -- credentials, such as Claude's sign-in -- of the owner's profile or of the environment's packs. */
+            no_sensitive_files?: boolean;
+            /** @description No signatures from the owner's SSH keys. */
+            no_ssh_keys?: boolean;
+            /** @description No credential for Hangar's registry. */
+            no_registry?: boolean;
+            /** @description VS Code trusts no folder without asking. */
+            no_editor_trust?: boolean;
+        };
         Spec: {
             image: string;
             cpus: number;
@@ -1391,10 +1404,9 @@ export interface components {
             editor_path?: string;
             /** @description The IDs of the file packs the environment has beside its owner's profile, in order: a file two of them name is the first's. A pack the owner may not use is left out. */
             file_packs?: string[];
-            /** @description Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored when untrusted, where it trusts nothing. */
+            /** @description Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing. */
             trusted_folders?: string[];
-            /** @description For code the owner does not trust: the environment is never given their credentials -- Claude's sign-in, or signatures from their SSH keys -- though the rest of their profile still follows them in. */
-            untrusted?: boolean;
+            access?: components["schemas"]["Access"];
             /** @description Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. A worker with DAX turned off (dax_mib 0) reads them in regardless. */
             dax?: boolean;
             /** @description Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<short> after Hangar's host. */

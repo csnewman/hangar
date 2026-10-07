@@ -13,7 +13,7 @@ const settingNames: Record<TemplateSetting, string> = {
   dax: 'image file mapping',
   repos: 'repositories',
   editor_path: 'editor folder',
-  untrusted: 'trust',
+  access: 'access',
   trusted_folders: 'trusted folders',
   file_packs: 'file packs',
   web_names: 'web server names',
