@@ -89,14 +89,9 @@ type VMConfig struct {
 	ImageDevice string `yaml:"image_device"`
 	// Root is what an environment's root is: "hangarfs" (the default), the
 	// guest kernel's hangarfs over the kernel's overlayfs, which takes locks
-	// on shared files across an owner's environments; "overlay", the
-	// overlayfs alone, where such locks hold within one environment; or,
-	// experimentally, "router", hangar-router (Router) merging the same
-	// layers.
+	// on shared files across an owner's environments; or "overlay", the
+	// overlayfs alone, where such locks hold within one environment.
 	Root string `yaml:"root"`
-	// Router is hangar-router built for the guest's architecture, which an
-	// environment runs as its root with root: router.
-	Router string `yaml:"router"`
 	// DaxMiB sizes the DAX window through which an environment that asks
 	// for DAX maps its base's files from this machine's page cache, with
 	// image_device virtiofs. 0 serves every base without one, whatever an

@@ -69,15 +69,8 @@ func preflight(cfg *Config) error {
 	}
 	switch cfg.Root {
 	case RootOverlay, RootHangarfs:
-	case RootRouter:
-		if cfg.Router == "" {
-			return errors.New("vm.root is router, and there is no vm.router to run")
-		}
-		if _, err := os.Stat(cfg.Router); err != nil {
-			return fmt.Errorf("router: %w", err)
-		}
 	default:
-		return fmt.Errorf("vm.root %q is none of %s, %s or %s", cfg.Root, RootOverlay, RootHangarfs, RootRouter)
+		return fmt.Errorf("vm.root %q is neither %s nor %s", cfg.Root, RootHangarfs, RootOverlay)
 	}
 	for ref, img := range cfg.Images {
 		st, err := os.Stat(img.Base)
@@ -176,7 +169,6 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		Dir:         m.dir,
 		Kernel:      m.rt.cfg.Kernel,
 		Agent:       m.rt.cfg.Agent,
-		Router:      routerFor(m.rt.cfg),
 		Hangarfs:    m.rt.cfg.Root == RootHangarfs,
 		Base:        img.Base,
 		BaseID:      img.ID,
@@ -596,14 +588,6 @@ func writeEditorTrust(sess *agent.Session, spec api.Spec) error {
 		return fmt.Errorf("exit %d: %s", out.Code, firstLine(out.Stderr, out.Stdout))
 	}
 	return nil
-}
-
-// routerFor is the router a machine runs as its root, or "" for overlayfs.
-func routerFor(c Config) string {
-	if c.Root == RootRouter {
-		return c.Router
-	}
-	return ""
 }
 
 // daxMiB is the virtio-fs DAX window an environment's machine is given: the

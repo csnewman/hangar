@@ -12,10 +12,6 @@
 !gpu/Cargo.lock
 !gpu/src/
 !gpu/virglrenderer/
-!router/Cargo.toml
-!router/Cargo.lock
-!router/src/
-!router/vendor/
 !editor/
 !images/
 internal/webui/dist/app
