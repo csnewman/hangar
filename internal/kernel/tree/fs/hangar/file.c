@@ -484,8 +484,13 @@ static int hfs_list_merged(struct file *file)
 		struct dentry *d;
 
 		p = t + strlen(t) + 1;
-		strscpy(target, t, PATH_MAX);
-		d = hfs_route_lookup(file_inode(file)->i_sb, target);
+		if (!*t) {
+			/* Excluded: the lower filesystem's own, if it is there. */
+			d = hfs_local_lookup(file->f_path.dentry, name, false);
+		} else {
+			strscpy(target, t, PATH_MAX);
+			d = hfs_route_lookup(file_inode(file)->i_sb, target);
+		}
 		if (IS_ERR(d))
 			continue;
 		if (d_really_is_positive(d))

@@ -1,47 +1,25 @@
-// Package profile is a user's profile: the files that make an environment
-// theirs -- Claude's settings and sign-in, VS Code's settings, git's, and
-// whatever else they choose to share -- and their SSH keys. It follows them
-// into every environment they own and stays the same in all of them as they
-// change it, in any environment or in the web UI.
+// Package profile is the files environments share with others -- each
+// user's profile, which follows them into every environment they own, and
+// the packs templates give theirs -- and users' SSH keys.
 //
-// The control plane holds the profile, in Postgres. Each running
-// environment's agent holds a session with the server replica its worker's
-// tunnel reaches: on connecting it is sent the paths the profile shares and
-// every file, which it writes into the home directory as an ordinary file,
-// and from then on it sends up the changes it sees there and is sent
-// everyone else's. The files are real files in the guest, written by
-// renaming over, so programs watching them see a change the way they see
-// any other.
-//
-// Two environments changing one file at once end with whichever the server
-// took second. The files are small, and mostly changed in one place at a
-// time.
+// A profile is Claude's settings and sign-in, VS Code's settings, git's,
+// and whatever else its owner chooses; a pack is files at fixed paths, a
+// project's .env say. Each is a file set: a directory of the files root,
+// which the control plane reads and writes for the web UI and every worker
+// serves its environments over NFS (internal/nfs). An environment's agent
+// mounts that, and hangarfs routes the sets' paths to it, so there is one
+// copy of each file, which every environment given it reads and writes, and
+// a lock taken on one in one environment holds in all of them -- whether by
+// flock or fcntl, or, as Claude's sign-in refresh does, by making a
+// directory.
 //
 // # Shared paths
 //
-// DefaultPaths are shared for everyone. A user adds more of their own --
-// a file, or a directory and everything under it -- and removes those
-// again; UserPaths is the set a user has.
-//
-// # Locks
-//
-// Some programs change a file under a lock of their own, a file or
-// directory they create at a known path and remove when done. Claude is
-// one: it refreshes its OAuth sign-in under ~/.claude/.oauth_refresh.lock,
-// and inside it rereads .credentials.json and uses what it finds if another
-// process refreshed first. A refresh token is good for one refresh, so two
-// environments refreshing with it at once would sign one of them out.
-//
-// The server decides who holds each of the Locks. The agent serves the
-// directory a lock is made in as a FUSE file system over the real one
-// (LockFS), so creating the lock is a question put to the server before it
-// is answered: if another environment holds it, creating it fails as it
-// would if another process here held it. Taking it brings this environment's
-// files up to date with the profile first, so the program finds the latest
-// on disk; letting it go sends what changed under it first, so the next
-// holder finds that. Only locks made of files can be served this way; a
-// lock taken with flock or fcntl is the kernel's and never reaches a file
-// system.
+// DefaultPaths are shared for everyone. A user adds more of their own -- a
+// file, or a directory and everything under it -- and leaves paths inside a
+// shared directory out, written with a leading "!"; UserPaths is the set a
+// user has. What programs rewrite all the time or keep per machine
+// (neverShared) is left out of any shared directory that holds it.
 //
 // # SSH keys
 //
@@ -127,17 +105,11 @@ const MaxProfileSize = 64 << 20
 const MaxUserPaths = 32
 
 // DefaultPaths are shared for everyone, relative to the home directory. A
-// path ending in a slash shares everything under it.
+// path ending in a slash shares everything under it, but neverShared.
 var DefaultPaths = []string{
-	".claude/settings.json",
-	".claude/CLAUDE.md",
-	CredentialsPath,
-	".claude/agents/",
-	".claude/commands/",
-	".claude/skills/",
-	".claude/output-styles/",
-	// Where Claude's /statusline writes the script settings.json runs.
-	".claude/statusline-command.sh",
+	// Claude's settings, sign-in, instructions, agents, commands, skills,
+	// plugins and output styles; not its sessions, history or caches.
+	".claude/",
 	".gitconfig",
 	".config/gh/config.yml",
 	".aws/config",
@@ -177,27 +149,17 @@ const vscodeUser = ".vscode-server-oss/data/User/"
 // CredentialsPath is Claude's sign-in.
 const CredentialsPath = ".claude/.credentials.json"
 
-// Lock is a lock a program takes by creating a path: a directory, or a
-// file made exclusively. Routed to the shared files with the profile
-// (RoutesFor), making it is exclusive between environments.
-type Lock struct {
-	// Path is relative to the home directory.
-	Path string
-}
-
-// Locks are the locks shared between environments beside the profile's
-// files, which are not themselves shared.
-var Locks = []Lock{
-	// Claude takes this with proper-lockfile: mkdir, touched every five
-	// seconds, stale after sixty.
-	{Path: ".claude/.oauth_refresh.lock"},
-}
-
-// Paths is a set of shared paths, relative to the home directory. One
-// ending in a slash is a directory, shared with everything under it.
+// Paths is a set of shared paths: relative to the home directory for a
+// profile, absolute for a pack. One ending in a slash is a directory,
+// shared with everything under it; one starting with "!" is left out of
+// the directory it is in, whatever else says.
 type Paths []string
 
-// UserPaths is the paths a user shares: the defaults and their own.
+// Exclude is the prefix of a path left out.
+const Exclude = "!"
+
+// UserPaths is the paths a user shares: the defaults and their own, with
+// what is never shared left out of the directories that hold it.
 func UserPaths(own []string) Paths {
 	out := append(Paths(nil), DefaultPaths...)
 	for _, p := range own {
@@ -205,26 +167,48 @@ func UserPaths(own []string) Paths {
 			out = append(out, p)
 		}
 	}
+	for _, n := range neverShared {
+		if _, ok := out.Covering(n); ok && !slices.Contains(out, Exclude+n) {
+			out = append(out, Exclude+n)
+		}
+	}
 	return out
 }
 
-// Synced reports whether a path is shared.
+// under reports whether p is s, or under s, a directory.
+func under(p, s string) bool {
+	return p == strings.TrimSuffix(s, "/") || p == s || strings.HasSuffix(s, "/") && strings.HasPrefix(p, s)
+}
+
+// Synced reports whether a path is shared: one of the paths, or under one,
+// and not left out.
 func (ps Paths) Synced(p string) bool {
 	if !ValidKey(p) {
 		return false
 	}
+	shared := false
 	for _, s := range ps {
+		if x, ok := strings.CutPrefix(s, Exclude); ok {
+			if under(p, x) {
+				return false
+			}
+			continue
+		}
 		if p == s || (strings.HasSuffix(s, "/") && strings.HasPrefix(p, s)) {
-			return true
+			shared = true
 		}
 	}
-	return false
+	return shared
 }
 
-// Covering returns the path in ps, other than p itself, that already shares
-// p: a shared directory it is under, or for a file, the file.
+// Covering returns the shared path in ps, other than p itself, that
+// already shares p: a shared directory it is under, or for a file, the
+// file.
 func (ps Paths) Covering(p string) (string, bool) {
 	for _, s := range ps {
+		if strings.HasPrefix(s, Exclude) {
+			continue
+		}
 		if s == p {
 			if !strings.HasSuffix(p, "/") {
 				return s, true
@@ -236,31 +220,6 @@ func (ps Paths) Covering(p string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// Dirs are the directories the agent watches: the parents of shared files,
-// whose other contents are not shared, and the shared directories, watched
-// with everything under them.
-func (ps Paths) Dirs() (parents, trees []string) {
-	for _, p := range ps {
-		if strings.HasSuffix(p, "/") {
-			trees = append(trees, strings.TrimSuffix(p, "/"))
-		} else if d := path.Dir(p); !slices.Contains(parents, d) {
-			parents = append(parents, d)
-		}
-	}
-	return parents, trees
-}
-
-// InTree reports whether a directory is one of the shared directories or
-// under one.
-func (ps Paths) InTree(dir string) bool {
-	for _, s := range ps {
-		if strings.HasSuffix(s, "/") && strings.HasPrefix(dir+"/", s) {
-			return true
-		}
-	}
-	return false
 }
 
 // TrustedOnlyByDefault reports whether a path holds a credential Hangar
@@ -290,8 +249,9 @@ func ValidKey(p string) bool {
 var refusedAbsolute = []string{"/proc/", "/sys/", "/dev/", "/run/", "/boot/"}
 
 // CheckPackPath reports why a path cannot be one of a pack's, or nil. It is
-// absolute, and a directory ends in a slash.
+// absolute, a directory ends in a slash, and one left out starts with "!".
 func CheckPackPath(p string) error {
+	p = strings.TrimPrefix(p, Exclude)
 	clean := strings.TrimSuffix(p, "/")
 	if !strings.HasPrefix(p, "/") || !ValidKey(clean) || strings.HasSuffix(p, "//") {
 		return fmt.Errorf("%q is not a clean absolute path", p)
@@ -304,37 +264,61 @@ func CheckPackPath(p string) error {
 	return nil
 }
 
-// refused are places a user may not share: what programs rewrite all the
-// time or hold per machine, and Hangar's own.
-var refused = []string{
+// neverShared are what programs rewrite all the time or keep per machine,
+// and Hangar's own: never shared, and left out of any shared directory that
+// holds them.
+var neverShared = []string{
 	".cache/",
 	".local/share/hangar/",
 	".vscode-server-oss/",
-	".claude/projects/",
-	".claude/todos/",
-	".claude/shell-snapshots/",
-	".claude/statsig/",
-	".claude/ide/",
 	".claude.json",
 	".npm/",
 	".cargo/registry/",
 	"go/pkg/",
+	// Claude's sessions, history, caches and the state it keeps per
+	// machine.
+	".claude/projects/",
+	".claude/sessions/",
+	".claude/session-env/",
+	".claude/file-history/",
+	".claude/shell-snapshots/",
+	".claude/todos/",
+	".claude/tasks/",
+	".claude/jobs/",
+	".claude/ide/",
+	".claude/daemon/",
+	".claude/daemon.log",
+	".claude/statsig/",
+	".claude/telemetry/",
+	".claude/cache/",
+	".claude/paste-cache/",
+	".claude/downloads/",
+	".claude/backups/",
+	".claude/chrome/",
+	".claude/state/",
+	".claude/debug/",
+	".claude/logs/",
+	".claude/history.jsonl",
+	".claude/stats-cache.json",
+	".claude/settings.local.json",
+	".claude/.last-cleanup",
+	".claude/.last-update-result.json",
 }
 
-// CheckUserPath reports why a path a user asks to share cannot be, or nil.
-// A directory ends in a slash.
+// CheckUserPath reports why a path a user asks to share, or to leave out
+// ("!path"), cannot be, or nil. A directory ends in a slash.
 func CheckUserPath(p string) error {
-	clean := strings.TrimSuffix(p, "/")
-	if !Valid(clean) || strings.HasSuffix(p, "//") {
-		return fmt.Errorf("%q is not a path inside the home directory", p)
+	x, exclude := strings.CutPrefix(p, Exclude)
+	clean := strings.TrimSuffix(x, "/")
+	if !Valid(clean) || strings.HasSuffix(x, "//") {
+		return fmt.Errorf("%q is not a path inside the home directory", x)
 	}
-	for _, r := range refused {
-		isDir := strings.HasSuffix(r, "/")
-		switch {
-		case clean == strings.TrimSuffix(r, "/"),
-			isDir && strings.HasPrefix(p, r),
-			strings.HasSuffix(p, "/") && strings.HasPrefix(r, p):
-			return fmt.Errorf("%s cannot be shared: it is rewritten constantly, or belongs to one machine", r)
+	if exclude {
+		return nil
+	}
+	for _, n := range neverShared {
+		if under(clean, n) {
+			return fmt.Errorf("%s cannot be shared: it is rewritten constantly, or belongs to one machine", n)
 		}
 	}
 	return nil

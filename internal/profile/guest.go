@@ -44,14 +44,14 @@ type Guest struct {
 }
 
 // Route is a path in the guest served from the shared files: Target, a
-// file set's ID and the path in it. A directory's is everything under it;
-// a lock's is looked up in the shared files every time it is used, so one
-// let go of in another environment is free at once.
+// file set's ID and the path in it. A directory's is everything under it.
+// One that Excludes, inside a routed directory, is the guest's own again:
+// served from its disk, with no target.
 type Route struct {
-	Path   string
-	Target string
-	Dir    bool
-	Lock   bool
+	Path    string
+	Target  string
+	Dir     bool
+	Exclude bool
 }
 
 // SetPaths are a file set's ID and the paths it shares, as a session sends
@@ -64,8 +64,7 @@ type SetPaths struct {
 
 // RoutesFor are the routes for the sets an environment is given, in the
 // order given: a path two of them name is the first's. The owner's profile
-// -- the set whose paths are relative -- is routed under home, with the
-// Locks among its files.
+// -- the set whose paths are relative -- is routed under home.
 func RoutesFor(home string, sets []SetPaths) []Route {
 	var out []Route
 	seen := map[string]bool{}
@@ -76,24 +75,21 @@ func RoutesFor(home string, sets []SetPaths) []Route {
 		}
 	}
 	for _, s := range sets {
-		profile := false
 		for _, p := range s.Paths {
-			if !ValidKey(strings.TrimSuffix(p, "/")) {
+			x, exclude := strings.CutPrefix(p, Exclude)
+			clean := strings.TrimSuffix(x, "/")
+			if !ValidKey(clean) {
 				continue
 			}
-			dir := strings.HasSuffix(p, "/")
-			clean := strings.TrimSuffix(p, "/")
-			if strings.HasPrefix(clean, "/") {
-				add(Route{Path: clean, Target: s.ID + clean, Dir: dir})
+			guestPath, target := clean, s.ID+clean
+			if !strings.HasPrefix(clean, "/") {
+				guestPath, target = path.Join(home, clean), s.ID+"/"+clean
+			}
+			if exclude {
+				add(Route{Path: guestPath, Exclude: true})
 				continue
 			}
-			profile = true
-			add(Route{Path: path.Join(home, clean), Target: s.ID + "/" + clean, Dir: dir})
-		}
-		if profile {
-			for _, l := range Locks {
-				add(Route{Path: path.Join(home, l.Path), Target: s.ID + "/" + l.Path, Lock: true})
-			}
+			add(Route{Path: guestPath, Target: target, Dir: strings.HasSuffix(x, "/")})
 		}
 	}
 	return out

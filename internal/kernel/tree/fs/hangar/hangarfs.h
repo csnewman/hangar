@@ -29,7 +29,7 @@ struct hfs_route {
 	const char *target;	/* under the shared directory */
 	unsigned int len;	/* of path */
 	bool dir;
-	bool lock;
+	bool exclude;		/* the mount's own again, with no target */
 };
 
 struct hfs_routes {
@@ -53,18 +53,9 @@ struct hfs_sb_info {
 enum hfs_route_kind {
 	HFS_LOCAL,	/* the lower directory */
 	HFS_ROUTED,	/* a route's target */
-	HFS_LOCK,	/* a route's target, a lock: looked up there every time */
 	HFS_UNDER,	/* within a routed directory, by its parent */
+	HFS_EXCLUDED,	/* excluded from a routed directory: the lower one's */
 };
-
-/*
- * A dentry's d_time: the generation of the routes it was looked up under,
- * and whether it is a lock.
- */
-static inline unsigned long hfs_stamp(unsigned long gen, bool lock)
-{
-	return gen << 1 | lock;
-}
 
 struct hfs_inode_info {
 	struct inode *lower;
@@ -155,6 +146,8 @@ void hfs_free_routes(struct hfs_sb_info *sbi);
 int hfs_route(const struct dentry *dentry, char *target);
 bool hfs_routes_cover(const struct dentry *dentry);
 struct dentry *hfs_route_lookup(struct super_block *sb, char *target);
+struct dentry *hfs_local_lookup(struct dentry *parent, const char *name,
+				bool make_parent);
 int hfs_route_children(const struct dentry *dir, char **out, size_t *out_len);
 int hfs_tmpfile(struct mnt_idmap *idmap, struct inode *dir, struct file *file,
 		umode_t mode);

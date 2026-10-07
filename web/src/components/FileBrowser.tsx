@@ -15,6 +15,7 @@ const describe: [string, string][] = [
   ['.claude/skills/', 'Claude skills'],
   ['.claude/output-styles/', 'Claude output styles'],
   ['.claude/statusline-command.sh', "Claude's status line script"],
+  ['.claude/', "Claude's settings, sign-in, instructions and extensions"],
   ['.gitconfig', "git's settings"],
   ['.git-credentials', "git's stored HTTPS credentials"],
   ['.netrc', 'Logins for curl, git and others'],
@@ -460,7 +461,7 @@ function AddFile({
   onAdded: (p: string) => void
 }) {
   const qc = useQueryClient()
-  const choices = paths.filter((p) => !existing.includes(p))
+  const choices = paths.filter((p) => !p.startsWith('!') && !existing.includes(p))
   const [path, setPath] = useState('')
   const add = useMutation({
     mutationFn: (p: string) => source.put(p, ''),

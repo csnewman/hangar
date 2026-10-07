@@ -81,7 +81,6 @@ static const struct super_operations hfs_sops = {
  * step, so a walk under RCU needs only the lower dentry's own word: it stays
  * a walk under RCU unless the routes changed, the lower dentry was dropped,
  * or it has a revalidation of its own -- as a routed one, over NFS, does.
- * A lock's is the server's word every time, not what NFS has cached.
  */
 static int hfs_d_revalidate(struct inode *dir, const struct qstr *name,
 			    struct dentry *dentry, unsigned int flags)
@@ -89,27 +88,20 @@ static int hfs_d_revalidate(struct inode *dir, const struct qstr *name,
 	struct hfs_sb_info *sbi = HFS_SB(dentry->d_sb);
 	struct dentry *lower = READ_ONCE(dentry->d_fsdata);
 	unsigned long gen = atomic_long_read(&sbi->routes_gen);
-	unsigned long stamp = READ_ONCE(dentry->d_time);
 	int ret = 1;
 
 	/* The lower filesystem dropped its dentry: look the name up again. */
 	if (d_unhashed(lower))
 		return flags & LOOKUP_RCU ? -ECHILD : 0;
-	if (stamp >> 1 != (gen & (ULONG_MAX >> 1))) {
+	if (READ_ONCE(dentry->d_time) != gen) {
 		int kind;
 
 		if (flags & LOOKUP_RCU)
 			return -ECHILD;
 		kind = hfs_route(dentry, NULL);
-		if (kind < 0 || (kind != HFS_LOCAL) != hfs_is_shared(dentry))
+		if (kind < 0 || (kind == HFS_ROUTED || kind == HFS_UNDER) != hfs_is_shared(dentry))
 			return 0;
-		stamp = hfs_stamp(gen, kind == HFS_LOCK);
-		WRITE_ONCE(dentry->d_time, stamp);
-	}
-	if (stamp & 1) {
-		if (flags & LOOKUP_RCU)
-			return -ECHILD;
-		flags |= LOOKUP_REVAL;
+		WRITE_ONCE(dentry->d_time, gen);
 	}
 	if (flags & LOOKUP_RCU) {
 		struct inode *inode = d_inode_rcu(dentry);

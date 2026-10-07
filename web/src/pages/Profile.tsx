@@ -180,9 +180,13 @@ function KeyRow({ sshKey }: { sshKey: SSHKey }) {
   )
 }
 
-// SharedPaths is what the profile shares: everyone's, and the user's own,
-// which they add and remove.
+// SharedPaths is what the profile shares, and what it leaves out of the
+// directories it shares ("!path"): everyone's, and the user's own, which
+// they add and remove.
 function SharedPaths({ paths, own }: { paths: string[]; own: string[] }) {
+  const shared = paths.filter((p) => !p.startsWith('!'))
+  const ownLeftOut = paths.filter((p) => p.startsWith('!') && own.includes(p))
+  const leftOut = paths.filter((p) => p.startsWith('!') && !own.includes(p)).map((p) => p.slice(1))
   const qc = useQueryClient()
   const [path, setPath] = useState('')
   const refresh = () => qc.invalidateQueries({ queryKey: profileKey })
@@ -203,13 +207,14 @@ function SharedPaths({ paths, own }: { paths: string[]; own: string[] }) {
     <section className="section">
       <h2 className="section-title">Shared paths</h2>
       <p className="muted small">
-        Relative to your home directory. A path ending in <code>/</code> shares a directory and everything in it.
-        Removing one leaves each environment its copy.
+        Relative to your home directory. A path ending in <code>/</code> shares a directory and everything in it; one
+        starting with <code>!</code> leaves a path in a shared directory to each environment. Removing a shared path
+        leaves each environment its copy.
       </p>
       <div className="panel">
         <table className="table">
           <tbody>
-            {paths.map((p) => (
+            {shared.map((p) => (
               <tr key={p}>
                 <td className="mono">{p}</td>
                 <td className="muted small">{own.includes(p) ? 'yours' : (describePath(p) ?? 'everyone')}</td>
@@ -225,13 +230,36 @@ function SharedPaths({ paths, own }: { paths: string[]; own: string[] }) {
                 </td>
               </tr>
             ))}
+            {ownLeftOut.map((p) => (
+              <tr key={p}>
+                <td className="mono">{p}</td>
+                <td className="muted small">yours, left to each environment</td>
+                <td className="num">
+                  <ConfirmButton
+                    label="Share it"
+                    confirmLabel="Share?"
+                    onConfirm={() => remove.mutate(p)}
+                    disabled={remove.isPending}
+                  />
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
+      {leftOut.length > 0 && (
+        <details className="muted small">
+          <summary>
+            Always left to each environment: {leftOut.length} {leftOut.length === 1 ? 'path' : 'paths'} programs rewrite
+            constantly or keep per machine
+          </summary>
+          <p className="mono">{leftOut.join('  ')}</p>
+        </details>
+      )}
       <form className="inline-form" onSubmit={submit}>
         <input
           className="mono grow"
-          placeholder="Share another: .config/nvim/ or .bash_aliases"
+          placeholder="Share another: .config/nvim/ or .bash_aliases; leave one out: !.claude/agents/"
           value={path}
           onChange={(e) => setPath(e.target.value)}
         />

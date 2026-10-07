@@ -28,11 +28,11 @@ const sharedDir = "/run/hangar/files"
 // filesPort is the vsock port the worker serves them on.
 const filesPort = 2049
 
-// sharedOptions are the NFS mount's. Only names that are there are cached:
-// a file another environment makes is seen at once, not once a cached "no
-// such file" ages out. A lock route is looked up in the server every time
-// anyway (hangarfs).
-var sharedOptions = fmt.Sprintf("vers=4.2,proto=vsock,addr=vsock:%d,port=%d,hard,lookupcache=positive",
+// sharedOptions are the NFS mount's. Only names that are there are cached,
+// and what is known of a file or directory for a second: a file another
+// environment makes is seen at once, and one it removes -- a lock directory
+// let go of -- within a second.
+var sharedOptions = fmt.Sprintf("vers=4.2,proto=vsock,addr=vsock:%d,port=%d,hard,lookupcache=positive,actimeo=1",
 	vsock.CIDHost, filesPort)
 
 // hangarfs's routes (include/uapi/linux/hangarfs.h).
@@ -43,9 +43,9 @@ type hangarfsRoutes struct {
 }
 
 const (
-	hangarfsRouteFile = 'f'
-	hangarfsRouteDir  = 'd'
-	hangarfsRouteLock = 'l'
+	hangarfsRouteFile    = 'f'
+	hangarfsRouteDir     = 'd'
+	hangarfsRouteExclude = 'x'
 	// _IOW('H', 1, struct hangarfs_routes)
 	hangarfsIocRoutes = 1<<30 | uint(unsafe.Sizeof(hangarfsRoutes{}))<<16 | 'H'<<8 | 1
 )
@@ -93,13 +93,15 @@ func (r *router) apply(routes []profile.Route) error {
 		dir := path.Dir(rt.Target)
 		kind := byte(hangarfsRouteFile)
 		switch {
+		case rt.Exclude:
+			kind = hangarfsRouteExclude
 		case rt.Dir:
 			dir, kind = rt.Target, hangarfsRouteDir
-		case rt.Lock:
-			kind = hangarfsRouteLock
 		}
-		if err := r.mkdirAll(filepath.Join(sharedDir, dir)); err != nil {
-			return fmt.Errorf("making %s in the shared files: %w", dir, err)
+		if !rt.Exclude {
+			if err := r.mkdirAll(filepath.Join(sharedDir, dir)); err != nil {
+				return fmt.Errorf("making %s in the shared files: %w", dir, err)
+			}
 		}
 		buf = append(buf, kind)
 		buf = append(buf, rt.Path...)

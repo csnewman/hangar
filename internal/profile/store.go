@@ -348,7 +348,16 @@ func (s *Store) AddPath(ctx context.Context, userID, path string) error {
 	if slices.Contains(own, path) {
 		return nil
 	}
-	if by, ok := s.UserPaths(own).Covering(path); ok {
+	paths := s.UserPaths(own)
+	if x, ok := strings.CutPrefix(path, Exclude); ok {
+		// Left out of a shared directory, and not already.
+		if by, ok := paths.Covering(x); !ok || !strings.HasSuffix(by, "/") {
+			return fmt.Errorf("%w: %s is not in a shared directory", ErrInvalid, x)
+		}
+		if !paths.Synced(strings.TrimSuffix(x, "/")) {
+			return fmt.Errorf("%w: %s is already left out", ErrInvalid, x)
+		}
+	} else if by, ok := paths.Covering(path); ok {
 		return fmt.Errorf("%w: %s is already shared, by %s", ErrInvalid, path, by)
 	}
 	return s.db.Transact(ctx, func(tx db.Tx) error {

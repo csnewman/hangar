@@ -10,6 +10,11 @@
  * file's lock file (<name>.lock, which git and others make exclusively to
  * lock the file), are matched by path, at lookup.
  *
+ * An excluded name, inside a routed directory, is found again in the lower
+ * filesystem by its path (hfs_local_lookup), and everything under it from
+ * there. Whatever is excluded is the lower filesystem's, however a route
+ * around it would have it.
+ *
  * The routes are replaced whole, under RCU. A cached name records the
  * generation of the routes it was looked up under (d_time), and is checked
  * again when that changes: when the routes are replaced, or a directory
@@ -76,7 +81,7 @@ static struct hfs_routes *hfs_routes_parse(const char *buf, size_t len)
 		const char *path, *target;
 
 		if (*p != HANGARFS_ROUTE_FILE && *p != HANGARFS_ROUTE_DIR &&
-		    *p != HANGARFS_ROUTE_LOCK)
+		    *p != HANGARFS_ROUTE_EXCLUDE)
 			return ERR_PTR(-EINVAL);
 		path = p + 1;
 		target = memchr(path, '\0', end - path);
@@ -86,7 +91,10 @@ static struct hfs_routes *hfs_routes_parse(const char *buf, size_t len)
 		p = memchr(target, '\0', end - target);
 		if (!p)
 			return ERR_PTR(-EINVAL);
-		if (!hfs_route_path_valid(path, target - 1 - path) ||
+		if (!hfs_route_path_valid(path, target - 1 - path))
+			return ERR_PTR(-EINVAL);
+		/* An exclusion has no target; every other route has one. */
+		if (path[-1] == HANGARFS_ROUTE_EXCLUDE ? p != target :
 		    !hfs_route_target_valid(target, p - target))
 			return ERR_PTR(-EINVAL);
 		p++;
@@ -104,7 +112,7 @@ static struct hfs_routes *hfs_routes_parse(const char *buf, size_t len)
 		struct hfs_route *r = &routes->r[i];
 
 		r->dir = *p == HANGARFS_ROUTE_DIR;
-		r->lock = *p == HANGARFS_ROUTE_LOCK;
+		r->exclude = *p == HANGARFS_ROUTE_EXCLUDE;
 		r->path = p + 1;
 		r->len = strlen(r->path);
 		r->target = r->path + r->len + 1;
@@ -185,15 +193,17 @@ static enum hfs_route_kind hfs_route_match(const struct hfs_route *r,
 {
 	if (len < r->len || memcmp(p, r->path, r->len))
 		return HFS_LOCAL;
+	if (r->exclude)
+		return len == r->len ? HFS_EXCLUDED : HFS_LOCAL;
 	if (len == r->len) {
 		if (target && strscpy(target, r->target, PATH_MAX) < 0)
 			return HFS_LOCAL;
-		return r->lock ? HFS_LOCK : HFS_ROUTED;
+		return HFS_ROUTED;
 	}
 	if (r->dir)
 		return p[r->len] == '/' ? HFS_UNDER : HFS_LOCAL;
 	/* A file's lock file, beside it, so making it is exclusive everywhere. */
-	if (r->lock || len != r->len + HFS_LOCK_SUFFIX_LEN ||
+	if (len != r->len + HFS_LOCK_SUFFIX_LEN ||
 	    memcmp(p + r->len, HFS_LOCK_SUFFIX, HFS_LOCK_SUFFIX_LEN))
 		return HFS_LOCAL;
 	if (target) {
@@ -204,13 +214,21 @@ static enum hfs_route_kind hfs_route_match(const struct hfs_route *r,
 		memcpy(target, r->target, tlen);
 		memcpy(target + tlen, HFS_LOCK_SUFFIX, HFS_LOCK_SUFFIX_LEN + 1);
 	}
-	return HFS_LOCK;
+	return HFS_ROUTED;
+}
+
+/* Whether p is an exclusion's path, or under one. */
+static bool hfs_excluded(const struct hfs_route *r, const char *p, size_t len)
+{
+	return r->exclude && len >= r->len && !memcmp(p, r->path, r->len) &&
+	       (len == r->len || p[r->len] == '/');
 }
 
 /*
  * Where a name is served from: here, a route's target (written to target,
- * PATH_MAX bytes, when given), or under a routed directory. A route point
- * itself is matched before another's lock file.
+ * PATH_MAX bytes, when given), under a routed directory, or excluded from
+ * one. An exclusion is matched first, then a route point itself, before
+ * another's lock file.
  */
 int hfs_route(const struct dentry *dentry, char *target)
 {
@@ -235,6 +253,14 @@ int hfs_route(const struct dentry *dentry, char *target)
 
 	rcu_read_lock();
 	routes = rcu_dereference(sbi->routes);
+	for (i = 0; routes && i < routes->n; i++) {
+		const struct hfs_route *r = &routes->r[i];
+
+		if (hfs_excluded(r, p, len)) {
+			kind = len == r->len ? HFS_EXCLUDED : HFS_LOCAL;
+			goto unlock;
+		}
+	}
 	for (i = 0; routes && i < routes->n; i++) {
 		const struct hfs_route *r = &routes->r[i];
 
@@ -326,8 +352,91 @@ struct dentry *hfs_route_lookup(struct super_block *sb, char *target)
 }
 
 /*
+ * The lower dentry of name, excluded from a routed directory, in parent:
+ * found by its path in the lower filesystem, positive or negative. With
+ * make_parent, a directory it is in that is not there -- the routed
+ * directory around it is the shared one's -- is made, owned as parent is,
+ * for a create to make the name in. Only the lower filesystem's dentries
+ * are locked, so a listing of parent can call it.
+ */
+struct dentry *hfs_local_lookup(struct dentry *parent, const char *name,
+				bool make_parent)
+{
+	struct hfs_sb_info *sbi = HFS_SB(parent->d_sb);
+	struct inode *owner = d_inode(parent);
+	struct dentry *cur, *next;
+	char *buf, *p, *slash;
+	size_t len;
+	int err = 0;
+
+	buf = __getname();
+	if (!buf)
+		return ERR_PTR(-ENOMEM);
+	p = dentry_path_raw(parent, buf, PATH_MAX);
+	if (IS_ERR(p)) {
+		__putname(buf);
+		return ERR_CAST(p);
+	}
+	/* Moved to the buffer's start, with "/name" after it. */
+	len = strlen(p);
+	if (len == 1)
+		len = 0;
+	if (len + 1 + strlen(name) >= PATH_MAX) {
+		__putname(buf);
+		return ERR_PTR(-ENAMETOOLONG);
+	}
+	memmove(buf, p, len);
+	p = buf;
+	p[len] = '/';
+	strcpy(p + len + 1, name);
+	cur = dget(sbi->lower.dentry);
+	/* Each component but the last: the directories it is in. */
+	for (p++; (slash = strchr(p, '/')); p = slash + 1) {
+		*slash = '\0';
+		next = lookup_noperm_unlocked(&QSTR(p), cur);
+		if (!IS_ERR(next) && d_really_is_negative(next) && make_parent) {
+			struct dentry *made;
+
+			dput(next);
+			made = start_creating(&nop_mnt_idmap, cur, &QSTR(p));
+			if (!IS_ERR(made) && d_really_is_negative(made)) {
+				made = vfs_mkdir(&nop_mnt_idmap, d_inode(cur), made, 0755, NULL);
+				if (!IS_ERR(made) && owner) {
+					struct iattr ia = { .ia_valid = ATTR_UID | ATTR_GID,
+							    .ia_uid = owner->i_uid,
+							    .ia_gid = owner->i_gid };
+
+					inode_lock(d_inode(made));
+					notify_change(&nop_mnt_idmap, made, &ia, NULL);
+					inode_unlock(d_inode(made));
+				}
+			}
+			next = end_creating_keep(made);
+		}
+		dput(cur);
+		if (IS_ERR(next)) {
+			err = PTR_ERR(next);
+			cur = NULL;
+			break;
+		}
+		cur = next;
+		if (d_really_is_negative(cur)) {
+			err = -ENOENT;
+			break;
+		}
+	}
+	if (!err)
+		next = lookup_noperm_unlocked(&QSTR(p), cur);
+	if (cur)
+		dput(cur);
+	__putname(buf);
+	return err ? ERR_PTR(err) : next;
+}
+
+/*
  * The route points directly in a directory, for listing it: their names,
- * and their targets after them, each ending in a NUL, in one allocation.
+ * and their targets after them -- empty for an exclusion -- each ending in
+ * a NUL, in one allocation.
  */
 int hfs_route_children(const struct dentry *dir, char **out, size_t *out_len)
 {

@@ -13,14 +13,13 @@
  *	    the target's. A file saved by writing another and renaming it
  *	    over the name is copied beside the target and renamed there.
  *	'd' a directory: the name, and everything under it, are the target's
- *	'l' a lock, a file or directory a program makes to take one: the name
- *	    is the target's, looked up in the shared directory every time it
- *	    is used, so one let go of elsewhere is free here at once. So is a
- *	    file's lock file.
+ *	'x' excluded: a name inside a routed directory that is the mount's own
+ *	    again, and everything under it, with no target
  *
  * A path is absolute, from the mount's root, with no trailing slash; a
  * target is relative, with no "..". The target's parent must exist for the
- * name to be found. shared_fd is the shared directory, set by the first
+ * name to be found; an excluded name's parent is made in the mount's own
+ * filesystem as it is needed. shared_fd is the shared directory, set by the first
  * call and the same in every one after; len 0 removes every route.
  */
 #ifndef _UAPI_LINUX_HANGARFS_H
@@ -31,7 +30,7 @@
 
 #define HANGARFS_ROUTE_FILE	'f'
 #define HANGARFS_ROUTE_DIR	'd'
-#define HANGARFS_ROUTE_LOCK	'l'
+#define HANGARFS_ROUTE_EXCLUDE	'x'
 
 /* The most bytes of routes, and of routes, one call takes. */
 #define HANGARFS_ROUTES_MAX_LEN	(256 * 1024)

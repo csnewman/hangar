@@ -169,18 +169,18 @@ func TestPackAccess(t *testing.T) {
 }
 
 // The routes an environment's sets give it: the profile's paths under the
-// home directory, with the Locks; a pack's where they are; a path two sets
-// name, the first's.
+// home directory, an exclusion as the guest's own; a pack's where they
+// are; a path two sets name, the first's.
 func TestRoutesFor(t *testing.T) {
 	routes := profile.RoutesFor("/home/dev", []profile.SetPaths{
-		{ID: "me", Paths: []string{".gitconfig", ".claude/skills/"}},
+		{ID: "me", Paths: []string{".gitconfig", ".claude/", "!.claude/projects/"}},
 		{ID: "pack1", Paths: []string{"/workspace/app/.env", "/home/dev/.gitconfig", "/srv/conf/"}},
 		{ID: "pack2", Paths: []string{"/workspace/app/.env", "../bad", "/x/../y"}},
 	})
 	want := []profile.Route{
 		{Path: "/home/dev/.gitconfig", Target: "me/.gitconfig"},
-		{Path: "/home/dev/.claude/skills", Target: "me/.claude/skills", Dir: true},
-		{Path: "/home/dev/.claude/.oauth_refresh.lock", Target: "me/.claude/.oauth_refresh.lock", Lock: true},
+		{Path: "/home/dev/.claude", Target: "me/.claude", Dir: true},
+		{Path: "/home/dev/.claude/projects", Exclude: true},
 		{Path: "/workspace/app/.env", Target: "pack1/workspace/app/.env"},
 		{Path: "/srv/conf", Target: "pack1/srv/conf", Dir: true},
 	}

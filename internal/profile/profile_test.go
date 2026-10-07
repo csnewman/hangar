@@ -208,7 +208,8 @@ func eventually(t *testing.T, what string, ok func() bool) {
 func TestUserPaths(t *testing.T) {
 	ctx := context.Background()
 	p := newPlane(t)
-	for _, bad := range []string{"", "/etc/passwd", "../x", ".cache/", ".claude/", ".claude/projects/x", ".vscode-server-oss/data/"} {
+	for _, bad := range []string{"", "/etc/passwd", "../x", ".cache/", ".claude/projects/x", ".vscode-server-oss/data/",
+		"!.config/x/", "!.claude/projects/", "!../x"} {
 		if err := p.store.AddPath(ctx, p.owner, bad); !errors.Is(err, profile.ErrInvalid) {
 			t.Errorf("sharing %q: %v", bad, err)
 		}
@@ -295,6 +296,41 @@ func TestSSHAgentServesAStartingEnvironment(t *testing.T) {
 	})
 	if keys, err := agent.NewClient(conn).List(); err != nil || len(keys) != 1 {
 		t.Fatalf("the agent of a starting environment offers %d keys (%v), want 1", len(keys), err)
+	}
+}
+
+// A path is left out of a shared directory with "!", ahead of the
+// directory and of another shared path in it; Claude's machine state is
+// left out of .claude/ already.
+func TestExcludedPaths(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	if err := p.store.AddPath(ctx, p.owner, "!.claude/agents/"); err != nil {
+		t.Fatal(err)
+	}
+	paths, err := p.store.Paths(ctx, p.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]bool{
+		".claude/settings.json":     true,
+		".claude/agents/a.md":       false,
+		".claude/agents":            false,
+		".claude/projects/x/s.json": false,
+		".claude/history.jsonl":     false,
+	} {
+		if got := paths.Synced(path); got != want {
+			t.Errorf("%s shared: %v, want %v", path, got, want)
+		}
+	}
+	if err := p.store.AddPath(ctx, p.owner, "!.claude/agents/"); err != nil {
+		t.Errorf("leaving a path out again: %v", err)
+	}
+	if err := p.store.RemovePath(ctx, p.owner, "!.claude/agents/"); err != nil {
+		t.Fatal(err)
+	}
+	if paths, _ = p.store.Paths(ctx, p.owner); !paths.Synced(".claude/agents/a.md") {
+		t.Error("a path is still left out once its exclusion is removed")
 	}
 }
 
