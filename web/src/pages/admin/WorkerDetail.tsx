@@ -187,7 +187,7 @@ function Environments({ worker: w }: { worker: Worker }) {
                 </td>
                 <td>{e.owner}</td>
                 <td>
-                  <PhaseBadge phase={e.phase} desired={e.desired} />
+                  <PhaseBadge phase={e.phase} desired={e.desired} workerOnline={e.worker_online} />
                   {e.reason && <div className="reason">{e.reason}</div>}
                 </td>
                 <td className="num nowrap">

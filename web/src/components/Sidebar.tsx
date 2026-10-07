@@ -252,7 +252,7 @@ function TreeItems({ environments, nested = false }: { environments: Environment
       {environments.map((e) => (
         <li key={e.id}>
           <NavLink to={`/environments/${e.id}`} className="tree-item" title={`${e.name} — ${e.phase}`}>
-            <PhaseDot phase={e.phase} />
+            <PhaseDot phase={e.phase} workerOnline={e.worker_online} />
             <span className="tree-name">{e.name}</span>
           </NavLink>
         </li>

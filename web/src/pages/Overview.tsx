@@ -98,7 +98,7 @@ function EnvironmentTable({
               </td>
               {showOwner && <td>{e.owner}</td>}
               <td>
-                <PhaseBadge phase={e.phase} desired={e.desired} />
+                <PhaseBadge phase={e.phase} desired={e.desired} workerOnline={e.worker_online} />
                 {e.phase === 'starting' ? <StartLine env={e} /> : e.reason && <div className="reason">{e.reason}</div>}
               </td>
               <td className="num nowrap">

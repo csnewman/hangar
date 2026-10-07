@@ -66,7 +66,7 @@ export function EnvironmentPage() {
           <h1 className="env-name" title={env.name}>
             {env.name}
           </h1>
-          <PhaseBadge phase={env.phase} desired={env.desired} />
+          <PhaseBadge phase={env.phase} desired={env.desired} workerOnline={env.worker_online} />
         </div>
         <nav className="tabs env-tabs">
           {tabs.map((t) => (
@@ -142,7 +142,7 @@ export function SummaryTab() {
       <div className="panel">
         <dl className="props">
           <Prop label="Status">
-            <PhaseBadge phase={env.phase} desired={env.desired} />
+            <PhaseBadge phase={env.phase} desired={env.desired} workerOnline={env.worker_online} />
           </Prop>
           <Prop label="Asked to be">{env.desired}</Prop>
           <Prop label="Owner">{env.owner}</Prop>

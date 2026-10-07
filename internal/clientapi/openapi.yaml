@@ -298,6 +298,13 @@ components:
         worker:
           type: string
           description: The worker it runs on, once placed.
+        worker_online:
+          type: boolean
+          description: >-
+            Whether the worker it is placed on has reported in the last 45
+            seconds. While it has not, phase is what it last reported, which
+            may no longer be so: a worker that stopped or lost its connection
+            leaves its environments as they were said to be.
         editor_path:
           type: string
           description: The folder an editor opens in it.

@@ -190,16 +190,20 @@ type Environment struct {
 	Image       string `json:"image"`
 	// ImageDigest is the digest of the copy of Image the environment boots
 	// from, as its worker reports it; empty until it has first started.
-	ImageDigest string            `json:"image_digest,omitempty"`
-	CPUs        int               `json:"cpus"`
-	MemoryMiB   int               `json:"memory_mib"`
-	Desired     DesiredState      `json:"desired"`
-	Phase       Phase             `json:"phase"`
-	Reason      string            `json:"reason,omitempty"`
-	Progress    *Progress         `json:"progress,omitempty"`
-	WorkerID    string            `json:"worker_id,omitempty"`
-	Worker      string            `json:"worker,omitempty"`
-	Stats       *EnvironmentStats `json:"stats,omitempty"`
+	ImageDigest string       `json:"image_digest,omitempty"`
+	CPUs        int          `json:"cpus"`
+	MemoryMiB   int          `json:"memory_mib"`
+	Desired     DesiredState `json:"desired"`
+	Phase       Phase        `json:"phase"`
+	Reason      string       `json:"reason,omitempty"`
+	Progress    *Progress    `json:"progress,omitempty"`
+	WorkerID    string       `json:"worker_id,omitempty"`
+	Worker      string       `json:"worker,omitempty"`
+	// WorkerOnline is whether its worker has reported lately
+	// (workers.OnlineWindow). Phase is what that worker last reported, which
+	// may no longer be so while it is not.
+	WorkerOnline bool              `json:"worker_online,omitempty"`
+	Stats        *EnvironmentStats `json:"stats,omitempty"`
 	// GPURenderer is what its virtual GPU renders with on its worker, and
 	// GPUSoftware whether that is the worker's CPU; empty without one.
 	GPURenderer string    `json:"gpu_renderer,omitempty"`

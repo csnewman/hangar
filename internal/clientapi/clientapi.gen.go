@@ -64,6 +64,9 @@ type Environment struct {
 
 	// Worker The worker it runs on, once placed.
 	Worker *string `json:"worker,omitempty"`
+
+	// WorkerOnline Whether the worker it is placed on has reported in the last 45 seconds. While it has not, phase is what it last reported, which may no longer be so: a worker that stopped or lost its connection leaves its environments as they were said to be.
+	WorkerOnline *bool `json:"worker_online,omitempty"`
 }
 
 // Error defines model for Error.

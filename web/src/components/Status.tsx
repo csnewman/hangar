@@ -22,12 +22,46 @@ const settled: Record<DesiredState, Phase[]> = {
   deleted: [],
 }
 
+// live are the phases that hold only while their worker keeps them: a
+// stopped or suspended environment stays so with its worker gone.
+const live: Phase[] = ['starting', 'running', 'stopping', 'suspending', 'deleting']
+
+// unreachable is whether the phase is one its worker would have to be
+// reporting, and it is not (worker_online false).
+function unreachable(phase: Phase, workerOnline?: boolean) {
+  return workerOnline === false && live.includes(phase)
+}
+
+const unreachableTitle = (phase: Phase) =>
+  `Its worker has not reported for a while, so this is not known. It was last ${phase}.`
+
 // PhaseDot is the status as a single dot, for the sidebar's tree.
-export function PhaseDot({ phase }: { phase: Phase }) {
+export function PhaseDot({ phase, workerOnline }: { phase: Phase; workerOnline?: boolean }) {
+  if (unreachable(phase, workerOnline)) {
+    return <span className="phase-dot tone-bad" aria-label="unreachable" title={unreachableTitle(phase)} />
+  }
   return <span className={`phase-dot tone-${tone[phase]}`} aria-label={phase} />
 }
 
-export function PhaseBadge({ phase, desired }: { phase: Phase; desired?: DesiredState }) {
+export function PhaseBadge({
+  phase,
+  desired,
+  workerOnline,
+}: {
+  phase: Phase
+  desired?: DesiredState
+  workerOnline?: boolean
+}) {
+  if (unreachable(phase, workerOnline)) {
+    return (
+      <span className="status">
+        <span className="badge badge-bad" title={unreachableTitle(phase)}>
+          <span className="dot" />
+          unreachable
+        </span>
+      </span>
+    )
+  }
   const moving = desired !== undefined && !settled[desired].includes(phase)
   return (
     <span className="status">

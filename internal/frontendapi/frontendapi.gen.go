@@ -579,6 +579,9 @@ type Environment struct {
 
 	// WorkerID The worker it is placed on. Absent until placed.
 	WorkerID *string `json:"worker_id,omitempty"`
+
+	// WorkerOnline Whether the worker it is placed on has reported in the last 45 seconds. While it has not, phase is what it last reported, which may no longer be so: a worker that stopped or lost its connection leaves its environments as they were said to be.
+	WorkerOnline *bool `json:"worker_online,omitempty"`
 }
 
 // EnvironmentImageChange What the environment's next start does to its image.

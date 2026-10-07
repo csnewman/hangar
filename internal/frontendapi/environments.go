@@ -187,11 +187,22 @@ func environment(e api.Environment) Environment {
 		Reason:          optional(e.Reason),
 		WorkerID:        optional(e.WorkerID),
 		Worker:          optional(e.Worker),
+		WorkerOnline:    workerOnline(e),
 		Stats:           environmentStats(e.Stats),
 		Progress:        startProgress(e.Progress),
 		CreatedAt:       e.CreatedAt,
 		UpdatedAt:       e.UpdatedAt,
 	}
+}
+
+// workerOnline is whether an environment's worker is online, for one placed
+// on a worker.
+func workerOnline(e api.Environment) *bool {
+	if e.WorkerID == "" {
+		return nil
+	}
+	online := e.WorkerOnline
+	return &online
 }
 
 func startProgress(p *api.Progress) *StartProgress {

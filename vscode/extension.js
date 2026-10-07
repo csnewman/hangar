@@ -209,17 +209,27 @@ class Tree {
   envNode(env, own) {
     const item = new vscode.TreeItem(env.name)
     item.id = env.id
-    item.description = env.phase === env.desired || env.phase === 'running' ? env.phase : `${env.phase} → ${env.desired}`
-    item.iconPath = phaseIcon(env.phase)
+    const lost = unreachable(env)
+    if (lost) item.description = 'unreachable'
+    else item.description = env.phase === env.desired || env.phase === 'running' ? env.phase : `${env.phase} → ${env.desired}`
+    item.iconPath = lost ? new vscode.ThemeIcon('debug-disconnect', new vscode.ThemeColor('errorForeground')) : phaseIcon(env.phase)
     item.contextValue = `env-${env.phase}`
     const tip = new vscode.MarkdownString()
     tip.appendMarkdown(`**${env.name}**${own ? '' : ` — ${env.owner}`}\n\n`)
-    tip.appendMarkdown(`${env.phase}${env.reason ? `: ${env.reason}` : ''}\n\n`)
+    if (lost) tip.appendMarkdown(`Its worker has not reported for a while, so this is not known. It was last ${env.phase}.\n\n`)
+    else tip.appendMarkdown(`${env.phase}${env.reason ? `: ${env.reason}` : ''}\n\n`)
     tip.appendMarkdown(`${env.template} · ${env.cpus} vCPU · ${Math.round(env.memory_mib / 1024)} GiB`)
     if (env.editor_path) tip.appendMarkdown(`\n\nOpens \`${env.editor_path}\``)
     item.tooltip = tip
     return { item, env }
   }
+}
+
+// unreachable is whether an environment's phase is one its worker would have
+// to be reporting, and the worker is not: a stopped or suspended one stays so
+// without it.
+function unreachable(env) {
+  return env.worker_online === false && ['starting', 'running', 'stopping', 'suspending', 'deleting'].includes(env.phase)
 }
 
 function phaseIcon(phase) {
@@ -614,7 +624,10 @@ async function pickEnvironment() {
       .filter((e) => e.desired !== 'deleted')
       .map((e) => ({
         label: e.name,
-        description: e.owner_id === me.id ? e.phase : `${e.owner} · ${e.phase}`,
+        description: (() => {
+          const shown = unreachable(e) ? 'unreachable' : e.phase
+          return e.owner_id === me.id ? shown : `${e.owner} · ${shown}`
+        })(),
         detail: e.template,
         env: e,
       })),

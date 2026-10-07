@@ -1181,6 +1181,8 @@ export interface components {
             worker_id?: string;
             /** @description That worker's name. */
             worker?: string;
+            /** @description Whether the worker it is placed on has reported in the last 45 seconds. While it has not, phase is what it last reported, which may no longer be so: a worker that stopped or lost its connection leaves its environments as they were said to be. */
+            worker_online?: boolean;
             stats?: components["schemas"]["EnvironmentStats"];
             /** Format: date-time */
             created_at: string;

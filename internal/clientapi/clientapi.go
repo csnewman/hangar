@@ -340,6 +340,10 @@ func environment(e api.Environment) Environment {
 		CreatedAt: e.CreatedAt,
 		UpdatedAt: e.UpdatedAt,
 	}
+	if e.WorkerID != "" {
+		online := e.WorkerOnline
+		out.WorkerOnline = &online
+	}
 	cpus, mem, display := e.CPUs, e.MemoryMiB, string(e.Spec.Display)
 	out.CPUs, out.MemoryMiB, out.Display = &cpus, &mem, optional(display)
 	out.EditorPath = optional(e.Spec.EditorPath)

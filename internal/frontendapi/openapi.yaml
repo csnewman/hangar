@@ -1652,6 +1652,13 @@ components:
         worker:
           type: string
           description: That worker's name.
+        worker_online:
+          type: boolean
+          description: >-
+            Whether the worker it is placed on has reported in the last 45
+            seconds. While it has not, phase is what it last reported, which
+            may no longer be so: a worker that stopped or lost its connection
+            leaves its environments as they were said to be.
         stats:
           $ref: "#/components/schemas/EnvironmentStats"
         created_at: { type: string, format: date-time }

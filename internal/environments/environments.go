@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -41,10 +42,14 @@ type Manager struct {
 
 func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
-const columns = `e.id, e.short_id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
+// columns are an environment's, its worker's being online among them: seen
+// within workers.OnlineWindow and not revoked.
+var columns = `e.id, e.short_id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
 	e.spec, e.image, e.image_digest, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
 	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress, w.gpu,
-	tm.spec, coalesce(tm.revision, 0), e.template_revision, e.image_pin_want, e.image_update, e.image_rollback, e.ports_public`
+	tm.spec, coalesce(tm.revision, 0), e.template_revision, e.image_pin_want, e.image_update, e.image_rollback, e.ports_public,
+	coalesce(w.last_seen_at > now() - interval '` + strconv.Itoa(int(workers.OnlineWindow.Seconds())) + ` seconds'
+		AND w.revoked_at IS NULL, false)`
 
 const from = `environments e
 	JOIN users u ON u.id = e.owner_id
@@ -62,7 +67,7 @@ func scan(row pgx.Row) (api.Environment, error) {
 	var pinWant *string
 	err := row.Scan(&e.ID, &e.ShortID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.ImageDigest, &e.CPUs,
 		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats,
-		&progress, &gpu, &tspec, &trev, &erev, &pinWant, &update, &rollback, &e.PortsPublic)
+		&progress, &gpu, &tspec, &trev, &erev, &pinWant, &update, &rollback, &e.PortsPublic, &e.WorkerOnline)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}
