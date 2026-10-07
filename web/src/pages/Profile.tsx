@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, KeyRound, Plus } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { ChevronRight, Copy, FileText, Folder, FolderOpen, KeyRound, Lock, Plus, Search } from 'lucide-react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 
 import { api, type LoginKey, type ProfileFile, type SSHKey } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
@@ -39,6 +39,12 @@ const describe: [string, string][] = [
   ['.vscode-server-oss/data/User/snippets/', 'VS Code snippets'],
 ]
 
+// describeExactly is what a listed path itself is, for the browser's rows,
+// where what a folder holds is said once, at the folder.
+function describeExactly(path: string): string | undefined {
+  return describe.find(([p]) => p === path)?.[1]
+}
+
 function describePath(path: string): string | undefined {
   for (const [p, what] of describe) {
     if (path === p || (p.endsWith('/') && path.startsWith(p))) return what
@@ -58,91 +64,286 @@ export function ProfilePage() {
   })
   const [open, setOpen] = useState<string | null>(null)
 
-  if (profile.isPending) return <div className="page page-narrow" />
-  if (profile.isError) return <div className="page page-narrow alert">{profile.error.message}</div>
+  if (profile.isPending) return <div className="page" />
+  if (profile.isError) return <div className="page alert">{profile.error.message}</div>
   const { files, keys, login_keys, paths, own_paths, secrets } = profile.data
 
   return (
-    <div className="page page-narrow">
-      <PageHeader
-        title="Profile"
-        subtitle="Follows you into every environment you own, and stays the same in all of them as you change it here or there."
-      />
-      {!secrets && (
-        <div className="alert">
-          This server has no secret key (HANGAR_SECRET_KEY_FILE), so it cannot keep SSH keys.
-        </div>
-      )}
+    <div className="page">
+      <div className="page-narrow">
+        <PageHeader
+          title="Profile"
+          subtitle="Follows you into every environment you own, and stays the same in all of them as you change it here or there."
+        />
+        {!secrets && (
+          <div className="alert">
+            This server has no secret key (HANGAR_SECRET_KEY_FILE), so it cannot keep SSH keys.
+          </div>
+        )}
+      </div>
       <section className="section">
         <h2 className="section-title">Files</h2>
-        <div className="panel">
-          {files.length === 0 ? (
-            <div className="empty">
-              Nothing yet. Sign in to Claude or change a setting in any environment and it appears here, or add a file
-              below.
-            </div>
-          ) : (
-            <table className="table">
-              <tbody>
-                {files.map((f) => (
-                  <FileRow
-                    key={f.path}
-                    file={f}
-                    open={open === f.path}
-                    onOpen={() => setOpen(open === f.path ? null : f.path)}
-                  />
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-        <AddFile paths={paths} existing={files.map((f) => f.path)} onAdded={setOpen} />
+        <FileBrowser files={files} paths={paths} open={open} onOpen={setOpen} />
       </section>
-      <SharedPaths paths={paths} own={own_paths} />
-      <SSHKeys keys={keys} disabled={!secrets} />
-      <LoginKeys keys={login_keys} />
+      <div className="page-narrow">
+        <SharedPaths paths={paths} own={own_paths} />
+        <SSHKeys keys={keys} disabled={!secrets} />
+        <LoginKeys keys={login_keys} />
+      </div>
     </div>
   )
 }
 
-function FileRow({ file, open, onOpen }: { file: ProfileFile; open: boolean; onOpen: () => void }) {
+// A folder of the browser's tree. Its path ends in a slash; the top's is "".
+type FolderNode = {
+  path: string
+  name: string
+  folders: FolderNode[]
+  files: ProfileFile[]
+  count: number
+  size: number
+}
+
+// treeOf arranges files into folders, each level's folders first and by
+// name, counting what is under each folder.
+function treeOf(files: ProfileFile[]): FolderNode {
+  const root: FolderNode = { path: '', name: '', folders: [], files: [], count: 0, size: 0 }
+  for (const f of files) {
+    let at = root
+    at.count++
+    at.size += f.size
+    for (const part of f.path.split('/').slice(0, -1)) {
+      const path = at.path + part + '/'
+      let next = at.folders.find((d) => d.path === path)
+      if (!next) {
+        next = { path, name: part, folders: [], files: [], count: 0, size: 0 }
+        at.folders.push(next)
+      }
+      at = next
+      at.count++
+      at.size += f.size
+    }
+    at.files.push(f)
+  }
+  const sort = (d: FolderNode) => {
+    d.folders.sort((a, b) => a.name.localeCompare(b.name))
+    d.files.sort((a, b) => a.path.localeCompare(b.path))
+    d.folders.forEach(sort)
+  }
+  sort(root)
+  return root
+}
+
+// foldersOf is every folder a file is in: "a/b/c" is in "a/" and "a/b/".
+function foldersOf(path: string): string[] {
+  const parts = path.split('/').slice(0, -1)
+  return parts.map((_, i) => parts.slice(0, i + 1).join('/') + '/')
+}
+
+function bytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`
+  return `${(n / 1024 / 1024).toFixed(1)} MiB`
+}
+
+// The folders left open, remembered in this browser only.
+const expandedKey = 'hangar.profile.expanded'
+
+function loadExpanded(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(expandedKey) ?? '[]') as string[])
+  } catch {
+    return new Set()
+  }
+}
+
+function saveExpanded(expanded: Set<string>) {
+  try {
+    localStorage.setItem(expandedKey, JSON.stringify([...expanded]))
+  } catch {
+    // Remembered for this visit only.
+  }
+}
+
+// FileBrowser is the profile's files as folders: a tree on one side, the file
+// chosen from it on the other.
+function FileBrowser({
+  files,
+  paths,
+  open,
+  onOpen,
+}: {
+  files: ProfileFile[]
+  paths: string[]
+  open: string | null
+  onOpen: (path: string | null) => void
+}) {
+  const [expanded, setExpanded] = useState(loadExpanded)
+  const [filter, setFilter] = useState('')
+  const query = filter.trim().toLowerCase()
+  const shown = useMemo(
+    () => (query ? files.filter((f) => f.path.toLowerCase().includes(query)) : files),
+    [files, query],
+  )
+  const tree = useMemo(() => treeOf(shown), [shown])
+  const total = useMemo(() => files.reduce((n, f) => n + f.size, 0), [files])
+  const selected = files.find((f) => f.path === open) ?? null
+
+  const expand = (next: Set<string>) => {
+    setExpanded(next)
+    saveExpanded(next)
+  }
+  const toggle = (path: string) => {
+    const next = new Set(expanded)
+    if (next.has(path)) next.delete(path)
+    else next.add(path)
+    expand(next)
+  }
+  // Choosing a file opens the folders it is in, so it stays in view.
+  const choose = (path: string) => {
+    onOpen(path)
+    const missing = foldersOf(path).filter((d) => !expanded.has(d))
+    if (missing.length > 0) expand(new Set([...expanded, ...missing]))
+  }
+  // While filtering, every folder with a match is open.
+  const isOpen = (path: string) => query !== '' || expanded.has(path)
+
+  return (
+    <div className="panel fb">
+      <div className="fb-tree">
+        <label className="fb-filter">
+          <Search size={14} />
+          <input placeholder="Filter files" value={filter} onChange={(e) => setFilter(e.target.value)} />
+        </label>
+        <div className="fb-rows">
+          {files.length === 0 ? (
+            <div className="empty small">
+              Nothing yet. Sign in to Claude or change a setting in any environment and it appears here.
+            </div>
+          ) : shown.length === 0 ? (
+            <div className="empty small">No file matches.</div>
+          ) : (
+            <FolderRows folder={tree} depth={0} isOpen={isOpen} toggle={toggle} open={open} choose={choose} />
+          )}
+        </div>
+      </div>
+      <div className="fb-detail">
+        {selected ? (
+          <FileDetail key={selected.path} file={selected} onRemoved={() => onOpen(null)} />
+        ) : (
+          <div className="fb-none muted">
+            {files.length} {files.length === 1 ? 'file' : 'files'}, {bytes(total)}. Choose one to see or edit it.
+          </div>
+        )}
+        <AddFile
+          paths={paths}
+          existing={files.map((f) => f.path)}
+          folder={selected ? (foldersOf(selected.path).at(-1) ?? '') : ''}
+          onAdded={choose}
+        />
+      </div>
+    </div>
+  )
+}
+
+function FolderRows({
+  folder,
+  depth,
+  isOpen,
+  toggle,
+  open,
+  choose,
+}: {
+  folder: FolderNode
+  depth: number
+  isOpen: (path: string) => boolean
+  toggle: (path: string) => void
+  open: string | null
+  choose: (path: string) => void
+}) {
+  return (
+    <>
+      {folder.folders.map((d) => {
+        const expanded = isOpen(d.path)
+        const what = describeExactly(d.path)
+        return (
+          <div key={d.path}>
+            <button
+              type="button"
+              className="fb-row"
+              style={{ paddingLeft: 8 + depth * 16 }}
+              onClick={() => toggle(d.path)}
+              aria-expanded={expanded}
+            >
+              <ChevronRight size={13} className={`chev${expanded ? ' chev-open' : ''}`} />
+              {expanded ? <FolderOpen size={14} /> : <Folder size={14} />}
+              <span className="fb-name mono">{d.name}</span>
+              {what && <span className="fb-what">{what}</span>}
+              <span className="fb-meta">{d.count}</span>
+            </button>
+            {expanded && (
+              <FolderRows folder={d} depth={depth + 1} isOpen={isOpen} toggle={toggle} open={open} choose={choose} />
+            )}
+          </div>
+        )
+      })}
+      {folder.files.map((f) => {
+        const what = describeExactly(f.path)
+        return (
+          <button
+            key={f.path}
+            type="button"
+            className={`fb-row${open === f.path ? ' active' : ''}`}
+            style={{ paddingLeft: 8 + depth * 16 + 19 }}
+            onClick={() => choose(f.path)}
+          >
+            {f.secret ? <Lock size={14} /> : <FileText size={14} />}
+            <span className="fb-name mono">{f.path.split('/').at(-1)}</span>
+            {what && <span className="fb-what">{what}</span>}
+            <span className="fb-meta">{f.secret ? 'hidden' : bytes(f.size)}</span>
+          </button>
+        )
+      })}
+    </>
+  )
+}
+
+// FileDetail is one file: what it is, and its contents to edit; for a
+// credential, which is not shown, a way to sign out of it.
+function FileDetail({ file, onRemoved }: { file: ProfileFile; onRemoved: () => void }) {
   const qc = useQueryClient()
   const remove = useMutation({
     mutationFn: () => api.deleteProfileFile(file.path),
+    onSuccess: onRemoved,
     onSettled: () => qc.invalidateQueries({ queryKey: profileKey }),
   })
+  const what = describePath(file.path)
   return (
-    <>
-      <tr>
-        <td>
-          {file.secret ? (
-            <span className="mono">{file.path}</span>
-          ) : (
-            <button type="button" className="file-link mono" onClick={onOpen}>
-              {file.path}
-            </button>
-          )}
-          <div className="muted small">{describePath(file.path)}</div>
-        </td>
-        <td className="muted nowrap">{file.secret ? 'hidden' : `${file.size} bytes`}</td>
-        <td className="muted nowrap">{new Date(file.updated_at).toLocaleString()}</td>
-        <td className="num">
-          <ConfirmButton
-            label={file.secret ? 'Sign out' : 'Remove'}
-            confirmLabel={file.secret ? 'Sign out everywhere?' : 'Remove everywhere?'}
-            onConfirm={() => remove.mutate()}
-            disabled={remove.isPending}
-          />
-        </td>
-      </tr>
-      {open && (
-        <tr>
-          <td colSpan={4}>
-            <FileEditor path={file.path} updatedAt={file.updated_at} />
-          </td>
-        </tr>
+    <div className="fb-file">
+      <div className="fb-head">
+        <div className="fb-title">
+          <div className="mono fb-path">{file.path}</div>
+          <div className="muted small">
+            {what && `${what} · `}
+            {file.secret ? 'contents hidden' : bytes(file.size)} · changed {new Date(file.updated_at).toLocaleString()}
+          </div>
+        </div>
+        <ConfirmButton
+          label={file.secret ? 'Sign out' : 'Remove'}
+          confirmLabel={file.secret ? 'Sign out everywhere?' : 'Remove everywhere?'}
+          onConfirm={() => remove.mutate()}
+          disabled={remove.isPending}
+        />
+      </div>
+      {file.secret ? (
+        <div className="muted small">
+          A credential: environments trusted with your credentials have it, and it is not shown here. Signing out
+          removes it from all of them.
+        </div>
+      ) : (
+        <FileEditor path={file.path} updatedAt={file.updated_at} />
       )}
-    </>
+    </div>
   )
 }
 
@@ -206,29 +407,43 @@ function FileEditor({ path, updatedAt }: { path: string; updatedAt: string }) {
   )
 }
 
-function AddFile({ paths, existing, onAdded }: { paths: string[]; existing: string[]; onAdded: (p: string) => void }) {
+function AddFile({
+  paths,
+  existing,
+  folder,
+  onAdded,
+}: {
+  paths: string[]
+  existing: string[]
+  folder: string
+  onAdded: (p: string) => void
+}) {
   const qc = useQueryClient()
   const choices = paths.filter((p) => !existing.includes(p) && !p.endsWith('.credentials.json'))
   const [path, setPath] = useState('')
   const add = useMutation({
-    mutationFn: () => api.putProfileFile(path, ''),
-    onSuccess: () => {
+    mutationFn: (p: string) => api.putProfileFile(p, ''),
+    onSuccess: (_, p) => {
       qc.invalidateQueries({ queryKey: profileKey })
-      onAdded(path)
+      onAdded(p)
       setPath('')
     },
   })
   const submit = (e: FormEvent) => {
     e.preventDefault()
-    if (path && !path.endsWith('/')) add.mutate()
+    if (path && !path.endsWith('/')) add.mutate(path)
   }
   return (
-    <form className="inline-form" onSubmit={submit}>
+    <form className="inline-form fb-add" onSubmit={submit}>
       <input
         className="mono grow"
         list="profile-paths"
-        placeholder="Add a file: .claude/commands/review.md"
+        placeholder={`New file: ${folder || '.claude/commands/'}review.md`}
         value={path}
+        // Starts in the folder of the file open beside it.
+        onFocus={() => {
+          if (!path && folder) setPath(folder)
+        }}
         onChange={(e) => setPath(e.target.value)}
       />
       <datalist id="profile-paths">
