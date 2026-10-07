@@ -249,7 +249,7 @@ func UserPaths(own []string) Paths {
 
 // Synced reports whether a path is shared.
 func (ps Paths) Synced(p string) bool {
-	if !Valid(p) {
+	if !ValidKey(p) {
 		return false
 	}
 	for _, s := range ps {
@@ -312,6 +312,35 @@ func TrustedOnlyByDefault(p string) bool { return slices.Contains(secretPaths, p
 func Valid(p string) bool {
 	return p != "" && p != "." && !strings.HasPrefix(p, "/") && path.Clean(p) == p && p != ".." &&
 		!strings.HasPrefix(p, "../") && !strings.Contains(p, "\x00")
+}
+
+// ValidKey reports whether p names a file of a set: a clean path inside the
+// home directory, as a profile's are, or a clean absolute one, as a pack's
+// are.
+func ValidKey(p string) bool {
+	if strings.HasPrefix(p, "/") {
+		return p != "/" && path.Clean(p) == p && !strings.Contains(p, "\x00")
+	}
+	return Valid(p)
+}
+
+// refusedAbsolute are where a pack may not put files: the kernel's and the
+// system's own.
+var refusedAbsolute = []string{"/proc/", "/sys/", "/dev/", "/run/", "/boot/"}
+
+// CheckPackPath reports why a path cannot be one of a pack's, or nil. It is
+// absolute, and a directory ends in a slash.
+func CheckPackPath(p string) error {
+	clean := strings.TrimSuffix(p, "/")
+	if !strings.HasPrefix(p, "/") || !ValidKey(clean) || strings.HasSuffix(p, "//") {
+		return fmt.Errorf("%q is not a clean absolute path", p)
+	}
+	for _, r := range refusedAbsolute {
+		if strings.HasPrefix(clean+"/", r) {
+			return fmt.Errorf("%s is the system's, and cannot hold a pack's files", r)
+		}
+	}
+	return nil
 }
 
 // refused are places a user may not share: what programs rewrite all the

@@ -102,36 +102,42 @@ func NewStore(d *db.DB, blobs blob.Versioned, sealer *Sealer) *Store {
 // KeepsSecrets reports whether the store has a key to keep SSH keys with.
 func (s *Store) KeepsSecrets() bool { return s.sealer != nil }
 
-// blobKey is where a user's file is kept.
-func blobKey(userID, path string) string { return userID + "/" + path }
+// blobKey is where a set's file is kept: <set>/<path>, an absolute path
+// keeping its own slash.
+func blobKey(set, path string) string {
+	if strings.HasPrefix(path, "/") {
+		return set + path
+	}
+	return set + "/" + path
+}
 
-// profileLock serializes a user's writes until the transaction ends.
-func profileLock(ctx context.Context, tx db.Tx, userID string) error {
-	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "profile:"+userID)
+// setLock serializes a file set's writes until the transaction ends.
+func setLock(ctx context.Context, tx db.Tx, set string) error {
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "profile:"+set)
 	return err
 }
 
 // Files returns a user's files, removed ones included, with their contents.
 // Without trusted, a trusted-only file is given as removed.
-func (s *Store) Files(ctx context.Context, userID string, trusted bool) ([]File, error) {
-	return s.files(ctx, userID, trusted, 0, "", true)
+func (s *Store) Files(ctx context.Context, set string, trusted bool) ([]File, error) {
+	return s.files(ctx, set, trusted, 0, "", true)
 }
 
 // List returns, as Files does, a user's files, without their contents.
-func (s *Store) List(ctx context.Context, userID string, trusted bool) ([]File, error) {
-	return s.files(ctx, userID, trusted, 0, "", false)
+func (s *Store) List(ctx context.Context, set string, trusted bool) ([]File, error) {
+	return s.files(ctx, set, trusted, 0, "", false)
 }
 
 // FilesUnder returns, as Files does, a user's files whose paths start with
 // dir: those in a directory and below, for a dir ending in a slash.
-func (s *Store) FilesUnder(ctx context.Context, userID, dir string, trusted bool) ([]File, error) {
-	return s.files(ctx, userID, trusted, 0, dir, true)
+func (s *Store) FilesUnder(ctx context.Context, set, dir string, trusted bool) ([]File, error) {
+	return s.files(ctx, set, trusted, 0, dir, true)
 }
 
 // File returns one of a user's files, with its contents, or ErrNotFound if
 // it is not there or was removed.
-func (s *Store) File(ctx context.Context, userID, path string, trusted bool) (File, error) {
-	files, err := s.files(ctx, userID, trusted, 0, path, true)
+func (s *Store) File(ctx context.Context, set, path string, trusted bool) (File, error) {
+	files, err := s.files(ctx, set, trusted, 0, path, true)
 	if err != nil {
 		return File{}, err
 	}
@@ -144,20 +150,20 @@ func (s *Store) File(ctx context.Context, userID, path string, trusted bool) (Fi
 }
 
 // Since returns the files changed after version.
-func (s *Store) Since(ctx context.Context, userID string, trusted bool, version int64) ([]File, error) {
-	return s.files(ctx, userID, trusted, version, "", true)
+func (s *Store) Since(ctx context.Context, set string, trusted bool, version int64) ([]File, error) {
+	return s.files(ctx, set, trusted, version, "", true)
 }
 
-func (s *Store) files(ctx context.Context, userID string, trusted bool, after int64, prefix string, contents bool) ([]File, error) {
-	if !db.ValidUUID(userID) {
+func (s *Store) files(ctx context.Context, set string, trusted bool, after int64, prefix string, contents bool) ([]File, error) {
+	if !db.ValidUUID(set) {
 		return nil, ErrNotFound
 	}
 	var out []File
 	var versions []string
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
 		rows, err := tx.Query(ctx, `SELECT path, coalesce(version_id, ''), size, mode, version, deleted, trusted_only, updated_at
-			FROM profile_files
-			WHERE user_id = $1 AND version > $2 AND starts_with(path, $3) ORDER BY version`, userID, after, prefix)
+			FROM set_files
+			WHERE set_id = $1 AND version > $2 AND starts_with(path, $3) ORDER BY version`, set, after, prefix)
 		if err != nil {
 			return err
 		}
@@ -196,7 +202,7 @@ func (s *Store) files(ctx context.Context, userID string, trusted bool, after in
 		sem <- struct{}{}
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			data, err := blob.ReadVersion(ctx, s.blobs, blobKey(userID, out[i].Path), versions[i])
+			data, err := blob.ReadVersion(ctx, s.blobs, blobKey(set, out[i].Path), versions[i])
 			if err != nil {
 				mu.Lock()
 				errs = append(errs, fmt.Errorf("%s: %w", out[i].Path, err))
@@ -214,8 +220,8 @@ func (s *Store) files(ctx context.Context, userID string, trusted bool, after in
 }
 
 // Put writes a file, returning it as stored.
-func (s *Store) Put(ctx context.Context, userID, path string, data []byte, mode uint32) (File, error) {
-	paths, err := s.Paths(ctx, userID)
+func (s *Store) Put(ctx context.Context, set, path string, data []byte, mode uint32) (File, error) {
+	paths, err := s.SetPaths(ctx, set)
 	if err != nil {
 		return File{}, err
 	}
@@ -232,19 +238,19 @@ func (s *Store) Put(ctx context.Context, userID, path string, data []byte, mode 
 			mode = 0o600
 		}
 	}
-	return s.write(ctx, userID, path, data, mode, false)
+	return s.write(ctx, set, path, data, mode, false)
 }
 
 // TrustedOnly reports whether a file is kept from untrusted environments: as
 // its setting says, or, for one not made yet, as its path's default.
-func (s *Store) TrustedOnly(ctx context.Context, userID, path string) (bool, error) {
-	if !db.ValidUUID(userID) {
+func (s *Store) TrustedOnly(ctx context.Context, set, path string) (bool, error) {
+	if !db.ValidUUID(set) {
 		return false, ErrNotFound
 	}
 	only := TrustedOnlyByDefault(path)
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT trusted_only FROM profile_files WHERE user_id = $1 AND path = $2`,
-			userID, path).Scan(&only)
+		err := tx.QueryRow(ctx, `SELECT trusted_only FROM set_files WHERE set_id = $1 AND path = $2`,
+			set, path).Scan(&only)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil
 		}
@@ -255,8 +261,8 @@ func (s *Store) TrustedOnly(ctx context.Context, userID, path string) (bool, err
 
 // SetSettings changes a file's mode and whether it is trusted-only, as a
 // new version, which reaches every environment as any change does.
-func (s *Store) SetSettings(ctx context.Context, userID, path string, mode uint32, trustedOnly bool) (File, error) {
-	if !db.ValidUUID(userID) {
+func (s *Store) SetSettings(ctx context.Context, set, path string, mode uint32, trustedOnly bool) (File, error) {
+	if !db.ValidUUID(set) {
 		return File{}, ErrNotFound
 	}
 	mode &= 0o777
@@ -265,20 +271,20 @@ func (s *Store) SetSettings(ctx context.Context, userID, path string, mode uint3
 	}
 	var f File
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		if err := profileLock(ctx, tx, userID); err != nil {
+		if err := setLock(ctx, tx, set); err != nil {
 			return err
 		}
 		var version int64
-		if err := tx.QueryRow(ctx, `INSERT INTO profile_versions (user_id, version) VALUES ($1, 1)
-			ON CONFLICT (user_id) DO UPDATE SET version = profile_versions.version + 1
-			RETURNING version`, userID).Scan(&version); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO set_versions (set_id, version) VALUES ($1, 1)
+			ON CONFLICT (set_id) DO UPDATE SET version = set_versions.version + 1
+			RETURNING version`, set).Scan(&version); err != nil {
 			return err
 		}
 		var m int32
-		err := tx.QueryRow(ctx, `UPDATE profile_files SET mode = $3, trusted_only = $4, version = $5, updated_at = now()
-			WHERE user_id = $1 AND path = $2 AND NOT deleted
+		err := tx.QueryRow(ctx, `UPDATE set_files SET mode = $3, trusted_only = $4, version = $5, updated_at = now()
+			WHERE set_id = $1 AND path = $2 AND NOT deleted
 			RETURNING path, size, mode, version, trusted_only, updated_at`,
-			userID, path, int32(mode), trustedOnly, version).
+			set, path, int32(mode), trustedOnly, version).
 			Scan(&f.Path, &f.Size, &m, &f.Version, &f.TrustedOnly, &f.UpdatedAt)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
@@ -288,29 +294,29 @@ func (s *Store) SetSettings(ctx context.Context, userID, path string, mode uint3
 		}
 		f.Mode = uint32(m)
 		if err := audit.Record(ctx, tx, audit.Event{Action: "profile.file_settings",
-			Target:  audit.Ref{Type: audit.KindFile, ID: userID + ":" + path, Name: path},
-			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}},
+			Target:  audit.Ref{Type: audit.KindFile, ID: set + ":" + path, Name: path},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: set}},
 			Details: map[string]any{"mode": fmt.Sprintf("%#o", mode), "trusted_only": trustedOnly}}); err != nil {
 			return err
 		}
-		return db.Notify(ctx, tx, Channel, userID)
+		return db.Notify(ctx, tx, Channel, set)
 	})
 	return f, err
 }
 
 // Delete removes a file, leaving a mark that it is gone.
-func (s *Store) Delete(ctx context.Context, userID, path string) (File, error) {
-	if !Valid(path) {
-		return File{}, fmt.Errorf("%w: %q is not a path in the home directory", ErrInvalid, path)
+func (s *Store) Delete(ctx context.Context, set, path string) (File, error) {
+	if !ValidKey(path) {
+		return File{}, fmt.Errorf("%w: %q is not a file's path", ErrInvalid, path)
 	}
-	return s.write(ctx, userID, path, nil, 0o644, true)
+	return s.write(ctx, set, path, nil, 0o644, true)
 }
 
-func (s *Store) write(ctx context.Context, userID, path string, data []byte, mode uint32, deleted bool) (File, error) {
-	if !db.ValidUUID(userID) {
+func (s *Store) write(ctx context.Context, set, path string, data []byte, mode uint32, deleted bool) (File, error) {
+	if !db.ValidUUID(set) {
 		return File{}, ErrNotFound
 	}
-	key := blobKey(userID, path)
+	key := blobKey(set, path)
 	f := File{Path: path, Data: data, Size: int64(len(data)), Mode: mode, Deleted: deleted}
 	// Every version put, one per attempt the transaction makes: all but
 	// the one it commits are let go of after.
@@ -318,22 +324,27 @@ func (s *Store) write(ctx context.Context, userID, path string, data []byte, mod
 	var old, kept string
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
 		old, kept = "", ""
-		// One sequence per user (profile_versions), so a session asks for
-		// everything after the last version it sent. A user's writes take
+		// A profile's set is made with its first file.
+		if _, err := tx.Exec(ctx, `INSERT INTO file_sets (id, user_id) SELECT id, id FROM users WHERE id = $1
+			ON CONFLICT DO NOTHING`, set); err != nil {
+			return err
+		}
+		// One sequence per set (set_versions), so a session asks for
+		// everything after the last version it sent. A set's writes take
 		// turns, so no two take the same number.
-		if err := profileLock(ctx, tx, userID); err != nil {
+		if err := setLock(ctx, tx, set); err != nil {
 			return err
 		}
 		var total int64
-		if err := tx.QueryRow(ctx, `SELECT coalesce(sum(size), 0) FROM profile_files
-			WHERE user_id = $1 AND path <> $2`, userID, path).Scan(&total); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT coalesce(sum(size), 0) FROM set_files
+			WHERE set_id = $1 AND path <> $2`, set, path).Scan(&total); err != nil {
 			return err
 		}
 		if total+f.Size > MaxProfileSize {
 			return fmt.Errorf("%w: the profile would hold more than %d MiB", ErrInvalid, MaxProfileSize>>20)
 		}
-		err := tx.QueryRow(ctx, `SELECT coalesce(version_id, '') FROM profile_files WHERE user_id = $1 AND path = $2`,
-			userID, path).Scan(&old)
+		err := tx.QueryRow(ctx, `SELECT coalesce(version_id, '') FROM set_files WHERE set_id = $1 AND path = $2`,
+			set, path).Scan(&old)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return err
 		}
@@ -346,18 +357,18 @@ func (s *Store) write(ctx context.Context, userID, path string, data []byte, mod
 			kept = vid
 		}
 		var version int64
-		if err := tx.QueryRow(ctx, `INSERT INTO profile_versions (user_id, version) VALUES ($1, 1)
-			ON CONFLICT (user_id) DO UPDATE SET version = profile_versions.version + 1
-			RETURNING version`, userID).Scan(&version); err != nil {
+		if err := tx.QueryRow(ctx, `INSERT INTO set_versions (set_id, version) VALUES ($1, 1)
+			ON CONFLICT (set_id) DO UPDATE SET version = set_versions.version + 1
+			RETURNING version`, set).Scan(&version); err != nil {
 			return err
 		}
 		err = tx.QueryRow(ctx, `
-			INSERT INTO profile_files (user_id, path, version_id, size, mode, deleted, version, trusted_only)
+			INSERT INTO set_files (set_id, path, version_id, size, mode, deleted, version, trusted_only)
 			VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7, $8)
-			ON CONFLICT (user_id, path) DO UPDATE SET version_id = EXCLUDED.version_id, size = EXCLUDED.size,
+			ON CONFLICT (set_id, path) DO UPDATE SET version_id = EXCLUDED.version_id, size = EXCLUDED.size,
 				mode = EXCLUDED.mode, deleted = EXCLUDED.deleted, version = EXCLUDED.version,
 				updated_at = now()
-			RETURNING version, updated_at, trusted_only`, userID, path, kept, f.Size, int32(mode), deleted, version,
+			RETURNING version, updated_at, trusted_only`, set, path, kept, f.Size, int32(mode), deleted, version,
 			TrustedOnlyByDefault(path)).
 			Scan(&f.Version, &f.UpdatedAt, &f.TrustedOnly)
 		if err != nil {
@@ -368,12 +379,12 @@ func (s *Store) write(ctx context.Context, userID, path string, data []byte, mod
 			action = "profile.file_delete"
 		}
 		if err := audit.Record(ctx, tx, audit.Event{Action: action,
-			Target:  audit.Ref{Type: audit.KindFile, ID: userID + ":" + path, Name: path},
-			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}},
+			Target:  audit.Ref{Type: audit.KindFile, ID: set + ":" + path, Name: path},
+			Related: []audit.Ref{{Type: audit.KindOwner, ID: set}},
 			Details: map[string]any{"size": f.Size}}); err != nil {
 			return err
 		}
-		return db.Notify(ctx, tx, Channel, userID)
+		return db.Notify(ctx, tx, Channel, set)
 	})
 	// What the row no longer names: the version it named before, if the
 	// write committed, and every version an attempt put and did not keep.
@@ -395,11 +406,67 @@ func (s *Store) write(ctx context.Context, userID, path string, data []byte, mod
 }
 
 // DeleteUser deletes every file kept for a user, once they are gone.
-func (s *Store) DeleteUser(ctx context.Context, userID string) error {
-	if !db.ValidUUID(userID) {
-		return ErrNotFound
+func (s *Store) DeleteSets(ctx context.Context, sets ...string) error {
+	var errs []error
+	for _, set := range sets {
+		if db.ValidUUID(set) {
+			errs = append(errs, s.blobs.DeleteAll(ctx, set+"/"))
+		}
 	}
-	return s.blobs.DeleteAll(ctx, userID+"/")
+	return errors.Join(errs...)
+}
+
+// SetsOf are the file sets of a user's own: their profile's, and their
+// copies of personal packs.
+func (s *Store) SetsOf(ctx context.Context, userID string) ([]string, error) {
+	if !db.ValidUUID(userID) {
+		return nil, ErrNotFound
+	}
+	out := []string{userID}
+	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT id::text FROM file_sets WHERE user_id = $1 AND pack_id IS NOT NULL`, userID)
+		if err != nil {
+			return err
+		}
+		more, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		out = append(out, more...)
+		return err
+	})
+	return out, err
+}
+
+// SetPaths are the paths a file set keeps: a profile's, relative to the
+// home directory, or a pack's, absolute. A set not made yet is a user's
+// profile, as their first file makes it.
+func (s *Store) SetPaths(ctx context.Context, set string) (Paths, error) {
+	if !db.ValidUUID(set) {
+		return nil, ErrNotFound
+	}
+	var user, pack *string
+	var paths []string
+	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		err := tx.QueryRow(ctx, `SELECT user_id::text, pack_id::text FROM file_sets WHERE id = $1`, set).Scan(&user, &pack)
+		if errors.Is(err, pgx.ErrNoRows) {
+			user = &set
+			return nil
+		}
+		if err != nil || pack == nil {
+			return err
+		}
+		rows, err := tx.Query(ctx, `SELECT path FROM file_pack_paths WHERE pack_id = $1 ORDER BY path`, *pack)
+		if err != nil {
+			return err
+		}
+		paths, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if pack != nil {
+		return Paths(paths), nil
+	}
+	return s.Paths(ctx, *user)
 }
 
 // Keys returns a user's SSH keys.
@@ -555,15 +622,15 @@ func (s *Store) Signers(ctx context.Context, userID string) ([]ssh.Signer, error
 
 // Lock takes or renews one of a user's locks on behalf of one environment,
 // reporting whether that environment holds it.
-func (s *Store) Lock(ctx context.Context, userID, path, environment string) (bool, error) {
+func (s *Store) Lock(ctx context.Context, set, path, environment string) (bool, error) {
 	var held bool
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
 		var holder string
 		err := tx.QueryRow(ctx, `
-			INSERT INTO profile_locks (user_id, path, environment, expires_at) VALUES ($1, $2, $3, now() + $4::interval)
-			ON CONFLICT (user_id, path) DO UPDATE SET environment = EXCLUDED.environment, expires_at = EXCLUDED.expires_at
-				WHERE profile_locks.environment = EXCLUDED.environment OR profile_locks.expires_at < now()
-			RETURNING environment::text`, userID, path, environment, lockLease).Scan(&holder)
+			INSERT INTO set_locks (set_id, path, environment, expires_at) VALUES ($1, $2, $3, now() + $4::interval)
+			ON CONFLICT (set_id, path) DO UPDATE SET environment = EXCLUDED.environment, expires_at = EXCLUDED.expires_at
+				WHERE set_locks.environment = EXCLUDED.environment OR set_locks.expires_at < now()
+			RETURNING environment::text`, set, path, environment, lockLease).Scan(&holder)
 		if errors.Is(err, pgx.ErrNoRows) {
 			held = false
 			return nil
@@ -572,20 +639,20 @@ func (s *Store) Lock(ctx context.Context, userID, path, environment string) (boo
 			return err
 		}
 		held = true
-		return db.Notify(ctx, tx, Channel, userID)
+		return db.Notify(ctx, tx, Channel, set)
 	})
 	return held, err
 }
 
 // Unlock releases one of a user's locks if the environment holds it.
-func (s *Store) Unlock(ctx context.Context, userID, path, environment string) error {
+func (s *Store) Unlock(ctx context.Context, set, path, environment string) error {
 	return s.db.Transact(ctx, func(tx db.Tx) error {
-		tag, err := tx.Exec(ctx, `DELETE FROM profile_locks WHERE user_id = $1 AND path = $2 AND environment = $3`,
-			userID, path, environment)
+		tag, err := tx.Exec(ctx, `DELETE FROM set_locks WHERE set_id = $1 AND path = $2 AND environment = $3`,
+			set, path, environment)
 		if err != nil || tag.RowsAffected() == 0 {
 			return err
 		}
-		return db.Notify(ctx, tx, Channel, userID)
+		return db.Notify(ctx, tx, Channel, set)
 	})
 }
 
@@ -690,7 +757,7 @@ func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
 			return err
 		}
 		still := s.UserPaths(own)
-		rows, err = tx.Query(ctx, `SELECT path, coalesce(version_id, '') FROM profile_files WHERE user_id = $1`, userID)
+		rows, err = tx.Query(ctx, `SELECT path, coalesce(version_id, '') FROM set_files WHERE set_id = $1`, userID)
 		if err != nil {
 			return err
 		}
@@ -703,7 +770,7 @@ func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
 		}
 		for _, f := range files {
 			if !still.Synced(f.path) {
-				if _, err := tx.Exec(ctx, `DELETE FROM profile_files WHERE user_id = $1 AND path = $2`, userID, f.path); err != nil {
+				if _, err := tx.Exec(ctx, `DELETE FROM set_files WHERE set_id = $1 AND path = $2`, userID, f.path); err != nil {
 					return err
 				}
 				if f.version != "" {

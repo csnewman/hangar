@@ -60,6 +60,8 @@ func (h *handler) UpdateUser(ctx context.Context, req UpdateUserRequestObject) (
 }
 
 func (h *handler) DeleteUser(ctx context.Context, req DeleteUserRequestObject) (DeleteUserResponseObject, error) {
+	// The user's file sets, found before their rows go with the user.
+	sets, serr := h.profiles.SetsOf(ctx, req.ID)
 	err := h.users.Delete(ctx, req.ID)
 	switch {
 	case errors.Is(err, users.ErrNotFound):
@@ -69,10 +71,13 @@ func (h *handler) DeleteUser(ctx context.Context, req DeleteUserRequestObject) (
 	case err != nil:
 		return nil, err
 	}
-	// Their profile's rows went with them; its files are in the object
-	// store, where nothing else would delete them.
-	if err := h.profiles.DeleteUser(ctx, req.ID); err != nil {
-		h.log.Warn("deleting a deleted user's profile files", "user", req.ID, "err", err)
+	// Their files' rows went with them; the files are in the object store,
+	// where nothing else would delete them.
+	if serr == nil {
+		serr = h.profiles.DeleteSets(ctx, sets...)
+	}
+	if serr != nil {
+		h.log.Warn("deleting a deleted user's files", "user", req.ID, "err", serr)
 	}
 	return DeleteUser204Response{}, nil
 }

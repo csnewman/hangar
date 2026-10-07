@@ -805,7 +805,11 @@ func TestContentsAreKeptInTheBlobStore(t *testing.T) {
 	}
 
 	// And a user gone takes everything with them.
-	if err := p.store.DeleteUser(ctx, p.owner); err != nil {
+	sets, err := p.store.SetsOf(ctx, p.owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.DeleteSets(ctx, sets...); err != nil {
 		t.Fatal(err)
 	}
 	if got := p.versions(t); len(got) != 0 {

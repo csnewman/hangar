@@ -12,9 +12,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/frontendapi"
+	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/teams"
 	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/users"
@@ -33,6 +35,7 @@ func newFixture(t *testing.T) *fixture {
 	d := dbtest.Open(t)
 	um := users.NewManager(d)
 	h, err := frontendapi.New(frontendapi.Config{
+		Profiles:     profile.NewStore(d, blob.NewMemory(), nil),
 		Environments: environments.NewManager(d),
 		Templates:    templates.NewManager(d),
 		Teams:        teams.NewManager(d),
@@ -509,6 +512,7 @@ func TestAutoSignIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	h, err := frontendapi.New(frontendapi.Config{
+		Profiles:     profile.NewStore(d, blob.NewMemory(), nil),
 		Environments: environments.NewManager(d),
 		Templates:    templates.NewManager(d),
 		Teams:        teams.NewManager(d),
