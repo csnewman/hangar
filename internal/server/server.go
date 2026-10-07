@@ -358,6 +358,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/worker/v1/register", s.registerWorker)
 	mux.Handle("GET /api/worker/v1/desired", s.workerAuth(s.workerDesired))
 	mux.Handle("PUT /api/worker/v1/status", s.workerAuth(s.workerStatus))
+	mux.Handle("GET /api/worker/v1/environments/{id}/files", s.workerAuth(s.workerEnvironmentFiles))
 	mux.Handle("GET /api/worker/v1/tunnel", s.workerAuth(func(w http.ResponseWriter, r *http.Request) {
 		s.tunnels.Accept(w, r, workerID(r))
 	}))

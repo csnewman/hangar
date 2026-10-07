@@ -151,6 +151,15 @@ func (s Spec) EditorTrust() []string {
 	return out
 }
 
+// EnvironmentFiles is what of the files environments share one may reach,
+// as its worker serves them (internal/nfs): its file sets, by ID, and in
+// each, by path, the files kept from it -- trusted-only ones, from an
+// environment not trusted with its owner's credentials.
+type EnvironmentFiles struct {
+	Sets   []string            `json:"sets"`
+	Hidden map[string][]string `json:"hidden,omitempty"`
+}
+
 // TemplateSpec is a Spec with the rules for naming the environments made
 // from it.
 type TemplateSpec struct {

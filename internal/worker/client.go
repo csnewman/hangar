@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -86,6 +87,13 @@ func (c *client) desired(ctx context.Context, after int64) (api.DesiredSet, erro
 	var set api.DesiredSet
 	err := c.do(ctx, http.MethodGet, "/api/worker/v1/desired?after="+strconv.FormatInt(after, 10), c.credential, nil, &set)
 	return set, err
+}
+
+// environmentFiles is what of the shared files an environment may reach.
+func (c *client) environmentFiles(ctx context.Context, id string) (api.EnvironmentFiles, error) {
+	var files api.EnvironmentFiles
+	err := c.do(ctx, http.MethodGet, "/api/worker/v1/environments/"+url.PathEscape(id)+"/files", c.credential, nil, &files)
+	return files, err
 }
 
 func (c *client) report(ctx context.Context, st api.WorkerStatus) error {

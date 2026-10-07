@@ -16,6 +16,7 @@ import (
 	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/gitout"
 	"github.com/csnewman/hangar/internal/host"
+	"github.com/csnewman/hangar/internal/nfs"
 	"github.com/csnewman/hangar/internal/sysuser"
 )
 
@@ -170,6 +171,12 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		Progress:    func(step string) { m.step(api.StepBoot, step) },
 		Log:         m.log,
 	}
+	m.rt.mu.Lock()
+	if root, view := m.rt.filesRoot, m.rt.filesView; root != "" && view != nil {
+		cfg.SharedFiles = root
+		cfg.SharedView = func(ctx context.Context) nfs.View { return view(ctx, m.id) }
+	}
+	m.rt.mu.Unlock()
 	if cfg.GPU {
 		cfg.GPUVenus = m.rt.cfg.GPUVenus
 		cfg.GPUVenusRestore = m.rt.cfg.GPUVenus && m.rt.cfg.GPUVenusRestore

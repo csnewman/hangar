@@ -16,6 +16,9 @@ storage:
   images: /var/lib/hangar/images
   environments: /var/lib/hangar/env
   caches: /var/lib/hangar/caches
+  # The files environments share (profiles, packs), served to each over
+  # NFS on vsock.
+  files: /var/lib/hangar/files
 
 reserved:
   cpus: 1

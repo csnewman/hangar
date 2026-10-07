@@ -36,6 +36,12 @@ type Config struct {
 		Images       string `yaml:"images"`
 		Environments string `yaml:"environments"`
 		Caches       string `yaml:"caches"`
+		// Files holds the files environments share with others -- their
+		// owners' profiles and packs -- each file set a directory named by
+		// its ID, which each environment's NFS server serves it from. It
+		// is the same on every worker: a mount of one NFS share, or EFS.
+		// Empty serves none.
+		Files string `yaml:"files"`
 	} `yaml:"storage"`
 
 	// Reserved is capacity kept back for the host itself.

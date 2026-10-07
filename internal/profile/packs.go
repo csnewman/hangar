@@ -2,6 +2,7 @@ package profile
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/users"
@@ -422,6 +424,68 @@ func (s *Store) EnvironmentSets(ctx context.Context, user string, packs []string
 			out = append(out, FileSet{ID: set, Paths: Paths(found[i].Paths)})
 		}
 		return nil
+	})
+	return out, err
+}
+
+// EnvironmentFiles is what of the shared files an environment placed on a
+// worker may reach: the sets its owner is given (EnvironmentSets), and for
+// an environment not trusted with its owner's credentials, the
+// trusted-only files in them, hidden. An environment placed on another
+// worker, or none, is not found.
+func (s *Store) EnvironmentFiles(ctx context.Context, workerID, envID string) (api.EnvironmentFiles, error) {
+	out := api.EnvironmentFiles{Sets: []string{}}
+	if !db.ValidUUID(envID) || !db.ValidUUID(workerID) {
+		return out, ErrNotFound
+	}
+	var owner string
+	var untrusted bool
+	var packs []string
+	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		var raw []byte
+		err := tx.QueryRow(ctx, `SELECT owner_id::text, coalesce((spec->>'untrusted')::boolean, false), spec->'file_packs'
+			FROM environments WHERE id = $1 AND worker_id = $2`, envID, workerID).Scan(&owner, &untrusted, &raw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		if len(raw) > 0 {
+			json.Unmarshal(raw, &packs)
+		}
+		return nil
+	})
+	if err != nil {
+		return out, err
+	}
+	sets, err := s.EnvironmentSets(ctx, owner, packs)
+	if err != nil {
+		return out, err
+	}
+	for _, set := range sets {
+		out.Sets = append(out.Sets, set.ID)
+	}
+	if !untrusted {
+		return out, nil
+	}
+	out.Hidden = map[string][]string{}
+	err = s.db.Transact(ctx, func(tx db.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT set_id::text, path FROM set_files
+			WHERE trusted_only AND NOT deleted AND set_id = ANY($1::uuid[])`, out.Sets)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var set, path string
+			if err := rows.Scan(&set, &path); err != nil {
+				return err
+			}
+			// A pack's paths are absolute; in its set they are under it.
+			out.Hidden[set] = append(out.Hidden[set], strings.TrimPrefix(path, "/"))
+		}
+		return rows.Err()
 	})
 	return out, err
 }

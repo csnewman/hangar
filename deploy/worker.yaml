@@ -19,6 +19,10 @@ storage:
   images: /var/lib/hangar/images
   environments: /var/lib/hangar/env
   caches: /var/lib/hangar/caches
+  # The files environments share with others -- their owners' profiles and
+  # packs -- which each is served over NFS on vsock. With more than one
+  # worker, every worker mounts the same share here (an NFS export, EFS).
+  files: /var/lib/hangar/files
 
 # Kept back for the host itself; environments are placed in the rest.
 reserved:

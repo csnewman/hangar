@@ -40,6 +40,7 @@ import (
 	"github.com/csnewman/hangar/internal/desktop"
 	"github.com/csnewman/hangar/internal/guestport"
 	"github.com/csnewman/hangar/internal/logs"
+	"github.com/csnewman/hangar/internal/nfs"
 	"github.com/csnewman/hangar/internal/procs"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sshd"
@@ -151,15 +152,23 @@ func (c *Config) defaults() {
 	}
 }
 
+// sharedFilesPort is the vsock port a guest mounts its shared files from,
+// NFS's own.
+const sharedFilesPort = 2049
+
 // Runtime runs environments as virtual machines. It implements the worker's
 // Runtime interface.
 type Runtime struct {
-	cfg    Config
-	store  *ImageStore
-	ctx    context.Context
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	envs   map[string]*machine
+	cfg Config
+	// filesRoot and filesView serve environments their shared files
+	// (UseSharedFiles).
+	filesRoot string
+	filesView func(ctx context.Context, env string) nfs.View
+	store     *ImageStore
+	ctx       context.Context
+	cancel    context.CancelFunc
+	mu        sync.Mutex
+	envs      map[string]*machine
 	// applied is set by the first spec the server hands over. The worker
 	// applies a desired set whole, so from then on an environment with no
 	// spec is one the server has no record of.
@@ -170,6 +179,15 @@ type Runtime struct {
 	// backend's environment for it; gpu is nil without a GPU backend.
 	gpu    *api.GPUInfo
 	gpuEnv []string
+}
+
+// UseSharedFiles has environments booted from now on served the files they
+// share with others, over NFS: from root, each what view says it may
+// reach.
+func (r *Runtime) UseSharedFiles(root string, view func(ctx context.Context, env string) nfs.View) {
+	r.mu.Lock()
+	r.filesRoot, r.filesView = root, view
+	r.mu.Unlock()
 }
 
 // New checks that this host can run environments and returns a runtime.

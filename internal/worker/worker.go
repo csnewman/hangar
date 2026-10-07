@@ -223,8 +223,12 @@ func New(cfg *Config, rt Runtime, log *slog.Logger) (*Worker, error) {
 				"offered_mib", offered.MemoryMiB, "memory_mib", mem, "swap_mib", swap)
 		}
 	}
-	return &Worker{cfg: cfg, rt: rt, client: newClient(cfg.Server.URL), capacity: offered, log: log,
-		sys: &sysStats{path: cfg.Storage.Environments}}, nil
+	w := &Worker{cfg: cfg, rt: rt, client: newClient(cfg.Server.URL), capacity: offered, log: log,
+		sys: &sysStats{path: cfg.Storage.Environments}}
+	if f, ok := rt.(SharedFiles); ok && cfg.Storage.Files != "" {
+		f.UseSharedFiles(cfg.Storage.Files, w.filesView)
+	}
+	return w, nil
 }
 
 // Capacity is what this worker offers the server: the machine, less what is

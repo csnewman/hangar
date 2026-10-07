@@ -18,6 +18,7 @@ import (
 	"github.com/csnewman/hangar/internal/agent"
 	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/host"
+	"github.com/csnewman/hangar/internal/nfs"
 )
 
 // InstanceConfig is one virtual machine: what it boots, what it is given,
@@ -77,6 +78,13 @@ type InstanceConfig struct {
 	Stdin   io.Reader `json:"-"`
 	// Verbose has the backends log to stderr.
 	Verbose bool `json:"-"`
+
+	// SharedFiles is the root of the files environments share with others,
+	// which the guest mounts over NFS on vsock (sharedFilesPort), served
+	// as SharedView, kept current until its context ends, says. Empty
+	// serves none.
+	SharedFiles string                             `json:"-"`
+	SharedView  func(ctx context.Context) nfs.View `json:"-"`
 
 	// AgentWait is how long the agent has to dial back.
 	AgentWait time.Duration `json:"-"`
@@ -317,6 +325,13 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 	inst.server, err = agent.ListenHybrid(ccfg.VsockSocket, guestCID)
 	if err != nil {
 		return nil, fmt.Errorf("listening for the agent: %w", err)
+	}
+	if cfg.SharedFiles != "" && cfg.SharedView != nil {
+		files, err := serveSharedFiles(procCtx, ccfg.VsockSocket, guestCID, cfg)
+		if err != nil {
+			return nil, fmt.Errorf("serving the shared files: %w", err)
+		}
+		inst.backends = append(inst.backends, files)
 	}
 
 	if resuming {
