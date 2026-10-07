@@ -327,6 +327,7 @@ const (
 	SettingDAX            TemplateSetting = "dax"
 	SettingDisplay        TemplateSetting = "display"
 	SettingEditorPath     TemplateSetting = "editor_path"
+	SettingFilePacks      TemplateSetting = "file_packs"
 	SettingGPU            TemplateSetting = "gpu"
 	SettingImage          TemplateSetting = "image"
 	SettingMemory         TemplateSetting = "memory"
@@ -348,6 +349,8 @@ func (e TemplateSetting) Valid() bool {
 	case SettingDisplay:
 		return true
 	case SettingEditorPath:
+		return true
+	case SettingFilePacks:
 		return true
 	case SettingGPU:
 		return true
@@ -629,6 +632,56 @@ type EnvironmentStats struct {
 // Error defines model for Error.
 type Error struct {
 	Error string `json:"error"`
+}
+
+// FilePack defines model for FilePack.
+type FilePack struct {
+	// CanChange The user may change the pack.
+	CanChange bool `json:"can_change"`
+	CanDelete bool `json:"can_delete"`
+
+	// CanWrite The user may change its files, or their copy of them.
+	CanWrite    bool      `json:"can_write"`
+	CreatedAt   time.Time `json:"created_at"`
+	Description string    `json:"description"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Owner       *string   `json:"owner,omitempty"`
+
+	// OwnerID The person who owns it, if one does.
+	OwnerID *string `json:"owner_id,omitempty"`
+
+	// Paths Absolute; a directory's ends in a slash, and holds everything under it.
+	Paths []string `json:"paths"`
+
+	// Personal Each person who uses it has their own copy of its files, rather than all sharing one.
+	Personal bool `json:"personal"`
+
+	// Team The team's slug.
+	Team *string `json:"team,omitempty"`
+
+	// TeamID The team that owns it, if one does.
+	TeamID    *string   `json:"team_id,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// FilePackFiles defines model for FilePackFiles.
+type FilePackFiles struct {
+	Files []ProfileFile `json:"files"`
+	Pack  FilePack      `json:"pack"`
+}
+
+// FilePackInput defines model for FilePackInput.
+type FilePackInput struct {
+	Description *string  `json:"description,omitempty"`
+	Name        string   `json:"name"`
+	Paths       []string `json:"paths"`
+
+	// Personal For a new pack. Ignored for a change.
+	Personal *bool `json:"personal,omitempty"`
+
+	// TeamID The team to own a new pack. Ignored for a change.
+	TeamID *string `json:"team_id,omitempty"`
 }
 
 // GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
@@ -984,6 +1037,9 @@ type Spec struct {
 	// EditorPath The folder the editor opens on. In a template it may use variables, as a repository's branch does.
 	EditorPath *string `json:"editor_path,omitempty"`
 
+	// FilePacks The IDs of the file packs the environment has beside its owner's profile, in order: a file two of them name is the first's. A pack the owner may not use is left out.
+	FilePacks *[]string `json:"file_packs,omitempty"`
+
 	// GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
 	GPU       GPU    `json:"gpu"`
 	Image     string `json:"image"`
@@ -1281,6 +1337,30 @@ type RemoveProfilePathParams struct {
 	Path string `form:"path" json:"path"`
 }
 
+// DeleteFilePackFileParams defines parameters for DeleteFilePackFile.
+type DeleteFilePackFileParams struct {
+	// Path The file's absolute path.
+	Path string `form:"path" json:"path"`
+}
+
+// GetFilePackFileParams defines parameters for GetFilePackFile.
+type GetFilePackFileParams struct {
+	// Path The file's absolute path.
+	Path string `form:"path" json:"path"`
+}
+
+// UpdateFilePackFileSettingsParams defines parameters for UpdateFilePackFileSettings.
+type UpdateFilePackFileSettingsParams struct {
+	// Path The file's absolute path.
+	Path string `form:"path" json:"path"`
+}
+
+// PutFilePackFileParams defines parameters for PutFilePackFile.
+type PutFilePackFileParams struct {
+	// Path The file's absolute path.
+	Path string `form:"path" json:"path"`
+}
+
 // GetWorkerLogParams defines parameters for GetWorkerLog.
 type GetWorkerLogParams struct {
 	Offset *int64 `form:"offset,omitempty" json:"offset,omitempty"`
@@ -1333,6 +1413,18 @@ type AddProfilePathJSONRequestBody = ProfilePath
 
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = CreateToken
+
+// CreateFilePackJSONRequestBody defines body for CreateFilePack for application/json ContentType.
+type CreateFilePackJSONRequestBody = FilePackInput
+
+// UpdateFilePackJSONRequestBody defines body for UpdateFilePack for application/json ContentType.
+type UpdateFilePackJSONRequestBody = FilePackInput
+
+// UpdateFilePackFileSettingsJSONRequestBody defines body for UpdateFilePackFileSettings for application/json ContentType.
+type UpdateFilePackFileSettingsJSONRequestBody = ProfileFileSettings
+
+// PutFilePackFileJSONRequestBody defines body for PutFilePackFile for application/json ContentType.
+type PutFilePackFileJSONRequestBody = PutProfileFile
 
 // CreateTeamJSONRequestBody defines body for CreateTeam for application/json ContentType.
 type CreateTeamJSONRequestBody = CreateTeam
@@ -1507,6 +1599,33 @@ type ServerInterface interface {
 
 	// (DELETE /api/frontend/me/tokens/{id})
 	RevokeToken(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/packs)
+	ListFilePacks(w http.ResponseWriter, r *http.Request)
+
+	// (POST /api/frontend/packs)
+	CreateFilePack(w http.ResponseWriter, r *http.Request)
+
+	// (DELETE /api/frontend/packs/{id})
+	DeleteFilePack(w http.ResponseWriter, r *http.Request, id string)
+
+	// (GET /api/frontend/packs/{id})
+	GetFilePack(w http.ResponseWriter, r *http.Request, id string)
+
+	// (PUT /api/frontend/packs/{id})
+	UpdateFilePack(w http.ResponseWriter, r *http.Request, id string)
+
+	// (DELETE /api/frontend/packs/{id}/file)
+	DeleteFilePackFile(w http.ResponseWriter, r *http.Request, id string, params DeleteFilePackFileParams)
+
+	// (GET /api/frontend/packs/{id}/file)
+	GetFilePackFile(w http.ResponseWriter, r *http.Request, id string, params GetFilePackFileParams)
+
+	// (PATCH /api/frontend/packs/{id}/file)
+	UpdateFilePackFileSettings(w http.ResponseWriter, r *http.Request, id string, params UpdateFilePackFileSettingsParams)
+
+	// (PUT /api/frontend/packs/{id}/file)
+	PutFilePackFile(w http.ResponseWriter, r *http.Request, id string, params PutFilePackFileParams)
 
 	// (GET /api/frontend/people)
 	ListPeople(w http.ResponseWriter, r *http.Request)
@@ -2795,6 +2914,280 @@ func (siw *ServerInterfaceWrapper) RevokeToken(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ListFilePacks operation middleware
+func (siw *ServerInterfaceWrapper) ListFilePacks(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListFilePacks(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateFilePack operation middleware
+func (siw *ServerInterfaceWrapper) CreateFilePack(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateFilePack(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteFilePack operation middleware
+func (siw *ServerInterfaceWrapper) DeleteFilePack(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteFilePack(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetFilePack operation middleware
+func (siw *ServerInterfaceWrapper) GetFilePack(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetFilePack(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateFilePack operation middleware
+func (siw *ServerInterfaceWrapper) UpdateFilePack(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateFilePack(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteFilePackFile operation middleware
+func (siw *ServerInterfaceWrapper) DeleteFilePackFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteFilePackFileParams
+
+	// ------------- Required query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteFilePackFile(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetFilePackFile operation middleware
+func (siw *ServerInterfaceWrapper) GetFilePackFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetFilePackFileParams
+
+	// ------------- Required query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetFilePackFile(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateFilePackFileSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateFilePackFileSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params UpdateFilePackFileSettingsParams
+
+	// ------------- Required query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateFilePackFileSettings(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutFilePackFile operation middleware
+func (siw *ServerInterfaceWrapper) PutFilePackFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PutFilePackFileParams
+
+	// ------------- Required query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutFilePackFile(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListPeople operation middleware
 func (siw *ServerInterfaceWrapper) ListPeople(w http.ResponseWriter, r *http.Request) {
 
@@ -3515,6 +3908,15 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.GetProfileFile)
 	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.UpdateProfileFileSettings)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.PutProfileFile)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/packs", wrapper.ListFilePacks)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/packs", wrapper.CreateFilePack)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/packs/{id}", wrapper.DeleteFilePack)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/packs/{id}", wrapper.GetFilePack)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/packs/{id}", wrapper.UpdateFilePack)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/packs/{id}/file", wrapper.DeleteFilePackFile)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/packs/{id}/file", wrapper.GetFilePackFile)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/frontend/packs/{id}/file", wrapper.UpdateFilePackFileSettings)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/packs/{id}/file", wrapper.PutFilePackFile)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.RemoveProfilePath)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.AddProfilePath)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/login-keys", wrapper.AddLoginKey)
@@ -6326,6 +6728,576 @@ func (response RevokeToken404JSONResponse) VisitRevokeTokenResponse(w http.Respo
 	return err
 }
 
+type ListFilePacksRequestObject struct {
+}
+
+type ListFilePacksResponseObject interface {
+	VisitListFilePacksResponse(w http.ResponseWriter) error
+}
+
+type ListFilePacks200JSONResponse []FilePack
+
+func (response ListFilePacks200JSONResponse) VisitListFilePacksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListFilePacks401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListFilePacks401JSONResponse) VisitListFilePacksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateFilePackRequestObject struct {
+	Body *CreateFilePackJSONRequestBody
+}
+
+type CreateFilePackResponseObject interface {
+	VisitCreateFilePackResponse(w http.ResponseWriter) error
+}
+
+type CreateFilePack201JSONResponse FilePack
+
+func (response CreateFilePack201JSONResponse) VisitCreateFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateFilePack400JSONResponse struct{ InvalidJSONResponse }
+
+func (response CreateFilePack400JSONResponse) VisitCreateFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateFilePack401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateFilePack401JSONResponse) VisitCreateFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateFilePack403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateFilePack403JSONResponse) VisitCreateFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteFilePackRequestObject struct {
+	ID string `json:"id"`
+}
+
+type DeleteFilePackResponseObject interface {
+	VisitDeleteFilePackResponse(w http.ResponseWriter) error
+}
+
+type DeleteFilePack204Response struct {
+}
+
+func (response DeleteFilePack204Response) VisitDeleteFilePackResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteFilePack401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteFilePack401JSONResponse) VisitDeleteFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteFilePack403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteFilePack403JSONResponse) VisitDeleteFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteFilePack404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteFilePack404JSONResponse) VisitDeleteFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetFilePackRequestObject struct {
+	ID string `json:"id"`
+}
+
+type GetFilePackResponseObject interface {
+	VisitGetFilePackResponse(w http.ResponseWriter) error
+}
+
+type GetFilePack200JSONResponse FilePackFiles
+
+func (response GetFilePack200JSONResponse) VisitGetFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetFilePack401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetFilePack401JSONResponse) VisitGetFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetFilePack404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetFilePack404JSONResponse) VisitGetFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateFilePackRequestObject struct {
+	ID   string `json:"id"`
+	Body *UpdateFilePackJSONRequestBody
+}
+
+type UpdateFilePackResponseObject interface {
+	VisitUpdateFilePackResponse(w http.ResponseWriter) error
+}
+
+type UpdateFilePack200JSONResponse FilePack
+
+func (response UpdateFilePack200JSONResponse) VisitUpdateFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateFilePack400JSONResponse struct{ InvalidJSONResponse }
+
+func (response UpdateFilePack400JSONResponse) VisitUpdateFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateFilePack401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateFilePack401JSONResponse) VisitUpdateFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateFilePack403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateFilePack403JSONResponse) VisitUpdateFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateFilePack404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateFilePack404JSONResponse) VisitUpdateFilePackResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteFilePackFileRequestObject struct {
+	ID     string `json:"id"`
+	Params DeleteFilePackFileParams
+}
+
+type DeleteFilePackFileResponseObject interface {
+	VisitDeleteFilePackFileResponse(w http.ResponseWriter) error
+}
+
+type DeleteFilePackFile204Response struct {
+}
+
+func (response DeleteFilePackFile204Response) VisitDeleteFilePackFileResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteFilePackFile400JSONResponse struct{ InvalidJSONResponse }
+
+func (response DeleteFilePackFile400JSONResponse) VisitDeleteFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteFilePackFile401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteFilePackFile401JSONResponse) VisitDeleteFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteFilePackFile403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteFilePackFile403JSONResponse) VisitDeleteFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteFilePackFile404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteFilePackFile404JSONResponse) VisitDeleteFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetFilePackFileRequestObject struct {
+	ID     string `json:"id"`
+	Params GetFilePackFileParams
+}
+
+type GetFilePackFileResponseObject interface {
+	VisitGetFilePackFileResponse(w http.ResponseWriter) error
+}
+
+type GetFilePackFile200JSONResponse ProfileFileContent
+
+func (response GetFilePackFile200JSONResponse) VisitGetFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetFilePackFile401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetFilePackFile401JSONResponse) VisitGetFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetFilePackFile404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetFilePackFile404JSONResponse) VisitGetFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateFilePackFileSettingsRequestObject struct {
+	ID     string `json:"id"`
+	Params UpdateFilePackFileSettingsParams
+	Body   *UpdateFilePackFileSettingsJSONRequestBody
+}
+
+type UpdateFilePackFileSettingsResponseObject interface {
+	VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error
+}
+
+type UpdateFilePackFileSettings200JSONResponse ProfileFile
+
+func (response UpdateFilePackFileSettings200JSONResponse) VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateFilePackFileSettings400JSONResponse struct{ InvalidJSONResponse }
+
+func (response UpdateFilePackFileSettings400JSONResponse) VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateFilePackFileSettings401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateFilePackFileSettings401JSONResponse) VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateFilePackFileSettings403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response UpdateFilePackFileSettings403JSONResponse) VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateFilePackFileSettings404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateFilePackFileSettings404JSONResponse) VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutFilePackFileRequestObject struct {
+	ID     string `json:"id"`
+	Params PutFilePackFileParams
+	Body   *PutFilePackFileJSONRequestBody
+}
+
+type PutFilePackFileResponseObject interface {
+	VisitPutFilePackFileResponse(w http.ResponseWriter) error
+}
+
+type PutFilePackFile200JSONResponse ProfileFile
+
+func (response PutFilePackFile200JSONResponse) VisitPutFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutFilePackFile400JSONResponse struct{ InvalidJSONResponse }
+
+func (response PutFilePackFile400JSONResponse) VisitPutFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutFilePackFile401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response PutFilePackFile401JSONResponse) VisitPutFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutFilePackFile403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response PutFilePackFile403JSONResponse) VisitPutFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutFilePackFile404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response PutFilePackFile404JSONResponse) VisitPutFilePackFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListPeopleRequestObject struct {
 }
 
@@ -8117,6 +9089,33 @@ type StrictServerInterface interface {
 	// (DELETE /api/frontend/me/tokens/{id})
 	RevokeToken(ctx context.Context, request RevokeTokenRequestObject) (RevokeTokenResponseObject, error)
 
+	// (GET /api/frontend/packs)
+	ListFilePacks(ctx context.Context, request ListFilePacksRequestObject) (ListFilePacksResponseObject, error)
+
+	// (POST /api/frontend/packs)
+	CreateFilePack(ctx context.Context, request CreateFilePackRequestObject) (CreateFilePackResponseObject, error)
+
+	// (DELETE /api/frontend/packs/{id})
+	DeleteFilePack(ctx context.Context, request DeleteFilePackRequestObject) (DeleteFilePackResponseObject, error)
+
+	// (GET /api/frontend/packs/{id})
+	GetFilePack(ctx context.Context, request GetFilePackRequestObject) (GetFilePackResponseObject, error)
+
+	// (PUT /api/frontend/packs/{id})
+	UpdateFilePack(ctx context.Context, request UpdateFilePackRequestObject) (UpdateFilePackResponseObject, error)
+
+	// (DELETE /api/frontend/packs/{id}/file)
+	DeleteFilePackFile(ctx context.Context, request DeleteFilePackFileRequestObject) (DeleteFilePackFileResponseObject, error)
+
+	// (GET /api/frontend/packs/{id}/file)
+	GetFilePackFile(ctx context.Context, request GetFilePackFileRequestObject) (GetFilePackFileResponseObject, error)
+
+	// (PATCH /api/frontend/packs/{id}/file)
+	UpdateFilePackFileSettings(ctx context.Context, request UpdateFilePackFileSettingsRequestObject) (UpdateFilePackFileSettingsResponseObject, error)
+
+	// (PUT /api/frontend/packs/{id}/file)
+	PutFilePackFile(ctx context.Context, request PutFilePackFileRequestObject) (PutFilePackFileResponseObject, error)
+
 	// (GET /api/frontend/people)
 	ListPeople(ctx context.Context, request ListPeopleRequestObject) (ListPeopleResponseObject, error)
 
@@ -9542,6 +10541,268 @@ func (sh *strictHandler) RevokeToken(w http.ResponseWriter, r *http.Request, id 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RevokeTokenResponseObject); ok {
 		if err := validResponse.VisitRevokeTokenResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListFilePacks operation middleware
+func (sh *strictHandler) ListFilePacks(w http.ResponseWriter, r *http.Request) {
+	var request ListFilePacksRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListFilePacks(ctx, request.(ListFilePacksRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListFilePacks")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListFilePacksResponseObject); ok {
+		if err := validResponse.VisitListFilePacksResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateFilePack operation middleware
+func (sh *strictHandler) CreateFilePack(w http.ResponseWriter, r *http.Request) {
+	var request CreateFilePackRequestObject
+
+	var body CreateFilePackJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateFilePack(ctx, request.(CreateFilePackRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateFilePack")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateFilePackResponseObject); ok {
+		if err := validResponse.VisitCreateFilePackResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteFilePack operation middleware
+func (sh *strictHandler) DeleteFilePack(w http.ResponseWriter, r *http.Request, id string) {
+	var request DeleteFilePackRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteFilePack(ctx, request.(DeleteFilePackRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteFilePack")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteFilePackResponseObject); ok {
+		if err := validResponse.VisitDeleteFilePackResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetFilePack operation middleware
+func (sh *strictHandler) GetFilePack(w http.ResponseWriter, r *http.Request, id string) {
+	var request GetFilePackRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetFilePack(ctx, request.(GetFilePackRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetFilePack")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetFilePackResponseObject); ok {
+		if err := validResponse.VisitGetFilePackResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateFilePack operation middleware
+func (sh *strictHandler) UpdateFilePack(w http.ResponseWriter, r *http.Request, id string) {
+	var request UpdateFilePackRequestObject
+
+	request.ID = id
+
+	var body UpdateFilePackJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateFilePack(ctx, request.(UpdateFilePackRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateFilePack")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateFilePackResponseObject); ok {
+		if err := validResponse.VisitUpdateFilePackResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteFilePackFile operation middleware
+func (sh *strictHandler) DeleteFilePackFile(w http.ResponseWriter, r *http.Request, id string, params DeleteFilePackFileParams) {
+	var request DeleteFilePackFileRequestObject
+
+	request.ID = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteFilePackFile(ctx, request.(DeleteFilePackFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteFilePackFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteFilePackFileResponseObject); ok {
+		if err := validResponse.VisitDeleteFilePackFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetFilePackFile operation middleware
+func (sh *strictHandler) GetFilePackFile(w http.ResponseWriter, r *http.Request, id string, params GetFilePackFileParams) {
+	var request GetFilePackFileRequestObject
+
+	request.ID = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetFilePackFile(ctx, request.(GetFilePackFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetFilePackFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetFilePackFileResponseObject); ok {
+		if err := validResponse.VisitGetFilePackFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateFilePackFileSettings operation middleware
+func (sh *strictHandler) UpdateFilePackFileSettings(w http.ResponseWriter, r *http.Request, id string, params UpdateFilePackFileSettingsParams) {
+	var request UpdateFilePackFileSettingsRequestObject
+
+	request.ID = id
+	request.Params = params
+
+	var body UpdateFilePackFileSettingsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateFilePackFileSettings(ctx, request.(UpdateFilePackFileSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateFilePackFileSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateFilePackFileSettingsResponseObject); ok {
+		if err := validResponse.VisitUpdateFilePackFileSettingsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PutFilePackFile operation middleware
+func (sh *strictHandler) PutFilePackFile(w http.ResponseWriter, r *http.Request, id string, params PutFilePackFileParams) {
+	var request PutFilePackFileRequestObject
+
+	request.ID = id
+	request.Params = params
+
+	var body PutFilePackFileJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PutFilePackFile(ctx, request.(PutFilePackFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PutFilePackFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PutFilePackFileResponseObject); ok {
+		if err := validResponse.VisitPutFilePackFileResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

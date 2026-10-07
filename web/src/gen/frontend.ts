@@ -111,7 +111,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The signed-in user's profile: the files that follow them into every environment they own, and their SSH keys. A secret file is listed without its content. */
+        /** @description The signed-in user's profile: the files that follow them into every environment they own, and their SSH keys. */
         get: operations["getProfile"];
         put?: never;
         post?: never;
@@ -141,6 +141,68 @@ export interface paths {
         head?: never;
         /** @description Change a file's settings. They reach every environment as a change to the file does. */
         patch: operations["updateProfileFileSettings"];
+        trace?: never;
+    };
+    "/api/frontend/packs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description The file packs the signed-in user may use: their own, and their teams'. Every pack, for an administrator. */
+        get: operations["listFilePacks"];
+        put?: never;
+        /** @description Make a pack, owned by the team it names, which the user must be a member or admin of, or else by the user. */
+        post: operations["createFilePack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/packs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        /** @description A pack and its files: the one copy of a shared pack's, or the user's own copy of a personal pack's. */
+        get: operations["getFilePack"];
+        /** @description Change a pack's name, description and paths. Its owner, and whether it is personal, stay. Files under a path it no longer names are dropped from the pack; environments keep theirs. */
+        put: operations["updateFilePack"];
+        post?: never;
+        /** @description Delete a pack and every copy of its files. Environments keep theirs. */
+        delete: operations["deleteFilePack"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/packs/{id}/file": {
+        parameters: {
+            query: {
+                /** @description The file's absolute path. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        get: operations["getFilePackFile"];
+        /** @description Write a file under one of the pack's paths. It reaches every running environment that has the pack at once. */
+        put: operations["putFilePackFile"];
+        post?: never;
+        /** @description Remove a file, from the pack and every environment that has it. */
+        delete: operations["deleteFilePackFile"];
+        options?: never;
+        head?: never;
+        patch: operations["updateFilePackFileSettings"];
         trace?: never;
     };
     "/api/frontend/me/profile/paths": {
@@ -1089,6 +1151,44 @@ export interface components {
             /** @description Whether the server can keep SSH keys: without its key, they are refused. */
             secrets: boolean;
         };
+        FilePack: {
+            id: string;
+            name: string;
+            description: string;
+            /** @description The person who owns it, if one does. */
+            owner_id?: string;
+            owner?: string;
+            /** @description The team that owns it, if one does. */
+            team_id?: string;
+            /** @description The team's slug. */
+            team?: string;
+            /** @description Each person who uses it has their own copy of its files, rather than all sharing one. */
+            personal: boolean;
+            /** @description Absolute; a directory's ends in a slash, and holds everything under it. */
+            paths: string[];
+            /** @description The user may change the pack. */
+            can_change: boolean;
+            /** @description The user may change its files, or their copy of them. */
+            can_write: boolean;
+            can_delete: boolean;
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            updated_at: string;
+        };
+        FilePackInput: {
+            name: string;
+            description?: string;
+            /** @description The team to own a new pack. Ignored for a change. */
+            team_id?: string;
+            /** @description For a new pack. Ignored for a change. */
+            personal?: boolean;
+            paths: string[];
+        };
+        FilePackFiles: {
+            pack: components["schemas"]["FilePack"];
+            files: components["schemas"]["ProfileFile"][];
+        };
         ProfileFile: {
             path: string;
             size: number;
@@ -1209,7 +1309,7 @@ export interface components {
          * @description A setting an environment takes from its template.
          * @enum {string}
          */
-        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "untrusted" | "trusted_folders" | "web_names" | "placement" | "name";
+        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "untrusted" | "trusted_folders" | "web_names" | "file_packs" | "placement" | "name";
         /**
          * @description console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; fs the backend serving the image; gpu the virtual GPU's backend.
          * @enum {string}
@@ -1289,6 +1389,8 @@ export interface components {
             repos: components["schemas"]["Repo"][];
             /** @description The folder the editor opens on. In a template it may use variables, as a repository's branch does. */
             editor_path?: string;
+            /** @description The IDs of the file packs the environment has beside its owner's profile, in order: a file two of them name is the first's. A pack the owner may not use is left out. */
+            file_packs?: string[];
             /** @description Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored when untrusted, where it trusts nothing. */
             trusted_folders?: string[];
             /** @description For code the owner does not trust: the environment is never given their credentials -- Claude's sign-in, or signatures from their SSH keys -- though the rest of their profile still follows them in. */
@@ -1978,6 +2080,251 @@ export interface operations {
             };
             400: components["responses"]["Invalid"];
             401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listFilePacks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The packs, by name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FilePack"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    createFilePack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FilePackInput"];
+            };
+        };
+        responses: {
+            /** @description The pack. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FilePack"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+        };
+    };
+    getFilePack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pack. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FilePackFiles"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateFilePack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FilePackInput"];
+            };
+        };
+        responses: {
+            /** @description The pack. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FilePack"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteFilePack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getFilePackFile: {
+        parameters: {
+            query: {
+                /** @description The file's absolute path. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The file. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileFileContent"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    putFilePackFile: {
+        parameters: {
+            query: {
+                /** @description The file's absolute path. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutProfileFile"];
+            };
+        };
+        responses: {
+            /** @description The file as stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileFile"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteFilePackFile: {
+        parameters: {
+            query: {
+                /** @description The file's absolute path. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Removed. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    updateFilePackFileSettings: {
+        parameters: {
+            query: {
+                /** @description The file's absolute path. */
+                path: string;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ProfileFileSettings"];
+            };
+        };
+        responses: {
+            /** @description The file as stored. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProfileFile"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };

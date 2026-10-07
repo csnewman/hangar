@@ -126,11 +126,17 @@ func (p *plane) env(t *testing.T, name string, untrusted bool) (id, home string,
 // envIn makes an environment in the given phase, with a guest for it.
 func (p *plane) envIn(t *testing.T, name string, untrusted bool, phase api.Phase) (id, home string, g *profile.Guest) {
 	t.Helper()
-	ctx := context.Background()
 	spec := `{}`
 	if untrusted {
 		spec = `{"untrusted": true}`
 	}
+	return p.envSpec(t, name, spec, phase)
+}
+
+// envSpec makes an environment with the given spec, with a guest for it.
+func (p *plane) envSpec(t *testing.T, name, spec string, phase api.Phase) (id, home string, g *profile.Guest) {
+	t.Helper()
+	ctx := context.Background()
 	err := p.d.Transact(ctx, func(tx db.Tx) error {
 		return tx.QueryRow(ctx, `INSERT INTO environments (owner_id, name, template_name, spec, image, cpus,
 				memory_mib, desired, worker_id, phase)

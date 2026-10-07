@@ -405,7 +405,7 @@ func (s *Store) write(ctx context.Context, set, path string, data []byte, mode u
 	return f, err
 }
 
-// DeleteUser deletes every file kept for a user, once they are gone.
+// DeleteSets deletes every file kept for file sets, once they are gone.
 func (s *Store) DeleteSets(ctx context.Context, sets ...string) error {
 	var errs []error
 	for _, set := range sets {

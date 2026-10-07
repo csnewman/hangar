@@ -115,6 +115,11 @@ type Spec struct {
 	// Chromium runs tens of times slower from it, so it is asked for, not
 	// assumed.
 	DAX bool `json:"dax,omitempty"`
+	// FilePacks are the IDs of the file packs the environment is kept in
+	// step with beside its owner's profile (internal/profile), in order: a
+	// file two of them name is the first's. One its owner may not use is
+	// left out.
+	FilePacks []string `json:"file_packs,omitempty"`
 	// WebNames are the names of the environment's own web servers its page
 	// links to, each reached on <name>-env<short> after Hangar's host.
 	WebNames []string `json:"web_names,omitempty"`

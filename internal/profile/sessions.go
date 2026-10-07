@@ -66,6 +66,8 @@ func (s *Sessions) UseRegistry(host string) { s.registry = host }
 type target struct {
 	env, name, owner, ownerName, worker string
 	trusted                             bool
+	// packs are the file packs its spec lists, joined by commas.
+	packs string
 }
 
 // Run keeps sessions with the environments that should have them until
@@ -92,13 +94,13 @@ func (s *Sessions) Kick() {
 	}
 }
 
-// Changed tells the sessions of a user's environments that their profile
-// changed. An empty user means any might have.
-func (s *Sessions) Changed(userID string) {
+// Changed tells the sessions kept in step with a file set that it changed.
+// An empty set means any might have.
+func (s *Sessions) Changed(set string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, sess := range s.sessions {
-		if userID == "" || sess.owner == userID {
+		if set == "" || sess.owner == set || sess.uses(set) {
 			sess.nudge()
 		}
 	}
@@ -111,7 +113,10 @@ func (s *Sessions) reconcile(ctx context.Context) {
 		err := s.store.db.Transact(ctx, func(tx db.Tx) error {
 			clear(want)
 			rows, err := tx.Query(ctx, `SELECT e.id::text, e.name, e.owner_id::text, u.username, e.worker_id::text,
-					coalesce((e.spec->>'untrusted')::boolean, false)
+					coalesce((e.spec->>'untrusted')::boolean, false),
+					coalesce((SELECT string_agg(p, ',' ORDER BY n) FROM jsonb_array_elements_text(
+						CASE jsonb_typeof(e.spec->'file_packs') WHEN 'array' THEN e.spec->'file_packs' ELSE '[]' END)
+						WITH ORDINALITY AS x(p, n)), '')
 				FROM environments e JOIN users u ON u.id = e.owner_id
 				WHERE e.phase IN ('starting', 'running') AND e.desired = 'running' AND e.worker_id = ANY($1::uuid[])`, workers)
 			if err != nil {
@@ -121,7 +126,7 @@ func (s *Sessions) reconcile(ctx context.Context) {
 			for rows.Next() {
 				var t target
 				var untrusted bool
-				if err := rows.Scan(&t.env, &t.name, &t.owner, &t.ownerName, &t.worker, &untrusted); err != nil {
+				if err := rows.Scan(&t.env, &t.name, &t.owner, &t.ownerName, &t.worker, &untrusted, &t.packs); err != nil {
 					return err
 				}
 				t.trusted = !untrusted
@@ -161,7 +166,7 @@ func (s *Sessions) reconcile(ctx context.Context) {
 		}
 		tr.n++
 		sess := &session{target: t, s: s, nudges: make(chan struct{}, 1), done: make(chan struct{}),
-			own: map[int64]bool{}, tries: *tr}
+			own: map[string]bool{}, sent: map[string]int64{}, tries: *tr}
 		sessCtx, cancel := context.WithCancel(ctx)
 		sess.cancel = cancel
 		s.sessions[id] = sess
@@ -180,20 +185,43 @@ type session struct {
 	wmu  sync.Mutex
 	conn net.Conn
 
-	// own are the versions this session's own writes made. They are not
-	// sent back: the agent has them, and a later change it has made since
-	// must not be overwritten by the echo of an earlier one.
-	own map[int64]bool
-	// sent is the last version of the profile sent, and paths the shared
-	// paths.
-	sent  int64
+	// own are the versions this session's own writes made, as
+	// <set>:<version>. They are not sent back: the agent has them, and a
+	// later change it has made since must not be overwritten by the echo
+	// of an earlier one.
+	own map[string]bool
+	// sets are the file sets the environment is kept in step with, the
+	// owner's profile first (Store.EnvironmentSets); sent the last version
+	// of each sent, and paths every set's paths, as last sent.
+	sets  []FileSet
+	sent  map[string]int64
 	paths Paths
+	// setIDs are the sets' IDs, for Changed.
+	smu    sync.Mutex
+	setIDs []string
 	// keys are the keys last sent.
 	keys     []string
 	keysSent bool
 	// tries are the attempts at a session with the environment, this one
 	// included, since it last had one.
 	tries tries
+}
+
+// uses reports whether the session keeps a set other than the profile.
+func (x *session) uses(set string) bool {
+	x.smu.Lock()
+	defer x.smu.Unlock()
+	return slices.Contains(x.setIDs, set)
+}
+
+// setFor is the set a file is kept in: the first whose paths include it.
+func (x *session) setFor(key string) (FileSet, bool) {
+	for _, s := range x.sets {
+		if s.Paths.Synced(key) {
+			return s, true
+		}
+	}
+	return FileSet{}, false
 }
 
 func (x *session) nudge() {
@@ -349,12 +377,31 @@ func (x *session) serve(ctx context.Context) error {
 	}
 }
 
-// sendPaths sends the shared paths when they are not what was last sent.
+// sendPaths looks up the sets again, and sends their paths when they are
+// not what was last sent.
 func (x *session) sendPaths(ctx context.Context) error {
-	paths, err := x.s.store.Paths(ctx, x.owner)
+	var packs []string
+	if x.packs != "" {
+		packs = strings.Split(x.packs, ",")
+	}
+	sets, err := x.s.store.EnvironmentSets(ctx, x.owner, packs)
 	if err != nil {
 		return err
 	}
+	x.sets = sets
+	ids := make([]string, 0, len(sets))
+	paths := Paths{}
+	for _, s := range sets {
+		ids = append(ids, s.ID)
+		for _, p := range s.Paths {
+			if !slices.Contains(paths, p) {
+				paths = append(paths, p)
+			}
+		}
+	}
+	x.smu.Lock()
+	x.setIDs = ids
+	x.smu.Unlock()
 	if slices.Equal(paths, x.paths) {
 		return nil
 	}
@@ -400,25 +447,32 @@ func (s *sentFiles) largest(n int) string {
 	return strings.Join(out, ", ")
 }
 
-// sendFiles sends what changed since the last it sent, counting it in sent
-// when that is given.
+// sendFiles sends what changed in each set since the last it sent,
+// counting it in sent when that is given. A file another set keeps, being
+// earlier in the list, is not sent.
 func (x *session) sendFiles(ctx context.Context, sent *sentFiles) error {
-	files, err := x.s.store.Since(ctx, x.owner, x.trusted, x.sent)
-	if err != nil {
-		return err
-	}
-	for _, f := range files {
-		x.sent = max(x.sent, f.Version)
-		if x.own[f.Version] {
-			delete(x.own, f.Version)
-			continue
-		}
-		if err := x.send(Message{Type: TypeFile, Path: f.Path, Data: f.Data, Mode: f.Mode,
-			Version: f.Version, Deleted: f.Deleted}); err != nil {
+	for _, set := range x.sets {
+		files, err := x.s.store.Since(ctx, set.ID, x.trusted, x.sent[set.ID])
+		if err != nil {
 			return err
 		}
-		if sent != nil {
-			sent.add(f.Path, len(f.Data))
+		for _, f := range files {
+			x.sent[set.ID] = max(x.sent[set.ID], f.Version)
+			own := fmt.Sprintf("%s:%d", set.ID, f.Version)
+			if x.own[own] {
+				delete(x.own, own)
+				continue
+			}
+			if by, ok := x.setFor(f.Path); !ok || by.ID != set.ID {
+				continue
+			}
+			if err := x.send(Message{Type: TypeFile, Path: f.Path, Data: f.Data, Mode: f.Mode,
+				Version: f.Version, Deleted: f.Deleted}); err != nil {
+				return err
+			}
+			if sent != nil {
+				sent.add(f.Path, len(f.Data))
+			}
 		}
 	}
 	return nil
@@ -449,11 +503,12 @@ func (x *session) handle(ctx context.Context, m Message) error {
 	log := x.s.log.With("environment", x.env)
 	switch m.Type {
 	case TypePut, TypeDelete:
-		if !x.paths.Synced(m.Path) {
+		set, ok := x.setFor(m.Path)
+		if !ok {
 			return nil
 		}
 		if !x.trusted {
-			only, err := x.s.store.TrustedOnly(ctx, x.owner, m.Path)
+			only, err := x.s.store.TrustedOnly(ctx, set.ID, m.Path)
 			if err != nil {
 				return err
 			}
@@ -464,12 +519,12 @@ func (x *session) handle(ctx context.Context, m Message) error {
 		var f File
 		var err error
 		if m.Type == TypePut {
-			f, err = x.s.store.Put(ctx, x.owner, m.Path, m.Data, m.Mode)
+			f, err = x.s.store.Put(ctx, set.ID, m.Path, m.Data, m.Mode)
 		} else {
-			f, err = x.s.store.Delete(ctx, x.owner, m.Path)
+			f, err = x.s.store.Delete(ctx, set.ID, m.Path)
 		}
 		if err == nil {
-			x.own[f.Version] = true
+			x.own[fmt.Sprintf("%s:%d", set.ID, f.Version)] = true
 		}
 		if errors.Is(err, ErrInvalid) || errors.Is(err, ErrNoKey) {
 			log.Warn("profile: refused a file from the environment", "path", m.Path, "err", err)
@@ -477,14 +532,20 @@ func (x *session) handle(ctx context.Context, m Message) error {
 		}
 		return err
 	case TypeLock:
-		// One of the Locks LockFS serves, or a lock the guest's kernel
-		// takes on a shared file for a program there.
+		// One of the Locks LockFS serves, in the profile, or a lock the
+		// guest's kernel takes on a shared file for a program there, in
+		// the file's set; a path just shared may be in none yet of those
+		// last looked up.
+		set := FileSet{ID: x.owner}
 		if _, ok := LockAt(m.Path); !ok {
-			paths, err := x.s.store.Paths(ctx, x.owner)
-			if err != nil {
-				return err
+			var found bool
+			if set, found = x.setFor(m.Path); !found {
+				if err := x.sendPaths(ctx); err != nil {
+					return err
+				}
+				set, found = x.setFor(m.Path)
 			}
-			if !paths.Synced(m.Path) {
+			if !found {
 				if m.ID == 0 {
 					return nil
 				}
@@ -494,7 +555,7 @@ func (x *session) handle(ctx context.Context, m Message) error {
 		if m.ID == 0 {
 			// A renewal from the holder.
 			if m.Held {
-				_, err := x.s.store.Lock(ctx, x.owner, m.Path, x.env)
+				_, err := x.s.store.Lock(ctx, set.ID, m.Path, x.env)
 				return err
 			}
 			return nil
@@ -503,12 +564,12 @@ func (x *session) handle(ctx context.Context, m Message) error {
 		if !m.Held {
 			// The agent sent what changed under the lock before asking
 			// to let it go, and those have been written above.
-			if err := x.s.store.Unlock(ctx, x.owner, m.Path, x.env); err != nil {
+			if err := x.s.store.Unlock(ctx, set.ID, m.Path, x.env); err != nil {
 				return err
 			}
 			return x.send(reply)
 		}
-		got, err := x.s.store.Lock(ctx, x.owner, m.Path, x.env)
+		got, err := x.s.store.Lock(ctx, set.ID, m.Path, x.env)
 		if err != nil {
 			return err
 		}
@@ -516,7 +577,7 @@ func (x *session) handle(ctx context.Context, m Message) error {
 			// The holder starts from the profile as it stands: what it
 			// is about to read, another environment may have just
 			// written.
-			files, err := x.s.store.FilesUnder(ctx, x.owner, path.Dir(m.Path)+"/", x.trusted)
+			files, err := x.s.store.FilesUnder(ctx, set.ID, path.Dir(m.Path)+"/", x.trusted)
 			if err != nil {
 				return err
 			}

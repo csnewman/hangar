@@ -182,6 +182,7 @@ func toSpec(s api.Spec) Spec {
 		Dax:            optionalBool(s.DAX),
 		TrustedFolders: optionalSlice(s.TrustedFolders),
 		WebNames:       optionalSlice(s.WebNames),
+		FilePacks:      optionalSlice(s.FilePacks),
 		Placement:      placement,
 	}
 }
@@ -203,6 +204,7 @@ func fromSpec(s Spec) api.Spec {
 		DAX:            s.Dax != nil && *s.Dax,
 		TrustedFolders: derefSlice(s.TrustedFolders),
 		WebNames:       derefSlice(s.WebNames),
+		FilePacks:      derefSlice(s.FilePacks),
 		Placement:      s.Placement,
 	}
 }

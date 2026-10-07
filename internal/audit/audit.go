@@ -105,6 +105,7 @@ const (
 	KindSSHKey      = "ssh_key"
 	KindFile        = "profile_file"
 	KindPath        = "profile_path"
+	KindPack        = "file_pack"
 )
 
 // Event is one thing that happened.

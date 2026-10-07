@@ -11,6 +11,7 @@ import './index.css'
 import { AccountPage } from './pages/Account'
 import { ConnectVSCodePage } from './pages/ConnectVSCode'
 import { ProfilePage } from './pages/Profile'
+import { PackPage, PacksPage } from './pages/Packs'
 import { AuditPage } from './pages/admin/Audit'
 import { PerformanceTab } from './pages/Performance'
 import { UsersPage } from './pages/admin/Users'
@@ -107,6 +108,8 @@ const router = createBrowserRouter([
           { path: 'teams/:id', element: <TeamPage /> },
           { path: 'account', element: <AccountPage /> },
           { path: 'profile', element: <ProfilePage /> },
+          { path: 'packs', element: <PacksPage /> },
+          { path: 'packs/:id', element: <PackPage /> },
           {
             path: 'admin/audit',
             element: (

@@ -45,8 +45,8 @@ type Guest struct {
 	backing map[string]string // LockFS's backing for each directory it serves
 
 	// changes are the kernel's reports of changes to shared files
-	// (ServeLocks), relative to the home directory; one that did not fit
-	// is changesLost, and everything is looked at again.
+	// (ServeLocks), as absolute paths; one that did not fit is
+	// changesLost, and everything is looked at again.
 	changes     chan string
 	changesLost atomic.Bool
 
@@ -139,7 +139,7 @@ func (g *Guest) Serve(conn io.ReadWriteCloser) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	s := &guestSession{g: g, conn: conn, home: u.HomeDir,
-		dirty: map[string]bool{}, pending: map[int64]chan Message{},
+		dirty: map[string]bool{}, waiting: map[string]Message{}, pending: map[int64]chan Message{},
 	}
 	s.uid, _ = strconv.Atoi(u.Uid)
 	s.gid, _ = strconv.Atoi(u.Gid)
@@ -252,6 +252,9 @@ func (g *Guest) backingFor(dir string) string {
 	if b, ok := g.backing[dir]; ok {
 		return b
 	}
+	if strings.HasPrefix(dir, "/") {
+		return dir
+	}
 	return filepath.Join(g.user.HomeDir, dir)
 }
 
@@ -289,7 +292,11 @@ type guestSession struct {
 	paths Paths
 
 	// Owned by run's goroutine.
-	dirty map[string]bool // paths changed here, not yet looked at
+	dirty map[string]bool // keys changed here, not yet looked at
+	// waiting are a pack's files whose place does not exist yet: the
+	// directory the pack's path is in, which a clone of the workspace
+	// makes. They are written once it does.
+	waiting map[string]Message
 
 	rmu      sync.Mutex
 	ready    bool // the profile has been sent whole
@@ -329,12 +336,65 @@ func hash(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// synced reports whether a path is shared and is not one of the agent's
-// own staging files.
-func (s *guestSession) synced(rel string) bool {
+// A key names a shared file: relative to the home directory for the
+// profile's, absolute for a pack's.
+
+// full is where the file a key names is.
+func (s *guestSession) full(key string) string {
+	if strings.HasPrefix(key, "/") {
+		return key
+	}
+	return filepath.Join(s.home, key)
+}
+
+// keysOf are the keys a path here might be shared as: itself, and,
+// under the home directory, relative to it.
+func (s *guestSession) keysOf(p string) []string {
+	out := []string{p}
+	if r, err := filepath.Rel(s.home, p); err == nil && r != "." && r != ".." && !strings.HasPrefix(r, "../") {
+		out = append(out, r)
+	}
+	return out
+}
+
+// synced reports whether a key is shared and is not one of the agent's own
+// staging files. A file the profile shares is the profile's, though a pack
+// names it too.
+func (s *guestSession) synced(key string) bool {
 	s.kmu.Lock()
 	defer s.kmu.Unlock()
-	return s.paths.Synced(rel) && !strings.HasPrefix(filepath.Base(rel), stagingPrefix)
+	if !s.paths.Synced(key) || strings.HasPrefix(filepath.Base(key), stagingPrefix) {
+		return false
+	}
+	if ks := s.keysOf(key); strings.HasPrefix(key, "/") && len(ks) > 1 && s.paths.Synced(ks[1]) {
+		return false
+	}
+	return true
+}
+
+// keyOf is the key a path here is shared as, if it is.
+func (s *guestSession) keyOf(p string) (string, bool) {
+	for _, k := range s.keysOf(p) {
+		if s.synced(k) {
+			return k, true
+		}
+	}
+	return "", false
+}
+
+// placed reports whether a pack's file has somewhere to go: the directory
+// its pack's path is in exists. A profile's always has, being the home
+// directory.
+func (s *guestSession) placed(key string) bool {
+	if !strings.HasPrefix(key, "/") {
+		return true
+	}
+	by, ok := s.sharedPaths().Covering(key)
+	if !ok {
+		return false
+	}
+	st, err := os.Stat(path.Dir(strings.TrimSuffix(by, "/")))
+	return err == nil && st.IsDir()
 }
 
 func (s *guestSession) sharedPaths() Paths {
@@ -415,6 +475,8 @@ func (s *guestSession) run(ctx context.Context) error {
 
 	debounce := time.NewTimer(time.Hour)
 	debounce.Stop()
+	retry := time.NewTicker(2 * time.Second)
+	defer retry.Stop()
 	for {
 		select {
 		case err := <-readErr:
@@ -423,9 +485,11 @@ func (s *guestSession) run(ctx context.Context) error {
 			if err := s.handle(m); err != nil {
 				return err
 			}
-		case rel := <-s.g.changes:
-			s.changedHere(rel)
+		case p := <-s.g.changes:
+			s.changedHere(p)
 			debounce.Reset(100 * time.Millisecond)
+		case <-retry.C:
+			s.placeWaiting()
 		case <-debounce.C:
 			if s.g.changesLost.Swap(false) {
 				s.rescan()
@@ -495,6 +559,12 @@ func (s *guestSession) setPaths(paths Paths) {
 	s.kmu.Unlock()
 	parents, trees := paths.Dirs()
 	for _, d := range append(parents, trees...) {
+		if strings.HasPrefix(d, "/") {
+			// A pack's are made as its files are written, once the
+			// directory its path is in exists: one made earlier would be
+			// in the way of the clone that makes it.
+			continue
+		}
 		if err := s.mkdirAll(filepath.Join(s.home, d)); err != nil {
 			s.g.log.Warn("profile: making a directory", "dir", d, "err", err)
 		}
@@ -505,22 +575,27 @@ func (s *guestSession) setPaths(paths Paths) {
 	}
 }
 
-// changedHere marks what the kernel reported changed to be looked at: the
-// path, what the profile has under it, which a directory removed or renamed
-// took with it, and what is under it here, which one made or renamed
-// brought.
-func (s *guestSession) changedHere(rel string) {
-	if rel == "" {
+// changedHere marks what the kernel reported changed, at the absolute path
+// p, to be looked at: the path, what the profile and packs have under it,
+// which a directory removed or renamed took with it, and what is under it
+// here, which one made or renamed brought.
+func (s *guestSession) changedHere(p string) {
+	if p == "" {
 		s.rescan()
 		return
 	}
-	s.dirty[rel] = true
-	for _, p := range s.knownUnder(rel) {
-		s.dirty[p] = true
+	paths := s.sharedPaths()
+	tree := false
+	for _, key := range s.keysOf(p) {
+		s.dirty[key] = true
+		for _, k := range s.knownUnder(key) {
+			s.dirty[k] = true
+		}
+		tree = tree || paths.InTree(key)
 	}
-	if s.sharedPaths().InTree(rel) {
-		if st, err := os.Lstat(filepath.Join(s.home, rel)); err == nil && st.IsDir() {
-			s.markTree(filepath.Join(s.home, rel))
+	if tree {
+		if st, err := os.Lstat(p); err == nil && st.IsDir() {
+			s.markTree(p)
 		}
 	}
 }
@@ -560,14 +635,7 @@ func (s *guestSession) rescan() {
 		}
 	}
 	for _, d := range trees {
-		filepath.WalkDir(filepath.Join(s.home, d), func(p string, e fs.DirEntry, err error) error {
-			if err == nil && !e.IsDir() {
-				if rel, err := filepath.Rel(s.home, p); err == nil {
-					s.dirty[rel] = true
-				}
-			}
-			return nil
-		})
+		s.markTree(s.full(d))
 	}
 }
 
@@ -582,7 +650,7 @@ func (s *guestSession) flush() error {
 		if !s.synced(rel) {
 			continue
 		}
-		full := filepath.Join(s.home, rel)
+		full := s.full(rel)
 		st, err := os.Lstat(full)
 		if errors.Is(err, fs.ErrNotExist) {
 			if h, ok := s.knownHash(rel); ok && h != "" {
@@ -621,7 +689,12 @@ func (s *guestSession) flush() error {
 // change is sent instead, unless the profile changed it too: then the
 // profile's is taken.
 func (s *guestSession) apply(m Message) error {
-	full := filepath.Join(s.home, m.Path)
+	full := s.full(m.Path)
+	if !s.placed(m.Path) {
+		s.waiting[m.Path] = m
+		return nil
+	}
+	delete(s.waiting, m.Path)
 	if base, ok := s.knownHash(m.Path); ok && base != "" {
 		unchanged := !m.Deleted && hash(m.Data) == base
 		cur, err := os.ReadFile(full)
@@ -633,6 +706,18 @@ func (s *guestSession) apply(m Message) error {
 		}
 	}
 	return s.applyAt(full, m)
+}
+
+// placeWaiting writes the pack's files that have somewhere to go.
+func (s *guestSession) placeWaiting() {
+	for key, m := range s.waiting {
+		if !s.placed(key) {
+			continue
+		}
+		if err := s.apply(m); err != nil {
+			s.g.log.Warn("profile: writing a file", "path", key, "err", err)
+		}
+	}
 }
 
 // applyUnder writes a file sent with a lock into the directory's backing.
@@ -754,7 +839,7 @@ func (s *guestSession) mkdirAll(dir string) error {
 	if _, err := os.Stat(dir); err == nil {
 		return nil
 	}
-	if parent := filepath.Dir(dir); parent != dir && strings.HasPrefix(dir, s.home) {
+	if parent := filepath.Dir(dir); parent != dir {
 		if err := s.mkdirAll(parent); err != nil {
 			return err
 		}
@@ -772,8 +857,8 @@ func (s *guestSession) markTree(dir string) {
 		if err != nil || e.IsDir() {
 			return nil
 		}
-		if rel, err := filepath.Rel(s.home, p); err == nil {
-			s.dirty[rel] = true
+		for _, key := range s.keysOf(p) {
+			s.dirty[key] = true
 		}
 		return nil
 	})

@@ -74,7 +74,7 @@ const Port uint32 = 8105
 // Message types.
 const (
 	// Server to agent.
-	TypePaths  = "paths"  // the paths the profile shares; sent first, and again when they change
+	TypePaths  = "paths"  // the paths shared, the profile's and packs'; sent first, and again when they change
 	TypeFile   = "file"   // a file's content, or that it is gone
 	TypeSynced = "synced" // every file has been sent; the agent may send its own
 	TypeKeys   = "keys"   // the public keys the SSH agent offers
@@ -98,8 +98,9 @@ const (
 type Message struct {
 	Type string `json:"type"`
 
-	// A file: its path relative to the home directory, its content and
-	// mode, and the version the server holds. Deleted marks one removed.
+	// A file: its path, relative to the home directory for the profile's
+	// or absolute for a pack's, its content and mode, and the version the
+	// server holds. Deleted marks one removed.
 	Path    string `json:"path,omitempty"`
 	Data    []byte `json:"data,omitempty"`
 	Mode    uint32 `json:"mode,omitempty"`

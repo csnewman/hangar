@@ -20,6 +20,9 @@ export type CreateUser = Schemas['CreateUser']
 export type UpdateUser = Schemas['UpdateUser']
 export type Profile = Schemas['Profile']
 export type ProfileFile = Schemas['ProfileFile']
+export type ProfileFileContent = Schemas['ProfileFileContent']
+export type FilePack = Schemas['FilePack']
+export type FilePackInput = Schemas['FilePackInput']
 export type SSHKey = Schemas['SSHKey']
 export type LoginKey = Schemas['LoginKey']
 export type AccessToken = Schemas['AccessToken']
@@ -101,6 +104,27 @@ export const api = {
     ),
   deleteProfileFile: (path: string) =>
     unwrap(client.DELETE('/api/frontend/me/profile/file', { params: { query: { path } } })),
+  packs: () => unwrap(client.GET('/api/frontend/packs')),
+  pack: (id: string) => unwrap(client.GET('/api/frontend/packs/{id}', byID(id))),
+  createPack: (body: FilePackInput) => unwrap(client.POST('/api/frontend/packs', { body })),
+  updatePack: (id: string, body: FilePackInput) =>
+    unwrap(client.PUT('/api/frontend/packs/{id}', { ...byID(id), body })),
+  deletePack: (id: string) => unwrap(client.DELETE('/api/frontend/packs/{id}', byID(id))),
+  packFile: (id: string, path: string) =>
+    unwrap(client.GET('/api/frontend/packs/{id}/file', { params: { path: { id }, query: { path } } })),
+  putPackFile: (id: string, path: string, content: string) =>
+    unwrap(
+      client.PUT('/api/frontend/packs/{id}/file', { params: { path: { id }, query: { path } }, body: { content } }),
+    ),
+  setPackFileSettings: (id: string, path: string, mode: number, trusted_only: boolean) =>
+    unwrap(
+      client.PATCH('/api/frontend/packs/{id}/file', {
+        params: { path: { id }, query: { path } },
+        body: { mode, trusted_only },
+      }),
+    ),
+  deletePackFile: (id: string, path: string) =>
+    unwrap(client.DELETE('/api/frontend/packs/{id}/file', { params: { path: { id }, query: { path } } })),
   addProfilePath: (path: string) => unwrap(client.POST('/api/frontend/me/profile/paths', { body: { path } })),
   removeProfilePath: (path: string) =>
     unwrap(client.DELETE('/api/frontend/me/profile/paths', { params: { query: { path } } })),

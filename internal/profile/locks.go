@@ -91,7 +91,7 @@ func (sl *lockServer) queue(p string) chan hangarsync.Msg {
 
 func (sl *lockServer) serve(q chan hangarsync.Msg) {
 	for m := range q {
-		rel, ok := sl.rel(m.Path)
+		rel, ok := sl.key(m.Path)
 		if !ok {
 			if m.Op == hangarsync.OpLock {
 				sl.answer(m.ID, 0)
@@ -157,38 +157,31 @@ func (sl *lockServer) answer(id uint64, result int32) {
 	}
 }
 
-// rel is a path under the home directory, relative to it.
-func (sl *lockServer) rel(p string) (string, bool) {
-	r, err := filepath.Rel(sl.g.user.HomeDir, p)
-	if err != nil || r == "." || strings.HasPrefix(r, "../") || r == ".." {
+// key is the key a shared file here is synced as (guestSession.keyOf).
+func (sl *lockServer) key(p string) (string, bool) {
+	sl.g.mu.Lock()
+	s := sl.g.current
+	sl.g.mu.Unlock()
+	if s == nil {
 		return "", false
 	}
-	return r, true
+	return s.keyOf(p)
 }
 
-// changed passes on the kernel's report of a change, as a path relative to
-// the home directory: a shared path's own, or, in LockFS's backing, the
-// path it is served at. An empty one is everything.
+// changed passes on the kernel's report of a change: a shared path's own,
+// or, in LockFS's backing, the path it is served at. An empty one is
+// everything.
 func (sl *lockServer) changed(p string) {
-	rel, ok := "", p == ""
-	if !ok {
-		rel, ok = sl.rel(p)
-	}
-	if !ok {
-		sl.g.mu.Lock()
-		for dir, b := range sl.g.backing {
-			if r, err := filepath.Rel(b, p); err == nil && r != ".." && !strings.HasPrefix(r, "../") {
-				rel, ok = path.Join(dir, r), true
-				break
-			}
+	sl.g.mu.Lock()
+	for dir, b := range sl.g.backing {
+		if r, err := filepath.Rel(b, p); p != "" && err == nil && r != ".." && !strings.HasPrefix(r, "../") {
+			p = filepath.Join(sl.g.user.HomeDir, dir, r)
+			break
 		}
-		sl.g.mu.Unlock()
 	}
-	if !ok {
-		return
-	}
+	sl.g.mu.Unlock()
 	select {
-	case sl.g.changes <- rel:
+	case sl.g.changes <- p:
 	default:
 		sl.g.changesLost.Store(true)
 	}
@@ -245,9 +238,12 @@ func (sl *lockServer) kernelPaths() (shared, watched []string) {
 	lockDirs := LockDirs()
 	for _, p := range s.sharedPaths() {
 		clean := strings.TrimSuffix(p, "/")
-		abs := path.Join(sl.g.user.HomeDir, clean)
-		if strings.HasSuffix(p, "/") {
-			abs += "/"
+		abs := p
+		if !strings.HasPrefix(p, "/") {
+			abs = path.Join(sl.g.user.HomeDir, clean)
+			if strings.HasSuffix(p, "/") {
+				abs += "/"
+			}
 		}
 		in := slices.IndexFunc(lockDirs, func(d string) bool { return clean == d || strings.HasPrefix(clean, d+"/") })
 		holds := slices.ContainsFunc(lockDirs, func(d string) bool { return strings.HasPrefix(d, clean+"/") })
@@ -272,8 +268,8 @@ func (sl *lockServer) kernelPaths() (shared, watched []string) {
 	return shared, watched
 }
 
-// Holds reports whether the environment holds a lock on a path, relative to
-// the home directory.
+// Holds reports whether the environment holds a lock on a shared file, by
+// its key.
 func (g *Guest) Holds(p string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()

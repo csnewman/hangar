@@ -253,8 +253,8 @@ func (m *Manager) Update(ctx context.Context, p users.Principal, id string, in I
 	return t, err
 }
 
-// Delete removes a team that owns nothing: no templates and no image
-// repositories. Only server administrators may.
+// Delete removes a team that owns nothing: no templates, image repositories
+// or file packs. Only server administrators may.
 func (m *Manager) Delete(ctx context.Context, p users.Principal, id string) error {
 	if !db.ValidUUID(id) {
 		return ErrNotFound
@@ -272,6 +272,15 @@ func (m *Manager) Delete(ctx context.Context, p users.Principal, id string) erro
 		}
 		if cur.Images > 0 {
 			return fmt.Errorf("%w: the team owns %d image repositories; delete them first", ErrConflict, cur.Images)
+		}
+		var packs int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM file_packs WHERE team_id = $1`, id).Scan(&packs); err != nil {
+			return err
+		}
+		if packs > 0 {
+			// Their files are kept apart from the database, and go when
+			// a pack is deleted.
+			return fmt.Errorf("%w: the team owns %d file packs; delete them first", ErrConflict, packs)
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM teams WHERE id = $1`, id); err != nil {
 			return err

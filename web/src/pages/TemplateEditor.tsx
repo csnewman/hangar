@@ -11,6 +11,7 @@ import { blankSpec, builtinVariables, hangarImages, patternGroups, templatesKey 
 import { canGive, teamsKey, useTeams } from '../teams'
 import { VisibilityBadge } from './Templates'
 import { Activity } from '../components/Activity'
+import { FilePacksField } from './Packs'
 
 const blank: TemplateInput = { name: '', description: '', visibility: 'private', spec: blankSpec }
 
@@ -102,6 +103,7 @@ function Editor({ existing }: { existing?: Template }) {
           return names.length > 0 ? names : undefined
         })(),
         dax: spec.dax || undefined,
+        file_packs: spec.file_packs?.length ? spec.file_packs : undefined,
         trusted_folders: spec.untrusted
           ? undefined
           : (spec.trusted_folders ?? []).map((f) => f.trim()).filter((f) => f !== '') || undefined,
@@ -428,6 +430,7 @@ function Editor({ existing }: { existing?: Template }) {
                 </small>
               </label>
             )}
+            <FilePacksField value={spec.file_packs ?? []} onChange={(ids) => setSpec({ file_packs: ids })} />
             <label className="field">
               <span>Web servers</span>
               <input
