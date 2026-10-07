@@ -182,6 +182,13 @@ services:
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
+    # Every machine's Cloud Hypervisor holds descriptors for each queue of
+    # each device -- hundreds for a large machine -- and the worker holds
+    # more for each machine it runs. 1048576 is the kernel's own ceiling
+    # (fs.nr_open) by default, so this is the most a stock host allows,
+    # whatever its Docker would otherwise give a container.
+    ulimits:
+      nofile: 1048576
     volumes:
       - ./worker.yaml:/etc/hangar/worker.yaml:ro
       # Environments' disks, images and caches. A directory on the host,
