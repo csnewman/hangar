@@ -251,18 +251,11 @@ func (s *Server) open(cs *cstate, r *reader, w *writer) uint32 {
 		return errSymlink
 	}
 	if how == openCreate {
-		if created || fst.Size == 0 && fst.Uid == 0 {
-			if dfd, dname, err := s.at(p); err == nil {
-				s.own(dfd, dname, cs.cred)
-				unix.Close(dfd)
-			}
-		}
 		if exclusive {
 			s.mu.Lock()
 			s.excl[p] = verifier
 			s.mu.Unlock()
 		}
-		attrs.uid, attrs.gid = nil, nil
 		if !created {
 			attrs.mode = nil // an existing file keeps its mode
 		}

@@ -35,17 +35,22 @@ type Config struct {
 	// Root holds the file sets, each a directory named by its ID.
 	Root string
 	View View
-	Log  *slog.Logger
+	// UID and GID own every file, as the environment sees them: its user,
+	// whoever made the file on the root -- the control plane, or another
+	// worker. Changing a file's owner is accepted and changes nothing.
+	UID, GID uint32
+	Log      *slog.Logger
 }
 
 // Server serves one environment's view of the root.
 type Server struct {
-	view    View
-	log     *slog.Logger
-	rootFD  int
-	h       *handles
-	started unix.Timespec
-	verf    [8]byte
+	view     View
+	uid, gid uint32
+	log      *slog.Logger
+	rootFD   int
+	h        *handles
+	started  unix.Timespec
+	verf     [8]byte
 
 	mu       sync.Mutex
 	nextID   uint64
@@ -116,7 +121,7 @@ func New(cfg Config) (*Server, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	now := time.Now()
-	s := &Server{view: cfg.View, log: log, rootFD: fd, h: newHandles(),
+	s := &Server{view: cfg.View, uid: cfg.UID, gid: cfg.GID, log: log, rootFD: fd, h: newHandles(),
 		started: unix.NsecToTimespec(now.UnixNano()), nextID: uint64(now.Unix()) << 32,
 		clients: map[uint64]*client{}, byOwner: map[string]*client{},
 		sessions: map[[16]byte]*session{}, states: map[[12]byte]*state{},

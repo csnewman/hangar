@@ -68,9 +68,7 @@ func (h *handler) GetFilePack(ctx context.Context, req GetFilePackRequestObject)
 	}
 	out := FilePackFiles{Pack: filePack(k), Files: []ProfileFile{}}
 	for _, f := range files {
-		if !f.Deleted {
-			out.Files = append(out.Files, profileFile(f))
-		}
+		out.Files = append(out.Files, profileFile(f))
 	}
 	return GetFilePack200JSONResponse(out), nil
 }
@@ -126,7 +124,7 @@ func (h *handler) PutFilePackFile(ctx context.Context, req PutFilePackFileReques
 		mode := uint32(0)
 		if req.Body.Mode != nil {
 			mode = uint32(*req.Body.Mode)
-		} else if cur, err := h.profiles.File(ctx, set, req.Params.Path, true); err == nil && !cur.Deleted {
+		} else if cur, err := h.profiles.File(ctx, set, req.Params.Path, true); err == nil {
 			mode = cur.Mode
 		}
 		f, err = h.profiles.Put(ctx, set, req.Params.Path, []byte(req.Body.Content), mode)
@@ -166,7 +164,7 @@ func (h *handler) UpdateFilePackFileSettings(ctx context.Context, req UpdateFile
 func (h *handler) DeleteFilePackFile(ctx context.Context, req DeleteFilePackFileRequestObject) (DeleteFilePackFileResponseObject, error) {
 	set, err := h.profiles.PackSet(ctx, principal(ctx), req.ID, true)
 	if err == nil {
-		_, err = h.profiles.Delete(ctx, set, req.Params.Path)
+		err = h.profiles.Delete(ctx, set, req.Params.Path)
 	}
 	switch {
 	case errors.Is(err, profile.ErrNotFound):

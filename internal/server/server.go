@@ -67,9 +67,13 @@ type Config struct {
 	AutoSignIn string
 	// Sealer encrypts users' SSH keys. Nil keeps none: they are refused.
 	Sealer *profile.Sealer
-	// Blobs keeps the registry's blobs, and ProfileBlobs, a versioned
-	// bucket, profiles' files.
-	Blobs        blob.Store
+	// Blobs keeps the registry's blobs.
+	Blobs blob.Store
+	// Files is the files root: the file sets environments share, each a
+	// directory, which every worker serves its environments too.
+	Files string
+	// ProfileBlobs is where file sets' contents were kept before: what of
+	// them the files root lacks is copied there at start.
 	ProfileBlobs blob.Versioned
 	// SSHListen, if set, is where the SSH gateway listens (internal/sshgw).
 	SSHListen string
@@ -120,10 +124,25 @@ func New(cfg Config) (*Server, error) {
 	um := users.NewManager(cfg.DB)
 	tunnels := tunnel.NewRegistry(log)
 	edits := editor.NewManager(cfg.DB)
-	if cfg.Blobs == nil || cfg.ProfileBlobs == nil {
+	if cfg.Blobs == nil {
 		return nil, errors.New("no blob store")
 	}
-	profiles := profile.NewStore(cfg.DB, cfg.ProfileBlobs, cfg.Sealer)
+	if cfg.Files == "" {
+		return nil, errors.New("no files root")
+	}
+	profiles, err := profile.NewStore(cfg.DB, cfg.Files, cfg.Sealer)
+	if err != nil {
+		return nil, fmt.Errorf("the files root: %w", err)
+	}
+	if cfg.ProfileBlobs != nil {
+		n, err := profiles.MigrateFrom(context.Background(), cfg.ProfileBlobs)
+		if err != nil {
+			return nil, fmt.Errorf("copying file sets from the blob store: %w", err)
+		}
+		if n > 0 {
+			log.Info("copied file sets' files from the blob store to the files root", "files", n)
+		}
+	}
 	if err := profiles.ShareForEveryone(cfg.ProfilePaths); err != nil {
 		return nil, fmt.Errorf("profile paths: %w", err)
 	}

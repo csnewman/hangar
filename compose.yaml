@@ -89,6 +89,7 @@ services:
       - .:/src
       - gomod:/go/pkg/mod
       - gocache:/root/.cache/go-build
+      - files:/var/lib/hangar/files
     ports:
       - 127.0.0.1:2222:2222
     depends_on:
@@ -132,6 +133,16 @@ services:
       - web
 
 volumes:
+  # The files environments share, served to them by the Lima VM's worker:
+  # its storage.files, which dev/lima-worker.sh exports over NFS. Lima
+  # forwards the VM's port 2049 to this machine. Soft, so the server is not
+  # held up for ever while the VM is down.
+  files:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: addr=host.docker.internal,vers=4.2,port=2049,soft,timeo=50,retrans=2
+      device: ":/"
   pgdata:
   gomod:
   gocache:

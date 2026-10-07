@@ -187,7 +187,7 @@ func path(e *enc, parts ...string) {
 func newServer(t *testing.T, v view) (*nfs.Server, string) {
 	t.Helper()
 	root := t.TempDir()
-	srv, err := nfs.New(nfs.Config{Root: root, View: v})
+	srv, err := nfs.New(nfs.Config{Root: root, View: v, UID: 1000, GID: 1000})
 	if err != nil {
 		t.Fatal(err)
 	}

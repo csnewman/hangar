@@ -252,8 +252,10 @@ the public URL's host at the listen port -- behind a load balancer on port
 ## Profiles
 
 Each person's profile -- Claude's settings and sign-in, `.gitconfig`,
-VS Code's settings, CLI sign-ins and the like -- is kept by the control
-plane and synced into every environment they own. The Profile page lists
+VS Code's settings, CLI sign-ins and the like -- follows them into every
+environment they own: the files are on the files root (below), which each
+worker serves its environments over NFS, so an environment reads and writes
+the one copy, and a lock taken in one holds in every other. The Profile page lists
 what is shared, and each person can add paths of their own there.
 `HANGAR_PROFILE_PATHS` adds paths for everyone, beside the built-in ones:
 
@@ -264,12 +266,25 @@ shares everything under it. A path no one may share -- caches, and what
 programs rewrite per machine, such as `.claude.json` -- stops the server
 starting, and says why.
 
-A profile's files are kept in the object store, and their paths and
-versions, and which version of each object holds a file, in Postgres.
+## The files root
+
+The files environments share -- profiles, and the packs templates give
+them -- are kept on the files root, a directory of one directory per file
+set, named by the set's ID. The control plane mounts it at
+`/var/lib/hangar/files`, from `HANGAR_FILES_DIR` on the host
+(`/var/lib/hangar/files`); each worker names it as `storage.files` in
+`worker.yaml`, and serves each environment what of it the control plane
+says it may reach. On one host, the worker's and the control plane's are
+the same directory. With several, every one mounts the same NFS share
+there -- an NFS server of your own, or EFS -- with root not squashed: the
+control plane and the workers both write it as root.
+
+A server that kept profiles' files in the object store copies those the
+files root lacks there when it starts.
 
 ## The object store
 
-Profiles' files and the registry's blobs are kept in an S3-compatible
+The registry's blobs are kept in an S3-compatible
 object store: the `blobs` service, RustFS, with its data in
 `$HANGAR_DATA_DIR/blobs`. The server signs in to it as `hangar` with a key
 derived from `secret-key`, which the control plane's `data-dirs` step
@@ -279,22 +294,9 @@ store of your own, such as S3 or a RustFS cluster, set `HANGAR_BLOB_URL` to
 to its secret key; `HANGAR_BLOB_ENCRYPT=true` asks it to encrypt what it
 keeps (SSE-S3). Every replica of the control plane uses the same store.
 
-What is kept is not encrypted by Hangar: profiles' files are in every
-environment's disk as they are, so a copy encrypted here would protect
-little. Encrypt the host's disks if that matters.
-
-The server uses two buckets, making them if they are not there, and sets
-their rules itself on every start:
-
-| bucket | holds | rules |
-|---|---|---|
-| `<bucket>` | the registry's blobs, by digest | uploads' leftovers deleted after two days |
-| `<bucket>-profiles` (`HANGAR_BLOB_PROFILE_BUCKET`) | profiles' files, as `<user>/<path>` | versioned; a version replaced is deleted after a day |
-
-Each write of a profile file is a new version, and the server deletes the
-one it replaced once the write is in the database; the versioning rule is
-for the rare one it could not. So the store needs object versioning and
-lifecycle rules, which S3, MinIO and RustFS have.
+The server makes its bucket if it is not there, and sets a rule on it
+every start: uploads' leftovers are deleted after two days. So the store
+needs lifecycle rules, which S3, MinIO and RustFS have.
 
 ## Where the data is
 
@@ -305,7 +307,8 @@ it:
 | | host directory |
 |---|---|
 | control plane's database | `$HANGAR_DATA_DIR/postgres` |
-| profiles' files and the registry's blobs | `$HANGAR_DATA_DIR/blobs` (RustFS) |
+| the registry's blobs | `$HANGAR_DATA_DIR/blobs` (RustFS) |
+| profiles' and packs' files | `$HANGAR_FILES_DIR`, `/var/lib/hangar/files` |
 | a worker's environments, images and caches | `$HANGAR_WORKER_DATA_DIR` |
 | secrets | `bootstrap-token` and `secret-key` beside `compose.yaml` |
 

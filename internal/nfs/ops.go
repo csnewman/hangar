@@ -494,9 +494,9 @@ func (s *Server) access(cs *cstate, want uint32, w *writer) uint32 {
 		if ftype(n.st.Mode) == nf4Reg && n.st.Mode&0o111 == 0 {
 			mode = 0o6
 		}
-	case cs.cred.uid == n.st.Uid:
+	case cs.cred.uid == s.uid:
 		mode = (n.st.Mode >> 6) & 7
-	case cs.cred.gid == n.st.Gid || slices.Contains(cs.cred.gids, n.st.Gid):
+	case cs.cred.gid == s.gid || slices.Contains(cs.cred.gids, s.gid):
 		mode = (n.st.Mode >> 3) & 7
 	default:
 		mode = n.st.Mode & 7
@@ -688,11 +688,6 @@ func (s *Server) child(cs *cstate, name string) (string, uint32) {
 	return p, nfsOK
 }
 
-// own gives a file made for the caller to the caller.
-func (s *Server) own(dirfd int, name string, c cred) {
-	unix.Fchownat(dirfd, name, int(c.uid), int(c.gid), unix.AT_SYMLINK_NOFOLLOW)
-}
-
 func (s *Server) create(cs *cstate, r *reader, w *writer) uint32 {
 	typ := r.uint32()
 	var target string
@@ -743,9 +738,7 @@ func (s *Server) create(cs *cstate, r *reader, w *writer) uint32 {
 	if err != nil {
 		return errno(err)
 	}
-	s.own(fd, name, cs.cred)
 	// The mode is set as given, not as the server's umask leaves it.
-	a.uid, a.gid = nil, nil
 	set, st := s.apply(p, a)
 	if st != nfsOK {
 		return st

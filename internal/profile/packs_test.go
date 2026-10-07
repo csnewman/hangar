@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -159,10 +160,8 @@ func TestPackAccess(t *testing.T) {
 	if err := p.store.DeletePack(ctx, as(alice), personal.ID); err != nil {
 		t.Fatal(err)
 	}
-	for k := range p.blobs.Versions() {
-		if strings.HasPrefix(k, bobs+"/") {
-			t.Errorf("%s outlived its pack", k)
-		}
+	if _, err := os.Stat(filepath.Join(p.root, bobs)); !os.IsNotExist(err) {
+		t.Errorf("bob's copy outlived its pack: %v", err)
 	}
 	if got := sets(bob); got != 2 {
 		t.Errorf("bob's environment keeps %d sets after a pack was deleted", got)
@@ -235,4 +234,40 @@ func TestEnvironmentsAreRoutedToTheirSets(t *testing.T) {
 		return slices.Contains(p.routesOf(id), profile.Route{Path: "/workspace/app/config",
 			Target: set + "/workspace/app/config", Dir: true})
 	})
+}
+
+// An untrusted environment is kept from its sets' trusted-only files: the
+// known credentials, and any its owner made trusted-only.
+func TestUntrustedEnvironmentsAreKeptFromTrustedOnlyFiles(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	if _, err := p.store.Put(ctx, p.owner, ".gitconfig", []byte("x"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.store.SetSettings(ctx, p.owner, ".gitconfig", 0o644, true); err != nil {
+		t.Fatal(err)
+	}
+	trusted, _, _ := p.env(t, "dev", false)
+	untrusted, _, _ := p.env(t, "review", true)
+	var worker string
+	p.d.Transact(ctx, func(tx db.Tx) error {
+		return tx.QueryRow(ctx, `SELECT worker_id::text FROM environments WHERE id = $1`, trusted).Scan(&worker)
+	})
+	files, err := p.store.EnvironmentFiles(ctx, worker, trusted)
+	if err != nil || len(files.Sets) != 1 || files.Sets[0] != p.owner || len(files.Hidden) != 0 {
+		t.Errorf("a trusted environment's files: %+v, %v", files, err)
+	}
+	files, err = p.store.EnvironmentFiles(ctx, worker, untrusted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hidden := files.Hidden[p.owner]
+	for _, want := range []string{".gitconfig", ".claude/.credentials.json"} {
+		if !slices.Contains(hidden, want) {
+			t.Errorf("%s is not hidden from an untrusted environment: %v", want, hidden)
+		}
+	}
+	if _, err := p.store.EnvironmentFiles(ctx, "00000000-0000-0000-0000-000000000000", trusted); !errors.Is(err, profile.ErrNotFound) {
+		t.Errorf("another worker's environment: %v", err)
+	}
 }

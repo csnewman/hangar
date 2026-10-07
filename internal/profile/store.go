@@ -1,23 +1,21 @@
 package profile
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/csnewman/hangar/internal/audit"
-	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/db"
 )
 
@@ -38,10 +36,8 @@ type File struct {
 	Size int64
 	Mode uint32
 	// TrustedOnly keeps the file from environments not trusted with their
-	// owner's credentials: they are told it is removed.
+	// owner's credentials.
 	TrustedOnly bool
-	Version     int64
-	Deleted     bool
 	UpdatedAt   time.Time
 }
 
@@ -55,12 +51,12 @@ type Key struct {
 	CreatedAt   time.Time
 }
 
-// Store keeps profiles: each file's path, mode and version in the database,
-// its contents in a versioned bucket as <user>/<path> (blobKey), the row
-// naming the version that holds them.
+// Store keeps file sets -- profiles and packs -- and users' keys. A set's
+// files are on the files root (files.go); what is known of them beside
+// their contents and modes, in the database.
 type Store struct {
 	db     *db.DB
-	blobs  blob.Versioned
+	root   *os.Root
 	sealer *Sealer
 	// everyone are the paths the server shares for every user beside the
 	// DefaultPaths.
@@ -87,317 +83,21 @@ func (s *Store) UserPaths(own []string) Paths {
 	return UserPaths(append(slices.Clone(s.everyone), own...))
 }
 
-// NewStore returns a store keeping files' contents in blobs. A nil sealer
-// keeps no SSH keys: they are refused.
-func NewStore(d *db.DB, blobs blob.Versioned, sealer *Sealer) *Store {
-	return &Store{db: d, blobs: blobs, sealer: sealer}
+// NewStore returns a store keeping file sets under the directory root. A
+// nil sealer keeps no SSH keys: they are refused.
+func NewStore(d *db.DB, root string, sealer *Sealer) (*Store, error) {
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return nil, err
+	}
+	r, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	return &Store{db: d, root: r, sealer: sealer}, nil
 }
 
 // KeepsSecrets reports whether the store has a key to keep SSH keys with.
 func (s *Store) KeepsSecrets() bool { return s.sealer != nil }
-
-// blobKey is where a set's file is kept: <set>/<path>, an absolute path
-// keeping its own slash.
-func blobKey(set, path string) string {
-	if strings.HasPrefix(path, "/") {
-		return set + path
-	}
-	return set + "/" + path
-}
-
-// setLock serializes a file set's writes until the transaction ends.
-func setLock(ctx context.Context, tx db.Tx, set string) error {
-	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "profile:"+set)
-	return err
-}
-
-// Files returns a user's files, removed ones included, with their contents.
-// Without trusted, a trusted-only file is given as removed.
-func (s *Store) Files(ctx context.Context, set string, trusted bool) ([]File, error) {
-	return s.files(ctx, set, trusted, 0, "", true)
-}
-
-// List returns, as Files does, a user's files, without their contents.
-func (s *Store) List(ctx context.Context, set string, trusted bool) ([]File, error) {
-	return s.files(ctx, set, trusted, 0, "", false)
-}
-
-// File returns one of a user's files, with its contents, or ErrNotFound if
-// it is not there or was removed.
-func (s *Store) File(ctx context.Context, set, path string, trusted bool) (File, error) {
-	files, err := s.files(ctx, set, trusted, 0, path, true)
-	if err != nil {
-		return File{}, err
-	}
-	for _, f := range files {
-		if f.Path == path && !f.Deleted {
-			return f, nil
-		}
-	}
-	return File{}, ErrNotFound
-}
-
-func (s *Store) files(ctx context.Context, set string, trusted bool, after int64, prefix string, contents bool) ([]File, error) {
-	if !db.ValidUUID(set) {
-		return nil, ErrNotFound
-	}
-	var out []File
-	var versions []string
-	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT path, coalesce(version_id, ''), size, mode, version, deleted, trusted_only, updated_at
-			FROM set_files
-			WHERE set_id = $1 AND version > $2 AND starts_with(path, $3) ORDER BY version`, set, after, prefix)
-		if err != nil {
-			return err
-		}
-		out, versions = nil, nil
-		for rows.Next() {
-			var f File
-			var mode int32
-			var vid string
-			if err := rows.Scan(&f.Path, &vid, &f.Size, &mode, &f.Version, &f.Deleted, &f.TrustedOnly, &f.UpdatedAt); err != nil {
-				return err
-			}
-			f.Mode = uint32(mode)
-			if f.TrustedOnly && !trusted {
-				// Gone, as far as such an environment knows: one that was
-				// given it before it was made trusted-only removes it.
-				f.Deleted, f.Size, vid = true, 0, ""
-			}
-			out = append(out, f)
-			versions = append(versions, vid)
-		}
-		return rows.Err()
-	})
-	if err != nil || !contents {
-		return out, err
-	}
-	// Read side by side: a whole profile is hundreds of small objects.
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var errs []error
-	sem := make(chan struct{}, 16)
-	for i := range out {
-		if out[i].Deleted || versions[i] == "" {
-			continue
-		}
-		wg.Add(1)
-		sem <- struct{}{}
-		go func() {
-			defer func() { <-sem; wg.Done() }()
-			data, err := blob.ReadVersion(ctx, s.blobs, blobKey(set, out[i].Path), versions[i])
-			if err != nil {
-				mu.Lock()
-				errs = append(errs, fmt.Errorf("%s: %w", out[i].Path, err))
-				mu.Unlock()
-				return
-			}
-			out[i].Data = data
-		}()
-	}
-	wg.Wait()
-	if len(errs) > 0 {
-		return nil, errors.Join(errs...)
-	}
-	return out, nil
-}
-
-// Put writes a file, returning it as stored.
-func (s *Store) Put(ctx context.Context, set, path string, data []byte, mode uint32) (File, error) {
-	paths, err := s.SetPaths(ctx, set)
-	if err != nil {
-		return File{}, err
-	}
-	if !paths.Synced(path) {
-		return File{}, fmt.Errorf("%w: %s is not shared", ErrInvalid, path)
-	}
-	if len(data) > MaxFileSize {
-		return File{}, fmt.Errorf("%w: %s is larger than %d bytes", ErrInvalid, path, MaxFileSize)
-	}
-	mode &= 0o777
-	if mode == 0 {
-		mode = 0o644
-		if TrustedOnlyByDefault(path) {
-			mode = 0o600
-		}
-	}
-	return s.write(ctx, set, path, data, mode, false)
-}
-
-// TrustedOnly reports whether a file is kept from untrusted environments: as
-// its setting says, or, for one not made yet, as its path's default.
-func (s *Store) TrustedOnly(ctx context.Context, set, path string) (bool, error) {
-	if !db.ValidUUID(set) {
-		return false, ErrNotFound
-	}
-	only := TrustedOnlyByDefault(path)
-	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT trusted_only FROM set_files WHERE set_id = $1 AND path = $2`,
-			set, path).Scan(&only)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil
-		}
-		return err
-	})
-	return only, err
-}
-
-// SetSettings changes a file's mode and whether it is trusted-only, as a
-// new version, which reaches every environment as any change does.
-func (s *Store) SetSettings(ctx context.Context, set, path string, mode uint32, trustedOnly bool) (File, error) {
-	if !db.ValidUUID(set) {
-		return File{}, ErrNotFound
-	}
-	mode &= 0o777
-	if mode == 0 {
-		return File{}, fmt.Errorf("%w: a file needs a mode", ErrInvalid)
-	}
-	var f File
-	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		if err := setLock(ctx, tx, set); err != nil {
-			return err
-		}
-		var version int64
-		if err := tx.QueryRow(ctx, `INSERT INTO set_versions (set_id, version) VALUES ($1, 1)
-			ON CONFLICT (set_id) DO UPDATE SET version = set_versions.version + 1
-			RETURNING version`, set).Scan(&version); err != nil {
-			return err
-		}
-		var m int32
-		err := tx.QueryRow(ctx, `UPDATE set_files SET mode = $3, trusted_only = $4, version = $5, updated_at = now()
-			WHERE set_id = $1 AND path = $2 AND NOT deleted
-			RETURNING path, size, mode, version, trusted_only, updated_at`,
-			set, path, int32(mode), trustedOnly, version).
-			Scan(&f.Path, &f.Size, &m, &f.Version, &f.TrustedOnly, &f.UpdatedAt)
-		if errors.Is(err, pgx.ErrNoRows) {
-			return ErrNotFound
-		}
-		if err != nil {
-			return err
-		}
-		f.Mode = uint32(m)
-		if err := audit.Record(ctx, tx, audit.Event{Action: "profile.file_settings",
-			Target:  audit.Ref{Type: audit.KindFile, ID: set + ":" + path, Name: path},
-			Related: []audit.Ref{{Type: audit.KindOwner, ID: set}},
-			Details: map[string]any{"mode": fmt.Sprintf("%#o", mode), "trusted_only": trustedOnly}}); err != nil {
-			return err
-		}
-		return db.Notify(ctx, tx, Channel, set)
-	})
-	return f, err
-}
-
-// Delete removes a file, leaving a mark that it is gone.
-func (s *Store) Delete(ctx context.Context, set, path string) (File, error) {
-	if !ValidKey(path) {
-		return File{}, fmt.Errorf("%w: %q is not a file's path", ErrInvalid, path)
-	}
-	return s.write(ctx, set, path, nil, 0o644, true)
-}
-
-func (s *Store) write(ctx context.Context, set, path string, data []byte, mode uint32, deleted bool) (File, error) {
-	if !db.ValidUUID(set) {
-		return File{}, ErrNotFound
-	}
-	key := blobKey(set, path)
-	f := File{Path: path, Data: data, Size: int64(len(data)), Mode: mode, Deleted: deleted}
-	// Every version put, one per attempt the transaction makes: all but
-	// the one it commits are let go of after.
-	var put []string
-	var old, kept string
-	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		old, kept = "", ""
-		// A profile's set is made with its first file.
-		if _, err := tx.Exec(ctx, `INSERT INTO file_sets (id, user_id) SELECT id, id FROM users WHERE id = $1
-			ON CONFLICT DO NOTHING`, set); err != nil {
-			return err
-		}
-		// One sequence per set (set_versions), so a session asks for
-		// everything after the last version it sent. A set's writes take
-		// turns, so no two take the same number.
-		if err := setLock(ctx, tx, set); err != nil {
-			return err
-		}
-		var total int64
-		if err := tx.QueryRow(ctx, `SELECT coalesce(sum(size), 0) FROM set_files
-			WHERE set_id = $1 AND path <> $2`, set, path).Scan(&total); err != nil {
-			return err
-		}
-		if total+f.Size > MaxProfileSize {
-			return fmt.Errorf("%w: the profile would hold more than %d MiB", ErrInvalid, MaxProfileSize>>20)
-		}
-		err := tx.QueryRow(ctx, `SELECT coalesce(version_id, '') FROM set_files WHERE set_id = $1 AND path = $2`,
-			set, path).Scan(&old)
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-			return err
-		}
-		if !deleted {
-			vid, err := s.blobs.PutVersion(ctx, key, bytes.NewReader(data), f.Size)
-			if err != nil {
-				return fmt.Errorf("keeping %s: %w", path, err)
-			}
-			put = append(put, vid)
-			kept = vid
-		}
-		var version int64
-		if err := tx.QueryRow(ctx, `INSERT INTO set_versions (set_id, version) VALUES ($1, 1)
-			ON CONFLICT (set_id) DO UPDATE SET version = set_versions.version + 1
-			RETURNING version`, set).Scan(&version); err != nil {
-			return err
-		}
-		err = tx.QueryRow(ctx, `
-			INSERT INTO set_files (set_id, path, version_id, size, mode, deleted, version, trusted_only)
-			VALUES ($1, $2, nullif($3, ''), $4, $5, $6, $7, $8)
-			ON CONFLICT (set_id, path) DO UPDATE SET version_id = EXCLUDED.version_id, size = EXCLUDED.size,
-				mode = EXCLUDED.mode, deleted = EXCLUDED.deleted, version = EXCLUDED.version,
-				updated_at = now()
-			RETURNING version, updated_at, trusted_only`, set, path, kept, f.Size, int32(mode), deleted, version,
-			TrustedOnlyByDefault(path)).
-			Scan(&f.Version, &f.UpdatedAt, &f.TrustedOnly)
-		if err != nil {
-			return err
-		}
-		action := "profile.file_write"
-		if deleted {
-			action = "profile.file_delete"
-		}
-		if err := audit.Record(ctx, tx, audit.Event{Action: action,
-			Target:  audit.Ref{Type: audit.KindFile, ID: set + ":" + path, Name: path},
-			Related: []audit.Ref{{Type: audit.KindOwner, ID: set}},
-			Details: map[string]any{"size": f.Size}}); err != nil {
-			return err
-		}
-		return db.Notify(ctx, tx, Channel, set)
-	})
-	// What the row no longer names: the version it named before, if the
-	// write committed, and every version an attempt put and did not keep.
-	// One a failure here leaves is deleted by the bucket's lifecycle once
-	// another version replaces it.
-	var drop []string
-	if err == nil && old != "" {
-		drop = append(drop, old)
-	}
-	for _, v := range put {
-		if err != nil || v != kept {
-			drop = append(drop, v)
-		}
-	}
-	for _, v := range drop {
-		s.blobs.DeleteVersion(context.WithoutCancel(ctx), key, v)
-	}
-	return f, err
-}
-
-// DeleteSets deletes every file kept for file sets, once they are gone.
-func (s *Store) DeleteSets(ctx context.Context, sets ...string) error {
-	var errs []error
-	for _, set := range sets {
-		if db.ValidUUID(set) {
-			errs = append(errs, s.blobs.DeleteAll(ctx, set+"/"))
-		}
-	}
-	return errors.Join(errs...)
-}
 
 // SetsOf are the file sets of a user's own: their profile's, and their
 // copies of personal packs.
@@ -679,10 +379,8 @@ func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
 	if !db.ValidUUID(userID) {
 		return ErrNotFound
 	}
-	type file struct{ path, version string }
-	var dropped []file
+	var still Paths
 	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		dropped = nil
 		tag, err := tx.Exec(ctx, `DELETE FROM profile_paths WHERE user_id = $1 AND path = $2`, userID, path)
 		if err != nil {
 			return err
@@ -703,34 +401,11 @@ func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
 		if err != nil {
 			return err
 		}
-		still := s.UserPaths(own)
-		rows, err = tx.Query(ctx, `SELECT path, coalesce(version_id, '') FROM set_files WHERE set_id = $1`, userID)
-		if err != nil {
-			return err
-		}
-		files, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (file, error) {
-			var f file
-			return f, r.Scan(&f.path, &f.version)
-		})
-		if err != nil {
-			return err
-		}
-		for _, f := range files {
-			if !still.Synced(f.path) {
-				if _, err := tx.Exec(ctx, `DELETE FROM set_files WHERE set_id = $1 AND path = $2`, userID, f.path); err != nil {
-					return err
-				}
-				if f.version != "" {
-					dropped = append(dropped, f)
-				}
-			}
-		}
+		still = s.UserPaths(own)
 		return db.Notify(ctx, tx, Channel, userID)
 	})
 	if err == nil {
-		for _, f := range dropped {
-			s.blobs.DeleteVersion(context.WithoutCancel(ctx), blobKey(userID, f.path), f.version)
-		}
+		s.dropUnshared(userID, still, false)
 	}
 	return err
 }

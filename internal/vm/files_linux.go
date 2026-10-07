@@ -13,6 +13,10 @@ import (
 	"github.com/csnewman/hangar/internal/vsock"
 )
 
+// sharedFilesUID owns the shared files in the guest: the user an image's
+// environments are used as, dev, which every image makes first.
+const sharedFilesUID = 1000
+
 // sharedFiles serves a guest its shared files over NFS, on the vsock port
 // its agent mounts them from.
 type sharedFiles struct {
@@ -27,7 +31,8 @@ type sharedFiles struct {
 
 func serveSharedFiles(ctx context.Context, base string, cid uint32, cfg InstanceConfig) (*sharedFiles, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	srv, err := nfs.New(nfs.Config{Root: cfg.SharedFiles, View: cfg.SharedView(ctx), Log: cfg.Log.With("component", "nfs")})
+	srv, err := nfs.New(nfs.Config{Root: cfg.SharedFiles, View: cfg.SharedView(ctx),
+		UID: sharedFilesUID, GID: sharedFilesUID, Log: cfg.Log.With("component", "nfs")})
 	if err != nil {
 		cancel()
 		return nil, err

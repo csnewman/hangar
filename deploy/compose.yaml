@@ -68,6 +68,9 @@ services:
       dockerfile: cmd/hangar-server/Dockerfile
     image: ${HANGAR_REGISTRY:-ghcr.io/csnewman/hangar}/server:${HANGAR_VERSION:-latest}
     restart: unless-stopped
+    # Root, as the workers are: both write the files root (below), and a
+    # directory one makes the other changes.
+    user: "0:0"
     environment:
       HANGAR_DATABASE_URL: postgres://hangar:${POSTGRES_PASSWORD:-}@postgres:5432/hangar?sslmode=disable
       HANGAR_PUBLIC_URL: ${HANGAR_PUBLIC_URL:-}
@@ -118,6 +121,10 @@ services:
       # The directory, not the files, so that files replaced by renaming
       # new ones into place are seen.
       - ${HANGAR_TLS_DIR:-./tls}:/etc/hangar-server/tls:ro
+      # The files environments share -- profiles and packs -- which every
+      # worker serves its environments too: the workers' storage.files, the
+      # same directory (on one host) or the same NFS share (on several).
+      - ${HANGAR_FILES_DIR:-/var/lib/hangar/files}:/var/lib/hangar/files
     secrets: [bootstrap-token, secret-key]
     ports:
       - ${HANGAR_PUBLISH_ADDRESS:-0.0.0.0}:53:53/udp

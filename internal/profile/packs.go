@@ -225,11 +225,9 @@ func (s *Store) UpdatePack(ctx context.Context, p users.Principal, id string, in
 	if err != nil {
 		return Pack{}, err
 	}
-	type file struct{ set, path, version string }
-	var dropped []file
+	var sets []string
 	var k Pack
 	err = s.db.Transact(ctx, func(tx db.Tx) error {
-		dropped = nil
 		cur, err := lockPack(ctx, tx, p, id)
 		if err != nil {
 			return err
@@ -248,28 +246,12 @@ func (s *Store) UpdatePack(ctx context.Context, p users.Principal, id string, in
 		if err := setPackPaths(ctx, tx, id, in.Paths); err != nil {
 			return err
 		}
-		rows, err := tx.Query(ctx, `SELECT f.set_id::text, f.path, coalesce(f.version_id, '')
-			FROM set_files f JOIN file_sets s ON s.id = f.set_id WHERE s.pack_id = $1`, id)
+		rows, err := tx.Query(ctx, `SELECT id::text FROM file_sets WHERE pack_id = $1`, id)
 		if err != nil {
 			return err
 		}
-		files, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (file, error) {
-			var f file
-			return f, r.Scan(&f.set, &f.path, &f.version)
-		})
-		if err != nil {
+		if sets, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil {
 			return err
-		}
-		for _, f := range files {
-			if Paths(in.Paths).Synced(f.path) {
-				continue
-			}
-			if _, err := tx.Exec(ctx, `DELETE FROM set_files WHERE set_id = $1 AND path = $2`, f.set, f.path); err != nil {
-				return err
-			}
-			if f.version != "" {
-				dropped = append(dropped, f)
-			}
 		}
 		if k, err = getPack(ctx, tx, p, id); err != nil {
 			return err
@@ -281,8 +263,8 @@ func (s *Store) UpdatePack(ctx context.Context, p users.Principal, id string, in
 		return db.Notify(ctx, tx, Channel, "")
 	})
 	if err == nil {
-		for _, f := range dropped {
-			s.blobs.DeleteVersion(context.WithoutCancel(ctx), blobKey(f.set, f.path), f.version)
+		for _, set := range sets {
+			s.dropUnshared(set, Paths(in.Paths), true)
 		}
 	}
 	return k, err
@@ -470,22 +452,15 @@ func (s *Store) EnvironmentFiles(ctx context.Context, workerID, envID string) (a
 		return out, nil
 	}
 	out.Hidden = map[string][]string{}
-	err = s.db.Transact(ctx, func(tx db.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT set_id::text, path FROM set_files
-			WHERE trusted_only AND NOT deleted AND set_id = ANY($1::uuid[])`, out.Sets)
+	for i, set := range out.Sets {
+		// The first set is the owner's profile; the rest are packs'.
+		hidden, err := s.hidden(ctx, set, i > 0)
 		if err != nil {
-			return err
+			return out, err
 		}
-		defer rows.Close()
-		for rows.Next() {
-			var set, path string
-			if err := rows.Scan(&set, &path); err != nil {
-				return err
-			}
-			// A pack's paths are absolute; in its set they are under it.
-			out.Hidden[set] = append(out.Hidden[set], strings.TrimPrefix(path, "/"))
+		if len(hidden) > 0 {
+			out.Hidden[set] = hidden
 		}
-		return rows.Err()
-	})
-	return out, err
+	}
+	return out, nil
 }

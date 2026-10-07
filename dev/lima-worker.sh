@@ -20,6 +20,18 @@ fi
 limactl shell hangar bash -c "
     set -e
     cd $repo
+    # The files environments share, exported for the control plane on the
+    # Mac (compose.yaml's files volume), as one NFS share serves every
+    # worker of a real deployment.
+    sudo mkdir -p /var/lib/hangar/files /etc/exports.d
+    if ! dpkg -s nfs-kernel-server >/dev/null 2>&1; then
+        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nfs-kernel-server >/dev/null
+    fi
+    echo '/var/lib/hangar/files *(rw,insecure,no_root_squash,no_subtree_check,fsid=0)' |
+        sudo tee /etc/exports.d/hangar-files.exports >/dev/null
+    sudo rm -f /etc/exports.d/hangar-nfstest.exports
+    sudo systemctl enable --now nfs-server >/dev/null 2>&1
+    sudo exportfs -ra
     /usr/local/go/bin/go build -o /var/tmp/hangar-worker ./cmd/hangar-worker
     # The agent every environment boots with: static, for the guest.
     CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath -ldflags '-s -w' \

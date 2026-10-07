@@ -34,9 +34,6 @@ func (h *handler) GetProfile(ctx context.Context, _ GetProfileRequestObject) (Ge
 		out.LoginKeys = append(out.LoginKeys, loginKey(k))
 	}
 	for _, f := range files {
-		if f.Deleted {
-			continue
-		}
 		out.Files = append(out.Files, ProfileFile{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
 			TrustedOnly: f.TrustedOnly, UpdatedAt: f.UpdatedAt})
 	}
@@ -65,7 +62,7 @@ func (h *handler) PutProfileFile(ctx context.Context, req PutProfileFileRequestO
 		mode = uint32(*req.Body.Mode)
 	} else if files, err := h.profiles.List(ctx, uid, true); err == nil {
 		for _, f := range files {
-			if f.Path == req.Params.Path && !f.Deleted {
+			if f.Path == req.Params.Path {
 				mode = f.Mode
 			}
 		}
@@ -96,7 +93,7 @@ func (h *handler) UpdateProfileFileSettings(ctx context.Context, req UpdateProfi
 }
 
 func (h *handler) DeleteProfileFile(ctx context.Context, req DeleteProfileFileRequestObject) (DeleteProfileFileResponseObject, error) {
-	_, err := h.profiles.Delete(ctx, principal(ctx).UserID, req.Params.Path)
+	err := h.profiles.Delete(ctx, principal(ctx).UserID, req.Params.Path)
 	switch {
 	case errors.Is(err, profile.ErrInvalid):
 		return DeleteProfileFile400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
