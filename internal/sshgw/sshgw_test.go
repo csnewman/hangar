@@ -79,13 +79,10 @@ func TestGateway(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	d := dbtest.Open(t)
-	store, err := profile.NewStore(d, t.TempDir(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := profile.NewStore(d, nil)
 
 	var alice, bob, worker, running, stopped string
-	err = d.Transact(ctx, func(tx db.Tx) error {
+	err := d.Transact(ctx, func(tx db.Tx) error {
 		tx.QueryRow(ctx, `INSERT INTO users (username) VALUES ('alice') RETURNING id`).Scan(&alice)
 		tx.QueryRow(ctx, `INSERT INTO users (username) VALUES ('bob') RETURNING id`).Scan(&bob)
 		tx.QueryRow(ctx, `INSERT INTO workers (name, credential_hash) VALUES ('w', '\x00') RETURNING id`).Scan(&worker)

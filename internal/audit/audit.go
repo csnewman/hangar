@@ -104,8 +104,8 @@ const (
 	KindOwner       = "owner"
 	KindSSHKey      = "ssh_key"
 	KindFile        = "profile_file"
-	KindPath        = "profile_path"
 	KindPack        = "file_pack"
+	KindCopy        = "pack_copy"
 )
 
 // Event is one thing that happened.

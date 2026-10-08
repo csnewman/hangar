@@ -33,7 +33,9 @@ func serveProfile() {
 		level = slog.LevelDebug
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
-	g := profile.NewGuest(u, newRouter(u).apply, log)
+	r := newRouter(u)
+	g := profile.NewGuest(u, profile.GuestFiles{Mount: r.mount, Route: r.apply, Shared: sharedDir,
+		State: agentState}, log)
 	go func() {
 		<-g.Synced()
 		os.MkdirAll(filepath.Dir(sysuser.ProfileSynced), 0o755)

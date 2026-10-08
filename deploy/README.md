@@ -249,41 +249,48 @@ one.
 the public URL's host at the listen port -- behind a load balancer on port
 22, say.
 
-## Profiles
+## Packs
 
-Each person's profile -- Claude's settings and sign-in, `.gitconfig`,
-VS Code's settings, CLI sign-ins and the like -- follows them into every
-environment they own: the files are on the files root (below), which each
-worker serves its environments over NFS, so an environment reads and writes
-the one copy, and a lock taken in one holds in every other. The Files page lists
-what is shared, and each person can add paths of their own there, or leave
-a path in a shared directory to each environment with `!` (Claude's
-sessions and caches in `~/.claude` are left so already).
-`HANGAR_PROFILE_PATHS` adds paths for everyone, beside the built-in ones:
+The files environments share are packs. A pack is a named list of paths --
+in the home directory, `~/.npmrc`, or absolute, `/workspace/app/.env`; a
+directory ending in a slash, with everything under it; one starting with
+`!` left out of a shared directory, to each environment -- and holds no
+files. A copy holds a pack's files: each person's own, made when they first
+need it, or a shared one a team (or a person) keeps. The files are on the
+files root (below), which each worker serves its environments over NFS, so
+an environment reads and writes the one copy, and a lock taken in one holds
+in every other.
 
-    HANGAR_PROFILE_PATHS=.config/nvim/,.bash_aliases
+An environment has the packs its template lists, then those that attach
+themselves: a person's to their own environments, a team's to its members',
+or one an administrator attaches to everyone's. For each it uses a copy:
+the one chosen on the environment, else the one the template pins, else the
+one it was first given, else its owner's default, else their own.
 
-Each is relative to the home directory, and a directory, ending in a slash,
-shares everything under it. A path no one may share -- caches, and what
-programs rewrite per machine, such as `.claude.json` -- stops the server
-starting, and says why.
+The profile is a built-in pack attached to everyone: Claude's settings and
+sign-in (leaving its sessions and caches to each environment), `.gitconfig`,
+VS Code's settings and CLI sign-ins. A new server makes it once, and
+administrators change its paths on the Files page; nothing about paths is
+fixed in the server. Each person's profile is their copy of it, and what
+else they share goes in packs of their own.
 
-A template says what of its owner's an environment is given: their
-profile, its sensitive files (credentials, in the profile and in packs),
-their SSH keys, a registry sign-in, and an editor that trusts its folders.
-"Untrusted code" in the template editor withholds all but the profile's
-other files.
+A path a pack marks sensitive -- the profile's credentials, say -- keeps
+every file under it from environments whose template withholds sensitive
+files. A template says what of its owner's an environment is given:
+self-attaching packs (the profile among them), sensitive files, their SSH
+keys, a registry sign-in, and an editor that trusts its folders. "Untrusted
+code" in the template editor withholds all but self-attaching packs.
 
-File packs are files a project's environments need beside the profile,
-such as a `.env` (an absolute path) or a registry login (`~/.npmrc`, in the
-home directory), which the templates listing a pack give their
-environments.
+When a path becomes shared in an environment, a file only the environment
+has is copied into the copy; one differing from the copy's is kept aside,
+and the environment's page asks which to keep. A path no longer shared is
+copied down, so the environment keeps it as its own.
 
 ## The files root
 
-The files environments share -- profiles, and the packs templates give
-them -- are kept on the files root, a directory of one directory per file
-set, named by the set's ID. The control plane mounts it at
+The copies of packs are kept on the files root, a directory of one
+directory per copy, named by its ID: a file in the home directory under
+`~/` in it, an absolute one at its path. The control plane mounts it at
 `/var/lib/hangar/files`, from `HANGAR_FILES_DIR` on the host (the worker
 data directory's `files/`); each worker names it as `storage.files` in
 `worker.yaml`, and serves each environment what of it the control plane
@@ -293,7 +300,8 @@ there -- an NFS server of your own, or EFS -- with root not squashed: the
 control plane and the workers both write it as root.
 
 A server that kept profiles' files in the object store copies those the
-files root lacks there when it starts.
+files root lacks there when it starts, and moves its files root to packs
+and copies once, as its database migrates.
 
 ## The object store
 

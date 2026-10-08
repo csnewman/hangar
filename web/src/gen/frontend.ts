@@ -111,7 +111,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The signed-in user's profile: the files that follow them into every environment they own, and their SSH keys. */
+        /** @description The signed-in user's keys: the SSH keys environments sign with, and the public keys that sign them in to their environments. */
         get: operations["getProfile"];
         put?: never;
         post?: never;
@@ -121,28 +121,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/frontend/me/profile/file": {
-        parameters: {
-            query: {
-                /** @description The file's path, relative to the home directory. */
-                path: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get: operations["getProfileFile"];
-        /** @description Write a file. It reaches every running environment the user owns at once. */
-        put: operations["putProfileFile"];
-        post?: never;
-        /** @description Remove a file, from the profile and every environment. */
-        delete: operations["deleteProfileFile"];
-        options?: never;
-        head?: never;
-        /** @description Change a file's settings. They reach every environment as a change to the file does. */
-        patch: operations["updateProfileFileSettings"];
-        trace?: never;
-    };
     "/api/frontend/packs": {
         parameters: {
             query?: never;
@@ -150,11 +128,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description The file packs the signed-in user may use: their own, and their teams'. Every pack, for an administrator. */
-        get: operations["listFilePacks"];
+        /** @description The packs the signed-in user may use: the built-in ones, those attached to everyone, their own, and their teams'. Every pack, for an administrator. */
+        get: operations["listPacks"];
         put?: never;
         /** @description Make a pack, owned by the team it names, which the user must be a member or admin of, or else by the user. */
-        post: operations["createFilePack"];
+        post: operations["createPack"];
         delete?: never;
         options?: never;
         head?: never;
@@ -166,61 +144,101 @@ export interface paths {
             query?: never;
             header?: never;
             path: {
-                id: string;
+                id: components["parameters"]["ID"];
             };
             cookie?: never;
         };
-        /** @description A pack and its files: the one copy of a shared pack's, or the user's own copy of a personal pack's. */
-        get: operations["getFilePack"];
-        /** @description Change a pack's name, description and paths. Its owner, and whether it is personal, stay. Files under a path it no longer names are dropped from the pack; environments keep theirs. */
-        put: operations["updateFilePack"];
+        get: operations["getPack"];
+        /** @description Change a pack's name, description, attach rule and paths. Its owner stays. Copies keep their files under a path taken out, unshared; environments copy them down as their own. */
+        put: operations["updatePack"];
         post?: never;
-        /** @description Delete a pack and every copy of its files. Environments keep theirs. */
-        delete: operations["deleteFilePack"];
+        /** @description Delete a pack and every copy of its files. A built-in pack is not deleted: attach it to nothing instead. */
+        delete: operations["deletePack"];
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/frontend/packs/{id}/file": {
+    "/api/frontend/packs/{id}/copies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description The copies of a pack the user may use: their own first, made if they have none yet, then the shared ones. */
+        get: operations["listCopies"];
+        put?: never;
+        /** @description Make a shared copy of the pack, owned by the team it names, which the user must be a member or admin of, or else by the user. */
+        post: operations["createCopy"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/packs/{id}/default": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description The copy the user uses of the pack, unless an environment or its template says otherwise. Without one, their own. */
+        put: operations["setDefaultCopy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/copies/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description A copy, its pack, and its files. */
+        get: operations["getCopy"];
+        put?: never;
+        post?: never;
+        /** @description Delete a copy and its files. Environments that used it are given another; a person who deletes their own is given an empty one. */
+        delete: operations["deleteCopy"];
+        options?: never;
+        head?: never;
+        patch: operations["renameCopy"];
+        trace?: never;
+    };
+    "/api/frontend/copies/{id}/file": {
         parameters: {
             query: {
-                /** @description The file's absolute path. */
+                /** @description The file's path, ~/ in the home directory or absolute. */
                 path: string;
             };
             header?: never;
             path: {
-                id: string;
+                id: components["parameters"]["ID"];
             };
             cookie?: never;
         };
-        get: operations["getFilePackFile"];
-        /** @description Write a file under one of the pack's paths. It reaches every running environment that has the pack at once. */
-        put: operations["putFilePackFile"];
+        get: operations["getCopyFile"];
+        /** @description Write a file under one of the pack's paths. It reaches every running environment using the copy at once. */
+        put: operations["putCopyFile"];
         post?: never;
-        /** @description Remove a file, from the pack and every environment that has it. */
-        delete: operations["deleteFilePackFile"];
+        /** @description Remove a file, from the copy and every environment using it. */
+        delete: operations["deleteCopyFile"];
         options?: never;
         head?: never;
-        patch: operations["updateFilePackFileSettings"];
-        trace?: never;
-    };
-    "/api/frontend/me/profile/paths": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** @description Share another path, relative to the home directory: a file, or a directory, ending in a slash, with everything under it. It is taken from and given to every environment the user owns. */
-        post: operations["addProfilePath"];
-        /** @description Stop sharing a path the user added. Each environment keeps its copy, as a file of its own. */
-        delete: operations["removeProfilePath"];
-        options?: never;
-        head?: never;
-        patch?: never;
+        patch: operations["setCopyFileMode"];
         trace?: never;
     };
     "/api/frontend/me/profile/login-keys": {
@@ -582,6 +600,65 @@ export interface paths {
         post?: never;
         /** @description Asks for the environment to be deleted. One its worker holds stays, desired "deleted", until the worker reports it gone; one no worker holds is removed at once. */
         delete: operations["deleteEnvironment"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/environments/{id}/packs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description The packs the environment has, in order -- those its template lists, then those attaching themselves to it -- and the copy it uses of each. */
+        get: operations["listEnvironmentPacks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/environments/{id}/packs/{pack}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                pack: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description The copy the environment uses of one of its packs. Without one, the template's pin, the one it was first given, or its owner's default. */
+        put: operations["chooseEnvironmentCopy"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/frontend/environments/{id}/conflicts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        /** @description Paths the environment had a file of its own at, differing from its copy's, when they became shared. The copy's is used; the environment's is kept aside until someone resolves it. */
+        get: operations["listEnvironmentConflicts"];
+        put?: never;
+        /** @description Resolve a conflict: keep the copy's file (shared), or write the environment's over it (environment), which everyone using the copy then has. */
+        post: operations["resolveEnvironmentConflict"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1136,84 +1213,142 @@ export interface components {
             /** @description Absent never expires. */
             expires_in_days?: number;
         };
-        ProfilePath: {
-            path: string;
-        };
         Profile: {
-            files: components["schemas"]["ProfileFile"][];
             keys: components["schemas"]["SSHKey"][];
             /** @description Public keys that sign the user in to their environments over SSH. */
             login_keys: components["schemas"]["LoginKey"][];
-            /** @description What a profile holds, relative to the home directory. One ending in a slash holds everything under it. */
-            paths: string[];
-            /** @description The paths among them the user added, which they may remove. */
-            own_paths: string[];
             /** @description Whether the server can keep SSH keys: without its key, they are refused. */
             secrets: boolean;
         };
-        FilePack: {
+        PackPath: {
+            /** @description ~/ in the home directory, or absolute. One ending in a slash is a directory and everything under it; one starting with ! is left out of a directory the pack shares, each environment's own. */
+            path: string;
+            /** @description Every file under it, in every copy, is kept from environments given no sensitive files. */
+            sensitive: boolean;
+        };
+        /**
+         * @description The environments a pack reaches without a template listing it: none (listed), its owner's, its team's members', or everyone's (an administrator's to set).
+         * @enum {string}
+         */
+        PackAttach: "listed" | "owner" | "team" | "everyone";
+        Pack: {
             id: string;
             name: string;
             description: string;
-            /** @description The person who owns it, if one does. */
             owner_id?: string;
+            /** @description The owner's username. */
             owner?: string;
-            /** @description The team that owns it, if one does. */
             team_id?: string;
-            /** @description The team's slug. */
+            /** @description The owning team's slug. */
             team?: string;
-            /** @description Each person who uses it has their own copy of its files, rather than all sharing one. */
-            personal: boolean;
-            /** @description Absolute; a directory's ends in a slash, and holds everything under it. */
-            paths: string[];
-            /** @description The user may change the pack. */
+            /** @description The server's, which administrators change. */
+            builtin: boolean;
+            attach: components["schemas"]["PackAttach"];
+            paths: components["schemas"]["PackPath"][];
+            /** @description The copy the user chose to use by default, if they chose one; else their own. */
+            default_copy_id?: string;
             can_change: boolean;
-            /** @description The user may change its files, or their copy of them. */
-            can_write: boolean;
             can_delete: boolean;
             /** Format: date-time */
             created_at: string;
             /** Format: date-time */
             updated_at: string;
         };
-        FilePackInput: {
+        PackInput: {
             name: string;
             description?: string;
-            /** @description The team to own a new pack. Ignored for a change. */
+            /** @description Only when making one; the user's own without. */
             team_id?: string;
-            /** @description For a new pack. Ignored for a change. */
-            personal?: boolean;
-            paths: string[];
+            attach?: components["schemas"]["PackAttach"];
+            paths: components["schemas"]["PackPath"][];
         };
-        FilePackFiles: {
-            pack: components["schemas"]["FilePack"];
-            files: components["schemas"]["ProfileFile"][];
+        Copy: {
+            id: string;
+            pack_id: string;
+            owner_id?: string;
+            owner?: string;
+            team_id?: string;
+            team?: string;
+            /** @description A person's own copy, one each. */
+            personal: boolean;
+            name: string;
+            can_write: boolean;
+            can_delete: boolean;
+            /** Format: date-time */
+            created_at: string;
         };
-        ProfileFile: {
+        CopyInput: {
+            name: string;
+            team_id?: string;
+        };
+        CopyName: {
+            name: string;
+        };
+        CopyChoice: {
+            /** @description The copy; without one, the rules choose. */
+            copy_id?: string;
+        };
+        CopyFiles: {
+            copy: components["schemas"]["Copy"];
+            pack: components["schemas"]["Pack"];
+            files: components["schemas"]["PackFile"][];
+        };
+        PackFile: {
             path: string;
             size: number;
             mode: number;
-            /** @description A credential: kept from environments whose template withholds sensitive files. Known credentials start so. */
+            /** @description Under a sensitive path of the pack. */
             sensitive: boolean;
+            /** @description Under a path the pack shares. A copy keeps a file the pack stopped sharing until someone deletes it. */
+            shared: boolean;
             /** Format: date-time */
             updated_at: string;
         };
-        ProfileFileSettings: {
+        PackFileMode: {
             /** @description Its permissions, as chmod takes them (0o600 is 384). */
             mode: number;
-            sensitive: boolean;
         };
-        ProfileFileContent: {
+        PackFileContent: {
             path: string;
             content: string;
             mode: number;
+            sensitive: boolean;
+            shared: boolean;
             /** Format: date-time */
             updated_at: string;
         };
-        PutProfileFile: {
+        PutPackFile: {
             content: string;
-            /** @description Permission bits. Absent keeps the file's, or 0644. */
+            /** @description Its permissions; without, the file's own, or 0600 for a sensitive one and 0644 for another. */
             mode?: number;
+        };
+        AttachedPack: {
+            pack: components["schemas"]["Pack"];
+            copy: components["schemas"]["Copy"];
+            /**
+             * @description How the copy was chosen: on the environment, the template's pin, the one it was first given (kept), or its owner's default.
+             * @enum {string}
+             */
+            from: "environment" | "template" | "kept" | "default";
+            /** @description Its template lists it, rather than its attaching itself. */
+            listed: boolean;
+        };
+        FileConflict: {
+            copy_id: string;
+            path: string;
+            /** Format: date-time */
+            found_at: string;
+            /**
+             * @description How someone resolved it, until the environment's agent has done it.
+             * @enum {string}
+             */
+            resolution?: "shared" | "environment";
+        };
+        ResolveConflict: {
+            copy_id: string;
+            path: string;
+            /** @enum {string} */
+            resolution: "shared" | "environment";
         };
         SSHKey: {
             id: string;
@@ -1309,7 +1444,7 @@ export interface components {
          * @description A setting an environment takes from its template.
          * @enum {string}
          */
-        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "access" | "trusted_folders" | "web_names" | "file_packs" | "placement" | "name";
+        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "access" | "trusted_folders" | "web_names" | "packs" | "placement" | "name";
         /**
          * @description console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; fs the backend serving the image; gpu the virtual GPU's backend.
          * @enum {string}
@@ -1382,9 +1517,9 @@ export interface components {
         };
         /** @description What of its owner's the environment is kept from, for code they do not trust. Each is false, giving it everything, when left out. */
         Access: {
-            /** @description None of the owner's profile's files. */
-            no_profile?: boolean;
-            /** @description None of the sensitive files -- credentials, such as Claude's sign-in -- of the owner's profile or of the environment's packs. */
+            /** @description Only the packs the template lists: none of those attaching themselves to environments, the profile among them. */
+            no_self_attached?: boolean;
+            /** @description None of the sensitive files -- credentials, such as Claude's sign-in -- of the environment's packs. */
             no_sensitive_files?: boolean;
             /** @description No signatures from the owner's SSH keys. */
             no_ssh_keys?: boolean;
@@ -1392,6 +1527,11 @@ export interface components {
             no_registry?: boolean;
             /** @description VS Code trusts no folder without asking. */
             no_editor_trust?: boolean;
+        };
+        PackRef: {
+            pack: string;
+            /** @description The copy every environment made from the template uses; without one, each owner's own. */
+            copy?: string;
         };
         Spec: {
             image: string;
@@ -1402,8 +1542,8 @@ export interface components {
             repos: components["schemas"]["Repo"][];
             /** @description The folder the editor opens on. In a template it may use variables, as a repository's branch does. */
             editor_path?: string;
-            /** @description The IDs of the file packs the environment has beside its owner's profile, in order: a file two of them name is the first's. A pack the owner may not use is left out. */
-            file_packs?: string[];
+            /** @description The packs the environment has, in order, before those attaching themselves to it: a path two of them name is the first's. A pack the owner may not use is left out. */
+            packs?: components["schemas"]["PackRef"][];
             /** @description Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing. */
             trusted_folders?: string[];
             access?: components["schemas"]["Access"];
@@ -1988,114 +2128,7 @@ export interface operations {
             401: components["responses"]["Unauthorized"];
         };
     };
-    getProfileFile: {
-        parameters: {
-            query: {
-                /** @description The file's path, relative to the home directory. */
-                path: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The file. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProfileFileContent"];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["NotFound"];
-        };
-    };
-    putProfileFile: {
-        parameters: {
-            query: {
-                /** @description The file's path, relative to the home directory. */
-                path: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["PutProfileFile"];
-            };
-        };
-        responses: {
-            /** @description The file as stored. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProfileFile"];
-                };
-            };
-            400: components["responses"]["Invalid"];
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    deleteProfileFile: {
-        parameters: {
-            query: {
-                /** @description The file's path, relative to the home directory. */
-                path: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Removed. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            400: components["responses"]["Invalid"];
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    updateProfileFileSettings: {
-        parameters: {
-            query: {
-                /** @description The file's path, relative to the home directory. */
-                path: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProfileFileSettings"];
-            };
-        };
-        responses: {
-            /** @description The file as stored. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProfileFile"];
-                };
-            };
-            400: components["responses"]["Invalid"];
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["NotFound"];
-        };
-    };
-    listFilePacks: {
+    listPacks: {
         parameters: {
             query?: never;
             header?: never;
@@ -2104,19 +2137,19 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The packs, by name. */
+            /** @description The packs, the built-in ones first, then by name. */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FilePack"][];
+                    "application/json": components["schemas"]["Pack"][];
                 };
             };
             401: components["responses"]["Unauthorized"];
         };
     };
-    createFilePack: {
+    createPack: {
         parameters: {
             query?: never;
             header?: never;
@@ -2125,7 +2158,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["FilePackInput"];
+                "application/json": components["schemas"]["PackInput"];
             };
         };
         responses: {
@@ -2135,7 +2168,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FilePack"];
+                    "application/json": components["schemas"]["Pack"];
                 };
             };
             400: components["responses"]["Invalid"];
@@ -2143,12 +2176,12 @@ export interface operations {
             403: components["responses"]["Forbidden"];
         };
     };
-    getFilePack: {
+    getPack: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                id: string;
+                id: components["parameters"]["ID"];
             };
             cookie?: never;
         };
@@ -2160,25 +2193,25 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FilePackFiles"];
+                    "application/json": components["schemas"]["Pack"];
                 };
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
     };
-    updateFilePack: {
+    updatePack: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                id: string;
+                id: components["parameters"]["ID"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["FilePackInput"];
+                "application/json": components["schemas"]["PackInput"];
             };
         };
         responses: {
@@ -2188,7 +2221,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["FilePack"];
+                    "application/json": components["schemas"]["Pack"];
                 };
             };
             400: components["responses"]["Invalid"];
@@ -2197,12 +2230,12 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    deleteFilePack: {
+    deletePack: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                id: string;
+                id: components["parameters"]["ID"];
             };
             cookie?: never;
         };
@@ -2220,15 +2253,173 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    getFilePackFile: {
+    listCopies: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The copies. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Copy"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    createCopy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CopyInput"];
+            };
+        };
+        responses: {
+            /** @description The copy. */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Copy"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    setDefaultCopy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CopyChoice"];
+            };
+        };
+        responses: {
+            /** @description Set. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getCopy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The copy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CopyFiles"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    deleteCopy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    renameCopy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CopyName"];
+            };
+        };
+        responses: {
+            /** @description The copy. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Copy"];
+                };
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    getCopyFile: {
         parameters: {
             query: {
-                /** @description The file's absolute path. */
+                /** @description The file's path, ~/ in the home directory or absolute. */
                 path: string;
             };
             header?: never;
             path: {
-                id: string;
+                id: components["parameters"]["ID"];
             };
             cookie?: never;
         };
@@ -2240,28 +2431,28 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProfileFileContent"];
+                    "application/json": components["schemas"]["PackFileContent"];
                 };
             };
             401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
     };
-    putFilePackFile: {
+    putCopyFile: {
         parameters: {
             query: {
-                /** @description The file's absolute path. */
+                /** @description The file's path, ~/ in the home directory or absolute. */
                 path: string;
             };
             header?: never;
             path: {
-                id: string;
+                id: components["parameters"]["ID"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["PutProfileFile"];
+                "application/json": components["schemas"]["PutPackFile"];
             };
         };
         responses: {
@@ -2271,7 +2462,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProfileFile"];
+                    "application/json": components["schemas"]["PackFile"];
                 };
             };
             400: components["responses"]["Invalid"];
@@ -2280,15 +2471,15 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    deleteFilePackFile: {
+    deleteCopyFile: {
         parameters: {
             query: {
-                /** @description The file's absolute path. */
+                /** @description The file's path, ~/ in the home directory or absolute. */
                 path: string;
             };
             header?: never;
             path: {
-                id: string;
+                id: components["parameters"]["ID"];
             };
             cookie?: never;
         };
@@ -2307,21 +2498,21 @@ export interface operations {
             404: components["responses"]["NotFound"];
         };
     };
-    updateFilePackFileSettings: {
+    setCopyFileMode: {
         parameters: {
             query: {
-                /** @description The file's absolute path. */
+                /** @description The file's path, ~/ in the home directory or absolute. */
                 path: string;
             };
             header?: never;
             path: {
-                id: string;
+                id: components["parameters"]["ID"];
             };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ProfileFileSettings"];
+                "application/json": components["schemas"]["PackFileMode"];
             };
         };
         responses: {
@@ -2331,58 +2522,12 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ProfileFile"];
+                    "application/json": components["schemas"]["PackFile"];
                 };
             };
             400: components["responses"]["Invalid"];
             401: components["responses"]["Unauthorized"];
             403: components["responses"]["Forbidden"];
-            404: components["responses"]["NotFound"];
-        };
-    };
-    addProfilePath: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProfilePath"];
-            };
-        };
-        responses: {
-            /** @description Shared. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            400: components["responses"]["Invalid"];
-            401: components["responses"]["Unauthorized"];
-        };
-    };
-    removeProfilePath: {
-        parameters: {
-            query: {
-                path: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description No longer shared. */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            401: components["responses"]["Unauthorized"];
             404: components["responses"]["NotFound"];
         };
     };
@@ -3231,6 +3376,111 @@ export interface operations {
                 content?: never;
             };
             401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listEnvironmentPacks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The packs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachedPack"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    chooseEnvironmentCopy: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+                pack: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CopyChoice"];
+            };
+        };
+        responses: {
+            /** @description Chosen. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    listEnvironmentConflicts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The conflicts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FileConflict"][];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            404: components["responses"]["NotFound"];
+        };
+    };
+    resolveEnvironmentConflict: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: components["parameters"]["ID"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveConflict"];
+            };
+        };
+        responses: {
+            /** @description Recorded; the environment's agent does it. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Invalid"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
         };
     };

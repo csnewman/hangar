@@ -15,7 +15,7 @@ const settingNames: Record<TemplateSetting, string> = {
   editor_path: 'editor folder',
   access: 'access',
   trusted_folders: 'trusted folders',
-  file_packs: 'file packs',
+  packs: 'packs',
   web_names: 'web server names',
   placement: 'placement',
   name: 'accepted names',

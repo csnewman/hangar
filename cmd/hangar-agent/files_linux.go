@@ -21,9 +21,13 @@ import (
 )
 
 // sharedDir is where the files the environment shares with others are
-// mounted: the worker serves them over NFS, on vsock, each file set a
+// mounted: the worker serves them over NFS, on vsock, each copy a
 // directory named by its ID.
 const sharedDir = "/run/hangar/files"
+
+// agentState is where the agent keeps, on the environment's own disk,
+// what it routed and the files it kept aside in conflicts.
+const agentState = "/var/lib/hangar-agent"
 
 // filesPort is the vsock port the worker serves them on.
 const filesPort = 2049

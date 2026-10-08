@@ -19,10 +19,15 @@ export type User = Schemas['User']
 export type CreateUser = Schemas['CreateUser']
 export type UpdateUser = Schemas['UpdateUser']
 export type Profile = Schemas['Profile']
-export type ProfileFile = Schemas['ProfileFile']
-export type ProfileFileContent = Schemas['ProfileFileContent']
-export type FilePack = Schemas['FilePack']
-export type FilePackInput = Schemas['FilePackInput']
+export type Pack = Schemas['Pack']
+export type PackInput = Schemas['PackInput']
+export type PackPath = Schemas['PackPath']
+export type PackRef = Schemas['PackRef']
+export type Copy = Schemas['Copy']
+export type PackFile = Schemas['PackFile']
+export type PackFileContent = Schemas['PackFileContent']
+export type AttachedPack = Schemas['AttachedPack']
+export type FileConflict = Schemas['FileConflict']
 export type SSHKey = Schemas['SSHKey']
 export type LoginKey = Schemas['LoginKey']
 export type AccessToken = Schemas['AccessToken']
@@ -96,39 +101,45 @@ export const api = {
   audit: (subject: string[], before?: number, limit = 50) =>
     unwrap(client.GET('/api/frontend/audit', { params: { query: { subject, before, limit } } })),
   profile: () => unwrap(client.GET('/api/frontend/me/profile')),
-  profileFile: (path: string) => unwrap(client.GET('/api/frontend/me/profile/file', { params: { query: { path } } })),
-  putProfileFile: (path: string, content: string) =>
-    unwrap(client.PUT('/api/frontend/me/profile/file', { params: { query: { path } }, body: { content } })),
-  setProfileFileSettings: (path: string, mode: number, sensitive: boolean) =>
-    unwrap(
-      client.PATCH('/api/frontend/me/profile/file', { params: { query: { path } }, body: { mode, sensitive } }),
-    ),
-  deleteProfileFile: (path: string) =>
-    unwrap(client.DELETE('/api/frontend/me/profile/file', { params: { query: { path } } })),
   packs: () => unwrap(client.GET('/api/frontend/packs')),
   pack: (id: string) => unwrap(client.GET('/api/frontend/packs/{id}', byID(id))),
-  createPack: (body: FilePackInput) => unwrap(client.POST('/api/frontend/packs', { body })),
-  updatePack: (id: string, body: FilePackInput) =>
-    unwrap(client.PUT('/api/frontend/packs/{id}', { ...byID(id), body })),
+  createPack: (body: PackInput) => unwrap(client.POST('/api/frontend/packs', { body })),
+  updatePack: (id: string, body: PackInput) => unwrap(client.PUT('/api/frontend/packs/{id}', { ...byID(id), body })),
   deletePack: (id: string) => unwrap(client.DELETE('/api/frontend/packs/{id}', byID(id))),
-  packFile: (id: string, path: string) =>
-    unwrap(client.GET('/api/frontend/packs/{id}/file', { params: { path: { id }, query: { path } } })),
-  putPackFile: (id: string, path: string, content: string) =>
+  copies: (pack: string) => unwrap(client.GET('/api/frontend/packs/{id}/copies', byID(pack))),
+  createCopy: (pack: string, name: string, team_id?: string) =>
+    unwrap(client.POST('/api/frontend/packs/{id}/copies', { ...byID(pack), body: { name, team_id } })),
+  setDefaultCopy: (pack: string, copy_id?: string) =>
+    unwrap(client.PUT('/api/frontend/packs/{id}/default', { ...byID(pack), body: { copy_id } })),
+  copy: (id: string) => unwrap(client.GET('/api/frontend/copies/{id}', byID(id))),
+  renameCopy: (id: string, name: string) =>
+    unwrap(client.PATCH('/api/frontend/copies/{id}', { ...byID(id), body: { name } })),
+  deleteCopy: (id: string) => unwrap(client.DELETE('/api/frontend/copies/{id}', byID(id))),
+  copyFile: (id: string, path: string) =>
+    unwrap(client.GET('/api/frontend/copies/{id}/file', { params: { path: { id }, query: { path } } })),
+  putCopyFile: (id: string, path: string, content: string) =>
     unwrap(
-      client.PUT('/api/frontend/packs/{id}/file', { params: { path: { id }, query: { path } }, body: { content } }),
+      client.PUT('/api/frontend/copies/{id}/file', { params: { path: { id }, query: { path } }, body: { content } }),
     ),
-  setPackFileSettings: (id: string, path: string, mode: number, sensitive: boolean) =>
+  setCopyFileMode: (id: string, path: string, mode: number) =>
     unwrap(
-      client.PATCH('/api/frontend/packs/{id}/file', {
-        params: { path: { id }, query: { path } },
-        body: { mode, sensitive },
+      client.PATCH('/api/frontend/copies/{id}/file', { params: { path: { id }, query: { path } }, body: { mode } }),
+    ),
+  deleteCopyFile: (id: string, path: string) =>
+    unwrap(client.DELETE('/api/frontend/copies/{id}/file', { params: { path: { id }, query: { path } } })),
+  environmentPacks: (id: string) => unwrap(client.GET('/api/frontend/environments/{id}/packs', byID(id))),
+  chooseEnvironmentCopy: (id: string, pack: string, copy_id?: string) =>
+    unwrap(
+      client.PUT('/api/frontend/environments/{id}/packs/{pack}', {
+        params: { path: { id, pack } },
+        body: { copy_id },
       }),
     ),
-  deletePackFile: (id: string, path: string) =>
-    unwrap(client.DELETE('/api/frontend/packs/{id}/file', { params: { path: { id }, query: { path } } })),
-  addProfilePath: (path: string) => unwrap(client.POST('/api/frontend/me/profile/paths', { body: { path } })),
-  removeProfilePath: (path: string) =>
-    unwrap(client.DELETE('/api/frontend/me/profile/paths', { params: { query: { path } } })),
+  environmentConflicts: (id: string) => unwrap(client.GET('/api/frontend/environments/{id}/conflicts', byID(id))),
+  resolveConflict: (id: string, copy_id: string, path: string, resolution: 'shared' | 'environment') =>
+    unwrap(
+      client.POST('/api/frontend/environments/{id}/conflicts', { ...byID(id), body: { copy_id, path, resolution } }),
+    ),
   addSSHKey: (name: string, private_key?: string) =>
     unwrap(client.POST('/api/frontend/me/profile/keys', { body: { name, private_key } })),
   deleteSSHKey: (id: string) => unwrap(client.DELETE('/api/frontend/me/profile/keys/{id}', byID(id))),

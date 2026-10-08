@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,7 +26,7 @@ type SharedFiles interface {
 type filesView struct {
 	mu     sync.Mutex
 	sets   []string
-	hidden map[string]map[string]bool
+	hidden map[string][]string
 }
 
 func (v *filesView) Sets() []string {
@@ -34,19 +35,23 @@ func (v *filesView) Sets() []string {
 	return slices.Clone(v.sets)
 }
 
+// Hidden reports whether a path in a copy is kept from the environment:
+// one hidden, or under a hidden directory.
 func (v *filesView) Hidden(set, path string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.hidden[set][path]
+	for _, h := range v.hidden[set] {
+		if path == h || path == strings.TrimSuffix(h, "/") || strings.HasSuffix(h, "/") && strings.HasPrefix(path, h) {
+			return true
+		}
+	}
+	return false
 }
 
 func (v *filesView) set(files api.EnvironmentFiles) {
-	hidden := map[string]map[string]bool{}
+	hidden := map[string][]string{}
 	for set, paths := range files.Hidden {
-		hidden[set] = map[string]bool{}
-		for _, p := range paths {
-			hidden[set][p] = true
-		}
+		hidden[set] = slices.Clone(paths)
 	}
 	v.mu.Lock()
 	v.sets, v.hidden = files.Sets, hidden

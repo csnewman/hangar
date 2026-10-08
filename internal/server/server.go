@@ -31,6 +31,7 @@ import (
 	"github.com/csnewman/hangar/internal/editor"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/frontendapi"
+	"github.com/csnewman/hangar/internal/packs"
 	"github.com/csnewman/hangar/internal/placement"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/publichost"
@@ -69,11 +70,11 @@ type Config struct {
 	Sealer *profile.Sealer
 	// Blobs keeps the registry's blobs.
 	Blobs blob.Store
-	// Files is the files root: the file sets environments share, each a
-	// directory, which every worker serves its environments too.
+	// Files is the files root: the copies of packs environments share,
+	// each a directory, which every worker serves its environments too.
 	Files string
-	// ProfileBlobs is where file sets' contents were kept before: what of
-	// them the files root lacks is copied there at start.
+	// ProfileBlobs is where profiles' and packs' files were kept before:
+	// what of them the files root lacks is copied there at start.
 	ProfileBlobs blob.Versioned
 	// SSHListen, if set, is where the SSH gateway listens (internal/sshgw).
 	SSHListen string
@@ -84,10 +85,7 @@ type Config struct {
 	// host named after PublicURL's, which image names start with:
 	// registry.<host>, or registry-<host> in the prefix style.
 	Registry bool
-	// ProfilePaths are shared in every user's profile beside the defaults
-	// (profile.DefaultPaths).
-	ProfilePaths []string
-	Log          *slog.Logger
+	Log      *slog.Logger
 }
 
 type Server struct {
@@ -107,6 +105,7 @@ type Server struct {
 	placeKick chan struct{}
 	sessions  *profile.Sessions
 	profiles  *profile.Store
+	packs     *packs.Store
 	auditLog  *audit.Log
 	sshListen string
 	sshKey    ssh.Signer
@@ -130,21 +129,17 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Files == "" {
 		return nil, errors.New("no files root")
 	}
-	profiles, err := profile.NewStore(cfg.DB, cfg.Files, cfg.Sealer)
+	profiles := profile.NewStore(cfg.DB, cfg.Sealer)
+	packStore, err := packs.NewStore(cfg.DB, cfg.Files)
 	if err != nil {
 		return nil, fmt.Errorf("the files root: %w", err)
 	}
-	if cfg.ProfileBlobs != nil {
-		n, err := profiles.MigrateFrom(context.Background(), cfg.ProfileBlobs)
-		if err != nil {
-			return nil, fmt.Errorf("copying file sets from the blob store: %w", err)
-		}
-		if n > 0 {
-			log.Info("copied file sets' files from the blob store to the files root", "files", n)
-		}
+	n, err := packStore.Migrate(context.Background(), cfg.ProfileBlobs)
+	if err != nil {
+		return nil, fmt.Errorf("bringing the files root up to date: %w", err)
 	}
-	if err := profiles.ShareForEveryone(cfg.ProfilePaths); err != nil {
-		return nil, fmt.Errorf("profile paths: %w", err)
+	if n > 0 {
+		log.Info("brought the files root up to date", "moved_or_copied", n)
 	}
 	auditLog := audit.NewLog(cfg.DB)
 	var public *publichost.Public
@@ -172,7 +167,7 @@ func New(cfg Config) (*Server, error) {
 	if public != nil {
 		editors = editor.NewGateway(edits, tunnels, public, log)
 	}
-	sessions := profile.NewSessions(profiles, tunnels, log)
+	sessions := profile.NewSessions(profiles, packStore, tunnels, log)
 	if reg != nil {
 		sessions.UseRegistry(registryHost)
 	}
@@ -190,6 +185,7 @@ func New(cfg Config) (*Server, error) {
 		Workers:      wm,
 		Users:        um,
 		Profiles:     profiles,
+		Packs:        packStore,
 		Audit:        auditLog,
 		AutoSignIn:   cfg.AutoSignIn,
 		Log:          log,
@@ -243,6 +239,7 @@ func New(cfg Config) (*Server, error) {
 		placeKick:    make(chan struct{}, 1),
 		sessions:     sessions,
 		profiles:     profiles,
+		packs:        packStore,
 		auditLog:     auditLog,
 		sshListen:    cfg.SSHListen,
 		sshKey:       sshKey,
@@ -261,7 +258,7 @@ func (s *Server) Run(ctx context.Context) {
 			// A report may have an environment running that has no
 			// profile session yet.
 			s.sessions.Kick()
-		case profile.Channel:
+		case profile.Channel, packs.Channel:
 			s.sessions.Changed(payload)
 		case placement.Channel, workers.CapacityChannel:
 			s.kickPlacement()
@@ -273,7 +270,7 @@ func (s *Server) Run(ctx context.Context) {
 			s.sessions.Changed("")
 			s.sessions.Kick()
 		}
-	}, workers.Channel, workers.CapacityChannel, placement.Channel, profile.Channel)
+	}, workers.Channel, workers.CapacityChannel, placement.Channel, profile.Channel, packs.Channel)
 	go s.sessions.Run(ctx)
 	if s.sshListen != "" {
 		go s.serveSSH(ctx)

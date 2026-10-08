@@ -1102,6 +1102,14 @@ input:focus {
   width: 170px;
 }
 
+.inline-form input[type='checkbox'] {
+  width: 15px;
+}
+
+.inline-form .check {
+  flex: none;
+}
+
 .form-actions {
   display: flex;
   justify-content: flex-end;
@@ -2155,6 +2163,11 @@ code {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   font-size: 13px;
+}
+
+/* A template pack's copy, under the pack it is for. */
+.pin {
+  margin: 4px 0 6px 23px;
 }
 
 .field-inline {

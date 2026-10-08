@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
-	"github.com/csnewman/hangar/internal/profile"
+	"github.com/csnewman/hangar/internal/packs"
 )
 
 // desiredHold is the longest a worker's request for its desired set is held
@@ -101,8 +101,8 @@ func (s *Server) workerStatus(w http.ResponseWriter, r *http.Request) {
 // workerEnvironmentFiles answers with what of the shared files one of the
 // worker's environments may reach, which the worker serves it.
 func (s *Server) workerEnvironmentFiles(w http.ResponseWriter, r *http.Request) {
-	files, err := s.profiles.EnvironmentFiles(r.Context(), workerID(r), r.PathValue("id"))
-	if errors.Is(err, profile.ErrNotFound) {
+	files, err := s.packs.EnvironmentFiles(r.Context(), workerID(r), r.PathValue("id"))
+	if errors.Is(err, packs.ErrNotFound) {
 		writeError(w, http.StatusNotFound, "no such environment on this worker")
 		return
 	}

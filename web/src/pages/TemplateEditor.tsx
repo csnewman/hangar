@@ -11,7 +11,7 @@ import { blankSpec, builtinVariables, hangarImages, patternGroups, templatesKey 
 import { canGive, teamsKey, useTeams } from '../teams'
 import { VisibilityBadge } from './Templates'
 import { Activity } from '../components/Activity'
-import { FilePacksField } from './Packs'
+import { PacksField } from './Packs'
 
 const blank: TemplateInput = { name: '', description: '', visibility: 'private', spec: blankSpec }
 
@@ -103,7 +103,7 @@ function Editor({ existing }: { existing?: Template }) {
           return names.length > 0 ? names : undefined
         })(),
         dax: spec.dax || undefined,
-        file_packs: spec.file_packs?.length ? spec.file_packs : undefined,
+        packs: spec.packs?.length ? spec.packs : undefined,
         trusted_folders: spec.access?.no_editor_trust
           ? undefined
           : (spec.trusted_folders ?? []).map((f) => f.trim()).filter((f) => f !== '') || undefined,
@@ -417,7 +417,7 @@ function Editor({ existing }: { existing?: Template }) {
                 </small>
               </label>
             )}
-            <FilePacksField value={spec.file_packs ?? []} onChange={(ids) => setSpec({ file_packs: ids })} />
+            <PacksField value={spec.packs ?? []} onChange={(packs) => setSpec({ packs })} />
             <label className="field">
               <span>Web servers</span>
               <input
@@ -527,14 +527,14 @@ function compactAccess(access: Access | undefined): Access | undefined {
 // What of its owner's an environment is given, each a setting of its own.
 const accessSettings: { key: keyof Access; label: string; hint: string }[] = [
   {
-    key: 'no_profile',
-    label: "The owner's profile",
-    hint: "Their shared files: Claude's settings, .gitconfig and the paths they add. File packs arrive either way.",
+    key: 'no_self_attached',
+    label: 'Self-attaching packs',
+    hint: "Packs that reach environments by themselves: the profile, and the owner's and their teams'. The packs listed below arrive either way.",
   },
   {
     key: 'no_sensitive_files',
     label: 'Sensitive files',
-    hint: "Credentials in the profile and the file packs: Claude's sign-in, git and registry logins, and any file marked sensitive.",
+    hint: "Every file under a pack's sensitive paths: Claude's sign-in, git and registry logins, and the like.",
   },
   { key: 'no_ssh_keys', label: 'SSH keys', hint: "Signatures from the owner's SSH keys, for git and ssh." },
   { key: 'no_registry', label: 'Registry sign-in', hint: "Docker signs in to Hangar's registry as the owner." },

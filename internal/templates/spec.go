@@ -19,7 +19,7 @@ const (
 	MaxMemoryMiB = 256 * 1024
 	MaxRepos     = 16
 	MaxWebNames  = 16
-	MaxFilePacks = 16
+	MaxPacks     = 16
 	// MaxWebName is the longest name that fits before -env<short ID> in one
 	// DNS label of 63 characters.
 	MaxWebName = 63 - len("-env000000")
@@ -150,20 +150,24 @@ func Validate(s api.TemplateSpec) (api.TemplateSpec, error) {
 		s.TrustedFolders[i] = path.Clean(f)
 	}
 
-	if len(s.FilePacks) > MaxFilePacks {
-		return bad("at most %d file packs", MaxFilePacks)
+	if len(s.Packs) > MaxPacks {
+		return bad("at most %d packs", MaxPacks)
 	}
-	var packs []string
-	for _, id := range s.FilePacks {
-		id = strings.ToLower(strings.TrimSpace(id))
-		if !db.ValidUUID(id) {
-			return bad("file pack %q is not a pack's ID", id)
+	var packs []api.PackRef
+	for _, ref := range s.Packs {
+		ref.Pack = strings.ToLower(strings.TrimSpace(ref.Pack))
+		ref.Copy = strings.ToLower(strings.TrimSpace(ref.Copy))
+		if !db.ValidUUID(ref.Pack) {
+			return bad("pack %q is not a pack's ID", ref.Pack)
 		}
-		if !slices.Contains(packs, id) {
-			packs = append(packs, id)
+		if ref.Copy != "" && !db.ValidUUID(ref.Copy) {
+			return bad("copy %q is not a copy's ID", ref.Copy)
+		}
+		if !slices.ContainsFunc(packs, func(r api.PackRef) bool { return r.Pack == ref.Pack }) {
+			packs = append(packs, ref)
 		}
 	}
-	s.FilePacks = packs
+	s.Packs = packs
 
 	if len(s.WebNames) > MaxWebNames {
 		return bad("at most %d web server names", MaxWebNames)

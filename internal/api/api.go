@@ -88,6 +88,13 @@ type Repo struct {
 	Branch string `json:"branch,omitempty"`
 }
 
+// PackRef is a pack a spec lists, by ID, and the copy of it every
+// environment uses, if the spec pins one.
+type PackRef struct {
+	Pack string `json:"pack"`
+	Copy string `json:"copy,omitempty"`
+}
+
 // Spec is what an environment is. A template holds one, with patterns in it;
 // an environment holds its own resolved copy, made when it was created.
 type Spec struct {
@@ -113,11 +120,10 @@ type Spec struct {
 	// Chromium runs tens of times slower from it, so it is asked for, not
 	// assumed.
 	DAX bool `json:"dax,omitempty"`
-	// FilePacks are the IDs of the file packs the environment is kept in
-	// step with beside its owner's profile (internal/profile), in order: a
-	// file two of them name is the first's. One its owner may not use is
-	// left out.
-	FilePacks []string `json:"file_packs,omitempty"`
+	// Packs are the packs the environment has (internal/packs), in order,
+	// before those that attach themselves to it: a path two of them name is
+	// the first's. One its owner may not use is left out.
+	Packs []PackRef `json:"packs,omitempty"`
 	// WebNames are the names of the environment's own web servers its page
 	// links to, each reached on <name>-env<short> after Hangar's host.
 	WebNames []string `json:"web_names,omitempty"`
@@ -127,10 +133,12 @@ type Spec struct {
 }
 
 // Access is what of its owner's an environment is kept from, for code they
-// do not trust (internal/profile). The zero value keeps nothing from it.
+// do not trust (internal/packs, internal/profile). The zero value keeps
+// nothing from it.
 type Access struct {
-	// NoProfile gives it none of its owner's profile's files.
-	NoProfile bool `json:"no_profile,omitempty"`
+	// NoSelfAttached gives it only the packs its spec lists: none of those
+	// that attach themselves to environments, the profile among them.
+	NoSelfAttached bool `json:"no_self_attached,omitempty"`
 	// NoSensitiveFiles keeps the sensitive files -- credentials -- of its
 	// owner's profile and of its packs from it.
 	NoSensitiveFiles bool `json:"no_sensitive_files,omitempty"`
@@ -142,7 +150,7 @@ type Access struct {
 	NoEditorTrust bool `json:"no_editor_trust,omitempty"`
 }
 
-// Untrusted is the access for code its owner does not trust: their files,
+// Untrusted is the access for code its owner does not trust: their packs,
 // but none of their credentials, and an editor that trusts nothing.
 var Untrusted = Access{NoSensitiveFiles: true, NoSSHKeys: true, NoRegistry: true, NoEditorTrust: true}
 
@@ -169,10 +177,11 @@ func (s Spec) EditorTrust() []string {
 	return out
 }
 
-// EnvironmentFiles is what of the files environments share one may reach,
-// as its worker serves them (internal/nfs): its file sets, by ID, and in
-// each, by path, the files kept from it -- sensitive ones, from an
-// environment with NoSensitiveFiles.
+// EnvironmentFiles is what of the files root an environment may reach, as
+// its worker serves it (internal/nfs): the copies of packs it uses, by ID,
+// and in each, the paths kept from it -- sensitive ones, from an
+// environment with NoSensitiveFiles -- as the copy's directory has them: a
+// directory's ending in a slash, and everything under it kept too.
 type EnvironmentFiles struct {
 	Sets   []string            `json:"sets"`
 	Hidden map[string][]string `json:"hidden,omitempty"`

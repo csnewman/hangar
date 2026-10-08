@@ -182,7 +182,7 @@ func toSpec(s api.Spec) Spec {
 		Dax:            optionalBool(s.DAX),
 		TrustedFolders: optionalSlice(s.TrustedFolders),
 		WebNames:       optionalSlice(s.WebNames),
-		FilePacks:      optionalSlice(s.FilePacks),
+		Packs:          packRefs(s.Packs),
 		Placement:      placement,
 	}
 }
@@ -204,7 +204,7 @@ func fromSpec(s Spec) api.Spec {
 		DAX:            s.Dax != nil && *s.Dax,
 		TrustedFolders: derefSlice(s.TrustedFolders),
 		WebNames:       derefSlice(s.WebNames),
-		FilePacks:      derefSlice(s.FilePacks),
+		Packs:          fromPackRefs(s.Packs),
 		Placement:      s.Placement,
 	}
 }
@@ -227,7 +227,7 @@ func toAccess(a api.Access) *Access {
 	if a == (api.Access{}) {
 		return nil
 	}
-	return &Access{NoProfile: optionalBool(a.NoProfile), NoSensitiveFiles: optionalBool(a.NoSensitiveFiles),
+	return &Access{NoSelfAttached: optionalBool(a.NoSelfAttached), NoSensitiveFiles: optionalBool(a.NoSensitiveFiles),
 		NoSSHKeys: optionalBool(a.NoSSHKeys), NoRegistry: optionalBool(a.NoRegistry),
 		NoEditorTrust: optionalBool(a.NoEditorTrust)}
 }
@@ -237,8 +237,30 @@ func fromAccess(a *Access) api.Access {
 		return api.Access{}
 	}
 	is := func(b *bool) bool { return b != nil && *b }
-	return api.Access{NoProfile: is(a.NoProfile), NoSensitiveFiles: is(a.NoSensitiveFiles),
+	return api.Access{NoSelfAttached: is(a.NoSelfAttached), NoSensitiveFiles: is(a.NoSensitiveFiles),
 		NoSSHKeys: is(a.NoSSHKeys), NoRegistry: is(a.NoRegistry), NoEditorTrust: is(a.NoEditorTrust)}
+}
+
+func packRefs(refs []api.PackRef) *[]PackRef {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make([]PackRef, len(refs))
+	for i, r := range refs {
+		out[i] = PackRef{Pack: r.Pack, Copy: optional(r.Copy)}
+	}
+	return &out
+}
+
+func fromPackRefs(refs *[]PackRef) []api.PackRef {
+	if refs == nil {
+		return nil
+	}
+	out := make([]api.PackRef, len(*refs))
+	for i, r := range *refs {
+		out[i] = api.PackRef{Pack: r.Pack, Copy: deref(r.Copy)}
+	}
+	return out
 }
 
 func optionalBool(b bool) *bool {

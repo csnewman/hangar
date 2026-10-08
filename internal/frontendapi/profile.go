@@ -9,98 +9,22 @@ import (
 
 func (h *handler) GetProfile(ctx context.Context, _ GetProfileRequestObject) (GetProfileResponseObject, error) {
 	uid := principal(ctx).UserID
-	files, err := h.profiles.List(ctx, uid, true)
-	if err != nil {
-		return nil, err
-	}
 	keys, err := h.profiles.Keys(ctx, uid)
 	if err != nil {
 		return nil, err
-	}
-	own, err := h.profiles.OwnPaths(ctx, uid)
-	if err != nil {
-		return nil, err
-	}
-	if own == nil {
-		own = []string{}
 	}
 	logins, err := h.profiles.LoginKeys(ctx, uid)
 	if err != nil {
 		return nil, err
 	}
-	out := Profile{Files: []ProfileFile{}, Keys: []SSHKey{}, LoginKeys: []LoginKey{}, Paths: h.profiles.UserPaths(own),
-		OwnPaths: own, Secrets: h.profiles.KeepsSecrets()}
+	out := Profile{Keys: []SSHKey{}, LoginKeys: []LoginKey{}, Secrets: h.profiles.KeepsSecrets()}
 	for _, k := range logins {
 		out.LoginKeys = append(out.LoginKeys, loginKey(k))
-	}
-	for _, f := range files {
-		out.Files = append(out.Files, ProfileFile{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
-			Sensitive: f.Sensitive, UpdatedAt: f.UpdatedAt})
 	}
 	for _, k := range keys {
 		out.Keys = append(out.Keys, sshKey(k))
 	}
 	return GetProfile200JSONResponse(out), nil
-}
-
-func (h *handler) GetProfileFile(ctx context.Context, req GetProfileFileRequestObject) (GetProfileFileResponseObject, error) {
-	f, err := h.profiles.File(ctx, principal(ctx).UserID, req.Params.Path, true)
-	if errors.Is(err, profile.ErrNotFound) {
-		return GetProfileFile404JSONResponse{NotFoundJSONResponse{Error: "no such file in the profile"}}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return GetProfileFile200JSONResponse{Path: f.Path, Content: string(f.Data), Mode: int(f.Mode),
-		UpdatedAt: f.UpdatedAt}, nil
-}
-
-func (h *handler) PutProfileFile(ctx context.Context, req PutProfileFileRequestObject) (PutProfileFileResponseObject, error) {
-	uid := principal(ctx).UserID
-	mode := uint32(0)
-	if req.Body.Mode != nil {
-		mode = uint32(*req.Body.Mode)
-	} else if files, err := h.profiles.List(ctx, uid, true); err == nil {
-		for _, f := range files {
-			if f.Path == req.Params.Path {
-				mode = f.Mode
-			}
-		}
-	}
-	f, err := h.profiles.Put(ctx, uid, req.Params.Path, []byte(req.Body.Content), mode)
-	switch {
-	case errors.Is(err, profile.ErrInvalid), errors.Is(err, profile.ErrNoKey):
-		return PutProfileFile400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
-	case err != nil:
-		return nil, err
-	}
-	return PutProfileFile200JSONResponse{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
-		Sensitive: f.Sensitive, UpdatedAt: f.UpdatedAt}, nil
-}
-
-func (h *handler) UpdateProfileFileSettings(ctx context.Context, req UpdateProfileFileSettingsRequestObject) (UpdateProfileFileSettingsResponseObject, error) {
-	f, err := h.profiles.SetSettings(ctx, principal(ctx).UserID, req.Params.Path, uint32(req.Body.Mode), req.Body.Sensitive)
-	switch {
-	case errors.Is(err, profile.ErrNotFound):
-		return UpdateProfileFileSettings404JSONResponse{NotFoundJSONResponse{Error: "no such file in the profile"}}, nil
-	case errors.Is(err, profile.ErrInvalid):
-		return UpdateProfileFileSettings400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
-	case err != nil:
-		return nil, err
-	}
-	return UpdateProfileFileSettings200JSONResponse{Path: f.Path, Size: int(f.Size), Mode: int(f.Mode),
-		Sensitive: f.Sensitive, UpdatedAt: f.UpdatedAt}, nil
-}
-
-func (h *handler) DeleteProfileFile(ctx context.Context, req DeleteProfileFileRequestObject) (DeleteProfileFileResponseObject, error) {
-	err := h.profiles.Delete(ctx, principal(ctx).UserID, req.Params.Path)
-	switch {
-	case errors.Is(err, profile.ErrInvalid):
-		return DeleteProfileFile400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
-	case err != nil:
-		return nil, err
-	}
-	return DeleteProfileFile204Response{}, nil
 }
 
 func (h *handler) AddSSHKey(ctx context.Context, req AddSSHKeyRequestObject) (AddSSHKeyResponseObject, error) {
@@ -130,28 +54,6 @@ func (h *handler) DeleteSSHKey(ctx context.Context, req DeleteSSHKeyRequestObjec
 		return nil, err
 	}
 	return DeleteSSHKey204Response{}, nil
-}
-
-func (h *handler) AddProfilePath(ctx context.Context, req AddProfilePathRequestObject) (AddProfilePathResponseObject, error) {
-	err := h.profiles.AddPath(ctx, principal(ctx).UserID, req.Body.Path)
-	switch {
-	case errors.Is(err, profile.ErrInvalid):
-		return AddProfilePath400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
-	case err != nil:
-		return nil, err
-	}
-	return AddProfilePath204Response{}, nil
-}
-
-func (h *handler) RemoveProfilePath(ctx context.Context, req RemoveProfilePathRequestObject) (RemoveProfilePathResponseObject, error) {
-	err := h.profiles.RemovePath(ctx, principal(ctx).UserID, req.Params.Path)
-	switch {
-	case errors.Is(err, profile.ErrNotFound):
-		return RemoveProfilePath404JSONResponse{NotFoundJSONResponse{Error: "not a path you added"}}, nil
-	case err != nil:
-		return nil, err
-	}
-	return RemoveProfilePath204Response{}, nil
 }
 
 func sshKey(k profile.Key) SSHKey {

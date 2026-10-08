@@ -24,14 +24,15 @@ import (
 	"golang.org/x/crypto/ssh/agent"
 )
 
-// Guest is the agent's half. The files its owner's profile and the
-// environment's packs share are served by the worker, over NFS: the guest
-// routes their paths there (Route), as each session says what they are.
-// It also serves the owner's SSH agent and registry credentials.
+// Guest is the agent's half. The copies of packs the environment uses are
+// served by the worker, over NFS: the guest routes their paths there, as
+// each session says what they are, sorting the files whose sharing changes
+// first (moves.go). It also serves the owner's SSH agent and registry
+// credentials.
 type Guest struct {
 	user  *user.User
 	log   *slog.Logger
-	route func([]Route) error
+	files GuestFiles
 
 	mu      sync.Mutex
 	current *guestSession
@@ -44,7 +45,7 @@ type Guest struct {
 }
 
 // Route is a path in the guest served from the shared files: Target, a
-// file set's ID and the path in it. A directory's is everything under it.
+// copy's ID and the path in it. A directory's is everything under it.
 // One that Excludes, inside a routed directory, is the guest's own again:
 // served from its disk, with no target.
 type Route struct {
@@ -54,18 +55,17 @@ type Route struct {
 	Exclude bool
 }
 
-// SetPaths are a file set's ID and the paths it shares, as a session sends
-// them: relative to the home directory for the owner's profile; absolute,
-// or in the home directory (Home), for a pack.
+// SetPaths are a copy's ID and the paths it shares, as a session sends
+// them: in the home directory (~/), or absolute.
 type SetPaths struct {
 	ID    string   `json:"id"`
 	Paths []string `json:"paths"`
 }
 
-// RoutesFor are the routes for the sets an environment is given, in the
-// order given: a path two of them name is the first's. The owner's
-// profile's paths, which are relative, and a pack's that start with Home
-// are routed under home.
+// RoutesFor are the routes for the copies an environment uses, in the
+// order given: a path two of them name is the first's. A path in the home
+// directory, ~/ -- or relative, as a server before packs sent a profile's
+// -- is routed under home.
 func RoutesFor(home string, sets []SetPaths) []Route {
 	var out []Route
 	seen := map[string]bool{}
@@ -77,13 +77,13 @@ func RoutesFor(home string, sets []SetPaths) []Route {
 	}
 	for _, s := range sets {
 		for _, p := range s.Paths {
-			x, exclude := strings.CutPrefix(p, Exclude)
+			x, exclude := strings.CutPrefix(p, "!")
 			clean := strings.TrimSuffix(x, "/")
-			if !ValidKey(clean) {
+			if !validRoutePath(clean) {
 				continue
 			}
 			guestPath, target := clean, s.ID+clean
-			if rel, ok := strings.CutPrefix(clean, Home); ok {
+			if rel, ok := strings.CutPrefix(clean, "~/"); ok {
 				guestPath, target = path.Join(home, rel), s.ID+"/"+clean
 			} else if !strings.HasPrefix(clean, "/") {
 				guestPath, target = path.Join(home, clean), s.ID+"/"+clean
@@ -98,13 +98,37 @@ func RoutesFor(home string, sets []SetPaths) []Route {
 	return out
 }
 
+// validRoutePath reports whether p is a clean path in the home directory
+// (~/…), a clean relative one, or a clean absolute one.
+func validRoutePath(p string) bool {
+	rel := strings.TrimPrefix(p, "~/")
+	if strings.HasPrefix(rel, "/") {
+		return rel != "/" && path.Clean(rel) == rel && !strings.ContainsRune(rel, 0)
+	}
+	return rel != "" && rel != "." && rel != ".." && path.Clean(rel) == rel &&
+		!strings.HasPrefix(rel, "../") && !strings.ContainsRune(rel, 0)
+}
+
+// copiesIn are the copies routes route to.
+func copiesIn(routes []Route) []string {
+	var out []string
+	for _, r := range routes {
+		if r.Exclude {
+			continue
+		}
+		if c, _ := copyOf(r.Target); !slices.Contains(out, c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // Synced is closed once a session's routes have first been applied.
 func (g *Guest) Synced() <-chan struct{} { return g.synced }
 
-// NewGuest serves u's shared files through route, which applies a session's
-// routes, and serves u's SSH agent.
-func NewGuest(u *user.User, route func([]Route) error, log *slog.Logger) *Guest {
-	return &Guest{user: u, log: log, route: route, changed: make(chan struct{}),
+// NewGuest serves u's shared files through files, and u's SSH agent.
+func NewGuest(u *user.User, files GuestFiles, log *slog.Logger) *Guest {
+	return &Guest{user: u, log: log, files: files, changed: make(chan struct{}),
 		synced: make(chan struct{})}
 }
 
@@ -268,6 +292,12 @@ func (s *guestSession) handle(m Message) {
 	switch m.Type {
 	case TypePaths:
 		s.applyRoutes(RoutesFor(s.home, m.Sets))
+	case TypeResolve:
+		if err := s.resolve(m); err != nil {
+			s.g.log.Warn("profile: resolving a conflict", "path", m.Path, "err", err)
+			return
+		}
+		s.send(Message{Type: TypeResolved, Copy: m.Copy, Path: m.Path})
 	case TypeRegistry:
 		s.g.setRegistry(m.Host)
 	case TypeKeys:
@@ -286,25 +316,42 @@ func (s *guestSession) handle(m Message) {
 	}
 }
 
-// applyRoutes has the routes applied, when they are not those already,
-// and Claude's record of this machine written if it has none: the setup's
-// choices are in the profile, so it is not taken through it again.
+// applyRoutes has the routes applied, when they are not those already --
+// the files whose sharing changes sorted first, and those the new routes
+// leave to the environment copied down after -- and tells the server what it routes to and the
+// conflicts it found. Then it writes Claude's record of this machine if
+// it has none: the setup's choices are in the profile, so it is not taken
+// through it again.
 func (s *guestSession) applyRoutes(routes []Route) {
 	g := s.g
 	g.mu.Lock()
 	same := g.routes != nil && slices.Equal(routes, g.routes)
 	g.mu.Unlock()
 	if !same {
-		if err := g.route(routes); err != nil {
+		retry := func(err error) {
 			if s.unrouted == nil {
 				g.log.Warn("profile: routing the shared files; trying again", "err", err)
 			}
 			s.unrouted = routes
+		}
+		if err := g.files.Mount(); err != nil {
+			retry(err)
 			return
 		}
+		downs, conflicts := s.sortPaths(g.lastRoutes(), routes)
+		if err := g.files.Route(routes); err != nil {
+			retry(err)
+			return
+		}
+		s.copyDown(downs)
 		g.mu.Lock()
 		g.routes = routes
 		g.mu.Unlock()
+		g.keepRoutes(routes)
+		for _, c := range conflicts {
+			s.send(Message{Type: TypeConflict, Copy: c.copy, Path: c.key})
+		}
+		s.send(Message{Type: TypeRouted, Routed: copiesIn(routes)})
 	}
 	s.unrouted = nil
 	if err := s.seedClaudeState(); err != nil {

@@ -114,9 +114,6 @@ services:
       # Hangar's own container registry, at registry.<HANGAR_PUBLIC_URL's
       # host> (registry-<host> in the prefix style). false turns it off.
       HANGAR_REGISTRY_ENABLED: ${HANGAR_REGISTRY_ENABLED:-true}
-      # Paths shared in every user's profile beside the built-in ones. See
-      # README.md.
-      HANGAR_PROFILE_PATHS: ${HANGAR_PROFILE_PATHS:-}
     volumes:
       # The directory, not the files, so that files replaced by renaming
       # new ones into place are seen.

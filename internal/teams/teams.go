@@ -273,14 +273,18 @@ func (m *Manager) Delete(ctx context.Context, p users.Principal, id string) erro
 		if cur.Images > 0 {
 			return fmt.Errorf("%w: the team owns %d image repositories; delete them first", ErrConflict, cur.Images)
 		}
-		var packs int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM file_packs WHERE team_id = $1`, id).Scan(&packs); err != nil {
+		var packs, copies int
+		if err := tx.QueryRow(ctx, `SELECT (SELECT count(*) FROM packs WHERE team_id = $1),
+			(SELECT count(*) FROM copies WHERE team_id = $1)`, id).Scan(&packs, &copies); err != nil {
 			return err
 		}
+		// Their files are kept apart from the database, and go when a pack
+		// or copy is deleted.
 		if packs > 0 {
-			// Their files are kept apart from the database, and go when
-			// a pack is deleted.
-			return fmt.Errorf("%w: the team owns %d file packs; delete them first", ErrConflict, packs)
+			return fmt.Errorf("%w: the team owns %d packs; delete them first", ErrConflict, packs)
+		}
+		if copies > 0 {
+			return fmt.Errorf("%w: the team owns %d shared copies; delete them first", ErrConflict, copies)
 		}
 		if _, err := tx.Exec(ctx, `DELETE FROM teams WHERE id = $1`, id); err != nil {
 			return err

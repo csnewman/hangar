@@ -11,7 +11,6 @@ import (
 	"log/slog"
 	"net"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +19,7 @@ import (
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
+	"github.com/csnewman/hangar/internal/packs"
 	"github.com/csnewman/hangar/internal/tunnel"
 )
 
@@ -34,6 +34,7 @@ type Tunnels interface {
 // tunnel reaches this replica.
 type Sessions struct {
 	store   *Store
+	packs   *packs.Store
 	tunnels Tunnels
 	log     *slog.Logger
 	// registry is Hangar's registry's host, when it has one.
@@ -53,8 +54,8 @@ type tries struct {
 	n     int
 }
 
-func NewSessions(store *Store, tunnels Tunnels, log *slog.Logger) *Sessions {
-	return &Sessions{store: store, tunnels: tunnels, log: log, kick: make(chan struct{}, 1),
+func NewSessions(store *Store, packStore *packs.Store, tunnels Tunnels, log *slog.Logger) *Sessions {
+	return &Sessions{store: store, packs: packStore, tunnels: tunnels, log: log, kick: make(chan struct{}, 1),
 		sessions: map[string]*session{}, tries: map[string]*tries{}}
 }
 
@@ -67,8 +68,6 @@ type target struct {
 	env, name, owner, ownerName, worker string
 	// access is what its spec keeps from it.
 	access api.Access
-	// packs are the file packs its spec lists, joined by commas.
-	packs string
 }
 
 // Run keeps sessions with the environments that should have them until
@@ -95,13 +94,13 @@ func (s *Sessions) Kick() {
 	}
 }
 
-// Changed tells the sessions kept in step with a file set that it changed.
-// An empty set means any might have.
-func (s *Sessions) Changed(set string) {
+// Changed tells the sessions something they send may have changed: a
+// user's keys (by the user's ID), a copy (by its ID), or, empty, anything.
+func (s *Sessions) Changed(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, sess := range s.sessions {
-		if set == "" || sess.owner == set || sess.uses(set) {
+		if id == "" || sess.owner == id || sess.uses(id) {
 			sess.nudge()
 		}
 	}
@@ -113,7 +112,8 @@ func (s *Sessions) reconcile(ctx context.Context) {
 	if len(workers) > 0 {
 		err := s.store.db.Transact(ctx, func(tx db.Tx) error {
 			clear(want)
-			rows, err := tx.Query(ctx, `SELECT e.id::text, e.name, e.owner_id::text, u.username, e.worker_id::text, e.spec
+			rows, err := tx.Query(ctx, `SELECT e.id::text, e.name, e.owner_id::text, u.username, e.worker_id::text,
+					e.spec
 				FROM environments e JOIN users u ON u.id = e.owner_id
 				WHERE e.phase IN ('starting', 'running') AND e.desired = 'running' AND e.worker_id = ANY($1::uuid[])`, workers)
 			if err != nil {
@@ -130,7 +130,7 @@ func (s *Sessions) reconcile(ctx context.Context) {
 				if err := json.Unmarshal(raw, &spec); err != nil {
 					return err
 				}
-				t.access, t.packs = spec.Access, strings.Join(spec.FilePacks, ",")
+				t.access = spec.Access
 				want[t.env] = t
 			}
 			return rows.Err()
@@ -185,13 +185,15 @@ type session struct {
 	wmu  sync.Mutex
 	conn net.Conn
 
-	// sets are the file sets the environment is given, the owner's
-	// profile first (Store.EnvironmentSets), as last sent.
-	sets     []FileSet
+	// sets are the copies the environment uses and their paths
+	// (packs.Store.EnvironmentSets), as last sent.
+	sets     []packs.Set
 	setsSent bool
-	// setIDs are the sets' IDs, for Changed.
+	// setIDs are the copies' IDs, for Changed.
 	smu    sync.Mutex
 	setIDs []string
+	// resolving are the conflicts' resolutions sent, by copy and path.
+	resolving map[string]bool
 	// keys are the keys last sent.
 	keys     []string
 	keysSent bool
@@ -200,7 +202,7 @@ type session struct {
 	tries tries
 }
 
-// uses reports whether the session gives a set other than the profile.
+// uses reports whether the environment uses a copy.
 func (x *session) uses(set string) bool {
 	x.smu.Lock()
 	defer x.smu.Unlock()
@@ -310,6 +312,9 @@ func (x *session) serve(ctx context.Context) error {
 	if err := x.sendSets(ctx); err != nil {
 		return err
 	}
+	if err := x.sendResolutions(ctx); err != nil {
+		return err
+	}
 
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
@@ -319,7 +324,10 @@ func (x *session) serve(ctx context.Context) error {
 			return ctx.Err()
 		case err := <-readErr:
 			return err
-		case <-incoming:
+		case m := <-incoming:
+			if err := x.heard(ctx, m); err != nil {
+				return err
+			}
 		case <-x.nudges:
 		case <-tick.C:
 		}
@@ -329,17 +337,54 @@ func (x *session) serve(ctx context.Context) error {
 		if err := x.sendKeys(ctx); err != nil {
 			return err
 		}
+		if err := x.sendResolutions(ctx); err != nil {
+			return err
+		}
 	}
+}
+
+// heard records what the agent says of the shared files: the copies it
+// routes to, and conflicts found and resolved.
+func (x *session) heard(ctx context.Context, m Message) error {
+	switch m.Type {
+	case TypeRouted:
+		return x.s.packs.Routed(ctx, x.env, m.Routed)
+	case TypeConflict:
+		return x.s.packs.AddConflict(ctx, x.env, m.Copy, m.Path)
+	case TypeResolved:
+		delete(x.resolving, m.Copy+"\x00"+m.Path)
+		return x.s.packs.ConflictDone(ctx, x.env, m.Copy, m.Path)
+	}
+	return nil
+}
+
+// sendResolutions sends the agent how its conflicts are resolved, each
+// once a session.
+func (x *session) sendResolutions(ctx context.Context) error {
+	conflicts, err := x.s.packs.Conflicts(ctx, x.env)
+	if err != nil {
+		return err
+	}
+	for _, c := range conflicts {
+		key := c.Copy + "\x00" + c.Path
+		if c.Resolution == "" || x.resolving[key] {
+			continue
+		}
+		if x.resolving == nil {
+			x.resolving = map[string]bool{}
+		}
+		x.resolving[key] = true
+		if err := x.send(Message{Type: TypeResolve, Copy: c.Copy, Path: c.Path, Resolution: c.Resolution}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // sendSets looks up the sets again, and sends them when they are not what
 // was last sent.
 func (x *session) sendSets(ctx context.Context) error {
-	var packs []string
-	if x.packs != "" {
-		packs = strings.Split(x.packs, ",")
-	}
-	sets, err := x.s.store.environmentSets(ctx, x.owner, api.Spec{Access: x.access, FilePacks: packs})
+	sets, err := x.s.packs.EnvironmentSets(ctx, x.env)
 	if err != nil {
 		return err
 	}
@@ -350,7 +395,7 @@ func (x *session) sendSets(ctx context.Context) error {
 	x.smu.Lock()
 	x.setIDs = ids
 	x.smu.Unlock()
-	if x.setsSent && slices.EqualFunc(sets, x.sets, func(a, b FileSet) bool {
+	if x.setsSent && slices.EqualFunc(sets, x.sets, func(a, b packs.Set) bool {
 		return a.ID == b.ID && slices.Equal(a.Paths, b.Paths)
 	}) {
 		return nil

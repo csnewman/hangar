@@ -15,6 +15,7 @@ import (
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/frontendapi"
+	"github.com/csnewman/hangar/internal/packs"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/teams"
 	"github.com/csnewman/hangar/internal/templates"
@@ -33,12 +34,14 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	d := dbtest.Open(t)
 	um := users.NewManager(d)
-	profiles, err := profile.NewStore(d, t.TempDir(), nil)
+	profiles := profile.NewStore(d, nil)
+	packStore, err := packs.NewStore(d, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	h, err := frontendapi.New(frontendapi.Config{
 		Profiles:     profiles,
+		Packs:        packStore,
 		Environments: environments.NewManager(d),
 		Templates:    templates.NewManager(d),
 		Teams:        teams.NewManager(d),
@@ -514,12 +517,14 @@ func TestAutoSignIn(t *testing.T) {
 	if _, err := um.Create(context.Background(), users.NewUser{Username: "dev", Password: password, Admin: true}); err != nil {
 		t.Fatal(err)
 	}
-	profiles, err := profile.NewStore(d, t.TempDir(), nil)
+	profiles := profile.NewStore(d, nil)
+	packStore, err := packs.NewStore(d, t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	h, err := frontendapi.New(frontendapi.Config{
 		Profiles:     profiles,
+		Packs:        packStore,
 		Environments: environments.NewManager(d),
 		Templates:    templates.NewManager(d),
 		Teams:        teams.NewManager(d),

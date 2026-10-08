@@ -27,6 +27,7 @@ import (
 
 	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/environments"
+	"github.com/csnewman/hangar/internal/packs"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/registry"
 	"github.com/csnewman/hangar/internal/teams"
@@ -50,6 +51,7 @@ type Config struct {
 	Workers      *workers.Manager
 	Users        *users.Manager
 	Profiles     *profile.Store
+	Packs        *packs.Store
 	Audit        *audit.Log
 	// Tunnels reaches workers, for terminals. Nil leaves terminals
 	// unavailable.
@@ -74,6 +76,7 @@ type handler struct {
 	workers      *workers.Manager
 	users        *users.Manager
 	profiles     *profile.Store
+	packs        *packs.Store
 	audit        *audit.Log
 	tunnels      Tunnels
 	editors      Editors
@@ -102,7 +105,7 @@ func New(cfg Config) (http.Handler, error) {
 
 	h := &handler{envs: cfg.Environments, templates: cfg.Templates, teams: cfg.Teams,
 		registry: cfg.Registry, registryHost: cfg.RegistryHost, workers: cfg.Workers, users: cfg.Users,
-		profiles: cfg.Profiles, audit: cfg.Audit, tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, ssh: cfg.SSH, log: cfg.Log}
+		profiles: cfg.Profiles, packs: cfg.Packs, audit: cfg.Audit, tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, ssh: cfg.SSH, log: cfg.Log}
 	strict := NewStrictHandlerWithOptions(h, []StrictMiddlewareFunc{rules.enforce}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			writeError(w, http.StatusBadRequest, err.Error())

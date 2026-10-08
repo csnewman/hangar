@@ -8,6 +8,7 @@ import { EnvironmentActions } from '../components/EnvironmentActions'
 import { formatAgo, shortDigest } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
 import { SpecChips } from '../components/SpecChips'
+import { EnvironmentPacks } from '../components/EnvironmentPacks'
 import { SettingsPanel, TemplateDrift } from '../components/EnvironmentSettings'
 import { EnvironmentPorts } from '../components/EnvironmentPorts'
 import { ImageUpdate } from '../components/ImageUpdate'
@@ -236,6 +237,7 @@ export function SummaryTab() {
         </dl>
       </div>
       <EnvironmentPorts env={env} />
+      <EnvironmentPacks env={env} />
       <SettingsPanel key={`${env.id}:${env.spec.cpus}:${env.spec.memory_mib}:${env.spec.display}:${env.spec.gpu}:${env.spec.dax}`} env={env} />
       <section className="section">
         <h2 className="section-title">Activity</h2>

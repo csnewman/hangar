@@ -18,6 +18,30 @@ import (
 	"github.com/oapi-codegen/runtime"
 )
 
+// Defines values for AttachedPackFrom.
+const (
+	AttachedPackFromDefault     AttachedPackFrom = "default"
+	AttachedPackFromEnvironment AttachedPackFrom = "environment"
+	AttachedPackFromKept        AttachedPackFrom = "kept"
+	AttachedPackFromTemplate    AttachedPackFrom = "template"
+)
+
+// Valid indicates whether the value is a known member of the AttachedPackFrom enum.
+func (e AttachedPackFrom) Valid() bool {
+	switch e {
+	case AttachedPackFromDefault:
+		return true
+	case AttachedPackFromEnvironment:
+		return true
+	case AttachedPackFromKept:
+		return true
+	case AttachedPackFromTemplate:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AuditActorKind.
 const (
 	AuditActorKindAnonymous AuditActorKind = "anonymous"
@@ -129,6 +153,24 @@ func (e EnvironmentLogName) Valid() bool {
 	}
 }
 
+// Defines values for FileConflictResolution.
+const (
+	FileConflictResolutionEnvironment FileConflictResolution = "environment"
+	FileConflictResolutionShared      FileConflictResolution = "shared"
+)
+
+// Valid indicates whether the value is a known member of the FileConflictResolution enum.
+func (e FileConflictResolution) Valid() bool {
+	switch e {
+	case FileConflictResolutionEnvironment:
+		return true
+	case FileConflictResolutionShared:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GPU.
 const (
 	GPUNone        GPU = "none"
@@ -189,6 +231,30 @@ func (e LocalImageState) Valid() bool {
 	}
 }
 
+// Defines values for PackAttach.
+const (
+	PackAttachEveryone PackAttach = "everyone"
+	PackAttachListed   PackAttach = "listed"
+	PackAttachOwner    PackAttach = "owner"
+	PackAttachTeam     PackAttach = "team"
+)
+
+// Valid indicates whether the value is a known member of the PackAttach enum.
+func (e PackAttach) Valid() bool {
+	switch e {
+	case PackAttachEveryone:
+		return true
+	case PackAttachListed:
+		return true
+	case PackAttachOwner:
+		return true
+	case PackAttachTeam:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Phase.
 const (
 	PhaseDeleting   Phase = "deleting"
@@ -222,6 +288,24 @@ func (e Phase) Valid() bool {
 	case PhaseSuspended:
 		return true
 	case PhaseSuspending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ResolveConflictResolution.
+const (
+	ResolveConflictResolutionEnvironment ResolveConflictResolution = "environment"
+	ResolveConflictResolutionShared      ResolveConflictResolution = "shared"
+)
+
+// Valid indicates whether the value is a known member of the ResolveConflictResolution enum.
+func (e ResolveConflictResolution) Valid() bool {
+	switch e {
+	case ResolveConflictResolutionEnvironment:
+		return true
+	case ResolveConflictResolutionShared:
 		return true
 	default:
 		return false
@@ -328,11 +412,11 @@ const (
 	SettingDAX            TemplateSetting = "dax"
 	SettingDisplay        TemplateSetting = "display"
 	SettingEditorPath     TemplateSetting = "editor_path"
-	SettingFilePacks      TemplateSetting = "file_packs"
 	SettingGPU            TemplateSetting = "gpu"
 	SettingImage          TemplateSetting = "image"
 	SettingMemory         TemplateSetting = "memory"
 	SettingName           TemplateSetting = "name"
+	SettingPacks          TemplateSetting = "packs"
 	SettingPlacement      TemplateSetting = "placement"
 	SettingRepos          TemplateSetting = "repos"
 	SettingTrustedFolders TemplateSetting = "trusted_folders"
@@ -352,8 +436,6 @@ func (e TemplateSetting) Valid() bool {
 		return true
 	case SettingEditorPath:
 		return true
-	case SettingFilePacks:
-		return true
 	case SettingGPU:
 		return true
 	case SettingImage:
@@ -361,6 +443,8 @@ func (e TemplateSetting) Valid() bool {
 	case SettingMemory:
 		return true
 	case SettingName:
+		return true
+	case SettingPacks:
 		return true
 	case SettingPlacement:
 		return true
@@ -377,16 +461,16 @@ func (e TemplateSetting) Valid() bool {
 
 // Defines values for Visibility.
 const (
-	Private Visibility = "private"
-	Shared  Visibility = "shared"
+	VisibilityPrivate Visibility = "private"
+	VisibilityShared  Visibility = "shared"
 )
 
 // Valid indicates whether the value is a known member of the Visibility enum.
 func (e Visibility) Valid() bool {
 	switch e {
-	case Private:
+	case VisibilityPrivate:
 		return true
-	case Shared:
+	case VisibilityShared:
 		return true
 	default:
 		return false
@@ -398,13 +482,13 @@ type Access struct {
 	// NoEditorTrust VS Code trusts no folder without asking.
 	NoEditorTrust *bool `json:"no_editor_trust,omitempty"`
 
-	// NoProfile None of the owner's profile's files.
-	NoProfile *bool `json:"no_profile,omitempty"`
-
 	// NoRegistry No credential for Hangar's registry.
 	NoRegistry *bool `json:"no_registry,omitempty"`
 
-	// NoSensitiveFiles None of the sensitive files -- credentials, such as Claude's sign-in -- of the owner's profile or of the environment's packs.
+	// NoSelfAttached Only the packs the template lists: none of those attaching themselves to environments, the profile among them.
+	NoSelfAttached *bool `json:"no_self_attached,omitempty"`
+
+	// NoSensitiveFiles None of the sensitive files -- credentials, such as Claude's sign-in -- of the environment's packs.
 	NoSensitiveFiles *bool `json:"no_sensitive_files,omitempty"`
 
 	// NoSSHKeys No signatures from the owner's SSH keys.
@@ -436,6 +520,21 @@ type AddSSHKey struct {
 	// PrivateKey A private key to import. Absent generates an ed25519 key.
 	PrivateKey *string `json:"private_key,omitempty"`
 }
+
+// AttachedPack defines model for AttachedPack.
+type AttachedPack struct {
+	Copy Copy `json:"copy"`
+
+	// From How the copy was chosen: on the environment, the template's pin, the one it was first given (kept), or its owner's default.
+	From AttachedPackFrom `json:"from"`
+
+	// Listed Its template lists it, rather than its attaching itself.
+	Listed bool `json:"listed"`
+	Pack   Pack `json:"pack"`
+}
+
+// AttachedPackFrom How the copy was chosen: on the environment, the template's pin, the one it was first given (kept), or its owner's default.
+type AttachedPackFrom string
 
 // AuditActor defines model for AuditActor.
 type AuditActor struct {
@@ -479,6 +578,47 @@ type ChangePassword struct {
 type Collaborators struct {
 	TeamIds *[]string `json:"team_ids,omitempty"`
 	UserIds []string  `json:"user_ids"`
+}
+
+// Copy defines model for Copy.
+type Copy struct {
+	CanDelete bool      `json:"can_delete"`
+	CanWrite  bool      `json:"can_write"`
+	CreatedAt time.Time `json:"created_at"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Owner     *string   `json:"owner,omitempty"`
+	OwnerID   *string   `json:"owner_id,omitempty"`
+	PackID    string    `json:"pack_id"`
+
+	// Personal A person's own copy, one each.
+	Personal bool    `json:"personal"`
+	Team     *string `json:"team,omitempty"`
+	TeamID   *string `json:"team_id,omitempty"`
+}
+
+// CopyChoice defines model for CopyChoice.
+type CopyChoice struct {
+	// CopyID The copy; without one, the rules choose.
+	CopyID *string `json:"copy_id,omitempty"`
+}
+
+// CopyFiles defines model for CopyFiles.
+type CopyFiles struct {
+	Copy  Copy       `json:"copy"`
+	Files []PackFile `json:"files"`
+	Pack  Pack       `json:"pack"`
+}
+
+// CopyInput defines model for CopyInput.
+type CopyInput struct {
+	Name   string  `json:"name"`
+	TeamID *string `json:"team_id,omitempty"`
+}
+
+// CopyName defines model for CopyName.
+type CopyName struct {
+	Name string `json:"name"`
 }
 
 // CreateEnvironment defines model for CreateEnvironment.
@@ -652,55 +792,18 @@ type Error struct {
 	Error string `json:"error"`
 }
 
-// FilePack defines model for FilePack.
-type FilePack struct {
-	// CanChange The user may change the pack.
-	CanChange bool `json:"can_change"`
-	CanDelete bool `json:"can_delete"`
+// FileConflict defines model for FileConflict.
+type FileConflict struct {
+	CopyID  string    `json:"copy_id"`
+	FoundAt time.Time `json:"found_at"`
+	Path    string    `json:"path"`
 
-	// CanWrite The user may change its files, or their copy of them.
-	CanWrite    bool      `json:"can_write"`
-	CreatedAt   time.Time `json:"created_at"`
-	Description string    `json:"description"`
-	ID          string    `json:"id"`
-	Name        string    `json:"name"`
-	Owner       *string   `json:"owner,omitempty"`
-
-	// OwnerID The person who owns it, if one does.
-	OwnerID *string `json:"owner_id,omitempty"`
-
-	// Paths Absolute; a directory's ends in a slash, and holds everything under it.
-	Paths []string `json:"paths"`
-
-	// Personal Each person who uses it has their own copy of its files, rather than all sharing one.
-	Personal bool `json:"personal"`
-
-	// Team The team's slug.
-	Team *string `json:"team,omitempty"`
-
-	// TeamID The team that owns it, if one does.
-	TeamID    *string   `json:"team_id,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	// Resolution How someone resolved it, until the environment's agent has done it.
+	Resolution *FileConflictResolution `json:"resolution,omitempty"`
 }
 
-// FilePackFiles defines model for FilePackFiles.
-type FilePackFiles struct {
-	Files []ProfileFile `json:"files"`
-	Pack  FilePack      `json:"pack"`
-}
-
-// FilePackInput defines model for FilePackInput.
-type FilePackInput struct {
-	Description *string  `json:"description,omitempty"`
-	Name        string   `json:"name"`
-	Paths       []string `json:"paths"`
-
-	// Personal For a new pack. Ignored for a change.
-	Personal *bool `json:"personal,omitempty"`
-
-	// TeamID The team to own a new pack. Ignored for a change.
-	TeamID *string `json:"team_id,omitempty"`
-}
+// FileConflictResolution How someone resolved it, until the environment's agent has done it.
+type FileConflictResolution string
 
 // GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
 type GPU string
@@ -897,6 +1000,95 @@ type NewAccessToken struct {
 	Token string `json:"token"`
 }
 
+// Pack defines model for Pack.
+type Pack struct {
+	// Attach The environments a pack reaches without a template listing it: none (listed), its owner's, its team's members', or everyone's (an administrator's to set).
+	Attach PackAttach `json:"attach"`
+
+	// Builtin The server's, which administrators change.
+	Builtin   bool      `json:"builtin"`
+	CanChange bool      `json:"can_change"`
+	CanDelete bool      `json:"can_delete"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// DefaultCopyID The copy the user chose to use by default, if they chose one; else their own.
+	DefaultCopyID *string `json:"default_copy_id,omitempty"`
+	Description   string  `json:"description"`
+	ID            string  `json:"id"`
+	Name          string  `json:"name"`
+
+	// Owner The owner's username.
+	Owner   *string    `json:"owner,omitempty"`
+	OwnerID *string    `json:"owner_id,omitempty"`
+	Paths   []PackPath `json:"paths"`
+
+	// Team The owning team's slug.
+	Team      *string   `json:"team,omitempty"`
+	TeamID    *string   `json:"team_id,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// PackAttach The environments a pack reaches without a template listing it: none (listed), its owner's, its team's members', or everyone's (an administrator's to set).
+type PackAttach string
+
+// PackFile defines model for PackFile.
+type PackFile struct {
+	Mode int    `json:"mode"`
+	Path string `json:"path"`
+
+	// Sensitive Under a sensitive path of the pack.
+	Sensitive bool `json:"sensitive"`
+
+	// Shared Under a path the pack shares. A copy keeps a file the pack stopped sharing until someone deletes it.
+	Shared    bool      `json:"shared"`
+	Size      int       `json:"size"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// PackFileContent defines model for PackFileContent.
+type PackFileContent struct {
+	Content   string    `json:"content"`
+	Mode      int       `json:"mode"`
+	Path      string    `json:"path"`
+	Sensitive bool      `json:"sensitive"`
+	Shared    bool      `json:"shared"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// PackFileMode defines model for PackFileMode.
+type PackFileMode struct {
+	// Mode Its permissions, as chmod takes them (0o600 is 384).
+	Mode int `json:"mode"`
+}
+
+// PackInput defines model for PackInput.
+type PackInput struct {
+	// Attach The environments a pack reaches without a template listing it: none (listed), its owner's, its team's members', or everyone's (an administrator's to set).
+	Attach      *PackAttach `json:"attach,omitempty"`
+	Description *string     `json:"description,omitempty"`
+	Name        string      `json:"name"`
+	Paths       []PackPath  `json:"paths"`
+
+	// TeamID Only when making one; the user's own without.
+	TeamID *string `json:"team_id,omitempty"`
+}
+
+// PackPath defines model for PackPath.
+type PackPath struct {
+	// Path ~/ in the home directory, or absolute. One ending in a slash is a directory and everything under it; one starting with ! is left out of a directory the pack shares, each environment's own.
+	Path string `json:"path"`
+
+	// Sensitive Every file under it, in every copy, is kept from environments given no sensitive files.
+	Sensitive bool `json:"sensitive"`
+}
+
+// PackRef defines model for PackRef.
+type PackRef struct {
+	// Copy The copy every environment made from the template uses; without one, each owner's own.
+	Copy *string `json:"copy,omitempty"`
+	Pack string  `json:"pack"`
+}
+
 // Person defines model for Person.
 type Person struct {
 	DisplayName string `json:"display_name"`
@@ -935,58 +1127,20 @@ type ProcessList struct {
 
 // Profile defines model for Profile.
 type Profile struct {
-	Files []ProfileFile `json:"files"`
-	Keys  []SSHKey      `json:"keys"`
+	Keys []SSHKey `json:"keys"`
 
 	// LoginKeys Public keys that sign the user in to their environments over SSH.
 	LoginKeys []LoginKey `json:"login_keys"`
-
-	// OwnPaths The paths among them the user added, which they may remove.
-	OwnPaths []string `json:"own_paths"`
-
-	// Paths What a profile holds, relative to the home directory. One ending in a slash holds everything under it.
-	Paths []string `json:"paths"`
 
 	// Secrets Whether the server can keep SSH keys: without its key, they are refused.
 	Secrets bool `json:"secrets"`
 }
 
-// ProfileFile defines model for ProfileFile.
-type ProfileFile struct {
-	Mode int    `json:"mode"`
-	Path string `json:"path"`
-
-	// Sensitive A credential: kept from environments whose template withholds sensitive files. Known credentials start so.
-	Sensitive bool      `json:"sensitive"`
-	Size      int       `json:"size"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// ProfileFileContent defines model for ProfileFileContent.
-type ProfileFileContent struct {
-	Content   string    `json:"content"`
-	Mode      int       `json:"mode"`
-	Path      string    `json:"path"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-// ProfileFileSettings defines model for ProfileFileSettings.
-type ProfileFileSettings struct {
-	// Mode Its permissions, as chmod takes them (0o600 is 384).
-	Mode      int  `json:"mode"`
-	Sensitive bool `json:"sensitive"`
-}
-
-// ProfilePath defines model for ProfilePath.
-type ProfilePath struct {
-	Path string `json:"path"`
-}
-
-// PutProfileFile defines model for PutProfileFile.
-type PutProfileFile struct {
+// PutPackFile defines model for PutPackFile.
+type PutPackFile struct {
 	Content string `json:"content"`
 
-	// Mode Permission bits. Absent keeps the file's, or 0644.
+	// Mode Its permissions; without, the file's own, or 0600 for a sensitive one and 0644 for another.
 	Mode *int `json:"mode,omitempty"`
 }
 
@@ -1007,6 +1161,16 @@ type Repo struct {
 	Ref *string `json:"ref,omitempty"`
 	URL string  `json:"url"`
 }
+
+// ResolveConflict defines model for ResolveConflict.
+type ResolveConflict struct {
+	CopyID     string                    `json:"copy_id"`
+	Path       string                    `json:"path"`
+	Resolution ResolveConflictResolution `json:"resolution"`
+}
+
+// ResolveConflictResolution defines model for ResolveConflict.Resolution.
+type ResolveConflictResolution string
 
 // Resources defines model for Resources.
 type Resources struct {
@@ -1057,13 +1221,13 @@ type Spec struct {
 	// EditorPath The folder the editor opens on. In a template it may use variables, as a repository's branch does.
 	EditorPath *string `json:"editor_path,omitempty"`
 
-	// FilePacks The IDs of the file packs the environment has beside its owner's profile, in order: a file two of them name is the first's. A pack the owner may not use is left out.
-	FilePacks *[]string `json:"file_packs,omitempty"`
-
 	// GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
 	GPU       GPU    `json:"gpu"`
 	Image     string `json:"image"`
 	MemoryMiB int    `json:"memory_mib"`
+
+	// Packs The packs the environment has, in order, before those attaching themselves to it: a path two of them name is the first's. A pack the owner may not use is left out.
+	Packs *[]PackRef `json:"packs,omitempty"`
 
 	// Placement Worker labels the environment requires: it runs only on a worker with every one of these labels, with these values.
 	Placement map[string]string `json:"placement"`
@@ -1309,6 +1473,30 @@ type ListAuditParams struct {
 	Limit  *int   `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// DeleteCopyFileParams defines parameters for DeleteCopyFile.
+type DeleteCopyFileParams struct {
+	// Path The file's path, ~/ in the home directory or absolute.
+	Path string `form:"path" json:"path"`
+}
+
+// GetCopyFileParams defines parameters for GetCopyFile.
+type GetCopyFileParams struct {
+	// Path The file's path, ~/ in the home directory or absolute.
+	Path string `form:"path" json:"path"`
+}
+
+// SetCopyFileModeParams defines parameters for SetCopyFileMode.
+type SetCopyFileModeParams struct {
+	// Path The file's path, ~/ in the home directory or absolute.
+	Path string `form:"path" json:"path"`
+}
+
+// PutCopyFileParams defines parameters for PutCopyFile.
+type PutCopyFileParams struct {
+	// Path The file's path, ~/ in the home directory or absolute.
+	Path string `form:"path" json:"path"`
+}
+
 // GetEnvironmentLogParams defines parameters for GetEnvironmentLog.
 type GetEnvironmentLogParams struct {
 	Offset *int64 `form:"offset,omitempty" json:"offset,omitempty"`
@@ -1325,59 +1513,6 @@ type SignInEnvironmentPortsParams struct {
 	To string `form:"to" json:"to"`
 }
 
-// DeleteProfileFileParams defines parameters for DeleteProfileFile.
-type DeleteProfileFileParams struct {
-	// Path The file's path, relative to the home directory.
-	Path string `form:"path" json:"path"`
-}
-
-// GetProfileFileParams defines parameters for GetProfileFile.
-type GetProfileFileParams struct {
-	// Path The file's path, relative to the home directory.
-	Path string `form:"path" json:"path"`
-}
-
-// UpdateProfileFileSettingsParams defines parameters for UpdateProfileFileSettings.
-type UpdateProfileFileSettingsParams struct {
-	// Path The file's path, relative to the home directory.
-	Path string `form:"path" json:"path"`
-}
-
-// PutProfileFileParams defines parameters for PutProfileFile.
-type PutProfileFileParams struct {
-	// Path The file's path, relative to the home directory.
-	Path string `form:"path" json:"path"`
-}
-
-// RemoveProfilePathParams defines parameters for RemoveProfilePath.
-type RemoveProfilePathParams struct {
-	Path string `form:"path" json:"path"`
-}
-
-// DeleteFilePackFileParams defines parameters for DeleteFilePackFile.
-type DeleteFilePackFileParams struct {
-	// Path The file's absolute path.
-	Path string `form:"path" json:"path"`
-}
-
-// GetFilePackFileParams defines parameters for GetFilePackFile.
-type GetFilePackFileParams struct {
-	// Path The file's absolute path.
-	Path string `form:"path" json:"path"`
-}
-
-// UpdateFilePackFileSettingsParams defines parameters for UpdateFilePackFileSettings.
-type UpdateFilePackFileSettingsParams struct {
-	// Path The file's absolute path.
-	Path string `form:"path" json:"path"`
-}
-
-// PutFilePackFileParams defines parameters for PutFilePackFile.
-type PutFilePackFileParams struct {
-	// Path The file's absolute path.
-	Path string `form:"path" json:"path"`
-}
-
 // GetWorkerLogParams defines parameters for GetWorkerLog.
 type GetWorkerLogParams struct {
 	Offset *int64 `form:"offset,omitempty" json:"offset,omitempty"`
@@ -1386,14 +1521,29 @@ type GetWorkerLogParams struct {
 // LoginJSONRequestBody defines body for Login for application/json ContentType.
 type LoginJSONRequestBody = Login
 
+// RenameCopyJSONRequestBody defines body for RenameCopy for application/json ContentType.
+type RenameCopyJSONRequestBody = CopyName
+
+// SetCopyFileModeJSONRequestBody defines body for SetCopyFileMode for application/json ContentType.
+type SetCopyFileModeJSONRequestBody = PackFileMode
+
+// PutCopyFileJSONRequestBody defines body for PutCopyFile for application/json ContentType.
+type PutCopyFileJSONRequestBody = PutPackFile
+
 // CreateEnvironmentJSONRequestBody defines body for CreateEnvironment for application/json ContentType.
 type CreateEnvironmentJSONRequestBody = CreateEnvironment
+
+// ResolveEnvironmentConflictJSONRequestBody defines body for ResolveEnvironmentConflict for application/json ContentType.
+type ResolveEnvironmentConflictJSONRequestBody = ResolveConflict
 
 // ResizeDesktopJSONRequestBody defines body for ResizeDesktop for application/json ContentType.
 type ResizeDesktopJSONRequestBody = DesktopSize
 
 // UpgradeEnvironmentImageJSONRequestBody defines body for UpgradeEnvironmentImage for application/json ContentType.
 type UpgradeEnvironmentImageJSONRequestBody = ImageUpgrade
+
+// ChooseEnvironmentCopyJSONRequestBody defines body for ChooseEnvironmentCopy for application/json ContentType.
+type ChooseEnvironmentCopyJSONRequestBody = CopyChoice
 
 // SetEnvironmentPortsJSONRequestBody defines body for SetEnvironmentPorts for application/json ContentType.
 type SetEnvironmentPortsJSONRequestBody SetEnvironmentPortsJSONBody
@@ -1413,35 +1563,26 @@ type SetImageRepositoryCollaboratorsJSONRequestBody = Collaborators
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePassword
 
-// UpdateProfileFileSettingsJSONRequestBody defines body for UpdateProfileFileSettings for application/json ContentType.
-type UpdateProfileFileSettingsJSONRequestBody = ProfileFileSettings
-
-// PutProfileFileJSONRequestBody defines body for PutProfileFile for application/json ContentType.
-type PutProfileFileJSONRequestBody = PutProfileFile
-
 // AddSSHKeyJSONRequestBody defines body for AddSSHKey for application/json ContentType.
 type AddSSHKeyJSONRequestBody = AddSSHKey
 
 // AddLoginKeyJSONRequestBody defines body for AddLoginKey for application/json ContentType.
 type AddLoginKeyJSONRequestBody = AddLoginKey
 
-// AddProfilePathJSONRequestBody defines body for AddProfilePath for application/json ContentType.
-type AddProfilePathJSONRequestBody = ProfilePath
-
 // CreateTokenJSONRequestBody defines body for CreateToken for application/json ContentType.
 type CreateTokenJSONRequestBody = CreateToken
 
-// CreateFilePackJSONRequestBody defines body for CreateFilePack for application/json ContentType.
-type CreateFilePackJSONRequestBody = FilePackInput
+// CreatePackJSONRequestBody defines body for CreatePack for application/json ContentType.
+type CreatePackJSONRequestBody = PackInput
 
-// UpdateFilePackJSONRequestBody defines body for UpdateFilePack for application/json ContentType.
-type UpdateFilePackJSONRequestBody = FilePackInput
+// UpdatePackJSONRequestBody defines body for UpdatePack for application/json ContentType.
+type UpdatePackJSONRequestBody = PackInput
 
-// UpdateFilePackFileSettingsJSONRequestBody defines body for UpdateFilePackFileSettings for application/json ContentType.
-type UpdateFilePackFileSettingsJSONRequestBody = ProfileFileSettings
+// CreateCopyJSONRequestBody defines body for CreateCopy for application/json ContentType.
+type CreateCopyJSONRequestBody = CopyInput
 
-// PutFilePackFileJSONRequestBody defines body for PutFilePackFile for application/json ContentType.
-type PutFilePackFileJSONRequestBody = PutProfileFile
+// SetDefaultCopyJSONRequestBody defines body for SetDefaultCopy for application/json ContentType.
+type SetDefaultCopyJSONRequestBody = CopyChoice
 
 // CreateTeamJSONRequestBody defines body for CreateTeam for application/json ContentType.
 type CreateTeamJSONRequestBody = CreateTeam
@@ -1485,6 +1626,27 @@ type ServerInterface interface {
 	// (POST /api/frontend/auth/logout)
 	Logout(w http.ResponseWriter, r *http.Request)
 
+	// (DELETE /api/frontend/copies/{id})
+	DeleteCopy(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/copies/{id})
+	GetCopy(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (PATCH /api/frontend/copies/{id})
+	RenameCopy(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (DELETE /api/frontend/copies/{id}/file)
+	DeleteCopyFile(w http.ResponseWriter, r *http.Request, id ID, params DeleteCopyFileParams)
+
+	// (GET /api/frontend/copies/{id}/file)
+	GetCopyFile(w http.ResponseWriter, r *http.Request, id ID, params GetCopyFileParams)
+
+	// (PATCH /api/frontend/copies/{id}/file)
+	SetCopyFileMode(w http.ResponseWriter, r *http.Request, id ID, params SetCopyFileModeParams)
+
+	// (PUT /api/frontend/copies/{id}/file)
+	PutCopyFile(w http.ResponseWriter, r *http.Request, id ID, params PutCopyFileParams)
+
 	// (GET /api/frontend/environments)
 	ListEnvironments(w http.ResponseWriter, r *http.Request)
 
@@ -1496,6 +1658,12 @@ type ServerInterface interface {
 
 	// (GET /api/frontend/environments/{id})
 	GetEnvironment(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (GET /api/frontend/environments/{id}/conflicts)
+	ListEnvironmentConflicts(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (POST /api/frontend/environments/{id}/conflicts)
+	ResolveEnvironmentConflict(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (PUT /api/frontend/environments/{id}/desktop/size)
 	ResizeDesktop(w http.ResponseWriter, r *http.Request, id ID)
@@ -1517,6 +1685,12 @@ type ServerInterface interface {
 
 	// (GET /api/frontend/environments/{id}/logs/{log})
 	GetEnvironmentLog(w http.ResponseWriter, r *http.Request, id ID, log EnvironmentLogName, params GetEnvironmentLogParams)
+
+	// (GET /api/frontend/environments/{id}/packs)
+	ListEnvironmentPacks(w http.ResponseWriter, r *http.Request, id ID)
+
+	// (PUT /api/frontend/environments/{id}/packs/{pack})
+	ChooseEnvironmentCopy(w http.ResponseWriter, r *http.Request, id ID, pack string)
 
 	// (PUT /api/frontend/environments/{id}/ports)
 	SetEnvironmentPorts(w http.ResponseWriter, r *http.Request, id ID)
@@ -1578,18 +1752,6 @@ type ServerInterface interface {
 	// (GET /api/frontend/me/profile)
 	GetProfile(w http.ResponseWriter, r *http.Request)
 
-	// (DELETE /api/frontend/me/profile/file)
-	DeleteProfileFile(w http.ResponseWriter, r *http.Request, params DeleteProfileFileParams)
-
-	// (GET /api/frontend/me/profile/file)
-	GetProfileFile(w http.ResponseWriter, r *http.Request, params GetProfileFileParams)
-
-	// (PATCH /api/frontend/me/profile/file)
-	UpdateProfileFileSettings(w http.ResponseWriter, r *http.Request, params UpdateProfileFileSettingsParams)
-
-	// (PUT /api/frontend/me/profile/file)
-	PutProfileFile(w http.ResponseWriter, r *http.Request, params PutProfileFileParams)
-
 	// (POST /api/frontend/me/profile/keys)
 	AddSSHKey(w http.ResponseWriter, r *http.Request)
 
@@ -1602,12 +1764,6 @@ type ServerInterface interface {
 	// (DELETE /api/frontend/me/profile/login-keys/{id})
 	DeleteLoginKey(w http.ResponseWriter, r *http.Request, id ID)
 
-	// (DELETE /api/frontend/me/profile/paths)
-	RemoveProfilePath(w http.ResponseWriter, r *http.Request, params RemoveProfilePathParams)
-
-	// (POST /api/frontend/me/profile/paths)
-	AddProfilePath(w http.ResponseWriter, r *http.Request)
-
 	// (GET /api/frontend/me/tokens)
 	ListTokens(w http.ResponseWriter, r *http.Request)
 
@@ -1618,31 +1774,28 @@ type ServerInterface interface {
 	RevokeToken(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (GET /api/frontend/packs)
-	ListFilePacks(w http.ResponseWriter, r *http.Request)
+	ListPacks(w http.ResponseWriter, r *http.Request)
 
 	// (POST /api/frontend/packs)
-	CreateFilePack(w http.ResponseWriter, r *http.Request)
+	CreatePack(w http.ResponseWriter, r *http.Request)
 
 	// (DELETE /api/frontend/packs/{id})
-	DeleteFilePack(w http.ResponseWriter, r *http.Request, id string)
+	DeletePack(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (GET /api/frontend/packs/{id})
-	GetFilePack(w http.ResponseWriter, r *http.Request, id string)
+	GetPack(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (PUT /api/frontend/packs/{id})
-	UpdateFilePack(w http.ResponseWriter, r *http.Request, id string)
+	UpdatePack(w http.ResponseWriter, r *http.Request, id ID)
 
-	// (DELETE /api/frontend/packs/{id}/file)
-	DeleteFilePackFile(w http.ResponseWriter, r *http.Request, id string, params DeleteFilePackFileParams)
+	// (GET /api/frontend/packs/{id}/copies)
+	ListCopies(w http.ResponseWriter, r *http.Request, id ID)
 
-	// (GET /api/frontend/packs/{id}/file)
-	GetFilePackFile(w http.ResponseWriter, r *http.Request, id string, params GetFilePackFileParams)
+	// (POST /api/frontend/packs/{id}/copies)
+	CreateCopy(w http.ResponseWriter, r *http.Request, id ID)
 
-	// (PATCH /api/frontend/packs/{id}/file)
-	UpdateFilePackFileSettings(w http.ResponseWriter, r *http.Request, id string, params UpdateFilePackFileSettingsParams)
-
-	// (PUT /api/frontend/packs/{id}/file)
-	PutFilePackFile(w http.ResponseWriter, r *http.Request, id string, params PutFilePackFileParams)
+	// (PUT /api/frontend/packs/{id}/default)
+	SetDefaultCopy(w http.ResponseWriter, r *http.Request, id ID)
 
 	// (GET /api/frontend/people)
 	ListPeople(w http.ResponseWriter, r *http.Request)
@@ -1816,6 +1969,252 @@ func (siw *ServerInterfaceWrapper) Logout(w http.ResponseWriter, r *http.Request
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteCopy operation middleware
+func (siw *ServerInterfaceWrapper) DeleteCopy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteCopy(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCopy operation middleware
+func (siw *ServerInterfaceWrapper) GetCopy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCopy(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RenameCopy operation middleware
+func (siw *ServerInterfaceWrapper) RenameCopy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RenameCopy(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteCopyFile operation middleware
+func (siw *ServerInterfaceWrapper) DeleteCopyFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params DeleteCopyFileParams
+
+	// ------------- Required query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteCopyFile(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetCopyFile operation middleware
+func (siw *ServerInterfaceWrapper) GetCopyFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetCopyFileParams
+
+	// ------------- Required query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetCopyFile(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetCopyFileMode operation middleware
+func (siw *ServerInterfaceWrapper) SetCopyFileMode(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetCopyFileModeParams
+
+	// ------------- Required query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetCopyFileMode(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutCopyFile operation middleware
+func (siw *ServerInterfaceWrapper) PutCopyFile(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PutCopyFileParams
+
+	// ------------- Required query parameter "path" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutCopyFile(w, r, id, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListEnvironments operation middleware
 func (siw *ServerInterfaceWrapper) ListEnvironments(w http.ResponseWriter, r *http.Request) {
 
@@ -1887,6 +2286,58 @@ func (siw *ServerInterfaceWrapper) GetEnvironment(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetEnvironment(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListEnvironmentConflicts operation middleware
+func (siw *ServerInterfaceWrapper) ListEnvironmentConflicts(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListEnvironmentConflicts(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResolveEnvironmentConflict operation middleware
+func (siw *ServerInterfaceWrapper) ResolveEnvironmentConflict(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResolveEnvironmentConflict(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2094,6 +2545,67 @@ func (siw *ServerInterfaceWrapper) GetEnvironmentLog(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetEnvironmentLog(w, r, id, log, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListEnvironmentPacks operation middleware
+func (siw *ServerInterfaceWrapper) ListEnvironmentPacks(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListEnvironmentPacks(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ChooseEnvironmentCopy operation middleware
+func (siw *ServerInterfaceWrapper) ChooseEnvironmentCopy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pack" -------------
+	var pack string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pack", r.PathValue("pack"), &pack, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pack", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ChooseEnvironmentCopy(w, r, id, pack)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2618,138 +3130,6 @@ func (siw *ServerInterfaceWrapper) GetProfile(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
-// DeleteProfileFile operation middleware
-func (siw *ServerInterfaceWrapper) DeleteProfileFile(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params DeleteProfileFileParams
-
-	// ------------- Required query parameter "path" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
-		}
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteProfileFile(w, r, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// GetProfileFile operation middleware
-func (siw *ServerInterfaceWrapper) GetProfileFile(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params GetProfileFileParams
-
-	// ------------- Required query parameter "path" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
-		}
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetProfileFile(w, r, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// UpdateProfileFileSettings operation middleware
-func (siw *ServerInterfaceWrapper) UpdateProfileFileSettings(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params UpdateProfileFileSettingsParams
-
-	// ------------- Required query parameter "path" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
-		}
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateProfileFileSettings(w, r, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// PutProfileFile operation middleware
-func (siw *ServerInterfaceWrapper) PutProfileFile(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params PutProfileFileParams
-
-	// ------------- Required query parameter "path" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
-		}
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.PutProfileFile(w, r, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // AddSSHKey operation middleware
 func (siw *ServerInterfaceWrapper) AddSSHKey(w http.ResponseWriter, r *http.Request) {
 
@@ -2830,53 +3210,6 @@ func (siw *ServerInterfaceWrapper) DeleteLoginKey(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
-// RemoveProfilePath operation middleware
-func (siw *ServerInterfaceWrapper) RemoveProfilePath(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params RemoveProfilePathParams
-
-	// ------------- Required query parameter "path" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
-		}
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.RemoveProfilePath(w, r, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// AddProfilePath operation middleware
-func (siw *ServerInterfaceWrapper) AddProfilePath(w http.ResponseWriter, r *http.Request) {
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.AddProfilePath(w, r)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
 // ListTokens operation middleware
 func (siw *ServerInterfaceWrapper) ListTokens(w http.ResponseWriter, r *http.Request) {
 
@@ -2931,11 +3264,11 @@ func (siw *ServerInterfaceWrapper) RevokeToken(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
-// ListFilePacks operation middleware
-func (siw *ServerInterfaceWrapper) ListFilePacks(w http.ResponseWriter, r *http.Request) {
+// ListPacks operation middleware
+func (siw *ServerInterfaceWrapper) ListPacks(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ListFilePacks(w, r)
+		siw.Handler.ListPacks(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2945,11 +3278,11 @@ func (siw *ServerInterfaceWrapper) ListFilePacks(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
-// CreateFilePack operation middleware
-func (siw *ServerInterfaceWrapper) CreateFilePack(w http.ResponseWriter, r *http.Request) {
+// CreatePack operation middleware
+func (siw *ServerInterfaceWrapper) CreatePack(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.CreateFilePack(w, r)
+		siw.Handler.CreatePack(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2959,14 +3292,14 @@ func (siw *ServerInterfaceWrapper) CreateFilePack(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
-// DeleteFilePack operation middleware
-func (siw *ServerInterfaceWrapper) DeleteFilePack(w http.ResponseWriter, r *http.Request) {
+// DeletePack operation middleware
+func (siw *ServerInterfaceWrapper) DeletePack(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
 
 	// ------------- Path parameter "id" -------------
-	var id string
+	var id ID
 
 	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
 	if err != nil {
@@ -2975,7 +3308,7 @@ func (siw *ServerInterfaceWrapper) DeleteFilePack(w http.ResponseWriter, r *http
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteFilePack(w, r, id)
+		siw.Handler.DeletePack(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2985,14 +3318,14 @@ func (siw *ServerInterfaceWrapper) DeleteFilePack(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
-// GetFilePack operation middleware
-func (siw *ServerInterfaceWrapper) GetFilePack(w http.ResponseWriter, r *http.Request) {
+// GetPack operation middleware
+func (siw *ServerInterfaceWrapper) GetPack(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
 
 	// ------------- Path parameter "id" -------------
-	var id string
+	var id ID
 
 	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
 	if err != nil {
@@ -3001,7 +3334,7 @@ func (siw *ServerInterfaceWrapper) GetFilePack(w http.ResponseWriter, r *http.Re
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetFilePack(w, r, id)
+		siw.Handler.GetPack(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3011,14 +3344,14 @@ func (siw *ServerInterfaceWrapper) GetFilePack(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
-// UpdateFilePack operation middleware
-func (siw *ServerInterfaceWrapper) UpdateFilePack(w http.ResponseWriter, r *http.Request) {
+// UpdatePack operation middleware
+func (siw *ServerInterfaceWrapper) UpdatePack(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
 
 	// ------------- Path parameter "id" -------------
-	var id string
+	var id ID
 
 	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
 	if err != nil {
@@ -3027,7 +3360,7 @@ func (siw *ServerInterfaceWrapper) UpdateFilePack(w http.ResponseWriter, r *http
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateFilePack(w, r, id)
+		siw.Handler.UpdatePack(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3037,14 +3370,14 @@ func (siw *ServerInterfaceWrapper) UpdateFilePack(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
-// DeleteFilePackFile operation middleware
-func (siw *ServerInterfaceWrapper) DeleteFilePackFile(w http.ResponseWriter, r *http.Request) {
+// ListCopies operation middleware
+func (siw *ServerInterfaceWrapper) ListCopies(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
 
 	// ------------- Path parameter "id" -------------
-	var id string
+	var id ID
 
 	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
 	if err != nil {
@@ -3052,24 +3385,8 @@ func (siw *ServerInterfaceWrapper) DeleteFilePackFile(w http.ResponseWriter, r *
 		return
 	}
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params DeleteFilePackFileParams
-
-	// ------------- Required query parameter "path" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
-		}
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.DeleteFilePackFile(w, r, id, params)
+		siw.Handler.ListCopies(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3079,14 +3396,14 @@ func (siw *ServerInterfaceWrapper) DeleteFilePackFile(w http.ResponseWriter, r *
 	handler.ServeHTTP(w, r)
 }
 
-// GetFilePackFile operation middleware
-func (siw *ServerInterfaceWrapper) GetFilePackFile(w http.ResponseWriter, r *http.Request) {
+// CreateCopy operation middleware
+func (siw *ServerInterfaceWrapper) CreateCopy(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
 
 	// ------------- Path parameter "id" -------------
-	var id string
+	var id ID
 
 	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
 	if err != nil {
@@ -3094,24 +3411,8 @@ func (siw *ServerInterfaceWrapper) GetFilePackFile(w http.ResponseWriter, r *htt
 		return
 	}
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params GetFilePackFileParams
-
-	// ------------- Required query parameter "path" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
-		}
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.GetFilePackFile(w, r, id, params)
+		siw.Handler.CreateCopy(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3121,14 +3422,14 @@ func (siw *ServerInterfaceWrapper) GetFilePackFile(w http.ResponseWriter, r *htt
 	handler.ServeHTTP(w, r)
 }
 
-// UpdateFilePackFileSettings operation middleware
-func (siw *ServerInterfaceWrapper) UpdateFilePackFileSettings(w http.ResponseWriter, r *http.Request) {
+// SetDefaultCopy operation middleware
+func (siw *ServerInterfaceWrapper) SetDefaultCopy(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
 
 	// ------------- Path parameter "id" -------------
-	var id string
+	var id ID
 
 	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
 	if err != nil {
@@ -3136,66 +3437,8 @@ func (siw *ServerInterfaceWrapper) UpdateFilePackFileSettings(w http.ResponseWri
 		return
 	}
 
-	// Parameter object where we will unmarshal all parameters from the context
-	var params UpdateFilePackFileSettingsParams
-
-	// ------------- Required query parameter "path" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
-		}
-		return
-	}
-
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.UpdateFilePackFileSettings(w, r, id, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// PutFilePackFile operation middleware
-func (siw *ServerInterfaceWrapper) PutFilePackFile(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "id" -------------
-	var id string
-
-	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
-		return
-	}
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params PutFilePackFileParams
-
-	// ------------- Required query parameter "path" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, true, "path", r.URL.Query(), &params.Path, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "path"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "path", Err: err})
-		}
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.PutFilePackFile(w, r, id, params)
+		siw.Handler.SetDefaultCopy(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3921,21 +4164,21 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/tokens", wrapper.CreateToken)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/tokens/{id}", wrapper.RevokeToken)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/profile", wrapper.GetProfile)
-	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.DeleteProfileFile)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.GetProfileFile)
-	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.UpdateProfileFileSettings)
-	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/me/profile/file", wrapper.PutProfileFile)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/packs", wrapper.ListFilePacks)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/packs", wrapper.CreateFilePack)
-	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/packs/{id}", wrapper.DeleteFilePack)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/packs/{id}", wrapper.GetFilePack)
-	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/packs/{id}", wrapper.UpdateFilePack)
-	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/packs/{id}/file", wrapper.DeleteFilePackFile)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/packs/{id}/file", wrapper.GetFilePackFile)
-	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/frontend/packs/{id}/file", wrapper.UpdateFilePackFileSettings)
-	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/packs/{id}/file", wrapper.PutFilePackFile)
-	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.RemoveProfilePath)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/paths", wrapper.AddProfilePath)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/packs", wrapper.ListPacks)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/packs", wrapper.CreatePack)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/packs/{id}", wrapper.DeletePack)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/packs/{id}", wrapper.GetPack)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/packs/{id}", wrapper.UpdatePack)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/packs/{id}/copies", wrapper.ListCopies)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/packs/{id}/copies", wrapper.CreateCopy)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/packs/{id}/default", wrapper.SetDefaultCopy)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/copies/{id}", wrapper.DeleteCopy)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/copies/{id}", wrapper.GetCopy)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/frontend/copies/{id}", wrapper.RenameCopy)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/copies/{id}/file", wrapper.DeleteCopyFile)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/copies/{id}/file", wrapper.GetCopyFile)
+	m.HandleFunc(http.MethodPatch+" "+options.BaseURL+"/api/frontend/copies/{id}/file", wrapper.SetCopyFileMode)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/copies/{id}/file", wrapper.PutCopyFile)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/login-keys", wrapper.AddLoginKey)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/profile/login-keys/{id}", wrapper.DeleteLoginKey)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/profile/keys", wrapper.AddSSHKey)
@@ -3969,6 +4212,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments", wrapper.CreateEnvironment)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/environments/{id}", wrapper.DeleteEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}", wrapper.GetEnvironment)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/packs", wrapper.ListEnvironmentPacks)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/packs/{pack}", wrapper.ChooseEnvironmentCopy)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/environments/{id}/conflicts", wrapper.ListEnvironmentConflicts)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/conflicts", wrapper.ResolveEnvironmentConflict)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/start", wrapper.StartEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/stop", wrapper.StopEnvironment)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/settings", wrapper.UpdateEnvironmentSettings)
@@ -4139,6 +4386,477 @@ func (response Logout401JSONResponse) VisitLogoutResponse(w http.ResponseWriter)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCopyRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type DeleteCopyResponseObject interface {
+	VisitDeleteCopyResponse(w http.ResponseWriter) error
+}
+
+type DeleteCopy204Response struct {
+}
+
+func (response DeleteCopy204Response) VisitDeleteCopyResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteCopy401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteCopy401JSONResponse) VisitDeleteCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCopy403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteCopy403JSONResponse) VisitDeleteCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCopy404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteCopy404JSONResponse) VisitDeleteCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCopyRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type GetCopyResponseObject interface {
+	VisitGetCopyResponse(w http.ResponseWriter) error
+}
+
+type GetCopy200JSONResponse CopyFiles
+
+func (response GetCopy200JSONResponse) VisitGetCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCopy401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetCopy401JSONResponse) VisitGetCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCopy404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetCopy404JSONResponse) VisitGetCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RenameCopyRequestObject struct {
+	ID   ID `json:"id"`
+	Body *RenameCopyJSONRequestBody
+}
+
+type RenameCopyResponseObject interface {
+	VisitRenameCopyResponse(w http.ResponseWriter) error
+}
+
+type RenameCopy200JSONResponse Copy
+
+func (response RenameCopy200JSONResponse) VisitRenameCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RenameCopy400JSONResponse struct{ InvalidJSONResponse }
+
+func (response RenameCopy400JSONResponse) VisitRenameCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RenameCopy401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RenameCopy401JSONResponse) VisitRenameCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RenameCopy403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RenameCopy403JSONResponse) VisitRenameCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RenameCopy404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RenameCopy404JSONResponse) VisitRenameCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCopyFileRequestObject struct {
+	ID     ID `json:"id"`
+	Params DeleteCopyFileParams
+}
+
+type DeleteCopyFileResponseObject interface {
+	VisitDeleteCopyFileResponse(w http.ResponseWriter) error
+}
+
+type DeleteCopyFile204Response struct {
+}
+
+func (response DeleteCopyFile204Response) VisitDeleteCopyFileResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteCopyFile400JSONResponse struct{ InvalidJSONResponse }
+
+func (response DeleteCopyFile400JSONResponse) VisitDeleteCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCopyFile401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteCopyFile401JSONResponse) VisitDeleteCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCopyFile403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response DeleteCopyFile403JSONResponse) VisitDeleteCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteCopyFile404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteCopyFile404JSONResponse) VisitDeleteCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCopyFileRequestObject struct {
+	ID     ID `json:"id"`
+	Params GetCopyFileParams
+}
+
+type GetCopyFileResponseObject interface {
+	VisitGetCopyFileResponse(w http.ResponseWriter) error
+}
+
+type GetCopyFile200JSONResponse PackFileContent
+
+func (response GetCopyFile200JSONResponse) VisitGetCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCopyFile401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetCopyFile401JSONResponse) VisitGetCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetCopyFile404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetCopyFile404JSONResponse) VisitGetCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetCopyFileModeRequestObject struct {
+	ID     ID `json:"id"`
+	Params SetCopyFileModeParams
+	Body   *SetCopyFileModeJSONRequestBody
+}
+
+type SetCopyFileModeResponseObject interface {
+	VisitSetCopyFileModeResponse(w http.ResponseWriter) error
+}
+
+type SetCopyFileMode200JSONResponse PackFile
+
+func (response SetCopyFileMode200JSONResponse) VisitSetCopyFileModeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetCopyFileMode400JSONResponse struct{ InvalidJSONResponse }
+
+func (response SetCopyFileMode400JSONResponse) VisitSetCopyFileModeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetCopyFileMode401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SetCopyFileMode401JSONResponse) VisitSetCopyFileModeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetCopyFileMode403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetCopyFileMode403JSONResponse) VisitSetCopyFileModeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetCopyFileMode404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetCopyFileMode404JSONResponse) VisitSetCopyFileModeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutCopyFileRequestObject struct {
+	ID     ID `json:"id"`
+	Params PutCopyFileParams
+	Body   *PutCopyFileJSONRequestBody
+}
+
+type PutCopyFileResponseObject interface {
+	VisitPutCopyFileResponse(w http.ResponseWriter) error
+}
+
+type PutCopyFile200JSONResponse PackFile
+
+func (response PutCopyFile200JSONResponse) VisitPutCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutCopyFile400JSONResponse struct{ InvalidJSONResponse }
+
+func (response PutCopyFile400JSONResponse) VisitPutCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutCopyFile401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response PutCopyFile401JSONResponse) VisitPutCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutCopyFile403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response PutCopyFile403JSONResponse) VisitPutCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutCopyFile404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response PutCopyFile404JSONResponse) VisitPutCopyFileResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -4339,6 +5057,129 @@ func (response GetEnvironment401JSONResponse) VisitGetEnvironmentResponse(w http
 type GetEnvironment404JSONResponse struct{ NotFoundJSONResponse }
 
 func (response GetEnvironment404JSONResponse) VisitGetEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnvironmentConflictsRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type ListEnvironmentConflictsResponseObject interface {
+	VisitListEnvironmentConflictsResponse(w http.ResponseWriter) error
+}
+
+type ListEnvironmentConflicts200JSONResponse []FileConflict
+
+func (response ListEnvironmentConflicts200JSONResponse) VisitListEnvironmentConflictsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnvironmentConflicts401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListEnvironmentConflicts401JSONResponse) VisitListEnvironmentConflictsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnvironmentConflicts404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListEnvironmentConflicts404JSONResponse) VisitListEnvironmentConflictsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveEnvironmentConflictRequestObject struct {
+	ID   ID `json:"id"`
+	Body *ResolveEnvironmentConflictJSONRequestBody
+}
+
+type ResolveEnvironmentConflictResponseObject interface {
+	VisitResolveEnvironmentConflictResponse(w http.ResponseWriter) error
+}
+
+type ResolveEnvironmentConflict204Response struct {
+}
+
+func (response ResolveEnvironmentConflict204Response) VisitResolveEnvironmentConflictResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type ResolveEnvironmentConflict400JSONResponse struct{ InvalidJSONResponse }
+
+func (response ResolveEnvironmentConflict400JSONResponse) VisitResolveEnvironmentConflictResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveEnvironmentConflict401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ResolveEnvironmentConflict401JSONResponse) VisitResolveEnvironmentConflictResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveEnvironmentConflict403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ResolveEnvironmentConflict403JSONResponse) VisitResolveEnvironmentConflictResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResolveEnvironmentConflict404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ResolveEnvironmentConflict404JSONResponse) VisitResolveEnvironmentConflictResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -4834,6 +5675,130 @@ func (response GetEnvironmentLog503JSONResponse) VisitGetEnvironmentLogResponse(
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnvironmentPacksRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type ListEnvironmentPacksResponseObject interface {
+	VisitListEnvironmentPacksResponse(w http.ResponseWriter) error
+}
+
+type ListEnvironmentPacks200JSONResponse []AttachedPack
+
+func (response ListEnvironmentPacks200JSONResponse) VisitListEnvironmentPacksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnvironmentPacks401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListEnvironmentPacks401JSONResponse) VisitListEnvironmentPacksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnvironmentPacks404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListEnvironmentPacks404JSONResponse) VisitListEnvironmentPacksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChooseEnvironmentCopyRequestObject struct {
+	ID   ID     `json:"id"`
+	Pack string `json:"pack"`
+	Body *ChooseEnvironmentCopyJSONRequestBody
+}
+
+type ChooseEnvironmentCopyResponseObject interface {
+	VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error
+}
+
+type ChooseEnvironmentCopy204Response struct {
+}
+
+func (response ChooseEnvironmentCopy204Response) VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type ChooseEnvironmentCopy400JSONResponse struct{ InvalidJSONResponse }
+
+func (response ChooseEnvironmentCopy400JSONResponse) VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChooseEnvironmentCopy401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ChooseEnvironmentCopy401JSONResponse) VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChooseEnvironmentCopy403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ChooseEnvironmentCopy403JSONResponse) VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChooseEnvironmentCopy404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ChooseEnvironmentCopy404JSONResponse) VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -6130,216 +7095,6 @@ func (response GetProfile401JSONResponse) VisitGetProfileResponse(w http.Respons
 	return err
 }
 
-type DeleteProfileFileRequestObject struct {
-	Params DeleteProfileFileParams
-}
-
-type DeleteProfileFileResponseObject interface {
-	VisitDeleteProfileFileResponse(w http.ResponseWriter) error
-}
-
-type DeleteProfileFile204Response struct {
-}
-
-func (response DeleteProfileFile204Response) VisitDeleteProfileFileResponse(w http.ResponseWriter) error {
-	w.WriteHeader(204)
-	return nil
-}
-
-type DeleteProfileFile400JSONResponse struct{ InvalidJSONResponse }
-
-func (response DeleteProfileFile400JSONResponse) VisitDeleteProfileFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type DeleteProfileFile401JSONResponse struct{ UnauthorizedJSONResponse }
-
-func (response DeleteProfileFile401JSONResponse) VisitDeleteProfileFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetProfileFileRequestObject struct {
-	Params GetProfileFileParams
-}
-
-type GetProfileFileResponseObject interface {
-	VisitGetProfileFileResponse(w http.ResponseWriter) error
-}
-
-type GetProfileFile200JSONResponse ProfileFileContent
-
-func (response GetProfileFile200JSONResponse) VisitGetProfileFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetProfileFile401JSONResponse struct{ UnauthorizedJSONResponse }
-
-func (response GetProfileFile401JSONResponse) VisitGetProfileFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetProfileFile404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response GetProfileFile404JSONResponse) VisitGetProfileFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateProfileFileSettingsRequestObject struct {
-	Params UpdateProfileFileSettingsParams
-	Body   *UpdateProfileFileSettingsJSONRequestBody
-}
-
-type UpdateProfileFileSettingsResponseObject interface {
-	VisitUpdateProfileFileSettingsResponse(w http.ResponseWriter) error
-}
-
-type UpdateProfileFileSettings200JSONResponse ProfileFile
-
-func (response UpdateProfileFileSettings200JSONResponse) VisitUpdateProfileFileSettingsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateProfileFileSettings400JSONResponse struct{ InvalidJSONResponse }
-
-func (response UpdateProfileFileSettings400JSONResponse) VisitUpdateProfileFileSettingsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateProfileFileSettings401JSONResponse struct{ UnauthorizedJSONResponse }
-
-func (response UpdateProfileFileSettings401JSONResponse) VisitUpdateProfileFileSettingsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateProfileFileSettings404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response UpdateProfileFileSettings404JSONResponse) VisitUpdateProfileFileSettingsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type PutProfileFileRequestObject struct {
-	Params PutProfileFileParams
-	Body   *PutProfileFileJSONRequestBody
-}
-
-type PutProfileFileResponseObject interface {
-	VisitPutProfileFileResponse(w http.ResponseWriter) error
-}
-
-type PutProfileFile200JSONResponse ProfileFile
-
-func (response PutProfileFile200JSONResponse) VisitPutProfileFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type PutProfileFile400JSONResponse struct{ InvalidJSONResponse }
-
-func (response PutProfileFile400JSONResponse) VisitPutProfileFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type PutProfileFile401JSONResponse struct{ UnauthorizedJSONResponse }
-
-func (response PutProfileFile401JSONResponse) VisitPutProfileFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
 type AddSSHKeyRequestObject struct {
 	Body *AddSSHKeyJSONRequestBody
 }
@@ -6528,94 +7283,6 @@ func (response DeleteLoginKey404JSONResponse) VisitDeleteLoginKeyResponse(w http
 	return err
 }
 
-type RemoveProfilePathRequestObject struct {
-	Params RemoveProfilePathParams
-}
-
-type RemoveProfilePathResponseObject interface {
-	VisitRemoveProfilePathResponse(w http.ResponseWriter) error
-}
-
-type RemoveProfilePath204Response struct {
-}
-
-func (response RemoveProfilePath204Response) VisitRemoveProfilePathResponse(w http.ResponseWriter) error {
-	w.WriteHeader(204)
-	return nil
-}
-
-type RemoveProfilePath401JSONResponse struct{ UnauthorizedJSONResponse }
-
-func (response RemoveProfilePath401JSONResponse) VisitRemoveProfilePathResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type RemoveProfilePath404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response RemoveProfilePath404JSONResponse) VisitRemoveProfilePathResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type AddProfilePathRequestObject struct {
-	Body *AddProfilePathJSONRequestBody
-}
-
-type AddProfilePathResponseObject interface {
-	VisitAddProfilePathResponse(w http.ResponseWriter) error
-}
-
-type AddProfilePath204Response struct {
-}
-
-func (response AddProfilePath204Response) VisitAddProfilePathResponse(w http.ResponseWriter) error {
-	w.WriteHeader(204)
-	return nil
-}
-
-type AddProfilePath400JSONResponse struct{ InvalidJSONResponse }
-
-func (response AddProfilePath400JSONResponse) VisitAddProfilePathResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type AddProfilePath401JSONResponse struct{ UnauthorizedJSONResponse }
-
-func (response AddProfilePath401JSONResponse) VisitAddProfilePathResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
 type ListTokensRequestObject struct {
 }
 
@@ -6745,16 +7412,16 @@ func (response RevokeToken404JSONResponse) VisitRevokeTokenResponse(w http.Respo
 	return err
 }
 
-type ListFilePacksRequestObject struct {
+type ListPacksRequestObject struct {
 }
 
-type ListFilePacksResponseObject interface {
-	VisitListFilePacksResponse(w http.ResponseWriter) error
+type ListPacksResponseObject interface {
+	VisitListPacksResponse(w http.ResponseWriter) error
 }
 
-type ListFilePacks200JSONResponse []FilePack
+type ListPacks200JSONResponse []Pack
 
-func (response ListFilePacks200JSONResponse) VisitListFilePacksResponse(w http.ResponseWriter) error {
+func (response ListPacks200JSONResponse) VisitListPacksResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6766,9 +7433,9 @@ func (response ListFilePacks200JSONResponse) VisitListFilePacksResponse(w http.R
 	return err
 }
 
-type ListFilePacks401JSONResponse struct{ UnauthorizedJSONResponse }
+type ListPacks401JSONResponse struct{ UnauthorizedJSONResponse }
 
-func (response ListFilePacks401JSONResponse) VisitListFilePacksResponse(w http.ResponseWriter) error {
+func (response ListPacks401JSONResponse) VisitListPacksResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6780,17 +7447,17 @@ func (response ListFilePacks401JSONResponse) VisitListFilePacksResponse(w http.R
 	return err
 }
 
-type CreateFilePackRequestObject struct {
-	Body *CreateFilePackJSONRequestBody
+type CreatePackRequestObject struct {
+	Body *CreatePackJSONRequestBody
 }
 
-type CreateFilePackResponseObject interface {
-	VisitCreateFilePackResponse(w http.ResponseWriter) error
+type CreatePackResponseObject interface {
+	VisitCreatePackResponse(w http.ResponseWriter) error
 }
 
-type CreateFilePack201JSONResponse FilePack
+type CreatePack201JSONResponse Pack
 
-func (response CreateFilePack201JSONResponse) VisitCreateFilePackResponse(w http.ResponseWriter) error {
+func (response CreatePack201JSONResponse) VisitCreatePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6802,9 +7469,9 @@ func (response CreateFilePack201JSONResponse) VisitCreateFilePackResponse(w http
 	return err
 }
 
-type CreateFilePack400JSONResponse struct{ InvalidJSONResponse }
+type CreatePack400JSONResponse struct{ InvalidJSONResponse }
 
-func (response CreateFilePack400JSONResponse) VisitCreateFilePackResponse(w http.ResponseWriter) error {
+func (response CreatePack400JSONResponse) VisitCreatePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6816,9 +7483,9 @@ func (response CreateFilePack400JSONResponse) VisitCreateFilePackResponse(w http
 	return err
 }
 
-type CreateFilePack401JSONResponse struct{ UnauthorizedJSONResponse }
+type CreatePack401JSONResponse struct{ UnauthorizedJSONResponse }
 
-func (response CreateFilePack401JSONResponse) VisitCreateFilePackResponse(w http.ResponseWriter) error {
+func (response CreatePack401JSONResponse) VisitCreatePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6830,9 +7497,9 @@ func (response CreateFilePack401JSONResponse) VisitCreateFilePackResponse(w http
 	return err
 }
 
-type CreateFilePack403JSONResponse struct{ ForbiddenJSONResponse }
+type CreatePack403JSONResponse struct{ ForbiddenJSONResponse }
 
-func (response CreateFilePack403JSONResponse) VisitCreateFilePackResponse(w http.ResponseWriter) error {
+func (response CreatePack403JSONResponse) VisitCreatePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6844,25 +7511,25 @@ func (response CreateFilePack403JSONResponse) VisitCreateFilePackResponse(w http
 	return err
 }
 
-type DeleteFilePackRequestObject struct {
-	ID string `json:"id"`
+type DeletePackRequestObject struct {
+	ID ID `json:"id"`
 }
 
-type DeleteFilePackResponseObject interface {
-	VisitDeleteFilePackResponse(w http.ResponseWriter) error
+type DeletePackResponseObject interface {
+	VisitDeletePackResponse(w http.ResponseWriter) error
 }
 
-type DeleteFilePack204Response struct {
+type DeletePack204Response struct {
 }
 
-func (response DeleteFilePack204Response) VisitDeleteFilePackResponse(w http.ResponseWriter) error {
+func (response DeletePack204Response) VisitDeletePackResponse(w http.ResponseWriter) error {
 	w.WriteHeader(204)
 	return nil
 }
 
-type DeleteFilePack401JSONResponse struct{ UnauthorizedJSONResponse }
+type DeletePack401JSONResponse struct{ UnauthorizedJSONResponse }
 
-func (response DeleteFilePack401JSONResponse) VisitDeleteFilePackResponse(w http.ResponseWriter) error {
+func (response DeletePack401JSONResponse) VisitDeletePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6874,9 +7541,9 @@ func (response DeleteFilePack401JSONResponse) VisitDeleteFilePackResponse(w http
 	return err
 }
 
-type DeleteFilePack403JSONResponse struct{ ForbiddenJSONResponse }
+type DeletePack403JSONResponse struct{ ForbiddenJSONResponse }
 
-func (response DeleteFilePack403JSONResponse) VisitDeleteFilePackResponse(w http.ResponseWriter) error {
+func (response DeletePack403JSONResponse) VisitDeletePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6888,9 +7555,9 @@ func (response DeleteFilePack403JSONResponse) VisitDeleteFilePackResponse(w http
 	return err
 }
 
-type DeleteFilePack404JSONResponse struct{ NotFoundJSONResponse }
+type DeletePack404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response DeleteFilePack404JSONResponse) VisitDeleteFilePackResponse(w http.ResponseWriter) error {
+func (response DeletePack404JSONResponse) VisitDeletePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6902,17 +7569,17 @@ func (response DeleteFilePack404JSONResponse) VisitDeleteFilePackResponse(w http
 	return err
 }
 
-type GetFilePackRequestObject struct {
-	ID string `json:"id"`
+type GetPackRequestObject struct {
+	ID ID `json:"id"`
 }
 
-type GetFilePackResponseObject interface {
-	VisitGetFilePackResponse(w http.ResponseWriter) error
+type GetPackResponseObject interface {
+	VisitGetPackResponse(w http.ResponseWriter) error
 }
 
-type GetFilePack200JSONResponse FilePackFiles
+type GetPack200JSONResponse Pack
 
-func (response GetFilePack200JSONResponse) VisitGetFilePackResponse(w http.ResponseWriter) error {
+func (response GetPack200JSONResponse) VisitGetPackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6924,9 +7591,9 @@ func (response GetFilePack200JSONResponse) VisitGetFilePackResponse(w http.Respo
 	return err
 }
 
-type GetFilePack401JSONResponse struct{ UnauthorizedJSONResponse }
+type GetPack401JSONResponse struct{ UnauthorizedJSONResponse }
 
-func (response GetFilePack401JSONResponse) VisitGetFilePackResponse(w http.ResponseWriter) error {
+func (response GetPack401JSONResponse) VisitGetPackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6938,9 +7605,9 @@ func (response GetFilePack401JSONResponse) VisitGetFilePackResponse(w http.Respo
 	return err
 }
 
-type GetFilePack404JSONResponse struct{ NotFoundJSONResponse }
+type GetPack404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response GetFilePack404JSONResponse) VisitGetFilePackResponse(w http.ResponseWriter) error {
+func (response GetPack404JSONResponse) VisitGetPackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6952,18 +7619,18 @@ func (response GetFilePack404JSONResponse) VisitGetFilePackResponse(w http.Respo
 	return err
 }
 
-type UpdateFilePackRequestObject struct {
-	ID   string `json:"id"`
-	Body *UpdateFilePackJSONRequestBody
+type UpdatePackRequestObject struct {
+	ID   ID `json:"id"`
+	Body *UpdatePackJSONRequestBody
 }
 
-type UpdateFilePackResponseObject interface {
-	VisitUpdateFilePackResponse(w http.ResponseWriter) error
+type UpdatePackResponseObject interface {
+	VisitUpdatePackResponse(w http.ResponseWriter) error
 }
 
-type UpdateFilePack200JSONResponse FilePack
+type UpdatePack200JSONResponse Pack
 
-func (response UpdateFilePack200JSONResponse) VisitUpdateFilePackResponse(w http.ResponseWriter) error {
+func (response UpdatePack200JSONResponse) VisitUpdatePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6975,9 +7642,9 @@ func (response UpdateFilePack200JSONResponse) VisitUpdateFilePackResponse(w http
 	return err
 }
 
-type UpdateFilePack400JSONResponse struct{ InvalidJSONResponse }
+type UpdatePack400JSONResponse struct{ InvalidJSONResponse }
 
-func (response UpdateFilePack400JSONResponse) VisitUpdateFilePackResponse(w http.ResponseWriter) error {
+func (response UpdatePack400JSONResponse) VisitUpdatePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -6989,9 +7656,9 @@ func (response UpdateFilePack400JSONResponse) VisitUpdateFilePackResponse(w http
 	return err
 }
 
-type UpdateFilePack401JSONResponse struct{ UnauthorizedJSONResponse }
+type UpdatePack401JSONResponse struct{ UnauthorizedJSONResponse }
 
-func (response UpdateFilePack401JSONResponse) VisitUpdateFilePackResponse(w http.ResponseWriter) error {
+func (response UpdatePack401JSONResponse) VisitUpdatePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -7003,9 +7670,9 @@ func (response UpdateFilePack401JSONResponse) VisitUpdateFilePackResponse(w http
 	return err
 }
 
-type UpdateFilePack403JSONResponse struct{ ForbiddenJSONResponse }
+type UpdatePack403JSONResponse struct{ ForbiddenJSONResponse }
 
-func (response UpdateFilePack403JSONResponse) VisitUpdateFilePackResponse(w http.ResponseWriter) error {
+func (response UpdatePack403JSONResponse) VisitUpdatePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -7017,9 +7684,9 @@ func (response UpdateFilePack403JSONResponse) VisitUpdateFilePackResponse(w http
 	return err
 }
 
-type UpdateFilePack404JSONResponse struct{ NotFoundJSONResponse }
+type UpdatePack404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response UpdateFilePack404JSONResponse) VisitUpdateFilePackResponse(w http.ResponseWriter) error {
+func (response UpdatePack404JSONResponse) VisitUpdatePackResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -7031,157 +7698,155 @@ func (response UpdateFilePack404JSONResponse) VisitUpdateFilePackResponse(w http
 	return err
 }
 
-type DeleteFilePackFileRequestObject struct {
-	ID     string `json:"id"`
-	Params DeleteFilePackFileParams
+type ListCopiesRequestObject struct {
+	ID ID `json:"id"`
 }
 
-type DeleteFilePackFileResponseObject interface {
-	VisitDeleteFilePackFileResponse(w http.ResponseWriter) error
+type ListCopiesResponseObject interface {
+	VisitListCopiesResponse(w http.ResponseWriter) error
 }
 
-type DeleteFilePackFile204Response struct {
+type ListCopies200JSONResponse []Copy
+
+func (response ListCopies200JSONResponse) VisitListCopiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
 }
 
-func (response DeleteFilePackFile204Response) VisitDeleteFilePackFileResponse(w http.ResponseWriter) error {
+type ListCopies401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListCopies401JSONResponse) VisitListCopiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListCopies404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListCopies404JSONResponse) VisitListCopiesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCopyRequestObject struct {
+	ID   ID `json:"id"`
+	Body *CreateCopyJSONRequestBody
+}
+
+type CreateCopyResponseObject interface {
+	VisitCreateCopyResponse(w http.ResponseWriter) error
+}
+
+type CreateCopy201JSONResponse Copy
+
+func (response CreateCopy201JSONResponse) VisitCreateCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCopy400JSONResponse struct{ InvalidJSONResponse }
+
+func (response CreateCopy400JSONResponse) VisitCreateCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCopy401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateCopy401JSONResponse) VisitCreateCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCopy403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateCopy403JSONResponse) VisitCreateCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCopy404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response CreateCopy404JSONResponse) VisitCreateCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetDefaultCopyRequestObject struct {
+	ID   ID `json:"id"`
+	Body *SetDefaultCopyJSONRequestBody
+}
+
+type SetDefaultCopyResponseObject interface {
+	VisitSetDefaultCopyResponse(w http.ResponseWriter) error
+}
+
+type SetDefaultCopy204Response struct {
+}
+
+func (response SetDefaultCopy204Response) VisitSetDefaultCopyResponse(w http.ResponseWriter) error {
 	w.WriteHeader(204)
 	return nil
 }
 
-type DeleteFilePackFile400JSONResponse struct{ InvalidJSONResponse }
+type SetDefaultCopy400JSONResponse struct{ InvalidJSONResponse }
 
-func (response DeleteFilePackFile400JSONResponse) VisitDeleteFilePackFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type DeleteFilePackFile401JSONResponse struct{ UnauthorizedJSONResponse }
-
-func (response DeleteFilePackFile401JSONResponse) VisitDeleteFilePackFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type DeleteFilePackFile403JSONResponse struct{ ForbiddenJSONResponse }
-
-func (response DeleteFilePackFile403JSONResponse) VisitDeleteFilePackFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type DeleteFilePackFile404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response DeleteFilePackFile404JSONResponse) VisitDeleteFilePackFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetFilePackFileRequestObject struct {
-	ID     string `json:"id"`
-	Params GetFilePackFileParams
-}
-
-type GetFilePackFileResponseObject interface {
-	VisitGetFilePackFileResponse(w http.ResponseWriter) error
-}
-
-type GetFilePackFile200JSONResponse ProfileFileContent
-
-func (response GetFilePackFile200JSONResponse) VisitGetFilePackFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetFilePackFile401JSONResponse struct{ UnauthorizedJSONResponse }
-
-func (response GetFilePackFile401JSONResponse) VisitGetFilePackFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type GetFilePackFile404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response GetFilePackFile404JSONResponse) VisitGetFilePackFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateFilePackFileSettingsRequestObject struct {
-	ID     string `json:"id"`
-	Params UpdateFilePackFileSettingsParams
-	Body   *UpdateFilePackFileSettingsJSONRequestBody
-}
-
-type UpdateFilePackFileSettingsResponseObject interface {
-	VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error
-}
-
-type UpdateFilePackFileSettings200JSONResponse ProfileFile
-
-func (response UpdateFilePackFileSettings200JSONResponse) VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateFilePackFileSettings400JSONResponse struct{ InvalidJSONResponse }
-
-func (response UpdateFilePackFileSettings400JSONResponse) VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error {
+func (response SetDefaultCopy400JSONResponse) VisitSetDefaultCopyResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -7193,89 +7858,9 @@ func (response UpdateFilePackFileSettings400JSONResponse) VisitUpdateFilePackFil
 	return err
 }
 
-type UpdateFilePackFileSettings401JSONResponse struct{ UnauthorizedJSONResponse }
+type SetDefaultCopy401JSONResponse struct{ UnauthorizedJSONResponse }
 
-func (response UpdateFilePackFileSettings401JSONResponse) VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(401)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateFilePackFileSettings403JSONResponse struct{ ForbiddenJSONResponse }
-
-func (response UpdateFilePackFileSettings403JSONResponse) VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type UpdateFilePackFileSettings404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response UpdateFilePackFileSettings404JSONResponse) VisitUpdateFilePackFileSettingsResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(404)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type PutFilePackFileRequestObject struct {
-	ID     string `json:"id"`
-	Params PutFilePackFileParams
-	Body   *PutFilePackFileJSONRequestBody
-}
-
-type PutFilePackFileResponseObject interface {
-	VisitPutFilePackFileResponse(w http.ResponseWriter) error
-}
-
-type PutFilePackFile200JSONResponse ProfileFile
-
-func (response PutFilePackFile200JSONResponse) VisitPutFilePackFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(200)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type PutFilePackFile400JSONResponse struct{ InvalidJSONResponse }
-
-func (response PutFilePackFile400JSONResponse) VisitPutFilePackFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(400)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type PutFilePackFile401JSONResponse struct{ UnauthorizedJSONResponse }
-
-func (response PutFilePackFile401JSONResponse) VisitPutFilePackFileResponse(w http.ResponseWriter) error {
+func (response SetDefaultCopy401JSONResponse) VisitSetDefaultCopyResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -7287,23 +7872,9 @@ func (response PutFilePackFile401JSONResponse) VisitPutFilePackFileResponse(w ht
 	return err
 }
 
-type PutFilePackFile403JSONResponse struct{ ForbiddenJSONResponse }
+type SetDefaultCopy404JSONResponse struct{ NotFoundJSONResponse }
 
-func (response PutFilePackFile403JSONResponse) VisitPutFilePackFileResponse(w http.ResponseWriter) error {
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(response); err != nil {
-		return err
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(403)
-	_, err := buf.WriteTo(w)
-	return err
-}
-
-type PutFilePackFile404JSONResponse struct{ NotFoundJSONResponse }
-
-func (response PutFilePackFile404JSONResponse) VisitPutFilePackFileResponse(w http.ResponseWriter) error {
+func (response SetDefaultCopy404JSONResponse) VisitSetDefaultCopyResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -8974,6 +9545,27 @@ type StrictServerInterface interface {
 	// (POST /api/frontend/auth/logout)
 	Logout(ctx context.Context, request LogoutRequestObject) (LogoutResponseObject, error)
 
+	// (DELETE /api/frontend/copies/{id})
+	DeleteCopy(ctx context.Context, request DeleteCopyRequestObject) (DeleteCopyResponseObject, error)
+
+	// (GET /api/frontend/copies/{id})
+	GetCopy(ctx context.Context, request GetCopyRequestObject) (GetCopyResponseObject, error)
+
+	// (PATCH /api/frontend/copies/{id})
+	RenameCopy(ctx context.Context, request RenameCopyRequestObject) (RenameCopyResponseObject, error)
+
+	// (DELETE /api/frontend/copies/{id}/file)
+	DeleteCopyFile(ctx context.Context, request DeleteCopyFileRequestObject) (DeleteCopyFileResponseObject, error)
+
+	// (GET /api/frontend/copies/{id}/file)
+	GetCopyFile(ctx context.Context, request GetCopyFileRequestObject) (GetCopyFileResponseObject, error)
+
+	// (PATCH /api/frontend/copies/{id}/file)
+	SetCopyFileMode(ctx context.Context, request SetCopyFileModeRequestObject) (SetCopyFileModeResponseObject, error)
+
+	// (PUT /api/frontend/copies/{id}/file)
+	PutCopyFile(ctx context.Context, request PutCopyFileRequestObject) (PutCopyFileResponseObject, error)
+
 	// (GET /api/frontend/environments)
 	ListEnvironments(ctx context.Context, request ListEnvironmentsRequestObject) (ListEnvironmentsResponseObject, error)
 
@@ -8985,6 +9577,12 @@ type StrictServerInterface interface {
 
 	// (GET /api/frontend/environments/{id})
 	GetEnvironment(ctx context.Context, request GetEnvironmentRequestObject) (GetEnvironmentResponseObject, error)
+
+	// (GET /api/frontend/environments/{id}/conflicts)
+	ListEnvironmentConflicts(ctx context.Context, request ListEnvironmentConflictsRequestObject) (ListEnvironmentConflictsResponseObject, error)
+
+	// (POST /api/frontend/environments/{id}/conflicts)
+	ResolveEnvironmentConflict(ctx context.Context, request ResolveEnvironmentConflictRequestObject) (ResolveEnvironmentConflictResponseObject, error)
 
 	// (PUT /api/frontend/environments/{id}/desktop/size)
 	ResizeDesktop(ctx context.Context, request ResizeDesktopRequestObject) (ResizeDesktopResponseObject, error)
@@ -9006,6 +9604,12 @@ type StrictServerInterface interface {
 
 	// (GET /api/frontend/environments/{id}/logs/{log})
 	GetEnvironmentLog(ctx context.Context, request GetEnvironmentLogRequestObject) (GetEnvironmentLogResponseObject, error)
+
+	// (GET /api/frontend/environments/{id}/packs)
+	ListEnvironmentPacks(ctx context.Context, request ListEnvironmentPacksRequestObject) (ListEnvironmentPacksResponseObject, error)
+
+	// (PUT /api/frontend/environments/{id}/packs/{pack})
+	ChooseEnvironmentCopy(ctx context.Context, request ChooseEnvironmentCopyRequestObject) (ChooseEnvironmentCopyResponseObject, error)
 
 	// (PUT /api/frontend/environments/{id}/ports)
 	SetEnvironmentPorts(ctx context.Context, request SetEnvironmentPortsRequestObject) (SetEnvironmentPortsResponseObject, error)
@@ -9067,18 +9671,6 @@ type StrictServerInterface interface {
 	// (GET /api/frontend/me/profile)
 	GetProfile(ctx context.Context, request GetProfileRequestObject) (GetProfileResponseObject, error)
 
-	// (DELETE /api/frontend/me/profile/file)
-	DeleteProfileFile(ctx context.Context, request DeleteProfileFileRequestObject) (DeleteProfileFileResponseObject, error)
-
-	// (GET /api/frontend/me/profile/file)
-	GetProfileFile(ctx context.Context, request GetProfileFileRequestObject) (GetProfileFileResponseObject, error)
-
-	// (PATCH /api/frontend/me/profile/file)
-	UpdateProfileFileSettings(ctx context.Context, request UpdateProfileFileSettingsRequestObject) (UpdateProfileFileSettingsResponseObject, error)
-
-	// (PUT /api/frontend/me/profile/file)
-	PutProfileFile(ctx context.Context, request PutProfileFileRequestObject) (PutProfileFileResponseObject, error)
-
 	// (POST /api/frontend/me/profile/keys)
 	AddSSHKey(ctx context.Context, request AddSSHKeyRequestObject) (AddSSHKeyResponseObject, error)
 
@@ -9091,12 +9683,6 @@ type StrictServerInterface interface {
 	// (DELETE /api/frontend/me/profile/login-keys/{id})
 	DeleteLoginKey(ctx context.Context, request DeleteLoginKeyRequestObject) (DeleteLoginKeyResponseObject, error)
 
-	// (DELETE /api/frontend/me/profile/paths)
-	RemoveProfilePath(ctx context.Context, request RemoveProfilePathRequestObject) (RemoveProfilePathResponseObject, error)
-
-	// (POST /api/frontend/me/profile/paths)
-	AddProfilePath(ctx context.Context, request AddProfilePathRequestObject) (AddProfilePathResponseObject, error)
-
 	// (GET /api/frontend/me/tokens)
 	ListTokens(ctx context.Context, request ListTokensRequestObject) (ListTokensResponseObject, error)
 
@@ -9107,31 +9693,28 @@ type StrictServerInterface interface {
 	RevokeToken(ctx context.Context, request RevokeTokenRequestObject) (RevokeTokenResponseObject, error)
 
 	// (GET /api/frontend/packs)
-	ListFilePacks(ctx context.Context, request ListFilePacksRequestObject) (ListFilePacksResponseObject, error)
+	ListPacks(ctx context.Context, request ListPacksRequestObject) (ListPacksResponseObject, error)
 
 	// (POST /api/frontend/packs)
-	CreateFilePack(ctx context.Context, request CreateFilePackRequestObject) (CreateFilePackResponseObject, error)
+	CreatePack(ctx context.Context, request CreatePackRequestObject) (CreatePackResponseObject, error)
 
 	// (DELETE /api/frontend/packs/{id})
-	DeleteFilePack(ctx context.Context, request DeleteFilePackRequestObject) (DeleteFilePackResponseObject, error)
+	DeletePack(ctx context.Context, request DeletePackRequestObject) (DeletePackResponseObject, error)
 
 	// (GET /api/frontend/packs/{id})
-	GetFilePack(ctx context.Context, request GetFilePackRequestObject) (GetFilePackResponseObject, error)
+	GetPack(ctx context.Context, request GetPackRequestObject) (GetPackResponseObject, error)
 
 	// (PUT /api/frontend/packs/{id})
-	UpdateFilePack(ctx context.Context, request UpdateFilePackRequestObject) (UpdateFilePackResponseObject, error)
+	UpdatePack(ctx context.Context, request UpdatePackRequestObject) (UpdatePackResponseObject, error)
 
-	// (DELETE /api/frontend/packs/{id}/file)
-	DeleteFilePackFile(ctx context.Context, request DeleteFilePackFileRequestObject) (DeleteFilePackFileResponseObject, error)
+	// (GET /api/frontend/packs/{id}/copies)
+	ListCopies(ctx context.Context, request ListCopiesRequestObject) (ListCopiesResponseObject, error)
 
-	// (GET /api/frontend/packs/{id}/file)
-	GetFilePackFile(ctx context.Context, request GetFilePackFileRequestObject) (GetFilePackFileResponseObject, error)
+	// (POST /api/frontend/packs/{id}/copies)
+	CreateCopy(ctx context.Context, request CreateCopyRequestObject) (CreateCopyResponseObject, error)
 
-	// (PATCH /api/frontend/packs/{id}/file)
-	UpdateFilePackFileSettings(ctx context.Context, request UpdateFilePackFileSettingsRequestObject) (UpdateFilePackFileSettingsResponseObject, error)
-
-	// (PUT /api/frontend/packs/{id}/file)
-	PutFilePackFile(ctx context.Context, request PutFilePackFileRequestObject) (PutFilePackFileResponseObject, error)
+	// (PUT /api/frontend/packs/{id}/default)
+	SetDefaultCopy(ctx context.Context, request SetDefaultCopyRequestObject) (SetDefaultCopyResponseObject, error)
 
 	// (GET /api/frontend/people)
 	ListPeople(ctx context.Context, request ListPeopleRequestObject) (ListPeopleResponseObject, error)
@@ -9329,6 +9912,213 @@ func (sh *strictHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// DeleteCopy operation middleware
+func (sh *strictHandler) DeleteCopy(w http.ResponseWriter, r *http.Request, id ID) {
+	var request DeleteCopyRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteCopy(ctx, request.(DeleteCopyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteCopy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteCopyResponseObject); ok {
+		if err := validResponse.VisitDeleteCopyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetCopy operation middleware
+func (sh *strictHandler) GetCopy(w http.ResponseWriter, r *http.Request, id ID) {
+	var request GetCopyRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetCopy(ctx, request.(GetCopyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetCopy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetCopyResponseObject); ok {
+		if err := validResponse.VisitGetCopyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RenameCopy operation middleware
+func (sh *strictHandler) RenameCopy(w http.ResponseWriter, r *http.Request, id ID) {
+	var request RenameCopyRequestObject
+
+	request.ID = id
+
+	var body RenameCopyJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RenameCopy(ctx, request.(RenameCopyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RenameCopy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RenameCopyResponseObject); ok {
+		if err := validResponse.VisitRenameCopyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteCopyFile operation middleware
+func (sh *strictHandler) DeleteCopyFile(w http.ResponseWriter, r *http.Request, id ID, params DeleteCopyFileParams) {
+	var request DeleteCopyFileRequestObject
+
+	request.ID = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteCopyFile(ctx, request.(DeleteCopyFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteCopyFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteCopyFileResponseObject); ok {
+		if err := validResponse.VisitDeleteCopyFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetCopyFile operation middleware
+func (sh *strictHandler) GetCopyFile(w http.ResponseWriter, r *http.Request, id ID, params GetCopyFileParams) {
+	var request GetCopyFileRequestObject
+
+	request.ID = id
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetCopyFile(ctx, request.(GetCopyFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetCopyFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetCopyFileResponseObject); ok {
+		if err := validResponse.VisitGetCopyFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetCopyFileMode operation middleware
+func (sh *strictHandler) SetCopyFileMode(w http.ResponseWriter, r *http.Request, id ID, params SetCopyFileModeParams) {
+	var request SetCopyFileModeRequestObject
+
+	request.ID = id
+	request.Params = params
+
+	var body SetCopyFileModeJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetCopyFileMode(ctx, request.(SetCopyFileModeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetCopyFileMode")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetCopyFileModeResponseObject); ok {
+		if err := validResponse.VisitSetCopyFileModeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PutCopyFile operation middleware
+func (sh *strictHandler) PutCopyFile(w http.ResponseWriter, r *http.Request, id ID, params PutCopyFileParams) {
+	var request PutCopyFileRequestObject
+
+	request.ID = id
+	request.Params = params
+
+	var body PutCopyFileJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PutCopyFile(ctx, request.(PutCopyFileRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PutCopyFile")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PutCopyFileResponseObject); ok {
+		if err := validResponse.VisitPutCopyFileResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListEnvironments operation middleware
 func (sh *strictHandler) ListEnvironments(w http.ResponseWriter, r *http.Request) {
 	var request ListEnvironmentsRequestObject
@@ -9429,6 +10219,65 @@ func (sh *strictHandler) GetEnvironment(w http.ResponseWriter, r *http.Request, 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetEnvironmentResponseObject); ok {
 		if err := validResponse.VisitGetEnvironmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListEnvironmentConflicts operation middleware
+func (sh *strictHandler) ListEnvironmentConflicts(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ListEnvironmentConflictsRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListEnvironmentConflicts(ctx, request.(ListEnvironmentConflictsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListEnvironmentConflicts")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListEnvironmentConflictsResponseObject); ok {
+		if err := validResponse.VisitListEnvironmentConflictsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResolveEnvironmentConflict operation middleware
+func (sh *strictHandler) ResolveEnvironmentConflict(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ResolveEnvironmentConflictRequestObject
+
+	request.ID = id
+
+	var body ResolveEnvironmentConflictJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResolveEnvironmentConflict(ctx, request.(ResolveEnvironmentConflictRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResolveEnvironmentConflict")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResolveEnvironmentConflictResponseObject); ok {
+		if err := validResponse.VisitResolveEnvironmentConflictResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -9630,6 +10479,66 @@ func (sh *strictHandler) GetEnvironmentLog(w http.ResponseWriter, r *http.Reques
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetEnvironmentLogResponseObject); ok {
 		if err := validResponse.VisitGetEnvironmentLogResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListEnvironmentPacks operation middleware
+func (sh *strictHandler) ListEnvironmentPacks(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ListEnvironmentPacksRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListEnvironmentPacks(ctx, request.(ListEnvironmentPacksRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListEnvironmentPacks")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListEnvironmentPacksResponseObject); ok {
+		if err := validResponse.VisitListEnvironmentPacksResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ChooseEnvironmentCopy operation middleware
+func (sh *strictHandler) ChooseEnvironmentCopy(w http.ResponseWriter, r *http.Request, id ID, pack string) {
+	var request ChooseEnvironmentCopyRequestObject
+
+	request.ID = id
+	request.Pack = pack
+
+	var body ChooseEnvironmentCopyJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ChooseEnvironmentCopy(ctx, request.(ChooseEnvironmentCopyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ChooseEnvironmentCopy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ChooseEnvironmentCopyResponseObject); ok {
+		if err := validResponse.VisitChooseEnvironmentCopyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -10195,124 +11104,6 @@ func (sh *strictHandler) GetProfile(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// DeleteProfileFile operation middleware
-func (sh *strictHandler) DeleteProfileFile(w http.ResponseWriter, r *http.Request, params DeleteProfileFileParams) {
-	var request DeleteProfileFileRequestObject
-
-	request.Params = params
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.DeleteProfileFile(ctx, request.(DeleteProfileFileRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "DeleteProfileFile")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(DeleteProfileFileResponseObject); ok {
-		if err := validResponse.VisitDeleteProfileFileResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// GetProfileFile operation middleware
-func (sh *strictHandler) GetProfileFile(w http.ResponseWriter, r *http.Request, params GetProfileFileParams) {
-	var request GetProfileFileRequestObject
-
-	request.Params = params
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetProfileFile(ctx, request.(GetProfileFileRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetProfileFile")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetProfileFileResponseObject); ok {
-		if err := validResponse.VisitGetProfileFileResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// UpdateProfileFileSettings operation middleware
-func (sh *strictHandler) UpdateProfileFileSettings(w http.ResponseWriter, r *http.Request, params UpdateProfileFileSettingsParams) {
-	var request UpdateProfileFileSettingsRequestObject
-
-	request.Params = params
-
-	var body UpdateProfileFileSettingsJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.UpdateProfileFileSettings(ctx, request.(UpdateProfileFileSettingsRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "UpdateProfileFileSettings")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(UpdateProfileFileSettingsResponseObject); ok {
-		if err := validResponse.VisitUpdateProfileFileSettingsResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// PutProfileFile operation middleware
-func (sh *strictHandler) PutProfileFile(w http.ResponseWriter, r *http.Request, params PutProfileFileParams) {
-	var request PutProfileFileRequestObject
-
-	request.Params = params
-
-	var body PutProfileFileJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.PutProfileFile(ctx, request.(PutProfileFileRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "PutProfileFile")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(PutProfileFileResponseObject); ok {
-		if err := validResponse.VisitPutProfileFileResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
 // AddSSHKey operation middleware
 func (sh *strictHandler) AddSSHKey(w http.ResponseWriter, r *http.Request) {
 	var request AddSSHKeyRequestObject
@@ -10427,63 +11218,6 @@ func (sh *strictHandler) DeleteLoginKey(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
-// RemoveProfilePath operation middleware
-func (sh *strictHandler) RemoveProfilePath(w http.ResponseWriter, r *http.Request, params RemoveProfilePathParams) {
-	var request RemoveProfilePathRequestObject
-
-	request.Params = params
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.RemoveProfilePath(ctx, request.(RemoveProfilePathRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "RemoveProfilePath")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(RemoveProfilePathResponseObject); ok {
-		if err := validResponse.VisitRemoveProfilePathResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// AddProfilePath operation middleware
-func (sh *strictHandler) AddProfilePath(w http.ResponseWriter, r *http.Request) {
-	var request AddProfilePathRequestObject
-
-	var body AddProfilePathJSONRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
-		return
-	}
-	request.Body = &body
-
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.AddProfilePath(ctx, request.(AddProfilePathRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "AddProfilePath")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(AddProfilePathResponseObject); ok {
-		if err := validResponse.VisitAddProfilePathResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
 // ListTokens operation middleware
 func (sh *strictHandler) ListTokens(w http.ResponseWriter, r *http.Request) {
 	var request ListTokensRequestObject
@@ -10565,23 +11299,23 @@ func (sh *strictHandler) RevokeToken(w http.ResponseWriter, r *http.Request, id 
 	}
 }
 
-// ListFilePacks operation middleware
-func (sh *strictHandler) ListFilePacks(w http.ResponseWriter, r *http.Request) {
-	var request ListFilePacksRequestObject
+// ListPacks operation middleware
+func (sh *strictHandler) ListPacks(w http.ResponseWriter, r *http.Request) {
+	var request ListPacksRequestObject
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.ListFilePacks(ctx, request.(ListFilePacksRequestObject))
+		return sh.ssi.ListPacks(ctx, request.(ListPacksRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "ListFilePacks")
+		handler = middleware(handler, "ListPacks")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(ListFilePacksResponseObject); ok {
-		if err := validResponse.VisitListFilePacksResponse(w); err != nil {
+	} else if validResponse, ok := response.(ListPacksResponseObject); ok {
+		if err := validResponse.VisitListPacksResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -10589,11 +11323,11 @@ func (sh *strictHandler) ListFilePacks(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// CreateFilePack operation middleware
-func (sh *strictHandler) CreateFilePack(w http.ResponseWriter, r *http.Request) {
-	var request CreateFilePackRequestObject
+// CreatePack operation middleware
+func (sh *strictHandler) CreatePack(w http.ResponseWriter, r *http.Request) {
+	var request CreatePackRequestObject
 
-	var body CreateFilePackJSONRequestBody
+	var body CreatePackJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
 		return
@@ -10601,18 +11335,18 @@ func (sh *strictHandler) CreateFilePack(w http.ResponseWriter, r *http.Request) 
 	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.CreateFilePack(ctx, request.(CreateFilePackRequestObject))
+		return sh.ssi.CreatePack(ctx, request.(CreatePackRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "CreateFilePack")
+		handler = middleware(handler, "CreatePack")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(CreateFilePackResponseObject); ok {
-		if err := validResponse.VisitCreateFilePackResponse(w); err != nil {
+	} else if validResponse, ok := response.(CreatePackResponseObject); ok {
+		if err := validResponse.VisitCreatePackResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -10620,25 +11354,25 @@ func (sh *strictHandler) CreateFilePack(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
-// DeleteFilePack operation middleware
-func (sh *strictHandler) DeleteFilePack(w http.ResponseWriter, r *http.Request, id string) {
-	var request DeleteFilePackRequestObject
+// DeletePack operation middleware
+func (sh *strictHandler) DeletePack(w http.ResponseWriter, r *http.Request, id ID) {
+	var request DeletePackRequestObject
 
 	request.ID = id
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.DeleteFilePack(ctx, request.(DeleteFilePackRequestObject))
+		return sh.ssi.DeletePack(ctx, request.(DeletePackRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "DeleteFilePack")
+		handler = middleware(handler, "DeletePack")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(DeleteFilePackResponseObject); ok {
-		if err := validResponse.VisitDeleteFilePackResponse(w); err != nil {
+	} else if validResponse, ok := response.(DeletePackResponseObject); ok {
+		if err := validResponse.VisitDeletePackResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -10646,25 +11380,25 @@ func (sh *strictHandler) DeleteFilePack(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
-// GetFilePack operation middleware
-func (sh *strictHandler) GetFilePack(w http.ResponseWriter, r *http.Request, id string) {
-	var request GetFilePackRequestObject
+// GetPack operation middleware
+func (sh *strictHandler) GetPack(w http.ResponseWriter, r *http.Request, id ID) {
+	var request GetPackRequestObject
 
 	request.ID = id
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetFilePack(ctx, request.(GetFilePackRequestObject))
+		return sh.ssi.GetPack(ctx, request.(GetPackRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetFilePack")
+		handler = middleware(handler, "GetPack")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetFilePackResponseObject); ok {
-		if err := validResponse.VisitGetFilePackResponse(w); err != nil {
+	} else if validResponse, ok := response.(GetPackResponseObject); ok {
+		if err := validResponse.VisitGetPackResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -10672,13 +11406,13 @@ func (sh *strictHandler) GetFilePack(w http.ResponseWriter, r *http.Request, id 
 	}
 }
 
-// UpdateFilePack operation middleware
-func (sh *strictHandler) UpdateFilePack(w http.ResponseWriter, r *http.Request, id string) {
-	var request UpdateFilePackRequestObject
+// UpdatePack operation middleware
+func (sh *strictHandler) UpdatePack(w http.ResponseWriter, r *http.Request, id ID) {
+	var request UpdatePackRequestObject
 
 	request.ID = id
 
-	var body UpdateFilePackJSONRequestBody
+	var body UpdatePackJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
 		return
@@ -10686,18 +11420,18 @@ func (sh *strictHandler) UpdateFilePack(w http.ResponseWriter, r *http.Request, 
 	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.UpdateFilePack(ctx, request.(UpdateFilePackRequestObject))
+		return sh.ssi.UpdatePack(ctx, request.(UpdatePackRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "UpdateFilePack")
+		handler = middleware(handler, "UpdatePack")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(UpdateFilePackResponseObject); ok {
-		if err := validResponse.VisitUpdateFilePackResponse(w); err != nil {
+	} else if validResponse, ok := response.(UpdatePackResponseObject); ok {
+		if err := validResponse.VisitUpdatePackResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -10705,26 +11439,25 @@ func (sh *strictHandler) UpdateFilePack(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
-// DeleteFilePackFile operation middleware
-func (sh *strictHandler) DeleteFilePackFile(w http.ResponseWriter, r *http.Request, id string, params DeleteFilePackFileParams) {
-	var request DeleteFilePackFileRequestObject
+// ListCopies operation middleware
+func (sh *strictHandler) ListCopies(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ListCopiesRequestObject
 
 	request.ID = id
-	request.Params = params
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.DeleteFilePackFile(ctx, request.(DeleteFilePackFileRequestObject))
+		return sh.ssi.ListCopies(ctx, request.(ListCopiesRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "DeleteFilePackFile")
+		handler = middleware(handler, "ListCopies")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(DeleteFilePackFileResponseObject); ok {
-		if err := validResponse.VisitDeleteFilePackFileResponse(w); err != nil {
+	} else if validResponse, ok := response.(ListCopiesResponseObject); ok {
+		if err := validResponse.VisitListCopiesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -10732,41 +11465,13 @@ func (sh *strictHandler) DeleteFilePackFile(w http.ResponseWriter, r *http.Reque
 	}
 }
 
-// GetFilePackFile operation middleware
-func (sh *strictHandler) GetFilePackFile(w http.ResponseWriter, r *http.Request, id string, params GetFilePackFileParams) {
-	var request GetFilePackFileRequestObject
+// CreateCopy operation middleware
+func (sh *strictHandler) CreateCopy(w http.ResponseWriter, r *http.Request, id ID) {
+	var request CreateCopyRequestObject
 
 	request.ID = id
-	request.Params = params
 
-	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.GetFilePackFile(ctx, request.(GetFilePackFileRequestObject))
-	}
-	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "GetFilePackFile")
-	}
-
-	response, err := handler(r.Context(), w, r, request)
-
-	if err != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(GetFilePackFileResponseObject); ok {
-		if err := validResponse.VisitGetFilePackFileResponse(w); err != nil {
-			sh.options.ResponseErrorHandlerFunc(w, r, err)
-		}
-	} else if response != nil {
-		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
-	}
-}
-
-// UpdateFilePackFileSettings operation middleware
-func (sh *strictHandler) UpdateFilePackFileSettings(w http.ResponseWriter, r *http.Request, id string, params UpdateFilePackFileSettingsParams) {
-	var request UpdateFilePackFileSettingsRequestObject
-
-	request.ID = id
-	request.Params = params
-
-	var body UpdateFilePackFileSettingsJSONRequestBody
+	var body CreateCopyJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
 		return
@@ -10774,18 +11479,18 @@ func (sh *strictHandler) UpdateFilePackFileSettings(w http.ResponseWriter, r *ht
 	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.UpdateFilePackFileSettings(ctx, request.(UpdateFilePackFileSettingsRequestObject))
+		return sh.ssi.CreateCopy(ctx, request.(CreateCopyRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "UpdateFilePackFileSettings")
+		handler = middleware(handler, "CreateCopy")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(UpdateFilePackFileSettingsResponseObject); ok {
-		if err := validResponse.VisitUpdateFilePackFileSettingsResponse(w); err != nil {
+	} else if validResponse, ok := response.(CreateCopyResponseObject); ok {
+		if err := validResponse.VisitCreateCopyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -10793,14 +11498,13 @@ func (sh *strictHandler) UpdateFilePackFileSettings(w http.ResponseWriter, r *ht
 	}
 }
 
-// PutFilePackFile operation middleware
-func (sh *strictHandler) PutFilePackFile(w http.ResponseWriter, r *http.Request, id string, params PutFilePackFileParams) {
-	var request PutFilePackFileRequestObject
+// SetDefaultCopy operation middleware
+func (sh *strictHandler) SetDefaultCopy(w http.ResponseWriter, r *http.Request, id ID) {
+	var request SetDefaultCopyRequestObject
 
 	request.ID = id
-	request.Params = params
 
-	var body PutFilePackFileJSONRequestBody
+	var body SetDefaultCopyJSONRequestBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
 		return
@@ -10808,18 +11512,18 @@ func (sh *strictHandler) PutFilePackFile(w http.ResponseWriter, r *http.Request,
 	request.Body = &body
 
 	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
-		return sh.ssi.PutFilePackFile(ctx, request.(PutFilePackFileRequestObject))
+		return sh.ssi.SetDefaultCopy(ctx, request.(SetDefaultCopyRequestObject))
 	}
 	for _, middleware := range sh.middlewares {
-		handler = middleware(handler, "PutFilePackFile")
+		handler = middleware(handler, "SetDefaultCopy")
 	}
 
 	response, err := handler(r.Context(), w, r, request)
 
 	if err != nil {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
-	} else if validResponse, ok := response.(PutFilePackFileResponseObject); ok {
-		if err := validResponse.VisitPutFilePackFileResponse(w); err != nil {
+	} else if validResponse, ok := response.(SetDefaultCopyResponseObject); ok {
+		if err := validResponse.VisitSetDefaultCopyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

@@ -127,8 +127,8 @@ paths:
     get:
       operationId: getProfile
       description: >-
-        The signed-in user's profile: the files that follow them into every
-        environment they own, and their SSH keys.
+        The signed-in user's keys: the SSH keys environments sign with, and
+        the public keys that sign them in to their environments.
       responses:
         "200":
           description: The profile.
@@ -137,86 +137,24 @@ paths:
               schema: { $ref: "#/components/schemas/Profile" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
-  /api/frontend/me/profile/file:
-    parameters:
-      - name: path
-        in: query
-        required: true
-        description: The file's path, relative to the home directory.
-        schema: { type: string }
-    get:
-      operationId: getProfileFile
-      responses:
-        "200":
-          description: The file.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ProfileFileContent" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-    put:
-      operationId: putProfileFile
-      description: >-
-        Write a file. It reaches every running environment the user owns at
-        once.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/PutProfileFile" }
-      responses:
-        "200":
-          description: The file as stored.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ProfileFile" }
-        "400": { $ref: "#/components/responses/Invalid" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-    patch:
-      operationId: updateProfileFileSettings
-      description: >-
-        Change a file's settings. They reach every environment as a change
-        to the file does.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ProfileFileSettings" }
-      responses:
-        "200":
-          description: The file as stored.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/ProfileFile" }
-        "400": { $ref: "#/components/responses/Invalid" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-    delete:
-      operationId: deleteProfileFile
-      description: Remove a file, from the profile and every environment.
-      responses:
-        "204":
-          description: Removed.
-        "400": { $ref: "#/components/responses/Invalid" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-
   /api/frontend/packs:
     get:
-      operationId: listFilePacks
+      operationId: listPacks
       description: >-
-        The file packs the signed-in user may use: their own, and their
-        teams'. Every pack, for an administrator.
+        The packs the signed-in user may use: the built-in ones, those
+        attached to everyone, their own, and their teams'. Every pack, for
+        an administrator.
       responses:
         "200":
-          description: The packs, by name.
+          description: The packs, the built-in ones first, then by name.
           content:
             application/json:
               schema:
                 type: array
-                items: { $ref: "#/components/schemas/FilePack" }
+                items: { $ref: "#/components/schemas/Pack" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
-      operationId: createFilePack
+      operationId: createPack
       description: >-
         Make a pack, owned by the team it names, which the user must be a
         member or admin of, or else by the user.
@@ -224,57 +162,56 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/FilePackInput" }
+            schema: { $ref: "#/components/schemas/PackInput" }
       responses:
         "201":
           description: The pack.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/FilePack" }
+              schema: { $ref: "#/components/schemas/Pack" }
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
 
   /api/frontend/packs/{id}:
     parameters:
-      - { name: id, in: path, required: true, schema: { type: string } }
+      - $ref: "#/components/parameters/ID"
     get:
-      operationId: getFilePack
-      description: >-
-        A pack and its files: the one copy of a shared pack's, or the user's
-        own copy of a personal pack's.
+      operationId: getPack
       responses:
         "200":
           description: The pack.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/FilePackFiles" }
+              schema: { $ref: "#/components/schemas/Pack" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
     put:
-      operationId: updateFilePack
+      operationId: updatePack
       description: >-
-        Change a pack's name, description and paths. Its owner, and whether
-        it is personal, stay. Files under a path it no longer names are
-        dropped from the pack; environments keep theirs.
+        Change a pack's name, description, attach rule and paths. Its owner
+        stays. Copies keep their files under a path taken out, unshared;
+        environments copy them down as their own.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/FilePackInput" }
+            schema: { $ref: "#/components/schemas/PackInput" }
       responses:
         "200":
           description: The pack.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/FilePack" }
+              schema: { $ref: "#/components/schemas/Pack" }
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
-      operationId: deleteFilePack
-      description: Delete a pack and every copy of its files. Environments keep theirs.
+      operationId: deletePack
+      description: >-
+        Delete a pack and every copy of its files. A built-in pack is not
+        deleted: attach it to nothing instead.
       responses:
         "204":
           description: Deleted.
@@ -282,103 +219,172 @@ paths:
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
-  /api/frontend/packs/{id}/file:
+  /api/frontend/packs/{id}/copies:
     parameters:
-      - { name: id, in: path, required: true, schema: { type: string } }
-      - name: path
-        in: query
-        required: true
-        description: The file's absolute path.
-        schema: { type: string }
+      - $ref: "#/components/parameters/ID"
     get:
-      operationId: getFilePackFile
+      operationId: listCopies
+      description: >-
+        The copies of a pack the user may use: their own first, made if
+        they have none yet, then the shared ones.
       responses:
         "200":
-          description: The file.
+          description: The copies.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ProfileFileContent" }
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Copy" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
-    put:
-      operationId: putFilePackFile
+    post:
+      operationId: createCopy
       description: >-
-        Write a file under one of the pack's paths. It reaches every running
-        environment that has the pack at once.
+        Make a shared copy of the pack, owned by the team it names, which
+        the user must be a member or admin of, or else by the user.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/PutProfileFile" }
+            schema: { $ref: "#/components/schemas/CopyInput" }
       responses:
-        "200":
-          description: The file as stored.
+        "201":
+          description: The copy.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ProfileFile" }
+              schema: { $ref: "#/components/schemas/Copy" }
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
-    patch:
-      operationId: updateFilePackFileSettings
+
+  /api/frontend/packs/{id}/default:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: setDefaultCopy
+      description: >-
+        The copy the user uses of the pack, unless an environment or its
+        template says otherwise. Without one, their own.
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ProfileFileSettings" }
+            schema: { $ref: "#/components/schemas/CopyChoice" }
+      responses:
+        "204":
+          description: Set.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/copies/{id}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: getCopy
+      description: A copy, its pack, and its files.
       responses:
         "200":
-          description: The file as stored.
+          description: The copy.
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ProfileFile" }
+              schema: { $ref: "#/components/schemas/CopyFiles" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: renameCopy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CopyName" }
+      responses:
+        "200":
+          description: The copy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Copy" }
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
     delete:
-      operationId: deleteFilePackFile
-      description: Remove a file, from the pack and every environment that has it.
+      operationId: deleteCopy
+      description: >-
+        Delete a copy and its files. Environments that used it are given
+        another; a person who deletes their own is given an empty one.
+      responses:
+        "204":
+          description: Deleted.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/copies/{id}/file:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: path
+        in: query
+        required: true
+        description: The file's path, ~/ in the home directory or absolute.
+        schema: { type: string }
+    get:
+      operationId: getCopyFile
+      responses:
+        "200":
+          description: The file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackFileContent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      operationId: putCopyFile
+      description: >-
+        Write a file under one of the pack's paths. It reaches every running
+        environment using the copy at once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PutPackFile" }
+      responses:
+        "200":
+          description: The file as stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackFile" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    patch:
+      operationId: setCopyFileMode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PackFileMode" }
+      responses:
+        "200":
+          description: The file as stored.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PackFile" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteCopyFile
+      description: Remove a file, from the copy and every environment using it.
       responses:
         "204":
           description: Removed.
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
-        "404": { $ref: "#/components/responses/NotFound" }
-
-  /api/frontend/me/profile/paths:
-    post:
-      operationId: addProfilePath
-      description: >-
-        Share another path, relative to the home directory: a file, or a
-        directory, ending in a slash, with everything under it. It is taken
-        from and given to every environment the user owns.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: { $ref: "#/components/schemas/ProfilePath" }
-      responses:
-        "204":
-          description: Shared.
-        "400": { $ref: "#/components/responses/Invalid" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-    delete:
-      operationId: removeProfilePath
-      description: >-
-        Stop sharing a path the user added. Each environment keeps its copy,
-        as a file of its own.
-      parameters:
-        - name: path
-          in: query
-          required: true
-          schema: { type: string }
-      responses:
-        "204":
-          description: No longer shared.
-        "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /api/frontend/me/profile/login-keys:
@@ -940,6 +946,86 @@ paths:
               schema: { $ref: "#/components/schemas/Environment" }
         "204":
           description: Removed outright.
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/environments/{id}/packs:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listEnvironmentPacks
+      description: >-
+        The packs the environment has, in order -- those its template
+        lists, then those attaching themselves to it -- and the copy it uses
+        of each.
+      responses:
+        "200":
+          description: The packs.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AttachedPack" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/environments/{id}/packs/{pack}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - { name: pack, in: path, required: true, schema: { type: string } }
+    put:
+      operationId: chooseEnvironmentCopy
+      description: >-
+        The copy the environment uses of one of its packs. Without one, the
+        template's pin, the one it was first given, or its owner's default.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CopyChoice" }
+      responses:
+        "204":
+          description: Chosen.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/environments/{id}/conflicts:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listEnvironmentConflicts
+      description: >-
+        Paths the environment had a file of its own at, differing from its
+        copy's, when they became shared. The copy's is used; the
+        environment's is kept aside until someone resolves it.
+      responses:
+        "200":
+          description: The conflicts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/FileConflict" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    post:
+      operationId: resolveEnvironmentConflict
+      description: >-
+        Resolve a conflict: keep the copy's file (shared), or write the
+        environment's over it (environment), which everyone using the copy
+        then has.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResolveConflict" }
+      responses:
+        "204":
+          description: Recorded; the environment's agent does it.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
 
   /api/frontend/environments/{id}/start:
@@ -1638,19 +1724,10 @@ components:
           maximum: 3650
           description: Absent never expires.
 
-    ProfilePath:
-      type: object
-      required: [path]
-      properties:
-        path: { type: string }
-
     Profile:
       type: object
-      required: [files, keys, login_keys, paths, own_paths, secrets]
+      required: [keys, login_keys, secrets]
       properties:
-        files:
-          type: array
-          items: { $ref: "#/components/schemas/ProfileFile" }
         keys:
           type: array
           items: { $ref: "#/components/schemas/SSHKey" }
@@ -1658,49 +1735,64 @@ components:
           type: array
           description: Public keys that sign the user in to their environments over SSH.
           items: { $ref: "#/components/schemas/LoginKey" }
-        paths:
-          type: array
-          description: >-
-            What a profile holds, relative to the home directory. One ending
-            in a slash holds everything under it.
-          items: { type: string }
-        own_paths:
-          type: array
-          description: The paths among them the user added, which they may remove.
-          items: { type: string }
         secrets:
           type: boolean
           description: >-
             Whether the server can keep SSH keys: without its key, they are
             refused.
 
-    FilePack:
+    PackPath:
       type: object
-      required: [id, name, description, personal, paths, can_change, can_write, can_delete, created_at, updated_at]
+      required: [path, sensitive]
+      additionalProperties: false
+      properties:
+        path:
+          type: string
+          description: >-
+            ~/ in the home directory, or absolute. One ending in a slash is a
+            directory and everything under it; one starting with ! is left
+            out of a directory the pack shares, each environment's own.
+        sensitive:
+          type: boolean
+          description: >-
+            Every file under it, in every copy, is kept from environments
+            given no sensitive files.
+
+    PackAttach:
+      type: string
+      description: >-
+        The environments a pack reaches without a template listing it: none
+        (listed), its owner's, its team's members', or everyone's (an
+        administrator's to set).
+      enum: [listed, owner, team, everyone]
+
+    Pack:
+      type: object
+      required: [id, name, description, builtin, attach, paths, can_change, can_delete, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
         description: { type: string }
-        owner_id: { type: string, description: "The person who owns it, if one does." }
-        owner: { type: string }
-        team_id: { type: string, description: "The team that owns it, if one does." }
-        team: { type: string, description: "The team's slug." }
-        personal:
+        owner_id: { type: string }
+        owner: { type: string, description: The owner's username. }
+        team_id: { type: string }
+        team: { type: string, description: The owning team's slug. }
+        builtin:
           type: boolean
-          description: >-
-            Each person who uses it has their own copy of its files, rather
-            than all sharing one.
+          description: The server's, which administrators change.
+        attach: { $ref: "#/components/schemas/PackAttach" }
         paths:
           type: array
-          description: Absolute; a directory's ends in a slash, and holds everything under it.
-          items: { type: string }
-        can_change: { type: boolean, description: "The user may change the pack." }
-        can_write: { type: boolean, description: "The user may change its files, or their copy of them." }
+          items: { $ref: "#/components/schemas/PackPath" }
+        default_copy_id:
+          type: string
+          description: The copy the user chose to use by default, if they chose one; else their own.
+        can_change: { type: boolean }
         can_delete: { type: boolean }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
 
-    FilePackInput:
+    PackInput:
       type: object
       required: [name, paths]
       additionalProperties: false
@@ -1709,41 +1801,83 @@ components:
         description: { type: string }
         team_id:
           type: string
-          description: The team to own a new pack. Ignored for a change.
-        personal:
-          type: boolean
-          description: For a new pack. Ignored for a change.
+          description: Only when making one; the user's own without.
+        attach: { $ref: "#/components/schemas/PackAttach" }
         paths:
           type: array
-          maxItems: 32
-          items: { type: string }
+          items: { $ref: "#/components/schemas/PackPath" }
 
-    FilePackFiles:
+    Copy:
       type: object
-      required: [pack, files]
+      required: [id, pack_id, personal, name, can_write, can_delete, created_at]
       properties:
-        pack: { $ref: "#/components/schemas/FilePack" }
+        id: { type: string }
+        pack_id: { type: string }
+        owner_id: { type: string }
+        owner: { type: string }
+        team_id: { type: string }
+        team: { type: string }
+        personal:
+          type: boolean
+          description: A person's own copy, one each.
+        name: { type: string }
+        can_write: { type: boolean }
+        can_delete: { type: boolean }
+        created_at: { type: string, format: date-time }
+
+    CopyInput:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        team_id: { type: string }
+
+    CopyName:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name: { type: string }
+
+    CopyChoice:
+      type: object
+      additionalProperties: false
+      properties:
+        copy_id:
+          type: string
+          description: The copy; without one, the rules choose.
+
+    CopyFiles:
+      type: object
+      required: [copy, pack, files]
+      properties:
+        copy: { $ref: "#/components/schemas/Copy" }
+        pack: { $ref: "#/components/schemas/Pack" }
         files:
           type: array
-          items: { $ref: "#/components/schemas/ProfileFile" }
+          items: { $ref: "#/components/schemas/PackFile" }
 
-    ProfileFile:
+    PackFile:
       type: object
-      required: [path, size, mode, sensitive, updated_at]
+      required: [path, size, mode, sensitive, shared, updated_at]
       properties:
         path: { type: string }
         size: { type: integer }
         mode: { type: integer }
         sensitive:
           type: boolean
+          description: Under a sensitive path of the pack.
+        shared:
+          type: boolean
           description: >-
-            A credential: kept from environments whose template withholds
-            sensitive files. Known credentials start so.
+            Under a path the pack shares. A copy keeps a file the pack stopped
+            sharing until someone deletes it.
         updated_at: { type: string, format: date-time }
 
-    ProfileFileSettings:
+    PackFileMode:
       type: object
-      required: [mode, sensitive]
+      required: [mode]
       additionalProperties: false
       properties:
         mode:
@@ -1751,25 +1885,70 @@ components:
           minimum: 1
           maximum: 511
           description: Its permissions, as chmod takes them (0o600 is 384).
-        sensitive: { type: boolean }
 
-    ProfileFileContent:
+    PackFileContent:
       type: object
-      required: [path, content, mode, updated_at]
+      required: [path, content, mode, sensitive, shared, updated_at]
       properties:
         path: { type: string }
         content: { type: string }
         mode: { type: integer }
+        sensitive: { type: boolean }
+        shared: { type: boolean }
         updated_at: { type: string, format: date-time }
 
-    PutProfileFile:
+    PutPackFile:
       type: object
       required: [content]
+      additionalProperties: false
       properties:
         content: { type: string }
         mode:
           type: integer
-          description: Permission bits. Absent keeps the file's, or 0644.
+          minimum: 1
+          maximum: 511
+          description: >-
+            Its permissions; without, the file's own, or 0600 for a sensitive
+            one and 0644 for another.
+
+    AttachedPack:
+      type: object
+      required: [pack, copy, from, listed]
+      properties:
+        pack: { $ref: "#/components/schemas/Pack" }
+        copy: { $ref: "#/components/schemas/Copy" }
+        from:
+          type: string
+          description: >-
+            How the copy was chosen: on the environment, the template's pin,
+            the one it was first given (kept), or its owner's default.
+          enum: [environment, template, kept, default]
+        listed:
+          type: boolean
+          description: Its template lists it, rather than its attaching itself.
+
+    FileConflict:
+      type: object
+      required: [copy_id, path, found_at]
+      properties:
+        copy_id: { type: string }
+        path: { type: string }
+        found_at: { type: string, format: date-time }
+        resolution:
+          type: string
+          description: How someone resolved it, until the environment's agent has done it.
+          enum: [shared, environment]
+
+    ResolveConflict:
+      type: object
+      required: [copy_id, path, resolution]
+      additionalProperties: false
+      properties:
+        copy_id: { type: string }
+        path: { type: string }
+        resolution:
+          type: string
+          enum: [shared, environment]
 
     SSHKey:
       type: object
@@ -1918,9 +2097,9 @@ components:
     TemplateSetting:
       type: string
       description: A setting an environment takes from its template.
-      enum: [image, cpus, memory, display, gpu, dax, repos, editor_path, access, trusted_folders, web_names, file_packs, placement, name]
+      enum: [image, cpus, memory, display, gpu, dax, repos, editor_path, access, trusted_folders, web_names, packs, placement, name]
       x-enum-varnames: [SettingImage, SettingCPUs, SettingMemory, SettingDisplay, SettingGPU, SettingDAX, SettingRepos,
-        SettingEditorPath, SettingAccess, SettingTrustedFolders, SettingWebNames, SettingFilePacks, SettingPlacement,
+        SettingEditorPath, SettingAccess, SettingTrustedFolders, SettingWebNames, SettingPacks, SettingPlacement,
         SettingName]
 
     EnvironmentLogName:
@@ -2044,14 +2223,16 @@ components:
         What of its owner's the environment is kept from, for code they do
         not trust. Each is false, giving it everything, when left out.
       properties:
-        no_profile:
+        no_self_attached:
           type: boolean
-          description: None of the owner's profile's files.
+          description: >-
+            Only the packs the template lists: none of those attaching
+            themselves to environments, the profile among them.
         no_sensitive_files:
           type: boolean
           description: >-
             None of the sensitive files -- credentials, such as Claude's
-            sign-in -- of the owner's profile or of the environment's packs.
+            sign-in -- of the environment's packs.
         no_ssh_keys:
           type: boolean
           description: No signatures from the owner's SSH keys.
@@ -2061,6 +2242,18 @@ components:
         no_editor_trust:
           type: boolean
           description: VS Code trusts no folder without asking.
+
+    PackRef:
+      type: object
+      required: [pack]
+      additionalProperties: false
+      properties:
+        pack: { type: string }
+        copy:
+          type: string
+          description: >-
+            The copy every environment made from the template uses; without
+            one, each owner's own.
 
     Spec:
       type: object
@@ -2081,14 +2274,14 @@ components:
           description: >-
             The folder the editor opens on. In a template it may use
             variables, as a repository's branch does.
-        file_packs:
+        packs:
           type: array
           maxItems: 16
           description: >-
-            The IDs of the file packs the environment has beside its owner's
-            profile, in order: a file two of them name is the first's. A pack
+            The packs the environment has, in order, before those attaching
+            themselves to it: a path two of them name is the first's. A pack
             the owner may not use is left out.
-          items: { type: string }
+          items: { $ref: "#/components/schemas/PackRef" }
         trusted_folders:
           type: array
           description: >-

@@ -128,8 +128,7 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 		PublicURL: os.Getenv("HANGAR_PUBLIC_URL"), HostStyle: style, AutoSignIn: autoSignIn, Sealer: sealer,
 		SSHListen: os.Getenv("HANGAR_SSH_LISTEN"), SSHAddress: os.Getenv("HANGAR_SSH_ADDRESS"),
 		Blobs: blobs, ProfileBlobs: profileBlobs, Registry: registryOn(),
-		Files:        envOr("HANGAR_FILES_DIR", "/var/lib/hangar/files"),
-		ProfilePaths: splitList(os.Getenv("HANGAR_PROFILE_PATHS"))})
+		Files: envOr("HANGAR_FILES_DIR", "/var/lib/hangar/files")})
 	if err != nil {
 		return err
 	}

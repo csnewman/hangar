@@ -7,8 +7,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -19,27 +17,13 @@ import (
 	"github.com/csnewman/hangar/internal/db"
 )
 
-// Channel carries a file set's ID when its files, or the paths it shares,
-// change; an empty one when any may have.
+// Channel carries a user's ID when their keys change.
 const Channel = "hangar_profile"
 
 var (
 	ErrNotFound = errors.New("not found")
 	ErrInvalid  = errors.New("invalid")
 )
-
-// File is one file of a profile.
-type File struct {
-	Path string
-	// Data is the file's contents, where they were asked for.
-	Data []byte
-	Size int64
-	Mode uint32
-	// Sensitive keeps the file from environments whose template withholds
-	// sensitive files (api.Access).
-	Sensitive bool
-	UpdatedAt time.Time
-}
 
 // Key is one of a user's SSH keys, as anyone may see it.
 type Key struct {
@@ -51,106 +35,20 @@ type Key struct {
 	CreatedAt   time.Time
 }
 
-// Store keeps file sets -- profiles and packs -- and users' keys. A set's
-// files are on the files root (files.go); what is known of them beside
-// their contents and modes, in the database.
+// Store keeps users' SSH keys and sign-in keys.
 type Store struct {
 	db     *db.DB
-	root   *os.Root
 	sealer *Sealer
-	// everyone are the paths the server shares for every user beside the
-	// DefaultPaths.
-	everyone []string
 }
 
-// ShareForEveryone shares paths for every user beside the DefaultPaths, as
-// a server is set up to. Each is one a user could share for themselves.
-func (s *Store) ShareForEveryone(paths []string) error {
-	for _, p := range paths {
-		if err := CheckUserPath(p); err != nil {
-			return err
-		}
-		if !slices.Contains(DefaultPaths, p) && !slices.Contains(s.everyone, p) {
-			s.everyone = append(s.everyone, p)
-		}
-	}
-	return nil
-}
-
-// UserPaths is the set a user shares: the DefaultPaths, the server's, and
-// own, the user's own.
-func (s *Store) UserPaths(own []string) Paths {
-	return UserPaths(append(slices.Clone(s.everyone), own...))
-}
-
-// NewStore returns a store keeping file sets under the directory root. A
-// nil sealer keeps no SSH keys: they are refused.
-func NewStore(d *db.DB, root string, sealer *Sealer) (*Store, error) {
-	if err := os.MkdirAll(root, 0o755); err != nil {
-		return nil, err
-	}
-	r, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, err
-	}
-	return &Store{db: d, root: r, sealer: sealer}, nil
+// NewStore returns a store keeping keys in d. A nil sealer keeps no SSH
+// keys: they are refused.
+func NewStore(d *db.DB, sealer *Sealer) *Store {
+	return &Store{db: d, sealer: sealer}
 }
 
 // KeepsSecrets reports whether the store has a key to keep SSH keys with.
 func (s *Store) KeepsSecrets() bool { return s.sealer != nil }
-
-// SetsOf are the file sets of a user's own: their profile's, and their
-// copies of personal packs.
-func (s *Store) SetsOf(ctx context.Context, userID string) ([]string, error) {
-	if !db.ValidUUID(userID) {
-		return nil, ErrNotFound
-	}
-	out := []string{userID}
-	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT id::text FROM file_sets WHERE user_id = $1 AND pack_id IS NOT NULL`, userID)
-		if err != nil {
-			return err
-		}
-		more, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		out = append(out, more...)
-		return err
-	})
-	return out, err
-}
-
-// SetPaths are the paths a file set keeps: a profile's, relative to the
-// home directory, or a pack's, absolute. A set not made yet is a user's
-// profile, as their first file makes it.
-func (s *Store) SetPaths(ctx context.Context, set string) (Paths, error) {
-	if !db.ValidUUID(set) {
-		return nil, ErrNotFound
-	}
-	var user, pack *string
-	var paths []string
-	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT user_id::text, pack_id::text FROM file_sets WHERE id = $1`, set).Scan(&user, &pack)
-		if errors.Is(err, pgx.ErrNoRows) {
-			user = &set
-			return nil
-		}
-		if err != nil || pack == nil {
-			return err
-		}
-		rows, err := tx.Query(ctx, `SELECT path FROM file_pack_paths WHERE pack_id = $1 ORDER BY path`, *pack)
-		if err != nil {
-			return err
-		}
-		paths, err = pgx.CollectRows(rows, pgx.RowTo[string])
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	if pack != nil {
-		return PackPaths(paths), nil
-	}
-	return s.Paths(ctx, *user)
-}
 
 // Keys returns a user's SSH keys.
 func (s *Store) Keys(ctx context.Context, userID string) ([]Key, error) {
@@ -303,125 +201,6 @@ func (s *Store) Signers(ctx context.Context, userID string) ([]ssh.Signer, error
 	return out, nil
 }
 
-// Paths returns the paths a user shares: everyone's, and their own.
-func (s *Store) Paths(ctx context.Context, userID string) (Paths, error) {
-	own, err := s.OwnPaths(ctx, userID)
-	if err != nil {
-		return nil, err
-	}
-	return s.UserPaths(own), nil
-}
-
-// OwnPaths returns the paths a user has added.
-func (s *Store) OwnPaths(ctx context.Context, userID string) ([]string, error) {
-	if !db.ValidUUID(userID) {
-		return nil, ErrNotFound
-	}
-	var out []string
-	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		rows, err := tx.Query(ctx, `SELECT path FROM profile_paths WHERE user_id = $1 ORDER BY path`, userID)
-		if err != nil {
-			return err
-		}
-		out, err = pgx.CollectRows(rows, pgx.RowTo[string])
-		return err
-	})
-	return out, err
-}
-
-// AddPath shares another path for a user: a file, or a directory, ending
-// in a slash, and everything under it. It may start with Home, as a
-// pack's does.
-func (s *Store) AddPath(ctx context.Context, userID, path string) error {
-	if !db.ValidUUID(userID) {
-		return ErrNotFound
-	}
-	path = profilePath(path)
-	if err := CheckUserPath(path); err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalid, err)
-	}
-	if slices.Contains(DefaultPaths, path) || slices.Contains(s.everyone, path) {
-		return fmt.Errorf("%w: %s is already shared", ErrInvalid, path)
-	}
-	own, err := s.OwnPaths(ctx, userID)
-	if err != nil {
-		return err
-	}
-	if slices.Contains(own, path) {
-		return nil
-	}
-	paths := s.UserPaths(own)
-	if x, ok := strings.CutPrefix(path, Exclude); ok {
-		// Left out of a shared directory, and not already.
-		if by, ok := paths.Covering(x); !ok || !strings.HasSuffix(by, "/") {
-			return fmt.Errorf("%w: %s is not in a shared directory", ErrInvalid, x)
-		}
-		if !paths.Synced(strings.TrimSuffix(x, "/")) {
-			return fmt.Errorf("%w: %s is already left out", ErrInvalid, x)
-		}
-	} else if by, ok := paths.Covering(path); ok {
-		return fmt.Errorf("%w: %s is already shared, by %s", ErrInvalid, path, by)
-	}
-	return s.db.Transact(ctx, func(tx db.Tx) error {
-		var n int
-		if err := tx.QueryRow(ctx, `SELECT count(*) FROM profile_paths WHERE user_id = $1`, userID).Scan(&n); err != nil {
-			return err
-		}
-		if n >= MaxUserPaths {
-			return fmt.Errorf("%w: a profile shares at most %d paths of its own", ErrInvalid, MaxUserPaths)
-		}
-		if _, err := tx.Exec(ctx, `INSERT INTO profile_paths (user_id, path) VALUES ($1, $2)
-			ON CONFLICT DO NOTHING`, userID, path); err != nil {
-			return err
-		}
-		if err := audit.Record(ctx, tx, audit.Event{Action: "profile.share",
-			Target:  audit.Ref{Type: audit.KindPath, ID: userID + ":" + path, Name: path},
-			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}}}); err != nil {
-			return err
-		}
-		return db.Notify(ctx, tx, Channel, userID)
-	})
-}
-
-// RemovePath stops sharing a path the user added. The profile's copies of
-// what only it shared are dropped; environments keep theirs, as files of
-// their own.
-func (s *Store) RemovePath(ctx context.Context, userID, path string) error {
-	if !db.ValidUUID(userID) {
-		return ErrNotFound
-	}
-	path = profilePath(path)
-	var still Paths
-	err := s.db.Transact(ctx, func(tx db.Tx) error {
-		tag, err := tx.Exec(ctx, `DELETE FROM profile_paths WHERE user_id = $1 AND path = $2`, userID, path)
-		if err != nil {
-			return err
-		}
-		if tag.RowsAffected() == 0 {
-			return ErrNotFound
-		}
-		if err := audit.Record(ctx, tx, audit.Event{Action: "profile.unshare",
-			Target:  audit.Ref{Type: audit.KindPath, ID: userID + ":" + path, Name: path},
-			Related: []audit.Ref{{Type: audit.KindOwner, ID: userID}}}); err != nil {
-			return err
-		}
-		rows, err := tx.Query(ctx, `SELECT path FROM profile_paths WHERE user_id = $1`, userID)
-		if err != nil {
-			return err
-		}
-		own, err := pgx.CollectRows(rows, pgx.RowTo[string])
-		if err != nil {
-			return err
-		}
-		still = s.UserPaths(own)
-		return db.Notify(ctx, tx, Channel, userID)
-	})
-	if err == nil {
-		s.dropUnshared(userID, still, false)
-	}
-	return err
-}
-
 // RecordSignature records that a user's key signed something on their
 // behalf: every signature is a use of the key.
 func (s *Store) RecordSignature(ctx context.Context, userID, fingerprint string, err error) {
@@ -557,17 +336,4 @@ func (s *Store) LoginKeyOwners(ctx context.Context, fingerprint string) ([]KeyOw
 		return err
 	})
 	return out, err
-}
-
-// profilePath is p, a profile's path, relative to the home directory
-// whether or not it starts with Home.
-func profilePath(p string) string {
-	x, exclude := strings.CutPrefix(p, Exclude)
-	if rel, ok := strings.CutPrefix(x, Home); ok {
-		if exclude {
-			return Exclude + rel
-		}
-		return rel
-	}
-	return p
 }

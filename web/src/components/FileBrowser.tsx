@@ -2,38 +2,38 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronRight, FileText, Folder, FolderOpen, Plus, Search } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 
-import type { ProfileFile, ProfileFileContent } from '../api'
+import type { PackFile, PackFileContent } from '../api'
 import { ConfirmButton } from './ConfirmButton'
 
-// What each part of a profile is, for people who did not write the list.
+// What each part of the profile is, for people who did not write the list.
 const describe: [string, string][] = [
-  ['.claude/.credentials.json', "Claude's sign-in"],
-  ['.claude/settings.json', "Claude's settings"],
-  ['.claude/CLAUDE.md', "Claude's instructions for every project"],
-  ['.claude/agents/', 'Claude subagents'],
-  ['.claude/commands/', 'Claude slash commands'],
-  ['.claude/skills/', 'Claude skills'],
-  ['.claude/output-styles/', 'Claude output styles'],
-  ['.claude/statusline-command.sh', "Claude's status line script"],
-  ['.claude/', "Claude's settings, sign-in, instructions and extensions"],
-  ['.gitconfig', "git's settings"],
-  ['.git-credentials', "git's stored HTTPS credentials"],
-  ['.netrc', 'Logins for curl, git and others'],
-  ['.config/gh/hosts.yml', 'GitHub CLI sign-in'],
-  ['.config/gh/config.yml', 'GitHub CLI settings'],
-  ['.config/glab-cli/config.yml', 'GitLab CLI sign-in and settings'],
-  ['.docker/config.json', 'Container registry logins'],
-  ['.npmrc', 'npm registry logins'],
-  ['.pypirc', 'PyPI logins'],
-  ['.aws/credentials', 'AWS keys'],
-  ['.aws/config', 'AWS profiles'],
-  ['.kube/config', 'Kubernetes clusters and credentials'],
-  ['.config/gcloud/application_default_credentials.json', 'Google Cloud application credentials'],
-  ['.config/gcloud/configurations/', 'Google Cloud configurations'],
-  ['.config/gcloud/active_config', 'Google Cloud active configuration'],
-  ['.vscode-server-oss/data/User/settings.json', 'VS Code settings'],
-  ['.vscode-server-oss/data/User/keybindings.json', 'VS Code keybindings'],
-  ['.vscode-server-oss/data/User/snippets/', 'VS Code snippets'],
+  ['~/.claude/.credentials.json', "Claude's sign-in"],
+  ['~/.claude/settings.json', "Claude's settings"],
+  ['~/.claude/CLAUDE.md', "Claude's instructions for every project"],
+  ['~/.claude/agents/', 'Claude subagents'],
+  ['~/.claude/commands/', 'Claude slash commands'],
+  ['~/.claude/skills/', 'Claude skills'],
+  ['~/.claude/output-styles/', 'Claude output styles'],
+  ['~/.claude/statusline-command.sh', "Claude's status line script"],
+  ['~/.claude/', "Claude's settings, sign-in, instructions and extensions"],
+  ['~/.gitconfig', "git's settings"],
+  ['~/.git-credentials', "git's stored HTTPS credentials"],
+  ['~/.netrc', 'Logins for curl, git and others'],
+  ['~/.config/gh/hosts.yml', 'GitHub CLI sign-in'],
+  ['~/.config/gh/config.yml', 'GitHub CLI settings'],
+  ['~/.config/glab-cli/config.yml', 'GitLab CLI sign-in and settings'],
+  ['~/.docker/config.json', 'Container registry logins'],
+  ['~/.npmrc', 'npm registry logins'],
+  ['~/.pypirc', 'PyPI logins'],
+  ['~/.aws/credentials', 'AWS keys'],
+  ['~/.aws/config', 'AWS profiles'],
+  ['~/.kube/config', 'Kubernetes clusters and credentials'],
+  ['~/.config/gcloud/application_default_credentials.json', 'Google Cloud application credentials'],
+  ['~/.config/gcloud/configurations/', 'Google Cloud configurations'],
+  ['~/.config/gcloud/active_config', 'Google Cloud active configuration'],
+  ['~/.vscode-server-oss/data/User/settings.json', 'VS Code settings'],
+  ['~/.vscode-server-oss/data/User/keybindings.json', 'VS Code keybindings'],
+  ['~/.vscode-server-oss/data/User/snippets/', 'VS Code snippets'],
 ]
 
 // describeExactly is what a listed path itself is, for the browser's rows,
@@ -54,7 +54,7 @@ type FolderNode = {
   path: string
   name: string
   folders: FolderNode[]
-  files: ProfileFile[]
+  files: PackFile[]
   count: number
   size: number
 }
@@ -62,7 +62,7 @@ type FolderNode = {
 // treeOf arranges files into folders, each level's folders first and by
 // name, counting what is under each folder. Absolute paths, a pack's, are
 // under "/".
-function treeOf(files: ProfileFile[]): FolderNode {
+function treeOf(files: PackFile[]): FolderNode {
   const root: FolderNode = {
     path: '',
     name: '',
@@ -130,13 +130,13 @@ function saveExpanded(expanded: Set<string>) {
   }
 }
 
-// FileSource is where a browser's files are kept: a profile, or a pack.
+// FileSource is where a browser's files are kept: a copy of a pack.
 export type FileSource = {
   // key lists the files; a change here refreshes it.
   key: readonly unknown[]
-  get: (path: string) => Promise<ProfileFileContent>
+  get: (path: string) => Promise<PackFileContent>
   put: (path: string, content: string) => Promise<unknown>
-  settings: (path: string, mode: number, sensitive: boolean) => Promise<unknown>
+  mode: (path: string, mode: number) => Promise<unknown>
   remove: (path: string) => Promise<unknown>
   // writable is whether the files may be changed here.
   writable: boolean
@@ -156,7 +156,7 @@ export function FileBrowser({
   onOpen,
 }: {
   source: FileSource
-  files: ProfileFile[]
+  files: PackFile[]
   paths: string[]
   open: string | null
   onOpen: (path: string | null) => void
@@ -293,7 +293,7 @@ function FolderRows({
 }
 
 // FileDetail is one file: what it is, and its contents to edit.
-function FileDetail({ source, file, onRemoved }: { source: FileSource; file: ProfileFile; onRemoved: () => void }) {
+function FileDetail({ source, file, onRemoved }: { source: FileSource; file: PackFile; onRemoved: () => void }) {
   const qc = useQueryClient()
   const remove = useMutation({
     mutationFn: () => source.remove(file.path),
@@ -308,6 +308,7 @@ function FileDetail({ source, file, onRemoved }: { source: FileSource; file: Pro
           <div className="mono fb-path">{file.path}</div>
           <div className="muted small">
             {what && `${what} · `}
+            {file.sensitive && 'sensitive · '}
             {bytes(file.size)} · changed {new Date(file.updated_at).toLocaleString()}
           </div>
         </div>
@@ -320,6 +321,12 @@ function FileDetail({ source, file, onRemoved }: { source: FileSource; file: Pro
           />
         )}
       </div>
+      {!file.shared && (
+        <div className="notice">
+          The pack no longer shares this path: environments keep their own copies of it, and this one is kept until you
+          remove it.
+        </div>
+      )}
       <FileSettings source={source} file={file} />
       <FileEditor source={source} path={file.path} updatedAt={file.updated_at} />
     </div>
@@ -336,11 +343,12 @@ const modes: [number, string][] = [
   [0o755, 'anyone can read and run it'],
 ]
 
-// FileSettings are a file's settings, each saved as it is changed.
-function FileSettings({ source, file }: { source: FileSource; file: ProfileFile }) {
+// FileSettings are a file's mode, saved as it is changed. Whether it is
+// sensitive is the pack's paths' to say.
+function FileSettings({ source, file }: { source: FileSource; file: PackFile }) {
   const qc = useQueryClient()
   const save = useMutation({
-    mutationFn: (s: { mode: number; sensitive: boolean }) => source.settings(file.path, s.mode, s.sensitive),
+    mutationFn: (mode: number) => source.mode(file.path, mode),
     onSettled: () => qc.invalidateQueries({ queryKey: source.key }),
   })
   const disabled = save.isPending || !source.writable
@@ -353,12 +361,7 @@ function FileSettings({ source, file }: { source: FileSource; file: ProfileFile 
           className="mono"
           value={file.mode}
           disabled={disabled}
-          onChange={(e) =>
-            save.mutate({
-              mode: Number(e.target.value),
-              sensitive: file.sensitive,
-            })
-          }
+          onChange={(e) => save.mutate(Number(e.target.value))}
         >
           {choices.map(([m, what]) => (
             <option key={m} value={m}>
@@ -366,20 +369,6 @@ function FileSettings({ source, file }: { source: FileSource; file: ProfileFile 
             </option>
           ))}
         </select>
-      </label>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={file.sensitive}
-          disabled={disabled}
-          onChange={(e) => save.mutate({ mode: file.mode, sensitive: e.target.checked })}
-        />
-        <span>
-          Sensitive
-          <small className="muted">
-            A credential: environments whose template withholds sensitive files are not given it.
-          </small>
-        </span>
       </label>
       {save.error && <span className="action-error">{save.error.message}</span>}
     </div>

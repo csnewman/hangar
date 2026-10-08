@@ -52,10 +52,7 @@ func TestClientAPI(t *testing.T) {
 	d := dbtest.Open(t)
 	um := users.NewManager(d)
 	em := environments.NewManager(d)
-	profiles, err := profile.NewStore(d, t.TempDir(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	profiles := profile.NewStore(d, nil)
 	srv := httptest.NewServer(clientapi.New(clientapi.Config{
 		Environments: em,
 		Users:        um,
