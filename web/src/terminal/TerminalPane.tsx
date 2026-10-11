@@ -1,4 +1,6 @@
 import '@xterm/xterm/css/xterm.css'
+// For the menu, which is the Code tab's.
+import '../code/code.css'
 
 import { ClipboardAddon } from '@xterm/addon-clipboard'
 import { FitAddon } from '@xterm/addon-fit'
@@ -10,6 +12,7 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import { useEffect, useRef, useState } from 'react'
 
+import { copyText, shortcut, useContextMenu } from '../code/ContextMenu'
 import { Connection, type SessionInfo } from './connection'
 import { darkTheme, lightTheme, prefersDark } from './theme'
 
@@ -31,7 +34,9 @@ export interface PaneEvents {
 // The session belongs to the environment, not the page: refreshing the page,
 // or opening it in a second window, attaches to the same shell. A dropped
 // connection is re-attached to the same session until it succeeds or the
-// session is found to have ended.
+// session is found to have ended. A session that was live here and is gone
+// without its shell having exited went with the environment, which
+// restarted: a new shell is started in its place.
 // isMac is whether ⌘ is the platform's key for copy and paste.
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent)
 
@@ -51,6 +56,8 @@ export function TerminalPane({
   events: PaneEvents
 }) {
   const host = useRef<HTMLDivElement>(null)
+  const termRef = useRef<Terminal | null>(null)
+  const menu = useContextMenu()
   const eventsRef = useRef(events)
   useEffect(() => {
     eventsRef.current = events
@@ -75,7 +82,7 @@ export function TerminalPane({
     const openLink = (uri: string) => {
       if (/^https?:\/\//i.test(uri)) window.open(uri, '_blank', 'noopener,noreferrer')
     }
-    const term = new Terminal({
+    const term = (termRef.current = new Terminal({
       // Hyperlinks a program writes (OSC 8), such as a sign-in page. Their
       // text need not be where they go, so the address is asked about
       // first, and shows as the pointer rests on one. The address itself
@@ -104,7 +111,7 @@ export function TerminalPane({
       macOptionIsMeta: true,
       rescaleOverlappingGlyphs: true,
       vtExtensions: { kittyKeyboard: true },
-    })
+    }))
     // On a Mac, ⌘C, ⌘X and ⌘V are the browser's copy, cut and paste, which
     // xterm answers from its selection and with the clipboard, and ⌘A
     // selects all of the terminal. Otherwise a program that asks for the
@@ -171,6 +178,10 @@ export function TerminalPane({
     // sent: it would be typed into whatever reads the input now.
     let replayLeft = 0
     let replaying = false
+    // Whether this pane has been attached, and whether the shell it was
+    // attached to went with a restart of the environment.
+    let wasLive = false
+    let restarted = false
     let retry: ReturnType<typeof setTimeout> | undefined
     let backoff = 500
     let disposed = false
@@ -183,9 +194,14 @@ export function TerminalPane({
           current = s.id
           initial.current = s.id
           backoff = 500
+          wasLive = true
           // The replay that follows is the session's recent output from
           // wherever it starts, so the screen is cleared for it.
           term.reset()
+          if (restarted) {
+            restarted = false
+            term.write('\x1b[2m[The environment restarted; this is a new shell.]\x1b[0m\r\n')
+          }
           setState('live')
           eventsRef.current.attached(s)
           if (toRun.current) {
@@ -212,6 +228,15 @@ export function TerminalPane({
         },
         lost: (why) => {
           if (disposed) return
+          if (why === 'no such session' && wasLive && current) {
+            current = undefined
+            initial.current = undefined
+            restarted = true
+            setState('reconnecting')
+            setReason('starting a new shell')
+            connect()
+            return
+          }
           if (why === 'no such session') {
             setState('ended')
             setReason('')
@@ -258,9 +283,43 @@ export function TerminalPane({
     }
   }, [env, restart])
 
+  // The terminal's own menu, in place of the browser's: the clipboard,
+  // choosing everything, and clearing what has scrolled away.
+  const openMenu = (e: React.MouseEvent) => {
+    const term = termRef.current
+    if (!term) return
+    const selected = term.getSelection()
+    menu.open(e, [
+      { label: 'Copy', shortcut: shortcut('Mod+C'), disabled: !selected, onSelect: () => copyText(selected) },
+      {
+        label: 'Paste',
+        shortcut: shortcut('Mod+V'),
+        onSelect: () => {
+          navigator.clipboard?.readText().then(
+            (text) => {
+              term.paste(text)
+              term.focus()
+            },
+            () => {},
+          )
+        },
+      },
+      'separator',
+      { label: 'Select All', shortcut: shortcut('Mod+A'), onSelect: () => term.selectAll() },
+      {
+        label: 'Clear',
+        onSelect: () => {
+          term.clear()
+          term.focus()
+        },
+      },
+    ])
+  }
+
   return (
     <div className="term-pane">
-      <div ref={host} className="term-host" />
+      <div ref={host} className="term-host" onContextMenu={openMenu} />
+      {menu.menu}
       {state !== 'live' && (
         <div className={`term-status term-status-${state}`}>
           {state === 'connecting' && 'Connecting…'}
