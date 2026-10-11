@@ -79,6 +79,8 @@ export function TerminalPane({
     null,
   )
   const claimRef = useRef<() => void>(() => {})
+  // typedRef marks input as a person's, for a paste from the menu.
+  const typedRef = useRef<() => void>(() => {})
   // The session to attach to is taken when the pane mounts: once a new
   // session has its ID the parent records it, and the pane carries on
   // rather than attaching again. Starting another forgets it.
@@ -206,6 +208,8 @@ export function TerminalPane({
     let retry: ReturnType<typeof setTimeout> | undefined
     let backoff = 500
     let disposed = false
+    // When a person last typed or pasted here.
+    let typedAt = 0
 
     const connect = () => {
       conn = new Connection(env, current, initialDir.current, want?.cols ?? term.cols, want?.rows ?? term.rows, {
@@ -286,8 +290,20 @@ export function TerminalPane({
       connect()
     }, 0)
 
-    term.onData((d) => !replaying && conn?.input(d))
-    term.onBinary((d) => !replaying && conn?.input(Uint8Array.from(d, (c) => c.charCodeAt(0))))
+    // What a person types or pastes is sent from any window, which asks for
+    // the size as they do. What the terminal sends of itself -- answers to
+    // a program's queries, focus and mouse reports -- is sent only from the
+    // window holding the size: every window watching would answer, and the
+    // program would read each answer.
+    const typed = () => {
+      typedAt = performance.now()
+      if (size && !size.mine && want) conn?.claim(want.cols, want.rows)
+    }
+    for (const ev of ['keydown', 'paste', 'compositionend'] as const) el.addEventListener(ev, typed, true)
+    typedRef.current = typed
+    const sending = () => !replaying && (size === null || size.mine || performance.now() - typedAt < 100)
+    term.onData((d) => sending() && conn?.input(d))
+    term.onBinary((d) => sending() && conn?.input(Uint8Array.from(d, (c) => c.charCodeAt(0))))
     claimRef.current = () => {
       if (want) conn?.claim(want.cols, want.rows)
       term.focus()
@@ -334,6 +350,7 @@ export function TerminalPane({
         onSelect: () => {
           navigator.clipboard?.readText().then(
             (text) => {
+              typedRef.current()
               term.paste(text)
               term.focus()
             },

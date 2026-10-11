@@ -177,7 +177,7 @@ func (m *Manager) attach(conn io.ReadWriteCloser, br *bufio.Reader, req Request)
 		}
 		switch typ {
 		case FrameInput:
-			s.input(c, payload)
+			s.input(payload)
 		case FrameResize:
 			if cols, rows, err := ParseResize(payload); err == nil {
 				s.claim(c, cols, rows)
@@ -341,18 +341,11 @@ func (s *session) owns(c *client) bool {
 	return s.owner == c
 }
 
-// input types what a client sent. Typing into a window takes the size for
-// it: whoever is using the terminal has it fit their window.
-func (s *session) input(c *client, p []byte) {
-	s.mu.Lock()
-	if s.owner != c && c.cols > 0 && c.rows > 0 {
-		if _, ok := s.clients[c]; ok {
-			s.owner = c
-			s.setSize(c.cols, c.rows)
-			s.announce()
-		}
-	}
-	s.mu.Unlock()
+// input types what a client sent. It takes nothing: a terminal answers a
+// program's queries, and reports focus and the mouse, of itself, in every
+// window watching it, so input is no sign of anyone using it. A window
+// someone types into asks for the size (claim) as they do.
+func (s *session) input(p []byte) {
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	_, _ = s.ptmx.Write(p)
@@ -391,7 +384,7 @@ func (s *session) prefer(c *client, cols, rows uint16) {
 // setSize sets the terminal's size, reporting whether it changed; the
 // kernel tells the program in it. s.mu is held.
 func (s *session) setSize(cols, rows uint16) bool {
-	if s.cols == cols && s.rows == rows {
+	if s.ended || (s.cols == cols && s.rows == rows) {
 		return false
 	}
 	s.cols, s.rows = cols, rows
@@ -448,9 +441,10 @@ func (s *session) pump(ended func()) {
 			code = -1
 		}
 	}
-	s.ptmx.Close()
-
+	// Closed under the lock: sizing it reads its descriptor under the lock,
+	// and an ended session is not sized.
 	s.mu.Lock()
+	s.ptmx.Close()
 	s.ended = true
 	s.code = code
 	for c := range s.clients {

@@ -8,7 +8,8 @@
 // output and may type.
 //
 // One connection holds the size, as tmux's window-size latest has it: the
-// first to attach, then whichever was last typed into or asked for it.
+// first to attach, then whichever last asked for it, as a window does when
+// someone types into it.
 // Every connection says what size its window would have; the holder's is
 // the terminal's, and the others are told the terminal's size, so they draw
 // it as it is rather than wrapped to their own, and whether they hold it.
@@ -102,7 +103,7 @@ const (
 	FrameResize byte = 'r'
 	// FramePrefer says what size the connection's window would have, in
 	// FrameResize's form. It is the terminal's only while the connection
-	// holds the size; typing takes it.
+	// holds the size.
 	FramePrefer byte = 'p'
 	// FrameSize tells a connection the terminal's size, how many
 	// connections are attached and whether it holds the size: SizePayload.

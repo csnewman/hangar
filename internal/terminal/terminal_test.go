@@ -209,10 +209,13 @@ func TestTheSizeIsWhoeverIsUsingIt(t *testing.T) {
 		t.Fatalf("the other told: %+v", got)
 	}
 
-	// Typing takes the size, at the typist's window's.
+	// Input takes nothing: every window's terminal answers queries of
+	// itself. Asking takes the size, as a window does when typed into.
 	b.send("x\n")
+	b.until("got:x")
+	b.sized(terminal.FrameResize, 70, 25)
 	if got := b.size(); got != (size{70, 25, 2, true}) {
-		t.Fatalf("after typing: %+v", got)
+		t.Fatalf("after asking: %+v", got)
 	}
 	if got := a.size(); got != (size{70, 25, 2, false}) {
 		t.Fatalf("the first told: %+v", got)
