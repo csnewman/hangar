@@ -1287,6 +1287,11 @@
   border-top: 1px solid var(--border);
 }
 
+.code-find-foot {
+  display: flex;
+  align-items: center;
+}
+
 .code-find-preview-head {
   display: flex;
   gap: 8px;
@@ -1617,7 +1622,22 @@
 }
 
 /* The Find tool window: a symbol's usages, by file. */
+/* The Find window: the list, and the chosen one's preview beside it. */
+.code-usages-split {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.code-usages-split .code-find-preview {
+  flex: 0 0 55%;
+  border-top: none;
+  border-left: 1px solid var(--border);
+}
+
 .code-usages {
+  flex: 1;
+  min-width: 0;
   height: 100%;
   overflow: auto;
   padding: 3px 0;

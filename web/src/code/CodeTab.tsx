@@ -552,7 +552,7 @@ function CodeView({
                 <CodeTerminal env={env} openIn={termIn} onHide={() => terminal.current?.collapse()} />
               </div>
               <div className="code-side-slot" hidden={bottom !== 'find'}>
-                <UsagesView usages={usages} onJump={openAt} onHide={() => terminal.current?.collapse()} />
+                <UsagesView client={client} usages={usages} onJump={openAt} onHide={() => terminal.current?.collapse()} />
               </div>
               {logSeen && (
                 <div className="code-side-slot" hidden={bottom !== 'log'}>
@@ -594,7 +594,17 @@ function CodeView({
             onClose={() => setPopup(null)}
           />
         )}
-        {popup === 'find' && <FindInFiles client={client} onOpen={openAt} onClose={() => setPopup(null)} />}
+        {popup === 'find' && (
+          <FindInFiles
+            client={client}
+            onOpen={openAt}
+            onFindWindow={(u) => {
+              setUsages(u)
+              showBottom('find')
+            }}
+            onClose={() => setPopup(null)}
+          />
+        )}
         {popup === 'folder' && <OpenFolder client={client} onChoose={onFolder} onClose={() => setPopup(null)} />}
       </div>
     </LanguagesContext.Provider>

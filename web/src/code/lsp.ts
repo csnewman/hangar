@@ -83,7 +83,17 @@ export interface FileOpener {
 // the folder, or absolute outside it), and the line it is on.
 export type Usage = { path: string; line: number; col: number; length: number; text: string }
 
-export type Usages = { symbol: string; state: 'finding' | 'found' | 'failed'; usages: Usage[]; why?: string }
+// Usages are what the Find window lists: a symbol's usages, or the
+// matches of a Find in Files moved there (kind 'text', symbol being what
+// was searched for, more saying when they were cut short).
+export type Usages = {
+  kind?: 'usages' | 'text'
+  symbol: string
+  state: 'finding' | 'found' | 'failed'
+  usages: Usage[]
+  why?: string
+  more?: boolean
+}
 
 type Location = { uri: string; range: Range }
 type LocationLink = { targetUri: string; targetSelectionRange: Range }

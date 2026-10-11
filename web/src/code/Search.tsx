@@ -5,7 +5,8 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNod
 
 import type { CodeClient, Match } from './client'
 import { codeHighlight, codeTheme, followScheme, languageFor } from './CodeEditor'
-import { shortcut } from './ContextMenu'
+import { isMac, shortcut } from './ContextMenu'
+import type { Usages } from './lsp'
 
 // Jump is a place in a file to open it at: a 1-based line (0 for none),
 // and optionally a 1-based column, or text in the line to select. focus
@@ -271,12 +272,15 @@ export function FindInFiles({
   client,
   initial,
   onOpen,
+  onFindWindow,
   onClose,
 }: {
   client: CodeClient
   // initial is text to search for, such as the editor's selection.
   initial?: string
   onOpen: (j: Jump) => void
+  // onFindWindow lists the matches in the Find window, to go through.
+  onFindWindow: (u: Usages) => void
   onClose: () => void
 }) {
   const [opts, setOpts] = useState<FindOptions>(() => (initial ? { ...lastFind, query: initial } : lastFind))
@@ -335,6 +339,28 @@ export function FindInFiles({
     onOpen({ path: m.path, line: m.line, find: first ? m.text.slice(first[0], first[1]) : undefined })
   }
 
+  // toFindWindow moves the matches to the Find window, as IntelliJ's Open
+  // in Find Window does: each match in a line its own row.
+  const toFindWindow = () => {
+    if (!result || !matches.length) return
+    onClose()
+    onFindWindow({
+      kind: 'text',
+      symbol: opts.query,
+      state: 'found',
+      more: result.truncated,
+      usages: matches.flatMap((m) =>
+        (m.ranges.length ? m.ranges : [[0, 0] as [number, number]]).map(([s, e]) => ({
+          path: m.path,
+          line: m.line,
+          col: s + 1,
+          length: e - s,
+          text: m.text,
+        })),
+      ),
+    })
+  }
+
   const toggle = (key: 'caseSensitive' | 'wholeWord' | 'regex', label: string, icon: ReactNode) => (
     <button
       type="button"
@@ -384,7 +410,10 @@ export function FindInFiles({
           onChange={(e) => set({ query: e.target.value })}
           onKeyDown={(e) => {
             if (moveSelection(e, sel, matches.length, setSel)) return
-            if (e.key === 'Enter') {
+            if (e.key === 'Enter' && (isMac ? e.metaKey : e.ctrlKey)) {
+              e.preventDefault()
+              toFindWindow()
+            } else if (e.key === 'Enter') {
               e.preventDefault()
               choose(current)
             }
@@ -416,6 +445,19 @@ export function FindInFiles({
         {!error && result && matches.length === 0 && <div className="code-popup-empty">Nothing found.</div>}
       </div>
       {current && <Preview client={client} match={current} onOpen={() => choose(current)} />}
+      <div className="code-popup-foot code-find-foot">
+        <span className="muted small">Enter opens the match</span>
+        <span className="code-tool-spacer" />
+        <button
+          type="button"
+          className="btn btn-sm"
+          disabled={!matches.length}
+          title={`List every match in the Find window (${shortcut('Mod+Enter')})`}
+          onClick={toFindWindow}
+        >
+          Open in Find Window
+        </button>
+      </div>
     </Popup>
   )
 }
@@ -446,8 +488,8 @@ function matchDecorations(state: EditorState, m: Match) {
 }
 
 // Preview shows a match in its file, read-only, the way Find in Files
-// shows it below the list.
-function Preview({ client, match, onOpen }: { client: CodeClient; match: Match; onOpen: () => void }) {
+// shows it below the list and the Find window beside it.
+export function Preview({ client, match, onOpen }: { client: CodeClient; match: Match; onOpen: () => void }) {
   const host = useRef<HTMLDivElement>(null)
   const view = useRef<EditorView | null>(null)
   const texts = useRef(new Map<string, Promise<string | null>>())
