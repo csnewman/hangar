@@ -502,6 +502,15 @@ function CodeView({
                     status={status}
                     canReopen={canReopen}
                     onActivate={(key) => setStore((s) => ({ ...s, active: key }))}
+                    onMove={(key, to) =>
+                      setStore((s) => {
+                        const tab = s.tabs.find((t) => tabKey(t) === key)
+                        if (!tab) return s
+                        const tabs = s.tabs.filter((t) => t !== tab)
+                        tabs.splice(to, 0, tab)
+                        return { ...s, tabs }
+                      })
+                    }
                     onOpen={open}
                     onClose={close}
                     onCloseMany={closeTabs}

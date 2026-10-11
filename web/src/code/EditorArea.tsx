@@ -1,5 +1,4 @@
-import { File, FileText, GitCompare, Monitor, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import type { CodeClient, GitStatus, SharedFile } from './client'
 import { CodeEditor } from './CodeEditor'
@@ -8,21 +7,9 @@ import { DesktopTab } from '../desktop/DesktopTab'
 import { DiffView } from './DiffView'
 import { DockerLogs } from './DockerView'
 import type { Jump } from './Search'
+import { TabBar, tabKey, type Tab } from './TabBar'
 
-// A tab is a file, its changes, a container's logs (path is then the
-// container's ID, and title its name), or the environment's desktop, which
-// is connected only while its tab is the one shown. A diff is against HEAD, or against
-// base (a commit, labelled baseLabel), where the file was named from.
-export type Tab = {
-  kind: 'file' | 'diff' | 'logs' | 'desktop'
-  path: string
-  title?: string
-  base?: string
-  baseLabel?: string
-  from?: string
-}
-
-export const tabKey = (t: Tab) => (t.base ? `diff@${t.base}:${t.path}` : `${t.kind}:${t.path}`)
+export { tabKey, type Tab } from './TabBar'
 
 // EditorArea is the Code tab's centre: a strip of tabs and the chosen one, a
 // shared file or a diff.
@@ -35,6 +22,7 @@ export function EditorArea({
   status,
   canReopen,
   onActivate,
+  onMove,
   onOpen,
   onClose,
   onCloseMany,
@@ -52,6 +40,7 @@ export function EditorArea({
   status: GitStatus | null
   canReopen: boolean
   onActivate: (key: string) => void
+  onMove: (key: string, to: number) => void
   onOpen: (tab: Tab) => void
   onClose: (key: string) => void
   onCloseMany: (keys: string[]) => void
@@ -60,20 +49,6 @@ export function EditorArea({
 }) {
   const current = tabs.find((t) => tabKey(t) === active) ?? null
   const menu = useContextMenu()
-  const bar = useRef<HTMLDivElement>(null)
-
-  // The active tab is scrolled into the bar's view whenever a tab is
-  // opened, chosen or opened again, by the bar alone, so nothing around it
-  // moves.
-  useEffect(() => {
-    const b = bar.current
-    const el = b?.querySelector<HTMLElement>('[aria-selected=true]')
-    if (!b || !el) return
-    const box = b.getBoundingClientRect()
-    const r = el.getBoundingClientRect()
-    if (r.left < box.left) b.scrollLeft -= box.left - r.left
-    else if (r.right > box.left + b.clientWidth) b.scrollLeft += r.right - box.left - b.clientWidth
-  }, [active, tabs.length, opened])
 
   // tabMenu is IntelliJ's and VS Code's tab menu, less what an editor
   // that saves as it goes has no use for.
@@ -111,54 +86,15 @@ export function EditorArea({
   return (
     <div className="code-editors">
       {tabs.length > 0 && (
-        <div className="code-tabs" role="tablist" ref={bar}>
-          {tabs.map((t) => {
-            const key = tabKey(t)
-            const name = t.title ?? t.path.split('/').pop() ?? t.path
-            return (
-              <div
-                key={key}
-                role="tab"
-                aria-selected={key === active}
-                className={key === active ? 'code-tab code-tab-on' : 'code-tab'}
-                title={
-                  t.kind === 'diff'
-                    ? `Changes to ${t.path}${t.base ? ` since ${t.baseLabel ?? t.base}` : ''}`
-                    : t.kind === 'logs'
-                      ? `Logs of ${name}`
-                      : t.path
-                }
-                onClick={() => onActivate(key)}
-                onContextMenu={(e) => menu.open(e, tabMenu(t))}
-                onAuxClick={(e) => {
-                  if (e.button === 1) onClose(key)
-                }}
-              >
-                {t.kind === 'diff' ? (
-                  <GitCompare size={13} className="code-icon-diff" />
-                ) : t.kind === 'logs' ? (
-                  <FileText size={13} className="code-icon-file" />
-                ) : t.kind === 'desktop' ? (
-                  <Monitor size={13} className="code-icon-file" />
-                ) : (
-                  <File size={13} className="code-icon-file" />
-                )}
-                <span>{name}</span>
-                <button
-                  type="button"
-                  className="code-tab-close"
-                  aria-label={`Close ${name}`}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onClose(key)
-                  }}
-                >
-                  <X size={12} />
-                </button>
-              </div>
-            )
-          })}
-        </div>
+        <TabBar
+          tabs={tabs}
+          active={active}
+          opened={opened}
+          onActivate={onActivate}
+          onClose={onClose}
+          onMove={onMove}
+          onMenu={(e, t) => menu.open(e, tabMenu(t))}
+        />
       )}
       <div className="code-editor-body">
         {current?.kind === 'file' && (

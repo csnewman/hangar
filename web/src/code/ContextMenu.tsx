@@ -4,11 +4,13 @@ import { createPortal } from 'react-dom'
 // An item runs its action and closes the menu. One with `confirm` asks
 // first: the first click shows that question in its place, the second
 // runs it. A heading names the items under it; `checked` marks the one in
-// force, such as the current branch.
+// force, such as the current branch. `detail` says more, quietly, as a
+// shortcut is shown.
 export type MenuItem =
   | {
       label: string
       shortcut?: string
+      detail?: string
       onSelect: () => void
       disabled?: boolean
       danger?: boolean
@@ -35,7 +37,10 @@ export function copyText(text: string) {
   navigator.clipboard?.writeText(text).catch(() => {})
 }
 
-type Open = { x: number; y: number; items: MenuItem[] }
+// A menu opens with its left edge at x, or its right edge for 'right'.
+type Align = 'left' | 'right'
+
+type Open = { x: number; y: number; items: MenuItem[]; align?: Align }
 
 // useContextMenu is a menu opened at the pointer: `open` from an
 // onContextMenu handler, and `menu` rendered anywhere.
@@ -46,10 +51,14 @@ export function useContextMenu() {
     e.stopPropagation()
     setState({ x: e.clientX, y: e.clientY, items })
   }, [])
-  // openAt opens it at a point, for a menu whose items load first.
-  const openAt = useCallback((x: number, y: number, items: MenuItem[]) => setState({ x, y, items }), [])
+  // openAt opens it at a point, for a menu whose items load first or one
+  // under a button.
+  const openAt = useCallback(
+    (x: number, y: number, items: MenuItem[], align?: Align) => setState({ x, y, items, align }),
+    [],
+  )
   const close = useCallback(() => setState(null), [])
-  const menu = state && <ContextMenu x={state.x} y={state.y} items={state.items} onClose={close} />
+  const menu = state && <ContextMenu x={state.x} y={state.y} align={state.align} items={state.items} onClose={close} />
   return { open, openAt, close, menu }
 }
 
@@ -59,11 +68,13 @@ export function useContextMenu() {
 export function ContextMenu({
   x,
   y,
+  align = 'left',
   items,
   onClose,
 }: {
   x: number
   y: number
+  align?: Align
   items: MenuItem[]
   onClose: () => void
 }) {
@@ -76,11 +87,11 @@ export function ContextMenu({
     if (!el) return
     const r = el.getBoundingClientRect()
     setPos({
-      left: Math.max(4, Math.min(x, window.innerWidth - r.width - 4)),
+      left: Math.max(4, Math.min(align === 'right' ? x - r.width : x, window.innerWidth - r.width - 4)),
       top: Math.max(4, y + r.height > window.innerHeight - 4 ? y - r.height : y),
     })
     el.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
-  }, [x, y])
+  }, [x, y, align])
 
   useEffect(() => {
     const away = (e: Event) => {
@@ -153,6 +164,7 @@ export function ContextMenu({
               {asking === i ? item.confirm : item.label}
             </span>
             {item.shortcut && asking !== i && <kbd>{item.shortcut}</kbd>}
+            {item.detail && asking !== i && <span className="code-menu-detail">{item.detail}</span>}
           </button>
         ),
       )}
