@@ -71,6 +71,45 @@ export interface Bytes {
   version: string
 }
 
+// MissingServer is why a language has no server, and the servers that
+// would serve it, with how each is installed when Hangar knows.
+export interface MissingServer {
+  missing: string
+  install: { command: string; install?: string }[]
+}
+
+// A message between a language server and the service, for debugging.
+export interface Traced {
+  t: number
+  dir: 'to' | 'from'
+  kind: 'request' | 'notification' | 'response'
+  method?: string
+  id?: string
+  ms?: number
+  error?: string
+}
+
+// ServerInfo is a language server running for the folder, one that is
+// installed but not running, or why there is none.
+export type ServerInfo =
+  | {
+      running: true
+      language: string
+      command: string
+      path: string
+      args: string[]
+      pid?: number
+      started: number
+      root: string
+      serverInfo?: { name?: string; version?: string }
+      tabs: number
+      documents: number
+      log: string
+      trace: Traced[]
+    }
+  | { running: false; command: string; path: string }
+  | ({ running: false } & MissingServer)
+
 // A ref names a commit: the branch checked out (head), a local or remote
 // branch, or a tag.
 export interface Ref {
@@ -307,6 +346,8 @@ export class CodeClient {
   // which every tab starts in.
   root = ''
   home = ''
+  // settingsPath is the Code tab's settings file, in the user's home.
+  settingsPath = ''
   private env: string
   private want: string
 
@@ -339,9 +380,14 @@ export class CodeClient {
     this.ws = ws
     ws.onopen = async () => {
       try {
-        const hello = (await this.call('hello', { root: this.want })) as { root: string; home: string }
+        const hello = (await this.call('hello', { root: this.want })) as {
+          root: string
+          home: string
+          settings?: string
+        }
         this.root = hello.root
         this.home = hello.home
+        this.settingsPath = hello.settings ?? ''
         this.backoff = 500
         for (const f of this.files.values()) await this.reopen(f)
         this.setState('live')
@@ -486,9 +532,19 @@ export class CodeClient {
   // startLanguageServer starts a server for an LSP language ID in this
   // tab's folder, or says why there is none.
   startLanguageServer(language: string) {
-    return this.request<{ server: number; root: string; command: string } | { missing: string }>('lsp.start', {
+    return this.request<{ server: number; root: string; command: string } | MissingServer>('lsp.start', {
       language,
     })
+  }
+  // languageServerInfo is what this folder's server for a language is
+  // doing, or why there is none.
+  languageServerInfo(language: string) {
+    return this.request<ServerInfo>('lsp.info', { language })
+  }
+  // restartLanguageServer stops the server for every tab; each starts it
+  // again.
+  restartLanguageServer(language: string) {
+    return this.request<null>('lsp.restart', { language })
   }
   stopLanguageServer(server: number) {
     return this.request<void>('lsp.stop', { server })

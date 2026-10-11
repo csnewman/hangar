@@ -3,6 +3,7 @@
 // and reports as notifications what it is told of files, documents and
 // that registration.
 let buf = Buffer.alloc(0)
+process.stderr.write('fake server starting\n')
 const send = (m) => {
 	const body = Buffer.from(JSON.stringify({ jsonrpc: '2.0', ...m }))
 	process.stdout.write(`Content-Length: ${body.length}\r\n\r\n`)

@@ -17,7 +17,7 @@ import { MapMode, Prec, Text, type Extension } from '@codemirror/state'
 import { createContext } from 'react'
 import { EditorView, keymap, type Command } from '@codemirror/view'
 
-import type { CodeClient } from './client'
+import type { CodeClient, MissingServer } from './client'
 import { isMac } from './ContextMenu'
 import type { Jump } from './Search'
 
@@ -75,6 +75,8 @@ export interface FileOpener {
   jump(j: Jump): void
   // usages shows a symbol's usages, or that they are being found.
   usages(u: Usages): void
+  // run runs a command in a new terminal session: installing a server.
+  run(command: string): void
 }
 
 // A usage of a symbol: where it is, in the Code tab's terms (a path from
@@ -337,7 +339,7 @@ function ideaKeys(c: ReturnType<typeof commands>): Extension {
 export type ServerState =
   | { state: 'starting'; language: string }
   | { state: 'ready'; language: string; command: string; client: LSPClient }
-  | { state: 'missing'; language: string; why: string }
+  | { state: 'missing'; language: string; why: string; install: MissingServer['install']; stopped?: boolean }
 
 // Languages starts, keeps and forgets a tab's language servers. A server
 // is started the first time a file of its language is opened, and all of
@@ -362,7 +364,14 @@ export class Languages {
       const lang = this.numbers.get(server)
       if (lang === undefined) return
       this.numbers.delete(server)
-      this.servers.set(lang, Promise.resolve({ state: 'missing', language: lang, why: `its server stopped: ${why}` }))
+      // Restarted, by anyone: started again here too.
+      if (why === 'restarted') this.servers.delete(lang)
+      else {
+        this.servers.set(
+          lang,
+          Promise.resolve({ state: 'missing', language: lang, why: `its server stopped: ${why}`, install: [], stopped: true }),
+        )
+      }
       this.changed()
     })
   }
@@ -375,6 +384,32 @@ export class Languages {
 
   private changed() {
     for (const fn of this.listeners) fn()
+  }
+
+  // restart restarts a language's server, for every tab.
+  async restart(language: string) {
+    await this.code.restartLanguageServer(language)
+  }
+
+  // retry forgets that a language had no server, or that it stopped, and
+  // has editors start it again: after installing one, say.
+  retry(language: string) {
+    this.servers.delete(language)
+    this.changed()
+  }
+
+  info(language: string) {
+    return this.code.languageServerInfo(language)
+  }
+
+  // openFile and run reach the Code tab, for a server's panel: its
+  // settings, and installing one.
+  openFile(path: string) {
+    this.opener.open(path)
+  }
+
+  run(command: string) {
+    this.opener.run(command)
   }
 
   // onChange calls fn when servers stop, for editors to attach again.
@@ -403,9 +438,9 @@ export class Languages {
     } catch (e) {
       // The connection dropped; the next attach starts again.
       this.servers.delete(language)
-      return { state: 'missing', language, why: e instanceof Error ? e.message : String(e) }
+      return { state: 'missing', language, why: e instanceof Error ? e.message : String(e), install: [] }
     }
-    if ('missing' in res) return { state: 'missing', language, why: res.missing }
+    if ('missing' in res) return { state: 'missing', language, why: res.missing, install: res.install ?? [] }
     const n = res.server
     this.numbers.set(n, language)
     const offs = new Map<(v: string) => void, () => void>()

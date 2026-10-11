@@ -8,9 +8,9 @@ import type { Files } from './files.js'
 import type { Git } from './git.js'
 import type { Action, Docker } from './docker.js'
 import { Hub } from './hub.js'
-import type { Message } from './lsp.js'
+import { find, type Message } from './lsp.js'
 import type { Search } from './search.js'
-import type { SettingsFile } from './settings.js'
+import { settingsPath, type SettingsFile } from './settings.js'
 
 const CHANNEL_JSON = 0x72 // 'r'
 const CHANNEL_YJS = 0x79 // 'y'
@@ -98,7 +98,7 @@ export class Connection {
 			// A server knows one folder.
 			this.stopServers()
 		}
-		return { root: this.f.root, home: this.s.root }
+		return { root: this.f.root, home: this.s.root, settings: settingsPath }
 	}
 
 	private receive(chunk: Buffer) {
@@ -193,6 +193,13 @@ export class Connection {
 				return this.startServer(str('language'))
 			case 'lsp.stop':
 				return this.stopServer(Number(p.server))
+			case 'lsp.info':
+				return this.serverInfo(str('language'))
+			case 'lsp.restart': {
+				// Every tab using it is told it stopped, and starts it again.
+				this.f.hubs.get(str('language'))?.stop('restarted')
+				return null
+			}
 			case 'docker.overview':
 				this.unwatchDocker ??= this.s.docker.onChange(() => this.event('docker.changed', {}))
 				return this.s.docker.overview()
@@ -311,7 +318,7 @@ export class Connection {
 			const started = Hub.start(f.root, language, await this.s.settings.get(), this.s.docs, f.files, () => {
 				if (f.hubs.get(language) === started) f.hubs.delete(language)
 			})
-			if ('missing' in started) return { missing: started.missing }
+			if ('missing' in started) return started
 			// Another request may have started one meanwhile.
 			const raced = f.hubs.get(language)
 			if (raced) started.stop('started twice')
@@ -332,6 +339,16 @@ export class Connection {
 		})
 		this.servers.set(n, tab)
 		return { server: n, root: f.root, command: hub.command }
+	}
+
+	// serverInfo is what the folder's server for a language is doing, or
+	// why there is none and how one would be installed.
+	private async serverInfo(language: string) {
+		const hub = this.f.hubs.get(language)
+		if (hub) return { running: true, ...hub.info() }
+		const found = find(language, await this.s.settings.get())
+		if ('missing' in found) return { running: false, ...found }
+		return { running: false, command: found.spec.command, path: found.path }
 	}
 
 	private stopServer(n: number) {

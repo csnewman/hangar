@@ -5,28 +5,49 @@ import { delimiter, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 // A language server Hangar knows how to start: its command, the arguments
-// that have it speak LSP on stdin and stdout, and the LSP language IDs it
-// serves. The first one installed for a language is the one used.
-type ServerSpec = { command: string; args: string[]; languages: string[] }
+// that have it speak LSP on stdin and stdout, the LSP language IDs it
+// serves, and the usual way to install it. The first one installed for a
+// language is the one used.
+type ServerSpec = { command: string; args: string[]; languages: string[]; install?: string }
 
 const servers: ServerSpec[] = [
-	{ command: 'gopls', args: [], languages: ['go'] },
+	{ command: 'gopls', args: [], languages: ['go'], install: 'go install golang.org/x/tools/gopls@latest' },
 	{
 		command: 'typescript-language-server',
 		args: ['--stdio'],
 		languages: ['typescript', 'typescriptreact', 'javascript', 'javascriptreact'],
+		install: 'npm install -g typescript-language-server typescript',
 	},
-	{ command: 'pyright-langserver', args: ['--stdio'], languages: ['python'] },
-	{ command: 'basedpyright-langserver', args: ['--stdio'], languages: ['python'] },
-	{ command: 'pylsp', args: [], languages: ['python'] },
-	{ command: 'rust-analyzer', args: [], languages: ['rust'] },
-	{ command: 'clangd', args: [], languages: ['c', 'cpp'] },
-	{ command: 'bash-language-server', args: ['start'], languages: ['shellscript'] },
-	{ command: 'yaml-language-server', args: ['--stdio'], languages: ['yaml'] },
-	{ command: 'vscode-json-language-server', args: ['--stdio'], languages: ['json'] },
+	{ command: 'pyright-langserver', args: ['--stdio'], languages: ['python'], install: 'npm install -g pyright' },
+	{ command: 'basedpyright-langserver', args: ['--stdio'], languages: ['python'], install: 'pip install basedpyright' },
+	{ command: 'pylsp', args: [], languages: ['python'], install: 'pip install python-lsp-server' },
+	{ command: 'rust-analyzer', args: [], languages: ['rust'], install: 'rustup component add rust-analyzer' },
+	{ command: 'clangd', args: [], languages: ['c', 'cpp'], install: 'sudo apt-get install -y clangd' },
+	{
+		command: 'bash-language-server',
+		args: ['start'],
+		languages: ['shellscript'],
+		install: 'npm install -g bash-language-server',
+	},
+	{
+		command: 'yaml-language-server',
+		args: ['--stdio'],
+		languages: ['yaml'],
+		install: 'npm install -g yaml-language-server',
+	},
+	{
+		command: 'vscode-json-language-server',
+		args: ['--stdio'],
+		languages: ['json'],
+		install: 'npm install -g vscode-langservers-extracted',
+	},
 	{ command: 'jdtls', args: [], languages: ['java'] },
 	{ command: 'zls', args: [], languages: ['zig'] },
 ]
+
+// Missing is why a language has no server, and the servers that would
+// serve it, with how each is installed when Hangar knows.
+export type Missing = { missing: string; install: { command: string; install?: string }[] }
 
 // The service's PATH is the system's; language servers are as often in
 // the user's own directories, where their installers put them.
@@ -69,17 +90,17 @@ function fromSettings(language: string, settings: Record<string, unknown>): Serv
 
 // find is the server to start for a language, with where its command is,
 // or why there is none: the settings' choice first, then Hangar's.
-export function find(
-	language: string,
-	settings: Record<string, unknown> = {},
-): { spec: ServerSpec; path: string } | { missing: string } {
+export function find(language: string, settings: Record<string, unknown> = {}): { spec: ServerSpec; path: string } | Missing {
 	const specs = [...fromSettings(language, settings), ...servers.filter((s) => s.languages.includes(language))]
-	if (specs.length === 0) return { missing: `Hangar knows no language server for ${language}` }
+	if (specs.length === 0) return { missing: `Hangar knows no language server for ${language}`, install: [] }
 	for (const spec of specs) {
 		const path = spec.command.includes('/') ? spec.command : which(spec.command)
 		if (path) return { spec, path }
 	}
-	return { missing: `no language server for ${language} is installed (looked for ${specs.map((s) => s.command).join(', ')})` }
+	return {
+		missing: `no language server for ${language} is installed (looked for ${specs.map((s) => s.command).join(', ')})`,
+		install: specs.map((s) => ({ command: s.command, install: s.install })),
+	}
 }
 
 // Message is a JSON-RPC message, less its version: a request (id and
@@ -104,8 +125,12 @@ const answered: Record<string, (params: unknown) => unknown> = {
 export class Server {
 	private proc: ChildProcessWithoutNullStreams
 	private buf: Buffer = Buffer.alloc(0)
+	// What it has written to stderr, its log, the latest 64 KiB.
 	private stderr = ''
 	private exited = false
+	readonly path: string
+	readonly args: string[]
+	readonly started = Date.now()
 
 	private onMessage: (msg: Message) => void
 	private onExit: (why: string) => void
@@ -113,12 +138,14 @@ export class Server {
 	constructor(root: string, found: { spec: ServerSpec; path: string }, onMessage: (msg: Message) => void, onExit: (why: string) => void) {
 		this.onMessage = onMessage
 		this.onExit = onExit
+		this.path = found.path
+		this.args = found.spec.args
 		const env = { ...process.env, PATH: searchPath().join(delimiter) }
 		this.proc = spawn(found.path, found.spec.args, { cwd: root, env, stdio: ['pipe', 'pipe', 'pipe'] })
 		this.proc.stdout.on('data', (chunk: Buffer) => this.receive(chunk))
 		this.proc.stderr.setEncoding('utf8')
 		this.proc.stderr.on('data', (s: string) => {
-			this.stderr = (this.stderr + s).slice(-4000)
+			this.stderr = (this.stderr + s).slice(-(64 << 10))
 		})
 		this.proc.on('error', (e) => this.exit(e.message))
 		this.proc.on('exit', (code, signal) => this.exit(signal ? `stopped by ${signal}` : `exited with ${code}`))
@@ -182,6 +209,14 @@ export class Server {
 			method: 'workspace/didChangeWatchedFiles',
 			params: { changes: paths.map((p) => ({ uri: pathToFileURL(p).href, type: existsSync(p) ? 2 : 3 })) },
 		})
+	}
+
+	get pid(): number | undefined {
+		return this.proc.pid
+	}
+
+	get log(): string {
+		return this.stderr
 	}
 
 	// kill ends the server at once, for a service that is itself stopping.

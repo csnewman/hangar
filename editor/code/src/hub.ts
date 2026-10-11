@@ -2,13 +2,45 @@ import { fileURLToPath } from 'node:url'
 
 import type { Documents, SharedDoc } from './docs.js'
 import type { Files } from './files.js'
-import { find, Server, type Message } from './lsp.js'
+import { find, Server, type Message, type Missing } from './lsp.js'
 
 // How long a server is kept once no tab uses it, so a tab reloaded, or
 // opened again soon, finds it warm.
 const KEEP_MS = 5 * 60_000
 // How soon after an edit the server is sent the document's text.
 const SYNC_AFTER_MS = 50
+
+// How many messages the trace keeps.
+const TRACE = 300
+
+// A message between the hub and its server, for seeing what a server is
+// doing: which way, what it was, and for an answer, how long it took and
+// whether it failed. Documents' text is never kept.
+export type Traced = {
+	t: number
+	dir: 'to' | 'from'
+	kind: 'request' | 'notification' | 'response'
+	method?: string
+	id?: string
+	ms?: number
+	error?: string
+}
+
+// HubInfo is what a hub says of itself and its server.
+export type HubInfo = {
+	language: string
+	command: string
+	path: string
+	args: string[]
+	pid?: number
+	started: number
+	root: string
+	serverInfo?: { name?: string; version?: string }
+	tabs: number
+	documents: number
+	log: string
+	trace: Traced[]
+}
 
 // Tab is one browser tab's use of a hub: what it is sent, and being told
 // the server has gone.
@@ -42,7 +74,12 @@ export class Hub {
 	private nextTab = 1
 	private nextId = 1
 	// Requests passed on, by the hub's id: whose, and their id.
-	private waiting = new Map<string, { tab: number; id: string | number }>()
+	private waiting = new Map<string, { tab: number; id: string | number; method?: string; at: number }>()
+	private trace: Traced[] = []
+	// What the server logs as LSP messages (window/logMessage), the latest
+	// 64 KiB, beside what it writes to stderr.
+	private logged = ''
+	private serverInfo: { name?: string; version?: string } | undefined
 	// Requests from the server passed to a tab, by the hub's id.
 	private asked = new Map<string, string | number>()
 	private initialized: Promise<unknown> | null = null
@@ -77,7 +114,7 @@ export class Hub {
 		documents: Documents,
 		files: Files,
 		gone: (why: string) => void,
-	): Hub | { missing: string } {
+	): Hub | Missing {
 		const found = find(language, settings)
 		if ('missing' in found) return found
 		return new Hub(root, language, found, documents, files, gone)
@@ -106,6 +143,43 @@ export class Hub {
 	// kill ends the server at once, the service itself stopping.
 	kill() {
 		this.server.kill()
+	}
+
+	info(): HubInfo {
+		return {
+			language: this.language,
+			command: this.command,
+			path: this.server.path,
+			args: this.server.args,
+			pid: this.server.pid,
+			started: this.server.started,
+			root: this.root,
+			serverInfo: this.serverInfo,
+			tabs: this.tabs.size,
+			documents: this.docs.size,
+			log: [this.server.log.trim(), this.logged.trim()].filter(Boolean).join('\n'),
+			trace: this.trace,
+		}
+	}
+
+	private note(m: Omit<Traced, 't'>) {
+		this.trace.push({ t: Date.now(), ...m })
+		if (this.trace.length > TRACE) this.trace.splice(0, this.trace.length - TRACE)
+	}
+
+	// toServer sends the server a message, noting it.
+	private toServer(m: Message) {
+		if (m.method !== undefined) {
+			this.note({
+				dir: 'to',
+				kind: m.id !== undefined ? 'request' : 'notification',
+				method: m.method,
+				id: m.id !== undefined ? String(m.id) : undefined,
+			})
+		} else if (m.id !== undefined) {
+			this.note({ dir: 'to', kind: 'response', id: String(m.id), error: errorText(m.error) })
+		}
+		this.server.send(m)
 	}
 
 	stop(why: string) {
@@ -144,7 +218,7 @@ export class Hub {
 			const id = this.asked.get(String(m.id))
 			if (id === undefined) return
 			this.asked.delete(String(m.id))
-			this.server.send({ id, result: m.result, error: m.error })
+			this.toServer({ id, result: m.result, error: m.error })
 		}
 	}
 
@@ -158,7 +232,7 @@ export class Hub {
 				})
 				const params = { ...m.params, processId: process.pid, rootUri: fileUrl(this.root), rootPath: this.root }
 				params.workspaceFolders = [{ uri: fileUrl(this.root), name: this.root.split('/').pop() || this.root }]
-				this.server.send({ id: 'hub-initialize', method: 'initialize', params })
+				this.toServer({ id: 'hub-initialize', method: 'initialize', params })
 			}
 			this.initialized.then(
 				(result) => tab.send({ id, result }),
@@ -174,8 +248,8 @@ export class Hub {
 		// The server sees each document as it is now before it answers.
 		this.flushAll()
 		const hid = `${n}:${this.nextId++}`
-		this.waiting.set(hid, { tab: n, id })
-		this.server.send({ id: hid, method: m.method, params: m.params })
+		this.waiting.set(hid, { tab: n, id, method: m.method, at: Date.now() })
+		this.toServer({ id: hid, method: m.method, params: m.params })
 	}
 
 	private notification(n: number, m: Message) {
@@ -197,21 +271,33 @@ export class Hub {
 			case '$/cancelRequest': {
 				const id = m.params?.id
 				for (const [hid, w] of this.waiting) {
-					if (w.tab === n && w.id === id) this.server.send({ method: '$/cancelRequest', params: { id: hid } })
+					if (w.tab === n && w.id === id) this.toServer({ method: '$/cancelRequest', params: { id: hid } })
 				}
 				return
 			}
 			default:
-				this.server.send({ method: m.method, params: m.params })
+				this.toServer({ method: m.method, params: m.params })
 		}
 	}
 
 	private fromServer(m: Message) {
+		if (m.method !== undefined) {
+			this.note({
+				dir: 'from',
+				kind: m.id !== undefined ? 'request' : 'notification',
+				method: m.method,
+				id: m.id !== undefined ? String(m.id) : undefined,
+			})
+		}
+		if (m.method === 'window/logMessage') {
+			const kind = ['', 'error', 'warning', 'info', 'log'][Number(m.params?.type)] ?? 'log'
+			this.logged = (this.logged + `[${new Date().toISOString().slice(11, 19)} ${kind}] ${m.params?.message ?? ''}\n`).slice(-(64 << 10))
+		}
 		if (m.method !== undefined && m.id !== undefined) {
 			// A request of the client's: put to a tab, the latest to attach.
 			const n = [...this.tabs.keys()].pop()
 			if (n === undefined) {
-				this.server.send({ id: m.id, error: { code: -32601, message: 'no client is attached' } })
+				this.toServer({ id: m.id, error: { code: -32601, message: 'no client is attached' } })
 				return
 			}
 			const hid = `server:${this.nextId++}`
@@ -221,15 +307,25 @@ export class Hub {
 			if (m.method === 'textDocument/publishDiagnostics' && m.params?.uri) this.diagnostics.set(m.params.uri, m)
 			for (const tab of this.tabs.values()) tab.send(m)
 		} else if (m.id === 'hub-initialize') {
+			this.note({ dir: 'from', kind: 'response', method: 'initialize', id: 'hub-initialize', error: errorText(m.error) })
+			this.serverInfo = (m.result as { serverInfo?: { name?: string; version?: string } } | undefined)?.serverInfo
 			if (m.error) this.rejectInit(new Error((m.error as { message?: string }).message ?? 'initialize failed'))
 			else {
-				this.server.send({ method: 'initialized', params: {} })
+				this.toServer({ method: 'initialized', params: {} })
 				this.resolveInit(m.result)
 			}
 		} else if (m.id !== undefined) {
 			const w = this.waiting.get(String(m.id))
 			if (!w) return
 			this.waiting.delete(String(m.id))
+			this.note({
+				dir: 'from',
+				kind: 'response',
+				method: w.method,
+				id: String(m.id),
+				ms: Date.now() - w.at,
+				error: errorText(m.error),
+			})
 			this.tabs.get(w.tab)?.send({ id: w.id, result: m.result, error: m.error })
 		}
 	}
@@ -268,7 +364,7 @@ export class Hub {
 				this.docs.set(uri, d)
 				await this.initialized
 				if (this.docs.get(uri) !== d) return
-				this.server.send({
+				this.toServer({
 					method: 'textDocument/didOpen',
 					params: { textDocument: { uri, languageId: d.language, version: d.version, text: doc.text.toString() } },
 				})
@@ -285,7 +381,7 @@ export class Hub {
 		clearTimeout(d.timer)
 		d.dirty = false
 		d.version++
-		this.server.send({
+		this.toServer({
 			method: 'textDocument/didChange',
 			params: { textDocument: { uri, version: d.version }, contentChanges: [{ text: d.doc.text.toString() }] },
 		})
@@ -301,10 +397,15 @@ export class Hub {
 		this.docs.delete(uri)
 		clearTimeout(d.timer)
 		d.unobserve()
-		if (tell) this.server.send({ method: 'textDocument/didClose', params: { textDocument: { uri } } })
+		if (tell) this.toServer({ method: 'textDocument/didClose', params: { textDocument: { uri } } })
 	}
 }
 
 function fileUrl(path: string) {
 	return 'file://' + path.split('/').map(encodeURIComponent).join('/')
+}
+
+function errorText(e: unknown): string | undefined {
+	if (e === undefined || e === null) return undefined
+	return (e as { message?: string }).message ?? JSON.stringify(e)
 }

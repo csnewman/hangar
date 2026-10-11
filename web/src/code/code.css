@@ -1313,12 +1313,19 @@
   border-radius: 2px;
 }
 
-/* The language server chip in an editor's corner. */
-.code-lsp {
+/* The language server chip in an editor's corner, its panel above it. */
+.code-lsp-box {
   position: absolute;
   right: 14px;
   bottom: 6px;
   z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+}
+
+.code-lsp {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1333,6 +1340,158 @@
 
 .code-lsp-missing {
   color: var(--busy);
+}
+
+.code-lsp-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.code-lsp-btn:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+.code-lsp-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: min(520px, 80vw);
+  max-height: min(520px, 70vh);
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-pop);
+  font-size: 12.5px;
+  overflow: hidden;
+}
+
+.code-lsp-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.code-lsp-panel .btn-sm {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.code-lsp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--busy);
+}
+
+.code-lsp-dot-on {
+  background: var(--code-git-added);
+}
+
+.code-lsp-facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  margin: 0;
+}
+
+.code-lsp-facts dt {
+  color: var(--muted);
+}
+
+.code-lsp-facts dd {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-lsp-facts code,
+.code-lsp-install code,
+.code-lsp-missing-body code {
+  font-family: var(--code-font);
+  font-size: 11.5px;
+}
+
+.code-lsp-cmd {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.code-lsp-cmd code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-lsp-log {
+  flex: 1;
+  min-height: 120px;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--code-bg);
+  font-family: var(--code-font);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.code-lsp-trace {
+  white-space: nowrap;
+}
+
+.code-lsp-trace > div {
+  display: flex;
+  gap: 8px;
+  line-height: 18px;
+}
+
+.code-lsp-dir {
+  color: var(--accent);
+}
+
+.code-lsp-trace-error,
+.code-lsp-err {
+  color: var(--danger);
+}
+
+.code-lsp-missing-body p {
+  margin: 0 0 6px;
+}
+
+.code-lsp-install {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+}
+
+.code-lsp-install code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--code-bg);
+}
+
+.code-lsp-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
 }
 
 .code-lsp-ro {

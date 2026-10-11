@@ -165,7 +165,8 @@ test('files, git and a shared document', async () => {
 	const a = new Client()
 	const b = new Client()
 	try {
-		assert.deepEqual(await a.call('hello'), { root, home: root })
+		const settings = join(dir, '.config', 'hangar', 'code.json')
+		assert.deepEqual(await a.call('hello'), { root, home: root, settings })
 		const list = await a.call('fs.list', { path: '.' })
 		assert.ok(list.some((e: any) => e.name === 'a.txt' && !e.dir))
 
@@ -309,7 +310,11 @@ test('a tab working in another folder, searching it', async () => {
 	try {
 		await assert.rejects(a.call('hello', { root: 'sub' }), /absolute/)
 		await assert.rejects(a.call('hello', { root: join(root, 'missing') }), /does not exist/)
-		assert.deepEqual(await a.call('hello', { root: join(root, 'sub') }), { root: join(root, 'sub'), home: root })
+		assert.deepEqual(await a.call('hello', { root: join(root, 'sub') }), {
+			root: join(root, 'sub'),
+			home: root,
+			settings: join(dir, '.config', 'hangar', 'code.json'),
+		})
 		const list = await a.call('fs.list', { path: '.' })
 		assert.deepEqual(list.map((e: any) => e.name), ['deep', 'one.go'])
 
@@ -435,6 +440,20 @@ test('a language server, shared by tabs and kept across a reload', async () => {
 		assert.deepEqual((await answer(a, na, 2)).result, { from: 'a' })
 		assert.deepEqual((await answer(b, nb, 2)).result, { from: 'b' })
 
+		// What the server is doing: its version, log, and the messages
+		// passed, each answer with how long it took.
+		const info = await a.call('lsp.info', { language: 'fake' })
+		assert.equal(info.running, true)
+		assert.equal(info.serverInfo.version, pid)
+		assert.equal(info.tabs, 2)
+		assert.match(info.log, /fake server starting/)
+		const echoed = info.trace.filter((t: any) => t.method === 'test/echo' && t.kind === 'response')
+		assert.equal(echoed.length, 2)
+		assert.ok(echoed.every((t: any) => t.dir === 'from' && typeof t.ms === 'number'))
+		const missing = await a.call('lsp.info', { language: 'cobol' })
+		assert.equal(missing.running, false)
+		assert.deepEqual(missing.install, [])
+
 		// Both open the shared document; the server is told once, and of an
 		// edit once, from the document, whatever the tabs say.
 		const doc = await a.open('lsp.fake')
@@ -464,6 +483,13 @@ test('a language server, shared by tabs and kept across a reload', async () => {
 		const nr = (await reloaded.call('lsp.start', { language: 'fake' })).server
 		init(reloaded, nr, 1)
 		assert.equal((await answer(reloaded, nr, 1)).result.serverInfo.version, pid)
+
+		// Restarting stops it for every tab, each told why.
+		await reloaded.call('lsp.restart', { language: 'fake' })
+		await until('told of the restart', () =>
+			b.events.some((e) => e.event === 'lsp.exited' && e.params.server === nb && e.params.why === 'restarted'),
+		)
+		assert.equal((await b.call('lsp.info', { language: 'fake' })).running, false)
 	} finally {
 		a.close()
 		b.close()

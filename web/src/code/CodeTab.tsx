@@ -267,10 +267,16 @@ function CodeView({
 
   // Language servers, which open the files they point at as tabs, and list
   // usages in the Find tool window.
-  const opener = useRef<{ open: typeof open; openAt: typeof openAt; showUsages: (u: Usages) => void } | null>(null)
+  const opener = useRef<{
+    open: typeof open
+    openAt: typeof openAt
+    run: (command: string) => void
+    showUsages: (u: Usages) => void
+  } | null>(null)
   opener.current = {
     open,
     openAt,
+    run: (command: string) => openTerminal(client.root, command),
     showUsages: (u: Usages) => {
       setUsages(u)
       showBottom('find')
@@ -282,6 +288,7 @@ function CodeView({
         open: (path) => opener.current?.open({ kind: 'file', path }),
         jump: (j) => opener.current?.openAt(j),
         usages: (u) => opener.current?.showUsages(u),
+        run: (command) => opener.current?.run(command),
       }),
     [client],
   )

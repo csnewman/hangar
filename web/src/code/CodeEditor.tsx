@@ -46,6 +46,7 @@ import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './Cont
 import { baseText, gitGutter, hunkAt, rollback, setBase, staged, type Hunk } from './gitGutter'
 import { blameField, blameGutter, blameMarkers, setBlame } from './blame'
 import { languageId, Languages, LanguagesContext, type ServerState } from './lsp'
+import { ServerChip } from './LspPanel'
 import type { Jump } from './Search'
 
 // codeHighlight colours code by the page's --syn-* colours (code.css), which
@@ -503,7 +504,7 @@ export function CodeEditor({
   return (
     <>
       <div ref={host} className="code-editor" />
-      <ServerChip server={server} readOnly={readOnly} />
+      <ServerChip server={server} readOnly={readOnly} client={client} languages={languages} />
       {menu.menu}
       {hunk && (
         <HunkPopover
@@ -580,26 +581,3 @@ function HunkPopover({
   )
 }
 
-// ServerChip says, in the editor's corner, what knows the file's code: its
-// language server, one starting, or why there is none.
-function ServerChip({ server, readOnly }: { server: ServerState | null; readOnly: boolean }) {
-  if (!server && !readOnly) return null
-  let text = ''
-  let tip = ''
-  let cls = 'code-lsp'
-  if (server?.state === 'starting') text = 'Starting language server…'
-  else if (server?.state === 'ready') {
-    text = server.command
-    tip = `${server.command} knows this file's code: ${shortcut('Mod+B')} or ${shortcut('Mod')}-click goes to a definition, ${shortcut('Alt+F7')} finds usages, ${shortcut('Shift+F6')} renames`
-  } else if (server?.state === 'missing') {
-    text = 'No language server'
-    tip = server.why
-    cls += ' code-lsp-missing'
-  }
-  return (
-    <div className={cls} title={tip || undefined}>
-      {readOnly && <span className="code-lsp-ro">Read-only</span>}
-      {text}
-    </div>
-  )
-}
