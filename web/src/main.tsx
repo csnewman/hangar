@@ -27,6 +27,7 @@ import { TemplateEditorPage } from './pages/TemplateEditor'
 import { TemplatesPage } from './pages/Templates'
 import { TeamPage, TeamsPage } from './pages/Teams'
 import { ImagePage, ImagesPage } from './pages/Images'
+import { installTooltips } from './tooltips'
 
 // A 401 from anything means the session has gone -- expired, signed out
 // elsewhere, or the user disabled. Refetching the current user then fails
@@ -151,6 +152,8 @@ const router = createBrowserRouter([
     ],
   },
 ])
+
+installTooltips()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -36,6 +36,10 @@
   --shadow-pop: 0 8px 24px rgb(16 24 40 / 0.16);
   --font: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --tip-bg: #1f2630;
+  --tip-text: #f2f4f7;
+  --tip-border: #1f2630;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -71,6 +75,10 @@
     /* Stepped for the dark surface, and validated there. */
     --series-1: #3987e5;
     --series-2: #d95926;
+
+    --tip-bg: #2a323d;
+    --tip-text: #e4e8ee;
+    --tip-border: #3a4452;
   }
 }
 
@@ -2698,4 +2706,25 @@ a.reason {
 }
 .env-reason a {
   margin-left: 8px;
+}
+
+/* The page's own tooltips (tooltips.ts). */
+.app-tip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 320px;
+  padding: 4px 8px;
+  border-radius: 5px;
+  background: var(--tip-bg);
+  color: var(--tip-text);
+  border: 1px solid var(--tip-border);
+  box-shadow: var(--shadow-pop);
+  font-size: 12px;
+  line-height: 1.4;
+  pointer-events: none;
+  white-space: pre-line;
+}
+
+.app-tip[hidden] {
+  display: none;
 }
