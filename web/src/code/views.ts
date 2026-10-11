@@ -7,7 +7,7 @@ export type FileView = 'text' | 'image' | 'hex'
 export const viewNames: Record<FileView, string> = {
   text: 'Text Editor',
   image: 'Image Viewer',
-  hex: 'Hex Viewer',
+  hex: 'Hex Editor',
 }
 
 const imageTypes: Record<string, string> = {

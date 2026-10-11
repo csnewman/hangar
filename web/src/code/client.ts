@@ -650,3 +650,8 @@ export class CodeClient {
     this.ws?.close()
   }
 }
+
+// A live connection keeps the code it was made with, which a hot update
+// in development would leave stale under the page: a change to this file
+// reloads the page instead.
+if (import.meta.hot) import.meta.hot.accept(() => window.location.reload())
