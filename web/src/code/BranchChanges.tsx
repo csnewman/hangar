@@ -74,12 +74,19 @@ export function BranchChanges({
   return (
     <div className="code-changes">
       <div className="code-branch-base">
-        <span className="muted small">Since it left</span>
+        <span className="muted small">Compared with</span>
         <button type="button" className="code-branch-btn" title="Compare with another branch" onClick={pickBase}>
           {data?.base ?? base ?? 'main'}
           <ChevronDown size={11} />
         </button>
-        {data && <span className="muted small">at {data.mergeBase.slice(0, 7)}</span>}
+        {data && (
+          <span
+            className="muted small"
+            title={`This branch split from ${data.base} at ${data.mergeBase.slice(0, 7)}: the changes are everything since that commit, so later commits on ${data.base} are not among them.`}
+          >
+            · branched at {data.mergeBase.slice(0, 7)}
+          </span>
+        )}
       </div>
       {error && <div className="code-note code-note-error">{error}</div>}
       {data && (
