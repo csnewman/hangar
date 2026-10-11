@@ -33,6 +33,7 @@ static struct inode *hfs_alloc_inode(struct super_block *sb)
 	if (!hi)
 		return NULL;
 	hi->lower = NULL;
+	hi->created = false;
 	return &hi->vfs_inode;
 }
 

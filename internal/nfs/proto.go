@@ -56,6 +56,8 @@ const (
 	opTestStateID        = 55
 	opDestroyClientID    = 57
 	opReclaimComplete    = 58
+	opAllocate           = 59
+	opDeallocate         = 62
 	opIllegal            = 10044
 )
 

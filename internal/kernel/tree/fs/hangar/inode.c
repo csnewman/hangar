@@ -213,15 +213,27 @@ static int hfs_create(struct mnt_idmap *idmap, struct inode *dir,
 	struct inode *lower_dir;
 	int err;
 
+	umode_t want = mode;
+	bool shared = hfs_is_shared(dentry);
+
 	lower = hfs_start_creating(dentry);
 	if (IS_ERR(lower))
 		return PTR_ERR(lower);
 	lower_dir = d_inode(lower->d_parent);
+	/* Openable by its owner, until hfs_open sets what was asked for. */
+	if (shared)
+		mode |= S_IRUSR | S_IWUSR;
 	err = vfs_create(&nop_mnt_idmap, lower, mode, NULL);
 	if (!err) {
 		hfs_set_lower(dentry, lower);
 		err = hfs_interpose(lower, dentry);
 		hfs_dir_changed(dir, lower_dir);
+		if (!err && shared && mode != want) {
+			struct hfs_inode_info *hi = HFS_I(d_inode(dentry));
+
+			hi->created_mode = want;
+			hi->created = true;
+		}
 	}
 	end_creating(lower);
 	return err;

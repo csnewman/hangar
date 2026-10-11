@@ -200,8 +200,14 @@ static enum hfs_route_kind hfs_route_match(const struct hfs_route *r,
 			return HFS_LOCAL;
 		return HFS_ROUTED;
 	}
+	/*
+	 * A name under a route point is its target's, whether the route was
+	 * given as a directory or not: a file route's target may be one.
+	 */
+	if (p[r->len] == '/')
+		return HFS_UNDER;
 	if (r->dir)
-		return p[r->len] == '/' ? HFS_UNDER : HFS_LOCAL;
+		return HFS_LOCAL;
 	/* A file's lock file, beside it, so making it is exclusive everywhere. */
 	if (len != r->len + HFS_LOCK_SUFFIX_LEN ||
 	    memcmp(p + r->len, HFS_LOCK_SUFFIX, HFS_LOCK_SUFFIX_LEN))
@@ -245,6 +251,14 @@ int hfs_route(const struct dentry *dentry, char *target)
 	if (!buf)
 		return -ENOMEM;
 	p = dentry_path_raw(dentry, buf, PATH_MAX);
+	/*
+	 * A name too deep for its path to fit is no route point, whose paths
+	 * fit: it is where its parent is, which is inside one or not.
+	 */
+	if (p == ERR_PTR(-ENAMETOOLONG)) {
+		kind = hfs_is_shared(dentry->d_parent) ? HFS_UNDER : HFS_LOCAL;
+		goto out;
+	}
 	if (IS_ERR(p)) {
 		kind = PTR_ERR(p);
 		goto out;
@@ -456,7 +470,8 @@ int hfs_route_children(const struct dentry *dir, char **out, size_t *out_len)
 	p = dentry_path_raw(dir, buf, PATH_MAX);
 	if (IS_ERR(p)) {
 		__putname(buf);
-		return PTR_ERR(p);
+		/* Too deep to hold a route point, whose paths fit. */
+		return p == ERR_PTR(-ENAMETOOLONG) ? 0 : PTR_ERR(p);
 	}
 	len = strlen(p);
 	/* The root's children are "/name". */

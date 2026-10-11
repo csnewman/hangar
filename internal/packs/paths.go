@@ -94,9 +94,16 @@ func PathsOf(ps []Path) Paths {
 	return out
 }
 
-// under reports whether p is s, or under s, a directory.
+// under reports whether p is s, or inside it.
 func under(p, s string) bool {
-	return p == strings.TrimSuffix(s, "/") || p == s || strings.HasSuffix(s, "/") && strings.HasPrefix(p, s)
+	return p == strings.TrimSuffix(s, "/") || inside(p, s)
+}
+
+// inside reports whether p is inside s. A path shares what is inside it
+// whether or not it ends in a slash: without one it may be a file or a
+// directory, whichever a copy holds.
+func inside(p, s string) bool {
+	return strings.HasPrefix(strings.TrimSuffix(p, "/"), strings.TrimSuffix(s, "/")+"/")
 }
 
 // Shared reports whether a file is shared: at one of the paths, or under
@@ -120,16 +127,14 @@ func (ps Paths) Shared(p string) bool {
 	return shared
 }
 
-// Routed are the paths an environment routes to a copy: those no
-// directory among them already shares, and the exclusions inside a shared
-// directory.
+// Routed are the paths an environment routes to a copy: those no other
+// among them already shares, and the exclusions inside one shared.
 func (ps Paths) Routed() Paths {
 	var out Paths
 	for _, p := range ps {
 		x, exclude := strings.CutPrefix(p, Exclude)
 		covered := slices.ContainsFunc(ps, func(s string) bool {
-			return s != p && !strings.HasPrefix(s, Exclude) && strings.HasSuffix(s, "/") &&
-				strings.HasPrefix(x, s)
+			return s != p && !strings.HasPrefix(s, Exclude) && inside(x, s)
 		})
 		if exclude == covered && !slices.Contains(out, p) {
 			out = append(out, p)
@@ -177,9 +182,9 @@ func checkPaths(in []Path) ([]Path, error) {
 			continue
 		}
 		if !slices.ContainsFunc(all, func(s string) bool {
-			return !strings.HasPrefix(s, Exclude) && strings.HasSuffix(s, "/") && strings.HasPrefix(x, s) && x != s
+			return !strings.HasPrefix(s, Exclude) && inside(x, s)
 		}) {
-			return nil, fmt.Errorf("%w: %s is left out of no directory the pack shares", ErrInvalid, x)
+			return nil, fmt.Errorf("%w: %s is left out of no path the pack shares", ErrInvalid, x)
 		}
 	}
 	slices.SortStableFunc(out, func(a, b Path) int {

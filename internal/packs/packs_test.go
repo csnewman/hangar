@@ -137,6 +137,16 @@ func TestPaths(t *testing.T) {
 	if got := ps.Routed(); !slices.Equal(got, packs.Paths{"~/.claude/", "!~/.claude/projects/", "/w/.env"}) {
 		t.Errorf("routed: %v", got)
 	}
+	// A path without a slash shares what is inside it too: it may be a
+	// directory.
+	kube := packs.Paths{"~/.kube", "~/.kube/config", "!~/.kube/cache"}
+	if !kube.Shared("~/.kube/config") || !kube.Shared("~/.kube/other") || kube.Shared("~/.kube/cache/x") ||
+		kube.Shared("~/.kubex") {
+		t.Error("what a path without a slash shares")
+	}
+	if got := kube.Routed(); !slices.Equal(got, packs.Paths{"~/.kube", "!~/.kube/cache"}) {
+		t.Errorf("routed under a path without a slash: %v", got)
+	}
 	sens := []packs.Path{{Path: "~/.ssh/", Sensitive: true}, {Path: "~/.npmrc", Sensitive: true}, {Path: "~/.gitconfig"}}
 	for path, want := range map[string]bool{"~/.ssh/id": true, "~/.npmrc": true, "~/.gitconfig": false, "~/.sshx": false} {
 		if got := packs.Sensitive(sens, path); got != want {

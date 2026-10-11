@@ -43,6 +43,35 @@ static void hfs_free_file(struct hfs_file *hf)
 	kfree(hf);
 }
 
+/*
+ * Gives a file made in the shared directory the mode it was asked for,
+ * once the open that made it has opened the lower file (hfs_create).
+ */
+static void hfs_restore_created_mode(struct file *file)
+{
+	struct inode *inode = file_inode(file);
+	struct hfs_inode_info *hi = HFS_I(inode);
+	struct dentry *lower = hfs_lower_dentry(file->f_path.dentry);
+	struct iattr ia;
+	umode_t mode;
+
+	spin_lock(&inode->i_lock);
+	mode = hi->created_mode;
+	if (!hi->created || !(file->f_mode & FMODE_CREATED)) {
+		spin_unlock(&inode->i_lock);
+		return;
+	}
+	hi->created = false;
+	spin_unlock(&inode->i_lock);
+
+	ia.ia_valid = ATTR_MODE;
+	ia.ia_mode = (d_inode(lower)->i_mode & S_IFMT) | (mode & S_IALLUGO);
+	inode_lock(d_inode(lower));
+	if (!notify_change(&nop_mnt_idmap, lower, &ia, NULL))
+		hfs_copy_attr(inode, d_inode(lower));
+	inode_unlock(d_inode(lower));
+}
+
 static int hfs_open(struct inode *inode, struct file *file)
 {
 	struct hfs_file *hf;
@@ -59,6 +88,7 @@ static int hfs_open(struct inode *inode, struct file *file)
 	else
 		lower = backing_file_open(file, file->f_flags, &path,
 					  current_cred());
+	hfs_restore_created_mode(file);
 	if (IS_ERR(lower)) {
 		kfree(hf);
 		return PTR_ERR(lower);

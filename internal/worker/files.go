@@ -36,12 +36,13 @@ func (v *filesView) Sets() []string {
 }
 
 // Hidden reports whether a path in a copy is kept from the environment:
-// one hidden, or under a hidden directory.
+// one hidden, or inside one, whether given as a directory or not.
 func (v *filesView) Hidden(set, path string) bool {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	for _, h := range v.hidden[set] {
-		if path == h || path == strings.TrimSuffix(h, "/") || strings.HasSuffix(h, "/") && strings.HasPrefix(path, h) {
+		h = strings.TrimSuffix(h, "/")
+		if path == h || strings.HasPrefix(path, h+"/") {
 			return true
 		}
 	}

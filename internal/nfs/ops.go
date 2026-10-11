@@ -120,6 +120,10 @@ func (s *Server) op(cs *cstate, op uint32, r *reader, w *writer) (uint32, []byte
 		return s.write(cs, r, w), nil
 	case opCommit:
 		return s.commit(cs, r, w), nil
+	case opAllocate:
+		return s.allocate(cs, r, 0), nil
+	case opDeallocate:
+		return s.allocate(cs, r, unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE), nil
 	case opLock:
 		return s.lock(cs, r, w), nil
 	case opLockT:

@@ -29,7 +29,7 @@ type GuestFiles struct {
 // served is where a guest path is served from under routes: the target,
 // a copy's file under Shared, or nothing, for the guest's own disk. As
 // hangarfs does, an exclusion wins, then a route at the path itself, then
-// the nearest routed directory it is in.
+// the nearest route it is inside, whether a directory route or not.
 func served(routes []Route, p string) string {
 	best := -1
 	for i, r := range routes {
@@ -42,7 +42,7 @@ func served(routes []Route, p string) string {
 		if p == r.Path {
 			return r.Target
 		}
-		if r.Dir && strings.HasPrefix(p, r.Path+"/") && (best < 0 || len(r.Path) > len(routes[best].Path)) {
+		if strings.HasPrefix(p, r.Path+"/") && (best < 0 || len(r.Path) > len(routes[best].Path)) {
 			best = i
 		}
 	}

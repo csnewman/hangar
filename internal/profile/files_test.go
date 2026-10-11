@@ -19,7 +19,7 @@ import (
 func TestRoutesFor(t *testing.T) {
 	routes := profile.RoutesFor("/home/dev", []profile.SetPaths{
 		{ID: "me", Paths: []string{"~/.gitconfig", "~/.claude/", "!~/.claude/projects/", ".bashrc"}},
-		{ID: "pack1", Paths: []string{"/workspace/app/.env", "/home/dev/.gitconfig", "/srv/conf/"}},
+		{ID: "pack1", Paths: []string{"/workspace/app/.env", "/home/dev/.gitconfig", "/srv/conf/", "~/.claude/x.json"}},
 		{ID: "pack2", Paths: []string{"/workspace/app/.env", "../bad", "/x/../y", "~/../x"}},
 	})
 	want := []profile.Route{
@@ -90,7 +90,7 @@ func TestFilesMoveAsSharingChanges(t *testing.T) {
 	ctx := context.Background()
 	p := newPlane(t)
 	dots, err := p.packs.CreatePack(ctx, as(p.owner), packs.PackInput{Name: "dots", Attach: packs.AttachOwner,
-		Paths: []packs.Path{{Path: "~/.toolrc"}, {Path: "~/.tool/"}}})
+		Paths: []packs.Path{{Path: "~/.toolrc"}, {Path: "~/.tool/"}, {Path: "~/.kube"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -105,12 +105,16 @@ func TestFilesMoveAsSharingChanges(t *testing.T) {
 	os.WriteFile(filepath.Join(home, ".toolrc"), []byte("local"), 0o644)
 	os.MkdirAll(filepath.Join(home, ".tool"), 0o755)
 	os.WriteFile(filepath.Join(home, ".tool/a"), []byte("mine"), 0o644)
+	// A directory at a path given without a slash.
+	os.MkdirAll(filepath.Join(home, ".kube"), 0o755)
+	os.WriteFile(filepath.Join(home, ".kube/config"), []byte("clusters"), 0o600)
 	id, _, _ := p.envIn(t, "a", api.Spec{}, api.PhaseRunning, home)
 
 	copied := filepath.Join(p.root, mine.ID, "~/.toolrc")
 	eventually(t, "the environment's own file to be copied up", func() bool {
 		b, err := os.ReadFile(copied)
-		return err == nil && string(b) == "local"
+		k, kerr := os.ReadFile(filepath.Join(p.root, mine.ID, "~/.kube/config"))
+		return err == nil && string(b) == "local" && kerr == nil && string(k) == "clusters"
 	})
 	var conflicts []packs.Conflict
 	eventually(t, "the differing file to be a conflict", func() bool {

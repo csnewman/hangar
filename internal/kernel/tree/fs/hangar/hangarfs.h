@@ -59,6 +59,14 @@ enum hfs_route_kind {
 
 struct hfs_inode_info {
 	struct inode *lower;
+	/*
+	 * The mode a file made in the shared directory was asked for, until
+	 * the open that made it has opened its lower file: it is made so its
+	 * owner can read and write it (hfs_create), as that open must
+	 * succeed whatever the mode, and NFS checks it.
+	 */
+	umode_t created_mode;
+	bool created;
 	struct inode vfs_inode;
 };
 

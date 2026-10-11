@@ -339,3 +339,35 @@ func TestLinksStayInTheRoot(t *testing.T) {
 		t.Fatal("looked a file up through a link out of the root")
 	}
 }
+
+// ALLOCATE grows a file to hold the range, as fallocate does; DEALLOCATE
+// punches a hole in it, keeping its size.
+func TestAllocate(t *testing.T) {
+	srv, root := newServer(t, view{sets: []string{"s"}})
+	os.MkdirAll(filepath.Join(root, "s"), 0o755)
+	c := connect(t, srv, "a")
+	sid := c.open("s", "f")
+	op := func(code uint32, offset, length uint64) uint32 {
+		_, d := c.run(func(e *enc) uint32 {
+			path(e, "s", "f")
+			e.u32(code).fixed(sid).u64(offset).u64(length)
+			return 4
+		})
+		for range 3 {
+			status(d)
+		}
+		return status(d)
+	}
+	if st := op(59, 0, 8192); st != 0 {
+		t.Fatalf("ALLOCATE: %d", st)
+	}
+	if st, _ := os.Stat(filepath.Join(root, "s", "f")); st.Size() != 8192 {
+		t.Errorf("allocated to %d bytes", st.Size())
+	}
+	if st := op(62, 0, 4096); st != 0 {
+		t.Fatalf("DEALLOCATE: %d", st)
+	}
+	if st, _ := os.Stat(filepath.Join(root, "s", "f")); st.Size() != 8192 {
+		t.Errorf("a hole changed the size to %d", st.Size())
+	}
+}

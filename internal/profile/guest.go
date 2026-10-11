@@ -63,19 +63,30 @@ type SetPaths struct {
 }
 
 // RoutesFor are the routes for the copies an environment uses, in the
-// order given: a path two of them name is the first's. A path in the home
-// directory, ~/ -- or relative, as a server before packs sent a profile's
-// -- is routed under home.
+// order given: a path two of them name, or one inside another's, is the
+// first's. A path in the home directory, ~/ -- or relative, as a server
+// before packs sent a profile's -- is routed under home.
 func RoutesFor(home string, sets []SetPaths) []Route {
 	var out []Route
 	seen := map[string]bool{}
+	// earlier are the paths the copies before this one route, which a
+	// path inside one of them is theirs.
+	var earlier []string
 	add := func(r Route) {
-		if !seen[r.Path] {
-			seen[r.Path] = true
-			out = append(out, r)
+		if seen[r.Path] || slices.ContainsFunc(earlier, func(e string) bool {
+			return strings.HasPrefix(r.Path, e+"/")
+		}) {
+			return
 		}
+		seen[r.Path] = true
+		out = append(out, r)
 	}
 	for _, s := range sets {
+		for _, r := range out {
+			if !r.Exclude && !slices.Contains(earlier, r.Path) {
+				earlier = append(earlier, r.Path)
+			}
+		}
 		for _, p := range s.Paths {
 			x, exclude := strings.CutPrefix(p, "!")
 			clean := strings.TrimSuffix(x, "/")

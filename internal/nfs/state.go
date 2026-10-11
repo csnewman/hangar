@@ -418,6 +418,31 @@ func (s *Server) write(cs *cstate, r *reader, w *writer) uint32 {
 	return nfsOK
 }
 
+// allocate is ALLOCATE (mode 0: space for a range, growing the file to
+// hold it) and DEALLOCATE (a hole punched in it, its size kept), as
+// fallocate does them.
+func (s *Server) allocate(cs *cstate, r *reader, mode uint32) uint32 {
+	id := readStateid(r)
+	offset, length := r.uint64(), r.uint64()
+	if r.err != nil {
+		return errBadXDR
+	}
+	if offset > math.MaxInt64 || length > math.MaxInt64-offset {
+		return errInval
+	}
+	f, temp, st := s.ioFile(cs, id, true)
+	if st != nfsOK {
+		return st
+	}
+	if temp {
+		defer f.Close()
+	}
+	if err := unix.Fallocate(int(f.Fd()), mode, int64(offset), int64(length)); err != nil {
+		return errno(err)
+	}
+	return nfsOK
+}
+
 func (s *Server) commit(cs *cstate, r *reader, w *writer) uint32 {
 	r.uint64()
 	r.uint32()
