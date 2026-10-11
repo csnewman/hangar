@@ -1902,6 +1902,33 @@ code {
 .term-host {
   position: absolute;
   inset: 8px 4px 4px 10px;
+  /* Drawn at another window's larger size, it scrolls. */
+  overflow: auto;
+}
+
+/* Says the terminal is drawn at another window's size, and how many are
+   watching it. */
+.term-sizebar {
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 4px 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.term-sizebar > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .term-status {

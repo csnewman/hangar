@@ -10,10 +10,11 @@ import { UnicodeGraphemesAddon } from '@xterm/addon-unicode-graphemes'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
+import { Eye } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { copyText, shortcut, useContextMenu } from '../code/ContextMenu'
-import { Connection, type SessionInfo } from './connection'
+import { Connection, type SessionInfo, type TerminalSize } from './connection'
 import { onDarkChange } from '../theme'
 import { darkTheme, lightTheme, prefersDark } from './theme'
 
@@ -38,6 +39,12 @@ export interface PaneEvents {
 // session is found to have ended. A session that was live here and is gone
 // without its shell having exited went with the environment, which
 // restarted: a new shell is started in its place.
+//
+// The terminal has one size, held by whichever window is using it (see
+// internal/terminal). The pane draws it at that size, not its own: a
+// window larger than it shows it in its corner, a smaller one scrolls, and
+// either says so, offering to fit it to this window. The pane tells the
+// server what size its window would have; typing into it takes the size.
 // isMac is whether ⌘ is the platform's key for copy and paste.
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent)
 
@@ -66,6 +73,12 @@ export function TerminalPane({
   const [state, setState] = useState<State>('connecting')
   const [reason, setReason] = useState('')
   const [restart, setRestart] = useState(0)
+  // The terminal's size as the server has it, and this window's own: they
+  // differ while another window holds the size.
+  const [sizing, setSizing] = useState<{ size: TerminalSize; want: { cols: number; rows: number } | null } | null>(
+    null,
+  )
+  const claimRef = useRef<() => void>(() => {})
   // The session to attach to is taken when the pane mounts: once a new
   // session has its ID the parent records it, and the pane carries on
   // rather than attaching again. Starting another forgets it.
@@ -169,7 +182,14 @@ export function TerminalPane({
     } catch {
       // No WebGL: the DOM renderer draws instead.
     }
-    fit.fit()
+    // What this window would have the terminal be, and what it is.
+    let want = fit.proposeDimensions() ?? null
+    if (want) term.resize(want.cols, want.rows)
+    let size: TerminalSize | null = null
+    const show = () => {
+      if (size && (term.cols !== size.cols || term.rows !== size.rows)) term.resize(size.cols, size.rows)
+      setSizing(size ? { size, want } : null)
+    }
 
     let current = initial.current
     let conn: Connection | null = null
@@ -188,8 +208,8 @@ export function TerminalPane({
     let disposed = false
 
     const connect = () => {
-      conn = new Connection(env, current, initialDir.current, term.cols, term.rows, {
-        attached: (s, history) => {
+      conn = new Connection(env, current, initialDir.current, want?.cols ?? term.cols, want?.rows ?? term.rows, {
+        attached: (s, history, mine) => {
           replayLeft = history
           replaying = history > 0
           current = s.id
@@ -199,6 +219,8 @@ export function TerminalPane({
           // The replay that follows is the session's recent output from
           // wherever it starts, so the screen is cleared for it.
           term.reset()
+          size = { cols: s.cols, rows: s.rows, viewers: s.clients, mine }
+          show()
           if (restarted) {
             restarted = false
             term.write('\x1b[2m[The environment restarted; this is a new shell.]\x1b[0m\r\n')
@@ -209,6 +231,10 @@ export function TerminalPane({
             conn?.input(toRun.current + '\r')
             toRun.current = undefined
           }
+        },
+        size: (s) => {
+          size = s
+          show()
         },
         output: (data) => {
           if (replayLeft <= 0) {
@@ -262,10 +288,22 @@ export function TerminalPane({
 
     term.onData((d) => !replaying && conn?.input(d))
     term.onBinary((d) => !replaying && conn?.input(Uint8Array.from(d, (c) => c.charCodeAt(0))))
-    term.onResize(({ cols, rows }) => conn?.resize(cols, rows))
+    claimRef.current = () => {
+      if (want) conn?.claim(want.cols, want.rows)
+      term.focus()
+    }
 
+    // The window's size is told to the server, which makes it the
+    // terminal's while this window holds it; until the server says so, a
+    // holder fits at once.
     const resize = new ResizeObserver(() => {
-      if (el.clientWidth > 0 && el.clientHeight > 0) fit.fit()
+      if (el.clientWidth === 0 || el.clientHeight === 0) return
+      const p = fit.proposeDimensions()
+      if (!p || (want && p.cols === want.cols && p.rows === want.rows)) return
+      want = { cols: p.cols, rows: p.rows }
+      conn?.prefer(p.cols, p.rows)
+      if (size?.mine) size = { ...size, cols: p.cols, rows: p.rows }
+      show()
     })
     resize.observe(el)
     const offScheme = onDarkChange((dark) => (term.options.theme = dark ? darkTheme : lightTheme))
@@ -319,6 +357,7 @@ export function TerminalPane({
     <div className="term-pane">
       <div ref={host} className="term-host" onContextMenu={openMenu} />
       {menu.menu}
+      {state === 'live' && sizing && <SizeBar sizing={sizing} onFit={() => claimRef.current()} />}
       {state !== 'live' && (
         <div className={`term-status term-status-${state}`}>
           {state === 'connecting' && 'Connecting…'}
@@ -339,6 +378,38 @@ export function TerminalPane({
             </>
           )}
         </div>
+      )}
+    </div>
+  )
+}
+
+// SizeBar says when the terminal is drawn at another window's size, with
+// fitting it to this one, and how many windows are watching it.
+function SizeBar({
+  sizing: { size, want },
+  onFit,
+}: {
+  sizing: { size: TerminalSize; want: { cols: number; rows: number } | null }
+  onFit: () => void
+}) {
+  const other = !size.mine && want !== null && (want.cols !== size.cols || want.rows !== size.rows)
+  if (!other && size.viewers < 2) return null
+  return (
+    <div className="term-sizebar">
+      {size.viewers > 1 && (
+        <span title={`${size.viewers} windows have this terminal open`}>
+          <Eye size={12} /> {size.viewers}
+        </span>
+      )}
+      {other && (
+        <>
+          <span>
+            Sized for another window ({size.cols}×{size.rows})
+          </span>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onFit}>
+            Fit to this window
+          </button>
+        </>
       )}
     </div>
   )

@@ -5,8 +5,14 @@
 // attach that asks for one and runs until its shell exits; connections come
 // and go. Any number may be attached at once -- two browser tabs, or a tab
 // refreshed while the old one is still closing -- and each sees the same
-// output and may type. The size is whichever attached connection last sent
-// one, as tmux does by default.
+// output and may type.
+//
+// One connection holds the size, as tmux's window-size latest has it: the
+// first to attach, then whichever was last typed into or asked for it.
+// Every connection says what size its window would have; the holder's is
+// the terminal's, and the others are told the terminal's size, so they draw
+// it as it is rather than wrapped to their own, and whether they hold it.
+// Watching, or a window opening, takes nothing from whoever is using it.
 //
 // A connection that attaches is first sent the session's recent output, so a
 // refreshed page shows what was there. That is a replay of bytes, not a
@@ -83,14 +89,25 @@ type Reply struct {
 	// size, its version -- since the program that asked may be long gone,
 	// and the answer would be typed into whatever reads the input now.
 	History int `json:"history,omitempty"`
+	// Owner is, for an attach, whether this connection holds the size.
+	Owner bool `json:"owner,omitempty"`
 }
 
 // Frame types.
 const (
 	// FrameInput carries keystrokes and pastes to the shell.
 	FrameInput byte = 'i'
-	// FrameResize carries a new size: columns then rows, two bytes each.
+	// FrameResize asks for the terminal's size: columns then rows, two
+	// bytes each. The connection holds the size from then on.
 	FrameResize byte = 'r'
+	// FramePrefer says what size the connection's window would have, in
+	// FrameResize's form. It is the terminal's only while the connection
+	// holds the size; typing takes it.
+	FramePrefer byte = 'p'
+	// FrameSize tells a connection the terminal's size, how many
+	// connections are attached and whether it holds the size: SizePayload.
+	// It is sent on attaching and whenever any of it changes.
+	FrameSize byte = 's'
 	// FrameOutput carries what the shell wrote.
 	FrameOutput byte = 'o'
 	// FrameExit says the shell exited, with its status as four bytes. It is
@@ -143,7 +160,28 @@ func ResizePayload(cols, rows uint16) []byte {
 	return b
 }
 
-// ParseResize decodes a FrameResize payload.
+// SizePayload encodes a FrameSize payload: columns, rows and connections,
+// two bytes each, then one byte, 1 if the connection holds the size.
+func SizePayload(cols, rows uint16, clients int, owner bool) []byte {
+	b := make([]byte, 7)
+	binary.BigEndian.PutUint16(b, cols)
+	binary.BigEndian.PutUint16(b[2:], rows)
+	binary.BigEndian.PutUint16(b[4:], uint16(min(clients, 1<<16-1)))
+	if owner {
+		b[6] = 1
+	}
+	return b
+}
+
+// ParseSize decodes a FrameSize payload.
+func ParseSize(b []byte) (cols, rows uint16, clients int, owner bool, err error) {
+	if len(b) != 7 {
+		return 0, 0, 0, false, fmt.Errorf("size frame of %d bytes", len(b))
+	}
+	return binary.BigEndian.Uint16(b), binary.BigEndian.Uint16(b[2:]), int(binary.BigEndian.Uint16(b[4:])), b[6] == 1, nil
+}
+
+// ParseResize decodes a FrameResize or FramePrefer payload.
 func ParseResize(b []byte) (cols, rows uint16, err error) {
 	if len(b) != 4 {
 		return 0, 0, fmt.Errorf("resize frame of %d bytes", len(b))

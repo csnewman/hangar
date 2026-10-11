@@ -225,7 +225,7 @@ func (h *handler) terminalSocket(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		switch msg[0] {
-		case terminal.FrameInput, terminal.FrameResize:
+		case terminal.FrameInput, terminal.FrameResize, terminal.FramePrefer:
 			if terminal.WriteFrame(stream, msg[0], msg[1:]) != nil {
 				return
 			}

@@ -123,12 +123,12 @@ func (m *Manager) attach(conn io.ReadWriteCloser, br *bufio.Reader, req Request)
 		return
 	}
 
-	c := &client{out: make(chan []byte, 256)}
+	c := &client{out: make(chan frame, 256), cols: req.Cols, rows: req.Rows}
 	history := s.join(c)
 	defer s.leave(c)
 
 	d := s.describe()
-	if err := writeReply(conn, Reply{Session: &d, History: len(history)}); err != nil {
+	if err := writeReply(conn, Reply{Session: &d, History: len(history), Owner: s.owns(c)}); err != nil {
 		return
 	}
 
@@ -152,15 +152,15 @@ func (m *Manager) attach(conn io.ReadWriteCloser, br *bufio.Reader, req Request)
 			}
 			history = history[n:]
 		}
-		for p := range c.out {
-			if p == nil {
+		for f := range c.out {
+			if f.typ == FrameExit {
 				code := make([]byte, 4)
 				binary.BigEndian.PutUint32(code, uint32(int32(s.exitCode())))
 				write(FrameExit, code)
 				conn.Close()
 				return
 			}
-			if write(FrameOutput, p) != nil {
+			if write(f.typ, f.p) != nil {
 				conn.Close()
 				return
 			}
@@ -170,9 +170,6 @@ func (m *Manager) attach(conn io.ReadWriteCloser, br *bufio.Reader, req Request)
 		conn.Close()
 	}()
 
-	if req.Cols > 0 && req.Rows > 0 {
-		s.resize(req.Cols, req.Rows, true)
-	}
 	for {
 		typ, payload, err := ReadFrame(br)
 		if err != nil {
@@ -180,10 +177,14 @@ func (m *Manager) attach(conn io.ReadWriteCloser, br *bufio.Reader, req Request)
 		}
 		switch typ {
 		case FrameInput:
-			s.input(payload)
+			s.input(c, payload)
 		case FrameResize:
 			if cols, rows, err := ParseResize(payload); err == nil {
-				s.resize(cols, rows, false)
+				s.claim(c, cols, rows)
+			}
+		case FramePrefer:
+			if cols, rows, err := ParseResize(payload); err == nil {
+				s.prefer(c, cols, rows)
 			}
 		}
 	}
@@ -242,9 +243,19 @@ func (m *Manager) find(req Request) (*session, error) {
 
 // client is one attached connection.
 type client struct {
-	// out carries output to the connection; nil means the shell exited.
-	out    chan []byte
+	// out carries frames to the connection: output, sizes, and the exit,
+	// in the order they happened.
+	out    chan frame
 	closed bool
+	// cols and rows are the size the connection's window would have.
+	cols, rows uint16
+}
+
+// frame is one frame for a connection. FrameExit's status is added as it
+// is sent.
+type frame struct {
+	typ byte
+	p   []byte
 }
 
 type session struct {
@@ -266,8 +277,11 @@ type session struct {
 	// reads is still recognised.
 	carry   []byte
 	clients map[*client]struct{}
-	ended   bool
-	code    int
+	// owner is the connection whose window's size the terminal has; nil
+	// once it has gone, until another takes the size.
+	owner *client
+	ended bool
+	code  int
 }
 
 func (s *session) describe() Session {
@@ -278,15 +292,30 @@ func (s *session) describe() Session {
 
 // join attaches a client and returns the history to replay to it. Both
 // happen under the session's lock, so no output falls between the replay and
-// the live stream, and none is sent twice.
+// the live stream, and none is sent twice. With nobody holding the size, the
+// client takes it.
+//
+// A full-screen program is told to draw itself again: by the size changing,
+// or otherwise by a signal, since the replayed output is a record of bytes,
+// and a program that has been redrawing one corner of the screen for an hour
+// cannot be reconstructed from the last two megabytes of it.
 func (s *session) join(c *client) []byte {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ended {
-		c.out <- nil
-	} else {
-		s.clients[c] = struct{}{}
+		c.out <- frame{typ: FrameExit}
+		return bytes.Clone(s.history)
 	}
+	s.clients[c] = struct{}{}
+	changed := false
+	if s.owner == nil && c.cols > 0 && c.rows > 0 {
+		s.owner = c
+		changed = s.setSize(c.cols, c.rows)
+	}
+	if !changed && s.alt {
+		signalForeground(s.ptmx)
+	}
+	s.announce()
 	return bytes.Clone(s.history)
 }
 
@@ -295,36 +324,93 @@ func (s *session) leave(c *client) {
 	defer s.mu.Unlock()
 	if _, ok := s.clients[c]; ok {
 		delete(s.clients, c)
+		if s.owner == c {
+			s.owner = nil
+		}
 		if !c.closed {
 			c.closed = true
 			close(c.out)
 		}
+		s.announce()
 	}
 }
 
-func (s *session) input(p []byte) {
+func (s *session) owns(c *client) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.owner == c
+}
+
+// input types what a client sent. Typing into a window takes the size for
+// it: whoever is using the terminal has it fit their window.
+func (s *session) input(c *client, p []byte) {
+	s.mu.Lock()
+	if s.owner != c && c.cols > 0 && c.rows > 0 {
+		if _, ok := s.clients[c]; ok {
+			s.owner = c
+			s.setSize(c.cols, c.rows)
+			s.announce()
+		}
+	}
+	s.mu.Unlock()
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	_, _ = s.ptmx.Write(p)
 }
 
-// resize sets the terminal's size. An attach passes redraw, which also tells
-// a full-screen program to draw itself again even if the size is unchanged:
-// the replayed output is a record of bytes, and a program that has been
-// redrawing one corner of the screen for an hour cannot be reconstructed
-// from the last two megabytes of it.
-func (s *session) resize(cols, rows uint16, redraw bool) {
-	s.mu.Lock()
-	same := s.cols == cols && s.rows == rows
-	s.cols, s.rows = cols, rows
-	alt := s.alt
-	s.mu.Unlock()
-	if !same {
-		_ = pty.Setsize(s.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+// claim gives a client the size, at the size it asks for.
+func (s *session) claim(c *client, cols, rows uint16) {
+	if cols == 0 || rows == 0 {
 		return
 	}
-	if redraw && alt {
-		signalForeground(s.ptmx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.clients[c]; !ok {
+		return
+	}
+	c.cols, c.rows = cols, rows
+	s.owner = c
+	s.setSize(cols, rows)
+	s.announce()
+}
+
+// prefer records the size a client's window would have, which is the
+// terminal's if the client holds the size.
+func (s *session) prefer(c *client, cols, rows uint16) {
+	if cols == 0 || rows == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c.cols, c.rows = cols, rows
+	if s.owner == c && s.setSize(cols, rows) {
+		s.announce()
+	}
+}
+
+// setSize sets the terminal's size, reporting whether it changed; the
+// kernel tells the program in it. s.mu is held.
+func (s *session) setSize(cols, rows uint16) bool {
+	if s.cols == cols && s.rows == rows {
+		return false
+	}
+	s.cols, s.rows = cols, rows
+	_ = pty.Setsize(s.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
+	return true
+}
+
+// announce tells every client the terminal's size, how many are attached,
+// and whether it holds the size. s.mu is held.
+func (s *session) announce() {
+	for c := range s.clients {
+		if c.closed {
+			continue
+		}
+		select {
+		case c.out <- frame{typ: FrameSize, p: SizePayload(s.cols, s.rows, len(s.clients), s.owner == c)}:
+		default:
+			// Falling behind; output drops it shortly.
+		}
 	}
 }
 
@@ -370,7 +456,7 @@ func (s *session) pump(ended func()) {
 	for c := range s.clients {
 		if !c.closed {
 			select {
-			case c.out <- nil:
+			case c.out <- frame{typ: FrameExit}:
 			default:
 			}
 		}
@@ -395,7 +481,7 @@ func (s *session) output(p []byte) {
 	}
 	for c := range s.clients {
 		select {
-		case c.out <- p:
+		case c.out <- frame{typ: FrameOutput, p: p}:
 		default:
 			// Too far behind to catch up without holding up everyone
 			// else; its connection is closed, and a refresh re-attaches.

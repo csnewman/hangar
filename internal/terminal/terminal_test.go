@@ -64,6 +64,42 @@ func (c *conn) until(want string) bool {
 	return false
 }
 
+// size is what a FrameSize says.
+type size struct {
+	cols, rows uint16
+	clients    int
+	owner      bool
+}
+
+// size reads frames until a size, keeping any output, and returns it.
+func (c *conn) size() size {
+	c.t.Helper()
+	c.c.SetDeadline(time.Now().Add(10 * time.Second))
+	for {
+		typ, p, err := terminal.ReadFrame(c.br)
+		if err != nil {
+			c.t.Fatalf("waiting for a size: %v", err)
+		}
+		switch typ {
+		case terminal.FrameOutput:
+			c.out.Write(p)
+		case terminal.FrameSize:
+			cols, rows, n, owner, err := terminal.ParseSize(p)
+			if err != nil {
+				c.t.Fatal(err)
+			}
+			return size{cols, rows, n, owner}
+		}
+	}
+}
+
+func (c *conn) sized(typ byte, cols, rows uint16) {
+	c.t.Helper()
+	if err := terminal.WriteFrame(c.c, typ, terminal.ResizePayload(cols, rows)); err != nil {
+		c.t.Fatal(err)
+	}
+}
+
 func (c *conn) send(s string) {
 	c.t.Helper()
 	if err := terminal.WriteFrame(c.c, terminal.FrameInput, []byte(s)); err != nil {
@@ -137,6 +173,75 @@ func TestSessionsOutliveConnections(t *testing.T) {
 	}
 }
 
+// The size is the window of whoever is using the terminal: the first to
+// attach, then whoever types or asks for it. Another window opening, or
+// changing, takes nothing from them; it is told the size to draw at.
+func TestTheSizeIsWhoeverIsUsingIt(t *testing.T) {
+	m := newManager()
+
+	a, r := dial(t, m, terminal.Request{Op: terminal.OpAttach, Cols: 100, Rows: 30})
+	if r.Err != "" || !r.Owner || r.Session.Cols != 100 || r.Session.Rows != 30 {
+		t.Fatalf("first attach: %+v", r)
+	}
+	id := r.Session.ID
+	if got := a.size(); got != (size{100, 30, 1, true}) {
+		t.Fatalf("first size: %+v", got)
+	}
+
+	b, r := dial(t, m, terminal.Request{Op: terminal.OpAttach, Session: id, Cols: 60, Rows: 20})
+	if r.Owner || r.Session.Cols != 100 || r.Session.Rows != 30 {
+		t.Fatalf("a second window took the size: %+v", r)
+	}
+	if got := b.size(); got != (size{100, 30, 2, false}) {
+		t.Fatalf("second window told: %+v", got)
+	}
+	if got := a.size(); got != (size{100, 30, 2, true}) {
+		t.Fatalf("first window told: %+v", got)
+	}
+
+	// The other window changing changes nothing; the holder's does.
+	b.sized(terminal.FramePrefer, 70, 25)
+	a.sized(terminal.FramePrefer, 110, 35)
+	if got := a.size(); got != (size{110, 35, 2, true}) {
+		t.Fatalf("after the holder's window changed: %+v", got)
+	}
+	if got := b.size(); got != (size{110, 35, 2, false}) {
+		t.Fatalf("the other told: %+v", got)
+	}
+
+	// Typing takes the size, at the typist's window's.
+	b.send("x\n")
+	if got := b.size(); got != (size{70, 25, 2, true}) {
+		t.Fatalf("after typing: %+v", got)
+	}
+	if got := a.size(); got != (size{70, 25, 2, false}) {
+		t.Fatalf("the first told: %+v", got)
+	}
+
+	// Asking for it takes it back.
+	a.sized(terminal.FrameResize, 120, 40)
+	if got := a.size(); got != (size{120, 40, 2, true}) {
+		t.Fatalf("after asking: %+v", got)
+	}
+	if got := b.size(); got != (size{120, 40, 2, false}) {
+		t.Fatalf("the second told: %+v", got)
+	}
+
+	// The holder leaving leaves the size as it was, held by nobody.
+	a.c.Close()
+	if got := b.size(); got != (size{120, 40, 1, false}) {
+		t.Fatalf("after the holder left: %+v", got)
+	}
+	list, r := dial(t, m, terminal.Request{Op: terminal.OpList})
+	list.c.Close()
+	if len(r.Sessions) != 1 || r.Sessions[0].Cols != 120 || r.Sessions[0].Rows != 40 {
+		t.Fatalf("the terminal's size: %+v", r.Sessions)
+	}
+
+	closer, _ := dial(t, m, terminal.Request{Op: terminal.OpClose, Session: id})
+	closer.c.Close()
+}
+
 func TestFrames(t *testing.T) {
 	var b bytes.Buffer
 	if err := terminal.WriteFrame(&b, terminal.FrameResize, terminal.ResizePayload(132, 43)); err != nil {
@@ -149,6 +254,10 @@ func TestFrames(t *testing.T) {
 	cols, rows, err := terminal.ParseResize(p)
 	if err != nil || cols != 132 || rows != 43 {
 		t.Fatalf("resize %dx%d %v", cols, rows, err)
+	}
+	gotCols, gotRows, n, owner, err := terminal.ParseSize(terminal.SizePayload(80, 24, 3, true))
+	if err != nil || gotCols != 80 || gotRows != 24 || n != 3 || !owner {
+		t.Fatalf("size %dx%d %d %v %v", gotCols, gotRows, n, owner, err)
 	}
 	if err := terminal.WriteFrame(&b, terminal.FrameInput, make([]byte, terminal.MaxFrame+1)); err == nil {
 		t.Fatal("wrote an oversized frame")
