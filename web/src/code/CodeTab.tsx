@@ -1,6 +1,6 @@
 import './code.css'
 
-import { Container, FolderTree, GitCompare, ListTree, Monitor, SquareTerminal, TextSearch } from 'lucide-react'
+import { Container, FolderTree, GitCompare, GitGraph, ListTree, Monitor, SquareTerminal, TextSearch } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Group,
@@ -20,6 +20,7 @@ import { containerShell, DockerView } from './DockerView'
 import { EditorArea, tabKey, type Tab } from './EditorArea'
 import { ProjectView } from './ProjectView'
 import { Languages, LanguagesContext, type Usages } from './lsp'
+import { GitLog } from './GitLog'
 import { FindInFiles, GotoFile, OpenFolder, type Jump } from './Search'
 import { UsagesView } from './UsagesView'
 
@@ -90,6 +91,7 @@ type Store = { tabs: Tab[]; active: string | null }
 
 // A tool window that moves between the sides, and the side it is on.
 type ToolName = 'project' | 'changes' | 'docker'
+type Bottom = 'terminal' | 'find' | 'log'
 type Side = 'left' | 'right'
 type Sides = Record<ToolName, Side>
 const defaultSides: Sides = { project: 'left', changes: 'right', docker: 'right' }
@@ -245,14 +247,19 @@ function CodeView({
     open({ kind: 'file', path: j.path })
     if (j.line > 0) setJump((x) => ({ ...j, n: (x?.n ?? 0) + 1 }))
   }
-  // The bottom panel shows the terminal or the Find tool window, keeping
-  // the other.
-  const [bottom, setBottom] = useState<'terminal' | 'find'>('terminal')
-  const showBottom = (w: 'terminal' | 'find') => {
+  // The bottom panel shows the terminal, the Find tool window or the Git
+  // Log, keeping the others.
+  const [bottom, setBottom] = useState<Bottom>('terminal')
+  const showBottom = (w: Bottom) => {
     setBottom(w)
     terminal.current?.expand()
   }
-  const toggleBottom = (w: 'terminal' | 'find') => {
+  // The Git Log reads the history once first shown, and is kept after.
+  const [logSeen, setLogSeen] = useState(false)
+  useEffect(() => {
+    if (bottom === 'log') setLogSeen(true)
+  }, [bottom])
+  const toggleBottom = (w: Bottom) => {
     if (bottom === w && shown.terminal) terminal.current?.collapse()
     else showBottom(w)
   }
@@ -479,6 +486,9 @@ function CodeView({
           <StripeButton on={false} title={`Find in Files (${shortcut('Mod+Shift+F')})`} onClick={() => setPopup('find')}>
             <TextSearch size={16} />
           </StripeButton>
+          <StripeButton on={shown.terminal && bottom === 'log'} title="Git Log" onClick={() => toggleBottom('log')}>
+            <GitGraph size={16} />
+          </StripeButton>
           <StripeButton on={shown.terminal && bottom === 'find'} title="Find" onClick={() => toggleBottom('find')}>
             <ListTree size={16} />
           </StripeButton>
@@ -537,6 +547,15 @@ function CodeView({
               <div className="code-side-slot" hidden={bottom !== 'find'}>
                 <UsagesView usages={usages} onJump={openAt} onHide={() => terminal.current?.collapse()} />
               </div>
+              {logSeen && (
+                <div className="code-side-slot" hidden={bottom !== 'log'}>
+                  <GitLog
+                    client={client}
+                    onDiff={(path, against) => open({ kind: 'diff', path, ...against })}
+                    onHide={() => terminal.current?.collapse()}
+                  />
+                </div>
+              )}
             </Panel>
           </Group>
           {state !== 'live' && (

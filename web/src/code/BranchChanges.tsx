@@ -6,9 +6,10 @@ import { BranchPicker, type PickerAction } from './BranchPicker'
 import type { Branches, BranchChanges as Changes, CodeClient, GitStatus } from './client'
 import { copyText, useContextMenu } from './ContextMenu'
 
-// DiffAgainst is what a diff of a branch's change compares with: where the
-// branch left its base, and the file's name there.
-export type DiffAgainst = { base: string; baseLabel: string; from?: string }
+// DiffAgainst is what a diff compares: where a branch left its base, or a
+// commit's parent, and the file's name there, with the working tree or
+// the commit (to).
+export type DiffAgainst = { base: string; baseLabel: string; from?: string; to?: string; toLabel?: string }
 
 // BranchChanges is the Changes window's Branch view: everything the branch
 // has changed since it left its base (the repository's main branch, or one

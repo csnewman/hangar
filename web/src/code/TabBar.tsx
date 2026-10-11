@@ -7,7 +7,8 @@ import { useContextMenu } from './ContextMenu'
 // container's ID, and title its name), or the environment's desktop, which
 // is connected only while its tab is the one shown. A diff is against
 // HEAD, or against base (a commit, labelled baseLabel), where the file was
-// named from.
+// named from; and of the working tree, or of a commit (to, labelled
+// toLabel), as a commit's own changes are.
 export type Tab = {
   kind: 'file' | 'diff' | 'logs' | 'desktop'
   path: string
@@ -15,9 +16,12 @@ export type Tab = {
   base?: string
   baseLabel?: string
   from?: string
+  to?: string
+  toLabel?: string
 }
 
-export const tabKey = (t: Tab) => (t.base ? `diff@${t.base}:${t.path}` : `${t.kind}:${t.path}`)
+export const tabKey = (t: Tab) =>
+  t.base ? `diff@${t.base}${t.to ? `..${t.to}` : ''}:${t.path}` : `${t.kind}:${t.path}`
 
 export const tabName = (t: Tab) => t.title ?? t.path.split('/').pop() ?? t.path
 
@@ -25,11 +29,15 @@ export const tabName = (t: Tab) => t.title ?? t.path.split('/').pop() ?? t.path
 // is its changes or a container's logs.
 function tabDetail(t: Tab): string | undefined {
   const dir = t.path.includes('/') ? t.path.slice(0, t.path.lastIndexOf('/')) : ''
-  if (t.kind === 'diff') {
-    return [t.base ? `changes since ${t.baseLabel ?? t.base}` : 'changes', dir].filter(Boolean).join(' · ')
-  }
+  if (t.kind === 'diff') return [diffWhat(t), dir].filter(Boolean).join(' · ')
   if (t.kind === 'logs') return 'logs'
   return dir || undefined
+}
+
+// diffWhat says which changes a diff tab shows.
+function diffWhat(t: Tab): string {
+  if (t.to) return `changes in ${t.toLabel ?? t.to}`
+  return t.base ? `changes since ${t.baseLabel ?? t.base}` : 'changes'
 }
 
 // A drag of a tab along the bar: the tab, and where it would go, as the
@@ -236,7 +244,7 @@ export function TabBar({
                 className={cls.join(' ')}
                 title={
                   t.kind === 'diff'
-                    ? `Changes to ${t.path}${t.base ? ` since ${t.baseLabel ?? t.base}` : ''}`
+                    ? `${t.path}: ${diffWhat(t)}`
                     : t.kind === 'logs'
                       ? `Logs of ${name}`
                       : t.path

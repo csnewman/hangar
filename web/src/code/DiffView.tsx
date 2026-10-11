@@ -38,19 +38,24 @@ const diffSide = (lang: Extension): Extension => [
 ]
 
 // DiffView shows a file as it was at HEAD, or at base, beside its working
-// copy, and follows the file as it changes, whoever changes it.
+// copy, or beside a later commit's (to), and follows the file as it
+// changes, whoever changes it.
 export function DiffView({
   client,
   path,
   base,
   baseLabel,
   from,
+  to,
+  toLabel,
 }: {
   client: CodeClient
   path: string
   base?: string
   baseLabel?: string
   from?: string
+  to?: string
+  toLabel?: string
 }) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -67,7 +72,7 @@ export function DiffView({
 
     const load = async () => {
       try {
-        const d = await client.diff(path, base, from)
+        const d = await client.diff(path, base, from, to)
         if (disposed) return
         setError('')
         const scroll = view?.b.scrollDOM.scrollTop ?? 0
@@ -108,7 +113,7 @@ export function DiffView({
       offGit()
       view?.destroy()
     }
-  }, [client, path, base, from])
+  }, [client, path, base, from, to])
 
   return (
     <div className="code-diff">
@@ -130,7 +135,7 @@ export function DiffView({
           {about?.from && <span className="code-diff-name">{about.from}</span>}
         </span>
         <span>
-          Working tree
+          {to ? (toLabel ?? to.slice(0, 8)) : 'Working tree'}
           {about?.from && <span className="code-diff-name">{path}</span>}
         </span>
       </div>

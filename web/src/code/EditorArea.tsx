@@ -108,6 +108,8 @@ export function EditorArea({
             base={current.base}
             baseLabel={current.baseLabel}
             from={current.from}
+            to={current.to}
+            toLabel={current.toLabel}
           />
         )}
         {current?.kind === 'desktop' && (

@@ -230,7 +230,16 @@ export class Connection {
 					str('path'),
 					typeof p.against === 'string' && p.against ? p.against : 'HEAD',
 					typeof p.from === 'string' && p.from ? p.from : undefined,
+					typeof p.to === 'string' && p.to ? p.to : undefined,
 				)
+			case 'git.log':
+				return this.f.git.log(
+					typeof p.ref === 'string' && p.ref ? p.ref : undefined,
+					typeof p.skip === 'number' ? p.skip : 0,
+					typeof p.max === 'number' ? p.max : 300,
+				)
+			case 'git.commitInfo':
+				return this.f.git.commitInfo(str('hash'))
 			case 'git.blame':
 				return this.f.git.blame(str('path'))
 			case 'git.branchChanges':

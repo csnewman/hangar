@@ -51,6 +51,40 @@ export interface Diff {
   working: string
 }
 
+// A ref names a commit: the branch checked out (head), a local or remote
+// branch, or a tag.
+export interface Ref {
+  name: string
+  kind: 'head' | 'branch' | 'remote' | 'tag'
+}
+
+export interface LogCommit {
+  hash: string
+  parents: string[]
+  author: string
+  email: string
+  time: number
+  subject: string
+  refs: Ref[]
+}
+
+export interface Log {
+  commits: LogCommit[]
+  more: boolean
+}
+
+export interface CommitInfo {
+  hash: string
+  parents: string[]
+  author: string
+  email: string
+  time: number
+  committer: string
+  committerTime: number
+  message: string
+  files: { path: string; status: string; from?: string }[]
+}
+
 export interface Blame {
   commits: Record<string, { author: string; time: number; summary: string }>
   lines: string[]
@@ -473,9 +507,17 @@ export class CodeClient {
     return this.request<GitStatus>('git.status')
   }
   // diff is a file as HEAD has it, or another commit (against), under the
-  // name it had there (from), beside the working tree's.
-  diff(path: string, against?: string, from?: string) {
-    return this.request<Diff>('git.diff', { path, against, from })
+  // name it had there (from), beside the working tree's or a later
+  // commit's (to).
+  diff(path: string, against?: string, from?: string, to?: string) {
+    return this.request<Diff>('git.diff', { path, against, from, to })
+  }
+  // log is a page of the history: every branch's, or ref's.
+  log(ref: string | undefined, skip: number, max: number) {
+    return this.request<Log>('git.log', { ref, skip, max })
+  }
+  commitInfo(hash: string) {
+    return this.request<CommitInfo>('git.commitInfo', { hash })
   }
   // blame is who last changed each line of a file, as it is on disk.
   blame(path: string) {

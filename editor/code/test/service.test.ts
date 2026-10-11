@@ -610,6 +610,38 @@ test("a branch's changes since it left main", async () => {
 		assert.equal(d.from, 'old.txt')
 		assert.equal((await a.call('git.diff', { path: 'new.txt' })).from, undefined)
 		await assert.rejects(a.call('git.diff', { path: 'new.txt', against: '--output=x' }), /not a revision/)
+
+		// The history: every branch's, children before parents, with what
+		// names each commit.
+		g('tag', 'v1', 'main~1')
+		const log = await a.call('git.log', {})
+		assert.equal(log.more, false)
+		const subjects = log.commits.map((c: any) => c.subject)
+		assert.deepEqual(new Set(subjects), new Set(['base', 'change kept', 'rename', 'main moves on']))
+		assert.equal(subjects.at(-1), 'base')
+		const byName = Object.fromEntries(log.commits.map((c: any) => [c.subject, c]))
+		assert.deepEqual(byName['rename'].refs, [{ name: 'feature', kind: 'head' }])
+		assert.deepEqual(byName['main moves on'].refs, [{ name: 'main', kind: 'branch' }])
+		assert.deepEqual(byName['base'].refs, [{ name: 'v1', kind: 'tag' }])
+		assert.deepEqual(byName['change kept'].parents, [byName['base'].hash])
+		const page = await a.call('git.log', { ref: 'feature', skip: 1, max: 1 })
+		assert.deepEqual(page.commits.map((c: any) => c.subject), ['change kept'])
+		assert.equal(page.more, true)
+		await assert.rejects(a.call('git.log', { ref: '--output=x' }), /not a revision/)
+
+		// A commit in full, and a file's diff in it.
+		const info = await a.call('git.commitInfo', { hash: byName['rename'].hash })
+		assert.equal(info.message, 'rename')
+		assert.deepEqual(info.files, [{ path: 'new.txt', status: 'R', from: 'old.txt' }])
+		const first = await a.call('git.commitInfo', { hash: byName['base'].hash })
+		assert.deepEqual(first.files.map((f: any) => f.path), ['kept.txt', 'old.txt'])
+		const cd = await a.call('git.diff', {
+			path: 'kept.txt',
+			against: `${byName['change kept'].hash}^`,
+			to: byName['change kept'].hash,
+		})
+		assert.equal(cd.head, 'kept\n')
+		assert.equal(cd.working, 'kept, changed\n')
 	} finally {
 		a.close()
 	}

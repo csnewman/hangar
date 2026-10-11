@@ -32,6 +32,15 @@
   --syn-tag: #0033b3;
   --syn-link: #006dcc;
   --syn-invalid: #f50000;
+  /* The Git Log's lanes, one colour each, eight in turn. */
+  --lane-0: #2f6fbf;
+  --lane-1: #2c8a3e;
+  --lane-2: #b8491d;
+  --lane-3: #8e44ad;
+  --lane-4: #c2185b;
+  --lane-5: #00838f;
+  --lane-6: #9e7c0c;
+  --lane-7: #5d6d7e;
 
   flex: 1;
   display: flex;
@@ -72,6 +81,14 @@
     --syn-tag: #d5b778;
     --syn-link: #548af7;
     --syn-invalid: #fa6675;
+    --lane-0: #6aa6f2;
+    --lane-1: #5cc27a;
+    --lane-2: #e58a5b;
+    --lane-3: #b98ae0;
+    --lane-4: #f06292;
+    --lane-5: #4dd0e1;
+    --lane-6: #d8b84a;
+    --lane-7: #9aa7b8;
   }
 }
 
@@ -1654,4 +1671,239 @@
   padding: 2px 12px 4px 32px;
   font-size: 11.5px;
   color: var(--muted);
+}
+
+/* Git Log */
+
+.code-log {
+  display: flex;
+  height: 100%;
+  min-height: 0;
+}
+
+.code-log-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+
+.code-log-filter {
+  flex: none;
+  margin: 6px 10px;
+  padding: 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--code-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+
+.code-log-filter:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.code-log-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+
+.code-log-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 24px;
+  display: grid;
+  align-items: center;
+  column-gap: 10px;
+  padding-right: 10px;
+  white-space: nowrap;
+  font-size: 12.5px;
+  cursor: default;
+}
+
+.code-log-row:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-log-row-on,
+.code-log-row-on:hover {
+  background: var(--sidebar-active);
+}
+
+.code-log-graph {
+  width: 100%;
+  overflow: visible;
+}
+
+.code-log-graph .code-log-lane {
+  fill: none;
+  stroke-width: 1.6;
+}
+
+.code-log-node {
+  stroke-width: 1.6;
+}
+
+.code-log-graph .code-log-merge {
+  fill: var(--code-bg);
+}
+
+.code-log-subject {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-log-subject > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-log-author {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+
+.code-log-date {
+  min-width: 64px;
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.code-log-ref {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 3px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 17px;
+  border: 1px solid var(--border-strong);
+  color: var(--text);
+}
+
+.code-log-ref-head {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  font-weight: 600;
+}
+
+.code-log-ref-branch {
+  border-color: color-mix(in srgb, var(--code-git-added) 60%, transparent);
+}
+
+.code-log-ref-remote {
+  border-color: color-mix(in srgb, var(--lane-3) 55%, transparent);
+  color: var(--muted);
+}
+
+.code-log-ref-tag {
+  border-color: color-mix(in srgb, var(--lane-6) 60%, transparent);
+}
+
+.code-log-foot {
+  flex: none;
+  padding: 4px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.code-log-details {
+  display: flex;
+  flex-direction: column;
+  flex: none;
+  width: clamp(240px, 34%, 460px);
+  min-height: 0;
+  border-left: 1px solid var(--border);
+}
+
+.code-log-files {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.code-log-message {
+  flex: none;
+  max-height: 45%;
+  overflow: auto;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.code-log-message-subject {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.code-log-message-body {
+  margin: 0 0 6px;
+  font: inherit;
+  white-space: pre-wrap;
+}
+
+.code-log-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.code-log-meta .code-link {
+  font-family: var(--code-font);
+  font-size: 11.5px;
+}
+
+.code-lane-0 {
+  stroke: var(--lane-0);
+  fill: var(--lane-0);
+}
+
+.code-lane-1 {
+  stroke: var(--lane-1);
+  fill: var(--lane-1);
+}
+
+.code-lane-2 {
+  stroke: var(--lane-2);
+  fill: var(--lane-2);
+}
+
+.code-lane-3 {
+  stroke: var(--lane-3);
+  fill: var(--lane-3);
+}
+
+.code-lane-4 {
+  stroke: var(--lane-4);
+  fill: var(--lane-4);
+}
+
+.code-lane-5 {
+  stroke: var(--lane-5);
+  fill: var(--lane-5);
+}
+
+.code-lane-6 {
+  stroke: var(--lane-6);
+  fill: var(--lane-6);
+}
+
+.code-lane-7 {
+  stroke: var(--lane-7);
+  fill: var(--lane-7);
 }

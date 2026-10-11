@@ -52,6 +52,81 @@ export type Branches = {
 	remote: string[]
 }
 
+// A ref names a commit: the branch checked out (head), a local or remote
+// branch, or a tag.
+export type Ref = { name: string; kind: 'head' | 'branch' | 'remote' | 'tag' }
+
+// LogCommit is one commit of the history, with its parents for drawing
+// how branches fork and merge.
+export type LogCommit = {
+	hash: string
+	parents: string[]
+	author: string
+	email: string
+	time: number
+	subject: string
+	refs: Ref[]
+}
+
+export type Log = { commits: LogCommit[]; more: boolean }
+
+// CommitInfo is a commit in full: its message, and the files it changed
+// from its first parent, renames found.
+export type CommitInfo = {
+	hash: string
+	parents: string[]
+	author: string
+	email: string
+	time: number
+	committer: string
+	committerTime: number
+	message: string
+	files: { path: string; status: string; from?: string }[]
+}
+
+// A revision as given by a browser: a hash, a name or HEAD, with ^ and ~,
+// never an option.
+function revision(r: string): string {
+	if (!/^[\w./~^@{}-]+$/.test(r) || r.startsWith('-') || r.includes('..')) throw new Error(`not a revision: ${r}`)
+	return r
+}
+
+// parseRefs reads git's %D, refs named in full (--decorate=full):
+// "HEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1".
+function parseRefs(d: string): Ref[] {
+	const refs: Ref[] = []
+	for (let part of d.split(', ')) {
+		if (!part) continue
+		let head = false
+		if (part.startsWith('HEAD -> ')) {
+			head = true
+			part = part.slice(8)
+		}
+		if (part.startsWith('tag: ')) part = part.slice(5)
+		if (part === 'HEAD') refs.push({ name: 'HEAD', kind: 'head' })
+		else if (part.startsWith('refs/heads/')) refs.push({ name: part.slice(11), kind: head ? 'head' : 'branch' })
+		else if (part.startsWith('refs/remotes/')) {
+			if (!part.endsWith('/HEAD')) refs.push({ name: part.slice(13), kind: 'remote' })
+		} else if (part.startsWith('refs/tags/')) refs.push({ name: part.slice(10), kind: 'tag' })
+	}
+	return refs
+}
+
+// nameStatus reads git's -z --name-status output.
+function nameStatus(out: string): { path: string; status: string; from?: string }[] {
+	const parts = out.split('\0')
+	const files: { path: string; status: string; from?: string }[] = []
+	for (let i = 0; i < parts.length; i++) {
+		const status = parts[i]
+		if (!status) continue
+		if (status.startsWith('R') || status.startsWith('C')) {
+			const from = parts[++i]
+			files.push({ path: parts[++i], status: status[0], from })
+		} else files.push({ path: parts[++i], status: status[0] })
+	}
+	return files
+}
+
 // Network commands answer or fail: nothing may wait on a prompt nobody
 // sees. A host seen for the first time is trusted, as a first clone is.
 // Reading takes no optional locks: a status that locked the index would be
@@ -215,16 +290,19 @@ export class Git {
 	}
 
 	// diff returns a file as it was at HEAD, or at another commit, and as
-	// the working tree has it, for a diff view to compare. A file new since
+	// the working tree has it, or a later commit (to), for a diff view to
+	// compare. A file new since
 	// was empty there; one renamed since is compared with its old name,
 	// which is given as from.
 	async diff(
 		path: string,
 		against = 'HEAD',
 		from?: string,
+		to?: string,
 	): Promise<{ path: string; from?: string; head: string; working: string }> {
 		const rel = this.rel(path)
-		if (!/^[\w./~^-]+$/.test(against) || against.startsWith('-')) throw new Error(`not a revision: ${against}`)
+		revision(against)
+		if (to) revision(to)
 		let was = from ? this.rel(from) : rel
 		let head = ''
 		try {
@@ -244,7 +322,7 @@ export class Git {
 		}
 		let working = ''
 		try {
-			working = await readFile(join(this.root, rel), 'utf8')
+			working = to ? await run(this.root, ['show', `${to}:./${rel}`]) : await readFile(join(this.root, rel), 'utf8')
 		} catch {
 			// Deleted.
 		}
@@ -350,6 +428,76 @@ export class Git {
 		return blame
 	}
 
+	// log is the history, newest first and each commit after its children:
+	// every branch's, remote ones and tags too, or one ref's. It is read a
+	// page at a time, skipping those read already.
+	async log(ref: string | undefined, skip: number, max: number): Promise<Log> {
+		const n = Math.max(1, Math.min(max, 2000))
+		const args = [
+			'log',
+			'--topo-order',
+			'--decorate=full',
+			`--skip=${Math.max(0, Math.floor(skip))}`,
+			`--max-count=${n + 1}`,
+			'--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s%x1e',
+			...(ref ? [revision(ref)] : ['--exclude=refs/stash', '--all']),
+			'--',
+		]
+		let out: string
+		try {
+			out = await run(this.root, args)
+		} catch (e) {
+			// A repository with no commits has no history.
+			if (/does not have any commits|bad default revision|unknown revision/.test((e as Error).message) && !ref) {
+				return { commits: [], more: false }
+			}
+			throw e
+		}
+		const commits = out
+			.split('\x1e')
+			.map((r) => r.replace(/^\n/, ''))
+			.filter(Boolean)
+			.map((r): LogCommit => {
+				const [hash, parents, author, email, time, refs, subject] = r.split('\x1f')
+				return {
+					hash,
+					parents: parents ? parents.split(' ') : [],
+					author,
+					email,
+					time: Number(time),
+					subject: subject ?? '',
+					refs: parseRefs(refs ?? ''),
+				}
+			})
+		return { commits: commits.slice(0, n), more: commits.length > n }
+	}
+
+	// commitInfo is one commit in full, with the files it changed in this
+	// folder, from its first parent.
+	async commitInfo(hash: string): Promise<CommitInfo> {
+		if (!/^[0-9a-f]{4,64}$/.test(hash)) throw new Error(`not a commit: ${hash}`)
+		const out = await run(this.root, ['show', '-s', '--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%cn%x1f%ct%x1f%B', hash])
+		const [full, parents, author, email, time, committer, committerTime, message] = out.split('\x1f')
+		const ps = parents ? parents.split(' ') : []
+		const changed = await run(
+			this.root,
+			ps.length
+				? ['diff', '-z', '--name-status', '--find-renames', '--relative', ps[0], full, '--', '.']
+				: ['diff-tree', '-z', '-r', '--root', '--no-commit-id', '--name-status', '--find-renames', '--relative', full, '--', '.'],
+		)
+		return {
+			hash: full,
+			parents: ps,
+			author,
+			email,
+			time: Number(time),
+			committer,
+			committerTime: Number(committerTime),
+			message: (message ?? '').trimEnd(),
+			files: nameStatus(changed),
+		}
+	}
+
 	// defaultBase is the branch others are based on: the remote's default
 	// (origin/HEAD), else the first of origin/main, origin/master, main and
 	// master there is.
@@ -385,18 +533,9 @@ export class Git {
 				const [hash, subject, author, time] = l.split('\x1f')
 				return { hash, subject, author, time: Number(time) }
 			})
-		const out = await run(this.root, ['diff', '-z', '--name-status', '--find-renames', '--relative', mergeBase, '--', '.'])
-		const parts = out.split('\0')
-		const changes: BranchChanges['changes'] = []
-		for (let i = 0; i < parts.length; i++) {
-			const status = parts[i]
-			if (!status) continue
-			if (status.startsWith('R') || status.startsWith('C')) {
-				const from = parts[++i]
-				const path = parts[++i]
-				changes.push({ path, status: status[0], from })
-			} else changes.push({ path: parts[++i], status: status[0] })
-		}
+		const changes: BranchChanges['changes'] = nameStatus(
+			await run(this.root, ['diff', '-z', '--name-status', '--find-renames', '--relative', mergeBase, '--', '.']),
+		)
 		// Files git does not know of yet are the branch's too, and one moved
 		// without git is a rename of the file the diff has deleted.
 		for (const c of (await this.status()).changes) {
