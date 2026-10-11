@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, Monitor, Moon, Plus, Sun } from 'lucide-react'
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 
 import { api } from '../api'
 import { meKey, useMe } from '../session'
-import { setTheme, type Theme } from '../theme'
+import { onThemeChoice, setTheme, type Theme } from '../theme'
 import { PageHeader } from '../components/PageHeader'
 import { Activity } from '../components/Activity'
 import { ConfirmButton } from '../components/ConfirmButton'
@@ -50,6 +50,8 @@ function Appearance() {
   const me = useMe()
   const qc = useQueryClient()
   const [theme, setChosen] = useState<Theme>(me.theme)
+  // Chosen in another tab, it shows here as chosen too.
+  useEffect(() => onThemeChoice(setChosen), [])
   const save = useMutation({
     mutationFn: (t: Theme) => api.setPreferences({ theme: t }),
     onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),

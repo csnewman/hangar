@@ -23,6 +23,7 @@ function stored(): Theme {
 let choice: Theme = stored()
 const system = window.matchMedia('(prefers-color-scheme: dark)')
 const listeners = new Set<(dark: boolean) => void>()
+const choiceListeners = new Set<(t: Theme) => void>()
 
 // isDark is whether the page is dark now.
 export function isDark(): boolean {
@@ -53,6 +54,14 @@ export function setTheme(t: Theme) {
     // As above.
   }
   apply()
+  for (const fn of choiceListeners) fn(t)
+}
+
+// onThemeChoice calls fn whenever the choice changes, here or in another
+// tab.
+export function onThemeChoice(fn: (t: Theme) => void): () => void {
+  choiceListeners.add(fn)
+  return () => choiceListeners.delete(fn)
 }
 
 // onDarkChange calls fn whenever the page turns light or dark: a new choice,
@@ -64,5 +73,12 @@ export function onDarkChange(fn: (dark: boolean) => void): () => void {
 
 system.addEventListener('change', () => {
   if (choice === 'system') apply()
+})
+// A choice made in another tab of this browser is this one's at once.
+window.addEventListener('storage', (e) => {
+  if (e.key !== key) return
+  choice = stored()
+  apply()
+  for (const fn of choiceListeners) fn(choice)
 })
 apply()
