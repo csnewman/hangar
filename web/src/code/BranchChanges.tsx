@@ -84,7 +84,7 @@ export function BranchChanges({
             className="muted small"
             title={`This branch split from ${data.base} at ${data.mergeBase.slice(0, 7)}: the changes are everything since that commit, so later commits on ${data.base} are not among them.`}
           >
-            · branched at {data.mergeBase.slice(0, 7)}
+            branched at {data.mergeBase.slice(0, 7)}
           </span>
         )}
       </div>

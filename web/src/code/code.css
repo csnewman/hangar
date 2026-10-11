@@ -1468,11 +1468,24 @@
   box-shadow: var(--shadow);
 }
 
+/* Narrow, its parts move to the next line whole, each kept on one line;
+   the branch's name is cut short only when it alone is too wide. */
 .code-branch-base {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 2px 6px;
   padding: 6px 10px 2px;
+}
+
+.code-branch-base > span {
+  white-space: nowrap;
+}
+
+.code-branch-base .code-branch-btn {
+  /* Its text in line with the others when it starts a line. */
+  margin-left: -6px;
+  max-width: calc(100% + 6px);
 }
 
 .code-changes-toggle {
