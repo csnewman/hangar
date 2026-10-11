@@ -2055,6 +2055,37 @@
   border-radius: 2px;
 }
 
+/* A byte changed and not saved. */
+.code-hex-mod {
+  color: var(--code-git-modified);
+  font-weight: 700;
+}
+
+/* A byte whose high half is typed, its low still to come. */
+.code-hex-half {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+/* The column typing goes to is the one marked strongly; the other
+   follows it faintly. */
+.code-hex-bytes:not(.code-hex-col-on) .code-hex-on,
+.code-hex-chars:not(.code-hex-col-on) .code-hex-on {
+  background: color-mix(in srgb, var(--code-selection) 45%, transparent);
+}
+
+.code-hex-dirty {
+  color: var(--code-git-modified);
+  margin-right: 4px;
+}
+
+.code-hex .btn-sm {
+  margin-right: 6px;
+}
+
+.code-hex-stale {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
 .code-diff-binary {
   flex: 1;
   min-height: 0;

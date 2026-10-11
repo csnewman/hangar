@@ -54,17 +54,21 @@ export interface Diff {
   binary?: boolean
 }
 
-// What a file is: text, or bytes that are not, and how large.
+// What a file is: text, or bytes that are not, and how large; whether
+// the user may write it, and its version, which any write changes.
 export interface Probe {
   size: number
   binary: boolean
+  writable: boolean
+  version: string
 }
 
-// Part of a file, base64, and the whole file's size.
+// Part of a file, base64, the whole file's size, and the version read.
 export interface Bytes {
   size: number
   offset: number
   data: string
+  version: string
 }
 
 // A ref names a commit: the branch checked out (head), a local or remote
@@ -452,6 +456,10 @@ export class CodeClient {
   // bytes is length bytes of a file from offset, base64.
   bytes(path: string, offset: number, length: number) {
     return this.request<Bytes>('fs.bytes', { path, offset, length })
+  }
+  // patch writes runs of bytes over a file's own, if it is still version.
+  patch(path: string, version: string, runs: { offset: number; data: string }[]) {
+    return this.request<{ version: string }>('fs.patch', { path, version, runs })
   }
   dockerOverview() {
     return this.request<DockerOverview>('docker.overview')

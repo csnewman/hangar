@@ -162,6 +162,17 @@ export class Connection {
 				return this.f.files.list(str('path'))
 			case 'fs.read':
 				return this.f.files.read(str('path'))
+			case 'fs.patch':
+				return this.f.files.patch(
+					str('path'),
+					str('version'),
+					Array.isArray(p.runs)
+						? (p.runs as { offset: unknown; data: unknown }[]).map((r) => ({
+								offset: Number(r.offset),
+								data: String(r.data),
+							}))
+						: [],
+				)
 			case 'fs.probe':
 				return this.f.files.probe(str('path'))
 			case 'fs.bytes':

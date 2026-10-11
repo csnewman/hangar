@@ -661,12 +661,34 @@ test('binary files: told from text, read in parts, compared as bytes', async () 
 	const a = new Client()
 	try {
 		await a.call('hello', { root: repo })
-		assert.deepEqual(await a.call('fs.probe', { path: 'pic.png' }), { size: 17, binary: true })
-		assert.deepEqual(await a.call('fs.probe', { path: 'note.txt' }), { size: 5, binary: false })
+		const probe = await a.call('fs.probe', { path: 'pic.png' })
+		assert.equal(probe.size, 17)
+		assert.equal(probe.binary, true)
+		assert.equal(probe.writable, true)
+		assert.equal((await a.call('fs.probe', { path: 'note.txt' })).binary, false)
 		const part = await a.call('fs.bytes', { path: 'pic.png', offset: 12, length: 100 })
 		assert.equal(part.size, 17)
 		assert.equal(part.offset, 12)
 		assert.deepEqual([...Buffer.from(part.data, 'base64')], [1, 2, 3, 4, 5])
+
+		// Bytes written over in place, to the version they were made to.
+		const patched = await a.call('fs.patch', {
+			path: 'pic.png',
+			version: probe.version,
+			runs: [{ offset: 12, data: Buffer.from([0xaa, 0xbb]).toString('base64') }],
+		})
+		assert.notEqual(patched.version, probe.version)
+		assert.deepEqual([...readFileSync(join(repo, 'pic.png')).subarray(12)], [0xaa, 0xbb, 3, 4, 5])
+		// Not to an older one, nor past the file's end.
+		await assert.rejects(
+			a.call('fs.patch', { path: 'pic.png', version: probe.version, runs: [{ offset: 0, data: 'AA==' }] }),
+			/changed on disk/,
+		)
+		await assert.rejects(
+			a.call('fs.patch', { path: 'pic.png', version: patched.version, runs: [{ offset: 17, data: 'AA==' }] }),
+			/outside the file/,
+		)
+		writeFileSync(join(repo, 'pic.png'), Buffer.concat([png, Buffer.from([4, 5])]))
 
 		const d = await a.call('git.diff', { path: 'pic.png' })
 		assert.equal(d.binary, true)

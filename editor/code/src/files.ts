@@ -1,5 +1,5 @@
-import { watch, type FSWatcher } from 'node:fs'
-import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { constants, watch, type FSWatcher } from 'node:fs'
+import { access, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 export type Entry = { name: string; dir: boolean; size: number }
@@ -12,8 +12,15 @@ const MAX_READ = 4 << 20
 export const MAX_BYTES = 32 << 20
 
 // What a file is, for choosing how to show it: text, or bytes that are
-// not, and how large.
-export type Probe = { size: number; binary: boolean }
+// not, and how large; whether the user may write it, and its version.
+export type Probe = { size: number; binary: boolean; writable: boolean; version: string }
+
+// A file's version is its modification time to the nanosecond and its
+// size: a write by anyone changes it.
+async function version(p: string): Promise<string> {
+	const st = await stat(p, { bigint: true })
+	return `${st.mtimeNs}:${st.size}`
+}
 
 // Directories whose contents are never listed as changing: they churn, and
 // nobody browses them.
@@ -77,7 +84,13 @@ export class Files {
 		try {
 			const buf = Buffer.alloc(Math.min(8192, st.size))
 			const { bytesRead } = await f.read(buf, 0, buf.length, 0)
-			return { size: st.size, binary: buf.subarray(0, bytesRead).includes(0) }
+			let writable = true
+			try {
+				await access(p, constants.W_OK)
+			} catch {
+				writable = false
+			}
+			return { size: st.size, binary: buf.subarray(0, bytesRead).includes(0), writable, version: await version(p) }
 		} finally {
 			await f.close()
 		}
@@ -85,7 +98,11 @@ export class Files {
 
 	// bytes is part of a file, base64: length bytes from offset, at most
 	// MAX_BYTES, fewer at its end.
-	async bytes(path: string, offset: number, length: number): Promise<{ size: number; offset: number; data: string }> {
+	async bytes(
+		path: string,
+		offset: number,
+		length: number,
+	): Promise<{ size: number; offset: number; data: string; version: string }> {
 		const p = this.abs(path)
 		const st = await stat(p)
 		if (!st.isFile()) throw new Error(`${path} is not a file`)
@@ -95,10 +112,36 @@ export class Files {
 		try {
 			const buf = Buffer.alloc(n)
 			const { bytesRead } = await f.read(buf, 0, n, from)
-			return { size: st.size, offset: from, data: buf.subarray(0, bytesRead).toString('base64') }
+			return {
+				size: st.size,
+				offset: from,
+				data: buf.subarray(0, bytesRead).toString('base64'),
+				version: await version(p),
+			}
 		} finally {
 			await f.close()
 		}
+	}
+
+	// patch writes bytes over a file's own, in place, each run at its
+	// offset, if the file is still the version they were made to; changed
+	// since, it refuses, so nobody's write is lost.
+	async patch(path: string, at: string, runs: { offset: number; data: string }[]): Promise<{ version: string }> {
+		const p = this.abs(path)
+		if ((await version(p)) !== at) throw new Error(`${path} changed on disk since it was read`)
+		const st = await stat(p)
+		const bufs = runs.map((r) => ({ offset: Math.floor(r.offset), buf: Buffer.from(r.data, 'base64') }))
+		if (bufs.reduce((n, b) => n + b.buf.length, 0) > MAX_BYTES) throw new Error('too many bytes changed at once')
+		for (const b of bufs) {
+			if (b.offset < 0 || b.offset + b.buf.length > st.size) throw new Error('a change lies outside the file')
+		}
+		const f = await open(p, 'r+')
+		try {
+			for (const b of bufs) await f.write(b.buf, 0, b.buf.length, b.offset)
+		} finally {
+			await f.close()
+		}
+		return { version: await version(p) }
 	}
 
 	async create(path: string) {
