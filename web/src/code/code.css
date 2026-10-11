@@ -1945,13 +1945,27 @@
   color: var(--muted);
 }
 
+/* Centred by its margins, not by alignment: an image larger than the
+   view then scrolls to every edge. */
 .code-image-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  display: grid;
-  place-items: center;
+  display: flex;
   padding: 16px;
+}
+
+.code-image-body img {
+  flex: none;
+  margin: auto;
+}
+
+.code-image-pan {
+  cursor: grab;
+}
+
+.code-image-panning {
+  cursor: grabbing;
 }
 
 .code-image-fit img {

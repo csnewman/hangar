@@ -1,5 +1,5 @@
 import { Grid2x2, Maximize, Minus, Plus, Scan } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import { formatBytes } from '../components/format'
 import type { CodeClient } from './client'
@@ -18,9 +18,9 @@ export function toURL(data: string, type: string): string {
 }
 
 // ImageView shows an image file as IntelliJ's image viewer does: fitted
-// to the view, or zoomed (the buttons, or the wheel with Ctrl or ⌘), over
-// a chessboard that shows its transparency, with its size and type. It
-// shows the file afresh whenever it changes.
+// to the view, or zoomed (the buttons, or the wheel with Ctrl or ⌘) and
+// moved by dragging, over a chessboard that shows its transparency, with
+// its size and type. It shows the file afresh whenever it changes.
 export function ImageView({ client, path }: { client: CodeClient; path: string }) {
   const type = imageType(path) ?? 'application/octet-stream'
   const [url, setUrl] = useState<string | null>(null)
@@ -76,7 +76,66 @@ export function ImageView({ client, path }: { client: CodeClient; path: string }
     if (!el || !dims) return 1
     return Math.min(1, (el.clientWidth - 32) / dims.w, (el.clientHeight - 32) / dims.h)
   }
-  const step = (by: number) => setZoom(Math.max(0.05, Math.min(32, +(scale() * by).toFixed(3))))
+  // Zooming keeps one point of the image where it was: the one under the
+  // pointer for the wheel, else the one in the middle of the view.
+  const img = useRef<HTMLImageElement>(null)
+  const focus = useRef<{ fx: number; fy: number; x: number; y: number } | null>(null)
+  const step = (by: number, at?: { x: number; y: number }) => {
+    const el = box.current
+    const im = img.current
+    if (el && im) {
+      const b = el.getBoundingClientRect()
+      const r = im.getBoundingClientRect()
+      const x = at?.x ?? b.left + b.width / 2
+      const y = at?.y ?? b.top + b.height / 2
+      focus.current = { fx: (x - r.left) / r.width, fy: (y - r.top) / r.height, x, y }
+    }
+    setZoom(Math.max(0.05, Math.min(32, +(scale() * by).toFixed(3))))
+  }
+  useLayoutEffect(() => {
+    const f = focus.current
+    focus.current = null
+    const el = box.current
+    const im = img.current
+    if (!f || !el || !im) return
+    const r = im.getBoundingClientRect()
+    el.scrollLeft += r.left + f.fx * r.width - f.x
+    el.scrollTop += r.top + f.fy * r.height - f.y
+  }, [zoom])
+
+  // An image larger than the view is moved by dragging it, as with
+  // IntelliJ's hand.
+  const [pannable, setPannable] = useState(false)
+  const [panning, setPanning] = useState(false)
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    const measure = () =>
+      setPannable(el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [zoom, dims])
+  const pan = (e: React.PointerEvent) => {
+    const el = box.current
+    if (e.button !== 0 || !el || !pannable) return
+    e.preventDefault()
+    const { clientX: x0, clientY: y0 } = e
+    const { scrollLeft: sx, scrollTop: sy } = el
+    setPanning(true)
+    const move = (ev: PointerEvent) => {
+      el.scrollLeft = sx - (ev.clientX - x0)
+      el.scrollTop = sy - (ev.clientY - y0)
+    }
+    const up = () => {
+      setPanning(false)
+      document.removeEventListener('pointermove', move, true)
+      document.removeEventListener('pointerup', up, true)
+    }
+    document.addEventListener('pointermove', move, true)
+    document.addEventListener('pointerup', up, true)
+  }
   // The wheel with Ctrl or ⌘ zooms the image, not the page: a listener
   // that may prevent the page's zoom, which React's may not.
   const stepRef = useRef(step)
@@ -87,7 +146,7 @@ export function ImageView({ client, path }: { client: CodeClient; path: string }
     const wheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return
       e.preventDefault()
-      stepRef.current(e.deltaY < 0 ? 1.1 : 1 / 1.1)
+      stepRef.current(e.deltaY < 0 ? 1.1 : 1 / 1.1, { x: e.clientX, y: e.clientY })
     }
     el.addEventListener('wheel', wheel, { passive: false })
     return () => el.removeEventListener('wheel', wheel)
@@ -131,11 +190,21 @@ export function ImageView({ client, path }: { client: CodeClient; path: string }
       </div>
       <div
         ref={box}
-        className={zoom === 'fit' ? 'code-image-body code-image-fit' : 'code-image-body'}
+        className={[
+          'code-image-body',
+          zoom === 'fit' && 'code-image-fit',
+          pannable && 'code-image-pan',
+          panning && 'code-image-panning',
+        ]
+          .filter(Boolean)
+          .join(' ')}
+        onPointerDown={pan}
       >
         {error && <p className="code-note code-note-error">{error}</p>}
         {url && !error && (
           <img
+            ref={img}
+            draggable={false}
             src={url}
             alt={path}
             className={chess ? 'code-image-chess' : undefined}
