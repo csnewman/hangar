@@ -39,12 +39,15 @@ export function TerminalPane({
   env,
   session,
   dir,
+  run,
   events,
 }: {
   env: string
   session: string | undefined
   // dir is where a new session's shell starts; absent, the home directory.
   dir?: string
+  // run is a command typed into a new session once it starts.
+  run?: string
   events: PaneEvents
 }) {
   const host = useRef<HTMLDivElement>(null)
@@ -60,6 +63,7 @@ export function TerminalPane({
   // rather than attaching again. Starting another forgets it.
   const initial = useRef(session)
   const initialDir = useRef(dir)
+  const toRun = useRef(initial.current ? undefined : run)
 
   useEffect(() => {
     const el = host.current
@@ -176,6 +180,10 @@ export function TerminalPane({
           term.reset()
           setState('live')
           eventsRef.current.attached(s)
+          if (toRun.current) {
+            conn?.input(toRun.current + '\r')
+            toRun.current = undefined
+          }
         },
         output: (data) => term.write(data),
         exited: () => {

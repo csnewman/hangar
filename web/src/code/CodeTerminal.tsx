@@ -14,20 +14,27 @@ export function CodeTerminal({
   onHide,
 }: {
   env: string
-  // openIn asks for a new session in a folder; n changes with each ask.
-  openIn: { dir: string; n: number } | null
+  // openIn asks for a new session in a folder, typing a command into it if
+  // given; n changes with each ask.
+  openIn: { dir: string; run?: string; n: number } | null
   onHide: () => void
 }) {
   const qc = useQueryClient()
   const key = ['terminals', env]
   const sessions = useQuery({ queryKey: key, queryFn: () => api.terminals(env), refetchInterval: 3000 })
-  const [pane, setPane] = useState<{ key: number; session: string | undefined; chosen: boolean; dir?: string }>({
+  const [pane, setPane] = useState<{
+    key: number
+    session: string | undefined
+    chosen: boolean
+    dir?: string
+    run?: string
+  }>({
     key: 0,
     session: undefined,
     chosen: false,
   })
   useEffect(() => {
-    if (openIn) setPane((p) => ({ key: p.key + 1, session: undefined, chosen: true, dir: openIn.dir }))
+    if (openIn) setPane((p) => ({ key: p.key + 1, session: undefined, chosen: true, dir: openIn.dir, run: openIn.run }))
   }, [openIn])
   const [titles, setTitles] = useState<Record<string, string>>({})
 
@@ -78,6 +85,7 @@ export function CodeTerminal({
             env={env}
             session={attachTo}
             dir={pane.dir}
+            run={pane.run}
             events={{
               attached: (s) => {
                 setPane((p) => (p.session === s.id ? p : { ...p, session: s.id }))

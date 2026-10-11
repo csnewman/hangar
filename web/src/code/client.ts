@@ -77,6 +77,35 @@ export interface TextQuery {
   mask?: string
 }
 
+export interface Container {
+  id: string
+  name: string
+  image: string
+  state: string
+  status: string
+  ports: string[]
+  created: number
+  project?: string
+  service?: string
+}
+
+export interface DockerImage {
+  id: string
+  tags: string[]
+  size: number
+  created: number
+  containers: number
+}
+
+export interface DockerOverview {
+  available: boolean
+  why?: string
+  containers: Container[]
+  images: DockerImage[]
+}
+
+export type DockerAction = 'start' | 'stop' | 'restart' | 'pause' | 'unpause' | 'remove'
+
 export type ConnectionState = 'connecting' | 'live' | 'reconnecting'
 
 type Events = {
@@ -89,6 +118,11 @@ type Events = {
   'settings.changed': (s: Record<string, unknown>) => void
   // A language server this tab started stopped.
   'lsp.exited': (p: { server: number; why: string }) => void
+  // Something happened to a container or image.
+  'docker.changed': () => void
+  // Output from a container whose logs are followed, and the end of it.
+  'docker.log': (p: { stream: number; text: string }) => void
+  'docker.logEnd': (p: { stream: number; why: string }) => void
 }
 
 // SharedFile is one file open for editing, shared with everyone who has it
@@ -183,6 +217,9 @@ export class CodeClient {
     'doc.deleted': new Set(),
     'settings.changed': new Set(),
     'lsp.exited': new Set(),
+    'docker.changed': new Set(),
+    'docker.log': new Set(),
+    'docker.logEnd': new Set(),
   }
   private lspHandlers = new Map<number, Set<(json: string) => void>>()
   private files = new Map<string, SharedFile>()
@@ -273,6 +310,12 @@ export class CodeClient {
         this.emit('doc.deleted', m.params)
       } else if (m.event === 'settings.changed') {
         this.emit('settings.changed', m.params)
+      } else if (m.event === 'docker.changed') {
+        this.emit('docker.changed')
+      } else if (m.event === 'docker.log') {
+        this.emit('docker.log', m.params)
+      } else if (m.event === 'docker.logEnd') {
+        this.emit('docker.logEnd', m.params)
       } else if (m.event === 'lsp.exited') {
         this.lspHandlers.delete(m.params.server)
         this.emit('lsp.exited', m.params)
@@ -333,6 +376,23 @@ export class CodeClient {
   async read(path: string) {
     return (await this.request<{ text: string | null }>('fs.read', { path })).text
   }
+  dockerOverview() {
+    return this.request<DockerOverview>('docker.overview')
+  }
+  dockerAct(id: string, action: DockerAction) {
+    return this.request<void>('docker.act', { id, action })
+  }
+  dockerRemoveImage(id: string) {
+    return this.request<void>('docker.removeImage', { id })
+  }
+  // dockerLogs follows a container's output, from its last tail lines.
+  dockerLogs(id: string, tail = 1000) {
+    return this.request<{ stream: number }>('docker.logs', { id, tail })
+  }
+  dockerLogsStop(stream: number) {
+    return this.request<void>('docker.logsStop', { stream })
+  }
+
   // startLanguageServer starts a server for an LSP language ID in this
   // tab's folder, or says why there is none.
   startLanguageServer(language: string) {

@@ -1,13 +1,16 @@
-import { File, GitCompare, X } from 'lucide-react'
+import { File, FileText, GitCompare, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import type { CodeClient, GitStatus, SharedFile } from './client'
 import { CodeEditor } from './CodeEditor'
 import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { DiffView } from './DiffView'
+import { DockerLogs } from './DockerView'
 import type { Jump } from './Search'
 
-export type Tab = { kind: 'file' | 'diff'; path: string }
+// A tab is a file, its changes, or a container's logs: path is then the
+// container's ID, and title its name.
+export type Tab = { kind: 'file' | 'diff' | 'logs'; path: string; title?: string }
 
 export const tabKey = (t: Tab) => `${t.kind}:${t.path}`
 
@@ -52,7 +55,7 @@ export function EditorArea({
     const i = tabs.findIndex((o) => tabKey(o) === key)
     const keys = tabs.map(tabKey)
     const changed = status?.changes.some((c) => c.path === t.path) ?? false
-    return [
+    const closing: MenuItem[] = [
       { label: 'Close', shortcut: shortcut('Alt+W'), onSelect: () => onClose(key) },
       { label: 'Close Others', disabled: tabs.length < 2, onSelect: () => onCloseMany(keys.filter((k) => k !== key)) },
       { label: 'Close Tabs to the Left', disabled: i === 0, onSelect: () => onCloseMany(keys.slice(0, i)) },
@@ -62,6 +65,10 @@ export function EditorArea({
         onSelect: () => onCloseMany(keys.slice(i + 1)),
       },
       { label: 'Close All', onSelect: () => onCloseMany(keys) },
+    ]
+    if (t.kind === 'logs') return closing
+    return [
+      ...closing,
       'separator',
       { label: 'Copy Path', onSelect: () => copyText(`${client.root}/${t.path}`) },
       { label: 'Copy Relative Path', onSelect: () => copyText(t.path) },
@@ -80,21 +87,27 @@ export function EditorArea({
         <div className="code-tabs" role="tablist">
           {tabs.map((t) => {
             const key = tabKey(t)
-            const name = t.path.split('/').pop() ?? t.path
+            const name = t.title ?? t.path.split('/').pop() ?? t.path
             return (
               <div
                 key={key}
                 role="tab"
                 aria-selected={key === active}
                 className={key === active ? 'code-tab code-tab-on' : 'code-tab'}
-                title={t.kind === 'diff' ? `Changes to ${t.path}` : t.path}
+                title={t.kind === 'diff' ? `Changes to ${t.path}` : t.kind === 'logs' ? `Logs of ${name}` : t.path}
                 onClick={() => onActivate(key)}
                 onContextMenu={(e) => menu.open(e, tabMenu(t))}
                 onAuxClick={(e) => {
                   if (e.button === 1) onClose(key)
                 }}
               >
-                {t.kind === 'diff' ? <GitCompare size={13} className="code-icon-diff" /> : <File size={13} className="code-icon-file" />}
+                {t.kind === 'diff' ? (
+                  <GitCompare size={13} className="code-icon-diff" />
+                ) : t.kind === 'logs' ? (
+                  <FileText size={13} className="code-icon-file" />
+                ) : (
+                  <File size={13} className="code-icon-file" />
+                )}
                 <span>{name}</span>
                 <button
                   type="button"
@@ -117,6 +130,9 @@ export function EditorArea({
           <FileTab key={tabKey(current)} client={client} path={current.path} user={user} jump={jump} onReveal={onReveal} />
         )}
         {current?.kind === 'diff' && <DiffView key={tabKey(current)} client={client} path={current.path} />}
+        {current?.kind === 'logs' && (
+          <DockerLogs key={tabKey(current)} client={client} id={current.path} name={current.title ?? current.path.slice(0, 12)} />
+        )}
         {!current && (
           <div className="code-empty">
             <p>Open a file from Project, or a change from Changes.</p>

@@ -3,6 +3,7 @@
 // and from the disk.
 import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
 import { connect, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -28,6 +29,7 @@ Object.assign(process.env, {
 const dir = mkdtempSync(join(tmpdir(), 'hangar-code-'))
 const root = join(dir, 'repo')
 const sock = join(dir, 'code.sock')
+const dockerSock = join(dir, 'docker.sock')
 const git = (...args: string[]) =>
 	execFileSync('git', ['-C', root, ...args])
 
@@ -40,8 +42,9 @@ before(async () => {
 	git('commit', '-q', '-m', 'first')
 	proc = spawn(process.execPath, [join(import.meta.dirname, '..', 'dist', 'code.mjs'), '--socket', sock, '--root', root], {
 		stdio: 'inherit',
-		// The settings file is in the home directory.
-		env: { ...process.env, HOME: dir },
+		// The settings file is in the home directory; Docker is the fake
+		// engine the Docker test serves.
+		env: { ...process.env, HOME: dir, DOCKER_HOST: `unix://${dockerSock}` },
 	})
 	for (let i = 0; i < 100; i++) {
 		try {
@@ -467,5 +470,85 @@ test('a language server, shared by tabs and kept across a reload', async () => {
 		rmSync(join(root, 'lsp-touched.txt'), { force: true })
 		rmSync(join(root, 'lsp.fake'), { force: true })
 		await new Promise((r) => setTimeout(r, 100))
+	}
+})
+
+test('docker: containers, actions, logs and changes', async () => {
+	// A fake Docker Engine: one container, one image; starting the
+	// container is reported as an event; its logs are framed as Docker
+	// frames a container without a TTY's.
+	const asked: string[] = []
+	let events: import('node:http').ServerResponse | undefined
+	const frame = (stream: number, text: string) => {
+		const body = Buffer.from(text)
+		const hdr = Buffer.alloc(8)
+		hdr[0] = stream
+		hdr.writeUInt32BE(body.length, 4)
+		return Buffer.concat([hdr, body])
+	}
+	const id = 'a'.repeat(64)
+	const engine = createServer((req, res) => {
+		const url = req.url ?? ''
+		asked.push(`${req.method} ${url.split('?')[0]}`)
+		const send = (v: unknown) => res.end(JSON.stringify(v))
+		if (url.startsWith('/v1.41/containers/json')) {
+			send([{ Id: id, Names: ['/web-1'], Image: 'nginx', State: 'running', Status: 'Up 2 minutes', Created: 1,
+				Ports: [{ IP: '0.0.0.0', PrivatePort: 80, PublicPort: 8080, Type: 'tcp' }, { IP: '::', PrivatePort: 80, PublicPort: 8080, Type: 'tcp' }],
+				Labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'web' } }])
+		} else if (url.startsWith('/v1.41/images/json')) {
+			send([{ Id: 'sha256:' + 'b'.repeat(64), RepoTags: ['nginx:latest'], Size: 1000, Created: 2, Containers: 1 }])
+		} else if (url === `/v1.41/containers/${id}/restart`) {
+			res.statusCode = 204
+			res.end()
+			events?.write(JSON.stringify({ Type: 'container', Action: 'restart' }) + '\n')
+		} else if (url === `/v1.41/containers/${id}/json`) {
+			send({ Config: { Tty: false } })
+		} else if (url.startsWith(`/v1.41/containers/${id}/logs`)) {
+			res.write(Buffer.concat([frame(1, 'hello '), frame(2, 'from stderr\n')]))
+			setTimeout(() => res.write(frame(1, 'later\n')), 50)
+		} else if (url.startsWith('/v1.41/events')) {
+			events = res
+			res.write('')
+		} else {
+			res.statusCode = 404
+			send({ message: 'no such thing' })
+		}
+	})
+	await new Promise<void>((r) => engine.listen(dockerSock, r))
+	const a = new Client()
+	try {
+		await a.call('hello')
+		const o = await a.call('docker.overview')
+		assert.equal(o.available, true)
+		assert.deepEqual(o.containers, [
+			{ id, name: 'web-1', image: 'nginx', state: 'running', status: 'Up 2 minutes', ports: ['8080→80/tcp'],
+				created: 1, project: 'shop', service: 'web' },
+		])
+		assert.deepEqual(o.images.map((i: any) => i.tags), [['nginx:latest']])
+
+		await until('events watched', () => events !== undefined)
+		await a.call('docker.act', { id, action: 'restart' })
+		await until('the change announced', () => a.events.some((e) => e.event === 'docker.changed'))
+		await assert.rejects(a.call('docker.act', { id, action: 'explode' }), /no such action/)
+		await assert.rejects(a.call('docker.act', { id: '../x', action: 'stop' }), /not a container/)
+
+		const { stream } = await a.call('docker.logs', { id, tail: 10 })
+		const text = () => a.events.filter((e) => e.event === 'docker.log' && e.params.stream === stream).map((e) => e.params.text).join('')
+		await until('the logs', () => text() === 'hello from stderr\nlater\n')
+		await a.call('docker.logsStop', { stream })
+	} finally {
+		a.close()
+		engine.closeAllConnections()
+		await new Promise((r) => engine.close(r))
+	}
+	// With no engine, Docker is said to be missing, not an error.
+	const b = new Client()
+	try {
+		await b.call('hello')
+		const o = await b.call('docker.overview')
+		assert.equal(o.available, false)
+		assert.match(o.why, /not running/)
+	} finally {
+		b.close()
 	}
 })

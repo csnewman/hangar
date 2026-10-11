@@ -18,6 +18,7 @@ import { existsSync, unlinkSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 
+import { Docker } from './docker.js'
 import { Documents } from './docs.js'
 import { Files } from './files.js'
 import { Git } from './git.js'
@@ -52,7 +53,8 @@ const folder = (dir: string): Folder => {
 
 if (existsSync(values.socket)) unlinkSync(values.socket)
 const settings = new SettingsFile()
-const server = createServer((sock: Socket) => new Connection(sock, { root, folder, docs, settings }))
+const docker = new Docker()
+const server = createServer((sock: Socket) => new Connection(sock, { root, folder, docs, settings, docker }))
 server.listen(values.socket, () => console.log(`hangar-code: serving ${root} on ${values.socket}`))
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {

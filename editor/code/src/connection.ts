@@ -5,6 +5,7 @@ import { isAbsolute, resolve } from 'node:path'
 import type { Documents, SharedDoc } from './docs.js'
 import type { Files } from './files.js'
 import type { Git } from './git.js'
+import type { Action, Docker } from './docker.js'
 import { Hub } from './hub.js'
 import type { Message } from './lsp.js'
 import type { Search } from './search.js'
@@ -22,7 +23,13 @@ export type Folder = { root: string; files: Files; git: Git; search: Search; hub
 // Services are the service's own: the folder it was started on, the one
 // serving any other folder, and the shared documents, which are everyone's
 // whatever folder they opened them from.
-type Services = { root: string; folder: (root: string) => Folder; docs: Documents; settings: SettingsFile }
+type Services = {
+	root: string
+	folder: (root: string) => Folder
+	docs: Documents
+	settings: SettingsFile
+	docker: Docker
+}
 
 type Request = { id: number; method: string; params?: Record<string, unknown> }
 
@@ -39,6 +46,10 @@ export class Connection {
 	// The language servers this tab uses, by its number for each.
 	private servers = new Map<number, { send: (m: Message) => void; detach: () => void }>()
 	private nextServer = 1
+	// Docker: watched once this tab asks of it, and the logs it follows.
+	private unwatchDocker: (() => void) | undefined
+	private logs = new Map<number, () => void>()
+	private nextLog = 1
 
 	constructor(
 		private sock: Socket,
@@ -162,6 +173,36 @@ export class Connection {
 				return this.startServer(str('language'))
 			case 'lsp.stop':
 				return this.stopServer(Number(p.server))
+			case 'docker.overview':
+				this.unwatchDocker ??= this.s.docker.onChange(() => this.event('docker.changed', {}))
+				return this.s.docker.overview()
+			case 'docker.act': {
+				const action = str('action')
+				if (!['start', 'stop', 'restart', 'pause', 'unpause', 'remove'].includes(action)) throw new Error(`no such action: ${action}`)
+				return this.s.docker.act(str('id'), action as Action)
+			}
+			case 'docker.removeImage':
+				return this.s.docker.removeImage(str('id'))
+			case 'docker.logs': {
+				const n = this.nextLog++
+				const stop = this.s.docker.logs(
+					str('id'),
+					typeof p.tail === 'number' ? p.tail : 1000,
+					(text) => this.event('docker.log', { stream: n, text }),
+					(why) => {
+						if (this.logs.delete(n)) this.event('docker.logEnd', { stream: n, why })
+					},
+				)
+				this.logs.set(n, stop)
+				return { stream: n }
+			}
+			case 'docker.logsStop': {
+				const n = Number(p.stream)
+				const stop = this.logs.get(n)
+				this.logs.delete(n)
+				stop?.()
+				return
+			}
 			case 'settings.get':
 				return this.s.settings.get()
 			case 'settings.set':
@@ -311,6 +352,9 @@ export class Connection {
 		this.closed = true
 		this.unwatch()
 		this.stopServers()
+		this.unwatchDocker?.()
+		for (const stop of this.logs.values()) stop()
+		this.logs.clear()
 		for (const doc of this.open.values()) doc.leave(this)
 		this.open.clear()
 	}

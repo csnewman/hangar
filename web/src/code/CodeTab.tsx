@@ -1,6 +1,6 @@
 import './code.css'
 
-import { FolderTree, GitCompare, SquareTerminal, TextSearch } from 'lucide-react'
+import { Container, FolderTree, GitCompare, SquareTerminal, TextSearch } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Group,
@@ -17,6 +17,7 @@ import { ChangesView } from './ChangesView'
 import { CodeClient, type ConnectionState, type GitStatus } from './client'
 import { CodeTerminal } from './CodeTerminal'
 import { isMac, shortcut } from './ContextMenu'
+import { containerShell, DockerView } from './DockerView'
 import { EditorArea, tabKey, type Tab } from './EditorArea'
 import { ProjectView } from './ProjectView'
 import { Languages, LanguagesContext } from './lsp'
@@ -88,12 +89,17 @@ function colourFor(name: string) {
 type Store = { tabs: Tab[]; active: string | null }
 
 // A tool window that moves between the sides, and the side it is on.
-type ToolName = 'project' | 'changes'
+type ToolName = 'project' | 'changes' | 'docker'
 type Side = 'left' | 'right'
 type Sides = Record<ToolName, Side>
-const defaultSides: Sides = { project: 'left', changes: 'right' }
-const toolNames: ToolName[] = ['project', 'changes']
-const toolTitles: Record<ToolName, string> = { project: 'Project', changes: 'Changes' }
+const defaultSides: Sides = { project: 'left', changes: 'right', docker: 'right' }
+const toolNames: ToolName[] = ['project', 'changes', 'docker']
+const toolTitles: Record<ToolName, string> = { project: 'Project', changes: 'Changes', docker: 'Docker' }
+const toolIcons: Record<ToolName, ReactNode> = {
+  project: <FolderTree size={16} />,
+  changes: <GitCompare size={16} />,
+  docker: <Container size={16} />,
+}
 
 function sidesFrom(settings: Record<string, unknown>): Sides {
   const tw = settings.toolWindows as Partial<Record<ToolName, unknown>> | undefined
@@ -220,10 +226,10 @@ function CodeView({
   }
 
   // Open in Terminal: a new session in a folder.
-  const [termIn, setTermIn] = useState<{ dir: string; n: number } | null>(null)
-  const openTerminal = (dir: string) => {
+  const [termIn, setTermIn] = useState<{ dir: string; run?: string; n: number } | null>(null)
+  const openTerminal = (dir: string, run?: string) => {
     terminal.current?.expand()
-    setTermIn((t) => ({ dir, n: (t?.n ?? 0) + 1 }))
+    setTermIn((t) => ({ dir, run, n: (t?.n ?? 0) + 1 }))
   }
 
   // Search: popups, and the place in a file one of them opens.
@@ -353,7 +359,7 @@ function CodeView({
       onClick={() => toggleTool(name)}
       onPointerDown={(e) => dragTool(name, e, setDragging, dropTool)}
     >
-      {name === 'project' ? <FolderTree size={16} /> : <GitCompare size={16} />}
+      {toolIcons[name]}
       {name === 'changes' && !!status?.changes.length && <span className="code-stripe-count">{status.changes.length}</span>}
     </StripeButton>
   )
@@ -373,6 +379,13 @@ function CodeView({
         onOpenFolder={() => setPopup('folder')}
         onFolderHere={(dir) => onFolder(dir === client.home ? '' : dir)}
         onHide={() => hideTool('project')}
+      />
+    ) : name === 'docker' ? (
+      <DockerView
+        client={client}
+        onLogs={(c) => open({ kind: 'logs', path: c.id, title: c.name })}
+        onShell={(c) => openTerminal(client.root, containerShell(c.name))}
+        onHide={() => hideTool('docker')}
       />
     ) : (
       <ChangesView
@@ -482,7 +495,7 @@ function CodeView({
         </Stripe>
         {dragging && (
           <div className="code-drag-ghost" style={{ left: dragging.x + 12, top: dragging.y + 12 }}>
-            {dragging.tool === 'project' ? <FolderTree size={14} /> : <GitCompare size={14} />}
+            {toolIcons[dragging.tool]}
             {toolTitles[dragging.tool]}
           </div>
         )}
