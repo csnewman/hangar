@@ -1,5 +1,5 @@
 import { File, FileText, GitCompare, Monitor, X } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import type { CodeClient, GitStatus, SharedFile } from './client'
 import { CodeEditor } from './CodeEditor'
@@ -57,6 +57,19 @@ export function EditorArea({
 }) {
   const current = tabs.find((t) => tabKey(t) === active) ?? null
   const menu = useContextMenu()
+  const bar = useRef<HTMLDivElement>(null)
+
+  // The active tab is scrolled into the bar's view whenever a tab is
+  // opened or chosen, by the bar alone, so nothing around it moves.
+  useEffect(() => {
+    const b = bar.current
+    const el = b?.querySelector<HTMLElement>('[aria-selected=true]')
+    if (!b || !el) return
+    const box = b.getBoundingClientRect()
+    const r = el.getBoundingClientRect()
+    if (r.left < box.left) b.scrollLeft -= box.left - r.left
+    else if (r.right > box.left + b.clientWidth) b.scrollLeft += r.right - box.left - b.clientWidth
+  }, [active, tabs.length])
 
   // tabMenu is IntelliJ's and VS Code's tab menu, less what an editor
   // that saves as it goes has no use for.
@@ -94,7 +107,7 @@ export function EditorArea({
   return (
     <div className="code-editors">
       {tabs.length > 0 && (
-        <div className="code-tabs" role="tablist">
+        <div className="code-tabs" role="tablist" ref={bar}>
           {tabs.map((t) => {
             const key = tabKey(t)
             const name = t.title ?? t.path.split('/').pop() ?? t.path
