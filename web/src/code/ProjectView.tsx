@@ -9,11 +9,13 @@ import {
   FolderPlus,
   ListCollapse,
   RefreshCw,
+  Search,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { CodeClient, Entry, GitStatus } from './client'
 import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
+import { marked, match } from './match'
 import { ToolWindow } from './ToolWindow'
 import { openWith, type FileView } from './views'
 
@@ -22,7 +24,9 @@ type Editing = { kind: 'file' | 'dir'; parent: string } | { kind: 'rename'; path
 
 // ProjectView is the Project tool window: the files under the root, loaded a
 // folder at a time as they are opened, kept current as they change on disk,
-// and coloured by what git says of them.
+// and coloured by what git says of them. Focused, it is worked with the
+// keyboard: the arrows move, open and close, Enter opens, and typing
+// searches the rows shown.
 export function ProjectView({
   client,
   env,
@@ -75,6 +79,18 @@ export function ProjectView({
   expandedRef.current = expanded
   const selectedRef = useRef(selected)
   selectedRef.current = selected
+  // The row the keyboard is on, and what is typed to find one (speed
+  // search, as IntelliJ's): rows shown whose names match are marked, and
+  // the cursor goes to the best.
+  const [cursor, setCursor] = useState<string | null>(null)
+  const [query, setQueryState] = useState('')
+  // Keys come faster than renders: what is typed is kept here too, for
+  // each key to add to.
+  const typed = useRef('')
+  const setQuery = (q: string) => {
+    typed.current = q
+    setQueryState(q)
+  }
 
   const load = useCallback(
     async (dir: string) => {
@@ -279,11 +295,22 @@ export function ProjectView({
           return (
             <div key={path}>
               <div
-                className={`code-tree-row ${highlighted === path ? 'code-tree-row-on' : ''}`}
+                className={[
+                  'code-tree-row',
+                  highlighted === path && 'code-tree-row-on',
+                  cursor === path && 'code-tree-row-cursor',
+                ]
+                  .filter(Boolean)
+                  .join(' ')}
                 data-path={path}
                 style={{ paddingLeft: 6 + depth * 14 }}
+                onMouseDown={() => {
+                  setCursor(path)
+                  setQuery('')
+                }}
                 onClick={() => {
                   setRevealed(null)
+                  tree.current?.focus()
                   if (e.dir) toggle(path)
                   else onOpen(path)
                 }}
@@ -300,7 +327,9 @@ export function ProjectView({
                 ) : (
                   <File size={14} className="code-icon-file" />
                 )}
-                <span className={`code-tree-name ${tone(path, e.dir)}`}>{e.name}</span>
+                <span className={`code-tree-name ${tone(path, e.dir)}`}>
+                  {query ? marked(e.name, match(e.name, query)?.ranges ?? []) : e.name}
+                </span>
               </div>
               {open && renderDir(path, depth + 1)}
             </div>
@@ -309,6 +338,101 @@ export function ProjectView({
       </>
     )
   }
+
+  // The rows shown, in order: the entries of every open folder.
+  const rows = (): { path: string; name: string; dir: boolean }[] => {
+    const out: { path: string; name: string; dir: boolean }[] = []
+    const walk = (dir: string) => {
+      for (const e of children[dir] ?? []) {
+        const path = dir ? `${dir}/${e.name}` : e.name
+        out.push({ path, name: e.name, dir: e.dir })
+        if (e.dir && expanded.has(path)) walk(path)
+      }
+    }
+    walk('')
+    return out
+  }
+
+  const goTo = (path: string) => {
+    setCursor(path)
+    requestAnimationFrame(() =>
+      tree.current?.querySelector(`[data-path="${CSS.escape(path)}"]`)?.scrollIntoView({ block: 'nearest' }),
+    )
+  }
+
+  // find puts the cursor on the best match for q, the earliest of the best
+  // from the cursor on.
+  const find = (q: string) => {
+    const all = rows()
+    const at = Math.max(0, all.findIndex((r) => r.path === cursor))
+    let best: { path: string; score: number; i: number } | null = null
+    all.forEach((r, i) => {
+      const m = match(r.name, q)
+      if (!m) return
+      const order = (i - at + all.length) % all.length
+      if (!best || m.score > best.score || (m.score === best.score && order < best.i)) {
+        best = { path: r.path, score: m.score, i: order }
+      }
+    })
+    if (best) goTo((best as { path: string }).path)
+  }
+
+  // step moves the cursor by one row, or to the next match while searching.
+  const step = (by: 1 | -1) => {
+    const all = rows()
+    const n = all.length
+    if (!n) return
+    const at = all.findIndex((r) => r.path === cursor)
+    const q = typed.current
+    if (!q) {
+      const i = at < 0 ? (by > 0 ? 0 : n - 1) : Math.max(0, Math.min(n - 1, at + by))
+      goTo(all[i].path)
+      return
+    }
+    const from = at < 0 ? (by > 0 ? -1 : 0) : at
+    for (let k = 1; k <= n; k++) {
+      const i = (((from + by * k) % n) + n) % n
+      if (match(all[i].name, q)) {
+        goTo(all[i].path)
+        return
+      }
+    }
+  }
+
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.target !== e.currentTarget) return
+    const all = rows()
+    const row = all.find((r) => r.path === cursor)
+    const parent = cursor?.includes('/') ? cursor.slice(0, cursor.lastIndexOf('/')) : null
+    const key = e.key
+    if (key === 'ArrowDown' || key === 'ArrowUp') step(key === 'ArrowDown' ? 1 : -1)
+    else if (key === 'ArrowRight' && row?.dir) {
+      if (!expanded.has(row.path)) toggle(row.path)
+      else {
+        const first = all[all.indexOf(row) + 1]
+        if (first?.path.startsWith(row.path + '/')) goTo(first.path)
+      }
+    } else if (key === 'ArrowLeft' && row) {
+      if (row.dir && expanded.has(row.path)) toggle(row.path)
+      else if (parent) goTo(parent)
+    } else if (key === 'Enter' && row) {
+      setQuery('')
+      if (row.dir) toggle(row.path)
+      else onOpen(row.path)
+    } else if (key === 'Escape' && typed.current) setQuery('')
+    else if (key === 'Backspace' && typed.current) {
+      const q = typed.current.slice(0, -1)
+      setQuery(q)
+      if (q) find(q)
+    } else if (key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey && (typed.current || key !== ' ')) {
+      const q = typed.current + key
+      setQuery(q)
+      find(q)
+    } else return
+    e.preventDefault()
+  }
+
+  const queryFound = !query || rows().some((r) => match(r.name, query))
 
   const rootName = root ? root.split('/').pop() || root : 'Project'
   return (
@@ -351,9 +475,21 @@ export function ProjectView({
         </>
       }
     >
+      {query && (
+        <div className={queryFound ? 'code-speed' : 'code-speed code-speed-none'}>
+          <Search size={12} />
+          <span>{query}</span>
+        </div>
+      )}
       <div
         className="code-tree"
         ref={tree}
+        tabIndex={0}
+        onKeyDown={onKey}
+        onBlur={() => setQuery('')}
+        onFocus={() => {
+          if (!cursor) setCursor(highlighted ?? rows()[0]?.path ?? null)
+        }}
         onContextMenu={(ev) => {
           if (ev.target === ev.currentTarget || (ev.target as HTMLElement).closest('.code-tree-root')) {
             menu.open(ev, entryMenu('', true, ev.clientX, ev.clientY))

@@ -284,6 +284,7 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
 }
 
 .code-note {
@@ -322,6 +323,40 @@
   overflow: auto;
   padding: 4px 0 12px;
   user-select: none;
+  outline: none;
+}
+
+/* The keyboard's row, while the tree has the focus. */
+.code-tree:focus .code-tree-row-cursor {
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.code-tree-name mark {
+  background: rgb(255 196 0 / 0.45);
+  color: inherit;
+  border-radius: 2px;
+}
+
+/* Speed search: what is typed, over the tree's top, as IntelliJ shows it. */
+.code-speed {
+  position: absolute;
+  top: 4px;
+  left: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  font-size: 12.5px;
+}
+
+.code-speed-none {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .code-tree-root {
