@@ -18,6 +18,8 @@
   --danger: #c9302c;
   --danger-bg: #fdf1f0;
   --good-bg: #edf8f0;
+  --warn-bg: #fdf6e7;
+  --warn-border: #efd49a;
 
   --good: #1f9d55;
   --busy: #d18a00;
@@ -54,6 +56,8 @@
     --danger: #f07370;
     --danger-bg: #2b1718;
     --good-bg: #13261b;
+    --warn-bg: #2a2212;
+    --warn-border: #5c4718;
 
     --good: #34c46f;
     --busy: #f0a92a;
@@ -2588,6 +2592,12 @@ a.reason {
   margin: 0;
   padding: 10px 12px;
   border-top: 1px solid var(--border);
+}
+
+/* A change here reaches other people. */
+.notice-warn {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
 }
 
 /* How an environment differs from its template, and the way back to it. */

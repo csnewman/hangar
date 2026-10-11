@@ -499,11 +499,35 @@ function CopyFiles({ copy, pack }: { copy: string; pack: Pack }) {
   )
   if (files.isError) return <div className="alert">{files.error.message}</div>
   if (!files.data) return null
+  const c = files.data.copy
   return (
     <section className="section">
       <h2 className="section-title">Files</h2>
+      {!c.personal && c.can_write && c.team && (
+        <div className="notice notice-warn">
+          This is {c.team}'s shared copy, {c.name}: a file you change, add or remove here changes in the environments of
+          everyone in {c.team} who uses it, not just yours.
+        </div>
+      )}
       <FileBrowser source={source} files={files.data.files} paths={shared} open={open} onOpen={setOpen} />
     </section>
+  )
+}
+
+// ReachWarning says, to someone who may change a pack, who else a change
+// reaches: everyone, for a built-in pack or one attached to everyone, and a
+// team's members, for a team's pack.
+function ReachWarning({ pack }: { pack: Pack }) {
+  let who = ''
+  if (pack.builtin || pack.attach === 'everyone') who = "every user's environments"
+  else if (pack.team) who = `the environments of everyone in ${pack.team} who uses it`
+  if (!who) return null
+  return (
+    <div className="notice notice-warn">
+      {pack.builtin ? 'This is a built-in pack: changes' : 'Changes'} to its paths and settings apply to {who}, not just
+      yours. A path taken out stops being shared for all of them, and one added starts sharing what each of them has
+      there.
+    </div>
   )
 }
 
@@ -539,6 +563,7 @@ function PackSettings({ pack }: { pack: Pack }) {
   return (
     <section className="section">
       <h2 className="section-title">Paths and settings</h2>
+      {!disabled && <ReachWarning pack={pack} />}
       {disabled && (
         <p className="muted small">
           {pack.builtin
