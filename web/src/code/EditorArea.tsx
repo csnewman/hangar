@@ -31,6 +31,7 @@ export function EditorArea({
   onCloseMany,
   onReopen,
   onReveal,
+  onShowCommit,
   jump,
 }: {
   client: CodeClient
@@ -49,6 +50,7 @@ export function EditorArea({
   onCloseMany: (keys: string[]) => void
   onReopen: () => void
   onReveal: (path: string) => void
+  onShowCommit: (hash: string) => void
 }) {
   const current = tabs.find((t) => tabKey(t) === active) ?? null
   const menu = useContextMenu()
@@ -113,6 +115,7 @@ export function EditorArea({
             user={user}
             jump={jump}
             onReveal={onReveal}
+            onShowCommit={onShowCommit}
           />
         )}
         {current?.kind === 'diff' && (
@@ -159,6 +162,7 @@ function FileTab({
   user,
   jump,
   onReveal,
+  onShowCommit,
 }: {
   client: CodeClient
   path: string
@@ -166,6 +170,7 @@ function FileTab({
   user: { name: string; color: string }
   jump: (Jump & { n: number }) | null
   onReveal: (path: string) => void
+  onShowCommit: (hash: string) => void
 }) {
   const [shown, setShown] = useState<FileView | null>(view ?? (opensAsImage(path) ? 'image' : null))
   useEffect(() => {
@@ -179,7 +184,9 @@ function FileTab({
   if (shown === 'image') return <ImageView client={client} path={path} />
   if (shown === 'hex') return <HexView client={client} path={path} />
   if (!shown) return <div className="code-empty"><p className="muted">Opening {path}…</p></div>
-  return <TextTab client={client} path={path} user={user} jump={jump} onReveal={onReveal} />
+  return (
+    <TextTab client={client} path={path} user={user} jump={jump} onReveal={onReveal} onShowCommit={onShowCommit} />
+  )
 }
 
 // TextTab is a text file, shared with everyone who has it open.
@@ -189,12 +196,14 @@ function TextTab({
   user,
   jump,
   onReveal,
+  onShowCommit,
 }: {
   client: CodeClient
   path: string
   user: { name: string; color: string }
   jump: (Jump & { n: number }) | null
   onReveal: (path: string) => void
+  onShowCommit: (hash: string) => void
 }) {
   const [file, setFile] = useState<SharedFile | null>(null)
   const [error, setError] = useState('')
@@ -234,5 +243,15 @@ function TextTab({
 
   if (error) return <div className="code-empty"><p className="code-note-error">{error}</p></div>
   if (!file) return <div className="code-empty"><p className="muted">Opening {path}…</p></div>
-  return <CodeEditor file={file} user={user} client={client} path={path} jump={jump} onReveal={onReveal} />
+  return (
+    <CodeEditor
+      file={file}
+      user={user}
+      client={client}
+      path={path}
+      jump={jump}
+      onReveal={onReveal}
+      onShowCommit={onShowCommit}
+    />
+  )
 }

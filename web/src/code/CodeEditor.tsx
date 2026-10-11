@@ -136,14 +136,32 @@ export const codeTheme = EditorView.theme({
   '.cm-foldGutter .cm-gutterElement': { color: 'var(--muted)' },
   '.cm-panels': { backgroundColor: 'var(--surface)', color: 'var(--text)' },
   '.cm-blame-gutter .cm-gutterElement': {
+    boxSizing: 'border-box',
+    width: 'var(--blame-width, 170px)',
     padding: '0 10px 0 6px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
     color: 'var(--muted)',
     fontFamily: 'var(--font)',
     fontSize: '11.5px',
     cursor: 'default',
   },
   '.cm-blame-gutter .cm-blame-fresh': { color: 'var(--accent)' },
-  '.cm-blame-gutter': { borderRight: '1px solid var(--border)' },
+  '.cm-blame-gutter .cm-blame-commit': { cursor: 'pointer' },
+  '.cm-blame-gutter .cm-blame-commit:hover': { color: 'var(--accent)', textDecoration: 'underline' },
+  // Its right edge drags its width.
+  '.cm-blame-gutter': { position: 'relative', borderRight: '1px solid var(--border)' },
+  '.cm-blame-gutter::after': {
+    content: '""',
+    position: 'absolute',
+    top: '0',
+    bottom: '0',
+    right: '-1px',
+    width: '6px',
+    cursor: 'col-resize',
+  },
+  '.cm-blame-gutter:hover::after': { borderRight: '2px solid var(--accent)' },
   '.cm-tooltip': {
     backgroundColor: 'var(--surface) !important',
     color: 'var(--text) !important',
@@ -218,6 +236,7 @@ export function CodeEditor({
   path,
   jump,
   onReveal,
+  onShowCommit,
 }: {
   file: SharedFile
   user: { name: string; color: string }
@@ -226,6 +245,8 @@ export function CodeEditor({
   // jump is a place to put the caret, each time it changes.
   jump?: (Jump & { n: number }) | null
   onReveal: (path: string) => void
+  // onShowCommit shows a commit in the Git Log: one clicked in the blame.
+  onShowCommit: (hash: string) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -234,6 +255,8 @@ export function CodeEditor({
   jumpRef.current = jump
   // Git blame in the gutter, while asked for.
   const [annotating, setAnnotating] = useState(false)
+  const onShowCommitRef = useRef(onShowCommit)
+  onShowCommitRef.current = onShowCommit
   const blameSlot = useRef(new Compartment())
   const languages = useContext(LanguagesContext)
   const [server, setServer] = useState<ServerState | null>(null)
@@ -507,7 +530,9 @@ export function CodeEditor({
         (b) => live && view.dispatch({ effects: setBlame.of(blameMarkers(view.state.doc, b)) }),
         () => live && setAnnotating(false),
       )
-    view.dispatch({ effects: blameSlot.current.reconfigure(Prec.highest(blameGutter)) })
+    view.dispatch({
+      effects: blameSlot.current.reconfigure(Prec.highest(blameGutter((hash) => onShowCommitRef.current(hash)))),
+    })
     load()
     let timer: ReturnType<typeof setTimeout> | undefined
     const off = client.on('git.changed', () => {

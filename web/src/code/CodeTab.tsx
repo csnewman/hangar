@@ -254,8 +254,14 @@ function CodeView({
     setBottom(w)
     fold('terminal', true)
   }
-  // The Git Log reads the history once first shown, and is kept after.
+  // The Git Log reads the history once first shown, and is kept after. A
+  // commit asked for elsewhere (the blame) is found and chosen in it.
   const [logSeen, setLogSeen] = useState(false)
+  const [logFocus, setLogFocus] = useState<{ hash: string; n: number } | null>(null)
+  const showCommit = (hash: string) => {
+    setLogFocus((f) => ({ hash, n: (f?.n ?? 0) + 1 }))
+    showBottom('log')
+  }
   useEffect(() => {
     if (bottom === 'log') setLogSeen(true)
   }, [bottom])
@@ -544,6 +550,7 @@ function CodeView({
                     onCloseMany={closeTabs}
                     onReopen={reopen}
                     onReveal={revealInProject}
+                    onShowCommit={showCommit}
                   />
                 </Panel>
                 {right.length > 0 && [<Separator key="right-sep" className="code-split code-split-v" />, toolPanel('right')]}
@@ -569,6 +576,7 @@ function CodeView({
                 <div className="code-side-slot" hidden={bottom !== 'log'}>
                   <GitLog
                     client={client}
+                    focus={logFocus}
                     onDiff={(path, against) => open({ kind: 'diff', path, ...against })}
                     onHide={() => fold('terminal', false)}
                   />

@@ -19,10 +19,13 @@ const laneWidth = 12
 // each opening its diff in that commit.
 export function GitLog({
   client,
+  focus,
   onDiff,
   onHide,
 }: {
   client: CodeClient
+  // focus is a commit to find and choose, each time it changes.
+  focus?: { hash: string; n: number } | null
   onDiff: (path: string, against: DiffAgainst) => void
   onHide: () => void
 }) {
@@ -116,6 +119,33 @@ export function GitLog({
   }, [])
   const first = Math.max(0, Math.floor(view.top / rowHeight) - 10)
   const last = Math.min(shown.length, Math.ceil((view.top + view.height) / rowHeight) + 10)
+
+  // A commit asked for is chosen at once, its details shown, and the
+  // history read on, every branch's and unfiltered, until it is in the
+  // list to scroll to, or the history ends.
+  const [seek, setSeek] = useState<string | null>(null)
+  useEffect(() => {
+    if (!focus) return
+    setFilter('')
+    setRef(undefined)
+    setSelected(focus.hash)
+    setSeek(focus.hash)
+  }, [focus])
+  useEffect(() => {
+    if (!seek || q || ref !== undefined) return
+    const i = commits.findIndex((c) => c.hash === seek)
+    if (i >= 0) {
+      setSeek(null)
+      const el = list.current
+      if (el) {
+        el.scrollTop = Math.max(0, i * rowHeight - el.clientHeight / 2)
+        setView({ top: el.scrollTop, height: el.clientHeight })
+      }
+      return
+    }
+    if (more) load(true)
+    else if (commits.length) setSeek(null)
+  }, [seek, commits, more, q, ref, load])
 
   const index = shown.findIndex(({ c }) => c.hash === selected)
   const select = (i: number) => {
