@@ -37,9 +37,21 @@ const diffSide = (lang: Extension): Extension => [
   EditorView.editable.of(false),
 ]
 
-// DiffView shows a file as it was at HEAD beside its working copy, and follows
-// the file as it changes, whoever changes it.
-export function DiffView({ client, path }: { client: CodeClient; path: string }) {
+// DiffView shows a file as it was at HEAD, or at base, beside its working
+// copy, and follows the file as it changes, whoever changes it.
+export function DiffView({
+  client,
+  path,
+  base,
+  baseLabel,
+  from,
+}: {
+  client: CodeClient
+  path: string
+  base?: string
+  baseLabel?: string
+  from?: string
+}) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
 
@@ -53,7 +65,7 @@ export function DiffView({ client, path }: { client: CodeClient; path: string })
 
     const load = async () => {
       try {
-        const d = await client.diff(path)
+        const d = await client.diff(path, base, from)
         if (disposed) return
         setError('')
         const scroll = view?.b.scrollDOM.scrollTop ?? 0
@@ -90,12 +102,12 @@ export function DiffView({ client, path }: { client: CodeClient; path: string })
       offGit()
       view?.destroy()
     }
-  }, [client, path])
+  }, [client, path, base, from])
 
   return (
     <div className="code-diff">
       <div className="code-diff-heads">
-        <span>HEAD</span>
+        <span>{base ? (baseLabel ?? base.slice(0, 8)) : 'HEAD'}</span>
         <span>Working tree</span>
       </div>
       {error && <div className="code-note">{error}</div>}

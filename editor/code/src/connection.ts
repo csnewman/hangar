@@ -226,7 +226,15 @@ export class Connection {
 			case 'git.status':
 				return this.f.git.status()
 			case 'git.diff':
-				return this.f.git.diff(str('path'))
+				return this.f.git.diff(
+					str('path'),
+					typeof p.against === 'string' && p.against ? p.against : 'HEAD',
+					typeof p.from === 'string' && p.from ? p.from : undefined,
+				)
+			case 'git.blame':
+				return this.f.git.blame(str('path'))
+			case 'git.branchChanges':
+				return this.f.git.branchChanges(typeof p.base === 'string' ? p.base : undefined)
 			case 'git.stage':
 				return this.f.git.stage(str('path'))
 			case 'git.unstage':

@@ -44,6 +44,7 @@ import * as Y from 'yjs'
 import type { CodeClient, SharedFile } from './client'
 import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { baseText, gitGutter, hunkAt, rollback, setBase, staged, type Hunk } from './gitGutter'
+import { blameField, blameGutter, blameMarkers, setBlame } from './blame'
 import { languageId, Languages, LanguagesContext, type ServerState } from './lsp'
 import type { Jump } from './Search'
 
@@ -133,6 +134,15 @@ export const codeTheme = EditorView.theme({
   '.cm-cursor': { borderLeftColor: 'var(--accent)' },
   '.cm-foldGutter .cm-gutterElement': { color: 'var(--muted)' },
   '.cm-panels': { backgroundColor: 'var(--surface)', color: 'var(--text)' },
+  '.cm-blame-gutter .cm-gutterElement': {
+    padding: '0 10px 0 6px',
+    color: 'var(--muted)',
+    fontFamily: 'var(--font)',
+    fontSize: '11.5px',
+    cursor: 'default',
+  },
+  '.cm-blame-gutter .cm-blame-fresh': { color: 'var(--accent)' },
+  '.cm-blame-gutter': { borderRight: '1px solid var(--border)' },
   '.cm-tooltip': {
     backgroundColor: 'var(--surface) !important',
     color: 'var(--text) !important',
@@ -221,6 +231,9 @@ export function CodeEditor({
   const [ready, setReady] = useState(false)
   const jumpRef = useRef(jump)
   jumpRef.current = jump
+  // Git blame in the gutter, while asked for.
+  const [annotating, setAnnotating] = useState(false)
+  const blameSlot = useRef(new Compartment())
   const languages = useContext(LanguagesContext)
   const [server, setServer] = useState<ServerState | null>(null)
   // A file the user may not write -- a library's, reached by going to a
@@ -294,6 +307,11 @@ export function CodeEditor({
       { label: 'Move Line Down', shortcut: shortcut('Alt+Shift+↓'), onSelect: run(moveLineDown) },
       { label: 'Delete Line', shortcut: shortcut('Mod+Y'), onSelect: run(deleteLine) },
       'separator',
+      {
+        label: annotating ? 'Close Annotations' : 'Annotate with Git Blame',
+        onSelect: () => setAnnotating((a) => !a),
+      },
+      'separator',
       { label: 'Copy Path', onSelect: () => copyText(`${client.root}/${path}`) },
       { label: 'Copy Reference', onSelect: () => copyText(`${path}:${line.number}`) },
       { label: 'Reveal in Project', onSelect: () => onReveal(path) },
@@ -349,6 +367,8 @@ export function CodeEditor({
           codeTheme,
           language.of([]),
           lsp.of([]),
+          blameField,
+          blameSlot.current.of([]),
           EditorState.readOnly.of(readOnly),
           yCollab(file.text, file.awareness, { undoManager: undo }),
           gitGutter((v, h, e) => setHunk({ view: v, h, x: e.clientX, y: e.clientY })),
@@ -429,6 +449,35 @@ export function CodeEditor({
       undo.destroy()
     }
   }, [file, user.name, user.color, client, path, languages, outside, readOnly])
+
+  // Annotations: loaded when asked for, again as git's state moves (a
+  // commit), and gone when closed.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!ready || !view) return
+    if (!annotating) {
+      view.dispatch({ effects: [blameSlot.current.reconfigure([]), setBlame.of(null)] })
+      return
+    }
+    let live = true
+    const load = () =>
+      client.blame(path).then(
+        (b) => live && view.dispatch({ effects: setBlame.of(blameMarkers(view.state.doc, b)) }),
+        () => live && setAnnotating(false),
+      )
+    view.dispatch({ effects: blameSlot.current.reconfigure(Prec.highest(blameGutter)) })
+    load()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const off = client.on('git.changed', () => {
+      clearTimeout(timer)
+      timer = setTimeout(load, 300)
+    })
+    return () => {
+      live = false
+      clearTimeout(timer)
+      off()
+    }
+  }, [ready, annotating, client, path])
 
   // A jump puts the caret on its line, selecting the text it names there,
   // with the line in the middle of the view.

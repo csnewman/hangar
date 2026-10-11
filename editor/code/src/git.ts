@@ -30,6 +30,22 @@ export type Branch = {
 	behind?: number
 }
 
+// BranchChanges is what a branch has changed since it left its base: the
+// commits since, and every file differing from the base, committed or not.
+export type BranchChanges = {
+	base: string
+	mergeBase: string
+	commits: { hash: string; subject: string; author: string; time: number }[]
+	changes: { path: string; status: string; from?: string }[]
+}
+
+// Blame is who last changed each line of a file: the commits, by hash,
+// and each line's commit. Lines not yet committed have the all-zero hash.
+export type Blame = {
+	commits: Record<string, { author: string; time: number; summary: string }>
+	lines: string[]
+}
+
 export type Branches = {
 	current?: string
 	local: Branch[]
@@ -198,19 +214,24 @@ export class Git {
 		return (await this.status()).changes.find((c) => c.path === rel)
 	}
 
-	// diff returns a file as it was at HEAD and as the working tree has it,
-	// for a diff view to compare. A file new since HEAD was empty there.
-	async diff(path: string): Promise<{ path: string; head: string; working: string }> {
+	// diff returns a file as it was at HEAD, or at another commit, and as
+	// the working tree has it, for a diff view to compare. A file new since
+	// was empty there; one renamed since is compared with its old name.
+	async diff(path: string, against = 'HEAD', from?: string): Promise<{ path: string; head: string; working: string }> {
 		const rel = this.rel(path)
+		if (!/^[\w./~^-]+$/.test(against) || against.startsWith('-')) throw new Error(`not a revision: ${against}`)
 		let head = ''
 		try {
-			head = await run(this.root, ['show', `HEAD:./${rel}`])
+			head = await run(this.root, ['show', `${against}:./${from ? this.rel(from) : rel}`])
 		} catch {
+			if (against !== 'HEAD') {
+				return { path: rel, head, working: await readFile(join(this.root, rel), 'utf8').catch(() => '') }
+			}
 			// Not in HEAD, unless under the name it was renamed from.
-			const from = (await this.change(rel))?.from
-			if (from) {
+			const renamed = (await this.change(rel))?.from
+			if (renamed) {
 				try {
-					head = await run(this.root, ['show', `HEAD:./${from}`])
+					head = await run(this.root, ['show', `HEAD:./${renamed}`])
 				} catch {
 					// New after all.
 				}
@@ -296,6 +317,94 @@ export class Git {
 		} catch {
 			return ''
 		}
+	}
+
+	// blame says who last changed each line of a file as it is on disk.
+	async blame(path: string): Promise<Blame> {
+		const rel = this.rel(path)
+		const out = await run(this.root, ['blame', '--porcelain', '--', `./${rel}`])
+		const blame: Blame = { commits: {}, lines: [] }
+		let hash = ''
+		for (const line of out.split('\n')) {
+			if (line.startsWith('\t')) {
+				blame.lines.push(hash)
+				continue
+			}
+			const head = /^([0-9a-f]{40}) \d+ \d+/.exec(line)
+			if (head) {
+				hash = head[1]
+				blame.commits[hash] ??= { author: '', time: 0, summary: '' }
+				continue
+			}
+			const c = blame.commits[hash]
+			if (!c) continue
+			if (line.startsWith('author ')) c.author = line.slice(7)
+			else if (line.startsWith('author-time ')) c.time = Number(line.slice(12))
+			else if (line.startsWith('summary ')) c.summary = line.slice(8)
+		}
+		return blame
+	}
+
+	// defaultBase is the branch others are based on: the remote's default
+	// (origin/HEAD), else the first of origin/main, origin/master, main and
+	// master there is.
+	async defaultBase(): Promise<string | null> {
+		try {
+			return (await run(this.root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).trim()
+		} catch {
+			// No remote default.
+		}
+		for (const b of ['origin/main', 'origin/master', 'main', 'master']) {
+			try {
+				await run(this.root, ['rev-parse', '--verify', '--quiet', `${b}^{commit}`])
+				return b
+			} catch {
+				// Not here.
+			}
+		}
+		return null
+	}
+
+	// branchChanges compares the working tree with where it left base (the
+	// default base when none is given).
+	async branchChanges(base?: string): Promise<BranchChanges> {
+		const b = base || (await this.defaultBase())
+		if (!b) throw new Error('there is no main branch to compare with')
+		if (b.startsWith('-')) throw new Error(`not a branch: ${b}`)
+		const mergeBase = (await run(this.root, ['merge-base', 'HEAD', b])).trim()
+		const log = await run(this.root, ['log', '--max-count=200', '--format=%h%x1f%s%x1f%an%x1f%ct', `${mergeBase}..HEAD`])
+		const commits = log
+			.split('\n')
+			.filter(Boolean)
+			.map((l) => {
+				const [hash, subject, author, time] = l.split('\x1f')
+				return { hash, subject, author, time: Number(time) }
+			})
+		const out = await run(this.root, ['diff', '-z', '--name-status', '--find-renames', '--relative', mergeBase, '--', '.'])
+		const parts = out.split('\0')
+		const changes: BranchChanges['changes'] = []
+		for (let i = 0; i < parts.length; i++) {
+			const status = parts[i]
+			if (!status) continue
+			if (status.startsWith('R') || status.startsWith('C')) {
+				const from = parts[++i]
+				const path = parts[++i]
+				changes.push({ path, status: status[0], from })
+			} else changes.push({ path: parts[++i], status: status[0] })
+		}
+		// Files git does not know of yet are the branch's too, and one moved
+		// without git is a rename of the file the diff has deleted.
+		for (const c of (await this.status()).changes) {
+			if (changes.some((x) => x.path === c.path)) continue
+			if (c.index === '?') changes.push({ path: c.path, status: 'A' })
+			else if (c.index === '.' && c.worktree === 'R' && c.from) {
+				const gone = changes.findIndex((x) => x.path === c.from && x.status === 'D')
+				if (gone >= 0) changes.splice(gone, 1, { path: c.path, status: 'R', from: c.from })
+				else changes.push({ path: c.path, status: 'A' })
+			}
+		}
+		changes.sort((x, y) => x.path.localeCompare(y.path))
+		return { base: b, mergeBase, commits, changes }
 	}
 
 	async branches(): Promise<Branches> {

@@ -560,3 +560,54 @@ test('docker: containers, actions, logs and changes', async () => {
 		b.close()
 	}
 })
+
+test("a branch's changes since it left main", async () => {
+	const repo = join(dir, 'branchy')
+	const g = (...args: string[]) => execFileSync('git', ['-C', repo, ...args]).toString()
+	execFileSync('git', ['init', '-q', '-b', 'main', repo])
+	writeFileSync(join(repo, 'kept.txt'), 'kept\n')
+	writeFileSync(join(repo, 'old.txt'), 'one\ntwo\nthree\nfour\n')
+	g('add', '.')
+	g('commit', '-q', '-m', 'base')
+	g('checkout', '-q', '-b', 'feature')
+	writeFileSync(join(repo, 'kept.txt'), 'kept, changed\n')
+	g('commit', '-q', '-am', 'change kept')
+	g('mv', 'old.txt', 'new.txt')
+	g('commit', '-q', '-m', 'rename')
+	// main moves on after the branch left it; that is not the branch's.
+	g('checkout', '-q', 'main')
+	writeFileSync(join(repo, 'mainonly.txt'), 'x\n')
+	g('add', '.')
+	g('commit', '-q', '-m', 'main moves on')
+	g('checkout', '-q', 'feature')
+	// Not committed: an edit, and a file git does not know.
+	writeFileSync(join(repo, 'new.txt'), 'one\ntwo\nthree\nfour\nfive\n')
+	writeFileSync(join(repo, 'fresh.txt'), 'fresh\n')
+	// And moved without git.
+	renameSync(join(repo, 'kept.txt'), join(repo, 'moved.txt'))
+
+	const a = new Client()
+	try {
+		await a.call('hello', { root: repo })
+		const bc = await a.call('git.branchChanges', {})
+		assert.equal(bc.base, 'main')
+		assert.deepEqual(bc.commits.map((c: any) => c.subject), ['rename', 'change kept'])
+		assert.deepEqual(bc.changes, [
+			{ path: 'fresh.txt', status: 'A' },
+			{ path: 'moved.txt', status: 'R', from: 'kept.txt' },
+			{ path: 'new.txt', status: 'R', from: 'old.txt' },
+		])
+		// Blame: the renamed file's lines were committed in the base, its last
+		// line is not committed yet.
+		const blame = await a.call('git.blame', { path: 'new.txt' })
+		assert.equal(blame.lines.length, 5)
+		assert.equal(blame.commits[blame.lines[0]].summary, 'base')
+		assert.equal(blame.lines[4], '0'.repeat(40))
+		const d = await a.call('git.diff', { path: 'new.txt', against: bc.mergeBase, from: 'old.txt' })
+		assert.equal(d.head, 'one\ntwo\nthree\nfour\n')
+		assert.equal(d.working, 'one\ntwo\nthree\nfour\nfive\n')
+		await assert.rejects(a.call('git.diff', { path: 'new.txt', against: '--output=x' }), /not a revision/)
+	} finally {
+		a.close()
+	}
+})

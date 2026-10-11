@@ -49,6 +49,18 @@ export interface Diff {
   working: string
 }
 
+export interface Blame {
+  commits: Record<string, { author: string; time: number; summary: string }>
+  lines: string[]
+}
+
+export interface BranchChanges {
+  base: string
+  mergeBase: string
+  commits: { hash: string; subject: string; author: string; time: number }[]
+  changes: { path: string; status: string; from?: string }[]
+}
+
 export interface Branch {
   name: string
   upstream?: string
@@ -458,8 +470,19 @@ export class CodeClient {
   status() {
     return this.request<GitStatus>('git.status')
   }
-  diff(path: string) {
-    return this.request<Diff>('git.diff', { path })
+  // diff is a file as HEAD has it, or another commit (against), under the
+  // name it had there (from), beside the working tree's.
+  diff(path: string, against?: string, from?: string) {
+    return this.request<Diff>('git.diff', { path, against, from })
+  }
+  // blame is who last changed each line of a file, as it is on disk.
+  blame(path: string) {
+    return this.request<Blame>('git.blame', { path })
+  }
+  // branchChanges is what the branch has changed since it left base, the
+  // repository's main branch when none is given.
+  branchChanges(base?: string) {
+    return this.request<BranchChanges>('git.branchChanges', { base })
   }
   stage(path: string) {
     return this.request<void>('git.stage', { path })

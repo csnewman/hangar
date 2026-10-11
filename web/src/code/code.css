@@ -1440,3 +1440,58 @@
 .code-docker-danger {
   color: var(--danger);
 }
+
+/* The Changes window's Local and Branch views. */
+.code-changes-mode {
+  display: flex;
+  gap: 2px;
+  margin: 6px 8px 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.code-changes-mode button {
+  flex: 1;
+  padding: 3px 8px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.code-changes-mode button[aria-selected='true'] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.code-branch-base {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px 2px;
+}
+
+.code-changes-toggle {
+  cursor: pointer;
+  user-select: none;
+}
+
+.code-commit-row {
+  cursor: default;
+}
+
+/* The desktop, in an editor tab. */
+.code-desktop {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-desktop .desktop-page {
+  min-height: 0;
+}

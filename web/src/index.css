@@ -2728,3 +2728,41 @@ a.reason {
 .app-tip[hidden] {
   display: none;
 }
+
+/* The environment's bar folded away: a tab at the top to bring it back. */
+.env-bar[hidden] {
+  display: none;
+}
+
+.page-flush {
+  position: relative;
+}
+
+.env-bar-reveal {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 20;
+  transform: translateX(-50%);
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-top: none;
+  border-radius: 0 0 7px 7px;
+  background: var(--surface);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.env-bar-reveal:hover {
+  opacity: 1;
+  color: var(--text);
+}
+
+.env-bar-hide {
+  padding: 4px 6px;
+}

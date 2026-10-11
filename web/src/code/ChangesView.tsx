@@ -1,6 +1,7 @@
 import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, CloudDownload, GitBranch, Minus, Plus, RefreshCw, Undo2 } from 'lucide-react'
 import { useState, type MouseEvent } from 'react'
 
+import { BranchChanges, type DiffAgainst } from './BranchChanges'
 import type { Change, CodeClient, GitStatus } from './client'
 import { copyText, useContextMenu, type MenuItem } from './ContextMenu'
 import { ToolWindow } from './ToolWindow'
@@ -8,7 +9,8 @@ import { ToolWindow } from './ToolWindow'
 // ChangesView is the Changes tool window: what git says has changed, grouped
 // as IntelliJ's commit window groups it, with staging, rollback and a commit
 // box. Clicking a file opens its diff. Its title bar holds the branch, which
-// switches branches, and fetch, pull and push.
+// switches branches, and fetch, pull and push. Its Branch view shows
+// instead what the branch has changed since it left the main branch.
 export function ChangesView({
   client,
   status,
@@ -20,10 +22,11 @@ export function ChangesView({
   client: CodeClient
   status: GitStatus | null
   reload: () => void
-  onDiff: (path: string) => void
+  onDiff: (path: string, against?: DiffAgainst) => void
   onOpen: (path: string) => void
   onHide: () => void
 }) {
+  const [view, setView] = useState<'local' | 'branch'>('local')
   const [message, setMessage] = useState('')
   const [amend, setAmend] = useState(false)
   const [error, setError] = useState('')
@@ -263,14 +266,34 @@ export function ChangesView({
           </button>
         </form>
       )}
-      <div className="code-changes">
-        {status && !status.repo && <div className="code-note">This folder is not a git repository.</div>}
-        {status?.repo && changes.length === 0 && <div className="code-note">No changes.</div>}
-        {section('Staged', staged, true)}
-        {section('Changes', unstaged, false, unstaged.length ? { label: 'Stage all', run: stageAll } : undefined)}
-        {section('Unversioned files', unversioned, false)}
-      </div>
       {status?.repo && (
+        <div className="code-changes-mode" role="tablist">
+          <button type="button" role="tab" aria-selected={view === 'local'} onClick={() => setView('local')}>
+            Local
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === 'branch'}
+            title="Everything the branch has changed since it left the main branch"
+            onClick={() => setView('branch')}
+          >
+            Branch
+          </button>
+        </div>
+      )}
+      {view === 'branch' && status?.repo ? (
+        <BranchChanges client={client} status={status} onDiff={onDiff} onOpen={onOpen} />
+      ) : (
+        <div className="code-changes">
+          {status && !status.repo && <div className="code-note">This folder is not a git repository.</div>}
+          {status?.repo && changes.length === 0 && <div className="code-note">No changes.</div>}
+          {section('Staged', staged, true)}
+          {section('Changes', unstaged, false, unstaged.length ? { label: 'Stage all', run: stageAll } : undefined)}
+          {section('Unversioned files', unversioned, false)}
+        </div>
+      )}
+      {status?.repo && view === 'local' && (
         <div className="code-commit">
           <textarea
             className="code-commit-message"

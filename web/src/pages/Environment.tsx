@@ -1,4 +1,18 @@
-import { Activity, Code2, Copy, ExternalLink, FileCode2, GitBranch, LayoutDashboard, Monitor, ScrollText, SquareTerminal, type LucideIcon } from 'lucide-react'
+import {
+  Activity,
+  ChevronDown,
+  ChevronUp,
+  Code2,
+  Copy,
+  ExternalLink,
+  FileCode2,
+  GitBranch,
+  LayoutDashboard,
+  Monitor,
+  ScrollText,
+  SquareTerminal,
+  type LucideIcon,
+} from 'lucide-react'
 import { useState } from 'react'
 import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from 'react-router'
 
@@ -29,6 +43,8 @@ const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: 'logs', label: 'Logs', icon: ScrollText },
 ]
 
+const barKey = 'hangar.env.bar.hidden'
+
 // EnvironmentPage is one environment: its header and actions, and a tab for
 // each way into it. The tabs are routes, so a console can be linked to and
 // survives a reload.
@@ -41,6 +57,23 @@ export function EnvironmentPage() {
   const segment = useLocation().pathname.split('/')[3] ?? ''
   const tab = tabs.find((t) => t.to === segment) ?? tabs[0]
   useTitle(env?.name, env && tab.label)
+  // The bar can be folded away, for more of the tab, as this browser
+  // remembers.
+  const [barHidden, setBarHidden] = useState(() => {
+    try {
+      return localStorage.getItem(barKey) === 'true'
+    } catch {
+      return false
+    }
+  })
+  const hideBar = (hidden: boolean) => {
+    setBarHidden(hidden)
+    try {
+      localStorage.setItem(barKey, String(hidden))
+    } catch {
+      // Remembered for this page regardless.
+    }
+  }
 
   if (envs.isPending) return <div className="page" />
   if (!env) {
@@ -56,7 +89,12 @@ export function EnvironmentPage() {
 
   return (
     <div className="page page-flush">
-      <div className="env-bar">
+      {barHidden && (
+        <button type="button" className="env-bar-reveal" title={`Show ${env.name}'s bar`} onClick={() => hideBar(false)}>
+          <ChevronDown size={13} />
+        </button>
+      )}
+      <div className="env-bar" hidden={barHidden}>
         <div className="env-ident">
           {env.owner_id !== me.id && (
             <>
@@ -80,6 +118,15 @@ export function EnvironmentPage() {
         <div className="env-actions">
           {desktop && env.phase === 'running' && <DesktopActions env={env.id} />}
           <EnvironmentActions env={env} afterDelete="/environments" />
+          <button
+            type="button"
+            className="btn btn-ghost env-bar-hide"
+            title="Fold this bar away, for more room"
+            aria-label="Fold this bar away"
+            onClick={() => hideBar(true)}
+          >
+            <ChevronUp size={14} />
+          </button>
         </div>
       </div>
       {env.phase === 'starting' ? (

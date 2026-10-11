@@ -1,6 +1,6 @@
 import './code.css'
 
-import { Container, FolderTree, GitCompare, ListTree, SquareTerminal, TextSearch } from 'lucide-react'
+import { Container, FolderTree, GitCompare, ListTree, Monitor, SquareTerminal, TextSearch } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Group,
@@ -124,6 +124,7 @@ function CodeView({
   folder: string
   onFolder: (dir: string) => void
 }) {
+  const hasDesktop = useEnv().spec.display !== 'none'
   // What this tab remembers -- open tabs, open folders -- is kept per
   // folder.
   const scope = folder ? `${env}:${folder}` : env
@@ -419,7 +420,7 @@ function CodeView({
         client={client}
         status={status}
         reload={reloadStatus}
-        onDiff={(path) => open({ kind: 'diff', path })}
+        onDiff={(path, against) => open({ kind: 'diff', path, ...against })}
         onOpen={(path) => open({ kind: 'file', path })}
         onHide={() => hideTool('changes')}
       />
@@ -461,6 +462,15 @@ function CodeView({
         <Stripe side="left" over={dragging?.over === 'left'}>
           {left.map(toolButton)}
           <span className="code-tool-spacer" />
+          {hasDesktop && (
+            <StripeButton
+              on={store.active === 'desktop:desktop'}
+              title="Desktop (connected while its tab is shown)"
+              onClick={() => open({ kind: 'desktop', path: 'desktop', title: 'Desktop' })}
+            >
+              <Monitor size={16} />
+            </StripeButton>
+          )}
           <StripeButton on={false} title={`Find in Files (${shortcut('Mod+Shift+F')})`} onClick={() => setPopup('find')}>
             <TextSearch size={16} />
           </StripeButton>
