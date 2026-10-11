@@ -2796,5 +2796,11 @@ a.reason {
 }
 
 .env-bar-hide {
-  padding: 4px 6px;
+  gap: 0;
+  padding: 6px 8px;
+}
+
+/* A line of no text, so it is as tall as the buttons with text beside it. */
+.env-bar-hide::before {
+  content: '\200b';
 }
