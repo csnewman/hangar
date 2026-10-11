@@ -97,6 +97,10 @@ func TestSessionsOutliveConnections(t *testing.T) {
 	if r.Err != "" || r.Session.Clients != 2 {
 		t.Fatalf("second attach: %+v", r)
 	}
+	// It is told how much of what follows is the replay: the history so far.
+	if want := len("hello\r\none\r\ngot:one\r\n"); r.History != want {
+		t.Fatalf("history: %d bytes, want %d", r.History, want)
+	}
 	second.until("got:one")
 	second.send("two\n")
 	first.until("got:two")

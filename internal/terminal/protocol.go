@@ -77,6 +77,12 @@ type Reply struct {
 	Err      string    `json:"err,omitempty"`
 	Session  *Session  `json:"session,omitempty"`
 	Sessions []Session `json:"sessions,omitempty"`
+	// History is, for an attach, how many bytes of the output that follows
+	// are the replay of the session's recent output, before the live
+	// output. A terminal must not answer what the replay asks of it -- its
+	// size, its version -- since the program that asked may be long gone,
+	// and the answer would be typed into whatever reads the input now.
+	History int `json:"history,omitempty"`
 }
 
 // Frame types.

@@ -13,6 +13,7 @@ export interface SessionInfo {
 interface Reply {
   err?: string
   session?: SessionInfo
+  history?: number
 }
 
 // Frame types, as internal/terminal defines them.
@@ -24,8 +25,8 @@ const EXIT = 0x78 // 'x'
 export interface ConnectionEvents {
   // attached is called with the session once the server has attached to it,
   // before any of its output: the output that follows starts with a replay
-  // of the session's recent history.
-  attached(session: SessionInfo): void
+  // of the session's recent history, history bytes long.
+  attached(session: SessionInfo, history: number): void
   output(data: Uint8Array): void
   // exited is called when the session's shell exits.
   exited(code: number): void
@@ -66,7 +67,7 @@ export class Connection {
           return
         }
         attached = true
-        events.attached(reply.session)
+        events.attached(reply.session, reply.history ?? 0)
         return
       }
       const msg = new Uint8Array(e.data as ArrayBuffer)

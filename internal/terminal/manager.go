@@ -128,7 +128,7 @@ func (m *Manager) attach(conn io.ReadWriteCloser, br *bufio.Reader, req Request)
 	defer s.leave(c)
 
 	d := s.describe()
-	if err := writeReply(conn, Reply{Session: &d}); err != nil {
+	if err := writeReply(conn, Reply{Session: &d, History: len(history)}); err != nil {
 		return
 	}
 

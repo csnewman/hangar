@@ -165,13 +165,21 @@ export function TerminalPane({
 
     let current = initial.current
     let conn: Connection | null = null
+    // The replay's bytes still to come, and whether the terminal is still
+    // reading them. What the terminal answers while it reads them -- its
+    // size, its version, asked by a program that may be long gone -- is not
+    // sent: it would be typed into whatever reads the input now.
+    let replayLeft = 0
+    let replaying = false
     let retry: ReturnType<typeof setTimeout> | undefined
     let backoff = 500
     let disposed = false
 
     const connect = () => {
       conn = new Connection(env, current, initialDir.current, term.cols, term.rows, {
-        attached: (s) => {
+        attached: (s, history) => {
+          replayLeft = history
+          replaying = history > 0
           current = s.id
           initial.current = s.id
           backoff = 500
@@ -185,7 +193,18 @@ export function TerminalPane({
             toRun.current = undefined
           }
         },
-        output: (data) => term.write(data),
+        output: (data) => {
+          if (replayLeft <= 0) {
+            term.write(data)
+            return
+          }
+          replayLeft -= data.length
+          if (replayLeft > 0) term.write(data)
+          else
+            term.write(data, () => {
+              replaying = false
+            })
+        },
         exited: () => {
           setState('ended')
           setReason('')
@@ -215,8 +234,8 @@ export function TerminalPane({
       connect()
     }, 0)
 
-    term.onData((d) => conn?.input(d))
-    term.onBinary((d) => conn?.input(Uint8Array.from(d, (c) => c.charCodeAt(0))))
+    term.onData((d) => !replaying && conn?.input(d))
+    term.onBinary((d) => !replaying && conn?.input(Uint8Array.from(d, (c) => c.charCodeAt(0))))
     term.onResize(({ cols, rows }) => conn?.resize(cols, rows))
 
     const resize = new ResizeObserver(() => {
