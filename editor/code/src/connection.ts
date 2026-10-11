@@ -162,6 +162,14 @@ export class Connection {
 				return this.f.files.list(str('path'))
 			case 'fs.read':
 				return this.f.files.read(str('path'))
+			case 'fs.probe':
+				return this.f.files.probe(str('path'))
+			case 'fs.bytes':
+				return this.f.files.bytes(
+					str('path'),
+					typeof p.offset === 'number' ? p.offset : 0,
+					typeof p.length === 'number' ? p.length : 65536,
+				)
 			case 'fs.create':
 				return this.f.files.create(str('path'))
 			case 'fs.mkdir':
@@ -238,6 +246,8 @@ export class Connection {
 					typeof p.skip === 'number' ? p.skip : 0,
 					typeof p.max === 'number' ? p.max : 300,
 				)
+			case 'git.blob':
+				return this.f.git.blob(str('rev'), str('path'))
 			case 'git.commitInfo':
 				return this.f.git.commitInfo(str('hash'))
 			case 'git.blame':

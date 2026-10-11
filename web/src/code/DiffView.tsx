@@ -1,10 +1,13 @@
 import { MergeView } from '@codemirror/merge'
 import { EditorState, type Extension } from '@codemirror/state'
 import { EditorView, lineNumbers } from '@codemirror/view'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { formatBytes } from '../components/format'
 import type { CodeClient } from './client'
 import { codeHighlight, codeTheme, followScheme, languageFor } from './CodeEditor'
+import { toURL } from './ImageView'
+import { imageType } from './views'
 
 // diffTheme colours the merge view's changes by the page's --diff-*
 // colours (code.css), over the merge view's own, which follow CodeMirror's
@@ -61,6 +64,8 @@ export function DiffView({
   const [error, setError] = useState('')
   // What the diff alone does not show: a new name, or nothing changed.
   const [about, setAbout] = useState<{ from?: string; same: boolean } | null>(null)
+  // A file of bytes is shown by BinarySides; this counts its loads.
+  const [binary, setBinary] = useState<{ from?: string; n: number } | null>(null)
 
   useEffect(() => {
     const el = host.current
@@ -75,6 +80,14 @@ export function DiffView({
         const d = await client.diff(path, base, from, to)
         if (disposed) return
         setError('')
+        if (d.binary) {
+          view?.destroy()
+          view = null
+          setAbout(d.from ? { from: d.from, same: false } : null)
+          setBinary((b) => ({ from: d.from, n: (b?.n ?? 0) + 1 }))
+          return
+        }
+        setBinary(null)
         const scroll = view?.b.scrollDOM.scrollTop ?? 0
         const a = d.head.replace(/\r\n/g, '\n')
         const b = d.working.replace(/\r\n/g, '\n')
@@ -140,7 +153,69 @@ export function DiffView({
         </span>
       </div>
       {error && <div className="code-note">{error}</div>}
-      <div ref={host} className="code-diff-host" />
+      {binary && (
+        <BinarySides key={binary.n} client={client} path={path} base={base} from={binary.from} to={to} />
+      )}
+      <div ref={host} className="code-diff-host" hidden={!!binary} />
+    </div>
+  )
+}
+
+// BinarySides shows a file of bytes as it was and as it is: an image as
+// both images, anything else by its size, as git does.
+function BinarySides({
+  client,
+  path,
+  base,
+  from,
+  to,
+}: {
+  client: CodeClient
+  path: string
+  base?: string
+  from?: string
+  to?: string
+}) {
+  const [sides, setSides] = useState<{ size: number; data: string }[] | null>(null)
+  const type = imageType(path)
+  useEffect(() => {
+    let live = true
+    Promise.all([
+      client.blob(base ?? 'HEAD', from ?? path),
+      to
+        ? client.blob(to, path)
+        : client.bytes(path, 0, 32 << 20).then(
+            (b) => ({ size: b.size, data: b.data }),
+            () => ({ size: 0, data: '' }),
+          ),
+    ]).then((s) => live && setSides(s))
+    return () => {
+      live = false
+    }
+  }, [client, path, base, from, to])
+  const urls = useMemo(() => (sides && type ? sides.map((s) => (s.data ? toURL(s.data, type) : null)) : []), [sides, type])
+  useEffect(() => () => urls.forEach((u) => u && URL.revokeObjectURL(u)), [urls])
+  if (!sides) return null
+  const same = sides[0].data === sides[1].data
+  return (
+    <div className="code-diff-binary">
+      {sides.map((s, i) => (
+        <div key={i} className="code-diff-binary-side">
+          {!s.data ? (
+            <p className="code-note">{i === 0 ? 'The file is new.' : 'The file is deleted.'}</p>
+          ) : type ? (
+            <img src={urls[i] ?? undefined} alt="" className="code-image-chess" />
+          ) : (
+            <p className="code-note">Binary file</p>
+          )}
+          {s.data && (
+            <span className="muted small">
+              {formatBytes(s.size)} ({s.size.toLocaleString()} bytes)
+            </span>
+          )}
+        </div>
+      ))}
+      {same && <p className="code-note code-diff-binary-same">The bytes are the same.</p>}
     </div>
   )
 }

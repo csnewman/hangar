@@ -6,8 +6,11 @@ import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu
 import { DesktopTab } from '../desktop/DesktopTab'
 import { DiffView } from './DiffView'
 import { DockerLogs } from './DockerView'
+import { HexView } from './HexView'
+import { ImageView } from './ImageView'
 import type { Jump } from './Search'
 import { TabBar, tabKey, type Tab } from './TabBar'
+import { openWith, opensAsImage, type FileView } from './views'
 
 export { tabKey, type Tab } from './TabBar'
 
@@ -52,7 +55,7 @@ export function EditorArea({
 
   // tabMenu is IntelliJ's and VS Code's tab menu, less what an editor
   // that saves as it goes has no use for.
-  const tabMenu = (t: Tab): MenuItem[] => {
+  const tabMenu = (t: Tab, x: number, y: number): MenuItem[] => {
     const key = tabKey(t)
     const i = tabs.findIndex((o) => tabKey(o) === key)
     const keys = tabs.map(tabKey)
@@ -76,6 +79,10 @@ export function EditorArea({
       { label: 'Copy Relative Path', onSelect: () => copyText(t.path) },
       'separator',
       { label: 'Reveal in Project', onSelect: () => onReveal(t.path) },
+      {
+        label: 'Open With…',
+        onSelect: () => menu.openAt(x, y, openWith(t.path, (view) => onOpen({ kind: 'file', path: t.path, view }))),
+      },
       t.kind === 'file'
         ? { label: 'Show Changes', disabled: !changed, onSelect: () => onOpen({ kind: 'diff', path: t.path }) }
         : { label: 'Open File', onSelect: () => onOpen({ kind: 'file', path: t.path }) },
@@ -93,12 +100,20 @@ export function EditorArea({
           onActivate={onActivate}
           onClose={onClose}
           onMove={onMove}
-          onMenu={(e, t) => menu.open(e, tabMenu(t))}
+          onMenu={(e, t) => menu.open(e, tabMenu(t, e.clientX, e.clientY))}
         />
       )}
       <div className="code-editor-body">
         {current?.kind === 'file' && (
-          <FileTab key={tabKey(current)} client={client} path={current.path} user={user} jump={jump} onReveal={onReveal} />
+          <FileTab
+            key={tabKey(current)}
+            client={client}
+            path={current.path}
+            view={current.view}
+            user={user}
+            jump={jump}
+            onReveal={onReveal}
+          />
         )}
         {current?.kind === 'diff' && (
           <DiffView
@@ -135,7 +150,40 @@ export function EditorArea({
   )
 }
 
+// FileTab shows a file in the view chosen for it, else the one its content
+// calls for: an image as an image, other bytes as hex, text to edit.
 function FileTab({
+  client,
+  path,
+  view,
+  user,
+  jump,
+  onReveal,
+}: {
+  client: CodeClient
+  path: string
+  view?: FileView
+  user: { name: string; color: string }
+  jump: (Jump & { n: number }) | null
+  onReveal: (path: string) => void
+}) {
+  const [shown, setShown] = useState<FileView | null>(view ?? (opensAsImage(path) ? 'image' : null))
+  useEffect(() => {
+    if (shown) return
+    client.probe(path).then(
+      (p) => setShown(p.binary ? 'hex' : 'text'),
+      // The editor says what is wrong with it.
+      () => setShown('text'),
+    )
+  }, [client, path, shown])
+  if (shown === 'image') return <ImageView client={client} path={path} />
+  if (shown === 'hex') return <HexView client={client} path={path} />
+  if (!shown) return <div className="code-empty"><p className="muted">Opening {path}…</p></div>
+  return <TextTab client={client} path={path} user={user} jump={jump} onReveal={onReveal} />
+}
+
+// TextTab is a text file, shared with everyone who has it open.
+function TextTab({
   client,
   path,
   user,

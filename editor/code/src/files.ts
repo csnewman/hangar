@@ -1,11 +1,19 @@
 import { watch, type FSWatcher } from 'node:fs'
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 export type Entry = { name: string; dir: boolean; size: number }
 
 // The largest file read for a preview.
 const MAX_READ = 4 << 20
+
+// The most of a file read as bytes at once: an image whole, or a hex
+// view's chunk of a larger file.
+export const MAX_BYTES = 32 << 20
+
+// What a file is, for choosing how to show it: text, or bytes that are
+// not, and how large.
+export type Probe = { size: number; binary: boolean }
 
 // Directories whose contents are never listed as changing: they churn, and
 // nobody browses them.
@@ -57,6 +65,40 @@ export class Files {
 		const buf = await readFile(p)
 		if (buf.subarray(0, 8000).includes(0)) return { text: null }
 		return { text: buf.toString('utf8') }
+	}
+
+	// probe says whether a file is text: binary when its start holds a NUL,
+	// as git judges.
+	async probe(path: string): Promise<Probe> {
+		const p = this.abs(path)
+		const st = await stat(p)
+		if (!st.isFile()) throw new Error(`${path} is not a file`)
+		const f = await open(p, 'r')
+		try {
+			const buf = Buffer.alloc(Math.min(8192, st.size))
+			const { bytesRead } = await f.read(buf, 0, buf.length, 0)
+			return { size: st.size, binary: buf.subarray(0, bytesRead).includes(0) }
+		} finally {
+			await f.close()
+		}
+	}
+
+	// bytes is part of a file, base64: length bytes from offset, at most
+	// MAX_BYTES, fewer at its end.
+	async bytes(path: string, offset: number, length: number): Promise<{ size: number; offset: number; data: string }> {
+		const p = this.abs(path)
+		const st = await stat(p)
+		if (!st.isFile()) throw new Error(`${path} is not a file`)
+		const from = Math.max(0, Math.min(Math.floor(offset), st.size))
+		const n = Math.max(0, Math.min(Math.floor(length), MAX_BYTES, st.size - from))
+		const f = await open(p, 'r')
+		try {
+			const buf = Buffer.alloc(n)
+			const { bytesRead } = await f.read(buf, 0, n, from)
+			return { size: st.size, offset: from, data: buf.subarray(0, bytesRead).toString('base64') }
+		} finally {
+			await f.close()
+		}
 	}
 
 	async create(path: string) {

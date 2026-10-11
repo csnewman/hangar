@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CodeClient, Entry, GitStatus } from './client'
 import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { ToolWindow } from './ToolWindow'
+import { openWith, type FileView } from './views'
 
 // Where a pending new entry or rename is typed.
 type Editing = { kind: 'file' | 'dir'; parent: string } | { kind: 'rename'; path: string } | null
@@ -43,7 +44,8 @@ export function ProjectView({
   // reveal asks for a path to be shown: its folders opened, it selected
   // and scrolled to. n changes with each ask.
   reveal: { path: string; n: number } | null
-  onOpen: (path: string) => void
+  // onOpen opens a file, in the view chosen with Open With if any.
+  onOpen: (path: string, view?: FileView) => void
   onDiff: (path: string) => void
   onTerminal: (dir: string) => void
   onGotoFile: () => void
@@ -213,14 +215,17 @@ export function ProjectView({
 
   // entryMenu is what a right-click on an entry offers; path '' is the
   // root, from a click on the tree's empty space.
-  const entryMenu = (path: string, dir: boolean): MenuItem[] => {
+  const entryMenu = (path: string, dir: boolean, x: number, y: number): MenuItem[] => {
     const name = path.split('/').pop() || root.split('/').pop() || root
     const abs = path ? `${root}/${path}` : root
     const folder = dir ? path : path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
     const change = !dir && status?.changes.find((c) => c.path === path)
     const items: MenuItem[] = []
     if (!dir) {
-      items.push({ label: 'Open', onSelect: () => onOpen(path) })
+      items.push(
+        { label: 'Open', onSelect: () => onOpen(path) },
+        { label: 'Open With…', onSelect: () => menu.openAt(x, y, openWith(path, (view) => onOpen(path, view))) },
+      )
       if (change) items.push({ label: 'Show Changes', onSelect: () => onDiff(path) })
       items.push('separator')
     }
@@ -282,7 +287,7 @@ export function ProjectView({
                   if (e.dir) toggle(path)
                   else onOpen(path)
                 }}
-                onContextMenu={(ev) => menu.open(ev, entryMenu(path, e.dir))}
+                onContextMenu={(ev) => menu.open(ev, entryMenu(path, e.dir, ev.clientX, ev.clientY))}
                 title={path}
               >
                 {e.dir ? (
@@ -351,7 +356,7 @@ export function ProjectView({
         ref={tree}
         onContextMenu={(ev) => {
           if (ev.target === ev.currentTarget || (ev.target as HTMLElement).closest('.code-tree-root')) {
-            menu.open(ev, entryMenu('', true))
+            menu.open(ev, entryMenu('', true, ev.clientX, ev.clientY))
           }
         }}
       >

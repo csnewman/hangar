@@ -646,3 +646,37 @@ test("a branch's changes since it left main", async () => {
 		a.close()
 	}
 })
+
+test('binary files: told from text, read in parts, compared as bytes', async () => {
+	const repo = join(dir, 'binary')
+	const g = (...args: string[]) => execFileSync('git', ['-C', repo, ...args]).toString()
+	execFileSync('git', ['init', '-q', '-b', 'main', repo])
+	const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, 1, 2, 3])
+	writeFileSync(join(repo, 'pic.png'), png)
+	writeFileSync(join(repo, 'note.txt'), 'text\n')
+	g('add', '.')
+	g('commit', '-q', '-m', 'files')
+	writeFileSync(join(repo, 'pic.png'), Buffer.concat([png, Buffer.from([4, 5])]))
+
+	const a = new Client()
+	try {
+		await a.call('hello', { root: repo })
+		assert.deepEqual(await a.call('fs.probe', { path: 'pic.png' }), { size: 17, binary: true })
+		assert.deepEqual(await a.call('fs.probe', { path: 'note.txt' }), { size: 5, binary: false })
+		const part = await a.call('fs.bytes', { path: 'pic.png', offset: 12, length: 100 })
+		assert.equal(part.size, 17)
+		assert.equal(part.offset, 12)
+		assert.deepEqual([...Buffer.from(part.data, 'base64')], [1, 2, 3, 4, 5])
+
+		const d = await a.call('git.diff', { path: 'pic.png' })
+		assert.equal(d.binary, true)
+		assert.equal(d.head, '')
+		const before = await a.call('git.blob', { rev: 'HEAD', path: 'pic.png' })
+		assert.equal(before.size, 15)
+		assert.deepEqual(Buffer.from(before.data, 'base64'), png)
+		assert.deepEqual(await a.call('git.blob', { rev: 'HEAD', path: 'missing.png' }), { size: 0, data: '' })
+		await assert.rejects(a.call('git.blob', { rev: '--output=x', path: 'pic.png' }), /not a revision/)
+	} finally {
+		a.close()
+	}
+})

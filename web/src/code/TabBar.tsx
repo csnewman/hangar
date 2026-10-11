@@ -1,17 +1,20 @@
-import { ChevronDown, File, FileText, GitCompare, Monitor, X } from 'lucide-react'
+import { Binary, ChevronDown, File, FileText, GitCompare, Image as ImageIcon, Monitor, X } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 
 import { useContextMenu } from './ContextMenu'
+import { opensAsImage, viewNames, type FileView } from './views'
 
 // A tab is a file, its changes, a container's logs (path is then the
 // container's ID, and title its name), or the environment's desktop, which
 // is connected only while its tab is the one shown. A diff is against
 // HEAD, or against base (a commit, labelled baseLabel), where the file was
 // named from; and of the working tree, or of a commit (to, labelled
-// toLabel), as a commit's own changes are.
+// toLabel), as a commit's own changes are. A file opens in the view its
+// content calls for, or the one chosen with Open With (view).
 export type Tab = {
   kind: 'file' | 'diff' | 'logs' | 'desktop'
   path: string
+  view?: FileView
   title?: string
   base?: string
   baseLabel?: string
@@ -21,7 +24,7 @@ export type Tab = {
 }
 
 export const tabKey = (t: Tab) =>
-  t.base ? `diff@${t.base}${t.to ? `..${t.to}` : ''}:${t.path}` : `${t.kind}:${t.path}`
+  t.base ? `diff@${t.base}${t.to ? `..${t.to}` : ''}:${t.path}` : `${t.kind}${t.view ? `+${t.view}` : ''}:${t.path}`
 
 export const tabName = (t: Tab) => t.title ?? t.path.split('/').pop() ?? t.path
 
@@ -31,6 +34,7 @@ function tabDetail(t: Tab): string | undefined {
   const dir = t.path.includes('/') ? t.path.slice(0, t.path.lastIndexOf('/')) : ''
   if (t.kind === 'diff') return [diffWhat(t), dir].filter(Boolean).join(' · ')
   if (t.kind === 'logs') return 'logs'
+  if (t.view) return [viewNames[t.view], dir].filter(Boolean).join(' · ')
   return dir || undefined
 }
 
@@ -247,7 +251,9 @@ export function TabBar({
                     ? `${t.path}: ${diffWhat(t)}`
                     : t.kind === 'logs'
                       ? `Logs of ${name}`
-                      : t.path
+                      : t.view
+                        ? `${t.path} in the ${viewNames[t.view]}`
+                        : t.path
                 }
                 onPointerDown={(e) => press(e, key)}
                 onClick={() => onActivate(key)}
@@ -262,6 +268,10 @@ export function TabBar({
                   <FileText size={13} className="code-icon-file" />
                 ) : t.kind === 'desktop' ? (
                   <Monitor size={13} className="code-icon-file" />
+                ) : t.view === 'hex' ? (
+                  <Binary size={13} className="code-icon-file" />
+                ) : t.view === 'image' || (!t.view && opensAsImage(t.path)) ? (
+                  <ImageIcon size={13} className="code-icon-file" />
                 ) : (
                   <File size={13} className="code-icon-file" />
                 )}

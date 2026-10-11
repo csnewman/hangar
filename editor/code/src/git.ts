@@ -138,6 +138,16 @@ const quiet = {
 	GIT_SSH_COMMAND: 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new',
 }
 
+// runBytes runs git for its output as bytes, not text.
+function runBytes(cwd: string, args: string[]): Promise<Buffer> {
+	return new Promise((resolvePromise, reject) => {
+		execFile('git', args, { cwd, maxBuffer: 64 << 20, encoding: 'buffer', env: quiet }, (err, stdout, stderr) => {
+			if (err) reject(new Error(stderr.toString().trim() || err.message))
+			else resolvePromise(stdout)
+		})
+	})
+}
+
 function run(cwd: string, args: string[], input?: string, timeout = 0, env: NodeJS.ProcessEnv = quiet): Promise<string> {
 	return new Promise((resolvePromise, reject) => {
 		const child = execFile(
@@ -299,7 +309,7 @@ export class Git {
 		against = 'HEAD',
 		from?: string,
 		to?: string,
-	): Promise<{ path: string; from?: string; head: string; working: string }> {
+	): Promise<{ path: string; from?: string; head: string; working: string; binary?: boolean }> {
 		const rel = this.rel(path)
 		revision(against)
 		if (to) revision(to)
@@ -326,7 +336,24 @@ export class Git {
 		} catch {
 			// Deleted.
 		}
+		// Bytes that are not text are not compared as text: the view shows
+		// them its own way, from blob.
+		if (head.includes('\0') || working.includes('\0')) {
+			return { path: rel, from: was !== rel ? was : undefined, head: '', working: '', binary: true }
+		}
 		return { path: rel, from: was !== rel ? was : undefined, head, working }
+	}
+
+	// blob is a file as a commit has it, base64, with its size; empty when
+	// the commit has no such file.
+	async blob(rev: string, path: string): Promise<{ size: number; data: string }> {
+		revision(rev)
+		try {
+			const buf = await runBytes(this.root, ['show', `${rev}:./${this.rel(path)}`])
+			return { size: buf.length, data: buf.toString('base64') }
+		} catch {
+			return { size: 0, data: '' }
+		}
 	}
 
 	// stage adds a file's changes to the index; a rename's, both its names.

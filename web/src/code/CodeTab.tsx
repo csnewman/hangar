@@ -409,7 +409,7 @@ function CodeView({
         status={status}
         selected={activeTab?.path ?? null}
         reveal={reveal}
-        onOpen={(path) => open({ kind: 'file', path })}
+        onOpen={(path, view) => open({ kind: 'file', path, view })}
         onDiff={(path) => open({ kind: 'diff', path })}
         onTerminal={openTerminal}
         onGotoFile={() => setPopup('goto')}
@@ -486,11 +486,11 @@ function CodeView({
           <StripeButton on={false} title={`Find in Files (${shortcut('Mod+Shift+F')})`} onClick={() => setPopup('find')}>
             <TextSearch size={16} />
           </StripeButton>
-          <StripeButton on={shown.terminal && bottom === 'log'} title="Git Log" onClick={() => toggleBottom('log')}>
-            <GitGraph size={16} />
-          </StripeButton>
           <StripeButton on={shown.terminal && bottom === 'find'} title="Find" onClick={() => toggleBottom('find')}>
             <ListTree size={16} />
+          </StripeButton>
+          <StripeButton on={shown.terminal && bottom === 'log'} title="Git Log" onClick={() => toggleBottom('log')}>
+            <GitGraph size={16} />
           </StripeButton>
           <StripeButton on={shown.terminal && bottom === 'terminal'} title="Terminal" onClick={() => toggleBottom('terminal')}>
             <SquareTerminal size={16} />

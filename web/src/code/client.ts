@@ -49,6 +49,22 @@ export interface Diff {
   from?: string
   head: string
   working: string
+  // Bytes, not text: head and working are empty, and the view reads the
+  // two sides with blob and bytes.
+  binary?: boolean
+}
+
+// What a file is: text, or bytes that are not, and how large.
+export interface Probe {
+  size: number
+  binary: boolean
+}
+
+// Part of a file, base64, and the whole file's size.
+export interface Bytes {
+  size: number
+  offset: number
+  data: string
 }
 
 // A ref names a commit: the branch checked out (head), a local or remote
@@ -429,6 +445,14 @@ export class CodeClient {
   async read(path: string) {
     return (await this.request<{ text: string | null }>('fs.read', { path })).text
   }
+  // probe says whether a file is text or bytes, for choosing its view.
+  probe(path: string) {
+    return this.request<Probe>('fs.probe', { path })
+  }
+  // bytes is length bytes of a file from offset, base64.
+  bytes(path: string, offset: number, length: number) {
+    return this.request<Bytes>('fs.bytes', { path, offset, length })
+  }
   dockerOverview() {
     return this.request<DockerOverview>('docker.overview')
   }
@@ -515,6 +539,10 @@ export class CodeClient {
   // log is a page of the history: every branch's, or ref's.
   log(ref: string | undefined, skip: number, max: number) {
     return this.request<Log>('git.log', { ref, skip, max })
+  }
+  // blob is a file as a commit has it, base64; empty when it has none.
+  blob(rev: string, path: string) {
+    return this.request<{ size: number; data: string }>('git.blob', { rev, path })
   }
   commitInfo(hash: string) {
     return this.request<CommitInfo>('git.commitInfo', { hash })
