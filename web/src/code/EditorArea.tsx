@@ -5,6 +5,7 @@ import type { CodeClient, GitStatus, SharedFile } from './client'
 import { CodeEditor } from './CodeEditor'
 import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { DiffView } from './DiffView'
+import type { Jump } from './Search'
 
 export type Tab = { kind: 'file' | 'diff'; path: string }
 
@@ -25,10 +26,12 @@ export function EditorArea({
   onCloseMany,
   onReopen,
   onReveal,
+  jump,
 }: {
   client: CodeClient
   tabs: Tab[]
   active: string | null
+  jump: (Jump & { n: number }) | null
   user: { name: string; color: string }
   status: GitStatus | null
   canReopen: boolean
@@ -111,12 +114,15 @@ export function EditorArea({
       )}
       <div className="code-editor-body">
         {current?.kind === 'file' && (
-          <FileTab key={tabKey(current)} client={client} path={current.path} user={user} onReveal={onReveal} />
+          <FileTab key={tabKey(current)} client={client} path={current.path} user={user} jump={jump} onReveal={onReveal} />
         )}
         {current?.kind === 'diff' && <DiffView key={tabKey(current)} client={client} path={current.path} />}
         {!current && (
           <div className="code-empty">
             <p>Open a file from Project, or a change from Changes.</p>
+            <p className="muted small">
+              {shortcut('Mod+Shift+O')} or Shift twice goes to a file; {shortcut('Mod+Shift+F')} finds text in files.
+            </p>
             <p className="muted small">Everyone with a file open edits it together; changes are saved as you type.</p>
           </div>
         )}
@@ -130,11 +136,13 @@ function FileTab({
   client,
   path,
   user,
+  jump,
   onReveal,
 }: {
   client: CodeClient
   path: string
   user: { name: string; color: string }
+  jump: (Jump & { n: number }) | null
   onReveal: (path: string) => void
 }) {
   const [file, setFile] = useState<SharedFile | null>(null)
@@ -175,5 +183,5 @@ function FileTab({
 
   if (error) return <div className="code-empty"><p className="code-note-error">{error}</p></div>
   if (!file) return <div className="code-empty"><p className="muted">Opening {path}…</p></div>
-  return <CodeEditor file={file} user={user} client={client} path={path} onReveal={onReveal} />
+  return <CodeEditor file={file} user={user} client={client} path={path} jump={jump} onReveal={onReveal} />
 }

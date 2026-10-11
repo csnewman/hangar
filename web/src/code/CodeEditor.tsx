@@ -42,6 +42,7 @@ import * as Y from 'yjs'
 import type { CodeClient, SharedFile } from './client'
 import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { baseText, gitGutter, hunkAt, rollback, setBase, staged, type Hunk } from './gitGutter'
+import type { Jump } from './Search'
 
 // codeHighlight colours code by the page's --syn-* colours (code.css), which
 // are IntelliJ's for light and dark, so one style serves both.
@@ -167,15 +168,20 @@ export function CodeEditor({
   user,
   client,
   path,
+  jump,
   onReveal,
 }: {
   file: SharedFile
   user: { name: string; color: string }
   client: CodeClient
   path: string
+  // jump is a place to put the caret, each time it changes.
+  jump?: (Jump & { n: number }) | null
   onReveal: (path: string) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
+  const viewRef = useRef<EditorView | null>(null)
+  const [ready, setReady] = useState(false)
   const menu = useContextMenu()
   const [hunk, setHunk] = useState<{ view: EditorView; h: Hunk; x: number; y: number } | null>(null)
   // crlf is whether the index's copy has CRLF endings, which a staged
@@ -314,14 +320,39 @@ export function CodeEditor({
     })
 
     view.focus()
+    viewRef.current = view
+    setReady(true)
     return () => {
       disposed = true
+      setReady(false)
+      viewRef.current = null
       clearTimeout(timer)
       offGit()
       view.destroy()
       undo.destroy()
     }
   }, [file, user.name, user.color, client, path])
+
+  // A jump puts the caret on its line, selecting the text it names there,
+  // with the line in the middle of the view.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!ready || !view || !jump || jump.path !== path || jump.line < 1) return
+    const doc = view.state.doc
+    const line = doc.line(Math.min(jump.line, doc.lines))
+    let from = line.from + Math.min(Math.max((jump.col ?? 1) - 1, 0), line.length)
+    let to = from
+    if (jump.find) {
+      const at = line.text.indexOf(jump.find)
+      const i = at >= 0 ? at : line.text.toLowerCase().indexOf(jump.find.toLowerCase())
+      if (i >= 0) {
+        from = line.from + i
+        to = from + jump.find.length
+      }
+    }
+    view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) })
+    view.focus()
+  }, [ready, jump, path])
 
   return (
     <>

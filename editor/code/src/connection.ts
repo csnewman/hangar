@@ -1,25 +1,37 @@
+import { stat } from 'node:fs/promises'
 import type { Socket } from 'node:net'
+import { isAbsolute, resolve } from 'node:path'
 
 import type { Documents, SharedDoc } from './docs.js'
 import type { Files } from './files.js'
 import type { Git } from './git.js'
+import type { Search } from './search.js'
+import type { SettingsFile } from './settings.js'
 
 const CHANNEL_JSON = 0x72 // 'r'
 const CHANNEL_YJS = 0x79 // 'y'
 const MAX_FRAME = 64 << 20
 
-type Services = { root: string; files: Files; git: Git; docs: Documents }
+// Folder is what serves one folder: its files, its git, and searches in it.
+export type Folder = { root: string; files: Files; git: Git; search: Search }
+
+// Services are the service's own: the folder it was started on, the one
+// serving any other folder, and the shared documents, which are everyone's
+// whatever folder they opened them from.
+type Services = { root: string; folder: (root: string) => Folder; docs: Documents; settings: SettingsFile }
 
 type Request = { id: number; method: string; params?: Record<string, unknown> }
 
 // Connection is one browser tab's Code view: its requests, the file and git
-// events it is sent, and the shared documents it has open.
+// events it is sent, and the shared documents it has open. It works in the
+// service's folder unless its hello names another, for that tab alone.
 export class Connection {
 	private buf: Buffer = Buffer.alloc(0)
 	private open = new Map<number, SharedDoc>()
 	private nextDoc = 1
 	private closed = false
-	private unwatch: () => void
+	private f: Folder
+	private unwatch: () => void = () => {}
 
 	constructor(
 		private sock: Socket,
@@ -28,14 +40,44 @@ export class Connection {
 		sock.on('data', (chunk) => this.receive(chunk))
 		sock.on('close', () => this.close())
 		sock.on('error', () => this.close())
-		// Every change under the root, and every change to what git reports,
-		// is announced; the browser decides what to reload.
-		const offFiles = s.files.onChange((dirs) => this.event('fs.changed', { dirs }))
-		const offGit = s.git.onChange(() => this.event('git.changed', {}))
+		this.f = s.folder(s.root)
+		this.watch()
+		const offSettings = s.settings.onChange((v) => this.event('settings.changed', v))
+		sock.on('close', offSettings)
+	}
+
+	// watch announces every change under the folder, and every change to
+	// what git reports; the browser decides what to reload.
+	private watch() {
+		this.unwatch()
+		const offFiles = this.f.files.onChange((dirs) => this.event('fs.changed', { dirs }))
+		const offGit = this.f.git.onChange(() => this.event('git.changed', {}))
 		this.unwatch = () => {
 			offFiles()
 			offGit()
 		}
+	}
+
+	// hello starts a connection in a folder: the one asked for, which must
+	// be an absolute path to a directory, or the service's own.
+	private async hello(root: unknown) {
+		let want = this.s.root
+		if (typeof root === 'string' && root !== '') {
+			if (!isAbsolute(root)) throw new Error(`${root} is not an absolute path`)
+			want = resolve(root)
+			let st
+			try {
+				st = await stat(want)
+			} catch {
+				throw new Error(`${want} does not exist`)
+			}
+			if (!st.isDirectory()) throw new Error(`${want} is not a folder`)
+		}
+		if (want !== this.f.root) {
+			this.f = this.s.folder(want)
+			this.watch()
+		}
+		return { root: this.f.root, home: this.s.root }
 	}
 
 	private receive(chunk: Buffer) {
@@ -86,47 +128,63 @@ export class Connection {
 		}
 		switch (method) {
 			case 'hello':
-				return { root: this.s.root }
+				return this.hello(p.root)
 			case 'fs.list':
-				return this.s.files.list(str('path'))
+				return this.f.files.list(str('path'))
+			case 'fs.read':
+				return this.f.files.read(str('path'))
 			case 'fs.create':
-				return this.s.files.create(str('path'))
+				return this.f.files.create(str('path'))
 			case 'fs.mkdir':
-				return this.s.files.mkdir(str('path'))
+				return this.f.files.mkdir(str('path'))
 			case 'fs.rename':
-				return this.s.files.rename(str('from'), str('to'))
+				return this.f.files.rename(str('from'), str('to'))
 			case 'fs.delete':
-				return this.s.files.remove(str('path'))
+				return this.f.files.remove(str('path'))
+			case 'settings.get':
+				return this.s.settings.get()
+			case 'settings.set':
+				return this.s.settings.set(p.settings)
+			case 'search.files':
+				return this.f.search.files()
+			case 'search.text':
+				return this.f.search.text({
+					query: str('query'),
+					regex: p.regex === true,
+					caseSensitive: p.caseSensitive === true,
+					wholeWord: p.wholeWord === true,
+					mask: typeof p.mask === 'string' ? p.mask : undefined,
+				})
 			case 'git.status':
-				return this.s.git.status()
+				return this.f.git.status()
 			case 'git.diff':
-				return this.s.git.diff(str('path'))
+				return this.f.git.diff(str('path'))
 			case 'git.stage':
-				return this.s.git.stage(str('path'))
+				return this.f.git.stage(str('path'))
 			case 'git.unstage':
-				return this.s.git.unstage(str('path'))
+				return this.f.git.unstage(str('path'))
 			case 'git.rollback':
-				return this.s.git.rollback(str('path'))
+				return this.f.git.rollback(str('path'))
 			case 'git.commit':
-				return this.s.git.commit(str('message'), p.amend === true)
+				return this.f.git.commit(str('message'), p.amend === true)
 			case 'git.lastMessage':
-				return this.s.git.lastMessage()
+				return this.f.git.lastMessage()
 			case 'git.show':
-				return this.s.git.show(str('path'), p.from === 'HEAD' ? 'HEAD' : 'index')
+				return this.f.git.show(str('path'), p.from === 'HEAD' ? 'HEAD' : 'index')
 			case 'git.setIndex':
-				return this.s.git.setIndex(str('path'), str('content'))
+				return this.f.git.setIndex(str('path'), str('content'))
 			case 'git.branches':
-				return this.s.git.branches()
+				return this.f.git.branches()
 			case 'git.checkout':
-				return this.s.git.checkout(str('name'))
+				return this.f.git.checkout(str('name'))
 			case 'git.createBranch':
-				return this.s.git.createBranch(str('name'))
+				return this.f.git.createBranch(str('name'))
 			case 'git.push':
-				return this.s.git.push()
+				return this.f.git.push()
 			case 'git.pull':
-				return this.s.git.pull()
+				return this.f.git.pull()
 			case 'git.fetch':
-				return this.s.git.fetch()
+				return this.f.git.fetch()
 			case 'doc.open':
 				return this.openDoc(str('path'))
 			case 'doc.close':
@@ -137,7 +195,7 @@ export class Connection {
 	}
 
 	private async openDoc(path: string) {
-		const doc = await this.s.docs.open(path)
+		const doc = await this.s.docs.open(resolve(this.f.root, path))
 		const n = this.nextDoc++
 		this.open.set(n, doc)
 		doc.join(this, n)

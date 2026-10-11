@@ -6,10 +6,31 @@ import { useEffect, useRef, useState } from 'react'
 import type { CodeClient } from './client'
 import { codeHighlight, codeTheme, languageFor } from './CodeEditor'
 
+// diffTheme colours the merge view's changes by the page's --diff-*
+// colours (code.css), over the merge view's own, which follow CodeMirror's
+// light or dark setting rather than the page's.
+const diffTheme = EditorView.theme({
+  '&.cm-merge-a .cm-changedLine, .cm-deletedChunk': { backgroundColor: 'var(--diff-deleted-line)' },
+  '&.cm-merge-b .cm-changedLine': { backgroundColor: 'var(--diff-inserted-line)' },
+  '&.cm-merge-a .cm-changedText, .cm-deletedChunk .cm-deletedText': {
+    background: 'var(--diff-deleted-text) !important',
+  },
+  '&.cm-merge-b .cm-changedText': { background: 'var(--diff-inserted-text) !important' },
+  '&.cm-merge-a .cm-changedLineGutter, .cm-deletedLineGutter': { background: 'var(--code-git-conflict) !important' },
+  '&.cm-merge-b .cm-changedLineGutter': { background: 'var(--code-git-added) !important' },
+  '.cm-collapsedLines': {
+    color: 'var(--muted) !important',
+    background: 'var(--surface-2) !important',
+    borderTop: '1px solid var(--border)',
+    borderBottom: '1px solid var(--border)',
+  },
+})
+
 const diffSide = (lang: Extension): Extension => [
   lineNumbers(),
   codeHighlight,
   codeTheme,
+  diffTheme,
   lang,
   EditorState.readOnly.of(true),
   EditorView.editable.of(false),

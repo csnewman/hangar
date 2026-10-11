@@ -21,7 +21,9 @@ import { parseArgs } from 'node:util'
 import { Documents } from './docs.js'
 import { Files } from './files.js'
 import { Git } from './git.js'
-import { Connection } from './connection.js'
+import { Search } from './search.js'
+import { SettingsFile } from './settings.js'
+import { Connection, type Folder } from './connection.js'
 
 const { values } = parseArgs({
 	options: {
@@ -34,12 +36,23 @@ if (!values.socket || !values.root) {
 	process.exit(2)
 }
 const root = resolve(values.root)
-const files = new Files(root)
-const git = new Git(root)
 const docs = new Documents(root)
 
+// One of each per folder anyone has open, shared by every tab that has it:
+// each watches the folder only while someone listens.
+const folders = new Map<string, Folder>()
+const folder = (dir: string): Folder => {
+	let f = folders.get(dir)
+	if (!f) {
+		f = { root: dir, files: new Files(dir), git: new Git(dir), search: new Search(dir) }
+		folders.set(dir, f)
+	}
+	return f
+}
+
 if (existsSync(values.socket)) unlinkSync(values.socket)
-const server = createServer((sock: Socket) => new Connection(sock, { root, files, git, docs }))
+const settings = new SettingsFile()
+const server = createServer((sock: Socket) => new Connection(sock, { root, folder, docs, settings }))
 server.listen(values.socket, () => console.log(`hangar-code: serving ${root} on ${values.socket}`))
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {

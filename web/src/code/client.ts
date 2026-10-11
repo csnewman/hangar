@@ -60,6 +60,21 @@ export interface Branches {
   remote: string[]
 }
 
+export interface Match {
+  path: string
+  line: number
+  text: string
+  ranges: [number, number][]
+}
+
+export interface TextQuery {
+  query: string
+  regex?: boolean
+  caseSensitive?: boolean
+  wholeWord?: boolean
+  mask?: string
+}
+
 export type ConnectionState = 'connecting' | 'live' | 'reconnecting'
 
 type Events = {
@@ -68,6 +83,8 @@ type Events = {
   'git.changed': () => void
   // An open file was deleted from disk. Its path is absolute.
   'doc.deleted': (p: { path: string }) => void
+  // Another tab changed the settings.
+  'settings.changed': (s: Record<string, unknown>) => void
 }
 
 // SharedFile is one file open for editing, shared with everyone who has it
@@ -160,6 +177,7 @@ export class CodeClient {
     'fs.changed': new Set(),
     'git.changed': new Set(),
     'doc.deleted': new Set(),
+    'settings.changed': new Set(),
   }
   private files = new Map<string, SharedFile>()
   private byNumber = new Map<number, SharedFile>()
@@ -169,11 +187,17 @@ export class CodeClient {
   private ready: Promise<void>
   private markReady!: () => void
   state: ConnectionState = 'connecting'
+  // root is the folder this tab works in; home is the environment's own,
+  // which every tab starts in.
   root = ''
+  home = ''
   private env: string
+  private want: string
 
-  constructor(env: string) {
+  // want is a folder to work in other than the environment's own, or ''.
+  constructor(env: string, want = '') {
     this.env = env
+    this.want = want
     this.ready = new Promise((r) => (this.markReady = r))
     this.connect()
   }
@@ -199,8 +223,9 @@ export class CodeClient {
     this.ws = ws
     ws.onopen = async () => {
       try {
-        const hello = (await this.call('hello')) as { root: string }
+        const hello = (await this.call('hello', { root: this.want })) as { root: string; home: string }
         this.root = hello.root
+        this.home = hello.home
         this.backoff = 500
         for (const f of this.files.values()) await this.reopen(f)
         this.setState('live')
@@ -238,6 +263,8 @@ export class CodeClient {
         this.emit('git.changed')
       } else if (m.event === 'doc.deleted') {
         this.emit('doc.deleted', m.params)
+      } else if (m.event === 'settings.changed') {
+        this.emit('settings.changed', m.params)
       }
     } else if (msg[0] === CHANNEL_YJS && msg.length >= 5) {
       const n = new DataView(msg.buffer, msg.byteOffset + 1, 4).getUint32(0)
@@ -273,6 +300,11 @@ export class CodeClient {
     })
   }
 
+  // connected waits until the connection is first made.
+  connected(): Promise<void> {
+    return this.ready
+  }
+
   // request waits for the connection, then makes a request.
   async request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
     await this.ready
@@ -281,6 +313,24 @@ export class CodeClient {
 
   list(path: string) {
     return this.request<Entry[]>('fs.list', { path })
+  }
+  // read is a file's text, or null for one too large or not text.
+  async read(path: string) {
+    return (await this.request<{ text: string | null }>('fs.read', { path })).text
+  }
+  // settings are the Code tab's, kept in the user's home (shared by their
+  // profile by default).
+  settings() {
+    return this.request<Record<string, unknown>>('settings.get')
+  }
+  saveSettings(settings: Record<string, unknown>) {
+    return this.request<void>('settings.set', { settings })
+  }
+  searchFiles() {
+    return this.request<{ files: string[]; truncated: boolean }>('search.files')
+  }
+  searchText(q: TextQuery) {
+    return this.request<{ matches: Match[]; truncated: boolean }>('search.text', { ...q })
   }
   create(path: string) {
     return this.request<void>('fs.create', { path })

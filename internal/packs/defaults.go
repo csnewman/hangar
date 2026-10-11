@@ -1,10 +1,10 @@
 package packs
 
 // ProfileDefaults are the built-in profile's paths as Hangar ships them,
-// which a new server's profile starts with (migration 0009) and an admin
-// may return it to: Claude's settings and sign-in, leaving its sessions and
-// caches to each environment; git's, VS Code's and CLIs' settings; and the
-// credentials CLIs keep in a file, sensitive.
+// which a new server's profile starts with (migrations 0009 and 0011) and
+// an admin may return it to: Claude's settings and sign-in, leaving its
+// sessions and caches to each environment; git's, VS Code's, the Code tab's
+// and CLIs' settings; and the credentials CLIs keep in a file, sensitive.
 var ProfileDefaults = []Path{
 	{Path: "~/.claude/"},
 	{Path: "~/.claude/.credentials.json", Sensitive: true},
@@ -52,4 +52,5 @@ var ProfileDefaults = []Path{
 	{Path: "~/.vscode-server-oss/data/User/settings.json"},
 	{Path: "~/.vscode-server-oss/data/User/keybindings.json"},
 	{Path: "~/.vscode-server-oss/data/User/snippets/"},
+	{Path: "~/.config/hangar/"},
 }

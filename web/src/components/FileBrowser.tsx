@@ -34,6 +34,7 @@ const describe: [string, string][] = [
   ['~/.vscode-server-oss/data/User/settings.json', 'VS Code settings'],
   ['~/.vscode-server-oss/data/User/keybindings.json', 'VS Code keybindings'],
   ['~/.vscode-server-oss/data/User/snippets/', 'VS Code snippets'],
+  ['~/.config/hangar/', 'Code tab settings'],
 ]
 
 // describeExactly is what a listed path itself is, for the browser's rows,

@@ -1,8 +1,19 @@
-import { ChevronRight, File, FilePlus, Folder, FolderOpen, FolderPlus, ListCollapse, RefreshCw } from 'lucide-react'
+import {
+  ChevronRight,
+  File,
+  FilePlus,
+  FileSearch,
+  Folder,
+  FolderInput,
+  FolderOpen,
+  FolderPlus,
+  ListCollapse,
+  RefreshCw,
+} from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { CodeClient, Entry, GitStatus } from './client'
-import { copyText, useContextMenu, type MenuItem } from './ContextMenu'
+import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { ToolWindow } from './ToolWindow'
 
 // Where a pending new entry or rename is typed.
@@ -20,6 +31,9 @@ export function ProjectView({
   onOpen,
   onDiff,
   onTerminal,
+  onGotoFile,
+  onOpenFolder,
+  onFolderHere,
   onHide,
 }: {
   client: CodeClient
@@ -32,6 +46,10 @@ export function ProjectView({
   onOpen: (path: string) => void
   onDiff: (path: string) => void
   onTerminal: (dir: string) => void
+  onGotoFile: () => void
+  // onOpenFolder asks which folder to work in; onFolderHere works in one.
+  onOpenFolder: () => void
+  onFolderHere: (dir: string) => void
   onHide: () => void
 }) {
   const storeKey = `hangar.code.${env}.expanded`
@@ -76,7 +94,7 @@ export function ProjectView({
   useEffect(() => {
     let live = true
     const start = async () => {
-      await client.request('hello')
+      await client.connected()
       if (!live) return
       setRoot(client.root)
       load('')
@@ -216,6 +234,7 @@ export function ProjectView({
       'separator',
       { label: 'Open in Terminal', onSelect: () => onTerminal(folder ? `${root}/${folder}` : root) },
     )
+    if (dir && path) items.push({ label: 'Open Folder in This Tab', onSelect: () => onFolderHere(abs) })
     if (change) {
       items.push(
         'separator',
@@ -293,6 +312,17 @@ export function ProjectView({
       onHide={onHide}
       actions={
         <>
+          <button
+            type="button"
+            className="code-tool-btn"
+            title={`Go to File (${shortcut('Mod+Shift+O')})`}
+            onClick={onGotoFile}
+          >
+            <FileSearch size={14} />
+          </button>
+          <button type="button" className="code-tool-btn" title="Open another folder in this tab" onClick={onOpenFolder}>
+            <FolderInput size={14} />
+          </button>
           <button type="button" className="code-tool-btn" title="New file" onClick={() => startNew('file', '')}>
             <FilePlus size={14} />
           </button>

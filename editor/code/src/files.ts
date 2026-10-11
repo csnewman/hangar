@@ -1,8 +1,11 @@
 import { watch, type FSWatcher } from 'node:fs'
-import { mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
 export type Entry = { name: string; dir: boolean; size: number }
+
+// The largest file read for a preview.
+const MAX_READ = 4 << 20
 
 // Directories whose contents are never listed as changing: they churn, and
 // nobody browses them.
@@ -42,6 +45,17 @@ export class Files {
 		}
 		out.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1))
 		return out
+	}
+
+	// read is a file's text, for a preview; null for a file too large to
+	// show or not text.
+	async read(path: string): Promise<{ text: string | null }> {
+		const p = this.abs(path)
+		const st = await stat(p)
+		if (!st.isFile() || st.size > MAX_READ) return { text: null }
+		const buf = await readFile(p)
+		if (buf.subarray(0, 8000).includes(0)) return { text: null }
+		return { text: buf.toString('utf8') }
 	}
 
 	async create(path: string) {

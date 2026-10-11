@@ -1,6 +1,6 @@
 import './code.css'
 
-import { FolderTree, GitCompare, SquareTerminal } from 'lucide-react'
+import { FolderTree, GitCompare, SquareTerminal, TextSearch } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Group,
@@ -16,8 +16,10 @@ import { useMe } from '../session'
 import { ChangesView } from './ChangesView'
 import { CodeClient, type ConnectionState, type GitStatus } from './client'
 import { CodeTerminal } from './CodeTerminal'
+import { isMac, shortcut } from './ContextMenu'
 import { EditorArea, tabKey, type Tab } from './EditorArea'
 import { ProjectView } from './ProjectView'
+import { FindInFiles, GotoFile, OpenFolder, type Jump } from './Search'
 
 // CodeTab is Hangar's own editor for an environment, laid out as IntelliJ
 // lays out its tool windows: Project on the left, Changes on the right,
@@ -42,15 +44,35 @@ export function CodeTab() {
 // Connected holds the tab's connection to the environment. It is made in an
 // effect, not during render, so React's development double mount makes and
 // closes a spare one rather than closing the one in use.
+//
+// The connection works in the environment's folder, unless this browser tab
+// has opened another, which it remembers for itself alone.
 function Connected({ env }: { env: string }) {
+  const folderKey = `hangar.code.${env}.folder`
+  const [folder, setFolder] = useState(() => {
+    try {
+      return sessionStorage.getItem(folderKey) ?? ''
+    } catch {
+      return ''
+    }
+  })
+  const choose = (dir: string) => {
+    try {
+      if (dir) sessionStorage.setItem(folderKey, dir)
+      else sessionStorage.removeItem(folderKey)
+    } catch {
+      // The folder is kept for as long as the page is open regardless.
+    }
+    setFolder(dir)
+  }
   const [client, setClient] = useState<CodeClient | null>(null)
   useEffect(() => {
-    const c = new CodeClient(env)
+    const c = new CodeClient(env, folder)
     setClient(c)
     return () => c.close()
-  }, [env])
+  }, [env, folder])
   if (!client) return <div className="code-page" />
-  return <CodeView env={env} client={client} />
+  return <CodeView key={folder} env={env} client={client} folder={folder} onFolder={choose} />
 }
 
 // A colour per user, so the same person's caret is the same colour
@@ -64,7 +86,40 @@ function colourFor(name: string) {
 
 type Store = { tabs: Tab[]; active: string | null }
 
-function CodeView({ env, client }: { env: string; client: CodeClient }) {
+// A tool window that moves between the sides, and the side it is on.
+type ToolName = 'project' | 'changes'
+type Side = 'left' | 'right'
+type Sides = Record<ToolName, Side>
+const defaultSides: Sides = { project: 'left', changes: 'right' }
+const toolNames: ToolName[] = ['project', 'changes']
+const toolTitles: Record<ToolName, string> = { project: 'Project', changes: 'Changes' }
+
+function sidesFrom(settings: Record<string, unknown>): Sides {
+  const tw = settings.toolWindows as Partial<Record<ToolName, unknown>> | undefined
+  const out = { ...defaultSides }
+  for (const n of toolNames) {
+    const v = tw?.[n]
+    if (v === 'left' || v === 'right') out[n] = v
+  }
+  return out
+}
+
+type Popup = 'goto' | 'everywhere' | 'find' | 'folder' | null
+
+function CodeView({
+  env,
+  client,
+  folder,
+  onFolder,
+}: {
+  env: string
+  client: CodeClient
+  folder: string
+  onFolder: (dir: string) => void
+}) {
+  // What this tab remembers -- open tabs, open folders -- is kept per
+  // folder.
+  const scope = folder ? `${env}:${folder}` : env
   const me = useMe()
   const user = useMemo(() => ({ name: me.display_name || me.username, color: colourFor(me.username) }), [me])
 
@@ -91,13 +146,14 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
     }
   }, [client, reloadStatus])
 
-  // Tool windows.
-  const project = usePanelRef()
-  const changes = usePanelRef()
+  // Tool windows: a panel on each side, showing one of the windows docked
+  // there at a time, as IntelliJ's sides do, and the terminal below.
+  const leftPanel = usePanelRef()
+  const rightPanel = usePanelRef()
   const terminal = usePanelRef()
 
   // Open tabs, remembered per environment.
-  const storeKey = `hangar.code.${env}.tabs`
+  const storeKey = `hangar.code.${scope}.tabs`
   const [store, setStore] = useState<Store>(() => {
     try {
       const s = JSON.parse(localStorage.getItem(storeKey) ?? '')
@@ -158,7 +214,7 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
   // Reveal in Project: the tree opens the folders to a path and selects it.
   const [reveal, setReveal] = useState<{ path: string; n: number } | null>(null)
   const revealInProject = (path: string) => {
-    project.current?.expand()
+    showTool('project')
     setReveal((r) => ({ path, n: (r?.n ?? 0) + 1 }))
   }
 
@@ -169,14 +225,46 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
     setTermIn((t) => ({ dir, n: (t?.n ?? 0) + 1 }))
   }
 
-  // Keys for tabs, chosen from those a browser leaves to the page: Alt+W
-  // closes, Alt+Shift+T reopens, Alt+[ and Alt+] step through them. They
-  // work wherever focus is while the Code tab shows -- it is on the page
-  // itself between one editor closing and the next opening -- except in the
-  // terminal, which keeps its own keys.
+  // Search: popups, and the place in a file one of them opens.
+  const [popup, setPopup] = useState<Popup>(null)
+  const [jump, setJump] = useState<(Jump & { n: number }) | null>(null)
+  const openAt = (j: Jump) => {
+    open({ kind: 'file', path: j.path })
+    if (j.line > 0) setJump((x) => ({ ...j, n: (x?.n ?? 0) + 1 }))
+  }
+  const recent = useMemo(
+    () => [...store.tabs].reverse().filter((t) => t.kind === 'file').map((t) => t.path),
+    [store.tabs],
+  )
+
+  // Keys, chosen from those a browser leaves to the page: as IntelliJ,
+  // Ctrl/Cmd+Shift+O goes to a file, Ctrl/Cmd+Shift+F finds in files and
+  // Shift twice searches everywhere, wherever focus is; Alt+W closes a tab,
+  // Alt+Shift+T reopens one, and Alt+[ and Alt+] step through them, except
+  // in the terminal, which keeps its own Alt keys. They work while the Code
+  // tab shows, focus being on the page itself between one editor closing
+  // and the next opening.
+  const lastShift = useRef(0)
   const onKey = (e: KeyboardEvent) => {
-    if (!e.altKey || e.ctrlKey || e.metaKey) return
+    if (e.key === 'Shift') {
+      if (e.repeat) return
+      const now = Date.now()
+      if (now - lastShift.current < 400 && !popup) {
+        lastShift.current = 0
+        setPopup('everywhere')
+      } else lastShift.current = now
+      return
+    }
+    lastShift.current = 0
+    const mod = isMac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey
+    if (mod && e.shiftKey && !e.altKey && (e.code === 'KeyO' || e.code === 'KeyF')) {
+      e.preventDefault()
+      e.stopPropagation()
+      setPopup(e.code === 'KeyO' ? 'goto' : 'find')
+      return
+    }
     if ((e.target as HTMLElement).closest('.code-term')) return
+    if (!e.altKey || e.ctrlKey || e.metaKey || popup) return
     const act = {
       KeyW: !e.shiftKey && (() => store.active && close(store.active)),
       KeyT: e.shiftKey && reopen,
@@ -198,7 +286,23 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
     return () => document.removeEventListener('keydown', listen, true)
   }, [])
 
-  const [shown, setShown] = useState({ project: true, changes: true, terminal: true })
+  // Settings, which say which side each tool window is on. They are the
+  // user's, in a file their profile shares, so they follow them to every
+  // environment.
+  const [settings, setSettings] = useState<Record<string, unknown>>({})
+  useEffect(() => {
+    client.settings().then(setSettings, () => {})
+    return client.on('settings.changed', setSettings)
+  }, [client])
+  const sides = sidesFrom(settings)
+  const moveTool = (name: ToolName, side: Side) => {
+    if (sides[name] === side) return
+    const next = { ...settings, toolWindows: { ...sides, [name]: side } }
+    setSettings(next)
+    client.saveSettings(next).catch(() => {})
+  }
+
+  const [shown, setShown] = useState({ left: true, right: true, terminal: true })
   const track = (name: keyof typeof shown) => (size: { asPercentage: number }) =>
     setShown((s) => (s[name] === size.asPercentage > 0 ? s : { ...s, [name]: size.asPercentage > 0 }))
   const toggle = (ref: React.RefObject<PanelImperativeHandle | null>) => {
@@ -208,50 +312,126 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
     else p.collapse()
   }
   const outer = useDefaultLayout({ id: 'hangar.code.v', storage: localStorage })
-  const inner = useDefaultLayout({ id: 'hangar.code.h', storage: localStorage })
+  const sidePanel = (side: Side) => (side === 'left' ? leftPanel : rightPanel)
+
+  // Which window each side shows: the one last chosen there, else the
+  // first docked there.
+  const [chosen, setChosen] = useState<Record<Side, ToolName | null>>({ left: null, right: null })
+  const showing = (side: Side): ToolName | null => {
+    const c = chosen[side]
+    return c && sides[c] === side ? c : (toolNames.find((n) => sides[n] === side) ?? null)
+  }
+  const showTool = (name: ToolName) => {
+    const side = sides[name]
+    setChosen((c) => ({ ...c, [side]: name }))
+    sidePanel(side).current?.expand()
+  }
+  // A window's button shows it, or hides it if it is what its side shows.
+  const toggleTool = (name: ToolName) => {
+    const side = sides[name]
+    if (showing(side) === name && shown[side]) sidePanel(side).current?.collapse()
+    else showTool(name)
+  }
+  const hideTool = (name: ToolName) => sidePanel(sides[name]).current?.collapse()
+  const dropTool = (name: ToolName, side: Side) => {
+    moveTool(name, side)
+    setChosen((c) => ({ ...c, [side]: name }))
+  }
+
+  const [dragging, setDragging] = useState<Dragging | null>(null)
+  const toolButton = (name: ToolName) => (
+    <StripeButton
+      key={name}
+      on={shown[sides[name]] && showing(sides[name]) === name}
+      title={`${toolTitles[name]} (drag to the other side to move it there)`}
+      onClick={() => toggleTool(name)}
+      onPointerDown={(e) => dragTool(name, e, setDragging, dropTool)}
+    >
+      {name === 'project' ? <FolderTree size={16} /> : <GitCompare size={16} />}
+      {name === 'changes' && !!status?.changes.length && <span className="code-stripe-count">{status.changes.length}</span>}
+    </StripeButton>
+  )
+
+  const toolBody = (name: ToolName) =>
+    name === 'project' ? (
+      <ProjectView
+        client={client}
+        env={scope}
+        status={status}
+        selected={activeTab?.path ?? null}
+        reveal={reveal}
+        onOpen={(path) => open({ kind: 'file', path })}
+        onDiff={(path) => open({ kind: 'diff', path })}
+        onTerminal={openTerminal}
+        onGotoFile={() => setPopup('goto')}
+        onOpenFolder={() => setPopup('folder')}
+        onFolderHere={(dir) => onFolder(dir === client.home ? '' : dir)}
+        onHide={() => hideTool('project')}
+      />
+    ) : (
+      <ChangesView
+        client={client}
+        status={status}
+        reload={reloadStatus}
+        onDiff={(path) => open({ kind: 'diff', path })}
+        onOpen={(path) => open({ kind: 'file', path })}
+        onHide={() => hideTool('changes')}
+      />
+    )
+
+  // A side's panel holds every window docked there, showing one; the
+  // others keep their state, hidden.
+  const toolPanel = (side: Side) => {
+    const names = toolNames.filter((n) => sides[n] === side)
+    const current = showing(side)
+    return (
+      <Panel
+        key={side}
+        id={side}
+        panelRef={sidePanel(side)}
+        defaultSize={side === 'left' ? '22%' : '24%'}
+        minSize="160px"
+        collapsible
+        collapsedSize={0}
+        onResize={track(side)}
+      >
+        {names.map((n) => (
+          <div key={n} className="code-side-slot" hidden={n !== current}>
+            {toolBody(n)}
+          </div>
+        ))}
+      </Panel>
+    )
+  }
+
+  const left = toolNames.filter((n) => sides[n] === 'left')
+  const right = toolNames.filter((n) => sides[n] === 'right')
+  // The row's sizes are remembered for each set of sides in use.
+  const arrangement = `${left.length > 0 ? 'left' : ''}|${right.length > 0 ? 'right' : ''}`
 
   return (
     <div className="code-page">
-      <div className="code-stripe">
-        <StripeButton on={shown.project} title="Project" onClick={() => toggle(project)}>
-          <FolderTree size={16} />
-        </StripeButton>
+      <Stripe side="left" over={dragging?.over === 'left'}>
+        {left.map(toolButton)}
         <span className="code-tool-spacer" />
+        <StripeButton on={false} title={`Find in Files (${shortcut('Mod+Shift+F')})`} onClick={() => setPopup('find')}>
+          <TextSearch size={16} />
+        </StripeButton>
         <StripeButton on={shown.terminal} title="Terminal" onClick={() => toggle(terminal)}>
           <SquareTerminal size={16} />
         </StripeButton>
-      </div>
+      </Stripe>
       <div className="code-main">
         <Group orientation="vertical" defaultLayout={outer.defaultLayout} onLayoutChanged={outer.onLayoutChanged}>
           <Panel id="top" minSize="30%">
-            <Group orientation="horizontal" defaultLayout={inner.defaultLayout} onLayoutChanged={inner.onLayoutChanged}>
-              <Panel
-                id="project"
-                panelRef={project}
-                defaultSize="22%"
-                minSize="140px"
-                collapsible
-                collapsedSize={0}
-                onResize={track('project')}
-              >
-                <ProjectView
-                  client={client}
-                  env={env}
-                  status={status}
-                  selected={activeTab?.path ?? null}
-                  reveal={reveal}
-                  onOpen={(path) => open({ kind: 'file', path })}
-                  onDiff={(path) => open({ kind: 'diff', path })}
-                  onTerminal={openTerminal}
-                  onHide={() => project.current?.collapse()}
-                />
-              </Panel>
-              <Separator className="code-split code-split-v" />
+            <ToolRow key={arrangement} arrangement={arrangement}>
+              {left.length > 0 && [toolPanel('left'), <Separator key="left-sep" className="code-split code-split-v" />]}
               <Panel id="editors" minSize="25%">
                 <EditorArea
                   client={client}
                   tabs={store.tabs}
                   active={store.active}
+                  jump={jump}
                   user={user}
                   status={status}
                   canReopen={canReopen}
@@ -263,26 +443,8 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
                   onReveal={revealInProject}
                 />
               </Panel>
-              <Separator className="code-split code-split-v" />
-              <Panel
-                id="changes"
-                panelRef={changes}
-                defaultSize="24%"
-                minSize="180px"
-                collapsible
-                collapsedSize={0}
-                onResize={track('changes')}
-              >
-                <ChangesView
-                  client={client}
-                  status={status}
-                  reload={reloadStatus}
-                  onDiff={(path) => open({ kind: 'diff', path })}
-                  onOpen={(path) => open({ kind: 'file', path })}
-                  onHide={() => changes.current?.collapse()}
-                />
-              </Panel>
-            </Group>
+              {right.length > 0 && [<Separator key="right-sep" className="code-split code-split-v" />, toolPanel('right')]}
+            </ToolRow>
           </Panel>
           <Separator className="code-split code-split-h" />
           <Panel
@@ -300,20 +462,116 @@ function CodeView({ env, client }: { env: string; client: CodeClient }) {
         {state !== 'live' && (
           <div className="code-status">
             {state === 'connecting' ? 'Connecting to the environment…' : `Reconnecting…${why ? ` (${why})` : ''}`}
+            {folder && state === 'reconnecting' && (
+              <button type="button" className="btn btn-ghost" onClick={() => onFolder('')}>
+                Back to the environment&rsquo;s folder
+              </button>
+            )}
           </div>
         )}
       </div>
-      <div className="code-stripe">
-        <StripeButton on={shown.changes} title="Changes" onClick={() => toggle(changes)}>
-          <GitCompare size={16} />
-          {!!status?.changes.length && <span className="code-stripe-count">{status.changes.length}</span>}
-        </StripeButton>
-      </div>
+      <Stripe side="right" over={dragging?.over === 'right'}>
+        {right.map(toolButton)}
+      </Stripe>
+      {dragging && (
+        <div className="code-drag-ghost" style={{ left: dragging.x + 12, top: dragging.y + 12 }}>
+          {dragging.tool === 'project' ? <FolderTree size={14} /> : <GitCompare size={14} />}
+          {toolTitles[dragging.tool]}
+        </div>
+      )}
+      {(popup === 'goto' || popup === 'everywhere') && (
+        <GotoFile
+          client={client}
+          title={popup === 'goto' ? 'Go to File' : 'Search Everywhere'}
+          recent={recent}
+          onOpen={openAt}
+          onClose={() => setPopup(null)}
+        />
+      )}
+      {popup === 'find' && <FindInFiles client={client} onOpen={openAt} onClose={() => setPopup(null)} />}
+      {popup === 'folder' && <OpenFolder client={client} onChoose={onFolder} onClose={() => setPopup(null)} />}
     </div>
   )
 }
 
-function StripeButton({ on, title, onClick, children }: { on: boolean; title: string; onClick: () => void; children: ReactNode }) {
+// ToolRow is the row of side panels and editors, its sizes remembered for
+// each arrangement: a row with a panel on each side is not one with one.
+function ToolRow({ arrangement, children }: { arrangement: string; children: ReactNode }) {
+  const layout = useDefaultLayout({ id: `hangar.code.h.${arrangement}`, storage: localStorage })
+  return (
+    <Group orientation="horizontal" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+      {children}
+    </Group>
+  )
+}
+
+// Stripe is a column of buttons at the side of the Code tab, which a tool
+// window's button being dragged can be dropped on.
+function Stripe({ side, over, children }: { side: Side; over: boolean; children: ReactNode }) {
+  return (
+    <div className={over ? 'code-stripe code-stripe-drop' : 'code-stripe'} data-side={side}>
+      {children}
+    </div>
+  )
+}
+
+// Dragging is a tool window's button being dragged to the other side: where
+// the pointer is, and the stripe it is over.
+type Dragging = { tool: ToolName; x: number; y: number; over: Side | null }
+
+// dragTool follows the pointer from a press on a tool window's button. Once
+// it has moved a few pixels it is a drag, shown by onMove, and dropped on a
+// stripe by onDrop; a press that does not move is left to be a click.
+function dragTool(
+  tool: ToolName,
+  e: React.PointerEvent,
+  onMove: (d: Dragging | null) => void,
+  onDrop: (tool: ToolName, side: Side) => void,
+) {
+  if (e.button !== 0) return
+  const x0 = e.clientX
+  const y0 = e.clientY
+  let dragging = false
+  const sideAt = (x: number, y: number) =>
+    ((document.elementFromPoint(x, y)?.closest('.code-stripe') as HTMLElement | null)?.dataset.side as Side | undefined) ??
+    null
+  const move = (ev: PointerEvent) => {
+    if (!dragging && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return
+    dragging = true
+    onMove({ tool, x: ev.clientX, y: ev.clientY, over: sideAt(ev.clientX, ev.clientY) })
+  }
+  const up = (ev: PointerEvent) => {
+    document.removeEventListener('pointermove', move, true)
+    document.removeEventListener('pointerup', up, true)
+    if (!dragging) return
+    onMove(null)
+    const side = sideAt(ev.clientX, ev.clientY)
+    if (side) onDrop(tool, side)
+    // The click that ends a drag is not a click on the button.
+    const swallow = (c: MouseEvent) => {
+      c.stopPropagation()
+      c.preventDefault()
+    }
+    document.addEventListener('click', swallow, { capture: true, once: true })
+    setTimeout(() => document.removeEventListener('click', swallow, true), 0)
+  }
+  document.addEventListener('pointermove', move, true)
+  document.addEventListener('pointerup', up, true)
+}
+
+function StripeButton({
+  on,
+  title,
+  onClick,
+  onPointerDown,
+  children,
+}: {
+  on: boolean
+  title: string
+  onClick: () => void
+  onPointerDown?: (e: React.PointerEvent) => void
+  children: ReactNode
+}) {
   return (
     <button
       type="button"
@@ -321,6 +579,8 @@ function StripeButton({ on, title, onClick, children }: { on: boolean; title: st
       title={title}
       aria-label={title}
       aria-pressed={on}
+      data-movable={onPointerDown ? '' : undefined}
+      onPointerDown={onPointerDown}
       onClick={onClick}
     >
       {children}

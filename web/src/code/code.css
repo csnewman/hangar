@@ -11,6 +11,11 @@
   --code-git-unversioned: #b8491d;
   --code-git-deleted: #7a7a7a;
   --code-git-conflict: #c9302c;
+  --code-find-hit: rgb(255 196 0 / 0.45);
+  --diff-deleted-line: rgb(238 68 51 / 0.08);
+  --diff-inserted-line: rgb(34 170 34 / 0.08);
+  --diff-deleted-text: rgb(238 68 51 / 0.22);
+  --diff-inserted-text: rgb(34 170 34 / 0.22);
   /* Syntax: IntelliJ Light's. */
   --syn-keyword: #0033b3;
   --syn-string: #067d17;
@@ -46,6 +51,11 @@
     --code-git-unversioned: #e58a5b;
     --code-git-deleted: #8a96a8;
     --code-git-conflict: #f07370;
+    --code-find-hit: rgb(214 160 40 / 0.4);
+    --diff-deleted-line: rgb(240 115 112 / 0.1);
+    --diff-inserted-line: rgb(92 194 122 / 0.1);
+    --diff-deleted-text: rgb(240 115 112 / 0.3);
+    --diff-inserted-text: rgb(92 194 122 / 0.3);
     /* Syntax: IntelliJ's Dark. */
     --syn-keyword: #cf8e6d;
     --syn-string: #6aab73;
@@ -121,7 +131,40 @@
   font-weight: 650;
 }
 
+/* A tool window's button dragged over a stripe it can move to. */
+.code-stripe-drop {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.code-stripe-btn[data-movable] {
+  touch-action: none;
+}
+
+.code-drag-ghost {
+  position: fixed;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  box-shadow: var(--shadow-pop);
+  font-size: 12px;
+  pointer-events: none;
+}
+
 /* Panels */
+
+.code-side-slot {
+  height: 100%;
+}
+
+.code-side-slot[hidden] {
+  display: none;
+}
 
 .code-main {
   position: relative;
@@ -161,6 +204,9 @@
   box-shadow: var(--shadow-pop);
   font-size: 12.5px;
   z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 /* Tool windows */
@@ -880,4 +926,234 @@
   font-size: 12px;
   color: var(--muted);
   cursor: pointer;
+}
+
+/* Search popups: Go to File, Find in Files, Open Folder. */
+
+.code-popup-shade {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 10vh 16px 16px;
+  background: rgb(0 0 0 / 0.08);
+}
+
+.code-popup {
+  display: flex;
+  flex-direction: column;
+  width: min(680px, 100%);
+  max-height: 70vh;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+  font-size: 13px;
+}
+
+.code-find {
+  width: min(900px, 100%);
+  height: 76vh;
+  max-height: none;
+}
+
+.code-popup-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 6px;
+}
+
+.code-popup-input {
+  margin: 0 10px 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-family: var(--code-font);
+  font-size: 13px;
+  outline: none;
+}
+
+.code-popup-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.code-popup-list {
+  flex: 1;
+  min-height: 60px;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding: 3px 0;
+}
+
+.code-popup-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 12px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.code-popup-row-on {
+  background: var(--sidebar-active);
+}
+
+.code-popup-row mark {
+  background: none;
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.code-popup-empty {
+  padding: 10px 12px;
+  color: var(--muted);
+}
+
+.code-popup-foot {
+  padding: 5px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.code-popup-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+}
+
+.code-goto-name {
+  flex: none;
+}
+
+.code-goto-dir {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.code-find-query {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: 10px;
+}
+
+.code-find-query .code-popup-input {
+  flex: 1;
+  margin-right: 6px;
+}
+
+.code-find-query .code-popup-input,
+.code-find-query .code-popup-toggle {
+  margin-bottom: 8px;
+}
+
+.code-popup-toggle {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.code-popup-toggle:hover {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.code-popup-toggle-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.code-find-mask {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.code-find-mask-input {
+  width: 150px;
+  padding: 3px 7px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-family: var(--code-font);
+  font-size: 12px;
+}
+
+.code-find-mask-input:disabled {
+  opacity: 0.5;
+}
+
+.code-find-list {
+  flex: 0 0 40%;
+}
+
+.code-find-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--code-font);
+  font-size: 12.5px;
+}
+
+.code-find-where {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.code-find-preview {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+
+.code-find-preview-head {
+  display: flex;
+  gap: 8px;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.code-find-preview-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.code-find-preview-body .cm-editor {
+  height: 100%;
+}
+
+.code-find-line {
+  background: var(--code-active-line);
+}
+
+.code-find-hit {
+  background: var(--code-find-hit);
+  border-radius: 2px;
 }

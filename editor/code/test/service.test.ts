@@ -2,7 +2,7 @@
 // windows would: files, git, and one shared document edited from both sides
 // and from the disk.
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { connect, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -40,6 +40,8 @@ before(async () => {
 	git('commit', '-q', '-m', 'first')
 	proc = spawn(process.execPath, [join(import.meta.dirname, '..', 'dist', 'code.mjs'), '--socket', sock, '--root', root], {
 		stdio: 'inherit',
+		// The settings file is in the home directory.
+		env: { ...process.env, HOME: dir },
 	})
 	for (let i = 0; i < 100; i++) {
 		try {
@@ -149,7 +151,7 @@ test('files, git and a shared document', async () => {
 	const a = new Client()
 	const b = new Client()
 	try {
-		assert.deepEqual(await a.call('hello'), { root })
+		assert.deepEqual(await a.call('hello'), { root, home: root })
 		const list = await a.call('fs.list', { path: '.' })
 		assert.ok(list.some((e: any) => e.name === 'a.txt' && !e.dir))
 
@@ -279,6 +281,100 @@ test('reading git state is not announced as a change to it', async () => {
 		await a.call('git.show', { path: 'touched.txt', from: 'index' })
 		await new Promise((r) => setTimeout(r, 600))
 		assert.deepEqual(a.events.filter((e) => e.event === 'git.changed'), [])
+	} finally {
+		a.close()
+	}
+})
+
+test('a tab working in another folder, searching it', async () => {
+	mkdirSync(join(root, 'sub', 'deep'), { recursive: true })
+	writeFileSync(join(root, 'sub', 'one.go'), 'package sub\n\nfunc FindMe() {}\n')
+	writeFileSync(join(root, 'sub', 'deep', 'two.go'), 'package deep\n// findme too\n')
+	writeFileSync(join(root, 'top.txt'), 'FindMe outside\n')
+	const a = new Client()
+	try {
+		await assert.rejects(a.call('hello', { root: 'sub' }), /absolute/)
+		await assert.rejects(a.call('hello', { root: join(root, 'missing') }), /does not exist/)
+		assert.deepEqual(await a.call('hello', { root: join(root, 'sub') }), { root: join(root, 'sub'), home: root })
+		const list = await a.call('fs.list', { path: '.' })
+		assert.deepEqual(list.map((e: any) => e.name), ['deep', 'one.go'])
+
+		// Git's paths are the folder's, and only what is within it.
+		const st = await a.call('git.status')
+		const paths = st.changes.map((c: any) => c.path).sort()
+		assert.deepEqual(paths, ['deep/two.go', 'one.go'])
+
+		const { files } = await a.call('search.files')
+		assert.deepEqual(files, ['deep/two.go', 'one.go'])
+
+		const found = await a.call('search.text', { query: 'findme' })
+		assert.deepEqual(
+			found.matches.map((m: any) => [m.path, m.line, m.text.slice(m.ranges[0][0], m.ranges[0][1])]).sort(),
+			[
+				['deep/two.go', 2, 'findme'],
+				['one.go', 3, 'FindMe'],
+			],
+		)
+		const exact = await a.call('search.text', { query: 'FindMe', caseSensitive: true, mask: '*.go, !deep/*' })
+		assert.deepEqual(exact.matches.map((m: any) => m.path), ['one.go'])
+		const re = await a.call('search.text', { query: 'func \\w+\\(', regex: true })
+		assert.deepEqual(re.matches.map((m: any) => m.text), ['func FindMe() {}'])
+
+		assert.equal((await a.call('fs.read', { path: 'one.go' })).text, 'package sub\n\nfunc FindMe() {}\n')
+	} finally {
+		a.close()
+		rmSync(join(root, 'sub'), { recursive: true })
+		rmSync(join(root, 'top.txt'))
+	}
+})
+
+test('settings are shared by every tab, in the home directory', async () => {
+	const a = new Client()
+	const b = new Client()
+	try {
+		await a.call('hello')
+		await b.call('hello')
+		assert.deepEqual(await a.call('settings.get'), {})
+		await a.call('settings.set', { settings: { toolWindows: { changes: 'left' } } })
+		assert.deepEqual(await b.call('settings.get'), { toolWindows: { changes: 'left' } })
+		await until('the change announced', () => b.events.some((e) => e.event === 'settings.changed'))
+		assert.deepEqual(JSON.parse(readFileSync(join(dir, '.config', 'hangar', 'code.json'), 'utf8')), {
+			toolWindows: { changes: 'left' },
+		})
+		await assert.rejects(a.call('settings.set', { settings: [1] }), /object/)
+	} finally {
+		a.close()
+		b.close()
+	}
+})
+
+test('a file moved without git is a rename', async () => {
+	writeFileSync(join(root, 'r.txt'), 'some\nlines\nhere\n')
+	git('add', 'r.txt')
+	git('commit', '-q', '-m', 'r')
+	const a = new Client()
+	try {
+		await a.call('hello')
+		renameSync(join(root, 'r.txt'), join(root, 'moved.txt'))
+		const st = await a.call('git.status')
+		assert.deepEqual(
+			st.changes.filter((c: any) => c.path === 'moved.txt' || c.path === 'r.txt'),
+			[{ index: '.', worktree: 'R', path: 'moved.txt', from: 'r.txt' }],
+		)
+		// The index is the repository's own, untouched.
+		assert.equal(git('status', '--porcelain', '--', 'moved.txt', 'r.txt').toString(), ' D r.txt\n?? moved.txt\n')
+
+		const d = await a.call('git.diff', { path: 'moved.txt' })
+		assert.equal(d.head, 'some\nlines\nhere\n')
+
+		await a.call('git.stage', { path: 'moved.txt' })
+		const staged = (await a.call('git.status')).changes.find((c: any) => c.path === 'moved.txt')
+		assert.deepEqual(staged, { index: 'R', worktree: '.', path: 'moved.txt', from: 'r.txt' })
+
+		await a.call('git.rollback', { path: 'moved.txt' })
+		assert.ok(existsSync(join(root, 'r.txt')))
+		assert.ok(!existsSync(join(root, 'moved.txt')))
+		assert.equal(git('status', '--porcelain', '--', 'moved.txt', 'r.txt').toString(), '')
 	} finally {
 		a.close()
 	}
