@@ -2,8 +2,9 @@
 // requests and events on one WebSocket, and shared documents over Yjs.
 //
 // The WebSocket carries the service's frames, one per message: a channel
-// byte, 'r' for JSON or 'y' for a document's Yjs message (its number as a
-// big-endian u32, then the y-protocols message).
+// byte, 'r' for JSON, 'y' for a document's Yjs message (its number as a
+// big-endian u32, then the y-protocols message), or 'l' for a language
+// server's message (the server's number, then the message's JSON).
 //
 // A dropped connection is reconnected. Open documents keep their Y.Doc
 // across it and are opened again, so nothing typed meanwhile is lost: Yjs
@@ -17,6 +18,7 @@ import * as Y from 'yjs'
 
 const CHANNEL_JSON = 0x72 // 'r'
 const CHANNEL_YJS = 0x79 // 'y'
+const CHANNEL_LSP = 0x6c // 'l'
 const MESSAGE_SYNC = 0
 const MESSAGE_AWARENESS = 1
 
@@ -85,6 +87,8 @@ type Events = {
   'doc.deleted': (p: { path: string }) => void
   // Another tab changed the settings.
   'settings.changed': (s: Record<string, unknown>) => void
+  // A language server this tab started stopped.
+  'lsp.exited': (p: { server: number; why: string }) => void
 }
 
 // SharedFile is one file open for editing, shared with everyone who has it
@@ -178,7 +182,9 @@ export class CodeClient {
     'git.changed': new Set(),
     'doc.deleted': new Set(),
     'settings.changed': new Set(),
+    'lsp.exited': new Set(),
   }
+  private lspHandlers = new Map<number, Set<(json: string) => void>>()
   private files = new Map<string, SharedFile>()
   private byNumber = new Map<number, SharedFile>()
   private retry: ReturnType<typeof setTimeout> | undefined
@@ -241,6 +247,8 @@ export class CodeClient {
       for (const w of this.waiting.values()) w.reject(new Error('the connection dropped'))
       this.waiting.clear()
       this.byNumber.clear()
+      // Language servers end with the connection.
+      this.lspHandlers.clear()
       if (this.closed) return
       this.setState('reconnecting', e.reason)
       this.retry = setTimeout(() => this.connect(), this.backoff)
@@ -265,7 +273,14 @@ export class CodeClient {
         this.emit('doc.deleted', m.params)
       } else if (m.event === 'settings.changed') {
         this.emit('settings.changed', m.params)
+      } else if (m.event === 'lsp.exited') {
+        this.lspHandlers.delete(m.params.server)
+        this.emit('lsp.exited', m.params)
       }
+    } else if (msg[0] === CHANNEL_LSP && msg.length >= 5) {
+      const n = new DataView(msg.buffer, msg.byteOffset + 1, 4).getUint32(0)
+      const json = new TextDecoder().decode(msg.subarray(5))
+      for (const h of this.lspHandlers.get(n) ?? []) h(json)
     } else if (msg[0] === CHANNEL_YJS && msg.length >= 5) {
       const n = new DataView(msg.buffer, msg.byteOffset + 1, 4).getUint32(0)
       this.byNumber.get(n)?.receive(msg.subarray(5))
@@ -318,6 +333,32 @@ export class CodeClient {
   async read(path: string) {
     return (await this.request<{ text: string | null }>('fs.read', { path })).text
   }
+  // startLanguageServer starts a server for an LSP language ID in this
+  // tab's folder, or says why there is none.
+  startLanguageServer(language: string) {
+    return this.request<{ server: number; root: string; command: string } | { missing: string }>('lsp.start', {
+      language,
+    })
+  }
+  stopLanguageServer(server: number) {
+    return this.request<void>('lsp.stop', { server })
+  }
+  // onLanguageServer subscribes to a server's messages.
+  onLanguageServer(server: number, fn: (json: string) => void): () => void {
+    let set = this.lspHandlers.get(server)
+    if (!set) this.lspHandlers.set(server, (set = new Set()))
+    set.add(fn)
+    return () => set.delete(fn)
+  }
+  sendLanguageServer(server: number, json: string) {
+    const body = new TextEncoder().encode(json)
+    const frame = new Uint8Array(5 + body.length)
+    frame[0] = CHANNEL_LSP
+    new DataView(frame.buffer).setUint32(1, server)
+    frame.set(body, 5)
+    this.write(frame)
+  }
+
   // settings are the Code tab's, kept in the user's home (shared by their
   // profile by default).
   settings() {

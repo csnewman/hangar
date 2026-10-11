@@ -4,7 +4,7 @@ import { CaseSensitive, File, Folder, FolderOpen, Regex, WholeWord } from 'lucid
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import type { CodeClient, Match } from './client'
-import { codeHighlight, codeTheme, languageFor } from './CodeEditor'
+import { codeHighlight, codeTheme, followScheme, languageFor } from './CodeEditor'
 import { shortcut } from './ContextMenu'
 
 // Jump is a place in a file to open it at: a 1-based line (0 for none),
@@ -462,6 +462,7 @@ function Preview({ client, match, onOpen }: { client: CodeClient; match: Match; 
         extensions: [
           lineNumbers(),
           codeHighlight,
+          followScheme,
           codeTheme,
           language.of([]),
           marks.of([]),

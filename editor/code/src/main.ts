@@ -44,7 +44,7 @@ const folders = new Map<string, Folder>()
 const folder = (dir: string): Folder => {
 	let f = folders.get(dir)
 	if (!f) {
-		f = { root: dir, files: new Files(dir), git: new Git(dir), search: new Search(dir) }
+		f = { root: dir, files: new Files(dir), git: new Git(dir), search: new Search(dir), hubs: new Map() }
 		folders.set(dir, f)
 	}
 	return f
@@ -57,6 +57,7 @@ server.listen(values.socket, () => console.log(`hangar-code: serving ${root} on 
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {
 	process.on(sig, async () => {
+		for (const f of folders.values()) for (const hub of f.hubs.values()) hub.kill()
 		await docs.saveAll()
 		process.exit(0)
 	})

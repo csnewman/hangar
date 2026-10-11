@@ -14,9 +14,10 @@ const QUIET = new Set(['.git', 'node_modules', '.cache', 'target', 'dist', '__py
 // Files lists and changes the environment's files. Paths are absolute, or
 // relative to the root.
 export class Files {
-	private listeners = new Set<(dirs: string[]) => void>()
+	private listeners = new Set<(dirs: string[], files: string[]) => void>()
 	private watcher: FSWatcher | undefined
 	private pending = new Set<string>()
+	private pendingFiles = new Set<string>()
 	private timer: NodeJS.Timeout | undefined
 
 	constructor(private root: string) {}
@@ -76,9 +77,10 @@ export class Files {
 		await rm(p, { recursive: true })
 	}
 
-	// onChange calls fn with the directories whose contents changed, a few at
-	// a time. The watch starts with the first listener.
-	onChange(fn: (dirs: string[]) => void): () => void {
+	// onChange calls fn with the directories whose contents changed, and the
+	// paths that changed in them, a few at a time. The watch starts with the
+	// first listener.
+	onChange(fn: (dirs: string[], files: string[]) => void): () => void {
 		this.listeners.add(fn)
 		if (!this.watcher) this.start()
 		return () => {
@@ -97,6 +99,7 @@ export class Files {
 				const rel = String(name)
 				if (rel.split('/').some((part) => QUIET.has(part))) return
 				this.pending.add(dirname(join(this.root, rel)))
+				this.pendingFiles.add(join(this.root, rel))
 				clearTimeout(this.timer)
 				this.timer = setTimeout(() => this.flush(), 150)
 			})
@@ -111,8 +114,10 @@ export class Files {
 
 	private flush() {
 		const dirs = [...this.pending]
+		const files = [...this.pendingFiles]
 		this.pending.clear()
-		for (const fn of this.listeners) fn(dirs)
+		this.pendingFiles.clear()
+		for (const fn of this.listeners) fn(dirs, files)
 	}
 
 	relative(path: string): string {

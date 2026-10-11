@@ -32,9 +32,11 @@ import {
   lineNumbers,
   type Command,
   rectangularSelection,
+  ViewPlugin,
 } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
-import { useEffect, useRef, useState } from 'react'
+import { findReferences, formatDocument, jumpToDefinition, LSPPlugin, renameSymbol } from '@codemirror/lsp-client'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next'
 import * as Y from 'yjs'
@@ -42,6 +44,7 @@ import * as Y from 'yjs'
 import type { CodeClient, SharedFile } from './client'
 import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { baseText, gitGutter, hunkAt, rollback, setBase, staged, type Hunk } from './gitGutter'
+import { languageId, Languages, LanguagesContext, type ServerState } from './lsp'
 import type { Jump } from './Search'
 
 // codeHighlight colours code by the page's --syn-* colours (code.css), which
@@ -77,6 +80,21 @@ export const codeHighlight: Extension = syntaxHighlighting(
   ]),
 )
 
+// followScheme tells CodeMirror whether the page is dark, as the system
+// says and as it changes, so its own parts -- tooltips, the completion
+// list, panels -- take their dark looks with it.
+const scheme = new Compartment()
+const darkQuery = () => (typeof window !== 'undefined' ? window.matchMedia?.('(prefers-color-scheme: dark)') : undefined)
+export const followScheme: Extension = [
+  scheme.of(EditorView.darkTheme.of(darkQuery()?.matches ?? false)),
+  ViewPlugin.define((view) => {
+    const q = darkQuery()
+    const on = () => view.dispatch({ effects: scheme.reconfigure(EditorView.darkTheme.of(q?.matches ?? false)) })
+    q?.addEventListener('change', on)
+    return { destroy: () => q?.removeEventListener('change', on) }
+  }),
+]
+
 // editorSetup is CodeMirror's basic setup, less its own undo history: a
 // shared document's undo is Yjs's, which undoes only this window's edits.
 export const editorSetup: Extension = [
@@ -89,6 +107,7 @@ export const editorSetup: Extension = [
   EditorState.allowMultipleSelections.of(true),
   indentOnInput(),
   codeHighlight,
+  followScheme,
   bracketMatching(),
   closeBrackets(),
   autocompletion({ activateOnTyping: false }),
@@ -114,6 +133,24 @@ export const codeTheme = EditorView.theme({
   '.cm-cursor': { borderLeftColor: 'var(--accent)' },
   '.cm-foldGutter .cm-gutterElement': { color: 'var(--muted)' },
   '.cm-panels': { backgroundColor: 'var(--surface)', color: 'var(--text)' },
+  '.cm-tooltip': {
+    backgroundColor: 'var(--surface) !important',
+    color: 'var(--text) !important',
+    border: '1px solid var(--border-strong) !important',
+    borderRadius: '6px',
+    boxShadow: 'var(--shadow-pop)',
+  },
+  '.cm-tooltip code, .cm-tooltip pre': {
+    backgroundColor: 'var(--surface-2) !important',
+    color: 'var(--text) !important',
+    fontFamily: 'var(--code-font)',
+  },
+  '.cm-tooltip a': { color: 'var(--accent)' },
+  '.cm-tooltip-autocomplete ul li[aria-selected]': {
+    backgroundColor: 'var(--accent) !important',
+    color: 'var(--accent-text) !important',
+  },
+  '.cm-completionDetail, .cm-completionInfo': { color: 'var(--muted)' },
 })
 
 // languageFor loads the language a file's name says it is written in.
@@ -182,6 +219,11 @@ export function CodeEditor({
   const host = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const [ready, setReady] = useState(false)
+  const languages = useContext(LanguagesContext)
+  const [server, setServer] = useState<ServerState | null>(null)
+  // A file outside the folder -- a library's, reached by going to a
+  // definition -- is shown, not edited.
+  const outside = path.startsWith('/')
   const menu = useContextMenu()
   const [hunk, setHunk] = useState<{ view: EditorView; h: Hunk; x: number; y: number } | null>(null)
   // crlf is whether the index's copy has CRLF endings, which a staged
@@ -253,6 +295,22 @@ export function CodeEditor({
       { label: 'Copy Reference', onSelect: () => copyText(`${path}:${line.number}`) },
       { label: 'Reveal in Project', onSelect: () => onReveal(path) },
     ]
+    if (LSPPlugin.get(view)) {
+      items.splice(
+        0,
+        0,
+        { label: 'Go to Definition', shortcut: shortcut('Mod+B'), onSelect: run(jumpToDefinition) },
+        { label: 'Find Usages', shortcut: shortcut('Alt+F7'), onSelect: run(findReferences) },
+        { label: 'Rename…', shortcut: shortcut('Shift+F6'), disabled: outside, onSelect: run(renameSymbol) },
+        {
+          label: 'Reformat Code',
+          shortcut: shortcut('Mod+Alt+L'),
+          disabled: outside,
+          onSelect: run(formatDocument),
+        },
+        'separator',
+      )
+    }
     if (h) {
       items.push(
         'separator',
@@ -274,6 +332,7 @@ export function CodeEditor({
     if (!el) return
     file.awareness.setLocalStateField('user', { name: user.name, color: user.color, colorLight: user.color + '33' })
     const language = new Compartment()
+    const lsp = new Compartment()
     const undo = new Y.UndoManager(file.text)
     const view = new EditorView({
       parent: el,
@@ -285,6 +344,8 @@ export function CodeEditor({
           keymap.of(yUndoManagerKeymap),
           codeTheme,
           language.of([]),
+          lsp.of([]),
+          EditorState.readOnly.of(outside),
           yCollab(file.text, file.awareness, { undoManager: undo }),
           gitGutter((v, h, e) => setHunk({ view: v, h, x: e.clientX, y: e.clientY })),
           EditorView.domEventHandlers({
@@ -299,6 +360,35 @@ export function CodeEditor({
     let disposed = false
     languageFor(file.path.split('/').pop() ?? '').then((ext) => {
       if (!disposed) view.dispatch({ effects: language.reconfigure(ext) })
+    })
+
+    // The file's language server, if its language has one: attached once
+    // it is running, and again whenever the servers start over (the
+    // connection dropped, or a server stopped).
+    const id = languageId(path)
+    const abs = outside ? path : `${client.root}/${path}`
+    const attach = () => {
+      const p = id ? languages?.server(path) : null
+      if (!p || !id) {
+        setServer(null)
+        return
+      }
+      setServer({ state: 'starting', language: id })
+      p.then((s) => {
+        if (disposed) return
+        setServer(s)
+        view.dispatch({ effects: lsp.reconfigure(Languages.extension(s, abs, id)) })
+      })
+    }
+    attach()
+    const offLanguages = languages?.onChange(() => {
+      if (disposed) return
+      try {
+        view.dispatch({ effects: lsp.reconfigure([]) })
+      } catch {
+        // The old server's client is gone with its connection.
+      }
+      attach()
     })
 
     // The gutter's base: the index's copy, reloaded whenever git's state
@@ -324,6 +414,7 @@ export function CodeEditor({
     setReady(true)
     return () => {
       disposed = true
+      offLanguages?.()
       setReady(false)
       viewRef.current = null
       clearTimeout(timer)
@@ -331,7 +422,7 @@ export function CodeEditor({
       view.destroy()
       undo.destroy()
     }
-  }, [file, user.name, user.color, client, path])
+  }, [file, user.name, user.color, client, path, languages, outside])
 
   // A jump puts the caret on its line, selecting the text it names there,
   // with the line in the middle of the view.
@@ -357,6 +448,7 @@ export function CodeEditor({
   return (
     <>
       <div ref={host} className="code-editor" />
+      <ServerChip server={server} outside={outside} />
       {menu.menu}
       {hunk && (
         <HunkPopover
@@ -430,5 +522,29 @@ function HunkPopover({
       </div>
     </div>,
     document.body,
+  )
+}
+
+// ServerChip says, in the editor's corner, what knows the file's code: its
+// language server, one starting, or why there is none.
+function ServerChip({ server, outside }: { server: ServerState | null; outside: boolean }) {
+  if (!server && !outside) return null
+  let text = ''
+  let tip = ''
+  let cls = 'code-lsp'
+  if (server?.state === 'starting') text = 'Starting language server…'
+  else if (server?.state === 'ready') {
+    text = server.command
+    tip = `${server.command} knows this file's code: ${shortcut('Mod+B')} or ${shortcut('Mod')}-click goes to a definition, ${shortcut('Alt+F7')} finds usages, ${shortcut('Shift+F6')} renames`
+  } else if (server?.state === 'missing') {
+    text = 'No language server'
+    tip = server.why
+    cls += ' code-lsp-missing'
+  }
+  return (
+    <div className={cls} title={tip || undefined}>
+      {outside && <span className="code-lsp-ro">Read-only</span>}
+      {text}
+    </div>
   )
 }

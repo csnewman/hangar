@@ -5,15 +5,19 @@ import { isAbsolute, resolve } from 'node:path'
 import type { Documents, SharedDoc } from './docs.js'
 import type { Files } from './files.js'
 import type { Git } from './git.js'
+import { Hub } from './hub.js'
+import type { Message } from './lsp.js'
 import type { Search } from './search.js'
 import type { SettingsFile } from './settings.js'
 
 const CHANNEL_JSON = 0x72 // 'r'
 const CHANNEL_YJS = 0x79 // 'y'
+const CHANNEL_LSP = 0x6c // 'l'
 const MAX_FRAME = 64 << 20
 
-// Folder is what serves one folder: its files, its git, and searches in it.
-export type Folder = { root: string; files: Files; git: Git; search: Search }
+// Folder is what serves one folder: its files, its git, searches in it, and
+// its language servers, by language, shared by every tab.
+export type Folder = { root: string; files: Files; git: Git; search: Search; hubs: Map<string, Hub> }
 
 // Services are the service's own: the folder it was started on, the one
 // serving any other folder, and the shared documents, which are everyone's
@@ -32,6 +36,9 @@ export class Connection {
 	private closed = false
 	private f: Folder
 	private unwatch: () => void = () => {}
+	// The language servers this tab uses, by its number for each.
+	private servers = new Map<number, { send: (m: Message) => void; detach: () => void }>()
+	private nextServer = 1
 
 	constructor(
 		private sock: Socket,
@@ -76,6 +83,8 @@ export class Connection {
 		if (want !== this.f.root) {
 			this.f = this.s.folder(want)
 			this.watch()
+			// A server knows one folder.
+			this.stopServers()
 		}
 		return { root: this.f.root, home: this.s.root }
 	}
@@ -108,6 +117,14 @@ export class Connection {
 		} else if (frame[0] === CHANNEL_YJS && frame.length >= 5) {
 			const doc = this.open.get(frame.readUInt32BE(1))
 			doc?.receive(this, frame.subarray(5))
+		} else if (frame[0] === CHANNEL_LSP && frame.length >= 5) {
+			const server = this.servers.get(frame.readUInt32BE(1))
+			if (!server) return
+			try {
+				server.send(JSON.parse(frame.subarray(5).toString('utf8')))
+			} catch {
+				// Not JSON; nothing to pass on.
+			}
 		}
 	}
 
@@ -141,6 +158,10 @@ export class Connection {
 				return this.f.files.rename(str('from'), str('to'))
 			case 'fs.delete':
 				return this.f.files.remove(str('path'))
+			case 'lsp.start':
+				return this.startServer(str('language'))
+			case 'lsp.stop':
+				return this.stopServer(Number(p.server))
 			case 'settings.get':
 				return this.s.settings.get()
 			case 'settings.set':
@@ -194,6 +215,54 @@ export class Connection {
 		}
 	}
 
+	// startServer joins this tab to its folder's language server for a
+	// language, starting it if no tab has, its messages relayed on the LSP
+	// channel under the number returned. A language with no server installed
+	// is told why.
+	private async startServer(language: string) {
+		const f = this.f
+		let hub = f.hubs.get(language)
+		if (!hub) {
+			const started = Hub.start(f.root, language, await this.s.settings.get(), this.s.docs, f.files, () => {
+				if (f.hubs.get(language) === started) f.hubs.delete(language)
+			})
+			if ('missing' in started) return { missing: started.missing }
+			// Another request may have started one meanwhile.
+			const raced = f.hubs.get(language)
+			if (raced) started.stop('started twice')
+			else f.hubs.set(language, started)
+			hub = f.hubs.get(language)!
+		}
+		const n = this.nextServer++
+		const tab = hub.attach({
+			send: (m) => {
+				const hdr = Buffer.alloc(5)
+				hdr[0] = CHANNEL_LSP
+				hdr.writeUInt32BE(n, 1)
+				this.write(Buffer.concat([hdr, Buffer.from(JSON.stringify({ jsonrpc: '2.0', ...m }), 'utf8')]))
+			},
+			gone: (why) => {
+				if (this.servers.delete(n)) this.event('lsp.exited', { server: n, why })
+			},
+		})
+		this.servers.set(n, tab)
+		return { server: n, root: f.root, command: hub.command }
+	}
+
+	private stopServer(n: number) {
+		const server = this.servers.get(n)
+		if (!server) return
+		this.servers.delete(n)
+		server.detach()
+	}
+
+	// stopServers leaves this tab's servers, which stay for others, and for
+	// a while after the last leaves.
+	private stopServers() {
+		for (const server of this.servers.values()) server.detach()
+		this.servers.clear()
+	}
+
 	private async openDoc(path: string) {
 		const doc = await this.s.docs.open(resolve(this.f.root, path))
 		const n = this.nextDoc++
@@ -241,6 +310,7 @@ export class Connection {
 		if (this.closed) return
 		this.closed = true
 		this.unwatch()
+		this.stopServers()
 		for (const doc of this.open.values()) doc.leave(this)
 		this.open.clear()
 	}

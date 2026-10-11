@@ -64,6 +64,8 @@ class Client {
 	private waiting = new Map<number, (m: any) => void>()
 	events: any[] = []
 	docs = new Map<number, Y.Doc>()
+	// Language servers' messages, by server.
+	lsp: { server: number; msg: any }[] = []
 
 	constructor() {
 		this.sock = connect(sock)
@@ -88,6 +90,8 @@ class Client {
 			const m = JSON.parse(f.subarray(1).toString())
 			if (m.id) this.waiting.get(m.id)?.(m)
 			else this.events.push(m)
+		} else if (f[0] === 0x6c) {
+			this.lsp.push({ server: f.readUInt32BE(1), msg: JSON.parse(f.subarray(5).toString()) })
 		} else if (f[0] === 0x79) {
 			const n = f.readUInt32BE(1)
 			const doc = this.docs.get(n)
@@ -114,6 +118,13 @@ class Client {
 		return new Promise((res, rej) =>
 			this.waiting.set(id, (m) => (m.error ? rej(new Error(m.error)) : res(m.result))),
 		)
+	}
+
+	sendLsp(server: number, msg: unknown) {
+		const hdr = Buffer.alloc(5)
+		hdr[0] = 0x6c
+		hdr.writeUInt32BE(server, 1)
+		this.write(Buffer.concat([hdr, Buffer.from(JSON.stringify(msg))]))
 	}
 
 	async open(path: string): Promise<Y.Doc> {
@@ -377,5 +388,84 @@ test('a file moved without git is a rename', async () => {
 		assert.equal(git('status', '--porcelain', '--', 'moved.txt', 'r.txt').toString(), '')
 	} finally {
 		a.close()
+	}
+})
+
+test('a language server, shared by tabs and kept across a reload', async () => {
+	const a = new Client()
+	const b = new Client()
+	let reloaded: Client | undefined
+	writeFileSync(join(root, 'lsp.fake'), 'one\n')
+	const uri = 'file://' + join(root, 'lsp.fake')
+	const init = (c: Client, n: number, id: number) =>
+		c.sendLsp(n, { jsonrpc: '2.0', id, method: 'initialize', params: { capabilities: {} } })
+	const answer = async (c: Client, n: number, id: number) => {
+		await until(`answer ${id}`, () => c.lsp.some((m) => m.server === n && m.msg.id === id))
+		return c.lsp.find((m) => m.server === n && m.msg.id === id)!.msg
+	}
+	try {
+		await a.call('hello')
+		await b.call('hello')
+		assert.match((await a.call('lsp.start', { language: 'cobol' })).missing, /no language server for cobol/)
+
+		await a.call('settings.set', {
+			settings: { languageServers: { fake: { command: process.execPath, args: [join(import.meta.dirname, 'fake-lsp.mjs')] } } },
+		})
+		const na = (await a.call('lsp.start', { language: 'fake' })).server
+		const started = await b.call('lsp.start', { language: 'fake' })
+		assert.equal(started.root, root)
+		const nb = started.server
+
+		// One server: both tabs are given its one answer to initialize.
+		init(a, na, 1)
+		init(b, nb, 7)
+		const pid = (await answer(a, na, 1)).result.serverInfo.version
+		assert.equal((await answer(b, nb, 7)).result.serverInfo.version, pid)
+		// The server's registration is answered by the service, not passed on.
+		await until('the registration answered', () => a.lsp.some((m) => m.msg.method === 'test/registered'))
+		assert.ok(!a.lsp.some((m) => m.msg.method === 'client/registerCapability'))
+
+		// Each tab's requests are answered to it, under its own ids.
+		a.sendLsp(na, { jsonrpc: '2.0', id: 2, method: 'test/echo', params: { from: 'a' } })
+		b.sendLsp(nb, { jsonrpc: '2.0', id: 2, method: 'test/echo', params: { from: 'b' } })
+		assert.deepEqual((await answer(a, na, 2)).result, { from: 'a' })
+		assert.deepEqual((await answer(b, nb, 2)).result, { from: 'b' })
+
+		// Both open the shared document; the server is told once, and of an
+		// edit once, from the document, whatever the tabs say.
+		const doc = await a.open('lsp.fake')
+		await until('synced', () => doc.getText('text').toString() === 'one\n')
+		for (const [c, n] of [[a, na], [b, nb]] as const) {
+			c.sendLsp(n, { jsonrpc: '2.0', method: 'textDocument/didOpen', params: { textDocument: { uri, languageId: 'fake', version: 0, text: 'stale' } } })
+		}
+		await until('opened', () => a.lsp.some((m) => m.msg.method === 'test/opened'))
+		a.sendLsp(na, { jsonrpc: '2.0', method: 'textDocument/didChange', params: { textDocument: { uri, version: 1 }, contentChanges: [{ text: 'from a' }] } })
+		doc.getText('text').insert(0, 'zero ')
+		await until('the edit told', () => a.lsp.some((m) => m.msg.method === 'test/edited'))
+		await new Promise((r) => setTimeout(r, 200))
+		const opened = a.lsp.filter((m) => m.msg.method === 'test/opened')
+		const edits = a.lsp.filter((m) => m.msg.method === 'test/edited')
+		assert.equal(opened.length, 1)
+		assert.equal(opened[0].msg.params.text, 'one\n')
+		assert.deepEqual(edits.map((m) => m.msg.params.text), ['zero one\n'])
+
+		// Files changed on disk are told to the server.
+		writeFileSync(join(root, 'lsp-touched.txt'), 'x')
+		await until('the change told', () => b.lsp.some((m) => m.msg.method === 'test/changed'))
+
+		// A reload is a new connection; the server it finds is the same one.
+		a.close()
+		reloaded = new Client()
+		await reloaded.call('hello')
+		const nr = (await reloaded.call('lsp.start', { language: 'fake' })).server
+		init(reloaded, nr, 1)
+		assert.equal((await answer(reloaded, nr, 1)).result.serverInfo.version, pid)
+	} finally {
+		a.close()
+		b.close()
+		reloaded?.close()
+		rmSync(join(root, 'lsp-touched.txt'), { force: true })
+		rmSync(join(root, 'lsp.fake'), { force: true })
+		await new Promise((r) => setTimeout(r, 100))
 	}
 })

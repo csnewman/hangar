@@ -4,7 +4,7 @@ import { EditorView, lineNumbers } from '@codemirror/view'
 import { useEffect, useRef, useState } from 'react'
 
 import type { CodeClient } from './client'
-import { codeHighlight, codeTheme, languageFor } from './CodeEditor'
+import { codeHighlight, codeTheme, followScheme, languageFor } from './CodeEditor'
 
 // diffTheme colours the merge view's changes by the page's --diff-*
 // colours (code.css), over the merge view's own, which follow CodeMirror's
@@ -29,6 +29,7 @@ const diffTheme = EditorView.theme({
 const diffSide = (lang: Extension): Extension => [
   lineNumbers(),
   codeHighlight,
+  followScheme,
   codeTheme,
   diffTheme,
   lang,

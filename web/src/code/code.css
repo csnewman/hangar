@@ -1157,3 +1157,30 @@
   background: var(--code-find-hit);
   border-radius: 2px;
 }
+
+/* The language server chip in an editor's corner. */
+.code-lsp {
+  position: absolute;
+  right: 14px;
+  bottom: 6px;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.code-lsp-missing {
+  color: var(--busy);
+}
+
+.code-lsp-ro {
+  color: var(--text);
+  font-weight: 600;
+}

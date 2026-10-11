@@ -19,6 +19,7 @@ import { CodeTerminal } from './CodeTerminal'
 import { isMac, shortcut } from './ContextMenu'
 import { EditorArea, tabKey, type Tab } from './EditorArea'
 import { ProjectView } from './ProjectView'
+import { Languages, LanguagesContext } from './lsp'
 import { FindInFiles, GotoFile, OpenFolder, type Jump } from './Search'
 
 // CodeTab is Hangar's own editor for an environment, laid out as IntelliJ
@@ -232,6 +233,11 @@ function CodeView({
     open({ kind: 'file', path: j.path })
     if (j.line > 0) setJump((x) => ({ ...j, n: (x?.n ?? 0) + 1 }))
   }
+  // Language servers, which open the files they point at as tabs.
+  const openRef = useRef(open)
+  openRef.current = open
+  const languages = useMemo(() => new Languages(client, { open: (path) => openRef.current({ kind: 'file', path }) }), [client])
+
   const recent = useMemo(
     () => [...store.tabs].reverse().filter((t) => t.kind === 'file').map((t) => t.path),
     [store.tabs],
@@ -410,87 +416,89 @@ function CodeView({
   const arrangement = `${left.length > 0 ? 'left' : ''}|${right.length > 0 ? 'right' : ''}`
 
   return (
-    <div className="code-page">
-      <Stripe side="left" over={dragging?.over === 'left'}>
-        {left.map(toolButton)}
-        <span className="code-tool-spacer" />
-        <StripeButton on={false} title={`Find in Files (${shortcut('Mod+Shift+F')})`} onClick={() => setPopup('find')}>
-          <TextSearch size={16} />
-        </StripeButton>
-        <StripeButton on={shown.terminal} title="Terminal" onClick={() => toggle(terminal)}>
-          <SquareTerminal size={16} />
-        </StripeButton>
-      </Stripe>
-      <div className="code-main">
-        <Group orientation="vertical" defaultLayout={outer.defaultLayout} onLayoutChanged={outer.onLayoutChanged}>
-          <Panel id="top" minSize="30%">
-            <ToolRow key={arrangement} arrangement={arrangement}>
-              {left.length > 0 && [toolPanel('left'), <Separator key="left-sep" className="code-split code-split-v" />]}
-              <Panel id="editors" minSize="25%">
-                <EditorArea
-                  client={client}
-                  tabs={store.tabs}
-                  active={store.active}
-                  jump={jump}
-                  user={user}
-                  status={status}
-                  canReopen={canReopen}
-                  onActivate={(key) => setStore((s) => ({ ...s, active: key }))}
-                  onOpen={open}
-                  onClose={close}
-                  onCloseMany={closeTabs}
-                  onReopen={reopen}
-                  onReveal={revealInProject}
-                />
-              </Panel>
-              {right.length > 0 && [<Separator key="right-sep" className="code-split code-split-v" />, toolPanel('right')]}
-            </ToolRow>
-          </Panel>
-          <Separator className="code-split code-split-h" />
-          <Panel
-            id="terminal"
-            panelRef={terminal}
-            defaultSize="30%"
-            minSize="90px"
-            collapsible
-            collapsedSize={0}
-            onResize={track('terminal')}
-          >
-            <CodeTerminal env={env} openIn={termIn} onHide={() => terminal.current?.collapse()} />
-          </Panel>
-        </Group>
-        {state !== 'live' && (
-          <div className="code-status">
-            {state === 'connecting' ? 'Connecting to the environment…' : `Reconnecting…${why ? ` (${why})` : ''}`}
-            {folder && state === 'reconnecting' && (
-              <button type="button" className="btn btn-ghost" onClick={() => onFolder('')}>
-                Back to the environment&rsquo;s folder
-              </button>
-            )}
+    <LanguagesContext.Provider value={languages}>
+      <div className="code-page">
+        <Stripe side="left" over={dragging?.over === 'left'}>
+          {left.map(toolButton)}
+          <span className="code-tool-spacer" />
+          <StripeButton on={false} title={`Find in Files (${shortcut('Mod+Shift+F')})`} onClick={() => setPopup('find')}>
+            <TextSearch size={16} />
+          </StripeButton>
+          <StripeButton on={shown.terminal} title="Terminal" onClick={() => toggle(terminal)}>
+            <SquareTerminal size={16} />
+          </StripeButton>
+        </Stripe>
+        <div className="code-main">
+          <Group orientation="vertical" defaultLayout={outer.defaultLayout} onLayoutChanged={outer.onLayoutChanged}>
+            <Panel id="top" minSize="30%">
+              <ToolRow key={arrangement} arrangement={arrangement}>
+                {left.length > 0 && [toolPanel('left'), <Separator key="left-sep" className="code-split code-split-v" />]}
+                <Panel id="editors" minSize="25%">
+                  <EditorArea
+                    client={client}
+                    tabs={store.tabs}
+                    active={store.active}
+                    jump={jump}
+                    user={user}
+                    status={status}
+                    canReopen={canReopen}
+                    onActivate={(key) => setStore((s) => ({ ...s, active: key }))}
+                    onOpen={open}
+                    onClose={close}
+                    onCloseMany={closeTabs}
+                    onReopen={reopen}
+                    onReveal={revealInProject}
+                  />
+                </Panel>
+                {right.length > 0 && [<Separator key="right-sep" className="code-split code-split-v" />, toolPanel('right')]}
+              </ToolRow>
+            </Panel>
+            <Separator className="code-split code-split-h" />
+            <Panel
+              id="terminal"
+              panelRef={terminal}
+              defaultSize="30%"
+              minSize="90px"
+              collapsible
+              collapsedSize={0}
+              onResize={track('terminal')}
+            >
+              <CodeTerminal env={env} openIn={termIn} onHide={() => terminal.current?.collapse()} />
+            </Panel>
+          </Group>
+          {state !== 'live' && (
+            <div className="code-status">
+              {state === 'connecting' ? 'Connecting to the environment…' : `Reconnecting…${why ? ` (${why})` : ''}`}
+              {folder && state === 'reconnecting' && (
+                <button type="button" className="btn btn-ghost" onClick={() => onFolder('')}>
+                  Back to the environment&rsquo;s folder
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        <Stripe side="right" over={dragging?.over === 'right'}>
+          {right.map(toolButton)}
+        </Stripe>
+        {dragging && (
+          <div className="code-drag-ghost" style={{ left: dragging.x + 12, top: dragging.y + 12 }}>
+            {dragging.tool === 'project' ? <FolderTree size={14} /> : <GitCompare size={14} />}
+            {toolTitles[dragging.tool]}
           </div>
         )}
+        {(popup === 'goto' || popup === 'everywhere') && (
+          <GotoFile
+            client={client}
+            title={popup === 'goto' ? 'Go to File' : 'Search Everywhere'}
+            recent={recent}
+            onOpen={openAt}
+            onClose={() => setPopup(null)}
+          />
+        )}
+        {popup === 'find' && <FindInFiles client={client} onOpen={openAt} onClose={() => setPopup(null)} />}
+        {popup === 'folder' && <OpenFolder client={client} onChoose={onFolder} onClose={() => setPopup(null)} />}
       </div>
-      <Stripe side="right" over={dragging?.over === 'right'}>
-        {right.map(toolButton)}
-      </Stripe>
-      {dragging && (
-        <div className="code-drag-ghost" style={{ left: dragging.x + 12, top: dragging.y + 12 }}>
-          {dragging.tool === 'project' ? <FolderTree size={14} /> : <GitCompare size={14} />}
-          {toolTitles[dragging.tool]}
-        </div>
-      )}
-      {(popup === 'goto' || popup === 'everywhere') && (
-        <GotoFile
-          client={client}
-          title={popup === 'goto' ? 'Go to File' : 'Search Everywhere'}
-          recent={recent}
-          onOpen={openAt}
-          onClose={() => setPopup(null)}
-        />
-      )}
-      {popup === 'find' && <FindInFiles client={client} onOpen={openAt} onClose={() => setPopup(null)} />}
-      {popup === 'folder' && <OpenFolder client={client} onChoose={onFolder} onClose={() => setPopup(null)} />}
-    </div>
+    </LanguagesContext.Provider>
   )
 }
 
