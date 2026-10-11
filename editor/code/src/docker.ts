@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import { request, type IncomingMessage } from 'node:http'
 
 // The Docker Engine's socket: DOCKER_HOST's, when it names a unix socket,
@@ -20,9 +21,14 @@ export type Container = {
 	status: string
 	ports: string[]
 	created: number
-	// The Compose project and service it belongs to, if any.
+	// The command it runs.
+	command: string
+	// The Compose project and service it belongs to, if any, and where the
+	// project's files are.
 	project?: string
 	service?: string
+	workingDir?: string
+	configFiles?: string[]
 }
 
 export type Image = { id: string; tags: string[]; size: number; created: number; containers: number }
@@ -77,6 +83,7 @@ type ApiContainer = {
 	Image: string
 	State: string
 	Status: string
+	Command: string
 	Created: number
 	Ports: { IP?: string; PrivatePort: number; PublicPort?: number; Type: string }[]
 	Labels: Record<string, string>
@@ -119,8 +126,14 @@ export class Docker {
 					status: c.Status,
 					ports: ports(c),
 					created: c.Created,
+					command: c.Command ?? '',
 					project: c.Labels?.['com.docker.compose.project'],
 					service: c.Labels?.['com.docker.compose.service'],
+					workingDir: c.Labels?.['com.docker.compose.project.working_dir'],
+					configFiles: c.Labels?.['com.docker.compose.project.config_files']
+						?.split(',')
+						.map((f) => f.trim())
+						.filter(Boolean),
 				}),
 			)
 			containers.sort((a, b) => (a.project ?? '').localeCompare(b.project ?? '') || a.name.localeCompare(b.name))
@@ -149,6 +162,32 @@ export class Docker {
 				: await call('POST', `/containers/${id}/${action}`)
 		// 304: already as asked.
 		if (res.status >= 300 && res.status !== 304) throw new Error(engineError(res))
+	}
+
+	// project does to a Compose project what its containers can be done
+	// to, each in turn, or takes it down as Compose does: its containers
+	// and networks removed.
+	async project(name: string, action: 'start' | 'stop' | 'restart' | 'down') {
+		if (!/^[a-z0-9][a-z0-9_-]*$/.test(name)) throw new Error('not a Compose project')
+		if (action === 'down') {
+			await new Promise<void>((resolve, reject) =>
+				execFile('docker', ['compose', '-p', name, 'down'], { timeout: 120_000 }, (err, _out, stderr) =>
+					err ? reject(new Error(stderr.trim().split('\n').pop() || err.message)) : resolve(),
+				),
+			)
+			return
+		}
+		const filters = encodeURIComponent(JSON.stringify({ label: [`com.docker.compose.project=${name}`] }))
+		const cs = await json<ApiContainer[]>('GET', `/containers/json?all=1&filters=${filters}`)
+		const errors: string[] = []
+		for (const c of cs) {
+			try {
+				await this.act(c.Id, action)
+			} catch (e) {
+				errors.push(`${(c.Names?.[0] ?? c.Id).replace(/^\//, '')}: ${e instanceof Error ? e.message : String(e)}`)
+			}
+		}
+		if (errors.length) throw new Error(errors.join('; '))
 	}
 
 	async removeImage(id: string) {

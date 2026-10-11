@@ -492,9 +492,11 @@ test('docker: containers, actions, logs and changes', async () => {
 		asked.push(`${req.method} ${url.split('?')[0]}`)
 		const send = (v: unknown) => res.end(JSON.stringify(v))
 		if (url.startsWith('/v1.41/containers/json')) {
-			send([{ Id: id, Names: ['/web-1'], Image: 'nginx', State: 'running', Status: 'Up 2 minutes', Created: 1,
+			send([{ Id: id, Names: ['/web-1'], Image: 'nginx', State: 'running', Status: 'Up 2 minutes', Created: 1, Command: 'nginx -g daemon off;',
 				Ports: [{ IP: '0.0.0.0', PrivatePort: 80, PublicPort: 8080, Type: 'tcp' }, { IP: '::', PrivatePort: 80, PublicPort: 8080, Type: 'tcp' }],
-				Labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'web' } }])
+				Labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'web',
+					'com.docker.compose.project.working_dir': '/home/dev/shop',
+					'com.docker.compose.project.config_files': '/home/dev/shop/compose.yaml,/home/dev/shop/compose.dev.yaml' } }])
 		} else if (url.startsWith('/v1.41/images/json')) {
 			send([{ Id: 'sha256:' + 'b'.repeat(64), RepoTags: ['nginx:latest'], Size: 1000, Created: 2, Containers: 1 }])
 		} else if (url === `/v1.41/containers/${id}/restart`) {
@@ -522,7 +524,8 @@ test('docker: containers, actions, logs and changes', async () => {
 		assert.equal(o.available, true)
 		assert.deepEqual(o.containers, [
 			{ id, name: 'web-1', image: 'nginx', state: 'running', status: 'Up 2 minutes', ports: ['8080→80/tcp'],
-				created: 1, project: 'shop', service: 'web' },
+				created: 1, command: 'nginx -g daemon off;', project: 'shop', service: 'web', workingDir: '/home/dev/shop',
+				configFiles: ['/home/dev/shop/compose.yaml', '/home/dev/shop/compose.dev.yaml'] },
 		])
 		assert.deepEqual(o.images.map((i: any) => i.tags), [['nginx:latest']])
 
@@ -530,6 +533,11 @@ test('docker: containers, actions, logs and changes', async () => {
 		await a.call('docker.act', { id, action: 'restart' })
 		await until('the change announced', () => a.events.some((e) => e.event === 'docker.changed'))
 		await assert.rejects(a.call('docker.act', { id, action: 'explode' }), /no such action/)
+		// A project's action is each of its containers'.
+		const before = asked.length
+		await a.call('docker.project', { project: 'shop', action: 'restart' })
+		assert.ok(asked.slice(before).includes(`POST /v1.41/containers/${id}/restart`))
+		await assert.rejects(a.call('docker.project', { project: '../x', action: 'stop' }), /not a Compose project/)
 		await assert.rejects(a.call('docker.act', { id: '../x', action: 'stop' }), /not a container/)
 
 		const { stream } = await a.call('docker.logs', { id, tail: 10 })

@@ -35,7 +35,7 @@ import {
   ViewPlugin,
 } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
-import { findReferences, formatDocument, jumpToDefinition, LSPPlugin, renameSymbol } from '@codemirror/lsp-client'
+import { formatDocument, LSPPlugin, renameSymbol } from '@codemirror/lsp-client'
 import { useContext, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next'
@@ -219,10 +219,13 @@ export function CodeEditor({
   const host = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
   const [ready, setReady] = useState(false)
+  const jumpRef = useRef(jump)
+  jumpRef.current = jump
   const languages = useContext(LanguagesContext)
   const [server, setServer] = useState<ServerState | null>(null)
-  // A file outside the folder -- a library's, reached by going to a
+  // A file the user may not write -- a library's, reached by going to a
   // definition -- is shown, not edited.
+  const readOnly = !file.writable
   const outside = path.startsWith('/')
   const menu = useContextMenu()
   const [hunk, setHunk] = useState<{ view: EditorView; h: Hunk; x: number; y: number } | null>(null)
@@ -295,17 +298,18 @@ export function CodeEditor({
       { label: 'Copy Reference', onSelect: () => copyText(`${path}:${line.number}`) },
       { label: 'Reveal in Project', onSelect: () => onReveal(path) },
     ]
-    if (LSPPlugin.get(view)) {
+    if (LSPPlugin.get(view) && languages) {
+      const { goToDefinition, findUsages } = languages.commands
       items.splice(
         0,
         0,
-        { label: 'Go to Definition', shortcut: shortcut('Mod+B'), onSelect: run(jumpToDefinition) },
-        { label: 'Find Usages', shortcut: shortcut('Alt+F7'), onSelect: run(findReferences) },
-        { label: 'Rename…', shortcut: shortcut('Shift+F6'), disabled: outside, onSelect: run(renameSymbol) },
+        { label: 'Go to Definition', shortcut: shortcut('Mod+B'), onSelect: run(goToDefinition) },
+        { label: 'Find Usages', shortcut: shortcut('Alt+F7'), onSelect: run(findUsages) },
+        { label: 'Rename…', shortcut: shortcut('Shift+F6'), disabled: readOnly, onSelect: run(renameSymbol) },
         {
           label: 'Reformat Code',
           shortcut: shortcut('Mod+Alt+L'),
-          disabled: outside,
+          disabled: readOnly,
           onSelect: run(formatDocument),
         },
         'separator',
@@ -345,7 +349,7 @@ export function CodeEditor({
           codeTheme,
           language.of([]),
           lsp.of([]),
-          EditorState.readOnly.of(outside),
+          EditorState.readOnly.of(readOnly),
           yCollab(file.text, file.awareness, { undoManager: undo }),
           gitGutter((v, h, e) => setHunk({ view: v, h, x: e.clientX, y: e.clientY })),
           EditorView.domEventHandlers({
@@ -409,7 +413,9 @@ export function CodeEditor({
       timer = setTimeout(loadBase, 150)
     })
 
-    view.focus()
+    // A file opened by stepping through a list leaves the keyboard there.
+    const j = jumpRef.current
+    if (!(j && j.path === path && j.focus === false)) view.focus()
     viewRef.current = view
     setReady(true)
     return () => {
@@ -422,7 +428,7 @@ export function CodeEditor({
       view.destroy()
       undo.destroy()
     }
-  }, [file, user.name, user.color, client, path, languages, outside])
+  }, [file, user.name, user.color, client, path, languages, outside, readOnly])
 
   // A jump puts the caret on its line, selecting the text it names there,
   // with the line in the middle of the view.
@@ -442,13 +448,13 @@ export function CodeEditor({
       }
     }
     view.dispatch({ selection: { anchor: from, head: to }, effects: EditorView.scrollIntoView(from, { y: 'center' }) })
-    view.focus()
+    if (jump.focus !== false) view.focus()
   }, [ready, jump, path])
 
   return (
     <>
       <div ref={host} className="code-editor" />
-      <ServerChip server={server} outside={outside} />
+      <ServerChip server={server} readOnly={readOnly} />
       {menu.menu}
       {hunk && (
         <HunkPopover
@@ -527,8 +533,8 @@ function HunkPopover({
 
 // ServerChip says, in the editor's corner, what knows the file's code: its
 // language server, one starting, or why there is none.
-function ServerChip({ server, outside }: { server: ServerState | null; outside: boolean }) {
-  if (!server && !outside) return null
+function ServerChip({ server, readOnly }: { server: ServerState | null; readOnly: boolean }) {
+  if (!server && !readOnly) return null
   let text = ''
   let tip = ''
   let cls = 'code-lsp'
@@ -543,7 +549,7 @@ function ServerChip({ server, outside }: { server: ServerState | null; outside: 
   }
   return (
     <div className={cls} title={tip || undefined}>
-      {outside && <span className="code-lsp-ro">Read-only</span>}
+      {readOnly && <span className="code-lsp-ro">Read-only</span>}
       {text}
     </div>
   )

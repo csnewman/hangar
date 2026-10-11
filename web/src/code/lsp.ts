@@ -3,9 +3,7 @@
 // spoken to through @codemirror/lsp-client over the tab's connection.
 
 import {
-  findReferences,
   formatDocument,
-  jumpToDefinition,
   languageServerExtensions,
   LSPClient,
   LSPPlugin,
@@ -17,10 +15,11 @@ import {
 } from '@codemirror/lsp-client'
 import { MapMode, Prec, Text, type Extension } from '@codemirror/state'
 import { createContext } from 'react'
-import { EditorView, keymap } from '@codemirror/view'
+import { EditorView, keymap, type Command } from '@codemirror/view'
 
 import type { CodeClient } from './client'
 import { isMac } from './ContextMenu'
+import type { Jump } from './Search'
 
 // languageId is the LSP language ID for a file, from its name, or null for
 // one no server is known for.
@@ -70,8 +69,23 @@ const pathOf = (uri: string) => decodeURIComponent(new URL(uri).pathname)
 // Opening files the server points at, such as a definition in another
 // file: the Code tab opens it as a tab, and says when its editor is ready.
 export interface FileOpener {
+  // open opens a file as a tab.
   open(path: string): void
+  // jump opens a file at a place, the place in the middle of the view.
+  jump(j: Jump): void
+  // usages shows a symbol's usages, or that they are being found.
+  usages(u: Usages): void
 }
+
+// A usage of a symbol: where it is, in the Code tab's terms (a path from
+// the folder, or absolute outside it), and the line it is on.
+export type Usage = { path: string; line: number; col: number; length: number; text: string }
+
+export type Usages = { symbol: string; state: 'finding' | 'found' | 'failed'; usages: Usage[]; why?: string }
+
+type Location = { uri: string; range: Range }
+type LocationLink = { targetUri: string; targetSelectionRange: Range }
+type Range = { start: Position; end: Position }
 
 class OpenFile implements WorkspaceFile {
   uri: string
@@ -202,42 +216,121 @@ class HangarWorkspace extends Workspace {
   }
 }
 
+// The Code tab's own going to a definition and finding of usages, in place
+// of the package's: a place in another file opens through the Code tab,
+// in the middle of the view, and usages are listed in its Find tool window,
+// which stays as files are opened from it.
+function commands(code: CodeClient, opener: FileOpener) {
+  const pathOfUri = (uri: string) => {
+    const abs = pathOf(uri)
+    return abs.startsWith(code.root + '/') ? abs.slice(code.root.length + 1) : abs
+  }
+
+  const goToDefinition: Command = (view) => {
+    const plugin = LSPPlugin.get(view)
+    if (!plugin || (plugin.client.serverCapabilities && !plugin.client.serverCapabilities.definitionProvider))
+      return false
+    plugin.client.sync()
+    const at = view.state.selection.main.head
+    plugin.client
+      .request<unknown, Location | Location[] | LocationLink[] | null>('textDocument/definition', {
+        textDocument: { uri: plugin.uri },
+        position: plugin.toPosition(at),
+      })
+      .then(
+        (res) => {
+          const first = Array.isArray(res) ? res[0] : res
+          if (!first) return
+          const uri = 'targetUri' in first ? first.targetUri : first.uri
+          const range = 'targetUri' in first ? first.targetSelectionRange : first.range
+          if (uri === plugin.uri && view.dom.isConnected) {
+            const pos = plugin.fromPosition(range.start)
+            view.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'center' }) })
+            view.focus()
+          } else opener.jump({ path: pathOfUri(uri), line: range.start.line + 1, col: range.start.character + 1 })
+        },
+        (e) => plugin.reportError('Going to the definition failed', e),
+      )
+    return true
+  }
+
+  const findUsages: Command = (view) => {
+    const plugin = LSPPlugin.get(view)
+    if (!plugin || (plugin.client.serverCapabilities && !plugin.client.serverCapabilities.referencesProvider))
+      return false
+    plugin.client.sync()
+    const at = view.state.selection.main.head
+    const word = view.state.wordAt(at)
+    const symbol = word ? view.state.sliceDoc(word.from, word.to) : 'the symbol'
+    opener.usages({ symbol, state: 'finding', usages: [] })
+    const workspace = plugin.client.workspace
+    plugin.client
+      .request<unknown, Location[] | null>('textDocument/references', {
+        textDocument: { uri: plugin.uri },
+        position: plugin.toPosition(at),
+        context: { includeDeclaration: true },
+      })
+      .then(async (res) => {
+        const usages: Usage[] = []
+        for (const loc of res ?? []) {
+          const file = await workspace.requestFile(loc.uri)
+          const n = loc.range.start.line + 1
+          const line = file && n <= file.doc.lines ? file.doc.line(n).text : ''
+          const length =
+            loc.range.end.line === loc.range.start.line ? loc.range.end.character - loc.range.start.character : 0
+          usages.push({ path: pathOfUri(loc.uri), line: n, col: loc.range.start.character + 1, length, text: line })
+        }
+        usages.sort((a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.col - b.col)
+        opener.usages({ symbol, state: 'found', usages })
+      })
+      .catch((e: unknown) =>
+        opener.usages({ symbol, state: 'failed', usages: [], why: e instanceof Error ? e.message : String(e) }),
+      )
+    return true
+  }
+
+  return { goToDefinition, findUsages }
+}
+
 const mod = (e: MouseEvent) => (isMac ? e.metaKey : e.ctrlKey)
 
-// ideaKeys are IntelliJ's keys for what a server answers, beside the
-// package's own (F12, Shift+F12, F2, Shift+Alt+F): Ctrl/Cmd+B and
-// Ctrl/Cmd+click go to a definition, Alt+F7 finds usages, Shift+F6
-// renames, Ctrl+Alt+L (Cmd+Alt+L) reformats, and Ctrl/Cmd+P shows a call's
-// parameters.
-const ideaKeys: Extension = [
-  Prec.high(
-    keymap.of([
-      { key: 'Mod-b', run: jumpToDefinition, preventDefault: true },
-      { key: 'Alt-F7', run: findReferences, preventDefault: true },
-      { key: 'Shift-F6', run: renameSymbol, preventDefault: true },
-      { key: 'Mod-Alt-l', run: formatDocument, preventDefault: true },
-      { key: 'Mod-p', run: showSignatureHelp, preventDefault: true },
-    ]),
-  ),
-  EditorView.domEventHandlers({
-    mousedown(e, view) {
-      if (e.button !== 0 || !mod(e) || e.shiftKey || e.altKey) return false
-      const pos = view.posAtCoords({ x: e.clientX, y: e.clientY })
-      if (pos == null) return false
-      e.preventDefault()
-      view.dispatch({ selection: { anchor: pos } })
-      return jumpToDefinition(view)
-    },
-  }),
-  EditorView.theme({
-    '.cm-lsp-documentation': { fontFamily: 'var(--font)', fontSize: '12.5px' },
-    '.cm-tooltip.cm-tooltip-hover, .cm-tooltip.cm-lsp-signature-tooltip': {
-      maxWidth: 'min(640px, 80vw)',
-      maxHeight: '320px',
-      overflow: 'auto',
-    },
-  }),
-]
+// ideaKeys are IntelliJ's keys for what a server answers: Ctrl/Cmd+B,
+// Ctrl/Cmd+click and F12 go to a definition, Alt+F7 and Shift+F12 find
+// usages, Shift+F6 renames, Ctrl+Alt+L (Cmd+Alt+L) reformats, and
+// Ctrl/Cmd+P shows a call's parameters.
+function ideaKeys(c: ReturnType<typeof commands>): Extension {
+  return [
+    Prec.highest(
+      keymap.of([
+        { key: 'Mod-b', run: c.goToDefinition, preventDefault: true },
+        { key: 'F12', run: c.goToDefinition, preventDefault: true },
+        { key: 'Alt-F7', run: c.findUsages, preventDefault: true },
+        { key: 'Shift-F12', run: c.findUsages, preventDefault: true },
+        { key: 'Shift-F6', run: renameSymbol, preventDefault: true },
+        { key: 'Mod-Alt-l', run: formatDocument, preventDefault: true },
+        { key: 'Mod-p', run: showSignatureHelp, preventDefault: true },
+      ]),
+    ),
+    EditorView.domEventHandlers({
+      mousedown(e, view) {
+        if (e.button !== 0 || !mod(e) || e.shiftKey || e.altKey) return false
+        const pos = view.posAtCoords({ x: e.clientX, y: e.clientY })
+        if (pos == null) return false
+        e.preventDefault()
+        view.dispatch({ selection: { anchor: pos } })
+        return c.goToDefinition(view)
+      },
+    }),
+    EditorView.theme({
+      '.cm-lsp-documentation': { fontFamily: 'var(--font)', fontSize: '12.5px' },
+      '.cm-tooltip.cm-tooltip-hover, .cm-tooltip.cm-lsp-signature-tooltip': {
+        maxWidth: 'min(640px, 80vw)',
+        maxHeight: '320px',
+        overflow: 'auto',
+      },
+    }),
+  ]
+}
 
 // A language's server, as far as this tab knows: starting, ready with its
 // client, or missing, with why.
@@ -255,10 +348,13 @@ export class Languages {
   private listeners = new Set<() => void>()
   private code: CodeClient
   private opener: FileOpener
+  // commands are going to a definition and finding usages, for menus.
+  readonly commands: ReturnType<typeof commands>
 
   constructor(code: CodeClient, opener: FileOpener) {
     this.code = code
     this.opener = opener
+    this.commands = commands(code, opener)
     code.on('state', (s) => {
       if (s === 'reconnecting') this.reset()
     })
@@ -325,8 +421,11 @@ export class Languages {
     const client = new LSPClient({
       rootUri: fileUri(res.root),
       timeout: 15_000,
+      // A server's information ("Finished loading packages") is not shown;
+      // its warnings and errors are.
+      notificationHandlers: { 'window/showMessage': (_c, p: { type?: number }) => (p?.type ?? 1) >= 3 },
       workspace: (c) => (workspace = new HangarWorkspace(c, this.code, this.opener)),
-      extensions: [...languageServerExtensions(), ideaKeys],
+      extensions: [...languageServerExtensions(), ideaKeys(this.commands)],
     }).connect(transport)
     // A mapping places a server's positions in files as they were when it
     // was made, and knows only the files open then; a reference in a file

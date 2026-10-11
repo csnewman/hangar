@@ -8,8 +8,9 @@ import { codeHighlight, codeTheme, followScheme, languageFor } from './CodeEdito
 import { shortcut } from './ContextMenu'
 
 // Jump is a place in a file to open it at: a 1-based line (0 for none),
-// and optionally a 1-based column, or text in the line to select.
-export type Jump = { path: string; line: number; col?: number; find?: string }
+// and optionally a 1-based column, or text in the line to select. focus
+// false leaves the keyboard where it is, as stepping through a list does.
+export type Jump = { path: string; line: number; col?: number; find?: string; focus?: boolean }
 
 // Popup is the frame the Code tab's search popups share, as IntelliJ's:
 // centred near the top, over everything, gone on Escape or a click away.

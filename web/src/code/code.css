@@ -1301,3 +1301,142 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* The Find tool window: a symbol's usages, by file. */
+.code-usages {
+  height: 100%;
+  overflow: auto;
+  padding: 3px 0;
+  outline: none;
+  font-size: 12.5px;
+}
+
+.code-usages-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.code-usages-row {
+  display: flex;
+  gap: 10px;
+  padding: 1px 8px 1px 40px;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+
+.code-usages-row:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-usages-row-on,
+.code-usages-row-on:hover {
+  background: var(--sidebar-active);
+}
+
+.code-usages-line {
+  flex: none;
+  min-width: 32px;
+  text-align: right;
+  color: var(--muted);
+  font-family: var(--code-font);
+}
+
+.code-usages-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--code-font);
+}
+
+.code-usages-text mark {
+  background: var(--code-find-hit);
+  color: inherit;
+  border-radius: 2px;
+}
+
+.code-docker-split {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-docker-split > .code-docker {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+}
+
+.code-docker-row-on,
+.code-docker-row-on:hover {
+  background: var(--sidebar-active);
+}
+
+.code-docker-chevron {
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+/* The details of the container or project chosen in the list. */
+.code-docker-details {
+  flex: none;
+  max-height: 55%;
+  overflow: auto;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.code-docker-details-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+}
+
+.code-docker-detail-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 3px 12px;
+}
+
+.code-docker-detail-label {
+  color: var(--muted);
+}
+
+.code-docker-detail-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+}
+
+.code-docker-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-align: left;
+}
+
+.code-docker-details-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.code-docker-details-actions .btn {
+  padding: 3px 8px;
+  font-size: 12px;
+  gap: 4px;
+}
+
+.code-docker-danger {
+  color: var(--danger);
+}

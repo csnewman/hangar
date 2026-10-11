@@ -85,8 +85,11 @@ export interface Container {
   status: string
   ports: string[]
   created: number
+  command: string
   project?: string
   service?: string
+  workingDir?: string
+  configFiles?: string[]
 }
 
 export interface DockerImage {
@@ -135,6 +138,8 @@ export class SharedFile {
   n = 0
   // synced is set once the document has caught up with the service's.
   synced = false
+  // writable is whether the environment's user may write the file.
+  writable = true
   private syncedWaiters: (() => void)[] = []
   refs = 0
   readonly path: string
@@ -382,6 +387,11 @@ export class CodeClient {
   dockerAct(id: string, action: DockerAction) {
     return this.request<void>('docker.act', { id, action })
   }
+  // dockerProject does to every container of a Compose project, or takes
+  // it down.
+  dockerProject(project: string, action: 'start' | 'stop' | 'restart' | 'down') {
+    return this.request<void>('docker.project', { project, action })
+  }
   dockerRemoveImage(id: string) {
     return this.request<void>('docker.removeImage', { id })
   }
@@ -513,7 +523,8 @@ export class CodeClient {
   }
 
   private async reopen(f: SharedFile) {
-    const { doc } = (await this.call('doc.open', { path: f.path })) as { doc: number }
+    const { doc, writable } = (await this.call('doc.open', { path: f.path })) as { doc: number; writable?: boolean }
+    f.writable = writable !== false
     this.byNumber.set(doc, f)
     f.start(doc)
   }

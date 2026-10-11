@@ -1,4 +1,5 @@
-import { stat } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { access, stat } from 'node:fs/promises'
 import type { Socket } from 'node:net'
 import { isAbsolute, resolve } from 'node:path'
 
@@ -181,6 +182,11 @@ export class Connection {
 				if (!['start', 'stop', 'restart', 'pause', 'unpause', 'remove'].includes(action)) throw new Error(`no such action: ${action}`)
 				return this.s.docker.act(str('id'), action as Action)
 			}
+			case 'docker.project': {
+				const action = str('action')
+				if (!['start', 'stop', 'restart', 'down'].includes(action)) throw new Error(`no such action: ${action}`)
+				return this.s.docker.project(str('project'), action as 'start' | 'stop' | 'restart' | 'down')
+			}
 			case 'docker.removeImage':
 				return this.s.docker.removeImage(str('id'))
 			case 'docker.logs': {
@@ -309,7 +315,15 @@ export class Connection {
 		const n = this.nextDoc++
 		this.open.set(n, doc)
 		doc.join(this, n)
-		return { doc: n, path: doc.path }
+		// A file the user may not write -- a library's, the system's -- is
+		// shown, not edited.
+		let writable = true
+		try {
+			await access(doc.path, constants.W_OK)
+		} catch {
+			writable = false
+		}
+		return { doc: n, path: doc.path, writable }
 	}
 
 	private closeDoc(n: number) {

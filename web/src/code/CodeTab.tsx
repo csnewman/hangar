@@ -1,6 +1,6 @@
 import './code.css'
 
-import { Container, FolderTree, GitCompare, SquareTerminal, TextSearch } from 'lucide-react'
+import { Container, FolderTree, GitCompare, ListTree, SquareTerminal, TextSearch } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Group,
@@ -8,7 +8,6 @@ import {
   Separator,
   useDefaultLayout,
   usePanelRef,
-  type PanelImperativeHandle,
 } from 'react-resizable-panels'
 
 import { useEnv } from '../pages/Environment'
@@ -20,8 +19,9 @@ import { isMac, shortcut } from './ContextMenu'
 import { containerShell, DockerView } from './DockerView'
 import { EditorArea, tabKey, type Tab } from './EditorArea'
 import { ProjectView } from './ProjectView'
-import { Languages, LanguagesContext } from './lsp'
+import { Languages, LanguagesContext, type Usages } from './lsp'
 import { FindInFiles, GotoFile, OpenFolder, type Jump } from './Search'
+import { UsagesView } from './UsagesView'
 
 // CodeTab is Hangar's own editor for an environment, laid out as IntelliJ
 // lays out its tool windows: Project on the left, Changes on the right,
@@ -228,7 +228,7 @@ function CodeView({
   // Open in Terminal: a new session in a folder.
   const [termIn, setTermIn] = useState<{ dir: string; run?: string; n: number } | null>(null)
   const openTerminal = (dir: string, run?: string) => {
-    terminal.current?.expand()
+    showBottom('terminal')
     setTermIn((t) => ({ dir, run, n: (t?.n ?? 0) + 1 }))
   }
 
@@ -239,10 +239,39 @@ function CodeView({
     open({ kind: 'file', path: j.path })
     if (j.line > 0) setJump((x) => ({ ...j, n: (x?.n ?? 0) + 1 }))
   }
-  // Language servers, which open the files they point at as tabs.
-  const openRef = useRef(open)
-  openRef.current = open
-  const languages = useMemo(() => new Languages(client, { open: (path) => openRef.current({ kind: 'file', path }) }), [client])
+  // The bottom panel shows the terminal or the Find tool window, keeping
+  // the other.
+  const [bottom, setBottom] = useState<'terminal' | 'find'>('terminal')
+  const showBottom = (w: 'terminal' | 'find') => {
+    setBottom(w)
+    terminal.current?.expand()
+  }
+  const toggleBottom = (w: 'terminal' | 'find') => {
+    if (bottom === w && shown.terminal) terminal.current?.collapse()
+    else showBottom(w)
+  }
+  const [usages, setUsages] = useState<Usages | null>(null)
+
+  // Language servers, which open the files they point at as tabs, and list
+  // usages in the Find tool window.
+  const opener = useRef<{ open: typeof open; openAt: typeof openAt; showUsages: (u: Usages) => void } | null>(null)
+  opener.current = {
+    open,
+    openAt,
+    showUsages: (u: Usages) => {
+      setUsages(u)
+      showBottom('find')
+    },
+  }
+  const languages = useMemo(
+    () =>
+      new Languages(client, {
+        open: (path) => opener.current?.open({ kind: 'file', path }),
+        jump: (j) => opener.current?.openAt(j),
+        usages: (u) => opener.current?.showUsages(u),
+      }),
+    [client],
+  )
 
   const recent = useMemo(
     () => [...store.tabs].reverse().filter((t) => t.kind === 'file').map((t) => t.path),
@@ -317,12 +346,7 @@ function CodeView({
   const [shown, setShown] = useState({ left: true, right: true, terminal: true })
   const track = (name: keyof typeof shown) => (size: { asPercentage: number }) =>
     setShown((s) => (s[name] === size.asPercentage > 0 ? s : { ...s, [name]: size.asPercentage > 0 }))
-  const toggle = (ref: React.RefObject<PanelImperativeHandle | null>) => {
-    const p = ref.current
-    if (!p) return
-    if (p.isCollapsed()) p.expand()
-    else p.collapse()
-  }
+
   const outer = useDefaultLayout({ id: 'hangar.code.v', storage: localStorage })
   const sidePanel = (side: Side) => (side === 'left' ? leftPanel : rightPanel)
 
@@ -385,6 +409,9 @@ function CodeView({
         client={client}
         onLogs={(c) => open({ kind: 'logs', path: c.id, title: c.name })}
         onShell={(c) => openTerminal(client.root, containerShell(c.name))}
+        onOpenFile={(abs) =>
+          open({ kind: 'file', path: abs.startsWith(client.root + '/') ? abs.slice(client.root.length + 1) : abs })
+        }
         onHide={() => hideTool('docker')}
       />
     ) : (
@@ -437,7 +464,10 @@ function CodeView({
           <StripeButton on={false} title={`Find in Files (${shortcut('Mod+Shift+F')})`} onClick={() => setPopup('find')}>
             <TextSearch size={16} />
           </StripeButton>
-          <StripeButton on={shown.terminal} title="Terminal" onClick={() => toggle(terminal)}>
+          <StripeButton on={shown.terminal && bottom === 'find'} title="Find" onClick={() => toggleBottom('find')}>
+            <ListTree size={16} />
+          </StripeButton>
+          <StripeButton on={shown.terminal && bottom === 'terminal'} title="Terminal" onClick={() => toggleBottom('terminal')}>
             <SquareTerminal size={16} />
           </StripeButton>
         </Stripe>
@@ -476,7 +506,12 @@ function CodeView({
               collapsedSize={0}
               onResize={track('terminal')}
             >
-              <CodeTerminal env={env} openIn={termIn} onHide={() => terminal.current?.collapse()} />
+              <div className="code-side-slot" hidden={bottom !== 'terminal'}>
+                <CodeTerminal env={env} openIn={termIn} onHide={() => terminal.current?.collapse()} />
+              </div>
+              <div className="code-side-slot" hidden={bottom !== 'find'}>
+                <UsagesView usages={usages} onJump={openAt} onHide={() => terminal.current?.collapse()} />
+              </div>
             </Panel>
           </Group>
           {state !== 'live' && (
