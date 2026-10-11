@@ -172,6 +172,15 @@ func TestTheProfileIsBuiltIn(t *testing.T) {
 	if !packs.Sensitive(profile.Paths, "~/.claude/.credentials.json") || packs.Sensitive(profile.Paths, "~/.gitconfig") {
 		t.Error("the profile's credentials are not sensitive, or its settings are")
 	}
+	// A new server's profile is what the code ships, which it says.
+	sorted := func(ps []packs.Path) []packs.Path {
+		ps = slices.Clone(ps)
+		slices.SortFunc(ps, func(a, b packs.Path) int { return strings.Compare(a.Path, b.Path) })
+		return ps
+	}
+	if !slices.Equal(sorted(profile.Paths), sorted(packs.ProfileDefaults)) || !slices.Equal(profile.Defaults, packs.ProfileDefaults) {
+		t.Error("a new server's profile is not the defaults the code ships")
+	}
 	if _, err := p.store.UpdatePack(ctx, as(alice), profile.ID, packs.PackInput{Name: "Profile",
 		Attach: packs.AttachEveryone, Paths: paths("~/.gitconfig")}); !errors.Is(err, packs.ErrForbidden) {
 		t.Errorf("alice changed the profile: %v", err)

@@ -1034,9 +1034,12 @@ type Pack struct {
 
 	// DefaultCopyID The copy the user chose to use by default, if they chose one; else their own.
 	DefaultCopyID *string `json:"default_copy_id,omitempty"`
-	Description   string  `json:"description"`
-	ID            string  `json:"id"`
-	Name          string  `json:"name"`
+
+	// DefaultPaths A built-in pack's paths as Hangar ships them, which an admin may return it to.
+	DefaultPaths *[]PackPath `json:"default_paths,omitempty"`
+	Description  string      `json:"description"`
+	ID           string      `json:"id"`
+	Name         string      `json:"name"`
 
 	// Owner The owner's username.
 	Owner   *string    `json:"owner,omitempty"`

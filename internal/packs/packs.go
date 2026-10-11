@@ -53,6 +53,8 @@ type Pack struct {
 	// Squash is who environments' callers act as on its files.
 	Squash Squash
 	Paths  []Path
+	// Defaults are a built-in pack's paths as Hangar ships them.
+	Defaults []Path
 	// What the caller may do: change it, and delete it.
 	CanChange, CanDelete bool
 	CreatedAt, UpdatedAt time.Time
@@ -126,6 +128,9 @@ func scanPack(row pgx.Row) (Pack, error) {
 	}
 	for i, p := range paths {
 		k.Paths = append(k.Paths, Path{Path: p, Sensitive: i < len(sensitive) && sensitive[i]})
+	}
+	if k.Builtin {
+		k.Defaults = ProfileDefaults
 	}
 	return k, err
 }

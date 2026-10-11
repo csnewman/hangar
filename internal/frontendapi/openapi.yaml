@@ -1794,6 +1794,10 @@ components:
         paths:
           type: array
           items: { $ref: "#/components/schemas/PackPath" }
+        default_paths:
+          type: array
+          description: A built-in pack's paths as Hangar ships them, which an admin may return it to.
+          items: { $ref: "#/components/schemas/PackPath" }
         default_copy_id:
           type: string
           description: The copy the user chose to use by default, if they chose one; else their own.

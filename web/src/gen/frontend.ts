@@ -1251,6 +1251,8 @@ export interface components {
             attach: components["schemas"]["PackAttach"];
             squash: components["schemas"]["PackSquash"];
             paths: components["schemas"]["PackPath"][];
+            /** @description A built-in pack's paths as Hangar ships them, which an admin may return it to. */
+            default_paths?: components["schemas"]["PackPath"][];
             /** @description The copy the user chose to use by default, if they chose one; else their own. */
             default_copy_id?: string;
             can_change: boolean;

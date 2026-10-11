@@ -16,6 +16,13 @@ func pack(k packs.Pack) Pack {
 	for _, p := range k.Paths {
 		out.Paths = append(out.Paths, PackPath{Path: p.Path, Sensitive: p.Sensitive})
 	}
+	if k.Defaults != nil {
+		d := make([]PackPath, 0, len(k.Defaults))
+		for _, p := range k.Defaults {
+			d = append(d, PackPath{Path: p.Path, Sensitive: p.Sensitive})
+		}
+		out.DefaultPaths = &d
+	}
 	return out
 }
 

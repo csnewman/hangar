@@ -527,6 +527,69 @@ function ReachWarning({ pack }: { pack: Pack }) {
       {pack.builtin ? 'This is a built-in pack: changes' : 'Changes'} to its paths and settings apply to {who}, not just
       yours. A path taken out stops being shared for all of them, and one added starts sharing what each of them has
       there.
+      {pack.default_paths && <BuiltinDefaults pack={pack} defaults={pack.default_paths} />}
+    </div>
+  )
+}
+
+// pathKey names a path and whether it is sensitive, for comparing lists.
+const pathKey = (p: PackPath) => `${p.path}${p.sensitive ? ' (sensitive)' : ''}`
+
+// BuiltinDefaults is a built-in pack's paths as Hangar ships them: whether
+// its own differ, how, and a way back to them.
+function BuiltinDefaults({ pack, defaults }: { pack: Pack; defaults: PackPath[] }) {
+  const qc = useQueryClient()
+  const now = pack.paths.map(pathKey)
+  const shipped = defaults.map(pathKey)
+  const added = now.filter((p) => !shipped.includes(p))
+  const removed = shipped.filter((p) => !now.includes(p))
+  const customized = added.length > 0 || removed.length > 0
+  const reset = useMutation({
+    mutationFn: () =>
+      api.updatePack(pack.id, {
+        name: pack.name,
+        description: pack.description,
+        attach: pack.attach,
+        squash: pack.squash,
+        paths: defaults,
+      }),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: packsKey })
+      qc.invalidateQueries({ queryKey: ['pack', pack.id] })
+    },
+  })
+  return (
+    <div className="builtin-defaults">
+      <div className="builtin-defaults-head">
+        <strong>{customized ? "Its paths differ from Hangar's defaults." : "Its paths are Hangar's defaults."}</strong>
+        {customized && (
+          <ConfirmButton
+            label="Reset to the defaults"
+            confirmLabel="Reset for every user?"
+            onConfirm={() => reset.mutate()}
+            disabled={reset.isPending}
+          />
+        )}
+      </div>
+      {customized && (
+        <ul className="mono small builtin-defaults-diff">
+          {added.map((p) => (
+            <li key={`+${p}`}>+ {p}</li>
+          ))}
+          {removed.map((p) => (
+            <li key={`-${p}`}>− {p}</li>
+          ))}
+        </ul>
+      )}
+      <details>
+        <summary>Hangar's defaults ({defaults.length} paths)</summary>
+        <ul className="mono small">
+          {defaults.map((p) => (
+            <li key={p.path}>{pathKey(p)}</li>
+          ))}
+        </ul>
+      </details>
+      {reset.error && <div className="alert">{reset.error.message}</div>}
     </div>
   )
 }

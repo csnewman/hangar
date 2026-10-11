@@ -2600,6 +2600,38 @@ a.reason {
   border-color: var(--warn-border);
 }
 
+/* A built-in pack's shipped paths, under its warning. */
+.builtin-defaults {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--warn-border);
+}
+
+.builtin-defaults-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.builtin-defaults ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.builtin-defaults .builtin-defaults-diff {
+  padding-left: 0;
+  list-style: none;
+}
+
+.builtin-defaults details {
+  margin-top: 6px;
+}
+
+.builtin-defaults summary {
+  cursor: pointer;
+}
+
 /* How an environment differs from its template, and the way back to it. */
 .notice.drift {
   display: flex;
