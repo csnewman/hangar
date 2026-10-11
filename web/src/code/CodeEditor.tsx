@@ -343,8 +343,43 @@ export function CodeEditor({
     }
     menu.open(e, items)
   }
-  // The editor, made once per file, reaches the latest openMenu through
-  // this.
+  // gutterMenu is a right-click in the gutter: what concerns the line
+  // there, as IntelliJ's gutter offers it.
+  const gutterMenu = (view: EditorView, e: MouseEvent) => {
+    const block = view.lineBlockAtHeight(e.clientY - view.documentTop)
+    const line = view.state.doc.lineAt(block.from)
+    const h = hunkAt(view.state, line.from)
+    const items: MenuItem[] = [
+      {
+        label: annotating ? 'Close Annotations' : 'Annotate with Git Blame',
+        onSelect: () => setAnnotating((a) => !a),
+      },
+      'separator',
+      { label: `Copy Reference (${path.split('/').pop()}:${line.number})`, onSelect: () => copyText(`${path}:${line.number}`) },
+      {
+        label: 'Go to Line…',
+        shortcut: shortcut(isMac ? 'Mod+Alt+G' : 'Mod+G'),
+        onSelect: () => {
+          gotoLine(view)
+          view.focus()
+        },
+      },
+    ]
+    if (h) {
+      items.push(
+        'separator',
+        { label: 'Show Change', onSelect: () => setHunk({ view, h, x: e.clientX, y: e.clientY }) },
+        { label: 'Rollback Change', disabled: readOnly, onSelect: () => rollback(view, h) },
+        { label: 'Stage Change', onSelect: () => stage(view, h) },
+      )
+    }
+    menu.open(e, items)
+  }
+  // The editor, made once per file, reaches the latest menus through these.
+  const gutterMenuRef = useRef(gutterMenu)
+  useEffect(() => {
+    gutterMenuRef.current = gutterMenu
+  })
   const openMenuRef = useRef(openMenu)
   useEffect(() => {
     openMenuRef.current = openMenu
@@ -381,6 +416,12 @@ export function CodeEditor({
           }),
         ],
       }),
+    })
+    // A right-click in the gutters -- the line numbers, the changes, the
+    // annotations -- is the gutter's menu, not the browser's.
+    view.dom.addEventListener('contextmenu', (e) => {
+      if (!(e.target as HTMLElement).closest('.cm-gutters')) return
+      gutterMenuRef.current(view, e)
     })
     let disposed = false
     languageFor(file.path.split('/').pop() ?? '').then((ext) => {
