@@ -225,6 +225,7 @@ func New(cfg Config) (*Runtime, error) {
 			r.adopt(e.Name())
 		}
 	}
+	go r.watchImages()
 	return r, nil
 }
 

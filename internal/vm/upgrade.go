@@ -86,13 +86,22 @@ func (m *machine) imageState(o *api.ObservedEnvironment) {
 
 // checkUpdate compares the environment's writable layer with the copy of
 // its image it is pinned to and a newer one, while it is stopped. It stands
-// down if the environment starts first.
+// down if the environment starts first. The newer copy is fetched before
+// the writable disk is taken, so a long pull holds up no start.
 func (m *machine) checkUpdate(from, to api.ImageCopy) {
 	defer func() {
 		m.mu.Lock()
 		m.checking = false
 		m.mu.Unlock()
 	}()
+	if _, err := m.rt.store.Get(m.rt.ctx, to, nil); err != nil {
+		m.log.Warn("fetching a newer copy of the image", "image", to.Ref, "err", err)
+		m.mu.Lock()
+		m.update, m.updateFrom = &api.ImageUpdate{Digest: to.Digest, Checked: true, Error: err.Error()}, from.Digest
+		m.mu.Unlock()
+		m.rt.notify()
+		return
+	}
 	if !m.disk.TryLock() {
 		return
 	}

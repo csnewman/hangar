@@ -255,11 +255,15 @@ func (s *ImageStore) Newest(ref string) (string, bool) {
 }
 
 // Latest is the digest of the copy of ref that new environments are made
-// over, if the store holds it: what ref named when last looked up, or the
-// newest copy held.
+// over: what ref named when last looked up, whether or not the store holds
+// that copy yet, or, when it has not been looked up since the store opened,
+// the newest copy held.
 func (s *ImageStore) Latest(ref string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if d, ok := s.current[ref]; ok {
+		return d, true
+	}
 	for c := range s.held {
 		if c.Ref == ref && s.isCurrent(c) {
 			return c.Digest, true

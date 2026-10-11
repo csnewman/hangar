@@ -249,3 +249,33 @@ func TestImageStoreEROFS(t *testing.T) {
 		t.Error("the image was made again")
 	}
 }
+
+// A reference that has moved on is the latest as soon as it is looked up,
+// before its copy is fetched, so environments made over the old copy are
+// offered the new one.
+func TestImageStoreLatestIsWhatWasLookedUp(t *testing.T) {
+	ctx := context.Background()
+	src := filepath.Join(t.TempDir(), "rootfs")
+	build(t, src, "one", "first")
+	const ref = "example.com/img:tag"
+	s, err := vm.NewImageStore(t.TempDir(), map[string]vm.Image{ref: {Base: src}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := s.Latest(ref); ok {
+		t.Fatalf("latest before a lookup or a copy: %q", d)
+	}
+	if _, err := s.Current(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := s.Latest(ref); !ok || d != "build:one" {
+		t.Fatalf("latest: %q, %v; want build:one", d, ok)
+	}
+	build(t, src, "two", "second")
+	if _, err := s.Current(ctx, ref); err != nil {
+		t.Fatal(err)
+	}
+	if d, ok := s.Latest(ref); !ok || d != "build:two" {
+		t.Fatalf("latest after a rebuild: %q, %v; want build:two", d, ok)
+	}
+}

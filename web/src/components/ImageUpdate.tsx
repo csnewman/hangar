@@ -9,8 +9,8 @@ function build(digest: string): string {
   return digest ? shortDigest(digest) : 'an earlier build'
 }
 
-// ImageUpdate offers an environment a newer copy of its image its worker
-// holds, says what upgrading would leave hiding the newer image's files, and
+// ImageUpdate offers an environment the newer copy of its image its
+// reference names, says what upgrading would leave hiding the newer image's files, and
 // once upgraded, offers to roll back or keep it. Each change is made at the
 // environment's next start.
 export function ImageUpdate({ env }: { env: Environment }) {
@@ -98,13 +98,13 @@ export function ImageUpdate({ env }: { env: Environment }) {
         <div className="notice drift image-update">
           <div>
             <div>
-              A newer build of <strong>{env.spec.image}</strong> is on its worker: {build(u.digest)}, where this
+              A newer build of <strong>{env.spec.image}</strong> is available: {build(u.digest)}, where this
               environment has {build(env.image_digest ?? '')}.
             </div>
             <div className="muted small">
               {!u.checked &&
                 (stopped
-                  ? 'Checking what upgrading would leave hidden…'
+                  ? 'Fetching it and checking what upgrading would leave hidden…'
                   : 'Stop it to check what upgrading would leave hidden.')}
               {u.error && <>Its writable disk could not be compared with the newer build: {u.error}</>}
               {clean && 'Nothing it has changed hides a file the newer build changes, so its disks carry over as they are.'}
