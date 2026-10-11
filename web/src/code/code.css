@@ -11,6 +11,22 @@
   --code-git-unversioned: #b8491d;
   --code-git-deleted: #7a7a7a;
   --code-git-conflict: #c9302c;
+  /* Syntax: IntelliJ Light's. */
+  --syn-keyword: #0033b3;
+  --syn-string: #067d17;
+  --syn-escape: #0037a6;
+  --syn-number: #1750eb;
+  --syn-comment: #8c8c8c;
+  --syn-doc: #8c8c8c;
+  --syn-function-def: #00627a;
+  --syn-function: #00627a;
+  --syn-type: #008080;
+  --syn-property: #871094;
+  --syn-constant: #871094;
+  --syn-meta: #9e880d;
+  --syn-tag: #0033b3;
+  --syn-link: #006dcc;
+  --syn-invalid: #f50000;
 
   flex: 1;
   display: flex;
@@ -30,6 +46,22 @@
     --code-git-unversioned: #e58a5b;
     --code-git-deleted: #8a96a8;
     --code-git-conflict: #f07370;
+    /* Syntax: IntelliJ's Dark. */
+    --syn-keyword: #cf8e6d;
+    --syn-string: #6aab73;
+    --syn-escape: #cf8e6d;
+    --syn-number: #2aacb8;
+    --syn-comment: #7a7e85;
+    --syn-doc: #5f826b;
+    --syn-function-def: #56a8f5;
+    --syn-function: #57aaf7;
+    --syn-type: #16baac;
+    --syn-property: #c77dbb;
+    --syn-constant: #c77dbb;
+    --syn-meta: #b3ae60;
+    --syn-tag: #d5b778;
+    --syn-link: #548af7;
+    --syn-invalid: #fa6675;
   }
 }
 

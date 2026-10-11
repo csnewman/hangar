@@ -1,15 +1,14 @@
 import { MergeView } from '@codemirror/merge'
 import { EditorState, type Extension } from '@codemirror/state'
 import { EditorView, lineNumbers } from '@codemirror/view'
-import { syntaxHighlighting, defaultHighlightStyle } from '@codemirror/language'
 import { useEffect, useRef, useState } from 'react'
 
 import type { CodeClient } from './client'
-import { codeTheme, languageFor } from './CodeEditor'
+import { codeHighlight, codeTheme, languageFor } from './CodeEditor'
 
 const diffSide = (lang: Extension): Extension => [
   lineNumbers(),
-  syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+  codeHighlight,
   codeTheme,
   lang,
   EditorState.readOnly.of(true),

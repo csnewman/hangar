@@ -14,8 +14,8 @@ import {
   foldKeymap,
   indentOnInput,
   LanguageDescription,
+  HighlightStyle,
   syntaxHighlighting,
-  defaultHighlightStyle,
 } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
 import { gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap, selectNextOccurrence } from '@codemirror/search'
@@ -33,6 +33,7 @@ import {
   type Command,
   rectangularSelection,
 } from '@codemirror/view'
+import { tags as t } from '@lezer/highlight'
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next'
@@ -41,6 +42,39 @@ import * as Y from 'yjs'
 import type { CodeClient, SharedFile } from './client'
 import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { baseText, gitGutter, hunkAt, rollback, setBase, staged, type Hunk } from './gitGutter'
+
+// codeHighlight colours code by the page's --syn-* colours (code.css), which
+// are IntelliJ's for light and dark, so one style serves both.
+export const codeHighlight: Extension = syntaxHighlighting(
+  HighlightStyle.define([
+    {
+      tag: [t.keyword, t.modifier, t.operatorKeyword, t.controlKeyword, t.definitionKeyword, t.moduleKeyword],
+      color: 'var(--syn-keyword)',
+    },
+    { tag: [t.bool, t.null, t.atom, t.self], color: 'var(--syn-keyword)' },
+    { tag: [t.string, t.special(t.string), t.character, t.regexp], color: 'var(--syn-string)' },
+    { tag: t.escape, color: 'var(--syn-escape)' },
+    { tag: [t.number, t.integer, t.float], color: 'var(--syn-number)' },
+    { tag: [t.comment, t.lineComment, t.blockComment], color: 'var(--syn-comment)', fontStyle: 'italic' },
+    { tag: t.docComment, color: 'var(--syn-doc)', fontStyle: 'italic' },
+    {
+      tag: [t.function(t.definition(t.variableName)), t.function(t.definition(t.propertyName))],
+      color: 'var(--syn-function-def)',
+    },
+    { tag: [t.function(t.variableName), t.function(t.propertyName)], color: 'var(--syn-function)' },
+    { tag: [t.typeName, t.className, t.namespace], color: 'var(--syn-type)' },
+    { tag: [t.propertyName, t.attributeName], color: 'var(--syn-property)' },
+    { tag: [t.constant(t.variableName), t.standard(t.variableName)], color: 'var(--syn-constant)' },
+    { tag: [t.meta, t.annotation, t.processingInstruction], color: 'var(--syn-meta)' },
+    { tag: [t.tagName], color: 'var(--syn-tag)' },
+    { tag: [t.heading], color: 'var(--syn-keyword)', fontWeight: 'bold' },
+    { tag: t.strong, fontWeight: 'bold' },
+    { tag: t.emphasis, fontStyle: 'italic' },
+    { tag: t.strikethrough, textDecoration: 'line-through' },
+    { tag: [t.link, t.url], color: 'var(--syn-link)', textDecoration: 'underline' },
+    { tag: t.invalid, color: 'var(--syn-invalid)' },
+  ]),
+)
 
 // editorSetup is CodeMirror's basic setup, less its own undo history: a
 // shared document's undo is Yjs's, which undoes only this window's edits.
@@ -53,7 +87,7 @@ export const editorSetup: Extension = [
   dropCursor(),
   EditorState.allowMultipleSelections.of(true),
   indentOnInput(),
-  syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
+  codeHighlight,
   bracketMatching(),
   closeBrackets(),
   autocompletion({ activateOnTyping: false }),
