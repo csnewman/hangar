@@ -252,7 +252,7 @@ function CodeView({
   const [bottom, setBottom] = useState<Bottom>('terminal')
   const showBottom = (w: Bottom) => {
     setBottom(w)
-    terminal.current?.expand()
+    fold('terminal', true)
   }
   // The Git Log reads the history once first shown, and is kept after.
   const [logSeen, setLogSeen] = useState(false)
@@ -260,7 +260,7 @@ function CodeView({
     if (bottom === 'log') setLogSeen(true)
   }, [bottom])
   const toggleBottom = (w: Bottom) => {
-    if (bottom === w && shown.terminal) terminal.current?.collapse()
+    if (bottom === w && shown.terminal) fold('terminal', false)
     else showBottom(w)
   }
   const [usages, setUsages] = useState<Usages | null>(null)
@@ -366,6 +366,17 @@ function CodeView({
   const [shown, setShown] = useState({ left: true, right: true, terminal: true })
   const track = (name: keyof typeof shown) => (size: { asPercentage: number }) =>
     setShown((s) => (s[name] === size.asPercentage > 0 ? s : { ...s, [name]: size.asPercentage > 0 }))
+  // fold opens or closes a panel. The panels report only sizes dragged,
+  // so whether it is open is read back once the change has taken effect.
+  const fold = (name: keyof typeof shown, open: boolean) => {
+    const ref = name === 'terminal' ? terminal : name === 'left' ? leftPanel : rightPanel
+    if (open) ref.current?.expand()
+    else ref.current?.collapse()
+    setTimeout(() => {
+      const isOpen = !(ref.current?.isCollapsed() ?? false)
+      setShown((s) => (s[name] === isOpen ? s : { ...s, [name]: isOpen }))
+    }, 0)
+  }
 
   const outer = useDefaultLayout({ id: 'hangar.code.v', storage: localStorage })
   const sidePanel = (side: Side) => (side === 'left' ? leftPanel : rightPanel)
@@ -380,15 +391,15 @@ function CodeView({
   const showTool = (name: ToolName) => {
     const side = sides[name]
     setChosen((c) => ({ ...c, [side]: name }))
-    sidePanel(side).current?.expand()
+    fold(side, true)
   }
   // A window's button shows it, or hides it if it is what its side shows.
   const toggleTool = (name: ToolName) => {
     const side = sides[name]
-    if (showing(side) === name && shown[side]) sidePanel(side).current?.collapse()
+    if (showing(side) === name && shown[side]) fold(side, false)
     else showTool(name)
   }
-  const hideTool = (name: ToolName) => sidePanel(sides[name]).current?.collapse()
+  const hideTool = (name: ToolName) => fold(sides[name], false)
   const dropTool = (name: ToolName, side: Side) => {
     moveTool(name, side)
     setChosen((c) => ({ ...c, [side]: name }))
@@ -549,17 +560,17 @@ function CodeView({
               onResize={track('terminal')}
             >
               <div className="code-side-slot" hidden={bottom !== 'terminal'}>
-                <CodeTerminal env={env} openIn={termIn} onHide={() => terminal.current?.collapse()} />
+                <CodeTerminal env={env} openIn={termIn} onHide={() => fold('terminal', false)} />
               </div>
               <div className="code-side-slot" hidden={bottom !== 'find'}>
-                <UsagesView client={client} usages={usages} onJump={openAt} onHide={() => terminal.current?.collapse()} />
+                <UsagesView client={client} usages={usages} onJump={openAt} onHide={() => fold('terminal', false)} />
               </div>
               {logSeen && (
                 <div className="code-side-slot" hidden={bottom !== 'log'}>
                   <GitLog
                     client={client}
                     onDiff={(path, against) => open({ kind: 'diff', path, ...against })}
-                    onHide={() => terminal.current?.collapse()}
+                    onHide={() => fold('terminal', false)}
                   />
                 </div>
               )}

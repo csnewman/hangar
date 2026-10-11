@@ -1,7 +1,7 @@
 import { EditorState, RangeSetBuilder, Compartment, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, lineNumbers } from '@codemirror/view'
 import { CaseSensitive, File, Folder, FolderOpen, Regex, WholeWord } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import type { CodeClient, Match } from './client'
 import { codeHighlight, codeTheme, followScheme, languageFor } from './CodeEditor'
@@ -498,10 +498,12 @@ export function Preview({ client, match, onOpen }: { client: CodeClient; match: 
   const language = useMemo(() => new Compartment(), [])
   const marks = useMemo(() => new Compartment(), [])
 
-  useEffect(() => {
-    const v = new EditorView({
-      parent: host.current!,
-      state: EditorState.create({
+  // A file's state: made afresh for each file shown, so its gutter, its
+  // folds and its scroll are its own, nothing kept from the file before.
+  const stateFor = useCallback(
+    (doc: string) =>
+      EditorState.create({
+        doc,
         extensions: [
           lineNumbers(),
           codeHighlight,
@@ -514,10 +516,14 @@ export function Preview({ client, match, onOpen }: { client: CodeClient; match: 
           EditorView.domEventHandlers({ dblclick: () => (onOpenRef.current(), true) }),
         ],
       }),
-    })
+    [language, marks],
+  )
+  useEffect(() => {
+    const v = new EditorView({ parent: host.current!, state: stateFor('') })
     view.current = v
+    shown.current = ''
     return () => v.destroy()
-  }, [language, marks])
+  }, [stateFor])
   const onOpenRef = useRef(onOpen)
   useEffect(() => {
     onOpenRef.current = onOpen
@@ -540,7 +546,7 @@ export function Preview({ client, match, onOpen }: { client: CodeClient; match: 
       setNote('')
       if (shown.current !== match.path) {
         shown.current = match.path
-        v.dispatch({ changes: { from: 0, to: v.state.doc.length, insert: t.replace(/\r\n/g, '\n') } })
+        v.setState(stateFor(t.replace(/\r\n/g, '\n')))
         const ext: Extension = await languageFor(match.path.split('/').pop() ?? '')
         if (!live) return
         v.dispatch({ effects: language.reconfigure(ext) })
@@ -554,7 +560,7 @@ export function Preview({ client, match, onOpen }: { client: CodeClient; match: 
     return () => {
       live = false
     }
-  }, [client, match, language, marks])
+  }, [client, match, language, marks, stateFor])
 
   return (
     <div className="code-find-preview">
