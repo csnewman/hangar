@@ -54,6 +54,8 @@ export function DiffView({
 }) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
+  // What the diff alone does not show: a new name, or nothing changed.
+  const [about, setAbout] = useState<{ from?: string; same: boolean } | null>(null)
 
   useEffect(() => {
     const el = host.current
@@ -69,12 +71,16 @@ export function DiffView({
         if (disposed) return
         setError('')
         const scroll = view?.b.scrollDOM.scrollTop ?? 0
+        const a = d.head.replace(/\r\n/g, '\n')
+        const b = d.working.replace(/\r\n/g, '\n')
+        setAbout({ from: d.from, same: a === b })
         view?.destroy()
         view = new MergeView({
           parent: el,
-          a: { doc: d.head.replace(/\r\n/g, '\n'), extensions: diffSide(lang) },
-          b: { doc: d.working.replace(/\r\n/g, '\n'), extensions: diffSide(lang) },
-          collapseUnchanged: { margin: 3, minSize: 6 },
+          a: { doc: a, extensions: diffSide(lang) },
+          b: { doc: b, extensions: diffSide(lang) },
+          // A file the same on both sides is shown whole, not as one fold.
+          collapseUnchanged: a === b ? undefined : { margin: 3, minSize: 6 },
           gutter: true,
         })
         view.b.scrollDOM.scrollTop = scroll
@@ -106,9 +112,27 @@ export function DiffView({
 
   return (
     <div className="code-diff">
+      {about && (about.from || about.same) && (
+        <div className="code-diff-about">
+          {about.from ? (
+            <>
+              Renamed from <code>{about.from}</code> to <code>{path}</code>.
+              {about.same && ' The content is unchanged.'}
+            </>
+          ) : (
+            'The content is unchanged.'
+          )}
+        </div>
+      )}
       <div className="code-diff-heads">
-        <span>{base ? (baseLabel ?? base.slice(0, 8)) : 'HEAD'}</span>
-        <span>Working tree</span>
+        <span>
+          {base ? (baseLabel ?? base.slice(0, 8)) : 'HEAD'}
+          {about?.from && <span className="code-diff-name">{about.from}</span>}
+        </span>
+        <span>
+          Working tree
+          {about?.from && <span className="code-diff-name">{path}</span>}
+        </span>
       </div>
       {error && <div className="code-note">{error}</div>}
       <div ref={host} className="code-diff-host" />

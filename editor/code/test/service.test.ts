@@ -380,6 +380,7 @@ test('a file moved without git is a rename', async () => {
 
 		const d = await a.call('git.diff', { path: 'moved.txt' })
 		assert.equal(d.head, 'some\nlines\nhere\n')
+		assert.equal(d.from, 'r.txt')
 
 		await a.call('git.stage', { path: 'moved.txt' })
 		const staged = (await a.call('git.status')).changes.find((c: any) => c.path === 'moved.txt')
@@ -606,6 +607,8 @@ test("a branch's changes since it left main", async () => {
 		const d = await a.call('git.diff', { path: 'new.txt', against: bc.mergeBase, from: 'old.txt' })
 		assert.equal(d.head, 'one\ntwo\nthree\nfour\n')
 		assert.equal(d.working, 'one\ntwo\nthree\nfour\nfive\n')
+		assert.equal(d.from, 'old.txt')
+		assert.equal((await a.call('git.diff', { path: 'new.txt' })).from, undefined)
 		await assert.rejects(a.call('git.diff', { path: 'new.txt', against: '--output=x' }), /not a revision/)
 	} finally {
 		a.close()

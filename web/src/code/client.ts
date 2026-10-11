@@ -45,6 +45,8 @@ export interface GitStatus {
 
 export interface Diff {
   path: string
+  // The name the file had in the commit compared with, when renamed since.
+  from?: string
   head: string
   working: string
 }

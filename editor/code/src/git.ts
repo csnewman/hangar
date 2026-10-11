@@ -216,22 +216,27 @@ export class Git {
 
 	// diff returns a file as it was at HEAD, or at another commit, and as
 	// the working tree has it, for a diff view to compare. A file new since
-	// was empty there; one renamed since is compared with its old name.
-	async diff(path: string, against = 'HEAD', from?: string): Promise<{ path: string; head: string; working: string }> {
+	// was empty there; one renamed since is compared with its old name,
+	// which is given as from.
+	async diff(
+		path: string,
+		against = 'HEAD',
+		from?: string,
+	): Promise<{ path: string; from?: string; head: string; working: string }> {
 		const rel = this.rel(path)
 		if (!/^[\w./~^-]+$/.test(against) || against.startsWith('-')) throw new Error(`not a revision: ${against}`)
+		let was = from ? this.rel(from) : rel
 		let head = ''
 		try {
-			head = await run(this.root, ['show', `${against}:./${from ? this.rel(from) : rel}`])
+			head = await run(this.root, ['show', `${against}:./${was}`])
 		} catch {
-			if (against !== 'HEAD') {
-				return { path: rel, head, working: await readFile(join(this.root, rel), 'utf8').catch(() => '') }
-			}
+			was = rel
 			// Not in HEAD, unless under the name it was renamed from.
-			const renamed = (await this.change(rel))?.from
+			const renamed = against === 'HEAD' ? (await this.change(rel))?.from : undefined
 			if (renamed) {
 				try {
 					head = await run(this.root, ['show', `HEAD:./${renamed}`])
+					was = renamed
 				} catch {
 					// New after all.
 				}
@@ -243,7 +248,7 @@ export class Git {
 		} catch {
 			// Deleted.
 		}
-		return { path: rel, head, working }
+		return { path: rel, from: was !== rel ? was : undefined, head, working }
 	}
 
 	// stage adds a file's changes to the index; a rename's, both its names.

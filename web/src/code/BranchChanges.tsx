@@ -132,9 +132,7 @@ export function BranchChanges({
               >
                 <span className={`code-change-letter code-change-${letterClass(c.status)}`}>{c.status}</span>
                 <span className="code-change-name">{c.path.split('/').pop()}</span>
-                <span className="code-change-dir muted">
-                  {c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/')) : ''}
-                </span>
+                <span className="code-change-dir muted">{changeWhere(c)}</span>
               </div>
             ))}
             {data.changes.length === 0 && <div className="code-note">Nothing differs from {data.base}.</div>}
@@ -158,4 +156,13 @@ export function BranchChanges({
 
 function letterClass(l: string) {
   return { A: 'added', D: 'deleted', R: 'renamed', C: 'added' }[l] ?? 'modified'
+}
+
+const dirOf = (p: string) => (p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '')
+
+// changeWhere is what a change's row says beside its name: its folder, or
+// for a rename, the name it had, whole when it was in another folder.
+export function changeWhere(c: { path: string; from?: string }): string {
+  if (!c.from) return dirOf(c.path)
+  return `from ${dirOf(c.from) === dirOf(c.path) ? c.from.split('/').pop() : c.from}`
 }

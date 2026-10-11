@@ -1,7 +1,7 @@
 import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, CloudDownload, GitBranch, Minus, Plus, RefreshCw, Undo2 } from 'lucide-react'
 import { useState, type MouseEvent } from 'react'
 
-import { BranchChanges, type DiffAgainst } from './BranchChanges'
+import { BranchChanges, changeWhere, type DiffAgainst } from './BranchChanges'
 import { BranchPicker, type PickerAction } from './BranchPicker'
 import type { Branches, Change, CodeClient, GitStatus } from './client'
 import { copyText, useContextMenu, type MenuItem } from './ContextMenu'
@@ -126,7 +126,7 @@ export function ChangesView({
       >
         <span className={`code-change-letter code-change-${letterClass(letter)}`}>{letter === '?' ? 'U' : letter}</span>
         <span className="code-change-name">{c.path.split('/').pop()}</span>
-        <span className="code-change-dir muted">{c.path.includes('/') ? c.path.slice(0, c.path.lastIndexOf('/')) : ''}</span>
+        <span className="code-change-dir muted">{changeWhere(c)}</span>
         <span className="code-change-actions" onClick={(e) => e.stopPropagation()}>
           {stagedRow ? (
             <button type="button" className="code-tool-btn" title="Unstage" onClick={() => act(() => client.unstage(c.path))}>
