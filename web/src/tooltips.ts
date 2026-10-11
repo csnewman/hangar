@@ -67,6 +67,13 @@ function hide() {
 
 function over(e: PointerEvent) {
   if (e.pointerType === 'touch') return
+  // An embedded page's title names it for screen readers; it is no
+  // tooltip. Once the pointer is in it, this page hears nothing more of it
+  // until it leaves, so a tooltip shown now would never be hidden.
+  if (e.target instanceof HTMLIFrameElement) {
+    hide()
+    return
+  }
   const el = (e.target as Element | null)?.closest?.('[title], [data-tip]') ?? null
   if (el === target) return
   const warm = (tip && !tip.hidden) || Date.now() - hiddenAt < WARM_MS
