@@ -448,11 +448,12 @@ h1 {
   z-index: 10;
 }
 
-.menu-up {
+/* A menu placed on the page itself, its place given by its opener. */
+.menu-fixed {
+  position: fixed;
   top: auto;
   right: auto;
-  left: 0;
-  bottom: calc(100% + 6px);
+  z-index: 50;
 }
 
 .menu-header {
