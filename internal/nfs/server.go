@@ -3,8 +3,9 @@
 // Package nfs is an NFSv4.1 and 4.2 server for one environment's share of
 // files that environments share with others: their file sets, each a
 // directory of a root (View). It serves the operations Linux's client uses,
-// each a system call on the root, as the client's user says it is (AUTH_SYS):
-// within the environment's sets that is the environment's own business.
+// each a system call on the root made as the caller -- the client's user as
+// it says it is (AUTH_SYS), squashed as the set says (Squash) -- so the
+// kernel checks permissions and owns new files as it would for them.
 //
 // Locks are open file description locks on the root's files, one
 // description for each lock owner's locks on a file: they hold between this
@@ -24,10 +25,13 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/csnewman/hangar/internal/fsuser"
 )
 
 // Config is a server's.
@@ -35,9 +39,8 @@ type Config struct {
 	// Root holds the file sets, each a directory named by its ID.
 	Root string
 	View View
-	// UID and GID own every file, as the environment sees them: its user,
-	// whoever made the file on the root -- the control plane, or another
-	// worker. Changing a file's owner is accepted and changes nothing.
+	// UID and GID are who a set's callers act as when it squashes all of
+	// them: the environments' user.
 	UID, GID uint32
 	Log      *slog.Logger
 }
@@ -333,7 +336,10 @@ func (s *Server) compound(c call) (compoundResult, bool) {
 		var body writer
 		if status == nfsOK {
 			var replay []byte
-			status, replay = s.op(cs, op, r, &body)
+			fsuser.Do(s.caller(cs), func() error {
+				status, replay = s.op(cs, op, r, &body)
+				return nil
+			})
 			if replay != nil {
 				return compoundResult{replay: replay}, true
 			}
@@ -397,3 +403,30 @@ func randomBytes(n int) []byte {
 }
 
 func be32(b []byte) uint32 { return binary.BigEndian.Uint32(b) }
+
+// caller is who a compound's operation acts as: its caller, squashed as
+// the set it works in says, or as every caller is in all of them.
+func (s *Server) caller(cs *cstate) fsuser.User {
+	set, _ := split(cs.cur)
+	if set == "" {
+		set, _ = split(cs.save)
+	}
+	switch s.squash(set) {
+	case SquashNone:
+		return fsuser.User{UID: cs.cred.uid, GID: cs.cred.gid, Groups: cs.cred.gids}
+	case SquashRoot:
+		if cs.cred.uid == 0 {
+			return fsuser.User{UID: nobody.uid, GID: nobody.gid}
+		}
+		return fsuser.User{UID: cs.cred.uid, GID: cs.cred.gid, Groups: cs.cred.gids}
+	}
+	return fsuser.User{UID: s.uid, GID: s.gid, Groups: []uint32{s.gid}}
+}
+
+// squash is how a set the environment is given squashes its callers.
+func (s *Server) squash(set string) Squash {
+	if set == "" || !slices.Contains(s.view.Sets(), set) {
+		return SquashAll
+	}
+	return s.view.Squash(set)
+}

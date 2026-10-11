@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/users"
@@ -49,7 +50,9 @@ type Pack struct {
 	TeamID, Team   string
 	Builtin        bool
 	Attach         Attach
-	Paths          []Path
+	// Squash is who environments' callers act as on its files.
+	Squash Squash
+	Paths  []Path
 	// What the caller may do: change it, and delete it.
 	CanChange, CanDelete bool
 	CreatedAt, UpdatedAt time.Time
@@ -62,8 +65,20 @@ type PackInput struct {
 	// TeamID makes a team the owner; without one, the caller is.
 	TeamID string
 	Attach Attach
+	Squash Squash
 	Paths  []Path
 }
+
+// Squash is who environments' callers act as on a pack's files, as an NFS
+// export's options say.
+type Squash = api.Squash
+
+// UID and GID own a copy's files when callers are squashed to one owner:
+// the environments' user, which every image shares.
+const (
+	UID = 1000
+	GID = 1000
+)
 
 // Store keeps packs, copies and their files. root is the files root.
 type Store struct {
@@ -93,7 +108,7 @@ const (
 	packDrop = `(NOT k.builtin AND ($1 OR k.owner_id = $2 OR ` + packRole + ` = 'admin'))`
 
 	packColumns = `k.id::text, k.name, k.description, coalesce(k.owner_id::text, ''), coalesce(u.username, ''),
-		coalesce(k.team_id::text, ''), coalesce(t.slug, ''), k.builtin, k.attach,
+		coalesce(k.team_id::text, ''), coalesce(t.slug, ''), k.builtin, k.attach, k.squash,
 		coalesce((SELECT array_agg(path ORDER BY ltrim(path, '!')) FROM pack_paths WHERE pack_id = k.id), '{}'),
 		coalesce((SELECT array_agg(sensitive ORDER BY ltrim(path, '!')) FROM pack_paths WHERE pack_id = k.id), '{}'),
 		coalesce(` + packEdit + `, false), coalesce(` + packDrop + `, false), k.created_at, k.updated_at`
@@ -105,7 +120,7 @@ func scanPack(row pgx.Row) (Pack, error) {
 	var paths []string
 	var sensitive []bool
 	err := row.Scan(&k.ID, &k.Name, &k.Description, &k.OwnerID, &k.Owner, &k.TeamID, &k.Team, &k.Builtin,
-		&k.Attach, &paths, &sensitive, &k.CanChange, &k.CanDelete, &k.CreatedAt, &k.UpdatedAt)
+		&k.Attach, &k.Squash, &paths, &sensitive, &k.CanChange, &k.CanDelete, &k.CreatedAt, &k.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return k, ErrNotFound
 	}
@@ -188,6 +203,13 @@ func checkPack(p users.Principal, in PackInput, team, builtin bool) (PackInput, 
 	default:
 		return in, fmt.Errorf("%w: no such attach rule %q", ErrInvalid, in.Attach)
 	}
+	switch in.Squash {
+	case "":
+		in.Squash = api.SquashAll
+	case api.SquashAll, api.SquashRoot, api.SquashNone:
+	default:
+		return in, fmt.Errorf("%w: no such squash %q", ErrInvalid, in.Squash)
+	}
 	paths, err := checkPaths(in.Paths)
 	if err != nil {
 		return in, err
@@ -215,8 +237,9 @@ func (s *Store) CreatePack(ctx context.Context, p users.Principal, in PackInput)
 			owner = &p.UserID
 		}
 		var id string
-		err := tx.QueryRow(ctx, `INSERT INTO packs (name, description, owner_id, team_id, attach)
-			VALUES ($1, $2, $3, $4, $5) RETURNING id::text`, in.Name, in.Description, owner, team, in.Attach).Scan(&id)
+		err := tx.QueryRow(ctx, `INSERT INTO packs (name, description, owner_id, team_id, attach, squash)
+			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`, in.Name, in.Description, owner, team, in.Attach,
+			in.Squash).Scan(&id)
 		if db.IsUniqueViolation(err) {
 			return fmt.Errorf("%w: its owner already has a pack named %s", ErrInvalid, in.Name)
 		}
@@ -293,6 +316,13 @@ func (s *Store) UpdatePack(ctx context.Context, p users.Principal, id string, in
 			return fmt.Errorf("%w: only the pack's owner, its team's members, or an admin for a built-in one, change it",
 				ErrForbidden)
 		}
+		// What is not given stays as it is.
+		if in.Attach == "" {
+			in.Attach = cur.Attach
+		}
+		if in.Squash == "" {
+			in.Squash = cur.Squash
+		}
 		if in, err = checkPack(p, in, cur.TeamID != "", cur.Builtin); err != nil {
 			return err
 		}
@@ -302,8 +332,8 @@ func (s *Store) UpdatePack(ctx context.Context, p users.Principal, id string, in
 		if cur.Attach == AttachEveryone && in.Attach != AttachEveryone && !p.Admin {
 			return fmt.Errorf("%w: only an admin stops a pack attaching to everyone's environments", ErrForbidden)
 		}
-		_, err = tx.Exec(ctx, `UPDATE packs SET name = $2, description = $3, attach = $4, updated_at = now() WHERE id = $1`,
-			id, in.Name, in.Description, in.Attach)
+		_, err = tx.Exec(ctx, `UPDATE packs SET name = $2, description = $3, attach = $4, squash = $5, updated_at = now()
+			WHERE id = $1`, id, in.Name, in.Description, in.Attach, in.Squash)
 		if db.IsUniqueViolation(err) {
 			return fmt.Errorf("%w: its owner already has a pack named %s", ErrInvalid, in.Name)
 		}
@@ -317,7 +347,7 @@ func (s *Store) UpdatePack(ctx context.Context, p users.Principal, id string, in
 			return err
 		}
 		if err := audit.Record(ctx, tx, audit.Event{Action: "file_pack.update", Target: packRef(k),
-			Details: map[string]any{"paths": PathsOf(k.Paths), "attach": k.Attach}}); err != nil {
+			Details: map[string]any{"paths": PathsOf(k.Paths), "attach": k.Attach, "squash": k.Squash}}); err != nil {
 			return err
 		}
 		return db.Notify(ctx, tx, Channel, "")

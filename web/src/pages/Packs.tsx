@@ -215,6 +215,33 @@ function AttachField({
   )
 }
 
+// SquashField chooses who environments' users act as on a pack's files,
+// as an NFS export's squash options do.
+function SquashField({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: Pack['squash']
+  onChange: (s: Pack['squash']) => void
+  disabled?: boolean
+}) {
+  return (
+    <label className="field">
+      <span>Ownership</span>
+      <select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as Pack['squash'])}>
+        <option value="all_squash">One owner: everyone acts as the environment's user (all_squash)</option>
+        <option value="root_squash">Real owners, root acting as nobody (root_squash)</option>
+        <option value="no_root_squash">Real owners, root included (no_root_squash)</option>
+      </select>
+      <small className="muted">
+        With one owner, every file is the environment's user's, whoever makes it, and changing an owner changes nothing.
+        With real owners, a file made by root, or another user, is theirs, as on any disk.
+      </small>
+    </label>
+  )
+}
+
 // PathsEditor edits a pack's paths, a row each.
 function PathsEditor({
   value,
@@ -487,13 +514,14 @@ function PackSettings({ pack }: { pack: Pack }) {
   const [name, setName] = useState(pack.name)
   const [description, setDescription] = useState(pack.description)
   const [attach, setAttach] = useState(pack.attach)
+  const [squash, setSquash] = useState(pack.squash)
   const [paths, setPaths] = useState<PackPath[]>(pack.paths)
   const refresh = () => {
     qc.invalidateQueries({ queryKey: packsKey })
     qc.invalidateQueries({ queryKey: ['pack', pack.id] })
   }
   const save = useMutation({
-    mutationFn: () => api.updatePack(pack.id, { name, description, attach, paths: cleanPaths(paths) }),
+    mutationFn: () => api.updatePack(pack.id, { name, description, attach, squash, paths: cleanPaths(paths) }),
     onSettled: refresh,
   })
   const remove = useMutation({
@@ -536,6 +564,7 @@ function PackSettings({ pack }: { pack: Pack }) {
           disabled={disabled}
         />
         <PathsEditor value={paths} onChange={setPaths} disabled={disabled} />
+        <SquashField value={squash} onChange={setSquash} disabled={disabled} />
         <p className="muted small">
           Copies keep their files under a path taken out, no longer shared; environments keep theirs as their own.
           Templates list this pack by its ID, <code>{pack.id}</code>.

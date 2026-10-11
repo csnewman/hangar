@@ -489,21 +489,21 @@ func (s *Server) access(cs *cstate, want uint32, w *writer) uint32 {
 	if st != nfsOK {
 		return st
 	}
-	var mode uint32
-	switch {
-	case n.root:
-		mode = 0o5
-	case cs.cred.uid == 0:
-		mode = 0o7
-		if ftype(n.st.Mode) == nf4Reg && n.st.Mode&0o111 == 0 {
-			mode = 0o6
+	// The kernel's answer, for the caller as the operation runs: their
+	// filesystem identity is the thread's.
+	var mode uint32 = 0o5
+	if !n.root {
+		mode = 0
+		fd, name, err := s.at(cs.cur)
+		if err != nil {
+			return errno(err)
 		}
-	case cs.cred.uid == s.uid:
-		mode = (n.st.Mode >> 6) & 7
-	case cs.cred.gid == s.gid || slices.Contains(cs.cred.gids, s.gid):
-		mode = (n.st.Mode >> 3) & 7
-	default:
-		mode = n.st.Mode & 7
+		for _, bit := range []uint32{unix.R_OK, unix.W_OK, unix.X_OK} {
+			if unix.Faccessat(fd, name, bit, unix.AT_EACCESS) == nil {
+				mode |= bit
+			}
+		}
+		unix.Close(fd)
 	}
 	var got uint32
 	dir := !n.root && ftype(n.st.Mode) == nf4Dir || n.root

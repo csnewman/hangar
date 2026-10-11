@@ -281,6 +281,15 @@ self-attaching packs (the profile among them), sensitive files, their SSH
 keys, a registry sign-in, and an editor that trusts its folders. "Untrusted
 code" in the template editor withholds all but self-attaching packs.
 
+A pack says who environments' users act as on its files, as an NFS
+export's squash options do: `all_squash` (the default) takes everyone,
+root included, as the environments' user, uid and gid 1000, so one owner
+has everything and changing an owner changes nothing; `root_squash` keeps
+real owners but takes root as nobody; `no_root_squash` keeps real owners,
+root's too. Every image's user is taken to be uid 1000. The files root
+keeps real owners in every case, so the control plane and the workers must
+be able to chown there (root, and an NFS share without root squashed).
+
 When a path becomes shared in an environment, a file only the environment
 has is copied into the copy; one differing from the copy's is kept aside,
 and the environment's page asks which to keep. A path no longer shared is

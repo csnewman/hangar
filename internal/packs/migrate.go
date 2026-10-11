@@ -19,8 +19,9 @@ import (
 // Migrate brings the files root up to what the database says, once: a
 // copy laid out relative to the home directory is moved under ~/ (as
 // copy_relayout lists), the files the blob store held are copied in (when
-// there is one), and paths are moved from one copy to another (as
-// copy_moves lists). It reports how many files and directories it moved or
+// there is one), paths are moved from one copy to another (as copy_moves
+// lists), and copies made as root are given to the environments' user (as
+// copy_chown lists). It reports how many files and directories it moved or
 // copied.
 func (s *Store) Migrate(ctx context.Context, blobs blob.Versioned) (int, error) {
 	n, err := s.relayout(ctx)
@@ -35,7 +36,58 @@ func (s *Store) Migrate(ctx context.Context, blobs blob.Versioned) (int, error) 
 		}
 	}
 	m, err := s.moves(ctx)
-	return n + m, err
+	n += m
+	if err != nil {
+		return n, err
+	}
+	o, err := s.chownCopies(ctx)
+	return n + o, err
+}
+
+// chownCopies gives everything in each copy copy_chown lists to the
+// environments' user, which the control plane and the workers made as
+// root before the files root kept real owners.
+func (s *Store) chownCopies(ctx context.Context) (int, error) {
+	var ids []string
+	err := s.db.Transact(ctx, func(tx db.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT copy_id::text FROM copy_chown`)
+		if err != nil {
+			return err
+		}
+		ids, err = pgx.CollectRows(rows, pgx.RowTo[string])
+		return err
+	})
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, id := range ids {
+		if db.ValidUUID(id) {
+			err := fs.WalkDir(s.root.FS(), id, func(p string, e fs.DirEntry, err error) error {
+				if err != nil {
+					if errors.Is(err, fs.ErrNotExist) {
+						return fs.SkipAll
+					}
+					return err
+				}
+				if err := s.own(p); err != nil {
+					return err
+				}
+				n++
+				return nil
+			})
+			if err != nil {
+				return n, fmt.Errorf("owning %s's files: %w", id, err)
+			}
+		}
+		if err := s.db.Transact(ctx, func(tx db.Tx) error {
+			_, err := tx.Exec(ctx, `DELETE FROM copy_chown WHERE copy_id = $1`, id)
+			return err
+		}); err != nil {
+			return n, err
+		}
+	}
+	return n, nil
 }
 
 // migrateFrom copies the files the database names in the blob store --
@@ -102,7 +154,7 @@ func (s *Store) migrateFrom(ctx context.Context, blobs blob.Versioned) (int, err
 		if err != nil {
 			return copied, err
 		}
-		if err := s.root.MkdirAll(path.Dir(target), 0o755); err != nil {
+		if err := s.mkdirAll(path.Dir(target)); err != nil {
 			return copied, err
 		}
 		if err := s.replace(target, data, os.FileMode(x.mode&0o777)); err != nil {
@@ -169,7 +221,7 @@ func (s *Store) underHome(copy string) (int, error) {
 		return 0, err
 	}
 	home := copy + "/" + strings.TrimSuffix(Home, "/")
-	if err := s.root.MkdirAll(home, 0o755); err != nil {
+	if err := s.mkdirAll(home); err != nil {
 		return 0, err
 	}
 	n := 0
@@ -212,7 +264,7 @@ func (s *Store) moves(ctx context.Context) (int, error) {
 			_, ferr := s.root.Lstat(from)
 			_, terr := s.root.Lstat(to)
 			if ferr == nil && errors.Is(terr, fs.ErrNotExist) {
-				if err := s.root.MkdirAll(path.Dir(to), 0o755); err != nil {
+				if err := s.mkdirAll(path.Dir(to)); err != nil {
 					return made, err
 				}
 				if err := s.root.Rename(from, to); err != nil {

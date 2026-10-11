@@ -255,6 +255,27 @@ func (e PackAttach) Valid() bool {
 	}
 }
 
+// Defines values for PackSquash.
+const (
+	AllSquash    PackSquash = "all_squash"
+	NoRootSquash PackSquash = "no_root_squash"
+	RootSquash   PackSquash = "root_squash"
+)
+
+// Valid indicates whether the value is a known member of the PackSquash enum.
+func (e PackSquash) Valid() bool {
+	switch e {
+	case AllSquash:
+		return true
+	case NoRootSquash:
+		return true
+	case RootSquash:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Phase.
 const (
 	PhaseDeleting   Phase = "deleting"
@@ -1022,6 +1043,9 @@ type Pack struct {
 	OwnerID *string    `json:"owner_id,omitempty"`
 	Paths   []PackPath `json:"paths"`
 
+	// Squash Who environments' callers act as on the pack's files, as an NFS export's options say: every one as the environments' user, root among them, so one owner has everything (all_squash); root as nobody (root_squash); or each as themselves (no_root_squash).
+	Squash PackSquash `json:"squash"`
+
 	// Team The owning team's slug.
 	Team      *string   `json:"team,omitempty"`
 	TeamID    *string   `json:"team_id,omitempty"`
@@ -1069,6 +1093,9 @@ type PackInput struct {
 	Name        string      `json:"name"`
 	Paths       []PackPath  `json:"paths"`
 
+	// Squash Who environments' callers act as on the pack's files, as an NFS export's options say: every one as the environments' user, root among them, so one owner has everything (all_squash); root as nobody (root_squash); or each as themselves (no_root_squash).
+	Squash *PackSquash `json:"squash,omitempty"`
+
 	// TeamID Only when making one; the user's own without.
 	TeamID *string `json:"team_id,omitempty"`
 }
@@ -1088,6 +1115,9 @@ type PackRef struct {
 	Copy *string `json:"copy,omitempty"`
 	Pack string  `json:"pack"`
 }
+
+// PackSquash Who environments' callers act as on the pack's files, as an NFS export's options say: every one as the environments' user, root among them, so one owner has everything (all_squash); root as nobody (root_squash); or each as themselves (no_root_squash).
+type PackSquash string
 
 // Person defines model for Person.
 type Person struct {

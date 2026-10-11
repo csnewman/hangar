@@ -27,6 +27,7 @@ type filesView struct {
 	mu     sync.Mutex
 	sets   []string
 	hidden map[string][]string
+	squash map[string]api.Squash
 }
 
 func (v *filesView) Sets() []string {
@@ -49,13 +50,26 @@ func (v *filesView) Hidden(set, path string) bool {
 	return false
 }
 
+// Squash is how a copy's callers act on its files, as its pack says.
+func (v *filesView) Squash(set string) nfs.Squash {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	switch v.squash[set] {
+	case api.SquashRoot:
+		return nfs.SquashRoot
+	case api.SquashNone:
+		return nfs.SquashNone
+	}
+	return nfs.SquashAll
+}
+
 func (v *filesView) set(files api.EnvironmentFiles) {
 	hidden := map[string][]string{}
 	for set, paths := range files.Hidden {
 		hidden[set] = slices.Clone(paths)
 	}
 	v.mu.Lock()
-	v.sets, v.hidden = files.Sets, hidden
+	v.sets, v.hidden, v.squash = files.Sets, hidden, files.Squash
 	v.mu.Unlock()
 }
 

@@ -555,3 +555,33 @@ func TestMigrate(t *testing.T) {
 		t.Errorf("migrated %d again (%v)", n, err)
 	}
 }
+
+// A pack squashes every caller to one owner unless it says otherwise, keeps
+// what it says when changed without it, and tells workers so.
+func TestSquash(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	alice := p.user(t, "alice")
+	if _, err := p.store.CreatePack(ctx, as(alice), packs.PackInput{Name: "bad", Squash: "maybe"}); !errors.Is(err, packs.ErrInvalid) {
+		t.Errorf("a pack took an unknown squash: %v", err)
+	}
+	k, err := p.store.CreatePack(ctx, as(alice), packs.PackInput{Name: "k", Paths: paths("/etc/thing/")})
+	if err != nil || k.Squash != api.SquashAll {
+		t.Fatalf("a new pack squashes %q (%v)", k.Squash, err)
+	}
+	if k, err = p.store.UpdatePack(ctx, as(alice), k.ID, packs.PackInput{Name: "k", Squash: api.SquashNone,
+		Paths: paths("/etc/thing/")}); err != nil || k.Squash != api.SquashNone {
+		t.Fatalf("changed to %q (%v)", k.Squash, err)
+	}
+	if k, err = p.store.UpdatePack(ctx, as(alice), k.ID, packs.PackInput{Name: "k2", Paths: paths("/etc/thing/")}); err != nil || k.Squash != api.SquashNone {
+		t.Errorf("changed without one, it squashes %q (%v)", k.Squash, err)
+	}
+	env := p.env(t, alice, "a", api.Spec{Packs: []api.PackRef{{Pack: k.ID}}})
+	files, err := p.store.EnvironmentFiles(ctx, p.worker, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if files.Squash[files.Sets[0]] != api.SquashNone || len(files.Squash) != 1 {
+		t.Errorf("the worker is told %v", files.Squash)
+	}
+}

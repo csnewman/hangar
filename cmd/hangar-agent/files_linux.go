@@ -16,6 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/csnewman/hangar/internal/fsuser"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/vsock"
 )
@@ -103,7 +104,8 @@ func (r *router) apply(routes []profile.Route) error {
 			dir, kind = rt.Target, hangarfsRouteDir
 		}
 		if !rt.Exclude {
-			if err := r.mkdirAll(filepath.Join(sharedDir, dir)); err != nil {
+			err := fsuser.Do(r.user(), func() error { return r.mkdirAll(filepath.Join(sharedDir, dir)) })
+			if err != nil {
 				return fmt.Errorf("making %s in the shared files: %w", dir, err)
 			}
 		}
@@ -133,7 +135,14 @@ func (r *router) apply(routes []profile.Route) error {
 	return nil
 }
 
-// mkdirAll makes a directory and any parents missing, owned by the user.
+// user is who the router makes directories in the shared files as: the
+// environment's user, who owns them there as they would have had they made
+// them.
+func (r *router) user() fsuser.User {
+	return fsuser.User{UID: uint32(r.uid), GID: uint32(r.gid), Groups: []uint32{uint32(r.gid)}}
+}
+
+// mkdirAll makes a directory and any parents missing.
 func (r *router) mkdirAll(dir string) error {
 	if _, err := os.Stat(dir); err == nil {
 		return nil
@@ -146,5 +155,5 @@ func (r *router) mkdirAll(dir string) error {
 	if err := os.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
-	return os.Lchown(dir, r.uid, r.gid)
+	return nil
 }

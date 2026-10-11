@@ -185,7 +185,24 @@ func (s Spec) EditorTrust() []string {
 type EnvironmentFiles struct {
 	Sets   []string            `json:"sets"`
 	Hidden map[string][]string `json:"hidden,omitempty"`
+	// Squash is how a copy's callers act on its files, where its pack
+	// says other than SquashAll.
+	Squash map[string]Squash `json:"squash,omitempty"`
 }
+
+// Squash is who an environment's callers act as on a pack's files, as an
+// NFS export's options say.
+type Squash string
+
+const (
+	// SquashAll takes every caller as the environment's user, root
+	// among them: one owner for everything.
+	SquashAll Squash = "all_squash"
+	// SquashRoot takes root as nobody, and other callers as themselves.
+	SquashRoot Squash = "root_squash"
+	// SquashNone takes every caller as themselves, root included.
+	SquashNone Squash = "no_root_squash"
+)
 
 // TemplateSpec is a Spec with the rules for naming the environments made
 // from it.

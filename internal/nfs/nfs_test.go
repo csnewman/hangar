@@ -4,10 +4,12 @@ package nfs_test
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 
 	"github.com/csnewman/hangar/internal/nfs"
@@ -17,10 +19,12 @@ import (
 type view struct {
 	sets   []string
 	hidden map[string]bool // "set/path"
+	squash map[string]nfs.Squash
 }
 
 func (v view) Sets() []string               { return v.sets }
 func (v view) Hidden(set, path string) bool { return v.hidden[set+"/"+path] }
+func (v view) Squash(set string) nfs.Squash { return v.squash[set] }
 
 // enc writes XDR, as a client sends it.
 type enc struct{ b []byte }
@@ -73,6 +77,10 @@ type client struct {
 	session []byte
 	seq     uint32
 	id      uint64
+	// uid is who calls are from, as AUTH_SYS says: 1000 unless set, or
+	// root with asRoot.
+	uid    uint32
+	asRoot bool
 }
 
 func connect(t *testing.T, srv *nfs.Server, name string) *client {
@@ -111,7 +119,11 @@ func (c *client) compound(ops []byte, n uint32) *dec {
 	call.u32(c.xid).u32(0).u32(2).u32(100003).u32(4).u32(1)
 	// AUTH_SYS as uid 1000, and no verifier.
 	var cred enc
-	cred.u32(0).str("test").u32(1000).u32(1000).u32(0)
+	uid := c.uid
+	if uid == 0 && !c.asRoot {
+		uid = 1000
+	}
+	cred.u32(0).str("test").u32(uid).u32(uid).u32(0)
 	call.u32(1).opaque(cred.b).u32(0).u32(0)
 	call.str("").u32(1).u32(n)
 	call.b = append(call.b, ops...)
@@ -184,6 +196,13 @@ func path(e *enc, parts ...string) {
 	}
 }
 
+// makeSet makes a set's directory as the server would: the environments'
+// user's, where the test is run as root to act as them.
+func makeSet(root, set string) {
+	os.MkdirAll(filepath.Join(root, set), 0o755)
+	os.Chown(filepath.Join(root, set), 1000, 1000)
+}
+
 func newServer(t *testing.T, v view) (*nfs.Server, string) {
 	t.Helper()
 	root := t.TempDir()
@@ -219,9 +238,9 @@ func (c *client) open(set, name string) []byte {
 
 func TestFilesThroughTheView(t *testing.T) {
 	srv, root := newServer(t, view{sets: []string{"mine"}, hidden: map[string]bool{"mine/secret": true}})
-	os.MkdirAll(filepath.Join(root, "theirs"), 0o755)
+	makeSet(root, "theirs")
 	os.WriteFile(filepath.Join(root, "theirs", "f"), []byte("x"), 0o644)
-	os.MkdirAll(filepath.Join(root, "mine"), 0o755)
+	makeSet(root, "mine")
 	os.WriteFile(filepath.Join(root, "mine", "secret"), []byte("x"), 0o644)
 	c := connect(t, srv, "a")
 
@@ -328,7 +347,7 @@ func TestLinksStayInTheRoot(t *testing.T) {
 	srv, root := newServer(t, view{sets: []string{"s"}})
 	outside := t.TempDir()
 	os.WriteFile(filepath.Join(outside, "f"), []byte("outside"), 0o644)
-	os.MkdirAll(filepath.Join(root, "s"), 0o755)
+	makeSet(root, "s")
 	os.Symlink(outside, filepath.Join(root, "s", "out"))
 	c := connect(t, srv, "a")
 	_, d := c.run(func(e *enc) uint32 { path(e, "s", "out", "f"); return 4 })
@@ -344,7 +363,7 @@ func TestLinksStayInTheRoot(t *testing.T) {
 // punches a hole in it, keeping its size.
 func TestAllocate(t *testing.T) {
 	srv, root := newServer(t, view{sets: []string{"s"}})
-	os.MkdirAll(filepath.Join(root, "s"), 0o755)
+	makeSet(root, "s")
 	c := connect(t, srv, "a")
 	sid := c.open("s", "f")
 	op := func(code uint32, offset, length uint64) uint32 {
@@ -369,5 +388,76 @@ func TestAllocate(t *testing.T) {
 	}
 	if st, _ := os.Stat(filepath.Join(root, "s", "f")); st.Size() != 8192 {
 		t.Errorf("a hole changed the size to %d", st.Size())
+	}
+}
+
+// Who a set's callers act as: one owner for everything, root as nobody,
+// or each as themselves. Only a server run as root acts as anyone else.
+func TestSquash(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("acting as another user needs root")
+	}
+	sets := []string{"all", "root", "none"}
+	srv, root := newServer(t, view{sets: append(sets, "fresh"), squash: map[string]nfs.Squash{
+		"all": nfs.SquashAll, "root": nfs.SquashRoot, "none": nfs.SquashNone, "fresh": nfs.SquashNone}})
+	for _, set := range sets {
+		os.MkdirAll(filepath.Join(root, set), 0o777)
+		os.Chmod(filepath.Join(root, set), 0o777)
+	}
+	owner := func(set, name string) uint32 {
+		var st syscall.Stat_t
+		if err := syscall.Lstat(filepath.Join(root, set, name), &st); err != nil {
+			t.Fatal(err)
+		}
+		return st.Uid
+	}
+	// chown asks a SETATTR of the owner, and gives its status.
+	chown := func(c *client, set, name string, uid uint32) uint32 {
+		_, d := c.run(func(e *enc) uint32 {
+			path(e, set, name)
+			var attrs enc
+			attrs.str(fmt.Sprint(uid))
+			e.u32(34).fixed(make([]byte, 16)).u32(2).u32(0).u32(1 << (36 - 32)).opaque(attrs.b)
+			return 4
+		})
+		for range 3 {
+			status(d)
+		}
+		return status(d)
+	}
+
+	rootCaller := connect(t, srv, "root")
+	rootCaller.asRoot = true
+	for set, want := range map[string]uint32{"all": 1000, "root": 65534, "none": 0} {
+		rootCaller.open(set, "byroot")
+		if uid := owner(set, "byroot"); uid != want {
+			t.Errorf("%s: a file root made is %d's, want %d's", set, uid, want)
+		}
+	}
+	if st := chown(rootCaller, "none", "byroot", 4321); st != 0 {
+		t.Errorf("root changing an owner with no squash: %d", st)
+	} else if uid := owner("none", "byroot"); uid != 4321 {
+		t.Errorf("the owner is %d after root changed it", uid)
+	}
+	if st := chown(rootCaller, "all", "byroot", 4321); st != 0 {
+		t.Errorf("changing an owner squashed to one: %d, want it taken", st)
+	} else if uid := owner("all", "byroot"); uid != 1000 {
+		t.Errorf("squashed to one owner, the owner changed to %d", uid)
+	}
+
+	// A set with no directory yet has one made, the environments' user's,
+	// for a caller to make files in.
+	user := connect(t, srv, "user")
+	user.open("fresh", "f")
+	if uid := owner("fresh", "f"); uid != 1000 {
+		t.Errorf("a file made in a new set is %d's", uid)
+	}
+	if uid := owner("fresh", "."); uid != 1000 {
+		t.Errorf("a new set's directory is %d's", uid)
+	}
+
+	// A user is refused another's file, with no squash.
+	if st := chown(user, "none", "byroot", 1000); st != 1 {
+		t.Errorf("a user taking another's file: %d, want PERM", st)
 	}
 }

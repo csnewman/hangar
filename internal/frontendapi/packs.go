@@ -11,7 +11,7 @@ import (
 func pack(k packs.Pack) Pack {
 	out := Pack{ID: k.ID, Name: k.Name, Description: k.Description, OwnerID: optional(k.OwnerID),
 		Owner: optional(k.Owner), TeamID: optional(k.TeamID), Team: optional(k.Team), Builtin: k.Builtin,
-		Attach: PackAttach(k.Attach), Paths: []PackPath{}, CanChange: k.CanChange, CanDelete: k.CanDelete,
+		Attach: PackAttach(k.Attach), Squash: PackSquash(k.Squash), Paths: []PackPath{}, CanChange: k.CanChange, CanDelete: k.CanDelete,
 		CreatedAt: k.CreatedAt, UpdatedAt: k.UpdatedAt}
 	for _, p := range k.Paths {
 		out.Paths = append(out.Paths, PackPath{Path: p.Path, Sensitive: p.Sensitive})
@@ -23,6 +23,9 @@ func packInput(in PackInput) packs.PackInput {
 	out := packs.PackInput{Name: in.Name, Description: deref(in.Description), TeamID: deref(in.TeamID)}
 	if in.Attach != nil {
 		out.Attach = packs.Attach(*in.Attach)
+	}
+	if in.Squash != nil {
+		out.Squash = packs.Squash(*in.Squash)
 	}
 	for _, p := range in.Paths {
 		out.Paths = append(out.Paths, packs.Path{Path: p.Path, Sensitive: p.Sensitive})

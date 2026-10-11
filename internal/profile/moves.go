@@ -9,6 +9,8 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+
+	"github.com/csnewman/hangar/internal/fsuser"
 )
 
 // GuestFiles is how the guest reaches the shared files.
@@ -123,7 +125,7 @@ func (s *guestSession) sortPaths(old, routes []Route) ([]down, []conflict) {
 			theirs, err := os.ReadFile(shared)
 			switch {
 			case errors.Is(err, fs.ErrNotExist):
-				if err := writeFile(shared, local, info.Mode().Perm(), -1, -1); err != nil {
+				if err := s.writeShared(shared, local, info.Mode().Perm()); err != nil {
 					s.g.log.Debug("profile: copying a file up", "path", p, "err", err)
 				}
 			case err != nil:
@@ -177,6 +179,13 @@ func (s *guestSession) copyDown(downs []down) {
 			s.g.log.Warn("profile: copying a file down", "path", d.path, "err", err)
 		}
 	}
+}
+
+// writeShared writes a file in the shared files as the environment's user,
+// who owns it there as they would have had they written it themselves.
+func (s *guestSession) writeShared(name string, data []byte, mode fs.FileMode) error {
+	return fsuser.Do(fsuser.User{UID: uint32(s.uid), GID: uint32(s.gid), Groups: []uint32{uint32(s.gid)}},
+		func() error { return writeFile(name, data, mode, -1, -1) })
 }
 
 // writeFile writes data at name, beside it and renamed over it, making
@@ -272,7 +281,7 @@ func (s *guestSession) resolve(m Message) error {
 		if err == nil {
 			info, _ := os.Stat(kept)
 			rel := strings.TrimPrefix(m.Path, "/")
-			err = writeFile(filepath.Join(s.g.files.Shared, m.Copy, rel), data, info.Mode().Perm(), -1, -1)
+			err = s.writeShared(filepath.Join(s.g.files.Shared, m.Copy, rel), data, info.Mode().Perm())
 		}
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err

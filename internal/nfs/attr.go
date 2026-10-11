@@ -162,9 +162,9 @@ func (s *Server) encodeAttrs(req bitmap, n *node) (bitmap, []byte) {
 		case attrNumLinks:
 			w.uint32(uint32(st.Nlink))
 		case attrOwner:
-			w.string(strconv.FormatUint(uint64(s.uid), 10))
+			w.string(strconv.FormatUint(uint64(st.Uid), 10))
 		case attrOwnerGroup:
-			w.string(strconv.FormatUint(uint64(s.gid), 10))
+			w.string(strconv.FormatUint(uint64(st.Gid), 10))
 		case attrRawDev:
 			w.uint32(unix.Major(st.Rdev))
 			w.uint32(unix.Minor(st.Rdev))
@@ -310,8 +310,22 @@ func (s *Server) apply(p string, a setAttrs) (bitmap, uint32) {
 		}
 		set.set(attrSize)
 	}
-	// Every file is the environment's user's (Config.UID): an owner given
-	// is taken as given and changes nothing.
+	// A set squashing every caller takes an owner as given and changes
+	// nothing; another changes it as the caller may.
+	if a.uid != nil || a.gid != nil {
+		if of, _ := split(p); s.squash(of) != SquashAll {
+			uid, gid := -1, -1
+			if a.uid != nil {
+				uid = int(*a.uid)
+			}
+			if a.gid != nil {
+				gid = int(*a.gid)
+			}
+			if err := unix.Fchownat(fd, name, uid, gid, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				return set, errno(err)
+			}
+		}
+	}
 	if a.uid != nil {
 		set.set(attrOwner)
 	}

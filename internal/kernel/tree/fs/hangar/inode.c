@@ -220,9 +220,15 @@ static int hfs_create(struct mnt_idmap *idmap, struct inode *dir,
 	if (IS_ERR(lower))
 		return PTR_ERR(lower);
 	lower_dir = d_inode(lower->d_parent);
-	/* Openable by its owner, until hfs_open sets what was asked for. */
-	if (shared)
+	/*
+	 * Openable by its owner, until hfs_open sets what was asked for: the
+	 * mode less the umask, which NFS strips from the mode it makes a file
+	 * with, not from one set after.
+	 */
+	if (shared) {
+		want &= ~current_umask();
 		mode |= S_IRUSR | S_IWUSR;
+	}
 	err = vfs_create(&nop_mnt_idmap, lower, mode, NULL);
 	if (!err) {
 		hfs_set_lower(dentry, lower);

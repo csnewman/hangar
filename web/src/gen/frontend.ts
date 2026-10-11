@@ -1231,6 +1231,11 @@ export interface components {
          * @enum {string}
          */
         PackAttach: "listed" | "owner" | "team" | "everyone";
+        /**
+         * @description Who environments' callers act as on the pack's files, as an NFS export's options say: every one as the environments' user, root among them, so one owner has everything (all_squash); root as nobody (root_squash); or each as themselves (no_root_squash).
+         * @enum {string}
+         */
+        PackSquash: "all_squash" | "root_squash" | "no_root_squash";
         Pack: {
             id: string;
             name: string;
@@ -1244,6 +1249,7 @@ export interface components {
             /** @description The server's, which administrators change. */
             builtin: boolean;
             attach: components["schemas"]["PackAttach"];
+            squash: components["schemas"]["PackSquash"];
             paths: components["schemas"]["PackPath"][];
             /** @description The copy the user chose to use by default, if they chose one; else their own. */
             default_copy_id?: string;
@@ -1260,6 +1266,7 @@ export interface components {
             /** @description Only when making one; the user's own without. */
             team_id?: string;
             attach?: components["schemas"]["PackAttach"];
+            squash?: components["schemas"]["PackSquash"];
             paths: components["schemas"]["PackPath"][];
         };
         Copy: {

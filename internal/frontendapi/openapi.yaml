@@ -1766,9 +1766,18 @@ components:
         administrator's to set).
       enum: [listed, owner, team, everyone]
 
+    PackSquash:
+      type: string
+      description: >-
+        Who environments' callers act as on the pack's files, as an NFS
+        export's options say: every one as the environments' user, root
+        among them, so one owner has everything (all_squash); root as
+        nobody (root_squash); or each as themselves (no_root_squash).
+      enum: [all_squash, root_squash, no_root_squash]
+
     Pack:
       type: object
-      required: [id, name, description, builtin, attach, paths, can_change, can_delete, created_at, updated_at]
+      required: [id, name, description, builtin, attach, squash, paths, can_change, can_delete, created_at, updated_at]
       properties:
         id: { type: string }
         name: { type: string }
@@ -1781,6 +1790,7 @@ components:
           type: boolean
           description: The server's, which administrators change.
         attach: { $ref: "#/components/schemas/PackAttach" }
+        squash: { $ref: "#/components/schemas/PackSquash" }
         paths:
           type: array
           items: { $ref: "#/components/schemas/PackPath" }
@@ -1803,6 +1813,7 @@ components:
           type: string
           description: Only when making one; the user's own without.
         attach: { $ref: "#/components/schemas/PackAttach" }
+        squash: { $ref: "#/components/schemas/PackSquash" }
         paths:
           type: array
           items: { $ref: "#/components/schemas/PackPath" }

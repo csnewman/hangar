@@ -13,6 +13,8 @@ import (
 	"sync"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/csnewman/hangar/internal/fsuser"
 )
 
 // A path here is relative to the server's root: "" is the root, which lists
@@ -100,13 +102,25 @@ func (s *Server) openFile(p string, flags int, mode uint32) (int, error) {
 }
 
 // ensureSet makes a set's directory if it is not there yet: a set is the
-// environment's from when it is given, whether or not it has files.
+// environment's from when it is given, whether or not it has files. The
+// server makes it, as no caller may make one in the root, and gives it to
+// the environments' user.
 func (s *Server) ensureSet(set string) error {
-	err := unix.Mkdirat(s.rootFD, set, 0o755)
-	if errors.Is(err, unix.EEXIST) {
+	return fsuser.Do(fsuser.Root, func() error {
+		err := unix.Mkdirat(s.rootFD, set, 0o755)
+		if errors.Is(err, unix.EEXIST) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		// A server not run as root cannot, and leaves it its own.
+		if err := unix.Fchownat(s.rootFD, set, int(s.uid), int(s.gid), unix.AT_SYMLINK_NOFOLLOW); err != nil &&
+			!errors.Is(err, unix.EPERM) {
+			return err
+		}
 		return nil
-	}
-	return err
+	})
 }
 
 // errno is the NFS status for a system call's error.

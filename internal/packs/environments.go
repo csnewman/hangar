@@ -316,28 +316,40 @@ func (s *Store) EnvironmentFiles(ctx context.Context, worker, env string) (api.E
 			return err
 		}
 		packOf := map[string][]Path{}
+		squash := func(id string, sq Squash) {
+			if sq != "" && sq != api.SquashAll {
+				if out.Squash == nil {
+					out.Squash = map[string]api.Squash{}
+				}
+				out.Squash[id] = sq
+			}
+		}
 		for _, a := range as {
 			if !slices.Contains(out.Sets, a.Copy.ID) {
 				out.Sets = append(out.Sets, a.Copy.ID)
 				packOf[a.Copy.ID] = a.Pack.Paths
+				squash(a.Copy.ID, a.Pack.Squash)
 			}
 		}
-		rows, err := tx.Query(ctx, `SELECT c.id::text, coalesce(array_agg(pp.path) FILTER (WHERE pp.sensitive), '{}')
-			FROM environment_routed r JOIN copies c ON c.id = r.copy_id
+		rows, err := tx.Query(ctx, `SELECT c.id::text, k.squash,
+				coalesce(array_agg(pp.path) FILTER (WHERE pp.sensitive), '{}')
+			FROM environment_routed r JOIN copies c ON c.id = r.copy_id JOIN packs k ON k.id = c.pack_id
 			LEFT JOIN pack_paths pp ON pp.pack_id = c.pack_id
-			WHERE r.environment_id = $1 GROUP BY c.id`, env)
+			WHERE r.environment_id = $1 GROUP BY c.id, k.squash`, env)
 		if err != nil {
 			return err
 		}
 		for rows.Next() {
 			var id string
+			var sq Squash
 			var sensitive []string
-			if err := rows.Scan(&id, &sensitive); err != nil {
+			if err := rows.Scan(&id, &sq, &sensitive); err != nil {
 				rows.Close()
 				return err
 			}
 			if !slices.Contains(out.Sets, id) {
 				out.Sets = append(out.Sets, id)
+				squash(id, sq)
 				for _, p := range sensitive {
 					packOf[id] = append(packOf[id], Path{Path: p, Sensitive: true})
 				}

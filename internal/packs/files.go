@@ -184,7 +184,7 @@ func (s *Store) Put(ctx context.Context, p users.Principal, copy, key string, da
 			mode = 0o644
 		}
 	}
-	if err := s.root.MkdirAll(path.Dir(target), 0o755); err != nil {
+	if err := s.mkdirAll(path.Dir(target)); err != nil {
 		return File{}, err
 	}
 	if err := s.replace(target, data, os.FileMode(mode)); err != nil {
@@ -264,12 +264,41 @@ func (s *Store) replace(name string, data []byte, mode os.FileMode) error {
 		err = s.root.Chmod(tmp, mode)
 	}
 	if err == nil {
+		err = s.own(tmp)
+	}
+	if err == nil {
 		err = s.root.Rename(tmp, name)
 	}
 	if err != nil {
 		s.root.Remove(tmp)
 	}
 	return err
+}
+
+// own gives a file or directory the files root holds to the environments'
+// user, as every file environments make there is when they are squashed
+// to one owner. A control plane not run as root cannot, and leaves it.
+func (s *Store) own(name string) error {
+	err := s.root.Lchown(name, UID, GID)
+	if errors.Is(err, fs.ErrPermission) {
+		return nil
+	}
+	return err
+}
+
+// mkdirAll makes a directory and those it is in, each the environments'
+// user's.
+func (s *Store) mkdirAll(dir string) error {
+	if _, err := s.root.Lstat(dir); err == nil || dir == "." || dir == "" {
+		return nil
+	}
+	if err := s.mkdirAll(path.Dir(dir)); err != nil {
+		return err
+	}
+	if err := s.root.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+		return err
+	}
+	return s.own(dir)
 }
 
 func randomName() string {
