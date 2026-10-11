@@ -339,6 +339,8 @@ export class CodeClient {
   private retry: ReturnType<typeof setTimeout> | undefined
   private backoff = 500
   private closed = false
+  // ready is settled while the connection is live, and pending while it
+  // is being made or made again.
   private ready: Promise<void>
   private markReady!: () => void
   state: ConnectionState = 'connecting'
@@ -406,6 +408,8 @@ export class CodeClient {
       // Language servers end with the connection.
       this.lspHandlers.clear()
       if (this.closed) return
+      // Requests wait for the connection to be back, not fail at once.
+      if (this.state === 'live') this.ready = new Promise((r) => (this.markReady = r))
       this.setState('reconnecting', e.reason)
       this.retry = setTimeout(() => this.connect(), this.backoff)
       this.backoff = Math.min(this.backoff * 2, 8000)

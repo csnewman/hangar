@@ -445,10 +445,15 @@ export class Languages {
     let res
     try {
       res = await this.code.startLanguageServer(language)
-    } catch (e) {
-      // The connection dropped; the next attach starts again.
+    } catch {
+      // The connection dropped, as it does while the environment restarts:
+      // once it is back, editors attach again and the server is started.
       this.servers.delete(language)
-      return { state: 'missing', language, why: e instanceof Error ? e.message : String(e), install: [] }
+      this.code.connected().then(
+        () => this.changed(),
+        () => {},
+      )
+      return { state: 'starting', language }
     }
     if ('missing' in res) return { state: 'missing', language, why: res.missing, install: res.install ?? [] }
     const n = res.server
