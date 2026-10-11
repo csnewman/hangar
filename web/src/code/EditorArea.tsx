@@ -30,6 +30,7 @@ export function EditorArea({
   client,
   tabs,
   active,
+  opened,
   user,
   status,
   canReopen,
@@ -44,6 +45,8 @@ export function EditorArea({
   client: CodeClient
   tabs: Tab[]
   active: string | null
+  // Counts the tabs opened, the active one again included.
+  opened: number
   jump: (Jump & { n: number }) | null
   user: { name: string; color: string }
   status: GitStatus | null
@@ -60,7 +63,8 @@ export function EditorArea({
   const bar = useRef<HTMLDivElement>(null)
 
   // The active tab is scrolled into the bar's view whenever a tab is
-  // opened or chosen, by the bar alone, so nothing around it moves.
+  // opened, chosen or opened again, by the bar alone, so nothing around it
+  // moves.
   useEffect(() => {
     const b = bar.current
     const el = b?.querySelector<HTMLElement>('[aria-selected=true]')
@@ -69,7 +73,7 @@ export function EditorArea({
     const r = el.getBoundingClientRect()
     if (r.left < box.left) b.scrollLeft -= box.left - r.left
     else if (r.right > box.left + b.clientWidth) b.scrollLeft += r.right - box.left - b.clientWidth
-  }, [active, tabs.length])
+  }, [active, tabs.length, opened])
 
   // tabMenu is IntelliJ's and VS Code's tab menu, less what an editor
   // that saves as it goes has no use for.

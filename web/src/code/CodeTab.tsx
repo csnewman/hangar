@@ -178,11 +178,16 @@ function CodeView({
       // Remembering tabs is a convenience.
     }
   }, [store, storeKey])
-  const open = (tab: Tab) =>
+  // opened counts the tabs opened, so the tab bar shows each one, the
+  // active one opened again included.
+  const [opened, setOpened] = useState(0)
+  const open = (tab: Tab) => {
     setStore((s) => ({
       tabs: s.tabs.some((t) => tabKey(t) === tabKey(tab)) ? s.tabs : [...s.tabs, tab],
       active: tabKey(tab),
     }))
+    setOpened((n) => n + 1)
+  }
   // Closed tabs, most recent last, for reopening.
   const closed = useRef<Tab[]>([])
   const [canReopen, setCanReopen] = useState(false)
@@ -491,6 +496,7 @@ function CodeView({
                     client={client}
                     tabs={store.tabs}
                     active={store.active}
+                    opened={opened}
                     jump={jump}
                     user={user}
                     status={status}
