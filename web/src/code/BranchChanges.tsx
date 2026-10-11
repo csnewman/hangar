@@ -1,9 +1,10 @@
-import { ChevronDown, ChevronRight, GitCommitHorizontal } from 'lucide-react'
+import { ChevronDown, ChevronRight, GitBranch, GitCommitHorizontal } from 'lucide-react'
 import { useCallback, useEffect, useState, type MouseEvent } from 'react'
 
 import { formatAgo } from '../components/format'
-import type { BranchChanges as Changes, CodeClient, GitStatus } from './client'
-import { copyText, useContextMenu, type MenuItem } from './ContextMenu'
+import { BranchPicker, type PickerAction } from './BranchPicker'
+import type { Branches, BranchChanges as Changes, CodeClient, GitStatus } from './client'
+import { copyText, useContextMenu } from './ContextMenu'
 
 // DiffAgainst is what a diff of a branch's change compares with: where the
 // branch left its base, and the file's name there.
@@ -42,30 +43,25 @@ export function BranchChanges({
   // Again whenever what git reports changes: the status is reloaded then.
   useEffect(load, [load, status])
 
+  const [picker, setPicker] = useState<{ anchor: DOMRect; branches: Branches } | null>(null)
   const pickBase = async (e: MouseEvent) => {
-    const { clientX: x, clientY: y } = e
-    let b
+    const anchor = e.currentTarget.getBoundingClientRect()
     try {
-      b = await client.branches()
+      const b = await client.branches()
+      setPicker({ anchor, branches: { ...b, local: b.local.filter((br) => br.name !== b.current) } })
     } catch {
-      return
+      // Without the branches there is nothing to choose from.
     }
-    const items: MenuItem[] = [
-      { label: 'The main branch', checked: base === undefined, onSelect: () => setBase(undefined) },
-      'separator',
-      { heading: 'Local' },
-      ...b.local
-        .filter((br) => br.name !== b.current)
-        .map((br) => ({ label: br.name, checked: base === br.name, onSelect: () => setBase(br.name) })),
-    ]
-    if (b.remote.length) {
-      items.push(
-        { heading: 'Remote' },
-        ...b.remote.map((r) => ({ label: r, checked: base === r, onSelect: () => setBase(r) })),
-      )
-    }
-    menu.openAt(x, y, items)
   }
+  const mainAction: PickerAction = (q) =>
+    !q || 'the main branch'.includes(q.toLowerCase())
+      ? {
+          label: 'The main branch',
+          icon: <GitBranch size={13} className="code-icon-file" />,
+          checked: base === undefined,
+          run: () => setBase(undefined),
+        }
+      : null
 
   if (status && !status.repo) return <div className="code-note">This folder is not a git repository.</div>
   const label = data ? `${data.base} at ${data.mergeBase.slice(0, 7)}` : ''
@@ -144,6 +140,16 @@ export function BranchChanges({
             {data.changes.length === 0 && <div className="code-note">Nothing differs from {data.base}.</div>}
           </div>
         </>
+      )}
+      {picker && (
+        <BranchPicker
+          anchor={picker.anchor}
+          branches={picker.branches}
+          checked={base}
+          actions={[mainAction]}
+          onPick={(name) => setBase(name)}
+          onClose={() => setPicker(null)}
+        />
       )}
       {menu.menu}
     </div>

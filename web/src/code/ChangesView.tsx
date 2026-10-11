@@ -2,7 +2,8 @@ import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, CloudDownload, GitBranch
 import { useState, type MouseEvent } from 'react'
 
 import { BranchChanges, type DiffAgainst } from './BranchChanges'
-import type { Change, CodeClient, GitStatus } from './client'
+import { BranchPicker, type PickerAction } from './BranchPicker'
+import type { Branches, Change, CodeClient, GitStatus } from './client'
 import { copyText, useContextMenu, type MenuItem } from './ContextMenu'
 import { ToolWindow } from './ToolWindow'
 
@@ -86,33 +87,20 @@ export function ChangesView({
   }
 
   // branchMenu lists the branches to switch to, loaded when it opens.
+  const [picker, setPicker] = useState<{ anchor: DOMRect; branches: Branches } | null>(null)
   const branchMenu = async (e: MouseEvent) => {
-    const { clientX: x, clientY: y } = e
-    let b
+    const anchor = e.currentTarget.getBoundingClientRect()
     try {
-      b = await client.branches()
+      setPicker({ anchor, branches: await client.branches() })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
-      return
     }
-    const items: MenuItem[] = [
-      { label: 'New Branch…', onSelect: () => setNewBranch('') },
-      'separator',
-      { heading: 'Local' },
-      ...b.local.map((br) => ({
-        label: br.name + (br.ahead ? ` ↑${br.ahead}` : '') + (br.behind ? ` ↓${br.behind}` : ''),
-        checked: br.name === b.current,
-        onSelect: () => br.name !== b.current && act(() => client.checkout(br.name), `Checking out ${br.name}…`),
-      })),
-    ]
-    if (b.remote.length) {
-      items.push(
-        { heading: 'Remote' },
-        ...b.remote.map((r) => ({ label: r, onSelect: () => act(() => client.checkout(r), `Checking out ${r}…`) })),
-      )
-    }
-    menu.openAt(x, y, items)
   }
+  // New Branch, named as typed when no branch has that name.
+  const newBranchAction: PickerAction = (q) =>
+    q && !picker?.branches.local.some((b) => b.name === q)
+      ? { label: `New Branch “${q}”`, run: () => act(() => client.createBranch(q), `Creating ${q}…`) }
+      : { label: 'New Branch…', run: () => setNewBranch('') }
 
   const createBranch = () => {
     const name = newBranch?.trim()
@@ -265,6 +253,18 @@ export function ChangesView({
             Create
           </button>
         </form>
+      )}
+      {picker && (
+        <BranchPicker
+          anchor={picker.anchor}
+          branches={picker.branches}
+          checked={picker.branches.current}
+          actions={[newBranchAction]}
+          onPick={(name) =>
+            name !== picker.branches.current && act(() => client.checkout(name), `Checking out ${name}…`)
+          }
+          onClose={() => setPicker(null)}
+        />
       )}
       {status?.repo && (
         <div className="code-changes-mode" role="tablist">

@@ -409,8 +409,11 @@ export class Git {
 
 	async branches(): Promise<Branches> {
 		const local: Branch[] = []
+		// Most recently committed to first: with many branches, the ones in
+		// use come first.
 		const out = await run(this.root, [
 			'for-each-ref',
+			'--sort=-committerdate',
 			'--format=%(refname:short)%09%(upstream:short)%09%(upstream:track,nobracket)%09%(HEAD)',
 			'refs/heads',
 		])
@@ -427,7 +430,7 @@ export class Git {
 			if (head === '*') current = name
 			local.push(b)
 		}
-		const remote = (await run(this.root, ['for-each-ref', '--format=%(refname:short)', 'refs/remotes']))
+		const remote = (await run(this.root, ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/remotes']))
 			.split('\n')
 			.filter((r) => r && !r.endsWith('/HEAD') && r.includes('/'))
 		return { current, local, remote }
