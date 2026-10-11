@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -64,7 +65,9 @@ type User struct {
 	Admin       bool
 	Disabled    bool
 	HasPassword bool
-	CreatedAt   time.Time
+	// Theme is the UI's colours the user chose: system, light or dark.
+	Theme     string
+	CreatedAt time.Time
 	// Environments is how many environments the user owns.
 	Environments int
 }
@@ -76,13 +79,13 @@ type Manager struct {
 func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
 const columns = `u.id, u.username, u.display_name, u.is_admin, u.disabled_at IS NOT NULL,
-	u.password_hash IS NOT NULL, u.created_at,
+	u.password_hash IS NOT NULL, u.theme, u.created_at,
 	(SELECT count(*) FROM environments e WHERE e.owner_id = u.id)`
 
 func scan(row pgx.Row) (User, error) {
 	var u User
-	err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Admin, &u.Disabled, &u.HasPassword, &u.CreatedAt,
-		&u.Environments)
+	err := row.Scan(&u.ID, &u.Username, &u.DisplayName, &u.Admin, &u.Disabled, &u.HasPassword, &u.Theme,
+		&u.CreatedAt, &u.Environments)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return u, ErrNotFound
 	}
@@ -227,6 +230,30 @@ func (m *Manager) Get(ctx context.Context, id string) (User, error) {
 		return err
 	})
 	return u, err
+}
+
+// Themes are the choices of the UI's colours.
+var Themes = []string{"system", "light", "dark"}
+
+// SetTheme records a user's choice of the UI's colours. It is theirs alone,
+// so it is not audited.
+func (m *Manager) SetTheme(ctx context.Context, id, theme string) error {
+	if !slices.Contains(Themes, theme) {
+		return fmt.Errorf("%w: theme must be system, light or dark", ErrInvalid)
+	}
+	if !db.ValidUUID(id) {
+		return ErrNotFound
+	}
+	return m.db.Transact(ctx, func(tx db.Tx) error {
+		tag, err := tx.Exec(ctx, `UPDATE users SET theme = $2 WHERE id = $1`, id, theme)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return ErrNotFound
+		}
+		return nil
+	})
 }
 
 // Update is a change to a user. A nil field is left as it is.

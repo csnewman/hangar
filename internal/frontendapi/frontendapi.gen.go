@@ -480,6 +480,27 @@ func (e TemplateSetting) Valid() bool {
 	}
 }
 
+// Defines values for Theme.
+const (
+	ThemeDark   Theme = "dark"
+	ThemeLight  Theme = "light"
+	ThemeSystem Theme = "system"
+)
+
+// Valid indicates whether the value is a known member of the Theme enum.
+func (e Theme) Valid() bool {
+	switch e {
+	case ThemeDark:
+		return true
+	case ThemeLight:
+		return true
+	case ThemeSystem:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for Visibility.
 const (
 	VisibilityPrivate Visibility = "private"
@@ -1009,8 +1030,11 @@ type Me struct {
 	Registry *string `json:"registry,omitempty"`
 
 	// SSH Where the SSH gateway is reached: ssh <environment>@<host> -p <port>, with a sign-in key. Absent when the server runs none.
-	SSH      *SSHGateway `json:"ssh,omitempty"`
-	Username string      `json:"username"`
+	SSH *SSHGateway `json:"ssh,omitempty"`
+
+	// Theme The UI's colours: the system's (light or dark as the device is set), or always light, or always dark.
+	Theme    Theme  `json:"theme"`
+	Username string `json:"username"`
 }
 
 // NewAccessToken defines model for NewAccessToken.
@@ -1131,6 +1155,12 @@ type Person struct {
 
 // Phase What the environment is doing, as its worker last reported. "pending" means no worker has reported on it yet.
 type Phase string
+
+// Preferences defines model for Preferences.
+type Preferences struct {
+	// Theme The UI's colours: the system's (light or dark as the device is set), or always light, or always dark.
+	Theme Theme `json:"theme"`
+}
 
 // Process defines model for Process.
 type Process struct {
@@ -1407,6 +1437,9 @@ type TerminalSession struct {
 	Title string `json:"title"`
 }
 
+// Theme The UI's colours: the system's (light or dark as the device is set), or always light, or always dark.
+type Theme string
+
 // UpdateUser Only the fields present are changed.
 type UpdateUser struct {
 	Admin       *bool   `json:"admin,omitempty"`
@@ -1596,6 +1629,9 @@ type SetImageRepositoryCollaboratorsJSONRequestBody = Collaborators
 // ChangePasswordJSONRequestBody defines body for ChangePassword for application/json ContentType.
 type ChangePasswordJSONRequestBody = ChangePassword
 
+// SetPreferencesJSONRequestBody defines body for SetPreferences for application/json ContentType.
+type SetPreferencesJSONRequestBody = Preferences
+
 // AddSSHKeyJSONRequestBody defines body for AddSSHKey for application/json ContentType.
 type AddSSHKeyJSONRequestBody = AddSSHKey
 
@@ -1781,6 +1817,9 @@ type ServerInterface interface {
 
 	// (POST /api/frontend/me/password)
 	ChangePassword(w http.ResponseWriter, r *http.Request)
+
+	// (PUT /api/frontend/me/preferences)
+	SetPreferences(w http.ResponseWriter, r *http.Request)
 
 	// (GET /api/frontend/me/profile)
 	GetProfile(w http.ResponseWriter, r *http.Request)
@@ -3149,6 +3188,20 @@ func (siw *ServerInterfaceWrapper) ChangePassword(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// SetPreferences operation middleware
+func (siw *ServerInterfaceWrapper) SetPreferences(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetPreferences(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetProfile operation middleware
 func (siw *ServerInterfaceWrapper) GetProfile(w http.ResponseWriter, r *http.Request) {
 
@@ -4192,6 +4245,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/auth/login", wrapper.Login)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/auth/logout", wrapper.Logout)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me", wrapper.GetMe)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/me/preferences", wrapper.SetPreferences)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/password", wrapper.ChangePassword)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/tokens", wrapper.ListTokens)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/tokens", wrapper.CreateToken)
@@ -7093,6 +7147,50 @@ func (response ChangePassword401JSONResponse) VisitChangePasswordResponse(w http
 	return err
 }
 
+type SetPreferencesRequestObject struct {
+	Body *SetPreferencesJSONRequestBody
+}
+
+type SetPreferencesResponseObject interface {
+	VisitSetPreferencesResponse(w http.ResponseWriter) error
+}
+
+type SetPreferences204Response struct {
+}
+
+func (response SetPreferences204Response) VisitSetPreferencesResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type SetPreferences400JSONResponse struct{ InvalidJSONResponse }
+
+func (response SetPreferences400JSONResponse) VisitSetPreferencesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetPreferences401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SetPreferences401JSONResponse) VisitSetPreferencesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetProfileRequestObject struct {
 }
 
@@ -9701,6 +9799,9 @@ type StrictServerInterface interface {
 	// (POST /api/frontend/me/password)
 	ChangePassword(ctx context.Context, request ChangePasswordRequestObject) (ChangePasswordResponseObject, error)
 
+	// (PUT /api/frontend/me/preferences)
+	SetPreferences(ctx context.Context, request SetPreferencesRequestObject) (SetPreferencesResponseObject, error)
+
 	// (GET /api/frontend/me/profile)
 	GetProfile(ctx context.Context, request GetProfileRequestObject) (GetProfileResponseObject, error)
 
@@ -11106,6 +11207,37 @@ func (sh *strictHandler) ChangePassword(w http.ResponseWriter, r *http.Request) 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ChangePasswordResponseObject); ok {
 		if err := validResponse.VisitChangePasswordResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetPreferences operation middleware
+func (sh *strictHandler) SetPreferences(w http.ResponseWriter, r *http.Request) {
+	var request SetPreferencesRequestObject
+
+	var body SetPreferencesJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetPreferences(ctx, request.(SetPreferencesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetPreferences")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetPreferencesResponseObject); ok {
+		if err := validResponse.VisitSetPreferencesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

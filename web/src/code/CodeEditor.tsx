@@ -44,6 +44,7 @@ import * as Y from 'yjs'
 import type { CodeClient, SharedFile } from './client'
 import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { baseText, gitGutter, hunkAt, rollback, setBase, staged, type Hunk } from './gitGutter'
+import { isDark, onDarkChange } from '../theme'
 import { blameField, blameGutter, blameMarkers, setBlame } from './blame'
 import { languageId, Languages, LanguagesContext, type ServerState } from './lsp'
 import { ServerChip } from './LspPanel'
@@ -82,18 +83,15 @@ export const codeHighlight: Extension = syntaxHighlighting(
   ]),
 )
 
-// followScheme tells CodeMirror whether the page is dark, as the system
-// says and as it changes, so its own parts -- tooltips, the completion
-// list, panels -- take their dark looks with it.
+// followScheme tells CodeMirror whether the page is dark, as the person's
+// theme has it and as it changes, so its own parts -- tooltips, the
+// completion list, panels -- take their dark looks with it.
 const scheme = new Compartment()
-const darkQuery = () => (typeof window !== 'undefined' ? window.matchMedia?.('(prefers-color-scheme: dark)') : undefined)
 export const followScheme: Extension = [
-  scheme.of(EditorView.darkTheme.of(darkQuery()?.matches ?? false)),
+  scheme.of(EditorView.darkTheme.of(isDark())),
   ViewPlugin.define((view) => {
-    const q = darkQuery()
-    const on = () => view.dispatch({ effects: scheme.reconfigure(EditorView.darkTheme.of(q?.matches ?? false)) })
-    q?.addEventListener('change', on)
-    return { destroy: () => q?.removeEventListener('change', on) }
+    const off = onDarkChange((dark) => view.dispatch({ effects: scheme.reconfigure(EditorView.darkTheme.of(dark)) }))
+    return { destroy: off }
   }),
 ]
 

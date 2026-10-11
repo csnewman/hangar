@@ -285,5 +285,25 @@ func (h *handler) ChangePassword(ctx context.Context, req ChangePasswordRequestO
 }
 
 func me(u users.User) Me {
-	return Me{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, Admin: u.Admin, HasPassword: u.HasPassword}
+	return Me{
+		ID:          u.ID,
+		Username:    u.Username,
+		DisplayName: u.DisplayName,
+		Admin:       u.Admin,
+		HasPassword: u.HasPassword,
+		Theme:       Theme(u.Theme),
+	}
+}
+
+func (h *handler) SetPreferences(ctx context.Context, req SetPreferencesRequestObject) (SetPreferencesResponseObject, error) {
+	err := h.users.SetTheme(ctx, principal(ctx).UserID, string(req.Body.Theme))
+	switch {
+	case errors.Is(err, users.ErrInvalid):
+		return SetPreferences400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
+	case errors.Is(err, users.ErrNotFound):
+		return nil, errUnauthorized
+	case err != nil:
+		return nil, err
+	}
+	return SetPreferences204Response{}, nil
 }

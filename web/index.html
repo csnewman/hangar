@@ -5,6 +5,18 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hangar</title>
+    <script>
+      // The theme, set before anything is drawn so a page never flashes
+      // the other; src/theme.ts keeps it after.
+      ;(function () {
+        var t
+        try {
+          t = localStorage.getItem('hangar.theme')
+        } catch (e) {}
+        var dark = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
+        document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+      })()
+    </script>
   </head>
   <body>
     <div id="root"></div>

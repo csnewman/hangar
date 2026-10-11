@@ -95,6 +95,8 @@ export const api = {
   login: (username: string, password: string) =>
     unwrap(client.POST('/api/frontend/auth/login', { body: { username, password } })),
   logout: () => unwrap(client.POST('/api/frontend/auth/logout')),
+  setPreferences: (preferences: Schemas['Preferences']) =>
+    unwrap(client.PUT('/api/frontend/me/preferences', { body: preferences })),
   changePassword: (current_password: string, new_password: string) =>
     unwrap(client.POST('/api/frontend/me/password', { body: { current_password, new_password } })),
 

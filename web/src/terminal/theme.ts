@@ -52,6 +52,4 @@ export const lightTheme: ITheme = {
   brightWhite: '#8c959f',
 }
 
-export function prefersDark(): boolean {
-  return window.matchMedia('(prefers-color-scheme: dark)').matches
-}
+export { isDark as prefersDark } from '../theme'

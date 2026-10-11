@@ -1,15 +1,21 @@
 import { useQuery } from '@tanstack/react-query'
-import type { ReactNode } from 'react'
+import { useEffect, type ReactNode } from 'react'
 import { Navigate, Outlet, useLocation } from 'react-router'
 
 import { api, ApiError } from './api'
 import { MeContext, meKey, useMe } from './session'
+import { setTheme, themeChoice } from './theme'
 
 // RequireAuth renders its routes for a signed-in user and sends anyone else
 // to the login page, remembering where they were going.
 export function RequireAuth() {
   const location = useLocation()
   const me = useQuery({ queryKey: meKey, queryFn: api.me, retry: false, refetchInterval: false, staleTime: 60_000 })
+  // The person's theme is the one they chose, wherever they chose it.
+  const theme = me.data?.theme
+  useEffect(() => {
+    if (theme && theme !== themeChoice()) setTheme(theme)
+  }, [theme])
 
   if (me.isPending) return <div className="splash" />
   if (me.isError) {

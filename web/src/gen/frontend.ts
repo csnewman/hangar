@@ -52,6 +52,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/me/preferences": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Sets the signed-in user's own preferences: how the UI looks to them, wherever they sign in. */
+        put: operations["setPreferences"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/me/password": {
         parameters: {
             query?: never;
@@ -1850,6 +1867,7 @@ export interface components {
             admin: boolean;
             /** @description Whether the user has a local password that they can change. */
             has_password: boolean;
+            theme: components["schemas"]["Theme"];
             ssh?: components["schemas"]["SSHGateway"];
         };
         /** @description Where the SSH gateway is reached: ssh <environment>@<host> -p <port>, with a sign-in key. Absent when the server runs none. */
@@ -1858,6 +1876,14 @@ export interface components {
             port: number;
             /** @description The gateway's public host key, in known_hosts form without the host name, for clients to trust without asking. */
             host_key: string;
+        };
+        /**
+         * @description The UI's colours: the system's (light or dark as the device is set), or always light, or always dark.
+         * @enum {string}
+         */
+        Theme: "system" | "light" | "dark";
+        Preferences: {
+            theme: components["schemas"]["Theme"];
         };
         ChangePassword: {
             current_password: string;
@@ -2020,6 +2046,30 @@ export interface operations {
                     "application/json": components["schemas"]["Me"];
                 };
             };
+            401: components["responses"]["Unauthorized"];
+        };
+    };
+    setPreferences: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Preferences"];
+            };
+        };
+        responses: {
+            /** @description Set. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["Invalid"];
             401: components["responses"]["Unauthorized"];
         };
     };

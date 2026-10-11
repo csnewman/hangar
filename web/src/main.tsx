@@ -3,6 +3,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { createBrowserRouter, Navigate, RouterProvider } from 'react-router'
 
+import './theme'
 import { ApiError } from './api'
 import { RequireAdmin, RequireAuth } from './auth'
 import { meKey, onSessionChange } from './session'

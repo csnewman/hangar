@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { copyText, shortcut, useContextMenu } from '../code/ContextMenu'
 import { Connection, type SessionInfo } from './connection'
+import { onDarkChange } from '../theme'
 import { darkTheme, lightTheme, prefersDark } from './theme'
 
 type State = 'connecting' | 'live' | 'reconnecting' | 'ended'
@@ -267,16 +268,14 @@ export function TerminalPane({
       if (el.clientWidth > 0 && el.clientHeight > 0) fit.fit()
     })
     resize.observe(el)
-    const scheme = window.matchMedia('(prefers-color-scheme: dark)')
-    const onScheme = () => (term.options.theme = scheme.matches ? darkTheme : lightTheme)
-    scheme.addEventListener('change', onScheme)
+    const offScheme = onDarkChange((dark) => (term.options.theme = dark ? darkTheme : lightTheme))
     term.focus()
 
     return () => {
       disposed = true
       clearTimeout(start)
       clearTimeout(retry)
-      scheme.removeEventListener('change', onScheme)
+      offScheme()
       resize.disconnect()
       conn?.close()
       term.dispose()

@@ -64,6 +64,23 @@ paths:
               schema: { $ref: "#/components/schemas/Me" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /api/frontend/me/preferences:
+    put:
+      operationId: setPreferences
+      description: >-
+        Sets the signed-in user's own preferences: how the UI looks to them,
+        wherever they sign in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Preferences" }
+      responses:
+        "204":
+          description: Set.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /api/frontend/me/password:
     post:
       operationId: changePassword
@@ -2766,7 +2783,7 @@ components:
 
     Me:
       type: object
-      required: [id, username, display_name, admin, has_password]
+      required: [id, username, display_name, admin, has_password, theme]
       properties:
         registry:
           type: string
@@ -2786,6 +2803,8 @@ components:
         has_password:
           type: boolean
           description: Whether the user has a local password that they can change.
+        theme:
+          $ref: "#/components/schemas/Theme"
         ssh:
           $ref: "#/components/schemas/SSHGateway"
 
@@ -2803,6 +2822,20 @@ components:
           description: >-
             The gateway's public host key, in known_hosts form without the
             host name, for clients to trust without asking.
+
+    Theme:
+      type: string
+      enum: [system, light, dark]
+      description: >-
+        The UI's colours: the system's (light or dark as the device is set),
+        or always light, or always dark.
+
+    Preferences:
+      type: object
+      required: [theme]
+      additionalProperties: false
+      properties:
+        theme: { $ref: "#/components/schemas/Theme" }
 
     ChangePassword:
       type: object

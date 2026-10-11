@@ -42,44 +42,50 @@
   --tip-border: #1f2630;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0f1318;
-    --surface: #161b22;
-    --surface-2: #1c222b;
-    --sidebar: #12171d;
-    --sidebar-hover: #1c232c;
-    --sidebar-active: #1d2b3b;
-    --border: #262d37;
-    --border-strong: #333c48;
-    --text: #e4e8ee;
-    --muted: #8a96a8;
-    --accent: #3b9be0;
-    --accent-hover: #62b0ea;
-    --accent-soft: #15293b;
-    --danger: #f07370;
-    --danger-bg: #2b1718;
-    --good-bg: #13261b;
-    --warn-bg: #2a2212;
-    --warn-border: #5c4718;
+/* The page's theme, set from the person's choice (theme.ts): light or
+   dark, the system's or chosen. */
+:root[data-theme='light'] {
+  color-scheme: light;
+}
 
-    --good: #34c46f;
-    --busy: #f0a92a;
-    --wait: #8494f2;
-    --idle: #667085;
-    --bad: #f07370;
+:root[data-theme='dark'] {
+  color-scheme: dark;
 
-    --shadow: none;
-    --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.5);
+  --bg: #0f1318;
+  --surface: #161b22;
+  --surface-2: #1c222b;
+  --sidebar: #12171d;
+  --sidebar-hover: #1c232c;
+  --sidebar-active: #1d2b3b;
+  --border: #262d37;
+  --border-strong: #333c48;
+  --text: #e4e8ee;
+  --muted: #8a96a8;
+  --accent: #3b9be0;
+  --accent-hover: #62b0ea;
+  --accent-soft: #15293b;
+  --danger: #f07370;
+  --danger-bg: #2b1718;
+  --good-bg: #13261b;
+  --warn-bg: #2a2212;
+  --warn-border: #5c4718;
 
-    /* Stepped for the dark surface, and validated there. */
-    --series-1: #3987e5;
-    --series-2: #d95926;
+  --good: #34c46f;
+  --busy: #f0a92a;
+  --wait: #8494f2;
+  --idle: #667085;
+  --bad: #f07370;
 
-    --tip-bg: #2a323d;
-    --tip-text: #e4e8ee;
-    --tip-border: #3a4452;
-  }
+  --shadow: none;
+  --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.5);
+
+  /* Stepped for the dark surface, and validated there. */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+
+  --tip-bg: #2a323d;
+  --tip-text: #e4e8ee;
+  --tip-border: #3a4452;
 }
 
 * {
@@ -1888,10 +1894,8 @@ code {
   background: #ffffff;
 }
 
-@media (prefers-color-scheme: dark) {
-  .term-pane {
-    background: #0d1117;
-  }
+:root[data-theme='dark'] .term-pane {
+  background: #0d1117;
 }
 
 .term-host {

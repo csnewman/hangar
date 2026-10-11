@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, Plus } from 'lucide-react'
-import { useState, type FormEvent } from 'react'
+import { Copy, Monitor, Moon, Plus, Sun } from 'lucide-react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 
 import { api } from '../api'
-import { useMe } from '../session'
+import { meKey, useMe } from '../session'
+import { setTheme, type Theme } from '../theme'
 import { PageHeader } from '../components/PageHeader'
 import { Activity } from '../components/Activity'
 import { ConfirmButton } from '../components/ConfirmButton'
@@ -31,6 +32,7 @@ export function AccountPage() {
           </div>
         </dl>
       </div>
+      <Appearance />
       {me.has_password && <ChangePassword />}
       <Keys />
       <AccessTokens />
@@ -39,6 +41,49 @@ export function AccountPage() {
         <Activity subjects={[`actor:${me.id}`]} />
       </section>
     </div>
+  )
+}
+
+// Appearance is the person's theme: their system's, or always light or
+// dark. It shows at once, and is kept for wherever they sign in.
+function Appearance() {
+  const me = useMe()
+  const qc = useQueryClient()
+  const [theme, setChosen] = useState<Theme>(me.theme)
+  const save = useMutation({
+    mutationFn: (t: Theme) => api.setPreferences({ theme: t }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
+  })
+  const choose = (t: Theme) => {
+    setChosen(t)
+    setTheme(t)
+    save.mutate(t)
+  }
+  const options: { value: Theme; label: string; icon: ReactNode; about: string }[] = [
+    { value: 'system', label: 'System', icon: <Monitor size={14} />, about: 'Light or dark as your device is set' },
+    { value: 'light', label: 'Light', icon: <Sun size={14} />, about: 'Always light' },
+    { value: 'dark', label: 'Dark', icon: <Moon size={14} />, about: 'Always dark' },
+  ]
+  return (
+    <section className="section">
+      <h2 className="section-title">Appearance</h2>
+      <div className="panel form">
+        <div className="field">
+          <span>Theme</span>
+          <div className="segmented" role="radiogroup" aria-label="Theme">
+            {options.map((o) => (
+              <label key={o.value} className={theme === o.value ? 'seg seg-on' : 'seg'} title={o.about}>
+                <input type="radio" name="theme" checked={theme === o.value} onChange={() => choose(o.value)} />
+                {o.icon}
+                {o.label}
+              </label>
+            ))}
+          </div>
+        </div>
+        <small className="muted">Kept with your account, so it follows you to every browser and the desktop app.</small>
+        {save.error && <div className="alert">{save.error.message}</div>}
+      </div>
+    </section>
   )
 }
 

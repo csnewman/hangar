@@ -366,6 +366,37 @@ func TestChangePassword(t *testing.T) {
 	}
 }
 
+// A person's choice of the UI's colours is theirs, kept for wherever they
+// sign in.
+func TestPreferences(t *testing.T) {
+	f := newFixture(t)
+	alice, _ := f.user(t, "alice", false)
+	bob, _ := f.user(t, "bob", false)
+	theme := func(c *client) any {
+		t.Helper()
+		status, body := c.do("GET", "/api/frontend/me", "")
+		if status != 200 {
+			t.Fatalf("me: %d", status)
+		}
+		return body["theme"]
+	}
+	if got := theme(alice); got != "system" {
+		t.Fatalf("theme at first: %v, want system", got)
+	}
+	if status, body := alice.do("PUT", "/api/frontend/me/preferences", `{"theme":"dark"}`); status != 204 {
+		t.Fatalf("set: %d %v", status, body)
+	}
+	if got := theme(alice); got != "dark" {
+		t.Fatalf("theme: %v, want dark", got)
+	}
+	if got := theme(bob); got != "system" {
+		t.Fatalf("someone else's theme changed: %v", got)
+	}
+	if status, _ := alice.do("PUT", "/api/frontend/me/preferences", `{"theme":"purple"}`); status != 400 {
+		t.Fatalf("a theme there is none of: %d, want 400", status)
+	}
+}
+
 // Private templates are their owner's and collaborators'; shared ones are
 // everyone's to use, but still only theirs to change.
 func TestTemplateAccess(t *testing.T) {

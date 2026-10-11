@@ -50,46 +50,44 @@
   font-size: 13px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .code-page {
-    --code-bg: #15191f;
-    --code-active-line: rgb(255 255 255 / 0.04);
-    --code-selection: rgb(59 155 224 / 0.3);
-    --code-git-modified: #6aa6f2;
-    --code-git-added: #5cc27a;
-    --code-git-unversioned: #e58a5b;
-    --code-git-deleted: #8a96a8;
-    --code-git-conflict: #f07370;
-    --code-find-hit: rgb(214 160 40 / 0.4);
-    --diff-deleted-line: rgb(240 115 112 / 0.1);
-    --diff-inserted-line: rgb(92 194 122 / 0.1);
-    --diff-deleted-text: rgb(240 115 112 / 0.3);
-    --diff-inserted-text: rgb(92 194 122 / 0.3);
-    /* Syntax: IntelliJ's Dark. */
-    --syn-keyword: #cf8e6d;
-    --syn-string: #6aab73;
-    --syn-escape: #cf8e6d;
-    --syn-number: #2aacb8;
-    --syn-comment: #7a7e85;
-    --syn-doc: #5f826b;
-    --syn-function-def: #56a8f5;
-    --syn-function: #57aaf7;
-    --syn-type: #16baac;
-    --syn-property: #c77dbb;
-    --syn-constant: #c77dbb;
-    --syn-meta: #b3ae60;
-    --syn-tag: #d5b778;
-    --syn-link: #548af7;
-    --syn-invalid: #fa6675;
-    --lane-0: #6aa6f2;
-    --lane-1: #5cc27a;
-    --lane-2: #e58a5b;
-    --lane-3: #b98ae0;
-    --lane-4: #f06292;
-    --lane-5: #4dd0e1;
-    --lane-6: #d8b84a;
-    --lane-7: #9aa7b8;
-  }
+:root[data-theme='dark'] .code-page {
+  --code-bg: #15191f;
+  --code-active-line: rgb(255 255 255 / 0.04);
+  --code-selection: rgb(59 155 224 / 0.3);
+  --code-git-modified: #6aa6f2;
+  --code-git-added: #5cc27a;
+  --code-git-unversioned: #e58a5b;
+  --code-git-deleted: #8a96a8;
+  --code-git-conflict: #f07370;
+  --code-find-hit: rgb(214 160 40 / 0.4);
+  --diff-deleted-line: rgb(240 115 112 / 0.1);
+  --diff-inserted-line: rgb(92 194 122 / 0.1);
+  --diff-deleted-text: rgb(240 115 112 / 0.3);
+  --diff-inserted-text: rgb(92 194 122 / 0.3);
+  /* Syntax: IntelliJ's Dark. */
+  --syn-keyword: #cf8e6d;
+  --syn-string: #6aab73;
+  --syn-escape: #cf8e6d;
+  --syn-number: #2aacb8;
+  --syn-comment: #7a7e85;
+  --syn-doc: #5f826b;
+  --syn-function-def: #56a8f5;
+  --syn-function: #57aaf7;
+  --syn-type: #16baac;
+  --syn-property: #c77dbb;
+  --syn-constant: #c77dbb;
+  --syn-meta: #b3ae60;
+  --syn-tag: #d5b778;
+  --syn-link: #548af7;
+  --syn-invalid: #fa6675;
+  --lane-0: #6aa6f2;
+  --lane-1: #5cc27a;
+  --lane-2: #e58a5b;
+  --lane-3: #b98ae0;
+  --lane-4: #f06292;
+  --lane-5: #4dd0e1;
+  --lane-6: #d8b84a;
+  --lane-7: #9aa7b8;
 }
 
 /* Stripes */
