@@ -2,7 +2,7 @@
 // windows would: files, git, and one shared document edited from both sides
 // and from the disk.
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { connect, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -724,6 +724,54 @@ test('binary files: told from text, read in parts, compared as bytes', async () 
 		assert.deepEqual(Buffer.from(before.data, 'base64'), png)
 		assert.deepEqual(await a.call('git.blob', { rev: 'HEAD', path: 'missing.png' }), { size: 0, data: '' })
 		await assert.rejects(a.call('git.blob', { rev: '--output=x', path: 'pic.png' }), /not a revision/)
+	} finally {
+		a.close()
+	}
+})
+
+test('a link is the file it leads to, as the editor shows it', async () => {
+	const a = new Client()
+	try {
+		mkdirSync(join(root, 'docs'))
+		writeFileSync(join(root, 'AGENTS.md'), 'one\ntwo\n')
+		symlinkSync('AGENTS.md', join(root, 'CLAUDE.md'))
+		symlinkSync('docs', join(root, 'docslink'))
+		writeFileSync(join(root, 'docs', 'd.txt'), 'doc\n')
+		git('add', 'AGENTS.md', 'CLAUDE.md', 'docslink', 'docs/d.txt')
+		git('commit', '-q', '-m', 'links')
+
+		// What the editor compares a link with is its target's, not the
+		// name the link holds; through a linked directory too.
+		assert.equal((await a.call('git.show', { path: 'CLAUDE.md', from: 'HEAD' })).text, 'one\ntwo\n')
+		assert.equal((await a.call('git.show', { path: 'docslink/d.txt', from: 'index' })).text, 'doc\n')
+		const blame = await a.call('git.blame', { path: 'CLAUDE.md' })
+		assert.equal(blame.lines.length, 2)
+
+		// The link and its target, open together, are one document.
+		const link = await a.open('CLAUDE.md')
+		const target = await a.open('AGENTS.md')
+		await until('both to load', () =>
+			link.getText('text').toString() === 'one\ntwo\n' && target.getText('text').toString() === 'one\ntwo\n',
+		)
+		link.getText('text').insert(0, 'zero\n')
+		await until('the edit to reach the target', () => target.getText('text').toString() === 'zero\none\ntwo\n')
+		await until('the edit to reach the disk', () => readFileSync(join(root, 'AGENTS.md'), 'utf8') === 'zero\none\ntwo\n')
+		assert.equal(readlinkSync(join(root, 'CLAUDE.md')), 'AGENTS.md')
+		assert.deepEqual((await a.call('git.status')).changes.map((c: any) => c.path), ['AGENTS.md'])
+
+		// Staging part of it through the link stages the target, and leaves
+		// the link a link.
+		await a.call('git.setIndex', { path: 'CLAUDE.md', content: 'zero\none\ntwo\n' })
+		assert.equal(git('show', ':AGENTS.md').toString(), 'zero\none\ntwo\n')
+		assert.match(git('ls-files', '-s', 'CLAUDE.md').toString(), /^120000 /)
+
+		// A link changed is compared as git compares it: the name it holds.
+		rmSync(join(root, 'CLAUDE.md'))
+		symlinkSync('docs/d.txt', join(root, 'CLAUDE.md'))
+		const diff = await a.call('git.diff', { path: 'CLAUDE.md' })
+		assert.deepEqual([diff.head, diff.working], ['AGENTS.md', 'docs/d.txt'])
+		git('checkout', '--', 'CLAUDE.md')
+		git('reset', '-q', '--hard')
 	} finally {
 		a.close()
 	}

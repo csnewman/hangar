@@ -127,8 +127,8 @@ export class Connection {
 			}
 			this.handle(req)
 		} else if (frame[0] === CHANNEL_YJS && frame.length >= 5) {
-			const doc = this.open.get(frame.readUInt32BE(1))
-			doc?.receive(this, frame.subarray(5))
+			const n = frame.readUInt32BE(1)
+			this.open.get(n)?.receive(this, n, frame.subarray(5))
 		} else if (frame[0] === CHANNEL_LSP && frame.length >= 5) {
 			const server = this.servers.get(frame.readUInt32BE(1))
 			if (!server) return
@@ -366,10 +366,11 @@ export class Connection {
 	}
 
 	private async openDoc(path: string) {
-		const doc = await this.s.docs.open(resolve(this.f.root, path))
+		const abs = resolve(this.f.root, path)
+		const doc = await this.s.docs.open(abs)
 		const n = this.nextDoc++
 		this.open.set(n, doc)
-		doc.join(this, n)
+		doc.join(this, n, abs)
 		// A file the user may not write -- a library's, the system's -- is
 		// shown, not edited.
 		let writable = true
@@ -378,14 +379,14 @@ export class Connection {
 		} catch {
 			writable = false
 		}
-		return { doc: n, path: doc.path, writable }
+		return { doc: n, path: abs, writable }
 	}
 
 	private closeDoc(n: number) {
 		const doc = this.open.get(n)
 		if (!doc) return
 		this.open.delete(n)
-		doc.leave(this)
+		doc.leave(this, n)
 	}
 
 	// sendYjs sends a y-protocols message for the connection's document n.
@@ -424,7 +425,7 @@ export class Connection {
 		this.unwatchDocker?.()
 		for (const stop of this.logs.values()) stop()
 		this.logs.clear()
-		for (const doc of this.open.values()) doc.leave(this)
+		for (const [n, doc] of this.open) doc.leave(this, n)
 		this.open.clear()
 	}
 }

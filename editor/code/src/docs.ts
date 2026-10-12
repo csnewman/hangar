@@ -1,5 +1,5 @@
 import { watch, type FSWatcher } from 'node:fs'
-import { readFile, stat, writeFile } from 'node:fs/promises'
+import { readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, resolve } from 'node:path'
 
 import * as decoding from 'lib0/decoding'
@@ -25,19 +25,22 @@ const KEEP_MS = 60_000
 const DISK = Symbol('disk')
 
 // Documents holds the files open for editing, one shared document each,
-// whoever has them open.
+// whoever has them open. A file is the one its links lead to: a link and
+// what it names, open side by side, are one document, so neither saves
+// over the other.
 export class Documents {
 	private docs = new Map<string, Promise<SharedDoc>>()
 
 	constructor(private root: string) {}
 
-	open(path: string): Promise<SharedDoc> {
+	async open(path: string): Promise<SharedDoc> {
 		const abs = isAbsolute(path) ? resolve(path) : resolve(this.root, path)
-		let p = this.docs.get(abs)
+		const real = await realpath(abs).catch(() => abs)
+		let p = this.docs.get(real)
 		if (!p) {
-			p = SharedDoc.load(abs, () => this.docs.delete(abs))
-			this.docs.set(abs, p)
-			p.catch(() => this.docs.delete(abs))
+			p = SharedDoc.load(real, () => this.docs.delete(real))
+			this.docs.set(real, p)
+			p.catch(() => this.docs.delete(real))
 		}
 		return p
 	}
@@ -53,16 +56,20 @@ export class Documents {
 	}
 }
 
-type Member = { n: number; clients: Set<number> }
+// A member is one of a connection's documents: a connection may have one
+// file open under two names, a link's and its target's. path is the name
+// it opened it by, and clients the awareness clients it brought.
+type Member = { conn: Connection; n: number; path: string; clients: Set<number> }
 
 // SharedDoc is one file as a Yjs document, kept in step with the file on disk
 // both ways: edits are written back after a short idle, and changes to the
-// file from anywhere else are merged into the document as edits.
+// file from anywhere else are merged into the document as edits. Its path
+// is the file's own, with no links in it.
 export class SharedDoc {
 	readonly doc = new Y.Doc()
 	readonly text = this.doc.getText('text')
 	readonly awareness = new awarenessProtocol.Awareness(this.doc)
-	private members = new Map<Connection, Member>()
+	private members = new Set<Member>()
 	private saveTimer: NodeJS.Timeout | undefined
 	private dropTimer: NodeJS.Timeout | undefined
 	private watcher: FSWatcher | undefined
@@ -88,12 +95,12 @@ export class SharedDoc {
 			encoding.writeVarUint(enc, MESSAGE_SYNC)
 			syncProtocol.writeUpdate(enc, update)
 			const msg = encoding.toUint8Array(enc)
-			for (const [conn, m] of this.members) conn.sendYjs(m.n, msg)
+			for (const m of this.members) m.conn.sendYjs(m.n, msg)
 			if (origin !== DISK) this.scheduleSave()
 		})
 		this.awareness.on('update', ({ added, updated, removed }: AwarenessChange, origin: unknown) => {
 			const changed = [...added, ...updated, ...removed]
-			const from = origin instanceof Object ? this.members.get(origin as Connection) : undefined
+			const from = this.members.has(origin as Member) ? (origin as Member) : undefined
 			if (from) {
 				for (const id of added) from.clients.add(id)
 				for (const id of removed) from.clients.delete(id)
@@ -102,7 +109,7 @@ export class SharedDoc {
 			encoding.writeVarUint(enc, MESSAGE_AWARENESS)
 			encoding.writeVarUint8Array(enc, awarenessProtocol.encodeAwarenessUpdate(this.awareness, changed))
 			const msg = encoding.toUint8Array(enc)
-			for (const [conn, m] of this.members) conn.sendYjs(m.n, msg)
+			for (const m of this.members) m.conn.sendYjs(m.n, msg)
 		})
 	}
 
@@ -129,9 +136,15 @@ export class SharedDoc {
 		return this.crlf ? s.replace(/\n/g, '\r\n') : s
 	}
 
-	join(conn: Connection, n: number) {
+	private member(conn: Connection, n: number): Member | undefined {
+		for (const m of this.members) if (m.conn === conn && m.n === n) return m
+		return undefined
+	}
+
+	// join adds a connection's document n, opened by the name path.
+	join(conn: Connection, n: number, path: string) {
 		clearTimeout(this.dropTimer)
-		this.members.set(conn, { n, clients: new Set() })
+		this.members.add({ conn, n, path, clients: new Set() })
 		// The server's state, for the new member to catch up from, and who
 		// else is here.
 		const enc = encoding.createEncoder()
@@ -147,28 +160,28 @@ export class SharedDoc {
 		}
 	}
 
-	leave(conn: Connection) {
-		const m = this.members.get(conn)
+	leave(conn: Connection, n: number) {
+		const m = this.member(conn, n)
 		if (!m) return
-		this.members.delete(conn)
+		this.members.delete(m)
 		awarenessProtocol.removeAwarenessStates(this.awareness, [...m.clients], null)
 		if (this.members.size === 0) {
 			this.dropTimer = setTimeout(() => this.drop(), KEEP_MS)
 		}
 	}
 
-	receive(conn: Connection, msg: Uint8Array) {
-		const m = this.members.get(conn)
+	receive(conn: Connection, n: number, msg: Uint8Array) {
+		const m = this.member(conn, n)
 		if (!m) return
 		const dec = decoding.createDecoder(msg)
 		const type = decoding.readVarUint(dec)
 		if (type === MESSAGE_SYNC) {
 			const enc = encoding.createEncoder()
 			encoding.writeVarUint(enc, MESSAGE_SYNC)
-			syncProtocol.readSyncMessage(dec, enc, this.doc, conn)
+			syncProtocol.readSyncMessage(dec, enc, this.doc, m)
 			if (encoding.length(enc) > 1) conn.sendYjs(m.n, encoding.toUint8Array(enc))
 		} else if (type === MESSAGE_AWARENESS) {
-			awarenessProtocol.applyAwarenessUpdate(this.awareness, decoding.readVarUint8Array(dec), conn)
+			awarenessProtocol.applyAwarenessUpdate(this.awareness, decoding.readVarUint8Array(dec), m)
 		}
 	}
 
@@ -212,7 +225,7 @@ export class SharedDoc {
 			if ((e as NodeJS.ErrnoException).code === 'ENOENT' && !this.deleted) {
 				this.deleted = true
 				clearTimeout(this.saveTimer)
-				for (const conn of this.members.keys()) conn.notify('doc.deleted', { path: this.path })
+				for (const m of this.members) m.conn.notify('doc.deleted', { path: m.path })
 			}
 			return
 		}

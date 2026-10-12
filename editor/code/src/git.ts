@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { watch, type FSWatcher } from 'node:fs'
-import { copyFile, mkdtemp, readFile, rm } from 'node:fs/promises'
+import { copyFile, lstat, mkdtemp, readFile, readlink, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, posix, relative, resolve } from 'node:path'
 
@@ -211,19 +211,19 @@ export class Git {
 	private listeners = new Set<() => void>()
 	private watchers: FSWatcher[] = []
 	private timer: NodeJS.Timeout | undefined
-	private found: Promise<{ prefix: string; gitDir: string }> | undefined
+	private found: Promise<{ prefix: string; gitDir: string; top: string }> | undefined
 
 	constructor(private root: string) {}
 
 	// where is the root's place in its repository, its path from the top
-	// ("" at the top, else ending in a slash), and the repository's git
-	// directory. Not being in a repository is not remembered: one may be
-	// made.
-	private where(): Promise<{ prefix: string; gitDir: string }> {
-		this.found ??= run(this.root, ['rev-parse', '--show-prefix', '--absolute-git-dir']).then(
+	// ("" at the top, else ending in a slash), the repository's git
+	// directory and its top. Not being in a repository is not remembered:
+	// one may be made.
+	private where(): Promise<{ prefix: string; gitDir: string; top: string }> {
+		this.found ??= run(this.root, ['rev-parse', '--show-prefix', '--absolute-git-dir', '--show-toplevel']).then(
 			(out) => {
-				const [prefix, gitDir] = out.split('\n')
-				return { prefix: prefix ?? '', gitDir: gitDir ?? join(this.root, '.git') }
+				const [prefix, gitDir, top] = out.split('\n')
+				return { prefix: prefix ?? '', gitDir: gitDir ?? join(this.root, '.git'), top: top ?? this.root }
 			},
 			(e) => {
 				this.found = undefined
@@ -235,6 +235,26 @@ export class Git {
 
 	private rel(path: string): string {
 		return relative(this.root, isAbsolute(path) ? resolve(path) : resolve(this.root, path))
+	}
+
+	// shown is the name git knows the file an editor shows by, from the
+	// root: an editor shows what links lead to, where git keeps a link as
+	// the name it holds, so the links are followed. null for a file they
+	// lead out of the repository.
+	private async shown(path: string): Promise<string | null> {
+		const abs = isAbsolute(path) ? resolve(path) : resolve(this.root, path)
+		let real: string
+		try {
+			real = await realpath(abs)
+		} catch {
+			// Not on disk: named as given.
+			return this.rel(path)
+		}
+		// Git works from the root with links resolved, as the system has it.
+		const [root, top] = await Promise.all([realpath(this.root), this.where().then((w) => realpath(w.top))])
+		const inRepo = relative(top, real)
+		if (inRepo.startsWith('../') || inRepo === '..' || isAbsolute(inRepo)) return null
+		return relative(root, real)
 	}
 
 	async status(): Promise<Status> {
@@ -332,7 +352,12 @@ export class Git {
 		}
 		let working = ''
 		try {
-			working = to ? await run(this.root, ['show', `${to}:./${rel}`]) : await readFile(join(this.root, rel), 'utf8')
+			if (to) working = await run(this.root, ['show', `${to}:./${rel}`])
+			else {
+				// A link is the name it holds, as git compares it.
+				const p = join(this.root, rel)
+				working = (await lstat(p)).isSymbolicLink() ? await readlink(p) : await readFile(p, 'utf8')
+			}
 		} catch {
 			// Deleted.
 		}
@@ -386,21 +411,24 @@ export class Git {
 		this.changed()
 	}
 
-	// show returns a file as HEAD or the index has it, or null where it
-	// has none.
+	// show returns the file an editor shows as HEAD or the index has it, or
+	// null where it has none.
 	async show(path: string, from: 'HEAD' | 'index'): Promise<{ text: string | null }> {
-		const rel = this.rel(path)
 		try {
+			const rel = await this.shown(path)
+			if (rel === null) return { text: null }
 			return { text: await run(this.root, ['show', `${from === 'HEAD' ? 'HEAD' : ''}:./${rel}`]) }
 		} catch {
 			return { text: null }
 		}
 	}
 
-	// setIndex stages a file's content as given, whatever the working tree
-	// holds: how part of a file's changes is staged.
+	// setIndex stages the content of the file an editor shows as given,
+	// whatever the working tree holds: how part of a file's changes is
+	// staged.
 	async setIndex(path: string, content: string) {
-		const rel = this.rel(path)
+		const rel = await this.shown(path)
+		if (rel === null) throw new Error(`${path} is not in the repository`)
 		const staged = (await run(this.root, ['ls-files', '--stage', '--', rel])).split(' ')[0]
 		const mode = /^1[0-7]{5}$/.test(staged) ? staged : '100644'
 		const sha = (await run(this.root, ['hash-object', '-w', '--stdin'], content)).trim()
@@ -429,9 +457,11 @@ export class Git {
 		}
 	}
 
-	// blame says who last changed each line of a file as it is on disk.
+	// blame says who last changed each line of the file an editor shows,
+	// as it is on disk.
 	async blame(path: string): Promise<Blame> {
-		const rel = this.rel(path)
+		const rel = await this.shown(path)
+		if (rel === null) throw new Error(`${path} is not in the repository`)
 		const out = await run(this.root, ['blame', '--porcelain', '--', `./${rel}`])
 		const blame: Blame = { commits: {}, lines: [] }
 		let hash = ''
