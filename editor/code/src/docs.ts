@@ -232,6 +232,9 @@ export class SharedDoc {
 		this.deleted = false
 		if (content === this.onDisk) return
 		this.onDisk = content
+		// The file's line endings are its own, changed on disk too: a file
+		// converted to LF is saved as LF from then on.
+		this.crlf = content.includes('\r\n')
 		const next = this.fromDisk(content)
 		const cur = this.text.toString()
 		if (next === cur) return

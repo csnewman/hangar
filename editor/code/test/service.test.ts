@@ -2,7 +2,7 @@
 // windows would: files, git, and one shared document edited from both sides
 // and from the disk.
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { connect, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -772,6 +772,189 @@ test('a link is the file it leads to, as the editor shows it', async () => {
 		assert.deepEqual([diff.head, diff.working], ['AGENTS.md', 'docs/d.txt'])
 		git('checkout', '--', 'CLAUDE.md')
 		git('reset', '-q', '--hard')
+	} finally {
+		a.close()
+	}
+})
+
+test('copying, moving, the trash, uploads and downloads', async () => {
+	const a = new Client()
+	const at = (p: string) => join(root, 'ops', p)
+	try {
+		mkdirSync(at('src/inner'), { recursive: true })
+		mkdirSync(at('dst'))
+		writeFileSync(at('src/one.txt'), 'one')
+		writeFileSync(at('src/inner/two.txt'), 'two')
+		writeFileSync(at('dst/one.txt'), 'theirs')
+
+		// A clash is reported, and nothing done, until the user chooses.
+		let r = await a.call('fs.transfer', { op: 'copy', from: ['ops/src/one.txt', 'ops/src/inner'], to: 'ops/dst', clash: 'ask' })
+		assert.deepEqual(r, { done: [], clashes: ['one.txt'] })
+		assert.equal(existsSync(at('dst/inner')), false)
+		r = await a.call('fs.transfer', { op: 'copy', from: ['ops/src/one.txt', 'ops/src/inner'], to: 'ops/dst', clash: 'rename' })
+		assert.deepEqual(r.done.map((d: any) => d.to), ['ops/dst/one copy.txt', 'ops/dst/inner'])
+		assert.equal(readFileSync(at('dst/one.txt'), 'utf8'), 'theirs')
+		assert.equal(readFileSync(at('dst/inner/two.txt'), 'utf8'), 'two')
+
+		// Copied onto itself, a duplicate beside it; moved onto itself, nothing.
+		r = await a.call('fs.transfer', { op: 'copy', from: ['ops/src/one.txt'], to: 'ops/src', clash: 'ask' })
+		assert.deepEqual(r.done, [{ from: 'ops/src/one.txt', to: 'ops/src/one copy.txt' }])
+		r = await a.call('fs.transfer', { op: 'move', from: ['ops/src/one.txt'], to: 'ops/src', clash: 'ask' })
+		assert.deepEqual(r.done, [])
+
+		// Moved, under a new name; a folder not into itself.
+		r = await a.call('fs.transfer', { op: 'move', from: ['ops/src/one copy.txt'], to: 'ops/dst', clash: 'ask', name: 'moved.txt' })
+		assert.deepEqual(r.done, [{ from: 'ops/src/one copy.txt', to: 'ops/dst/moved.txt' }])
+		await assert.rejects(a.call('fs.transfer', { op: 'move', from: ['ops/src'], to: 'ops/src/inner', clash: 'ask' }), /inside itself/)
+		r = await a.call('fs.transfer', { op: 'move', from: ['ops/dst/one.txt'], to: 'ops/src', clash: 'replace' })
+		assert.equal(readFileSync(at('src/one.txt'), 'utf8'), 'theirs')
+
+		// The trash, and back.
+		const t = await a.call('fs.trash', { paths: ['ops/src/one.txt', 'ops/dst/inner'] })
+		assert.deepEqual(t.map((x: any) => x.path), ['ops/src/one.txt', 'ops/dst/inner'])
+		assert.equal(existsSync(at('src/one.txt')), false)
+		const info = readFileSync(join(dir, '.local/share/Trash/info', `${t[0].id}.trashinfo`), 'utf8')
+		assert.match(info, /^\[Trash Info\]\nPath=.*\/ops\/src\/one\.txt\nDeletionDate=/)
+		await a.call('fs.restore', { items: t })
+		assert.equal(readFileSync(at('src/one.txt'), 'utf8'), 'theirs')
+		assert.equal(readFileSync(at('dst/inner/two.txt'), 'utf8'), 'two')
+
+		// An upload in parts, put in place whole.
+		const token = await a.call('fs.uploadStart', { path: 'ops/up/new.bin' })
+		await a.call('fs.uploadWrite', { token, data: Buffer.from('hello ').toString('base64') })
+		assert.equal(existsSync(at('up/new.bin')), false)
+		await a.call('fs.uploadWrite', { token, data: Buffer.from('world').toString('base64') })
+		assert.equal(await a.call('fs.uploadEnd', { token, replace: false }), 'ops/up/new.bin')
+		assert.equal(readFileSync(at('up/new.bin'), 'utf8'), 'hello world')
+		const again = await a.call('fs.uploadStart', { path: 'ops/up/new.bin' })
+		await assert.rejects(a.call('fs.uploadEnd', { token: again, replace: false }), /already exists/)
+
+		// A download: a folder and a file, zipped.
+		chmodSync(at('src/inner/two.txt'), 0o755)
+		const z = await a.call('fs.zip', { paths: ['ops/src', 'ops/up/new.bin'] })
+		// Read back by another zip reader: Python's.
+		const read = JSON.parse(
+			execFileSync('python3', [
+				'-c',
+				`import json, sys, zipfile
+z = zipfile.ZipFile(sys.argv[1])
+assert z.testzip() is None
+print(json.dumps({'names': z.namelist(), 'two': z.read('src/inner/two.txt').decode(), 'mode': z.getinfo('src/inner/two.txt').external_attr >> 16}))`,
+				z.path,
+			]).toString(),
+		)
+		assert.deepEqual(read.names, ['src/', 'src/inner/', 'src/inner/two.txt', 'src/one.txt', 'new.bin'])
+		assert.equal(read.two, 'two')
+		assert.equal(read.mode & 0o777, 0o755)
+		const bytes = await a.call('fs.bytes', { path: z.path, offset: 0, length: 4 })
+		assert.equal(Buffer.from(bytes.data, 'base64').readUInt32LE(0), 0x04034b50)
+		await a.call('fs.unzip', { path: z.path })
+		assert.equal(existsSync(z.path), false)
+		// Only a download is removed that way.
+		await a.call('fs.unzip', { path: at('src/one.txt') })
+		assert.equal(existsSync(at('src/one.txt')), true)
+	} finally {
+		rmSync(join(root, 'ops'), { recursive: true, force: true })
+		a.close()
+	}
+})
+
+test("permissions, line separators, encodings, and git's ignores", async () => {
+	const a = new Client()
+	const at = (p: string) => join(root, 'props', p)
+	try {
+		mkdirSync(at('build'), { recursive: true })
+		writeFileSync(at('run.sh'), '#!/bin/sh\n')
+		chmodSync(at('run.sh'), 0o644)
+		writeFileSync(at('crlf.txt'), 'a\r\nb\r\n')
+		writeFileSync(join(root, '.gitignore'), 'props/build/\n')
+
+		let list = await a.call('fs.list', { path: 'props' })
+		assert.deepEqual(
+			list.map((e: any) => [e.name, !!e.exec, !!e.ignored]),
+			[['build', false, true], ['crlf.txt', false, false], ['run.sh', false, false]],
+		)
+		await a.call('fs.setMode', { path: 'props/run.sh', exec: true })
+		assert.equal(statSync(at('run.sh')).mode & 0o777, 0o755)
+		await a.call('fs.setMode', { path: 'props/run.sh', writable: false })
+		list = await a.call('fs.list', { path: 'props' })
+		const run = list.find((e: any) => e.name === 'run.sh')
+		assert.equal(run.exec, true)
+		assert.equal(run.readonly, true)
+		await a.call('fs.setMode', { path: 'props/run.sh', exec: false, writable: true })
+		assert.equal(statSync(at('run.sh')).mode & 0o777, 0o644)
+
+		let props = await a.call('fs.textProps', { path: 'props/crlf.txt' })
+		assert.deepEqual([props.encoding, props.bom, props.separator], ['UTF-8', false, 'CRLF'])
+
+		// An open document follows a conversion, and saves in the file's new
+		// line separators.
+		const doc = await a.open('props/crlf.txt')
+		await until('the document to load', () => doc.getText('text').toString() === 'a\nb\n')
+		props = await a.call('fs.convert', { path: 'props/crlf.txt', separator: 'LF' })
+		assert.equal(props.separator, 'LF')
+		await new Promise((r) => setTimeout(r, 300))
+		doc.getText('text').insert(0, 'z\n')
+		await until('the edit to be saved in LF', () => readFileSync(at('crlf.txt'), 'utf8') === 'z\na\nb\n')
+
+		props = await a.call('fs.convert', { path: 'props/crlf.txt', bom: true })
+		assert.deepEqual([props.encoding, props.bom], ['UTF-8', true])
+		assert.deepEqual([...readFileSync(at('crlf.txt')).subarray(0, 3)], [0xef, 0xbb, 0xbf])
+		props = await a.call('fs.convert', { path: 'props/crlf.txt', encoding: 'UTF-16LE' })
+		assert.deepEqual([props.encoding, props.bom], ['UTF-16LE', true])
+		assert.equal(readFileSync(at('crlf.txt')).subarray(2).toString('utf16le'), 'z\na\nb\n')
+		props = await a.call('fs.convert', { path: 'props/crlf.txt', encoding: 'UTF-8' })
+		assert.deepEqual([props.encoding, props.bom], ['UTF-8', false])
+		assert.equal(readFileSync(at('crlf.txt'), 'utf8'), 'z\na\nb\n')
+		// Text ASCII alone holds is UTF-8 as much as ISO-8859-1; é tells them
+		// apart.
+		writeFileSync(at('latin.txt'), 'café\n')
+		props = await a.call('fs.convert', { path: 'props/latin.txt', encoding: 'ISO-8859-1' })
+		assert.deepEqual([props.encoding, props.bom], ['ISO-8859-1', false])
+		assert.deepEqual([...readFileSync(at('latin.txt'))], [0x63, 0x61, 0x66, 0xe9, 0x0a])
+		writeFileSync(at('wide.txt'), '漢\n')
+		await assert.rejects(a.call('fs.convert', { path: 'props/wide.txt', encoding: 'ISO-8859-1' }), /cannot hold/)
+
+		// Ignoring: anchored at the top, once.
+		await a.call('git.ignore', { path: 'props/run.sh', dir: false })
+		await a.call('git.ignore', { path: 'props/run.sh', dir: false })
+		assert.equal(readFileSync(join(root, '.gitignore'), 'utf8'), 'props/build/\n/props/run.sh\n')
+	} finally {
+		rmSync(join(root, 'props'), { recursive: true, force: true })
+		rmSync(join(root, '.gitignore'), { force: true })
+		a.close()
+	}
+})
+
+test("a file's history, and finding and replacing in a folder", async () => {
+	const a = new Client()
+	try {
+		mkdirSync(join(root, 'hist/sub'), { recursive: true })
+		writeFileSync(join(root, 'hist/h.txt'), 'v1 alpha\n')
+		writeFileSync(join(root, 'hist/sub/s.txt'), 'alpha beta\n')
+		git('add', 'hist')
+		git('commit', '-q', '-m', 'h1')
+		writeFileSync(join(root, 'hist/sub/s.txt'), 'alpha gamma\n')
+		git('commit', '-q', '-am', 'other')
+		writeFileSync(join(root, 'hist/h.txt'), 'v2 alpha\n')
+		git('commit', '-q', '-am', 'h2')
+
+		const log = await a.call('git.log', { ref: 'HEAD', skip: 0, max: 10, path: 'hist/h.txt' })
+		assert.deepEqual(log.commits.map((c: any) => c.subject), ['h2', 'h1'])
+		// The parent is the nearest commit that changed it.
+		assert.deepEqual(log.commits[0].parents, [log.commits[1].hash])
+
+		const found = await a.call('search.text', { query: 'alpha', dir: 'hist/sub' })
+		assert.deepEqual(found.matches.map((m: any) => m.path), ['hist/sub/s.txt'])
+		await assert.rejects(a.call('search.text', { query: 'alpha', dir: '../x' }), /not a folder/)
+
+		const r = await a.call('search.replace', { query: '(\\w+) alpha', regex: true, replacement: '$1 omega', dir: 'hist' })
+		assert.deepEqual(r, { files: ['hist/h.txt'], replaced: 1 })
+		assert.equal(readFileSync(join(root, 'hist/h.txt'), 'utf8'), 'v2 omega\n')
+		const r2 = await a.call('search.replace', { query: 'alpha', replacement: 'delta', paths: ['hist/sub/s.txt'] })
+		assert.deepEqual(r2, { files: ['hist/sub/s.txt'], replaced: 1 })
+		assert.equal(readFileSync(join(root, 'hist/sub/s.txt'), 'utf8'), 'delta gamma\n')
+		git('checkout', '--', 'hist')
 	} finally {
 		a.close()
 	}

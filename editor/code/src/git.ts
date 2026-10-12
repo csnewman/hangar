@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { watch, type FSWatcher } from 'node:fs'
-import { copyFile, lstat, mkdtemp, readFile, readlink, realpath, rm } from 'node:fs/promises'
+import { appendFile, copyFile, lstat, mkdtemp, readFile, readlink, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, posix, relative, resolve } from 'node:path'
 
@@ -488,17 +488,23 @@ export class Git {
 	// log is the history, newest first and each commit after its children:
 	// every branch's, remote ones and tags too, or one ref's. It is read a
 	// page at a time, skipping those read already.
-	async log(ref: string | undefined, skip: number, max: number): Promise<Log> {
+	//
+	// With a path, it is that file's or folder's history: the commits that
+	// changed it, each one's parents rewritten to the nearest that did, so
+	// the graph still joins up. A rename is where the history starts.
+	async log(ref: string | undefined, skip: number, max: number, path?: string): Promise<Log> {
 		const n = Math.max(1, Math.min(max, 2000))
 		const args = [
 			'log',
 			'--topo-order',
+			...(path ? ['--parents'] : []),
 			'--decorate=full',
 			`--skip=${Math.max(0, Math.floor(skip))}`,
 			`--max-count=${n + 1}`,
 			'--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s%x1e',
 			...(ref ? [revision(ref)] : ['--exclude=refs/stash', '--all']),
 			'--',
+			...(path ? [`./${this.rel(path)}`] : []),
 		]
 		let out: string
 		try {
@@ -527,6 +533,50 @@ export class Git {
 				}
 			})
 		return { commits: commits.slice(0, n), more: commits.length > n }
+	}
+
+	// ignored is which of paths git ignores.
+	async ignored(paths: string[]): Promise<Set<string>> {
+		if (paths.length === 0) return new Set()
+		try {
+			await this.where()
+		} catch {
+			return new Set()
+		}
+		const rels = paths.map((p) => this.rel(p))
+		const out = await new Promise<string>((res) => {
+			const child = execFile(
+				'git',
+				['check-ignore', '-z', '--stdin'],
+				{ cwd: this.root, encoding: 'utf8', env: quiet, maxBuffer: 16 << 20 },
+				// 1 is none ignored; anything else wrong is the same, for this.
+				(_err, stdout) => res(stdout ?? ''),
+			)
+			child.stdin?.end(rels.join('\0') + '\0')
+		})
+		const hit = new Set(out.split('\0').filter(Boolean))
+		return new Set(paths.filter((_, i) => hit.has(rels[i])))
+	}
+
+	// ignore adds a path to the .gitignore at the top of the repository,
+	// anchored there, a folder with its slash.
+	async ignore(path: string, dir: boolean) {
+		const { top } = await this.where()
+		const abs = isAbsolute(path) ? resolve(path) : resolve(this.root, path)
+		const rel = relative(await realpath(top), await realpath(abs).catch(() => abs))
+		if (!rel || rel.startsWith('..') || isAbsolute(rel)) throw new Error(`${path} is not in the repository`)
+		// Characters a pattern would read are escaped, so it names the path.
+		const pattern = '/' + rel.replace(/[\\*?[\]!# ]/g, '\\$&') + (dir ? '/' : '')
+		const file = join(top, '.gitignore')
+		let have = ''
+		try {
+			have = await readFile(file, 'utf8')
+		} catch {
+			// None yet.
+		}
+		if (have.split(/\r?\n/).includes(pattern)) return
+		await appendFile(file, (have && !have.endsWith('\n') ? '\n' : '') + pattern + '\n')
+		this.changed()
 	}
 
 	// commitInfo is one commit in full, with the files it changed in this

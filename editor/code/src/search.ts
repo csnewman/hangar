@@ -1,6 +1,6 @@
 import { execFile, spawn } from 'node:child_process'
-import { open, readdir } from 'node:fs/promises'
-import { join } from 'node:path'
+import { open, readdir, stat, writeFile } from 'node:fs/promises'
+import { isAbsolute, join, normalize } from 'node:path'
 
 // The most files listed for Go to File, and the most matches one search
 // returns.
@@ -23,6 +23,8 @@ export type TextQuery = {
 	wholeWord?: boolean
 	// Comma-separated globs, as IntelliJ's file mask: "*.go, !*_test.go".
 	mask?: string
+	// A folder to search in, from the root; the root by default.
+	dir?: string
 }
 
 export type Match = {
@@ -122,7 +124,7 @@ export class Search {
 		if (!q.caseSensitive) args.push('--ignore-case')
 		if (q.wholeWord) args.push('--word-regexp')
 		for (const g of globs(q.mask)) args.push('--glob', g)
-		args.push('--', q.query, '.')
+		args.push('--', q.query, scope(q.dir))
 		return new Promise((resolve, reject) => {
 			const child = spawn('rg', args, { cwd: this.root })
 			const matches: Match[] = []
@@ -169,13 +171,75 @@ export class Search {
 		})
 	}
 
-	private async scan(q: TextQuery, re: RegExp): Promise<TextResult> {
+	// inScope is the files a query looks in, without ripgrep: Go to File's,
+	// in its folder and its mask.
+	private async inScope(q: TextQuery): Promise<string[]> {
 		const { files } = await this.files()
 		const include = matcher(q.mask)
+		const dir = scope(q.dir)
+		return files.filter((f) => include(f) && (dir === '.' || f.startsWith(dir + '/')))
+	}
+
+	// replace replaces every match of a query with replacement, in the
+	// files given or every file it matches in: $1 and the like are a
+	// regular expression's groups, as IntelliJ's replace has them. It
+	// returns the files changed and how many matches were replaced.
+	async replace(q: TextQuery, replacement: string, only?: string[]): Promise<{ files: string[]; replaced: number }> {
+		if (!q.query) return { files: [], replaced: 0 }
+		const re = toRegExp(q)
+		const files = only ?? (await this.matching(q))
+		const changed: string[] = []
+		let replaced = 0
+		for (const f of files) {
+			if (isAbsolute(f) || normalize(f).startsWith('..')) continue
+			const abs = join(this.root, f)
+			const text = await readText(abs)
+			if (text === null) continue
+			let n = 0
+			const next = text.replace(re, (...m) => {
+				n++
+				return q.regex ? expand(replacement, m) : replacement
+			})
+			if (n === 0 || next === text) continue
+			const mode = (await stat(abs)).mode
+			await writeFile(abs, next, { mode })
+			changed.push(f)
+			replaced += n
+		}
+		return { files: changed, replaced }
+	}
+
+	// matching is the files a query matches in, all of them.
+	private async matching(q: TextQuery): Promise<string[]> {
+		const re = toRegExp(q)
+		if (await haveRipgrep()) {
+			const args = ['--files-with-matches', '--hidden', '--glob', '!.git', '--max-filesize', '8M', '-0']
+			if (!q.regex) args.push('--fixed-strings')
+			if (!q.caseSensitive) args.push('--ignore-case')
+			if (q.wholeWord) args.push('--word-regexp')
+			for (const g of globs(q.mask)) args.push('--glob', g)
+			args.push('--', q.query, scope(q.dir))
+			try {
+				return (await exec('rg', args, this.root)).split('\0').filter(Boolean).map((p) => p.replace(/^\.\//, ''))
+			} catch (e) {
+				// 1 is no matches.
+				if ((e as { code?: number }).code === 1) return []
+			}
+		}
+		const out: string[] = []
+		for (const f of await this.inScope(q)) {
+			const text = await readText(join(this.root, f))
+			re.lastIndex = 0
+			if (text !== null && re.test(text)) out.push(f)
+		}
+		return out
+	}
+
+	private async scan(q: TextQuery, re: RegExp): Promise<TextResult> {
+		const files = await this.inScope(q)
 		const matches: Match[] = []
 		const deadline = Date.now() + SEARCH_TIMEOUT_MS
 		for (const f of files) {
-			if (!include(f)) continue
 			if (matches.length >= MAX_MATCHES || Date.now() > deadline) return { matches, truncated: true }
 			const text = await readText(join(this.root, f))
 			if (text === null) continue
@@ -190,6 +254,15 @@ export class Search {
 		}
 		return { matches, truncated: false }
 	}
+}
+
+// scope is a folder to search in as the searches name it: '.' for the
+// root. One outside the root is refused.
+function scope(dir?: string): string {
+	if (!dir) return '.'
+	const d = normalize(dir).replace(/\/+$/, '')
+	if (isAbsolute(d) || d === '..' || d.startsWith('../')) throw new Error(`not a folder in this one: ${dir}`)
+	return d === '.' ? '.' : d
 }
 
 // toRegExp is the query as a JavaScript expression, used to find where in
@@ -262,6 +335,21 @@ function matcher(mask?: string): (path: string) => boolean {
 	const inc = gs.filter((g) => !g.startsWith('!')).map(toRe)
 	const exc = gs.filter((g) => g.startsWith('!')).map((g) => toRe(g.slice(1)))
 	return (p) => (inc.length === 0 || inc.some((r) => r.test(p))) && !exc.some((r) => r.test(p))
+}
+
+// expand is a replacement with a match's groups put in it: $1 to $99, $&
+// for the whole match, $$ for a dollar.
+function expand(replacement: string, m: unknown[]): string {
+	// The match, its groups, then the offset, the input and, if named
+	// groups, an object of them.
+	const tail = typeof m[m.length - 1] === 'object' ? 3 : 2
+	const groups = m.slice(0, m.length - tail) as (string | undefined)[]
+	return replacement.replace(/\$(\$|&|\d{1,2})/g, (all, g: string) => {
+		if (g === '$') return '$'
+		if (g === '&') return groups[0] ?? ''
+		const i = Number(g)
+		return i < groups.length ? (groups[i] ?? '') : all
+	})
 }
 
 // readText is a file's text, or null for one too large or not text.

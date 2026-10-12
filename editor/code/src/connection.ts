@@ -4,6 +4,7 @@ import type { Socket } from 'node:net'
 import { isAbsolute, resolve } from 'node:path'
 
 import type { Documents, SharedDoc } from './docs.js'
+import { ENCODINGS, type Clash, type Encoding, type Separator } from './fileops.js'
 import type { Files } from './files.js'
 import type { Git } from './git.js'
 import type { Action, Docker } from './docker.js'
@@ -155,11 +156,18 @@ export class Connection {
 			if (typeof v !== 'string') throw new Error(`${k} is required`)
 			return v
 		}
+		const strs = (k: string) => {
+			const v = p[k]
+			if (!Array.isArray(v) || !v.every((x) => typeof x === 'string')) throw new Error(`${k} is required`)
+			return v as string[]
+		}
+		const opt = (k: string) => (typeof p[k] === 'string' && p[k] ? (p[k] as string) : undefined)
+		const flag = (k: string) => (typeof p[k] === 'boolean' ? (p[k] as boolean) : undefined)
 		switch (method) {
 			case 'hello':
 				return this.hello(p.root)
 			case 'fs.list':
-				return this.f.files.list(str('path'))
+				return this.list(str('path'))
 			case 'fs.read':
 				return this.f.files.read(str('path'))
 			case 'fs.patch':
@@ -189,6 +197,46 @@ export class Connection {
 				return this.f.files.rename(str('from'), str('to'))
 			case 'fs.delete':
 				return this.f.files.remove(str('path'))
+			case 'fs.transfer': {
+				const op = str('op')
+				const clash = str('clash')
+				if (op !== 'copy' && op !== 'move') throw new Error(`no such operation: ${op}`)
+				if (!['ask', 'replace', 'skip', 'rename'].includes(clash)) throw new Error(`no such choice: ${clash}`)
+				return this.f.files.transfer(op, strs('from'), str('to'), clash as Clash, opt('name'))
+			}
+			case 'fs.trash':
+				return this.f.files.trash(strs('paths'))
+			case 'fs.restore': {
+				const items = Array.isArray(p.items) ? (p.items as { path: unknown; id: unknown }[]) : []
+				return this.f.files.restore(items.map((t) => ({ path: String(t.path), id: String(t.id) })))
+			}
+			case 'fs.uploadStart':
+				return this.f.files.uploadStart(str('path'))
+			case 'fs.uploadWrite':
+				return this.f.files.uploadWrite(str('token'), str('data'))
+			case 'fs.uploadEnd':
+				return this.f.files.uploadEnd(str('token'), p.replace === true)
+			case 'fs.uploadAbort':
+				return this.f.files.uploadAbort(str('token'))
+			case 'fs.zip':
+				return this.f.files.zip(strs('paths'))
+			case 'fs.unzip':
+				return this.f.files.unzip(str('path'))
+			case 'fs.setMode':
+				return this.f.files.setMode(str('path'), { exec: flag('exec'), writable: flag('writable') })
+			case 'fs.textProps':
+				return this.f.files.textProps(str('path'))
+			case 'fs.convert': {
+				const separator = opt('separator')
+				const encoding = opt('encoding')
+				if (separator && !['LF', 'CRLF', 'CR'].includes(separator)) throw new Error(`no such separator: ${separator}`)
+				if (encoding && !ENCODINGS.includes(encoding as Encoding)) throw new Error(`no such encoding: ${encoding}`)
+				return this.f.files.convert(str('path'), {
+					separator: separator as Separator | undefined,
+					encoding: encoding as Encoding | undefined,
+					bom: flag('bom'),
+				})
+			}
 			case 'lsp.start':
 				return this.startServer(str('language'))
 			case 'lsp.stop':
@@ -242,13 +290,9 @@ export class Connection {
 			case 'search.files':
 				return this.f.search.files()
 			case 'search.text':
-				return this.f.search.text({
-					query: str('query'),
-					regex: p.regex === true,
-					caseSensitive: p.caseSensitive === true,
-					wholeWord: p.wholeWord === true,
-					mask: typeof p.mask === 'string' ? p.mask : undefined,
-				})
+				return this.f.search.text(this.textQuery(p))
+			case 'search.replace':
+				return this.f.search.replace(this.textQuery(p), str('replacement'), Array.isArray(p.paths) ? strs('paths') : undefined)
 			case 'git.status':
 				return this.f.git.status()
 			case 'git.diff':
@@ -263,7 +307,10 @@ export class Connection {
 					typeof p.ref === 'string' && p.ref ? p.ref : undefined,
 					typeof p.skip === 'number' ? p.skip : 0,
 					typeof p.max === 'number' ? p.max : 300,
+					opt('path'),
 				)
+			case 'git.ignore':
+				return this.f.git.ignore(str('path'), p.dir === true)
 			case 'git.blob':
 				return this.f.git.blob(str('rev'), str('path'))
 			case 'git.commitInfo':
@@ -305,6 +352,27 @@ export class Connection {
 			default:
 				throw new Error(`no such method: ${method}`)
 		}
+	}
+
+	private textQuery(p: Record<string, unknown>) {
+		if (typeof p.query !== 'string') throw new Error('query is required')
+		return {
+			query: p.query,
+			regex: p.regex === true,
+			caseSensitive: p.caseSensitive === true,
+			wholeWord: p.wholeWord === true,
+			mask: typeof p.mask === 'string' ? p.mask : undefined,
+			dir: typeof p.dir === 'string' && p.dir ? p.dir : undefined,
+		}
+	}
+
+	// list is a folder's entries, with which of them git ignores.
+	private async list(path: string) {
+		const entries = await this.f.files.list(path)
+		const dir = this.f.files.abs(path)
+		const ignored = await this.f.git.ignored(entries.map((e) => resolve(dir, e.name))).catch(() => new Set<string>())
+		for (const e of entries) if (ignored.has(resolve(dir, e.name))) e.ignored = true
+		return entries
 	}
 
 	// startServer joins this tab to its folder's language server for a

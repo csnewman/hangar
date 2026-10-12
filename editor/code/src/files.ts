@@ -2,7 +2,34 @@ import { constants, watch, type FSWatcher } from 'node:fs'
 import { access, mkdir, open, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 
-export type Entry = { name: string; dir: boolean; size: number }
+import {
+	convert,
+	isPacked,
+	restore,
+	setMode,
+	textProps,
+	transfer,
+	trash,
+	Uploads,
+	zip,
+	type Clash,
+	type Encoding,
+	type Separator,
+	type Trashed,
+} from './fileops.js'
+
+// An entry in a folder: whether it is one, its size, and of a file whether
+// it is a link, runs, and may be written. ignored is git's say, added by
+// the connection.
+export type Entry = {
+	name: string
+	dir: boolean
+	size: number
+	link?: boolean
+	exec?: boolean
+	readonly?: boolean
+	ignored?: boolean
+}
 
 // The largest file read for a preview.
 const MAX_READ = 4 << 20
@@ -34,6 +61,7 @@ export class Files {
 	private pending = new Set<string>()
 	private pendingFiles = new Set<string>()
 	private timer: NodeJS.Timeout | undefined
+	private uploads = new Uploads()
 
 	constructor(private root: string) {}
 
@@ -46,18 +74,22 @@ export class Files {
 		const ents = await readdir(dir, { withFileTypes: true })
 		const out: Entry[] = []
 		for (const e of ents) {
-			let isDir = e.isDirectory()
-			let size = 0
+			const entry: Entry = { name: e.name, dir: e.isDirectory(), size: 0 }
+			if (e.isSymbolicLink()) entry.link = true
 			if (e.isSymbolicLink() || e.isFile()) {
 				try {
 					const st = await stat(join(dir, e.name))
-					isDir = st.isDirectory()
-					size = st.size
+					entry.dir = st.isDirectory()
+					if (!entry.dir) {
+						entry.size = st.size
+						if (st.mode & 0o111) entry.exec = true
+						if (!(st.mode & 0o222)) entry.readonly = true
+					}
 				} catch {
 					// A dangling link is listed as a file.
 				}
 			}
-			out.push({ name: e.name, dir: isDir, size })
+			out.push(entry)
 		}
 		out.sort((a, b) => (a.dir === b.dir ? a.name.localeCompare(b.name) : a.dir ? -1 : 1))
 		return out
@@ -160,6 +192,77 @@ export class Files {
 		const p = this.abs(path)
 		if (p === this.root || p === '/') throw new Error('refusing to delete the root')
 		await rm(p, { recursive: true })
+	}
+
+	// transfer copies or moves paths into a folder, as fileops' transfer,
+	// the paths it made given as the browser named the ones it was given.
+	async transfer(op: 'copy' | 'move', from: string[], to: string, clash: Clash, name?: string) {
+		const srcs = from.map((f) => this.guarded(f))
+		const r = await transfer(op, srcs, this.abs(to), clash, name)
+		return { clashes: r.clashes, done: r.done.map((d) => ({ from: this.named(d.from), to: this.named(d.to) })) }
+	}
+
+	// trash puts paths in the desktop's trash; restore puts them back.
+	async trash(paths: string[]): Promise<Trashed[]> {
+		const out = await trash(paths.map((p) => this.guarded(p)))
+		return out.map((t) => ({ ...t, path: this.named(t.path) }))
+	}
+
+	async restore(items: Trashed[]) {
+		await restore(items.map((t) => ({ id: t.id, path: this.abs(t.path) })))
+	}
+
+	uploadStart(path: string) {
+		return this.uploads.start(this.abs(path))
+	}
+
+	uploadWrite(token: string, data: string) {
+		return this.uploads.write(token, data)
+	}
+
+	async uploadEnd(token: string, replace: boolean) {
+		return this.named(await this.uploads.end(token, replace))
+	}
+
+	uploadAbort(token: string) {
+		return this.uploads.abort(token)
+	}
+
+	// zip packs paths for downloading, into a file the browser reads with
+	// bytes and then removes with unzip.
+	zip(paths: string[]) {
+		return zip(paths.map((p) => this.abs(p)))
+	}
+
+	async unzip(path: string) {
+		if (await isPacked(path)) await rm(path, { force: true })
+	}
+
+	setMode(path: string, change: { exec?: boolean; writable?: boolean }) {
+		return setMode(this.abs(path), change)
+	}
+
+	textProps(path: string) {
+		return textProps(this.abs(path))
+	}
+
+	convert(path: string, to: { separator?: Separator; encoding?: Encoding; bom?: boolean }) {
+		return convert(this.abs(path), to)
+	}
+
+	// guarded is a path to change wholesale -- move, copy, trash -- which
+	// the root, and /, are not.
+	private guarded(path: string): string {
+		const p = this.abs(path)
+		if (p === this.root || p === '/') throw new Error('refusing to move the root')
+		return p
+	}
+
+	// named is an absolute path as the browser names it: from the root when
+	// within it.
+	private named(abs: string): string {
+		const rel = relative(this.root, abs)
+		return rel && !rel.startsWith('..') && !isAbsolute(rel) ? rel : abs
 	}
 
 	// onChange calls fn with the directories whose contents changed, and the
