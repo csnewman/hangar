@@ -181,6 +181,28 @@ func (s *guestSession) copyDown(downs []down) {
 	}
 }
 
+// makeParents makes the directories each shared path is in, once the
+// routes are applied. hangarfs finds a routed name by looking it up in its
+// directory, so a path whose directory the environment lacks -- ~/.aws/config
+// in an image with no ~/.aws -- is not there until something makes it. They
+// are the user's in the home directory, and root's elsewhere, as a mkdir -p
+// by either would leave them; one inside a routed directory is the copy's,
+// which the router made.
+func (s *guestSession) makeParents(routes []Route) {
+	for _, r := range routes {
+		if r.Exclude {
+			continue
+		}
+		uid, gid := -1, -1
+		if strings.HasPrefix(r.Path, s.home+"/") {
+			uid, gid = s.uid, s.gid
+		}
+		if err := mkdirAllOwned(filepath.Dir(r.Path), uid, gid); err != nil {
+			s.g.log.Warn("profile: making a shared path's directory", "path", r.Path, "err", err)
+		}
+	}
+}
+
 // writeShared writes a file in the shared files as the environment's user,
 // who owns it there as they would have had they written it themselves.
 func (s *guestSession) writeShared(name string, data []byte, mode fs.FileMode) error {

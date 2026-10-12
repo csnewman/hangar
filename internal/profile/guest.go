@@ -330,7 +330,8 @@ func (s *guestSession) handle(m Message) {
 // applyRoutes has the routes applied, when they are not those already --
 // the files whose sharing changes sorted first, and those the new routes
 // leave to the environment copied down after -- and tells the server what it routes to and the
-// conflicts it found. Then it writes Claude's record of this machine if
+// conflicts it found. Then it makes the directories the shared paths are
+// in, if they are missing, and writes Claude's record of this machine if
 // it has none: the setup's choices are in the profile, so it is not taken
 // through it again.
 func (s *guestSession) applyRoutes(routes []Route) {
@@ -364,6 +365,10 @@ func (s *guestSession) applyRoutes(routes []Route) {
 		}
 		s.send(Message{Type: TypeRouted, Routed: copiesIn(routes)})
 	}
+	// Each time, routes changed or not, so a directory removed since is
+	// back once the session says the routes again, as it does on
+	// reconnecting.
+	s.makeParents(routes)
 	s.unrouted = nil
 	if err := s.seedClaudeState(); err != nil {
 		g.log.Warn("profile: writing Claude's state", "err", err)

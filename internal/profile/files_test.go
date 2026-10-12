@@ -150,3 +150,25 @@ func TestFilesMoveAsSharingChanges(t *testing.T) {
 		return string(b) == "edited"
 	})
 }
+
+// A shared file in a directory the environment lacks has the directory
+// made, so it is there to be found.
+func TestASharedFilesDirectoryIsMade(t *testing.T) {
+	ctx := context.Background()
+	p := newPlane(t)
+	if _, err := p.packs.CreatePack(ctx, as(p.owner), packs.PackInput{Name: "aws", Attach: packs.AttachOwner,
+		Paths: []packs.Path{{Path: "~/.aws/config"}, {Path: "~/.cache/tool/state/"}}}); err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	p.envIn(t, "a", api.Spec{}, api.PhaseRunning, home)
+
+	eventually(t, "the shared paths' directories to be made", func() bool {
+		a, aerr := os.Stat(filepath.Join(home, ".aws"))
+		c, cerr := os.Stat(filepath.Join(home, ".cache/tool"))
+		return aerr == nil && a.IsDir() && cerr == nil && c.IsDir()
+	})
+	if _, err := os.Stat(filepath.Join(home, ".cache/tool/state")); err == nil {
+		t.Error("a shared directory was made in the environment rather than routed")
+	}
+}
