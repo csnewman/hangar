@@ -223,6 +223,9 @@ const [undoKey, , redoKey] = yUndoManagerKeymap
 const selectedText = (view: EditorView) =>
   view.state.selection.ranges.map((r) => view.state.sliceDoc(r.from, r.to)).join('\n')
 
+// The jumps whose annotations have been shown.
+const blamed = new WeakSet<object>()
+
 // CodeEditor edits one shared file. Everyone with it open sees the others'
 // carets and selections, named. Beside the line numbers, a gutter marks
 // what differs from git's index; a click on a mark shows what was there,
@@ -543,6 +546,14 @@ export function CodeEditor({
       off()
     }
   }, [ready, annotating, client, path])
+
+  // A jump that asks for the annotations shows them, once: the editor
+  // opened again later is as it was left.
+  useEffect(() => {
+    if (!jump?.blame || jump.path !== path || blamed.has(jump)) return
+    blamed.add(jump)
+    setAnnotating(true)
+  }, [jump, path])
 
   // A jump puts the caret on its line, selecting the text it names there,
   // with the line in the middle of the view.

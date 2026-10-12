@@ -40,7 +40,11 @@ export function copyText(text: string) {
 // A menu opens with its left edge at x, or its right edge for 'right'.
 type Align = 'left' | 'right'
 
-type Open = { x: number; y: number; items: MenuItem[]; align?: Align }
+// n counts the menus opened, so each, a submenu opened in its place too,
+// is placed afresh.
+type Open = { x: number; y: number; items: MenuItem[]; align?: Align; n: number }
+
+let opened = 0
 
 // useContextMenu is a menu opened at the pointer: `open` from an
 // onContextMenu handler, and `menu` rendered anywhere.
@@ -49,16 +53,18 @@ export function useContextMenu() {
   const open = useCallback((e: ReactMouseEvent | MouseEvent, items: MenuItem[]) => {
     e.preventDefault()
     e.stopPropagation()
-    setState({ x: e.clientX, y: e.clientY, items })
+    setState({ x: e.clientX, y: e.clientY, items, n: ++opened })
   }, [])
   // openAt opens it at a point, for a menu whose items load first or one
   // under a button.
   const openAt = useCallback(
-    (x: number, y: number, items: MenuItem[], align?: Align) => setState({ x, y, items, align }),
+    (x: number, y: number, items: MenuItem[], align?: Align) => setState({ x, y, items, align, n: ++opened }),
     [],
   )
   const close = useCallback(() => setState(null), [])
-  const menu = state && <ContextMenu x={state.x} y={state.y} align={state.align} items={state.items} onClose={close} />
+  const menu = state && (
+    <ContextMenu key={state.n} x={state.x} y={state.y} align={state.align} items={state.items} onClose={close} />
+  )
   return { open, openAt, close, menu }
 }
 
@@ -88,7 +94,8 @@ export function ContextMenu({
     const r = el.getBoundingClientRect()
     setPos({
       left: Math.max(4, Math.min(align === 'right' ? x - r.width : x, window.innerWidth - r.width - 4)),
-      top: Math.max(4, y + r.height > window.innerHeight - 4 ? y - r.height : y),
+      // Below the point, else as far up as it must go to fit.
+      top: Math.max(4, Math.min(y, window.innerHeight - r.height - 4)),
     })
     el.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
   }, [x, y, align])

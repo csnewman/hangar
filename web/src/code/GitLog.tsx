@@ -1,4 +1,4 @@
-import { ChevronDown, Copy, File, GitBranch, RefreshCw, Tag } from 'lucide-react'
+import { ChevronDown, Copy, File, GitBranch, History, RefreshCw, Tag, X } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 
 import { changeWhere, type DiffAgainst } from './BranchChanges'
@@ -16,20 +16,31 @@ const laneWidth = 12
 // GitLog is the Git Log tool window, as IntelliJ's: the history of every
 // branch (or one) as a graph of how they forked and merged, newest first,
 // filtered by what is typed, and the chosen commit's message and files,
-// each opening its diff in that commit.
+// each opening its diff in that commit. It shows one file's or folder's
+// history when asked, until that is cleared.
 export function GitLog({
   client,
   focus,
+  history,
   onDiff,
   onHide,
 }: {
   client: CodeClient
   // focus is a commit to find and choose, each time it changes.
   focus?: { hash: string; n: number } | null
+  // history is a path whose history to show, each time it changes.
+  history?: { path: string; n: number } | null
   onDiff: (path: string, against: DiffAgainst) => void
   onHide: () => void
 }) {
   const [ref, setRef] = useState<string | undefined>(undefined)
+  const [path, setPath] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    if (!history) return
+    setPath(history.path)
+    setFilter('')
+    setSelected(null)
+  }, [history])
   const [commits, setCommits] = useState<LogCommit[]>([])
   const [more, setMore] = useState(false)
   const [error, setError] = useState('')
@@ -49,7 +60,7 @@ export function GitLog({
       try {
         const skip = next ? count.current : 0
         const max = next ? page : Math.max(page, count.current)
-        const log = await client.log(ref, skip, max)
+        const log = await client.log(ref, skip, max, path)
         setCommits((c) => (next ? [...c, ...log.commits] : log.commits))
         setMore(log.more)
         setError('')
@@ -59,7 +70,7 @@ export function GitLog({
         loading.current = false
       }
     },
-    [client, ref],
+    [client, ref, path],
   )
   useEffect(() => {
     count.current = 0
@@ -128,11 +139,12 @@ export function GitLog({
     if (!focus) return
     setFilter('')
     setRef(undefined)
+    setPath(undefined)
     setSelected(focus.hash)
     setSeek(focus.hash)
   }, [focus])
   useEffect(() => {
-    if (!seek || q || ref !== undefined) return
+    if (!seek || q || ref !== undefined || path !== undefined) return
     const i = commits.findIndex((c) => c.hash === seek)
     if (i >= 0) {
       setSeek(null)
@@ -145,7 +157,7 @@ export function GitLog({
     }
     if (more) load(true)
     else if (commits.length) setSeek(null)
-  }, [seek, commits, more, q, ref, load])
+  }, [seek, commits, more, q, ref, path, load])
 
   const index = shown.findIndex(({ c }) => c.hash === selected)
   const select = (i: number) => {
@@ -202,11 +214,27 @@ export function GitLog({
     <ToolWindow
       title="Git Log"
       extra={
-        <button type="button" className="code-branch-btn" title="Show another branch's history" onClick={pickRef}>
-          <GitBranch size={12} />
-          {ref === undefined ? 'All branches' : ref === 'HEAD' ? 'The current branch' : ref}
-          <ChevronDown size={11} />
-        </button>
+        <>
+          <button type="button" className="code-branch-btn" title="Show another branch's history" onClick={pickRef}>
+            <GitBranch size={12} />
+            {ref === undefined ? 'All branches' : ref === 'HEAD' ? 'The current branch' : ref}
+            <ChevronDown size={11} />
+          </button>
+          {path !== undefined && (
+            <span className="code-log-path" title={`Only the commits that changed ${path}`}>
+              <History size={12} />
+              {path.split('/').pop() || path}
+              <button
+                type="button"
+                title="Show the whole history"
+                aria-label="Show the whole history"
+                onClick={() => setPath(undefined)}
+              >
+                <X size={11} />
+              </button>
+            </span>
+          )}
+        </>
       }
       actions={
         <button type="button" className="code-tool-btn" title="Refresh" onClick={() => load(false)}>

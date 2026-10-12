@@ -229,7 +229,11 @@ export class SharedDoc {
 			}
 			return
 		}
-		this.deleted = false
+		if (this.deleted) {
+			// Back: restored from the trash, or made again.
+			this.deleted = false
+			for (const m of this.members) m.conn.notify('doc.restored', { path: m.path })
+		}
 		if (content === this.onDisk) return
 		this.onDisk = content
 		// The file's line endings are its own, changed on disk too: a file

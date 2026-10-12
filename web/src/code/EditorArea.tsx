@@ -4,7 +4,7 @@ import type { CodeClient, GitStatus, SharedFile } from './client'
 import { CodeEditor } from './CodeEditor'
 import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { DesktopTab } from '../desktop/DesktopTab'
-import { DiffView } from './DiffView'
+import { CompareView, DiffView } from './DiffView'
 import { DockerLogs } from './DockerView'
 import { HexView } from './HexView'
 import { ImageView } from './ImageView'
@@ -130,6 +130,9 @@ export function EditorArea({
             toLabel={current.toLabel}
           />
         )}
+        {current?.kind === 'compare' && current.other && (
+          <CompareView key={tabKey(current)} client={client} left={current.other} right={current.path} />
+        )}
         {current?.kind === 'desktop' && (
           <div className="code-desktop">
             <DesktopTab />
@@ -209,14 +212,20 @@ function TextTab({
   const [error, setError] = useState('')
 
   // A file deleted while open is shown as deleted rather than edited, which
-  // would bring it back.
-  useEffect(
-    () =>
-      client.on('doc.deleted', ({ path: gone }) => {
-        if (gone === `${client.root}/${path}` || gone === path) setError(`${path.split('/').pop()} was deleted.`)
-      }),
-    [client, path],
-  )
+  // would bring it back, until it is back: restored from the trash.
+  useEffect(() => {
+    const ours = (p: string) => p === `${client.root}/${path}` || p === path
+    const offGone = client.on('doc.deleted', ({ path: gone }) => {
+      if (ours(gone)) setError(`${path.split('/').pop()} was deleted.`)
+    })
+    const offBack = client.on('doc.restored', ({ path: back }) => {
+      if (ours(back)) setError('')
+    })
+    return () => {
+      offGone()
+      offBack()
+    }
+  }, [client, path])
 
   useEffect(() => {
     let f: SharedFile | null = null

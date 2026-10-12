@@ -12,8 +12,11 @@ import { opensAsImage, viewNames, type FileView } from './views'
 // toLabel), as a commit's own changes are. A file opens in the view its
 // content calls for, or the one chosen with Open With (view).
 export type Tab = {
-  kind: 'file' | 'diff' | 'logs' | 'desktop'
+  kind: 'file' | 'diff' | 'compare' | 'logs' | 'desktop'
   path: string
+  // other is what a compare tab shows the file beside: another file, or
+  // the clipboard (clipboard:<id>).
+  other?: string
   view?: FileView
   title?: string
   base?: string
@@ -24,7 +27,11 @@ export type Tab = {
 }
 
 export const tabKey = (t: Tab) =>
-  t.base ? `diff@${t.base}${t.to ? `..${t.to}` : ''}:${t.path}` : `${t.kind}${t.view ? `+${t.view}` : ''}:${t.path}`
+  t.kind === 'compare'
+    ? `compare:${t.other}|${t.path}`
+    : t.base
+      ? `diff@${t.base}${t.to ? `..${t.to}` : ''}:${t.path}`
+      : `${t.kind}${t.view ? `+${t.view}` : ''}:${t.path}`
 
 export const tabName = (t: Tab) => t.title ?? t.path.split('/').pop() ?? t.path
 
@@ -33,6 +40,8 @@ export const tabName = (t: Tab) => t.title ?? t.path.split('/').pop() ?? t.path
 function tabDetail(t: Tab): string | undefined {
   const dir = t.path.includes('/') ? t.path.slice(0, t.path.lastIndexOf('/')) : ''
   if (t.kind === 'diff') return [diffWhat(t), dir].filter(Boolean).join(' · ')
+  if (t.kind === 'compare')
+    return `compared with ${t.other?.startsWith('clipboard:') ? 'the clipboard' : (t.other?.split('/').pop() ?? '')}`
   if (t.kind === 'logs') return 'logs'
   if (t.view) return [viewNames[t.view], dir].filter(Boolean).join(' · ')
   return dir || undefined

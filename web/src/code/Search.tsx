@@ -1,6 +1,6 @@
 import { EditorState, RangeSetBuilder, Compartment, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, lineNumbers } from '@codemirror/view'
-import { CaseSensitive, File, Folder, FolderOpen, Regex, WholeWord } from 'lucide-react'
+import { CaseSensitive, File, Folder, FolderOpen, Regex, Replace, WholeWord, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import type { CodeClient, Match } from './client'
@@ -11,11 +11,22 @@ import type { Usages } from './lsp'
 // Jump is a place in a file to open it at: a 1-based line (0 for none),
 // and optionally a 1-based column, or text in the line to select. focus
 // false leaves the keyboard where it is, as stepping through a list does.
-export type Jump = { path: string; line: number; col?: number; find?: string; focus?: boolean }
+// Jump is a place in a file to go to: a line (from 1; 0 is none), the
+// column and text there, whether the editor takes focus, and whether its
+// annotations (git blame) are shown.
+export type Jump = { path: string; line: number; col?: number; find?: string; focus?: boolean; blame?: boolean }
 
 // Popup is the frame the Code tab's search popups share, as IntelliJ's:
 // centred near the top, over everything, gone on Escape or a click away.
-function Popup({ className, onClose, children }: { className?: string; onClose: () => void; children: ReactNode }) {
+export function Popup({
+  className,
+  onClose,
+  children,
+}: {
+  className?: string
+  onClose: () => void
+  children: ReactNode
+}) {
   return (
     <div
       className="code-popup-shade"
@@ -261,16 +272,29 @@ type FindOptions = {
   wholeWord: boolean
   mask: string
   masked: boolean
+  replacement: string
 }
 
 // The last search, so Find in Files opens where it was left.
-let lastFind: FindOptions = { query: '', regex: false, caseSensitive: false, wholeWord: false, mask: '', masked: false }
+let lastFind: FindOptions = {
+  query: '',
+  regex: false,
+  caseSensitive: false,
+  wholeWord: false,
+  mask: '',
+  masked: false,
+  replacement: '',
+}
 
 // FindInFiles searches the folder's files for text, as IntelliJ's Find in
-// Files: matches as they are found, each previewed in its file.
+// Files: matches as they are found, each previewed in its file. Opened on
+// a folder it searches that folder, and opened to replace (IntelliJ's
+// Replace in Files) it replaces the matches in a file or every file.
 export function FindInFiles({
   client,
   initial,
+  dir,
+  replace,
   onOpen,
   onFindWindow,
   onClose,
@@ -278,6 +302,9 @@ export function FindInFiles({
   client: CodeClient
   // initial is text to search for, such as the editor's selection.
   initial?: string
+  // dir is a folder to search, from the root.
+  dir?: string
+  replace?: boolean
   onOpen: (j: Jump) => void
   // onFindWindow lists the matches in the Find window, to go through.
   onFindWindow: (u: Usages) => void
@@ -288,10 +315,27 @@ export function FindInFiles({
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [sel, setSel] = useState(0)
-  const set = (o: Partial<FindOptions>) => setOpts((x) => ({ ...x, ...o }))
+  const [scope, setScope] = useState(dir ?? '')
+  const [replacing, setReplacing] = useState(!!replace)
+  // round counts replacements, after each of which the search runs again.
+  const [round, setRound] = useState(0)
+  const [replaced, setReplaced] = useState('')
+  const [confirmAll, setConfirmAll] = useState(false)
+  const set = (o: Partial<FindOptions>) => {
+    setConfirmAll(false)
+    setOpts((x) => ({ ...x, ...o }))
+  }
   useEffect(() => {
     lastFind = opts
   }, [opts])
+  const query = {
+    query: opts.query,
+    regex: opts.regex,
+    caseSensitive: opts.caseSensitive,
+    wholeWord: opts.wholeWord,
+    mask: opts.masked ? opts.mask : '',
+    dir: scope,
+  }
 
   useEffect(() => {
     if (!opts.query) {
@@ -309,6 +353,7 @@ export function FindInFiles({
           caseSensitive: opts.caseSensitive,
           wholeWord: opts.wholeWord,
           mask: opts.masked ? opts.mask : '',
+          dir: scope,
         })
         .then(
           (r) => {
@@ -325,10 +370,30 @@ export function FindInFiles({
       live = false
       clearTimeout(timer)
     }
-  }, [client, opts])
+    // The replacement is not part of what is searched for.
+  }, [client, opts.query, opts.regex, opts.caseSensitive, opts.wholeWord, opts.mask, opts.masked, scope, round])
+
+  // replaceIn replaces the matches in the files given, or every file.
+  const replaceIn = async (paths?: string[]) => {
+    setConfirmAll(false)
+    try {
+      const r = await client.replace(query, opts.replacement, paths)
+      setReplaced(
+        r.replaced
+          ? `Replaced ${r.replaced} match${r.replaced === 1 ? '' : 'es'} in ${r.files.length} file${r.files.length === 1 ? '' : 's'}.`
+          : 'Nothing was replaced.',
+      )
+      setRound((n) => n + 1)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
 
   const matches = result?.matches ?? []
   const fileCount = useMemo(() => new Set(matches.map((m) => m.path)).size, [matches])
+  // Each match in a line, which a line's row may hold several of.
+  const occurrences = useMemo(() => matches.reduce((n, m) => n + Math.max(1, m.ranges.length), 0), [matches])
+  useEffect(() => setConfirmAll(false), [result])
   const list = useScrollIntoView(sel)
   const current = matches[sel]
 
@@ -377,7 +442,21 @@ export function FindInFiles({
   return (
     <Popup className="code-find" onClose={onClose}>
       <div className="code-popup-head">
-        <span className="strong">Find in Files</span>
+        <span className="strong">{replacing ? 'Replace in Files' : 'Find in Files'}</span>
+        {scope && (
+          <span className="code-log-path" title={`Only the files in ${scope}`}>
+            <Folder size={12} />
+            {scope}
+            <button
+              type="button"
+              title="Search every folder"
+              aria-label="Search every folder"
+              onClick={() => setScope('')}
+            >
+              <X size={11} />
+            </button>
+          </span>
+        )}
         <span className="muted small">
           {busy
             ? 'Searching…'
@@ -422,7 +501,50 @@ export function FindInFiles({
         {toggle('caseSensitive', 'Match case', <CaseSensitive size={15} />)}
         {toggle('wholeWord', 'Words', <WholeWord size={15} />)}
         {toggle('regex', 'Regex', <Regex size={15} />)}
+        <button
+          type="button"
+          className={replacing ? 'code-popup-toggle code-popup-toggle-on' : 'code-popup-toggle'}
+          title="Replace"
+          aria-label="Replace"
+          aria-pressed={replacing}
+          onClick={() => setReplacing((x) => !x)}
+        >
+          <Replace size={15} />
+        </button>
       </div>
+      {replacing && (
+        <div className="code-find-query">
+          <input
+            className="code-popup-input"
+            spellCheck={false}
+            placeholder={opts.regex ? 'Replace with ($1 for a group)' : 'Replace with'}
+            value={opts.replacement}
+            onChange={(e) => set({ replacement: e.target.value })}
+          />
+          <button
+            type="button"
+            className="btn btn-sm"
+            disabled={!current || busy}
+            title={current ? `Replace the matches in ${current.path}` : undefined}
+            onClick={() => current && replaceIn([current.path])}
+          >
+            Replace in File
+          </button>
+          <button
+            type="button"
+            className={confirmAll ? 'btn btn-sm btn-danger' : 'btn btn-sm'}
+            disabled={!matches.length || busy}
+            onClick={() => (confirmAll ? replaceIn() : setConfirmAll(true))}
+          >
+            {confirmAll
+              ? result?.truncated
+                ? 'Replace every match?'
+                : `Replace ${occurrences} match${occurrences === 1 ? '' : 'es'} in ${fileCount} file${fileCount === 1 ? '' : 's'}?`
+              : 'Replace All'}
+          </button>
+        </div>
+      )}
+      {replaced && <div className="code-find-replaced muted small">{replaced}</div>}
       <div className="code-popup-list code-find-list" ref={list} role="listbox">
         {matches.map((m, i) => (
           <div

@@ -242,10 +242,16 @@ function CodeView({
 
   // Search: popups, and the place in a file one of them opens.
   const [popup, setPopup] = useState<Popup>(null)
+  // Find in Files opened from the Project tree: in a folder, to replace.
+  const [findIn, setFindIn] = useState<{ dir?: string; replace?: boolean }>({})
+  const findInFolder = (dir: string, replace: boolean) => {
+    setFindIn({ dir, replace })
+    setPopup('find')
+  }
   const [jump, setJump] = useState<(Jump & { n: number }) | null>(null)
   const openAt = (j: Jump) => {
     open({ kind: 'file', path: j.path })
-    if (j.line > 0) setJump((x) => ({ ...j, n: (x?.n ?? 0) + 1 }))
+    if (j.line > 0 || j.blame) setJump((x) => ({ ...j, n: (x?.n ?? 0) + 1 }))
   }
   // The bottom panel shows the terminal, the Find tool window or the Git
   // Log, keeping the others.
@@ -258,6 +264,26 @@ function CodeView({
   // commit asked for elsewhere (the blame) is found and chosen in it.
   const [logSeen, setLogSeen] = useState(false)
   const [logFocus, setLogFocus] = useState<{ hash: string; n: number } | null>(null)
+  const [logHistory, setLogHistory] = useState<{ path: string; n: number } | null>(null)
+  const showHistory = (path: string) => {
+    setLogHistory((h) => ({ path, n: (h?.n ?? 0) + 1 }))
+    showBottom('log')
+  }
+  // moved has the tabs on paths that moved follow them.
+  const moved = (pairs: { from: string; to: string }[]) =>
+    setStore((s) => {
+      const follow = (p: string) => {
+        for (const { from, to } of pairs) {
+          if (p === from) return to
+          if (p.startsWith(from + '/')) return to + p.slice(from.length)
+        }
+        return p
+      }
+      const keyOf = (t: Tab) => tabKey(t)
+      const tabs = s.tabs.map((t) => ({ ...t, path: follow(t.path), ...(t.other ? { other: follow(t.other) } : {}) }))
+      const was = s.tabs.findIndex((t) => keyOf(t) === s.active)
+      return { tabs, active: was >= 0 ? keyOf(tabs[was]) : s.active }
+    })
   const showCommit = (hash: string) => {
     setLogFocus((f) => ({ hash, n: (f?.n ?? 0) + 1 }))
     showBottom('log')
@@ -433,12 +459,20 @@ function CodeView({
         status={status}
         selected={activeTab?.path ?? null}
         reveal={reveal}
-        onOpen={(path, view) => open({ kind: 'file', path, view })}
+        onOpen={(path, view, stay) => {
+          open({ kind: 'file', path, view })
+          if (stay) setJump((x) => ({ path, line: 0, focus: false, n: (x?.n ?? 0) + 1 }))
+        }}
+        onTab={open}
         onDiff={(path) => open({ kind: 'diff', path })}
         onTerminal={openTerminal}
         onGotoFile={() => setPopup('goto')}
         onOpenFolder={() => setPopup('folder')}
         onFolderHere={(dir) => onFolder(dir === client.home ? '' : dir)}
+        onFind={findInFolder}
+        onHistory={showHistory}
+        onAnnotate={(path) => openAt({ path, line: 0, blame: true })}
+        onMoved={moved}
         onHide={() => hideTool('project')}
       />
     ) : name === 'docker' ? (
@@ -577,6 +611,7 @@ function CodeView({
                   <GitLog
                     client={client}
                     focus={logFocus}
+                    history={logHistory}
                     onDiff={(path, against) => open({ kind: 'diff', path, ...against })}
                     onHide={() => fold('terminal', false)}
                   />
@@ -616,12 +651,17 @@ function CodeView({
         {popup === 'find' && (
           <FindInFiles
             client={client}
+            dir={findIn.dir}
+            replace={findIn.replace}
             onOpen={openAt}
             onFindWindow={(u) => {
               setUsages(u)
               showBottom('find')
             }}
-            onClose={() => setPopup(null)}
+            onClose={() => {
+              setPopup(null)
+              setFindIn({})
+            }}
           />
         )}
         {popup === 'folder' && <OpenFolder client={client} onChoose={onFolder} onClose={() => setPopup(null)} />}

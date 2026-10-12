@@ -219,3 +219,96 @@ function BinarySides({
     </div>
   )
 }
+
+// The clipboard's text, as it was when a file was compared with it, by the
+// id a compare tab names it by. It lasts as long as the page.
+export const clipboards = new Map<string, string>()
+let clipboardIds = 0
+
+// keepClipboard keeps text for a compare tab, returning what the tab's
+// other side is: clipboard:<id>.
+export function keepClipboard(text: string): string {
+  const id = `clipboard:${++clipboardIds}`
+  clipboards.set(id, text)
+  return id
+}
+
+// sideName is how a compare tab's side is named: a file by its path, the
+// clipboard as that.
+export function sideName(side: string): string {
+  return side.startsWith('clipboard:') ? 'Clipboard' : side
+}
+
+// CompareView shows two texts side by side: two files, or a file and what
+// was on the clipboard, as IntelliJ's Compare Files and Compare with
+// Clipboard do. The files are followed as they change.
+export function CompareView({ client, left, right }: { client: CodeClient; left: string; right: string }) {
+  const host = useRef<HTMLDivElement>(null)
+  const [error, setError] = useState('')
+  const [same, setSame] = useState(false)
+
+  useEffect(() => {
+    const el = host.current
+    if (!el) return
+    let view: MergeView | null = null
+    let disposed = false
+    let lang: Extension = []
+    const text = async (side: string): Promise<string> => {
+      if (side.startsWith('clipboard:')) {
+        const t = clipboards.get(side)
+        if (t === undefined) throw new Error('What was on the clipboard is gone with the page it was compared in.')
+        return t
+      }
+      const t = await client.read(side)
+      if (t === null) throw new Error(`${side.split('/').pop()} is too large to compare, or not text.`)
+      return t
+    }
+    const load = async () => {
+      try {
+        const [a, b] = (await Promise.all([text(left), text(right)])).map((t) => t.replace(/\r\n/g, '\n'))
+        if (disposed) return
+        setError('')
+        setSame(a === b)
+        const scroll = view?.b.scrollDOM.scrollTop ?? 0
+        view?.destroy()
+        view = new MergeView({
+          parent: el,
+          a: { doc: a, extensions: diffSide(lang) },
+          b: { doc: b, extensions: diffSide(lang) },
+          collapseUnchanged: a === b ? undefined : { margin: 3, minSize: 6 },
+          gutter: true,
+        })
+        view.b.scrollDOM.scrollTop = scroll
+      } catch (e) {
+        if (!disposed) setError(e instanceof Error ? e.message : String(e))
+      }
+    }
+    languageFor(right.split('/').pop() ?? '').then((l) => {
+      lang = l
+      load()
+    })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const off = client.on('fs.changed', () => {
+      clearTimeout(timer)
+      timer = setTimeout(load, 250)
+    })
+    return () => {
+      disposed = true
+      clearTimeout(timer)
+      off()
+      view?.destroy()
+    }
+  }, [client, left, right])
+
+  return (
+    <div className="code-diff">
+      {same && !error && <div className="code-diff-about">The contents are the same.</div>}
+      <div className="code-diff-heads">
+        <span>{sideName(left)}</span>
+        <span>{sideName(right)}</span>
+      </div>
+      {error && <div className="code-note">{error}</div>}
+      <div ref={host} className="code-diff-host" hidden={!!error} />
+    </div>
+  )
+}

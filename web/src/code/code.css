@@ -393,6 +393,59 @@
   text-overflow: ellipsis;
 }
 
+/* The rows chosen, stronger while the tree has the focus. */
+.code-tree-row-chosen {
+  background: var(--sidebar-active);
+}
+
+.code-tree:focus .code-tree-row-chosen {
+  background: var(--accent-soft);
+}
+
+/* Cut, waiting to be pasted. */
+.code-tree-row-cut .code-tree-name,
+.code-tree-row-cut svg {
+  opacity: 0.5;
+}
+
+/* What git ignores, as IntelliJ shows excluded files. */
+.code-tree-row-ignored .code-tree-name {
+  color: var(--muted);
+}
+
+/* The folder a drag would drop into. */
+.code-tree-drop {
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+/* What was last done, and its Undo; or what is under way; or what failed. */
+.code-tree-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px 4px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.code-tree-status > span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-tree-status .code-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  width: auto;
+  padding: 0 5px;
+  font: inherit;
+}
+
 .code-tree-input {
   flex: 1;
   min-width: 0;
@@ -1054,6 +1107,37 @@
   text-overflow: ellipsis;
 }
 
+/* The path whose history the Git Log is showing, and a button to stop. */
+.code-log-path {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  margin-left: 4px;
+  padding: 1px 2px 1px 6px;
+  border-radius: 5px;
+  background: var(--accent-soft, var(--surface-2));
+  color: var(--text);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.code-log-path button {
+  display: inline-grid;
+  place-items: center;
+  padding: 2px;
+  background: none;
+  border: none;
+  border-radius: 3px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.code-log-path button:hover {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
 .code-new-branch {
   display: flex;
   gap: 6px;
@@ -1200,6 +1284,15 @@
   align-items: center;
   gap: 2px;
   padding-right: 10px;
+}
+
+.code-find-query .btn-sm {
+  margin-left: 4px;
+}
+
+/* What the last replace did. */
+.code-find-replaced {
+  padding: 2px 14px 6px;
 }
 
 .code-find-query .code-popup-input {
@@ -2329,4 +2422,37 @@
 .code-diff-binary-same {
   grid-column: 1 / -1;
   text-align: center;
+}
+
+/* The Project tree's dialogs: Move, Copy, and what to do with a name a
+   folder already has. */
+.code-dialog {
+  width: min(480px, 100%);
+}
+
+.code-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.code-dialog-field > span {
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.code-dialog-body {
+  padding: 0 12px 8px;
+}
+
+.code-dialog-body p {
+  margin: 8px 0 0;
+}
+
+.code-dialog-names {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  font-family: var(--code-font);
+  font-size: 12px;
 }

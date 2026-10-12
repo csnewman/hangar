@@ -22,10 +22,36 @@ const CHANNEL_LSP = 0x6c // 'l'
 const MESSAGE_SYNC = 0
 const MESSAGE_AWARENESS = 1
 
+// An entry in a folder. Of a file: whether it is a link, runs and may not
+// be written; of either, whether git ignores it.
 export interface Entry {
   name: string
   dir: boolean
   size: number
+  link?: boolean
+  exec?: boolean
+  readonly?: boolean
+  ignored?: boolean
+}
+
+// What a copy or move does with a name the folder has: report it, or
+// replace it, skip it, or give the new one a free name.
+export type Clash = 'ask' | 'replace' | 'skip' | 'rename'
+
+// A path in the trash, by its id there, to restore it by.
+export type Trashed = { path: string; id: string }
+
+export type Encoding = 'UTF-8' | 'UTF-16LE' | 'UTF-16BE' | 'ISO-8859-1'
+export type Separator = 'LF' | 'CRLF' | 'CR'
+
+// TextProps are what a file's bytes say of its text, and its mode.
+export type TextProps = {
+  encoding: Encoding | null
+  bom: boolean
+  separator: Separator | 'mixed' | null
+  mode: number
+  size: number
+  modified: number
 }
 
 export interface Change {
@@ -182,6 +208,8 @@ export interface TextQuery {
   caseSensitive?: boolean
   wholeWord?: boolean
   mask?: string
+  // A folder to search in, from the root.
+  dir?: string
 }
 
 export interface Container {
@@ -224,6 +252,7 @@ type Events = {
   'git.changed': () => void
   // An open file was deleted from disk. Its path is absolute.
   'doc.deleted': (p: { path: string }) => void
+  'doc.restored': (p: { path: string }) => void
   // Another tab changed the settings.
   'settings.changed': (s: Record<string, unknown>) => void
   // A language server this tab started stopped.
@@ -327,6 +356,7 @@ export class CodeClient {
     'fs.changed': new Set(),
     'git.changed': new Set(),
     'doc.deleted': new Set(),
+    'doc.restored': new Set(),
     'settings.changed': new Set(),
     'lsp.exited': new Set(),
     'docker.changed': new Set(),
@@ -431,6 +461,8 @@ export class CodeClient {
         this.emit('git.changed')
       } else if (m.event === 'doc.deleted') {
         this.emit('doc.deleted', m.params)
+      } else if (m.event === 'doc.restored') {
+        this.emit('doc.restored', m.params)
       } else if (m.event === 'settings.changed') {
         this.emit('settings.changed', m.params)
       } else if (m.event === 'docker.changed') {
@@ -595,6 +627,63 @@ export class CodeClient {
   remove(path: string) {
     return this.request<void>('fs.delete', { path })
   }
+  // transfer copies or moves paths into a folder, under their own names or,
+  // for one, name. With clash 'ask', names the folder has are reported and
+  // nothing is done.
+  transfer(op: 'copy' | 'move', from: string[], to: string, clash: Clash, name?: string) {
+    return this.request<{ done: { from: string; to: string }[]; clashes: string[] }>('fs.transfer', {
+      op,
+      from,
+      to,
+      clash,
+      name,
+    })
+  }
+  // trash puts paths in the trash; restore puts them back.
+  trash(paths: string[]) {
+    return this.request<Trashed[]>('fs.trash', { paths })
+  }
+  restore(items: Trashed[]) {
+    return this.request<void>('fs.restore', { items })
+  }
+  uploadStart(path: string) {
+    return this.request<string>('fs.uploadStart', { path })
+  }
+  uploadWrite(token: string, data: string) {
+    return this.request<void>('fs.uploadWrite', { token, data })
+  }
+  uploadEnd(token: string, replace: boolean) {
+    return this.request<string>('fs.uploadEnd', { token, replace })
+  }
+  uploadAbort(token: string) {
+    return this.request<void>('fs.uploadAbort', { token })
+  }
+  // zip packs paths into a zip to download, read with bytes, then removed
+  // with unzip.
+  zip(paths: string[]) {
+    return this.request<{ path: string; size: number }>('fs.zip', { paths })
+  }
+  unzip(path: string) {
+    return this.request<void>('fs.unzip', { path })
+  }
+  setMode(path: string, change: { exec?: boolean; writable?: boolean }) {
+    return this.request<number>('fs.setMode', { path, ...change })
+  }
+  textProps(path: string) {
+    return this.request<TextProps>('fs.textProps', { path })
+  }
+  convert(path: string, to: { separator?: Separator; encoding?: Encoding; bom?: boolean }) {
+    return this.request<TextProps>('fs.convert', { path, ...to })
+  }
+  // replace replaces a query's every match, in the files given or all it
+  // matches in.
+  replace(q: TextQuery, replacement: string, paths?: string[]) {
+    return this.request<{ files: string[]; replaced: number }>('search.replace', { ...q, replacement, paths })
+  }
+  // ignore adds a path to the repository's .gitignore.
+  ignore(path: string, dir: boolean) {
+    return this.request<void>('git.ignore', { path, dir })
+  }
   status() {
     return this.request<GitStatus>('git.status')
   }
@@ -604,9 +693,10 @@ export class CodeClient {
   diff(path: string, against?: string, from?: string, to?: string) {
     return this.request<Diff>('git.diff', { path, against, from, to })
   }
-  // log is a page of the history: every branch's, or ref's.
-  log(ref: string | undefined, skip: number, max: number) {
-    return this.request<Log>('git.log', { ref, skip, max })
+  // log is a page of the history: every branch's, or ref's; of a path,
+  // the commits that changed it.
+  log(ref: string | undefined, skip: number, max: number, path?: string) {
+    return this.request<Log>('git.log', { ref, skip, max, path })
   }
   // blob is a file as a commit has it, base64; empty when it has none.
   blob(rev: string, path: string) {
