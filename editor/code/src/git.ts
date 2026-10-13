@@ -1,8 +1,9 @@
-import { execFile } from 'node:child_process'
 import { watch, type FSWatcher } from 'node:fs'
 import { appendFile, copyFile, lstat, mkdtemp, readFile, readlink, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { isAbsolute, join, posix, relative, resolve } from 'node:path'
+
+import { execFile } from './child.js'
 
 export type Change = {
 	path: string

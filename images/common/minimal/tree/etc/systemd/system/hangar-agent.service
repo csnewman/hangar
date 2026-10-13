@@ -11,6 +11,9 @@ DefaultDependencies=no
 Before=sysinit.target
 
 [Service]
+# Its OOM settings are a drop-in the agent installs with itself
+# (cmd/hangar-agent/oom.go), so they come with the agent the worker
+# supplies.
 Type=exec
 ExecStart=/usr/local/bin/hangar-agent
 # The agent redials the host itself, for the life of the guest: the host

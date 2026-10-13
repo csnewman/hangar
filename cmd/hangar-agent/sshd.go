@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/csnewman/hangar/internal/oomscore"
 	"github.com/csnewman/hangar/internal/sshd"
 	"github.com/csnewman/hangar/internal/vsock"
 )
@@ -18,6 +19,7 @@ func serveSSH() {
 		fmt.Fprintf(os.Stderr, "hangar-agent: ssh: %v\n", err)
 		return
 	}
+	srv.Prepare = ranked(oomscore.User)
 	if exe, err := os.Executable(); err == nil {
 		srv.SFTP = exe + " sftp-server"
 	}

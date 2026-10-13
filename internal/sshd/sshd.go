@@ -42,6 +42,10 @@ type Server struct {
 	// image has no OpenSSH sftp-server. Empty refuses the subsystem there.
 	SFTP string
 
+	// Prepare, if set, is given each process the server starts before it
+	// starts: the agent ranks it for the OOM killer (internal/oomscore).
+	Prepare func(*exec.Cmd)
+
 	user   string
 	log    *slog.Logger
 	config *ssh.ServerConfig
@@ -244,6 +248,9 @@ func (s *Server) command(command string, env []string, term *ptyRequest) (*exec.
 	}
 	if err := sysuser.RunAs(cmd, u); err != nil {
 		return nil, err
+	}
+	if s.Prepare != nil {
+		s.Prepare(cmd)
 	}
 	return cmd, nil
 }

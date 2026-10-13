@@ -5,11 +5,13 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"os/user"
 	"path/filepath"
 	"strconv"
 	"time"
 
+	"github.com/csnewman/hangar/internal/oomscore"
 	"github.com/csnewman/hangar/internal/terminal"
 	"github.com/csnewman/hangar/internal/vsock"
 )
@@ -26,7 +28,15 @@ const terminalSocket = "/run/hangar/terminal.sock"
 // outlive every connection to them: the browser tab, the worker and the
 // control plane can all come and go while a shell carries on.
 func serveTerminals() {
-	mgr := terminal.NewManager(terminal.LoginShell("dev"), slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	login := terminal.LoginShell("dev")
+	shell := func(req terminal.Request) (*exec.Cmd, error) {
+		cmd, err := login(req)
+		if err == nil {
+			ranked(oomscore.User)(cmd)
+		}
+		return cmd, err
+	}
+	mgr := terminal.NewManager(shell, slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	go serveTerminalSocket(mgr, "dev")
 	for {
 		ln, err := vsock.Listen(vsock.CIDAny, terminal.Port)

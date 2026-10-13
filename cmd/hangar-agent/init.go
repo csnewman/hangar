@@ -189,6 +189,10 @@ func assembleRoot() error {
 		return fmt.Errorf("installing the agent: %w", err)
 	}
 
+	if err := installOOMDropIn(newRoot); err != nil {
+		return fmt.Errorf("installing the agent's OOM settings: %w", err)
+	}
+
 	if err := ensureMachineID(newRoot); err != nil {
 		return fmt.Errorf("giving the environment a machine ID: %w", err)
 	}

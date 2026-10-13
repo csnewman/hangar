@@ -55,6 +55,10 @@ const (
 // Server is the VS Code server for one user, started when first needed and
 // again whenever it has exited.
 type Server struct {
+	// Prepare, if set, is given each process the server starts before it
+	// starts: the agent ranks it for the OOM killer (internal/oomscore).
+	Prepare func(*exec.Cmd)
+
 	user string
 	log  *slog.Logger
 
@@ -160,6 +164,9 @@ func (s *Server) start(ctx context.Context) (*process, error) {
 	cmd.Stderr = logOut
 	if err := sysuser.RunAs(cmd, u); err != nil {
 		return nil, err
+	}
+	if s.Prepare != nil {
+		s.Prepare(cmd)
 	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting the editor: %w", err)

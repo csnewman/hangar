@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/desktop"
+	"github.com/csnewman/hangar/internal/oomscore"
 	"github.com/csnewman/hangar/internal/vsock"
 )
 
@@ -14,6 +15,7 @@ import (
 // runs. Its VNC server starts on the first of them.
 func serveDesktop() {
 	srv := desktop.NewServer("dev", slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	srv.Prepare = ranked(oomscore.Service)
 	for {
 		ln, err := vsock.Listen(vsock.CIDAny, desktop.Port)
 		if err != nil {

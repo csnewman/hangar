@@ -1,8 +1,10 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { accessSync, constants, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+
+import { spawn } from './child.js'
 
 // A language server Hangar knows how to start: its command, the arguments
 // that have it speak LSP on stdin and stdout, the LSP language IDs it

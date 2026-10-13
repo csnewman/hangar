@@ -1,5 +1,6 @@
-import { execFile } from 'node:child_process'
 import { request, type IncomingMessage } from 'node:http'
+
+import { execFile } from './child.js'
 
 // The Docker Engine's socket: DOCKER_HOST's, when it names a unix socket,
 // else the usual one.

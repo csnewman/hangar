@@ -1,6 +1,7 @@
-import { execFile, spawn } from 'node:child_process'
 import { open, readdir, stat, writeFile } from 'node:fs/promises'
 import { isAbsolute, join, normalize } from 'node:path'
+
+import { execFile, spawn } from './child.js'
 
 // The most files listed for Go to File, and the most matches one search
 // returns.

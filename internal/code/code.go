@@ -57,6 +57,10 @@ const (
 
 // Server runs the service for one user, one process per root.
 type Server struct {
+	// Prepare, if set, is given each process the server starts before it
+	// starts: the agent ranks it for the OOM killer (internal/oomscore).
+	Prepare func(*exec.Cmd)
+
 	user string
 	log  *slog.Logger
 
@@ -172,6 +176,9 @@ func (s *Server) start(ctx context.Context, u *user.User, root string) (*process
 	cmd.Stderr = logOut
 	if err := sysuser.RunAs(cmd, u); err != nil {
 		return nil, err
+	}
+	if s.Prepare != nil {
+		s.Prepare(cmd)
 	}
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting the code service: %w", err)

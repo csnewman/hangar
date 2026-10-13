@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/agent"
+	"github.com/csnewman/hangar/internal/oomscore"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sshd"
 	"github.com/csnewman/hangar/internal/vsock"
@@ -41,6 +42,12 @@ func main() {
 	if os.Getpid() == 1 {
 		initRoot()
 		return
+	}
+	// A process a server starts, at its OOM score (oomscore.Wrap).
+	if len(os.Args) > 1 && os.Args[1] == oomscore.Arg {
+		err := oomscore.Exec(os.Args[2:])
+		fmt.Fprintf(os.Stderr, "hangar-agent: %v\n", err)
+		os.Exit(127)
 	}
 	// Docker's credential helper for Hangar's registry, run by docker as
 	// docker-credential-hangar.
@@ -177,6 +184,7 @@ func execute(id uint64, argv []string) agent.Response {
 	resp := agent.Response{ID: id}
 
 	cmd := exec.Command(argv[0], argv[1:]...)
+	ranked(oomscore.User)(cmd)
 	var stdout, stderr strings.Builder
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
