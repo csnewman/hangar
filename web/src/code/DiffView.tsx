@@ -1,5 +1,5 @@
-import { MergeView, unifiedMergeView } from '@codemirror/merge'
-import { EditorState, type Extension } from '@codemirror/state'
+import { Chunk, MergeView, unifiedMergeView } from '@codemirror/merge'
+import { EditorState, Text, type Extension } from '@codemirror/state'
 import { EditorView, lineNumbers } from '@codemirror/view'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -46,7 +46,8 @@ const diffSide = (lang: Extension): Extension => [
 //
 // Unified, as on a phone, the two are one column: the file as it is, with
 // what was removed shown above what replaced it, its lines wrapped when
-// wrap is set.
+// wrap is set. The screen around it names the two sides, and is told how
+// many lines were added and removed (onStats).
 export function DiffView({
   client,
   path,
@@ -57,6 +58,7 @@ export function DiffView({
   toLabel,
   unified,
   wrap,
+  onStats,
 }: {
   client: CodeClient
   path: string
@@ -67,6 +69,7 @@ export function DiffView({
   toLabel?: string
   unified?: boolean
   wrap?: boolean
+  onStats?: (s: DiffStats) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -74,6 +77,10 @@ export function DiffView({
   const [about, setAbout] = useState<{ from?: string; same: boolean } | null>(null)
   // A file of bytes is shown by BinarySides; this counts its loads.
   const [binary, setBinary] = useState<{ from?: string; n: number } | null>(null)
+  const stats = useRef(onStats)
+  useEffect(() => {
+    stats.current = onStats
+  })
 
   useEffect(() => {
     const el = host.current
@@ -100,6 +107,7 @@ export function DiffView({
         const a = d.head.replace(/\r\n/g, '\n')
         const b = d.working.replace(/\r\n/g, '\n')
         setAbout({ from: d.from, same: a === b })
+        stats.current?.(countLines(a, b))
         view?.destroy()
         // A file the same on both sides is shown whole, not as one fold.
         const collapseUnchanged = a === b ? undefined : { margin: 3, minSize: 6 }
@@ -164,13 +172,7 @@ export function DiffView({
           )}
         </div>
       )}
-      {unified ? (
-        <div className="code-diff-heads">
-          <span>
-            {base ? (baseLabel ?? base.slice(0, 8)) : 'HEAD'} → {to ? (toLabel ?? to.slice(0, 8)) : 'Working tree'}
-          </span>
-        </div>
-      ) : (
+      {!unified && (
         <div className="code-diff-heads">
           <span>
             {base ? (baseLabel ?? base.slice(0, 8)) : 'HEAD'}
@@ -189,6 +191,23 @@ export function DiffView({
       <div ref={host} className="code-diff-host" hidden={!!binary} />
     </div>
   )
+}
+
+// DiffStats is how many lines a diff adds and removes.
+export type DiffStats = { added: number; removed: number }
+
+function countLines(a: string, b: string): DiffStats {
+  const ta = Text.of(a.split('\n'))
+  const tb = Text.of(b.split('\n'))
+  const lines = (t: Text, from: number, to: number, end: number) =>
+    to === from ? 0 : t.lineAt(end).number - t.lineAt(from).number + 1
+  let added = 0
+  let removed = 0
+  for (const c of Chunk.build(ta, tb)) {
+    removed += lines(ta, c.fromA, c.toA, c.endA)
+    added += lines(tb, c.fromB, c.toB, c.endB)
+  }
+  return { added, removed }
 }
 
 // BinarySides shows a file of bytes as it was and as it is: an image as

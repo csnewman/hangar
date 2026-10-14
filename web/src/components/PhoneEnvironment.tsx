@@ -3,8 +3,8 @@ import {
   Activity,
   ChevronLeft,
   ChevronRight,
-  Code2,
   FileCode2,
+  GitBranch,
   Monitor,
   Plus,
   ScrollText,
@@ -22,7 +22,8 @@ import { PhaseBadge } from './Status'
 
 // PhoneEnvironmentHead is the top of an environment's screen on a phone,
 // above its details: what it is, its controls, its terminal sessions -- what
-// a phone is mostly for -- and a row for each other way into it.
+// a phone is mostly for -- and a row for each other way into it that works
+// on a phone.
 export function PhoneEnvironmentHead({ env }: { env: Environment }) {
   const me = useMe()
   const running = env.phase === 'running'
@@ -63,13 +64,13 @@ export function PhoneEnvironmentHead({ env }: { env: Environment }) {
 
       {running && <Sessions env={env} />}
 
-      <h2 className="phone-heading">Open</h2>
+      <h2 className="phone-heading">Workspace</h2>
       <div className="phone-list">
-        <Row to="code" icon={FileCode2} label="Code" about="Files, changes and history" />
-        <Row to="editor" icon={Code2} label="VS Code" />
-        {env.spec.display === 'desktop' && <Row to="desktop" icon={Monitor} label="Desktop" />}
+        {running && <Row to="code" icon={GitBranch} label="Changes" about="What is uncommitted, and not pushed" />}
+        {running && <Row to="code?view=files" icon={FileCode2} label="Files" />}
         <Row to="performance" icon={Activity} label="Performance" />
         <Row to="logs" icon={ScrollText} label="Logs" />
+        {env.spec.display === 'desktop' && <Row to="desktop" icon={Monitor} label="Desktop" />}
       </div>
 
       <h2 className="phone-heading">Details</h2>

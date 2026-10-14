@@ -106,9 +106,11 @@ export function EnvironmentPage() {
 
   if (phone) {
     const summary = tab === tabs[0]
+    // The Code tab's screens have heads of their own, with the way back.
+    const bar = !summary && tab.to !== 'code'
     return (
       <div className="page page-flush">
-        {!summary && (
+        {bar && (
           <div className="phone-bar">
             <Link to={`/environments/${env.id}`} className="phone-back" aria-label={`Back to ${env.name}`}>
               <ChevronLeft size={22} />

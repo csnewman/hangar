@@ -2472,7 +2472,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 12px 16px calc(24px + env(safe-area-inset-bottom));
+  padding: 4px 16px calc(24px + env(safe-area-inset-bottom));
 }
 
 /* The column scrolls rather than squeezing what is in it. */
@@ -2484,35 +2484,47 @@
   font-size: inherit;
 }
 
-.phone-code-branch {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-left: 4px;
-  font-size: 15px;
+.phone-code .phone-heading {
+  margin-top: 16px;
 }
 
-.phone-code-branch > svg {
+/* A screen's head: back to the environment, the title, and under it the
+   branch or the folder. */
+.phone-code-head {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.phone-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 17px;
+  background: var(--surface);
+  font-family: var(--code-font);
+  font-size: 13px;
+}
+
+.phone-chip > svg {
   flex: none;
   color: var(--muted);
 }
 
-.phone-code-branch-name {
-  min-width: 0;
+.phone-chip > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 600;
 }
 
-.phone-icon-btn:disabled {
-  color: var(--muted);
-  opacity: 0.5;
-  cursor: default;
-}
-
-.phone-icon-btn-on {
-  background: var(--accent-soft);
+.phone-code-crumbs {
+  font-size: 15px;
+  overflow-wrap: anywhere;
 }
 
 .phone-code-busy {
@@ -2527,86 +2539,46 @@
   white-space: pre-wrap;
 }
 
-/* The four lists, as a segmented control. */
-.phone-segments {
-  flex: none;
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-  gap: 2px;
-  padding: 2px;
-  border-radius: 9px;
-  background: var(--surface-2);
+.phone-code-none {
+  padding: 8px 4px;
 }
 
-.phone-segments button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  min-height: 34px;
-  padding: 0 4px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 500;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.phone-segments button[aria-selected='true'] {
-  background: var(--surface);
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
-  font-weight: 600;
-}
-
-.phone-segment-count {
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: 9px;
-  background: var(--accent);
-  color: var(--accent-text);
-  font-size: 11.5px;
-  line-height: 18px;
-}
-
-.phone-code-heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.phone-code-heading .code-link {
-  font-size: 14px;
-  letter-spacing: normal;
-  text-transform: none;
-}
-
-.phone-code-first {
-  margin-top: 8px;
+.phone-code-gap {
+  margin-top: 16px;
 }
 
 .phone-list-empty {
   padding: 16px 14px;
 }
 
-.phone-code-note {
-  margin: 8px 4px 0;
-  font-size: 14px;
-  line-height: 1.4;
-}
-
-.phone-code-note code,
 .phone-row-sub code {
   font-family: var(--code-font);
 }
 
-/* A change: the row opens its diff, and its button beside stages it. */
+.phone-row:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A change: its box ticks it into the commit, the rest opens its diff. */
 .phone-change {
   gap: 0;
-  padding: 0 4px 0 0;
+  padding: 0;
+}
+
+.phone-change-check {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  align-self: stretch;
+}
+
+.phone-change-check input {
+  width: 22px;
+  height: 22px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .phone-change-open {
@@ -2614,9 +2586,9 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
-  min-height: 52px;
-  padding: 8px 6px 8px 14px;
+  gap: 10px;
+  min-height: 56px;
+  padding: 8px 14px 8px 0;
   border: 0;
   background: transparent;
   color: inherit;
@@ -2626,13 +2598,30 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-.phone-change-letter {
+.phone-badge {
   flex: none;
-  width: 14px;
-  font-family: var(--code-font);
-  font-size: 14px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  font-size: 12px;
   font-weight: 700;
-  text-align: center;
+  color: var(--code-git-modified);
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.phone-badge-added,
+.phone-badge-renamed {
+  color: var(--code-git-added);
+}
+
+.phone-badge-deleted {
+  color: var(--code-git-deleted);
+}
+
+.phone-badge-unversioned {
+  color: var(--code-git-unversioned);
 }
 
 .phone-change-name {
@@ -2661,64 +2650,37 @@
   color: var(--muted);
 }
 
-.phone-code-crumbs {
-  padding: 4px 4px 0;
-  font-size: 15px;
-  overflow-wrap: anywhere;
-}
-
 .phone-code-more {
   align-self: center;
   min-height: 40px;
   padding: 0 20px;
 }
 
-/* The box to commit in. */
-.phone-commit {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-top: 16px;
-  padding: 12px;
-}
-
 .phone-commit-message {
   width: 100%;
-  min-height: 80px;
-  padding: 10px 12px;
+  min-height: 72px;
+  max-height: 240px;
+  margin-top: 4px;
+  padding: 12px 14px;
   border: 1px solid var(--border-strong);
-  border-radius: 8px;
+  border-radius: 12px;
   background: var(--surface);
   color: var(--text);
   font: inherit;
   font-size: 16px;
-  resize: vertical;
+  resize: none;
   field-sizing: content;
-  max-height: 240px;
 }
 
-.phone-commit-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+.phone-wide-btn {
+  justify-content: center;
+  min-height: 48px;
+  border-radius: 12px;
+  font-size: 16px;
 }
 
-.phone-commit-amend {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 40px;
-  font-size: 15px;
-}
-
-.phone-commit-bar .btn {
-  min-height: 40px;
-  padding: 0 16px;
-  font-size: 15px;
-}
-
-/* A screen the first one leads to: a commit, a diff or a file. */
+/* A screen another leads to: a commit, a diff or a file, under a bar with
+   the way back. */
 .phone-code-screen {
   flex: 1;
   min-height: 0;
@@ -2728,31 +2690,47 @@
 
 .phone-code-bar {
   flex: none;
-  display: flex;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
   align-items: center;
-  gap: 2px;
-  min-height: 52px;
-  padding: 0 4px;
+  gap: 4px;
+  min-height: 56px;
+  padding: 0 6px;
   border-bottom: 1px solid var(--border);
-  background: var(--surface);
+  background: var(--sidebar);
 }
 
 .phone-code-bar-title {
-  flex: 1;
-  min-width: 0;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font-size: 16px;
   font-weight: 600;
 }
 
 .phone-code-bar-title > span {
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .phone-code-bar-title .phone-row-sub {
+  font-size: 12px;
   font-weight: 400;
+}
+
+.phone-icon-btn-on {
+  background: var(--accent-soft);
+}
+
+.phone-diff-added {
+  color: var(--code-git-added);
+}
+
+.phone-diff-removed {
+  color: var(--code-git-conflict);
 }
 
 .phone-code-fill {
@@ -2768,6 +2746,33 @@
 .phone-code-text .cm-editor {
   height: auto;
   min-height: 100%;
+}
+
+/* Previous, Revert and Next, under a diff. */
+.phone-diff-foot {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  padding: 8px 12px max(8px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+.phone-diff-foot-two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.phone-diff-foot .btn {
+  justify-content: center;
+  gap: 6px;
+  min-height: 46px;
+  border-radius: 12px;
+  font-size: 15px;
+}
+
+.phone-diff-revert {
+  color: var(--danger);
 }
 
 .phone-commit-info {
