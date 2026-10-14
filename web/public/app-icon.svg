@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- The home-screen icon: favicon.svg's mark, full bleed, as iOS rounds
+       the corners itself. The PNGs beside it are rendered from it:
+       rsvg-convert -w N -h N app-icon.svg -o <name>.png -->
+  <rect width="512" height="512" fill="#4f46e5"/>
+  <path d="M96 384V224l160-96 160 96v160h-64V256H160v128z" fill="#fff"/>
+</svg>

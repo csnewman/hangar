@@ -19,6 +19,7 @@ import { UsersPage } from './pages/admin/Users'
 import { WorkersPage } from './pages/admin/Workers'
 import { EnvironmentPage, SummaryTab } from './pages/Environment'
 import { LoginPage } from './pages/Login'
+import { MorePage } from './pages/More'
 import { LogsTab } from './pages/LogsTab'
 import { WorkerDetailPage } from './pages/admin/WorkerDetail'
 import { NewEnvironmentPage } from './pages/NewEnvironment'
@@ -109,6 +110,8 @@ const router = createBrowserRouter([
           { path: 'teams', element: <TeamsPage /> },
           { path: 'teams/:id', element: <TeamPage /> },
           { path: 'account', element: <AccountPage /> },
+          // The phone's way to what the sidebar holds.
+          { path: 'more', element: <MorePage /> },
           { path: 'files', element: <FilesPage /> },
           { path: 'files/packs/:id', element: <PackPage /> },
           // Where the profile and packs were each a page of their own.

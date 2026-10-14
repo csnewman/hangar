@@ -276,7 +276,10 @@ export function TerminalPane({
           }
           setState('reconnecting')
           setReason(why)
-          retry = setTimeout(connect, backoff)
+          retry = setTimeout(() => {
+            retry = undefined
+            connect()
+          }, backoff)
           backoff = Math.min(backoff * 2, 5000)
         },
       })
@@ -322,6 +325,17 @@ export function TerminalPane({
       show()
     })
     resize.observe(el)
+    // A phone suspends a page it has put away, connections and all. Coming
+    // back to it, the connection is made again at once, not when its
+    // backoff runs out.
+    const visible = () => {
+      if (document.hidden || retry === undefined) return
+      clearTimeout(retry)
+      retry = undefined
+      backoff = 500
+      connect()
+    }
+    document.addEventListener('visibilitychange', visible)
     const offScheme = onDarkChange((dark) => (term.options.theme = dark ? darkTheme : lightTheme))
     term.focus()
 
@@ -330,6 +344,7 @@ export function TerminalPane({
       clearTimeout(start)
       clearTimeout(retry)
       offScheme()
+      document.removeEventListener('visibilitychange', visible)
       resize.disconnect()
       conn?.close()
       term.dispose()

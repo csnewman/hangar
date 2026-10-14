@@ -35,6 +35,8 @@ let shown: boolean | null = null
 function apply() {
   const dark = isDark()
   document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+  // The colour a phone's browser tints itself, the page's background.
+  document.querySelector<HTMLMetaElement>('meta[name=theme-color]')?.setAttribute('content', dark ? '#0f1318' : '#f7f8fa')
   if (dark === shown) return
   shown = dark
   for (const fn of listeners) fn(dark)

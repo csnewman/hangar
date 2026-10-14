@@ -2804,3 +2804,356 @@ a.reason {
 .env-bar-hide::before {
   content: '\200b';
 }
+
+/* The phone's layout (phone.ts): a bar of tabs at the foot in place of the
+   sidebar, and lists of rows big enough for a thumb. The page draws under
+   the notch and home indicator (viewport-fit=cover) and keeps its content
+   clear of them with the safe-area insets. */
+
+.app-phone {
+  grid-template-rows: minmax(0, 1fr) auto;
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+.app-phone .main {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Without the bar of tabs, an environment's screen keeps clear of the home
+   indicator itself. */
+.app-phone .main:last-child {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.phone-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 4px 8px max(6px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+.phone-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 48px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.phone-tab:hover {
+  text-decoration: none;
+}
+
+.phone-tab.active {
+  color: var(--accent);
+}
+
+.phone-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 18px;
+}
+
+.phone-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.phone-title {
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+
+.phone-heading {
+  margin: 18px 4px 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.phone-icon-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 22px;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.phone-card,
+.phone-list {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.phone-list {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.phone-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 15px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.phone-row:last-child {
+  border-bottom: 0;
+}
+
+.phone-row:hover {
+  text-decoration: none;
+}
+
+.phone-row:active {
+  background: var(--surface-2);
+}
+
+.phone-row > svg:first-child {
+  flex: none;
+  color: var(--muted);
+}
+
+.phone-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.phone-row-sub {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.phone-row-chev {
+  flex: none;
+  color: var(--muted);
+}
+
+.phone-row-accent,
+.phone-row-accent > svg:first-child {
+  color: var(--accent);
+}
+
+.phone-row-danger,
+.phone-row-danger > svg:first-child {
+  color: var(--danger);
+}
+
+.phone-empty {
+  padding: 24px 4px;
+  color: var(--muted);
+}
+
+/* An environment in the list: the row leads to its screen, and a stopped
+   one has its start button beside. */
+.phone-env {
+  padding: 0;
+}
+
+.phone-env-link {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 60px;
+  padding: 8px 14px;
+  color: var(--text);
+}
+
+.phone-env-link:hover {
+  text-decoration: none;
+}
+
+.phone-env-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.phone-env-sub {
+  font-size: 13px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-env .reason {
+  max-width: none;
+  margin-top: 0;
+}
+
+.phone-env-start {
+  flex: none;
+  min-height: 36px;
+  margin-right: 12px;
+}
+
+.install-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px 6px 12px 14px;
+}
+
+.install-hint-icon {
+  flex: none;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.install-hint-text {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.4;
+}
+
+.install-hint-share {
+  vertical-align: -2px;
+}
+
+.install-hint .phone-icon-btn {
+  margin-top: -8px;
+  color: var(--muted);
+}
+
+/* An environment's own screen. */
+.phone-env-head {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.phone-back {
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 44px;
+  margin-left: -8px;
+  padding-right: 8px;
+  font-size: 16px;
+  color: var(--accent);
+  -webkit-tap-highlight-color: transparent;
+}
+
+.phone-back:hover {
+  text-decoration: none;
+}
+
+.phone-back span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-env-ident {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.phone-env-head .notice {
+  margin: 0;
+}
+
+.phone-env-head .start-progress {
+  margin: 0;
+}
+
+.phone-env-actions .actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.phone-env-actions .btn {
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 15px;
+}
+
+/* A tab of an environment, under a bar back to its screen. */
+.phone-bar {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  min-height: 48px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+.phone-bar .phone-back {
+  margin-left: -6px;
+  max-width: 100%;
+}
+
+.phone-bar-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+@media (max-width: 760px) {
+  /* Safari zooms into a field whose text is smaller than this. */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+
+  .page,
+  .tab-body > .page-pad {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .tab-body > .page-pad {
+    padding-top: 12px;
+  }
+
+  /* An environment's tabs fill the screen edge to edge. */
+  .page-flush {
+    padding: 0;
+  }
+}

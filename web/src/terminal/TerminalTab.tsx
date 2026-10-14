@@ -20,7 +20,8 @@ export function TerminalTab() {
   const chosen = params.get('session') ?? undefined
   // Remounting the pane is what attaches it to a different session; a new
   // session learning its ID does not, so the pane has a key of its own.
-  const [pane, setPane] = useState(() => ({ key: 0, session: chosen }))
+  // ?new opens a new session, as the New session button does.
+  const [pane, setPane] = useState(() => ({ key: params.has('new') && !chosen ? 1 : 0, session: chosen }))
   const [titles, setTitles] = useState<Record<string, string>>({})
   const [progress, setProgress] = useState<IProgressState | null>(null)
 

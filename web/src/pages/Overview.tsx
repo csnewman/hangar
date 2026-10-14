@@ -6,11 +6,18 @@ import { useMe } from '../session'
 import { EnvironmentActions } from '../components/EnvironmentActions'
 import { formatAgo, formatMemory } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
+import { PhoneEnvironments } from '../components/PhoneEnvironments'
 import { StartLine } from '../components/StartProgress'
 import { PhaseBadge } from '../components/Status'
 import { splitByOwner, useEnvironments } from '../environments'
+import { usePhone } from '../phone'
 
 export function OverviewPage() {
+  if (usePhone()) return <PhoneEnvironments />
+  return <Overview />
+}
+
+function Overview() {
   const me = useMe()
   const envs = useEnvironments()
   const { mine, others } = splitByOwner(envs.data ?? [], me)

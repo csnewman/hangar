@@ -3,7 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover draws under a phone's notch and home indicator,
+         which the stylesheet keeps clear of with the safe-area insets. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#f7f8fa" />
+    <!-- Added to an iPhone's home screen, Hangar opens as an app of its own. -->
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="Hangar" />
     <title>Hangar</title>
     <script>
       // The theme, set before anything is drawn so a page never flashes
@@ -15,6 +22,7 @@
         } catch (e) {}
         var dark = t === 'dark' || (t !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches)
         document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+        document.querySelector('meta[name=theme-color]').content = dark ? '#0f1318' : '#f7f8fa'
       })()
     </script>
   </head>

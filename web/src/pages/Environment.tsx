@@ -1,6 +1,7 @@
 import {
   Activity,
   ChevronDown,
+  ChevronLeft,
   ChevronUp,
   Code2,
   Copy,
@@ -21,6 +22,7 @@ import { useMe } from '../session'
 import { EnvironmentActions } from '../components/EnvironmentActions'
 import { formatAgo, shortDigest } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
+import { PhoneEnvironmentHead } from '../components/PhoneEnvironment'
 import { SpecChips } from '../components/SpecChips'
 import { EnvironmentPacks } from '../components/EnvironmentPacks'
 import { SettingsPanel, TemplateDrift } from '../components/EnvironmentSettings'
@@ -30,6 +32,7 @@ import { StartProgress } from '../components/StartProgress'
 import { desktop } from '../desktop'
 import { PhaseBadge, RendererBadge } from '../components/Status'
 import { useEnvironments } from '../environments'
+import { usePhone } from '../phone'
 import { useTitle } from '../title'
 import { Activity as AuditActivity } from '../components/Activity'
 
@@ -47,8 +50,10 @@ const barKey = 'hangar.env.bar.hidden'
 
 // EnvironmentPage is one environment: its header and actions, and a tab for
 // each way into it. The tabs are routes, so a console can be linked to and
-// survives a reload.
+// survives a reload. On a phone the summary is the environment's screen,
+// leading to each tab, and a tab fills the screen under a bar back to it.
 export function EnvironmentPage() {
+  const phone = usePhone()
   const { id } = useParams()
   const me = useMe()
   const envs = useEnvironments()
@@ -82,6 +87,39 @@ export function EnvironmentPage() {
         <PageHeader crumbs={[{ label: 'Environments', to: '/environments' }]} title="Not found" />
         <div className="panel empty-state">
           This environment does not exist, or it is not yours. <Link to="/environments">Back to environments</Link>
+        </div>
+      </div>
+    )
+  }
+
+  const notice =
+    env.phase === 'starting' ? (
+      <StartProgress env={env} />
+    ) : (
+      env.reason && (
+        <div className="notice env-reason">
+          {env.reason}
+          {env.phase === 'failed' && <Link to={`/environments/${env.id}/logs`}>See its logs</Link>}
+        </div>
+      )
+    )
+
+  if (phone) {
+    const summary = tab === tabs[0]
+    return (
+      <div className="page page-flush">
+        {!summary && (
+          <div className="phone-bar">
+            <Link to={`/environments/${env.id}`} className="phone-back" aria-label={`Back to ${env.name}`}>
+              <ChevronLeft size={22} />
+              <span>{env.name}</span>
+            </Link>
+            <span className="phone-bar-title">{tab.label}</span>
+          </div>
+        )}
+        {!summary && notice}
+        <div className="tab-body">
+          <Outlet context={env} />
         </div>
       </div>
     )
@@ -129,16 +167,7 @@ export function EnvironmentPage() {
           </button>
         </div>
       </div>
-      {env.phase === 'starting' ? (
-        <StartProgress env={env} />
-      ) : (
-        env.reason && (
-          <div className="notice env-reason">
-            {env.reason}
-            {env.phase === 'failed' && <Link to={`/environments/${env.id}/logs`}>See its logs</Link>}
-          </div>
-        )
-      )}
+      {notice}
       <div className="tab-body">
         <Outlet context={env} />
       </div>
@@ -183,8 +212,10 @@ export function useEnv() {
 export function SummaryTab() {
   const env = useEnv()
   const me = useMe()
+  const phone = usePhone()
   return (
     <div className="page-pad">
+      {phone && <PhoneEnvironmentHead env={env} />}
       <TemplateDrift env={env} />
       <ImageUpdate env={env} />
       <div className="panel">

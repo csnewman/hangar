@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { Outlet } from 'react-router'
+import { Outlet, useMatch } from 'react-router'
 
 import { desktop } from '../desktop'
+import { usePhone } from '../phone'
+import { PhoneTabs } from './PhoneTabs'
 import { Sidebar } from './Sidebar'
 
 const widthKey = 'hangar.sidebar.width'
@@ -29,8 +31,14 @@ function store(key: string, value: string) {
 
 // Shell is the frame every signed-in page sits in: the inventory down the
 // left, and the page beside it. The inventory is as wide as it is dragged,
-// or folded to its icons, and this browser remembers which.
+// or folded to its icons, and this browser remembers which. On a phone the
+// sidebar is a bar of tabs at the foot instead, left out on an environment's
+// own screens, which have their way back at the top.
 export function Shell() {
+  const phone = usePhone()
+  const environment = useMatch('/environments/:id/*')
+  const creating = useMatch('/environments/new')
+  const inEnvironment = environment !== null && creating === null
   const [width, setWidth] = useState(() => {
     const w = Number(stored(widthKey))
     return w >= minWidth && w <= maxWidth ? w : defaultWidth
@@ -92,6 +100,17 @@ export function Shell() {
         <main className="main">
           <Outlet />
         </main>
+      </div>
+    )
+  }
+
+  if (phone) {
+    return (
+      <div className="app app-phone">
+        <main className="main">
+          <Outlet />
+        </main>
+        {!inEnvironment && <PhoneTabs />}
       </div>
     )
   }
