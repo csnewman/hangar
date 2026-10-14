@@ -1,7 +1,6 @@
 import {
   Activity,
   ChevronDown,
-  ChevronLeft,
   ChevronUp,
   Code2,
   Copy,
@@ -22,6 +21,7 @@ import { useMe } from '../session'
 import { EnvironmentActions } from '../components/EnvironmentActions'
 import { formatAgo, shortDigest } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
+import { PhoneNav } from '../components/Phone'
 import { PhoneEnvironmentDetails, PhoneEnvironmentHead, PhoneEnvironmentSettings } from '../components/PhoneEnvironment'
 import { SpecChips } from '../components/SpecChips'
 import { EnvironmentPacks } from '../components/EnvironmentPacks'
@@ -110,15 +110,7 @@ export function EnvironmentPage() {
     const bar = !summary && tab.to !== 'code' && tab.to !== 'terminal'
     return (
       <div className="page page-flush">
-        {bar && (
-          <div className="phone-bar">
-            <Link to={`/environments/${env.id}`} className="phone-back" aria-label={`Back to ${env.name}`}>
-              <ChevronLeft size={22} />
-              <span>{env.name}</span>
-            </Link>
-            <span className="phone-bar-title">{tab.label}</span>
-          </div>
-        )}
+        {bar && <PhoneNav back={{ to: `/environments/${env.id}`, label: env.name }} title={tab.label} sub={env.name} />}
         {!summary && notice}
         <div className="tab-body">
           <Outlet context={env} />

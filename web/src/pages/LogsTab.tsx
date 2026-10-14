@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router'
 
 import { api, type EnvironmentLogName } from '../api'
 import { LogView } from '../components/LogView'
+import { usePhone } from '../phone'
 import { useEnv } from './Environment'
 
 const logNames: { name: EnvironmentLogName; label: string; about: string }[] = [
@@ -18,7 +19,8 @@ const logNames: { name: EnvironmentLogName; label: string; about: string }[] = [
 ]
 
 // LogsTab shows the logs an environment's worker keeps of it, from its last
-// start, which say why a start is stuck or failed.
+// start, which say why a start is stuck or failed. On a phone the logs are
+// chips above the log, which wraps its lines.
 export function LogsTab() {
   const env = useEnv()
   const [params, setParams] = useSearchParams()
@@ -27,15 +29,18 @@ export function LogsTab() {
     (offset?: number) => api.environmentLog(env.id, chosen.name, offset),
     [env.id, chosen.name],
   )
+  const phone = usePhone()
+  const [seg, segOn] = phone ? ['phone-pill', 'phone-pill phone-pill-on'] : ['seg', 'seg seg-on']
 
   return (
     <div className="page-pad logs-tab">
-      <div className="segmented">
+      <div className={phone ? 'phone-pills' : 'segmented'}>
         {logNames.map((l) => (
           <button
             key={l.name}
             type="button"
-            className={l.name === chosen.name ? 'seg seg-on' : 'seg'}
+            className={l.name === chosen.name ? segOn : seg}
+            aria-pressed={l.name === chosen.name}
             onClick={() => setParams({ log: l.name }, { replace: true })}
           >
             {l.label}

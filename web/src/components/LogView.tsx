@@ -1,3 +1,4 @@
+import { ArrowDown } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import type { LogPart } from '../api'
@@ -22,6 +23,8 @@ export function LogView({ load }: { load: (offset?: number) => Promise<LogPart> 
   const [error, setError] = useState<string | null>(null)
   const pre = useRef<HTMLPreElement>(null)
   const follow = useRef(true)
+  // Scrolled up from the end, a button goes back to it.
+  const [away, setAway] = useState(false)
 
   useEffect(() => {
     let stopped = false
@@ -73,7 +76,13 @@ export function LogView({ load }: { load: (offset?: number) => Promise<LogPart> 
 
   const onScroll = () => {
     const el = pre.current
-    if (el) follow.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 16
+    if (!el) return
+    follow.current = el.scrollTop + el.clientHeight >= el.scrollHeight - 16
+    setAway(!follow.current)
+  }
+  const toEnd = () => {
+    const el = pre.current
+    if (el) el.scrollTop = el.scrollHeight
   }
 
   return (
@@ -85,6 +94,12 @@ export function LogView({ load }: { load: (offset?: number) => Promise<LogPart> 
         <pre ref={pre} className="log-text mono" onScroll={onScroll}>
           {text || (!error ? 'Nothing logged yet.' : '')}
         </pre>
+      )}
+      {away && (
+        <button type="button" className="btn btn-primary log-latest" onClick={toEnd}>
+          <ArrowDown size={15} />
+          Latest
+        </button>
       )}
     </div>
   )
