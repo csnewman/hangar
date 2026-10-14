@@ -1,7 +1,10 @@
 /* The Code tab: IntelliJ's arrangement of tool windows, at IntelliJ's density,
-   in Hangar's colours. */
+   in Hangar's colours. Its colours are shared by the phone's screens
+   (PhoneCode.tsx). */
 
-.code-page {
+.code-page,
+.phone-code,
+.phone-code-screen {
   --code-bg: var(--surface);
   --code-active-line: rgb(0 0 0 / 0.035);
   --code-selection: rgb(33 125 220 / 0.22);
@@ -41,7 +44,9 @@
   --lane-5: #00838f;
   --lane-6: #9e7c0c;
   --lane-7: #5d6d7e;
+}
 
+.code-page {
   flex: 1;
   display: flex;
   min-height: 520px;
@@ -50,7 +55,7 @@
   font-size: 13px;
 }
 
-:root[data-theme='dark'] .code-page {
+:root[data-theme='dark'] :is(.code-page, .phone-code, .phone-code-screen) {
   --code-bg: #15191f;
   --code-active-line: rgb(255 255 255 / 0.04);
   --code-selection: rgb(59 155 224 / 0.3);
@@ -2455,4 +2460,340 @@
   padding-left: 18px;
   font-family: var(--code-font);
   font-size: 12px;
+}
+
+/* The Code tab on a phone (PhoneCode.tsx), built of the phone's rows and
+   lists (index.css). */
+
+.phone-code {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px calc(24px + env(safe-area-inset-bottom));
+}
+
+/* The column scrolls rather than squeezing what is in it. */
+.phone-code > * {
+  flex-shrink: 0;
+}
+
+.phone-code .code-link {
+  font-size: inherit;
+}
+
+.phone-code-branch {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 4px;
+  font-size: 15px;
+}
+
+.phone-code-branch > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.phone-code-branch-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.phone-icon-btn:disabled {
+  color: var(--muted);
+  opacity: 0.5;
+  cursor: default;
+}
+
+.phone-icon-btn-on {
+  background: var(--accent-soft);
+}
+
+.phone-code-busy {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.phone-code .notice.phone-code-error {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* The four lists, as a segmented control. */
+.phone-segments {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 2px;
+  padding: 2px;
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+
+.phone-segments button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.phone-segments button[aria-selected='true'] {
+  background: var(--surface);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.12);
+  font-weight: 600;
+}
+
+.phone-segment-count {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 11.5px;
+  line-height: 18px;
+}
+
+.phone-code-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.phone-code-heading .code-link {
+  font-size: 14px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.phone-code-first {
+  margin-top: 8px;
+}
+
+.phone-list-empty {
+  padding: 16px 14px;
+}
+
+.phone-code-note {
+  margin: 8px 4px 0;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.phone-code-note code,
+.phone-row-sub code {
+  font-family: var(--code-font);
+}
+
+/* A change: the row opens its diff, and its button beside stages it. */
+.phone-change {
+  gap: 0;
+  padding: 0 4px 0 0;
+}
+
+.phone-change-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 6px 8px 14px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.phone-change-letter {
+  flex: none;
+  width: 14px;
+  font-family: var(--code-font);
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+}
+
+.phone-change-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-tail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.phone-commit-row-subject {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+.phone-file-ignored {
+  color: var(--muted);
+}
+
+.phone-code-crumbs {
+  padding: 4px 4px 0;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.phone-code-more {
+  align-self: center;
+  min-height: 40px;
+  padding: 0 20px;
+}
+
+/* The box to commit in. */
+.phone-commit {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+  padding: 12px;
+}
+
+.phone-commit-message {
+  width: 100%;
+  min-height: 80px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px;
+  resize: vertical;
+  field-sizing: content;
+  max-height: 240px;
+}
+
+.phone-commit-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.phone-commit-amend {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  font-size: 15px;
+}
+
+.phone-commit-bar .btn {
+  min-height: 40px;
+  padding: 0 16px;
+  font-size: 15px;
+}
+
+/* A screen the first one leads to: a commit, a diff or a file. */
+.phone-code-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.phone-code-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 52px;
+  padding: 0 4px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.phone-code-bar-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  font-weight: 600;
+}
+
+.phone-code-bar-title > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-code-bar-title .phone-row-sub {
+  font-weight: 400;
+}
+
+.phone-code-fill {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.phone-code-text {
+  overflow: auto;
+}
+
+.phone-code-text .cm-editor {
+  height: auto;
+  min-height: 100%;
+}
+
+.phone-commit-info {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px;
+}
+
+.phone-commit-subject {
+  font-size: 17px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.phone-commit-body {
+  margin: 0;
+  font: inherit;
+  font-size: 14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A unified diff has one side, and a file of bytes shows its two one
+   above the other. */
+.code-diff-unified .code-diff-heads,
+.code-diff-unified .code-diff-binary {
+  grid-template-columns: minmax(0, 1fr);
 }

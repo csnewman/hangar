@@ -1,7 +1,7 @@
 import './code.css'
 
 import { Container, FolderTree, GitCompare, GitGraph, ListTree, Monitor, SquareTerminal, TextSearch } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Group,
   Panel,
@@ -11,9 +11,10 @@ import {
 } from 'react-resizable-panels'
 
 import { useEnv } from '../pages/Environment'
+import { usePhone } from '../phone'
 import { useMe } from '../session'
 import { ChangesView } from './ChangesView'
-import { CodeClient, type ConnectionState, type GitStatus } from './client'
+import { CodeClient, type ConnectionState } from './client'
 import { CodeTerminal } from './CodeTerminal'
 import { isMac, shortcut } from './ContextMenu'
 import { containerShell, DockerView } from './DockerView'
@@ -21,8 +22,10 @@ import { EditorArea, tabKey, type Tab } from './EditorArea'
 import { ProjectView } from './ProjectView'
 import { Languages, LanguagesContext, type Usages } from './lsp'
 import { GitLog } from './GitLog'
+import { PhoneCode } from './PhoneCode'
 import { FindInFiles, GotoFile, OpenFolder, type Jump } from './Search'
 import { UsagesView } from './UsagesView'
+import { useGitStatus } from './useGitStatus'
 
 // CodeTab is Hangar's own editor for an environment, laid out as IntelliJ
 // lays out its tool windows: Project on the left, Changes on the right,
@@ -49,8 +52,10 @@ export function CodeTab() {
 // closes a spare one rather than closing the one in use.
 //
 // The connection works in the environment's folder, unless this browser tab
-// has opened another, which it remembers for itself alone.
+// has opened another, which it remembers for itself alone. On a phone it
+// shows PhoneCode.
 function Connected({ env }: { env: string }) {
+  const phone = usePhone()
   const folderKey = `hangar.code.${env}.folder`
   const [folder, setFolder] = useState(() => {
     try {
@@ -75,6 +80,7 @@ function Connected({ env }: { env: string }) {
     return () => c.close()
   }, [env, folder])
   if (!client) return <div className="code-page" />
+  if (phone) return <PhoneCode client={client} />
   return <CodeView key={folder} env={env} client={client} folder={folder} onFolder={choose} />
 }
 
@@ -138,23 +144,7 @@ function CodeView({
   useEffect(() => client.on('state', (s, w) => { setState(s); setWhy(w) }), [client])
 
   // Git status, reloaded whenever files or the repository change.
-  const [status, setStatus] = useState<GitStatus | null>(null)
-  const reloadStatus = useCallback(() => {
-    client.status().then(setStatus, () => {})
-  }, [client])
-  useEffect(() => {
-    reloadStatus()
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const later = () => {
-      clearTimeout(timer)
-      timer = setTimeout(reloadStatus, 300)
-    }
-    const offs = [client.on('fs.changed', later), client.on('git.changed', later), client.on('state', (s) => s === 'live' && later())]
-    return () => {
-      clearTimeout(timer)
-      offs.forEach((off) => off())
-    }
-  }, [client, reloadStatus])
+  const [status, reloadStatus] = useGitStatus(client)
 
   // Tool windows: a panel on each side, showing one of the windows docked
   // there at a time, as IntelliJ's sides do, and the terminal below.

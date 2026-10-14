@@ -1,4 +1,4 @@
-import { MergeView } from '@codemirror/merge'
+import { MergeView, unifiedMergeView } from '@codemirror/merge'
 import { EditorState, type Extension } from '@codemirror/state'
 import { EditorView, lineNumbers } from '@codemirror/view'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -43,6 +43,10 @@ const diffSide = (lang: Extension): Extension => [
 // DiffView shows a file as it was at HEAD, or at base, beside its working
 // copy, or beside a later commit's (to), and follows the file as it
 // changes, whoever changes it.
+//
+// Unified, as on a phone, the two are one column: the file as it is, with
+// what was removed shown above what replaced it, its lines wrapped when
+// wrap is set.
 export function DiffView({
   client,
   path,
@@ -51,6 +55,8 @@ export function DiffView({
   from,
   to,
   toLabel,
+  unified,
+  wrap,
 }: {
   client: CodeClient
   path: string
@@ -59,6 +65,8 @@ export function DiffView({
   from?: string
   to?: string
   toLabel?: string
+  unified?: boolean
+  wrap?: boolean
 }) {
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
@@ -70,7 +78,7 @@ export function DiffView({
   useEffect(() => {
     const el = host.current
     if (!el) return
-    let view: MergeView | null = null
+    let view: { destroy(): void; scrollDOM: HTMLElement } | null = null
     let disposed = false
     let lang: Extension = []
     const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''
@@ -88,20 +96,34 @@ export function DiffView({
           return
         }
         setBinary(null)
-        const scroll = view?.b.scrollDOM.scrollTop ?? 0
+        const scroll = view?.scrollDOM.scrollTop ?? 0
         const a = d.head.replace(/\r\n/g, '\n')
         const b = d.working.replace(/\r\n/g, '\n')
         setAbout({ from: d.from, same: a === b })
         view?.destroy()
-        view = new MergeView({
-          parent: el,
-          a: { doc: a, extensions: diffSide(lang) },
-          b: { doc: b, extensions: diffSide(lang) },
-          // A file the same on both sides is shown whole, not as one fold.
-          collapseUnchanged: a === b ? undefined : { margin: 3, minSize: 6 },
-          gutter: true,
-        })
-        view.b.scrollDOM.scrollTop = scroll
+        // A file the same on both sides is shown whole, not as one fold.
+        const collapseUnchanged = a === b ? undefined : { margin: 3, minSize: 6 }
+        if (unified) {
+          view = new EditorView({
+            parent: el,
+            doc: b,
+            extensions: [
+              diffSide(lang),
+              unifiedMergeView({ original: a, mergeControls: false, gutter: true, collapseUnchanged }),
+              wrap ? EditorView.lineWrapping : [],
+            ],
+          })
+        } else {
+          const m = new MergeView({
+            parent: el,
+            a: { doc: a, extensions: diffSide(lang) },
+            b: { doc: b, extensions: diffSide(lang) },
+            collapseUnchanged,
+            gutter: true,
+          })
+          view = { destroy: () => m.destroy(), scrollDOM: m.b.scrollDOM }
+        }
+        view.scrollDOM.scrollTop = scroll
       } catch (e) {
         if (!disposed) setError(e instanceof Error ? e.message : String(e))
       }
@@ -126,10 +148,10 @@ export function DiffView({
       offGit()
       view?.destroy()
     }
-  }, [client, path, base, from, to])
+  }, [client, path, base, from, to, unified, wrap])
 
   return (
-    <div className="code-diff">
+    <div className={unified ? 'code-diff code-diff-unified' : 'code-diff'}>
       {about && (about.from || about.same) && (
         <div className="code-diff-about">
           {about.from ? (
@@ -142,16 +164,24 @@ export function DiffView({
           )}
         </div>
       )}
-      <div className="code-diff-heads">
-        <span>
-          {base ? (baseLabel ?? base.slice(0, 8)) : 'HEAD'}
-          {about?.from && <span className="code-diff-name">{about.from}</span>}
-        </span>
-        <span>
-          {to ? (toLabel ?? to.slice(0, 8)) : 'Working tree'}
-          {about?.from && <span className="code-diff-name">{path}</span>}
-        </span>
-      </div>
+      {unified ? (
+        <div className="code-diff-heads">
+          <span>
+            {base ? (baseLabel ?? base.slice(0, 8)) : 'HEAD'} → {to ? (toLabel ?? to.slice(0, 8)) : 'Working tree'}
+          </span>
+        </div>
+      ) : (
+        <div className="code-diff-heads">
+          <span>
+            {base ? (baseLabel ?? base.slice(0, 8)) : 'HEAD'}
+            {about?.from && <span className="code-diff-name">{about.from}</span>}
+          </span>
+          <span>
+            {to ? (toLabel ?? to.slice(0, 8)) : 'Working tree'}
+            {about?.from && <span className="code-diff-name">{path}</span>}
+          </span>
+        </div>
+      )}
       {error && <div className="code-note">{error}</div>}
       {binary && (
         <BinarySides key={binary.n} client={client} path={path} base={base} from={binary.from} to={to} />
