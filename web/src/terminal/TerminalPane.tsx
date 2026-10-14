@@ -55,6 +55,7 @@ export function TerminalPane({
   dir,
   run,
   keys = false,
+  name,
   events,
 }: {
   env: string
@@ -65,6 +66,8 @@ export function TerminalPane({
   run?: string
   // keys shows the keys a phone's keyboard lacks, and a box to write in.
   keys?: boolean
+  // name is the session's title, which the phone's messages are written to.
+  name?: string
   events: PaneEvents
 }) {
   const host = useRef<HTMLDivElement>(null)
@@ -345,6 +348,7 @@ export function TerminalPane({
         term.input('\r', true)
       },
       focus: () => term.focus(),
+      blur: () => term.blur(),
     }
     claimRef.current = () => {
       if (want) conn?.claim(want.cols, want.rows)
@@ -452,7 +456,7 @@ export function TerminalPane({
           </div>
         )}
       </div>
-      {keys && <TerminalKeys target={() => keyTarget.current} ctrl={ctrl} onCtrl={setCtrl} />}
+      {keys && <TerminalKeys target={() => keyTarget.current} name={name} ctrl={ctrl} onCtrl={setCtrl} />}
     </>
   )
 }

@@ -3225,22 +3225,93 @@ button.phone-back {
   cursor: pointer;
 }
 
-/* A terminal's keys on a phone (TerminalKeys.tsx). */
+/* A terminal's keys on a phone (TerminalKeys.tsx): one row, at rest or on
+   the keyboard, or the box a message is written in. */
 .term-keys {
   flex: none;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 8px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
   border-top: 1px solid var(--border);
   background: var(--sidebar);
 }
 
+/* At rest the row sits on the home indicator, which the keyboard covers. */
+.term-keys-rest {
+  padding-bottom: max(6px, env(safe-area-inset-bottom));
+}
+
 .term-keys-row {
+  flex: 1;
+  min-width: 0;
   display: flex;
   gap: 6px;
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+.term-keys-gap {
+  flex: 1;
+}
+
+.term-keys-sep {
+  flex: none;
+  align-self: stretch;
+  width: 1px;
+  margin: 6px 0;
+  background: var(--border);
+}
+
+.term-mode {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--accent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.term-mode:active,
+.term-mode-on {
+  background: var(--surface-2);
+}
+
+.term-write {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+.term-write-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.term-write-head > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.term-write .term-compose-btn.term-write-close {
+  width: 34px;
+  height: 34px;
+  color: var(--text);
 }
 
 .term-key {
@@ -3275,11 +3346,11 @@ button.phone-back {
 .term-compose-box {
   flex: 1;
   min-width: 0;
-  min-height: 42px;
-  max-height: 140px;
+  min-height: 84px;
+  max-height: 180px;
   padding: 10px 14px;
   border: 1px solid var(--border-strong);
-  border-radius: 21px;
+  border-radius: 14px;
   background: var(--surface);
   color: var(--text);
   font: inherit;

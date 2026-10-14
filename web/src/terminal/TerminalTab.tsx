@@ -62,6 +62,8 @@ export function TerminalTab() {
   }
   const active = chosen ?? attachTo
   const titleOf = (s: TerminalSession, i: number) => titles[s.id] || s.title || `Shell ${i + 1}`
+  const at = list.findIndex((s) => s.id === active)
+  const title = at >= 0 ? titleOf(list[at], at) : 'New session'
 
   const terminal = (
     <TerminalPane
@@ -69,6 +71,7 @@ export function TerminalTab() {
       env={env.id}
       session={attachTo}
       keys={phone}
+      name={at >= 0 ? title : undefined}
       events={{
         attached: (s) => {
           if (s.id !== chosen) setParams({ session: s.id }, { replace: true })
@@ -82,12 +85,11 @@ export function TerminalTab() {
   )
 
   if (phone) {
-    const at = list.findIndex((s) => s.id === active)
     return (
       <div className="term-page">
         <PhoneBar
           env={env}
-          title={at >= 0 ? titleOf(list[at], at) : 'New session'}
+          title={title}
           windows={at >= 0 ? list[at].clients : 0}
           sessions={list.map((s, i) => ({ ...s, title: titleOf(s, i) }))}
           active={active}

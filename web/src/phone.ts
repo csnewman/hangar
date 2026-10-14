@@ -30,6 +30,7 @@ export function installable(): boolean {
 // instead, the visual viewport, as --phone-top and --phone-height, and
 // data-keyboard is set on the page while the keyboard is up.
 const vv = window.visualViewport
+const keyboardWatchers = new Set<() => void>()
 if (vv) {
   const fit = () => {
     // Zoomed in, the page is as it was.
@@ -38,10 +39,27 @@ if (vv) {
     root.setProperty('--phone-top', `${vv.offsetTop}px`)
     root.setProperty('--phone-height', `${vv.height}px`)
     // Far shorter than the window: the keyboard, not a browser's bars.
-    if (window.innerHeight - vv.height > 150) document.documentElement.dataset.keyboard = ''
+    const up = window.innerHeight - vv.height > 150
+    if (up === keyboardUp()) return
+    if (up) document.documentElement.dataset.keyboard = ''
     else delete document.documentElement.dataset.keyboard
+    keyboardWatchers.forEach((fn) => fn())
   }
   vv.addEventListener('resize', fit)
   vv.addEventListener('scroll', fit)
   fit()
+}
+
+function keyboardUp(): boolean {
+  return document.documentElement.dataset.keyboard !== undefined
+}
+
+// useKeyboard is whether the phone's on-screen keyboard is up.
+export function useKeyboard(): boolean {
+  return useSyncExternalStore((fn) => {
+    keyboardWatchers.add(fn)
+    return () => {
+      keyboardWatchers.delete(fn)
+    }
+  }, keyboardUp)
 }
