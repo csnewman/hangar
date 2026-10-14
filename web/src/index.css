@@ -3610,6 +3610,52 @@ a.reason {
   }
 }
 
+/* The desktop on a phone (DesktopTab.tsx): the picture, then its tools
+   above the home indicator. Touch on the picture is noVNC's own: a tap
+   clicks, two fingers tap to right-click, a drag drags. */
+.desktop-phone {
+  position: relative;
+}
+
+.desktop-phone-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.desktop-tools {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px max(6px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+.desktop-tools .phone-choice {
+  min-width: 150px;
+}
+
+.desktop-tools .phone-icon-btn:disabled {
+  color: var(--muted);
+  opacity: 0.5;
+}
+
+/* Off the screen but focusable, so the phone's keyboard comes up for it. */
+.desktop-keys {
+  position: absolute;
+  left: -9999px;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  font-size: 16px;
+}
+
 /* A phone screen with a bar, a body that scrolls and a foot: the whole
    of the main area, or of an environment's tab. */
 .phone-screen {

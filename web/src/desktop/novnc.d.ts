@@ -22,6 +22,9 @@ declare module '@novnc/novnc' {
     focus(): void
     blur(): void
     sendCtrlAltDel(): void
+    // sendKey presses a key, by its X keysym, or with down given, presses
+    // or releases it.
+    sendKey(keysym: number, code: string | null, down?: boolean): void
     clipboardPasteFrom(text: string): void
   }
 }

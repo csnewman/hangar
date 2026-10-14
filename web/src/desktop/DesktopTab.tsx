@@ -1,9 +1,10 @@
 import RFB from '@novnc/novnc'
-import { AppWindow, Clipboard, Eye, Maximize, MousePointer2, Scaling } from 'lucide-react'
+import { AppWindow, Clipboard, Eye, Keyboard, Maximize, MousePointer2, Scaling } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { api } from '../api'
 import { useEnv } from '../pages/Environment'
+import { usePhone } from '../phone'
 
 type State = 'connecting' | 'live' | 'reconnecting' | 'ended'
 
@@ -47,9 +48,12 @@ function DesktopView({ env, name }: { env: string; name: string }) {
   const [state, setState] = useState<State>('connecting')
   const [reason, setReason] = useState('')
   const [viewOnly, setViewOnly] = useState(false)
+  const phone = usePhone()
   // Whether the desktop follows this window's size. Everyone watching shares
-  // one desktop, so the last window to resize it wins.
-  const [fit, setFit] = useState(true)
+  // one desktop, so the last window to resize it wins; a phone leaves it as
+  // it is unless asked, and shows it scaled down.
+  const [fit, setFit] = useState(!phone)
+  const keys = useRef<HTMLTextAreaElement>(null)
   const [restart, setRestart] = useState(0)
 
   useEffect(() => {
@@ -149,6 +153,94 @@ function DesktopView({ env, name }: { env: string; name: string }) {
     }
   }
 
+  // A phone's keyboard comes up for a text field, not for the desktop's
+  // picture: what is typed into a hidden one is sent on as keys.
+  const typed = (e: React.FormEvent<HTMLTextAreaElement>) => {
+    const rfb = rfbRef.current
+    const ev = e.nativeEvent as InputEvent
+    if (rfb) {
+      if (ev.inputType === 'deleteContentBackward') rfb.sendKey(0xff08, 'Backspace')
+      else if (ev.inputType === 'insertLineBreak') rfb.sendKey(0xff0d, 'Enter')
+      else for (const c of ev.data ?? '') rfb.sendKey(keysym(c), null)
+    }
+    e.currentTarget.value = ''
+  }
+
+  if (phone) {
+    return (
+      <div className="desktop-page desktop-phone" ref={page}>
+        {state !== 'live' && (
+          <div className="desktop-phone-state">
+            <span className={`desktop-dot desktop-dot-${state}`} />
+            {state === 'connecting' && 'Connecting…'}
+            {state === 'reconnecting' && <>Reconnecting…{reason && ` (${reason})`}</>}
+            {state === 'reconnecting' && (
+              <button type="button" className="btn btn-ghost" onClick={() => setRestart((n) => n + 1)}>
+                Retry now
+              </button>
+            )}
+          </div>
+        )}
+        <div ref={host} className="desktop-host" />
+        <textarea
+          ref={keys}
+          className="desktop-keys"
+          aria-label="Type to the desktop"
+          autoCapitalize="off"
+          autoCorrect="off"
+          spellCheck={false}
+          onInput={typed}
+        />
+        <div className="desktop-tools" role="toolbar" aria-label="Desktop">
+          <div className="phone-choice" role="radiogroup" aria-label="Input">
+            {([false, true] as const).map((v) => (
+              <button
+                key={String(v)}
+                type="button"
+                role="radio"
+                aria-checked={viewOnly === v}
+                className={viewOnly === v ? 'phone-choice-on' : undefined}
+                onClick={() => setViewOnly(v)}
+              >
+                {v ? 'View' : 'Touch'}
+              </button>
+            ))}
+          </div>
+          <span className="desktop-spacer" />
+          <button
+            type="button"
+            className="phone-icon-btn"
+            aria-label="Keyboard"
+            disabled={viewOnly}
+            onClick={() => keys.current?.focus()}
+          >
+            <Keyboard size={20} />
+          </button>
+          <button type="button" className="phone-icon-btn" aria-label="Paste" disabled={viewOnly} onClick={paste}>
+            <Clipboard size={20} />
+          </button>
+          <button
+            type="button"
+            className={fit ? 'phone-icon-btn phone-icon-btn-on' : 'phone-icon-btn'}
+            aria-label={fit ? 'Stop sizing the desktop to this phone' : 'Size the desktop to this phone'}
+            aria-pressed={fit}
+            onClick={() => setFit((f) => !f)}
+          >
+            <Scaling size={20} />
+          </button>
+          <button
+            type="button"
+            className="phone-icon-btn"
+            aria-label="Full screen"
+            onClick={() => page.current?.requestFullscreen?.()}
+          >
+            <Maximize size={20} />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="desktop-page" ref={page}>
       <div className="desktop-bar">
@@ -204,4 +296,11 @@ function DesktopView({ env, name }: { env: string; name: string }) {
       <div ref={host} className="desktop-host" />
     </div>
   )
+}
+
+// keysym is the X keysym that types a character: Latin-1 as itself, the
+// rest of Unicode offset into the keysyms kept for it.
+function keysym(c: string): number {
+  const code = c.codePointAt(0) ?? 0
+  return code < 0x100 ? code : 0x01000000 + code
 }
