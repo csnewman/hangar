@@ -3,6 +3,7 @@ import { Link } from 'react-router'
 
 import { api, type AttachedPack, type Environment } from '../api'
 import { copyName, packPath } from '../pages/Packs'
+import { usePhone } from '../phone'
 import { useMe } from '../session'
 
 // fromWhat says how an environment came to use a copy.
@@ -29,7 +30,39 @@ export function EnvironmentPacks({ env }: { env: Environment }) {
     queryFn: () => api.environmentConflicts(env.id),
     refetchInterval: 5_000,
   })
+  const phone = usePhone()
   if (!packs.data || packs.data.length === 0) return null
+  if (phone) {
+    return (
+      <section className="phone-section">
+        <h2 className="phone-heading">Files</h2>
+        <div className="phone-list">
+          {packs.data.map((a) => (
+            <div key={a.pack.id} className="phone-row phone-pack">
+              <span className="phone-row-main">
+                <Link to={packPath(a.pack.id, a.copy.id)} className="strong">
+                  {a.pack.name}
+                </Link>
+                <span className="phone-row-sub">
+                  {a.listed ? 'its template lists it' : 'attaches itself'} · {fromWhat[a.from]}
+                </span>
+                {own ? (
+                  <span className="phone-pack-copy">
+                    <CopyChoice env={env.id} attached={a} />
+                  </span>
+                ) : (
+                  <span className="phone-row-sub">{copyName(a.copy, me.id)}</span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+        {conflicts.data && conflicts.data.length > 0 && (
+          <Conflicts env={env.id} own={own} conflicts={conflicts.data} names={packs.data} />
+        )}
+      </section>
+    )
+  }
   return (
     <section className="section">
       <h2 className="section-title">Files</h2>

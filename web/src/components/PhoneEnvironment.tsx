@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
   ChevronLeft,
@@ -14,9 +14,15 @@ import {
 import { Link } from 'react-router'
 
 import { api, type Environment } from '../api'
+import { changeable, environmentsKey, settingsSummary, sshCommand, webURL } from '../environments'
 import { useMe } from '../session'
+import { Activity as AuditActivity } from './Activity'
 import { EnvironmentActions } from './EnvironmentActions'
-import { formatAgo, formatMemory } from './format'
+import { EnvironmentPacks } from './EnvironmentPacks'
+import { SettingsForm, TemplateDrift } from './EnvironmentSettings'
+import { formatAgo, formatMemory, shortDigest } from './format'
+import { ImageUpdate } from './ImageUpdate'
+import { PhoneChoice, PhoneCopy, PhoneNav, PhoneRow, PhoneSection, PhoneValue } from './Phone'
 import { StartProgress } from './StartProgress'
 import { PhaseBadge } from './Status'
 
@@ -72,8 +78,6 @@ export function PhoneEnvironmentHead({ env }: { env: Environment }) {
         <Row to="logs" icon={ScrollText} label="Logs" />
         {env.spec.display === 'desktop' && <Row to="desktop" icon={Monitor} label="Desktop" />}
       </div>
-
-      <h2 className="phone-heading">Details</h2>
     </div>
   )
 }
@@ -82,7 +86,11 @@ export function PhoneEnvironmentHead({ env }: { env: Environment }) {
 // and a new one.
 function Sessions({ env }: { env: Environment }) {
   // The terminal tab's query, so each shows what the other learnt.
-  const sessions = useQuery({ queryKey: ['terminals', env.id], queryFn: () => api.terminals(env.id), refetchInterval: 3000 })
+  const sessions = useQuery({
+    queryKey: ['terminals', env.id],
+    queryFn: () => api.terminals(env.id),
+    refetchInterval: 3000,
+  })
   const list = sessions.data ?? []
   return (
     <>
@@ -120,5 +128,144 @@ function Row({ to, icon: Icon, label, about }: { to: string; icon: LucideIcon; l
       </span>
       <ChevronRight size={16} className="phone-row-chev" />
     </Link>
+  )
+}
+
+// PhoneEnvironmentDetails is the rest of an environment's screen on a
+// phone, under its head: what needs doing about its template or image,
+// then what it is, how to reach it, its settings, its files and what has
+// happened to it.
+export function PhoneEnvironmentDetails({ env }: { env: Environment }) {
+  const me = useMe()
+  const own = env.owner_id === me.id
+  const suffix = me.environment_host_suffix
+  const s = env.spec
+  return (
+    <>
+      <TemplateDrift env={env} />
+      <ImageUpdate env={env} />
+      <PhoneSection>
+        <PhoneRow
+          label="Template"
+          to={env.template_id ? `/templates/${env.template_id}` : undefined}
+          end={<PhoneValue>{env.template_id ? env.template : `${env.template} (deleted)`}</PhoneValue>}
+        />
+        <PhoneRow
+          label="Image"
+          sub={env.image_digest ? `${env.image} · ${shortDigest(env.image_digest)}` : env.image}
+          mono
+        />
+        <PhoneRow
+          label="Resources"
+          end={
+            <PhoneValue>
+              {s.cpus} vCPU · {formatMemory(s.memory_mib)} · {s.display === 'desktop' ? 'Desktop' : 'Headless'}
+              {s.gpu !== 'none' && ` · ${s.gpu === 'virtual' ? 'Virtual GPU' : 'GPU passthrough'}`}
+            </PhoneValue>
+          }
+        />
+        {env.gpu_renderer && (
+          <PhoneRow
+            label="Virtual GPU"
+            sub={env.gpu_software ? `${env.gpu_renderer}, on the worker's CPU` : env.gpu_renderer}
+          />
+        )}
+        <PhoneRow label="Worker" end={<PhoneValue>{env.worker ?? 'not yet placed'}</PhoneValue>} />
+        {!own && <PhoneRow label="Owner" end={<PhoneValue>{env.owner}</PhoneValue>} />}
+        {s.repos.map((r) => (
+          <PhoneRow
+            key={r.path}
+            label="Repository"
+            sub={`${r.url} in ${r.path}${r.ref ? ` at ${r.ref}` : ''}${r.branch ? `, on ${r.branch}` : ''}`}
+            mono
+          />
+        ))}
+        <PhoneRow label="Created" end={<PhoneValue>{formatAgo(env.created_at)}</PhoneValue>} />
+      </PhoneSection>
+
+      {me.ssh && (
+        <PhoneSection title="SSH">
+          <PhoneCopy text={sshCommand(me.ssh, env, own)} />
+          <PhoneRow to="/account#sign-in-keys" label="Sign-in keys" sub="Add one to reach it over SSH" />
+        </PhoneSection>
+      )}
+
+      {suffix !== undefined && <PhoneWebServers env={env} suffix={suffix} />}
+
+      <PhoneSection note={changeable(env) ? 'Changes take effect when it next starts.' : 'Stop it to change these.'}>
+        <PhoneRow to="?show=settings" label="Settings" sub={settingsSummary(env)} />
+      </PhoneSection>
+
+      <EnvironmentPacks env={env} />
+
+      <section className="phone-section">
+        <h2 className="phone-heading">Activity</h2>
+        <AuditActivity subjects={[`environment:${env.id}`]} pageSize={5} />
+      </section>
+    </>
+  )
+}
+
+function PhoneWebServers({ env, suffix }: { env: Environment; suffix: string }) {
+  const qc = useQueryClient()
+  const set = useMutation({
+    mutationFn: (pub: boolean) => api.setEnvironmentPorts(env.id, pub),
+    onSettled: () => qc.invalidateQueries({ queryKey: environmentsKey }),
+  })
+  const pub = env.ports_public ?? false
+  return (
+    <section className="phone-section">
+      <h2 className="phone-heading">Web servers</h2>
+      <div className="phone-list">
+        {['', ...(env.spec.web_names ?? [])].map((n) => (
+          <PhoneRow
+            key={n}
+            href={webURL(n, env.short_id, suffix)}
+            label={n || 'Its own'}
+            sub={webURL(n, env.short_id, suffix)
+              .replace(/^https?:\/\//, '')
+              .replace(/\/$/, '')}
+            mono
+          />
+        ))}
+      </div>
+      <PhoneChoice
+        label="Who reaches them"
+        value={pub ? 'public' : 'private'}
+        options={[
+          { value: 'private', label: 'Private' },
+          { value: 'public', label: 'Public' },
+        ]}
+        disabled={set.isPending}
+        onChange={(v) => set.mutate(v === 'public')}
+      />
+      <p className="phone-note">
+        {pub
+          ? 'Anyone who can reach Hangar, without signing in.'
+          : 'Only people who may use this environment, signed in to Hangar.'}{' '}
+        HTTPS reaches its port 443 and HTTP its port 80.
+      </p>
+      {set.error && <div className="alert">{set.error.message}</div>}
+    </section>
+  )
+}
+
+// PhoneEnvironmentSettings is an environment's settings as a screen of
+// their own, changed while it is stopped.
+export function PhoneEnvironmentSettings({ env, onBack }: { env: Environment; onBack: () => void }) {
+  const ok = changeable(env)
+  return (
+    <div className="phone-screen">
+      <PhoneNav back={{ onBack, label: env.name }} title="Settings" sub={env.name} />
+      <div className="phone-screen-body">
+        {!ok && <div className="notice">Stop {env.name} to change these. Changes take effect when it next starts.</div>}
+        <SettingsForm
+          key={`${env.spec.cpus}:${env.spec.memory_mib}:${env.spec.display}:${env.spec.gpu}:${env.spec.dax}`}
+          env={env}
+          disabled={!ok}
+          onDone={onBack}
+        />
+      </div>
+    </div>
   )
 }

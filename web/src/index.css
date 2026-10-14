@@ -2995,6 +2995,197 @@ a.reason {
   color: var(--muted);
 }
 
+/* A phone screen's pieces (components/Phone.tsx). */
+.phone-screen-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.phone-screen-head-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 44px;
+  margin: 0 -8px;
+}
+
+.phone-screen-head-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.phone-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.phone-section > .phone-heading {
+  margin-top: 14px;
+}
+
+.phone-note {
+  margin: 0 4px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.phone-row-value {
+  flex: none;
+  max-width: 55%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+.phone-row .mono,
+.phone-row code {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.phone-copy {
+  cursor: default;
+}
+
+.phone-copy code {
+  padding: 0;
+  background: none;
+}
+
+.phone-copy:active {
+  background: transparent;
+}
+
+.phone-copy .phone-icon-btn {
+  margin: -6px -8px -6px 0;
+}
+
+.phone-foot {
+  flex: none;
+  display: flex;
+  gap: 10px;
+  padding: 10px 16px max(10px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+.phone-foot > * {
+  flex: 1;
+  min-height: 46px;
+  justify-content: center;
+}
+
+.phone-choice {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--surface-2);
+}
+
+.phone-choice > button {
+  flex: 1 1 0;
+  min-height: 34px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.phone-choice > .phone-choice-on {
+  background: var(--surface);
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.2);
+}
+
+.phone-row-empty {
+  color: var(--muted);
+  cursor: default;
+}
+
+.phone-event {
+  cursor: default;
+}
+
+.phone-event:active {
+  background: transparent;
+}
+
+.phone-event-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.phone-event .detail {
+  margin-right: 8px;
+}
+
+.phone-event .phone-row-main > * {
+  overflow-wrap: anywhere;
+}
+
+.phone-pack {
+  cursor: default;
+}
+
+.phone-pack:active {
+  background: transparent;
+}
+
+.phone-pack-copy {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.phone-pack-copy select {
+  flex: 1;
+  min-width: 0;
+}
+
+/* An environment's screen on a phone: its head and its details, spaced as
+   one list of sections. */
+.phone-env-page {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.phone-env-page > .notice {
+  margin: 8px 0 0;
+}
+
+/* A phone screen with a bar, a body that scrolls and a foot. */
+.phone-screen {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.phone-screen-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 16px 24px;
+}
+
+.phone-screen-body > * {
+  flex-shrink: 0;
+}
+
 /* An environment in the list: the row leads to its screen, and a stopped
    one has its start button beside. */
 .phone-env {

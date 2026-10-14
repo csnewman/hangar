@@ -47,3 +47,26 @@ export function changeable(env: Environment): boolean {
   if (env.phase === 'suspended' || env.desired === 'suspended' || env.phase === 'stopping') return false
   return env.desired === 'stopped' || (!env.worker_id && env.phase === 'pending')
 }
+
+// webURL is where an environment's web server called name is reached, or
+// its plain one with no name, over the same scheme as Hangar itself.
+export function webURL(name: string, short: string, suffix: string): string {
+  return `${window.location.protocol}//${name ? `${name}-` : ''}env${short}${suffix}/`
+}
+
+// sshCommand reaches the environment through the SSH gateway: by its name
+// alone for its owner, and by owner/name for anyone else who can see it.
+export function sshCommand(gw: { host: string; port: number }, env: Environment, own: boolean) {
+  const user = own ? env.name : `${env.owner}/${env.name}`
+  return `ssh ${user}@${gw.host}` + (gw.port === 22 ? '' : ` -p ${gw.port}`)
+}
+
+// settingsSummary is an environment's settings in a line.
+export function settingsSummary(env: Environment): string {
+  const s = env.spec
+  return (
+    `${s.cpus} vCPU${s.cpus === 1 ? '' : 's'}, ${s.memory_mib} MiB, ` +
+    `${s.display === 'desktop' ? 'desktop' : 'headless'}, ${s.gpu === 'none' ? 'no GPU' : `${s.gpu} GPU`}` +
+    (s.dax ? ', image files mapped from the host' : '')
+  )
+}

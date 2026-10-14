@@ -15,14 +15,14 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useState } from 'react'
-import { Link, NavLink, Outlet, useLocation, useOutletContext, useParams } from 'react-router'
+import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router'
 
 import type { Environment } from '../api'
 import { useMe } from '../session'
 import { EnvironmentActions } from '../components/EnvironmentActions'
 import { formatAgo, shortDigest } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
-import { PhoneEnvironmentHead } from '../components/PhoneEnvironment'
+import { PhoneEnvironmentDetails, PhoneEnvironmentHead, PhoneEnvironmentSettings } from '../components/PhoneEnvironment'
 import { SpecChips } from '../components/SpecChips'
 import { EnvironmentPacks } from '../components/EnvironmentPacks'
 import { SettingsPanel, TemplateDrift } from '../components/EnvironmentSettings'
@@ -31,7 +31,7 @@ import { ImageUpdate } from '../components/ImageUpdate'
 import { StartProgress } from '../components/StartProgress'
 import { desktop } from '../desktop'
 import { PhaseBadge, RendererBadge } from '../components/Status'
-import { useEnvironments } from '../environments'
+import { sshCommand, useEnvironments, webURL } from '../environments'
 import { usePhone } from '../phone'
 import { useTitle } from '../title'
 import { Activity as AuditActivity } from '../components/Activity'
@@ -201,12 +201,6 @@ function DesktopActions({ env }: { env: string }) {
   )
 }
 
-// webURL is where an environment's web server called name is reached, or
-// its plain one with no name, over the same scheme as Hangar itself.
-function webURL(name: string, short: string, suffix: string): string {
-  return `${window.location.protocol}//${name ? `${name}-` : ''}env${short}${suffix}/`
-}
-
 export function useEnv() {
   return useOutletContext<Environment>()
 }
@@ -215,9 +209,24 @@ export function SummaryTab() {
   const env = useEnv()
   const me = useMe()
   const phone = usePhone()
+  const [params, setParams] = useSearchParams()
+  const location = useLocation()
+  const navigate = useNavigate()
+  if (phone) {
+    if (params.get('show') === 'settings') {
+      // Back is a step back, unless the screen was opened directly.
+      const back = () => (location.key !== 'default' ? navigate(-1) : setParams({}, { replace: true }))
+      return <PhoneEnvironmentSettings env={env} onBack={back} />
+    }
+    return (
+      <div className="page-pad phone-env-page">
+        <PhoneEnvironmentHead env={env} />
+        <PhoneEnvironmentDetails env={env} />
+      </div>
+    )
+  }
   return (
     <div className="page-pad">
-      {phone && <PhoneEnvironmentHead env={env} />}
       <TemplateDrift env={env} />
       <ImageUpdate env={env} />
       <div className="panel">
@@ -325,13 +334,6 @@ export function SummaryTab() {
       </section>
     </div>
   )
-}
-
-// sshCommand reaches the environment through the SSH gateway: by its name
-// alone for its owner, and by owner/name for anyone else who can see it.
-function sshCommand(gw: { host: string; port: number }, env: Environment, own: boolean) {
-  const user = own ? env.name : `${env.owner}/${env.name}`
-  return `ssh ${user}@${gw.host}` + (gw.port === 22 ? '' : ` -p ${gw.port}`)
 }
 
 function SSHCommand({ command }: { command: string }) {
