@@ -106,8 +106,8 @@ export function EnvironmentPage() {
 
   if (phone) {
     const summary = tab === tabs[0]
-    // The Code tab's screens have heads of their own, with the way back.
-    const bar = !summary && tab.to !== 'code'
+    // The Code and Terminal tabs have bars of their own, with the way back.
+    const bar = !summary && tab.to !== 'code' && tab.to !== 'terminal'
     return (
       <div className="page page-flush">
         {bar && (

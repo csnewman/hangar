@@ -775,14 +775,25 @@ function WrapButton({ wrap, onWrap }: { wrap: boolean; onWrap: (on: boolean) => 
 }
 
 // TopHead heads a screen the environment's screen leads to: the way back
-// to it, the screen's title, and what is under the title.
+// to it, the screen's title, and what is under the title. Opened from a
+// terminal (the link's state names it, from), the way back is to that.
 function TopHead({ env, title, children }: { env: Environment; title: string; children?: ReactNode }) {
+  const location = useLocation()
+  const navigate = useNavigate()
+  const from = (location.state as { from?: string } | null)?.from
   return (
     <div className="phone-code-head">
-      <Link to={`/environments/${env.id}`} className="phone-back">
-        <ChevronLeft size={22} />
-        <span>{env.name}</span>
-      </Link>
+      {from ? (
+        <button type="button" className="phone-back" onClick={() => navigate(-1)}>
+          <ChevronLeft size={22} />
+          <span>{from}</span>
+        </button>
+      ) : (
+        <Link to={`/environments/${env.id}`} className="phone-back">
+          <ChevronLeft size={22} />
+          <span>{env.name}</span>
+        </Link>
+      )}
       <h1 className="phone-title">{title}</h1>
       {children}
     </div>
@@ -803,15 +814,15 @@ function ScreenBar({
   children?: ReactNode
 }) {
   return (
-    <div className="phone-code-bar">
+    <div className="phone-nav">
       <button type="button" className="phone-icon-btn" aria-label="Back" onClick={onBack}>
         <ChevronLeft size={24} />
       </button>
-      <div className="phone-code-bar-title">
+      <div className="phone-nav-title">
         <span>{title}</span>
         {sub && <span className="phone-row-sub">{sub}</span>}
       </div>
-      <div className="phone-code-bar-end">{children}</div>
+      <div className="phone-nav-end">{children}</div>
     </div>
   )
 }

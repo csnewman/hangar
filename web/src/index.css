@@ -3150,6 +3150,81 @@ a.reason {
   font-weight: 600;
 }
 
+/* A screen's bar: the way back, its title and what it is of, centred,
+   and its own buttons. */
+.phone-nav {
+  flex: none;
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 4px;
+  min-height: 56px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+.phone-nav-title {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.phone-nav-title > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.phone-nav-title .phone-row-sub {
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.phone-nav-wide {
+  grid-template-columns: 92px minmax(0, 1fr) 92px;
+}
+
+.phone-nav-end {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.phone-nav .phone-icon-btn {
+  position: relative;
+}
+
+.phone-icon-btn-on {
+  background: var(--accent-soft);
+}
+
+/* A count on a button, as the changes waiting on the terminal's bar. */
+.phone-icon-count {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  min-width: 17px;
+  padding: 0 4px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 17px;
+}
+
+button.phone-back {
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+
 /* A terminal's keys on a phone (TerminalKeys.tsx). */
 .term-keys {
   flex: none;
@@ -3262,4 +3337,27 @@ a.reason {
   .page-flush {
     padding: 0;
   }
+}
+
+/* The list of a terminal's sessions, opened from its bar on a phone. */
+.term-page {
+  position: relative;
+}
+
+.term-switch-backdrop {
+  position: absolute;
+  inset: 56px 0 0;
+  z-index: 5;
+  background: rgb(0 0 0 / 0.25);
+}
+
+.term-switch {
+  position: absolute;
+  top: 62px;
+  left: 8px;
+  right: 8px;
+  z-index: 6;
+  max-height: 60%;
+  overflow-y: auto;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
 }

@@ -2688,43 +2688,6 @@
   flex-direction: column;
 }
 
-.phone-code-bar {
-  flex: none;
-  display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) 44px;
-  align-items: center;
-  gap: 4px;
-  min-height: 56px;
-  padding: 0 6px;
-  border-bottom: 1px solid var(--border);
-  background: var(--sidebar);
-}
-
-.phone-code-bar-title {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 1px;
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.phone-code-bar-title > span {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.phone-code-bar-title .phone-row-sub {
-  font-size: 12px;
-  font-weight: 400;
-}
-
-.phone-icon-btn-on {
-  background: var(--accent-soft);
-}
-
 .phone-diff-added {
   color: var(--code-git-added);
 }
