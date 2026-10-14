@@ -10,7 +10,7 @@ import {
   SendHorizontal,
   X,
 } from 'lucide-react'
-import { useRef, useState, type ReactNode } from 'react'
+import { useRef, useState, type PointerEvent, type ReactNode, type TouchEvent } from 'react'
 import { flushSync } from 'react-dom'
 
 import { useKeyboard } from '../phone'
@@ -127,8 +127,7 @@ export function TerminalKeys({
             className="term-compose-btn term-compose-send"
             aria-label={text ? 'Send' : 'Press Enter'}
             title={text ? 'Send, then press Enter' : 'Press Enter'}
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={send}
+            {...tap(send)}
           >
             <SendHorizontal size={20} />
           </button>
@@ -153,8 +152,7 @@ export function TerminalKeys({
             type="button"
             className={ctrl ? 'term-key term-key-on' : 'term-key'}
             aria-pressed={ctrl}
-            onPointerDown={(e) => e.preventDefault()}
-            onClick={() => onCtrl(!ctrl)}
+            {...tap(() => onCtrl(!ctrl))}
           >
             ctrl
           </button>
@@ -217,8 +215,7 @@ function ModeButton({
       className={on ? 'term-mode term-mode-on' : 'term-mode'}
       aria-label={label}
       title={label}
-      onPointerDown={(e) => e.preventDefault()}
-      onClick={onPress}
+      {...tap(onPress)}
     >
       {children}
     </button>
@@ -227,14 +224,7 @@ function ModeButton({
 
 function Key({ k, onPress }: { k: KeyDef; onPress: (k: KeyDef) => void }) {
   return (
-    <button
-      type="button"
-      className="term-key"
-      aria-label={k.name}
-      // Pressing a key leaves the keyboard where it was: up or down.
-      onPointerDown={(e) => e.preventDefault()}
-      onClick={() => onPress(k)}
-    >
+    <button type="button" className="term-key" aria-label={k.name} {...tap(() => onPress(k))}>
       {k.label}
     </button>
   )
@@ -257,4 +247,38 @@ function keyFor(c: string): { key: string; code: string; keyCode: number } {
   }
   const n = named[c] ?? { code: '', keyCode: 0 }
   return { key: c, ...n }
+}
+
+// Where each key's touch began, kept apart from the key's render, which
+// may happen between a touch's start and its end.
+const touches = new WeakMap<Element, { x: number; y: number }>()
+
+// tap is the handlers for a key that leaves the keyboard where it was, up
+// or down. Safari on a phone moves the focus off the terminal, and puts the
+// keyboard away, for a tap on anything else, however its pointerdown is
+// handled; a touch that ends where it began is taken as the press instead,
+// and its end cancelled, so the tap, and the click after it, never happen.
+// A touch that moves is the row scrolling. A mouse presses on click, its
+// pointerdown cancelled so the focus stays.
+function tap(onPress: () => void) {
+  return {
+    onTouchStart: (e: TouchEvent) => {
+      const t = e.touches[0]
+      touches.set(e.currentTarget, { x: t.clientX, y: t.clientY })
+    },
+    onTouchMove: (e: TouchEvent) => {
+      const t = e.touches[0]
+      const at = touches.get(e.currentTarget)
+      if (at && Math.hypot(t.clientX - at.x, t.clientY - at.y) > 10) touches.delete(e.currentTarget)
+    },
+    onTouchEnd: (e: TouchEvent) => {
+      if (!touches.delete(e.currentTarget)) return
+      e.preventDefault()
+      onPress()
+    },
+    onPointerDown: (e: PointerEvent) => {
+      if (e.pointerType === 'mouse') e.preventDefault()
+    },
+    onClick: onPress,
+  }
 }
