@@ -7,6 +7,8 @@ import { api, type Copy, type Pack, type PackInput, type PackPath, type PackRef 
 import { ConfirmButton } from '../components/ConfirmButton'
 import { FileBrowser, type FileSource } from '../components/FileBrowser'
 import { PageHeader } from '../components/PageHeader'
+import { PhoneHead, PhoneNav, PhoneRow, PhoneSection } from '../components/Phone'
+import { usePhone } from '../phone'
 import { useMe } from '../session'
 import { canGive, useTeams } from '../teams'
 
@@ -56,6 +58,26 @@ export function PackList() {
   const [creating, setCreating] = useState(false)
   const packs = usePacks()
   const list = packs.data ?? []
+  const phone = usePhone()
+  if (phone) {
+    return (
+      <>
+        {creating && <CreateForm onDone={() => setCreating(false)} />}
+        {packs.isError && <div className="alert">Could not load packs: {packs.error.message}</div>}
+        <PhoneSection title="Packs">
+          {list.map((k) => (
+            <PhoneRow
+              key={k.id}
+              to={packPath(k.id)}
+              label={k.name}
+              sub={`${ownerOf(k)} · ${reaches(k, me.id)} · ${k.default_copy_id ? 'a shared copy' : 'your own copy'}`}
+            />
+          ))}
+          {!creating && <PhoneRow onClick={() => setCreating(true)} icon={Plus} label="New pack" tone="accent" />}
+        </PhoneSection>
+      </>
+    )
+  }
   return (
     <section className="section">
       <div className="section-head">
@@ -257,7 +279,7 @@ function PathsEditor({
     <div className="field">
       <span>Paths</span>
       {value.map((p, i) => (
-        <div key={i} className="inline-form">
+        <div key={i} className="inline-form path-row">
           <input
             className="mono grow"
             spellCheck={false}
@@ -320,6 +342,7 @@ export function PackRedirect() {
 // default unless another is chosen -- and its paths and settings.
 export function PackPage() {
   const me = useMe()
+  const phone = usePhone()
   const { id = '' } = useParams()
   const [search, setSearch] = useSearchParams()
   const pack = useQuery({ queryKey: ['pack', id], queryFn: () => api.pack(id) })
@@ -332,6 +355,43 @@ export function PackPage() {
   const own = copies.data.find((c) => c.personal)
   const fallback = k.default_copy_id ?? own?.id ?? copies.data[0]?.id
   const chosen = copies.data.find((c) => c.id === search.get('copy'))?.id ?? fallback
+  const choose = (c: string) => setSearch(!c || c === fallback ? {} : { copy: c }, { replace: true })
+
+  // On a phone the copy and its files are the pack's screen, and its paths
+  // and settings a screen of their own.
+  if (phone) {
+    if (search.get('show') === 'settings') {
+      const back = () => {
+        const next = new URLSearchParams(search)
+        next.delete('show')
+        setSearch(next, { replace: true })
+      }
+      return (
+        <div className="phone-screen">
+          <PhoneNav back={{ onBack: back, label: k.name }} title="Paths and settings" sub={k.name} />
+          <div className="phone-screen-body phone-screen-sections">
+            <PackSettings key={k.updated_at} pack={k} />
+          </div>
+        </div>
+      )
+    }
+    return (
+      <div className="page phone-page">
+        <PhoneHead back={{ to: '/files', label: 'Files' }} title={k.name}>
+          <p className="phone-note">{[ownerOf(k), reaches(k, me.id), k.description].filter(Boolean).join(' · ')}</p>
+        </PhoneHead>
+        <CopyBar pack={k} copies={copies.data} chosen={chosen} onChoose={choose} />
+        {chosen && <CopyFiles key={chosen} copy={chosen} pack={k} />}
+        <PhoneSection>
+          <PhoneRow
+            to={`?${new URLSearchParams({ ...Object.fromEntries(search), show: 'settings' })}`}
+            label="Paths and settings"
+            sub={`${k.paths.length} ${k.paths.length === 1 ? 'path' : 'paths'}`}
+          />
+        </PhoneSection>
+      </div>
+    )
+  }
 
   return (
     <div className="page">
@@ -340,12 +400,7 @@ export function PackPage() {
         title={k.name}
         subtitle={[ownerOf(k), reaches(k, me.id), k.description].filter(Boolean).join(' · ')}
       />
-      <CopyBar
-        pack={k}
-        copies={copies.data}
-        chosen={chosen}
-        onChoose={(c) => setSearch(!c || c === fallback ? {} : { copy: c }, { replace: true })}
-      />
+      <CopyBar pack={k} copies={copies.data} chosen={chosen} onChoose={choose} />
       {chosen && <CopyFiles key={chosen} copy={chosen} pack={k} />}
       <div className="page-narrow">
         <PackSettings key={k.updated_at} pack={k} />

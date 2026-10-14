@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronRight, FileText, Folder, FolderOpen, Plus, Search } from 'lucide-react'
+import { ChevronLeft, ChevronRight, FileText, Folder, FolderOpen, Plus, Search } from 'lucide-react'
 import { useEffect, useMemo, useState, type FormEvent } from 'react'
 
 import type { PackFile, PackFileContent } from '../api'
+import { usePhone } from '../phone'
 import { ConfirmButton } from './ConfirmButton'
 
 // What each part of the profile is, for people who did not write the list.
@@ -148,7 +149,8 @@ export type FileSource = {
 }
 
 // FileBrowser is a source's files as folders: a tree on one side, the file
-// chosen from it on the other.
+// chosen from it on the other. On a phone it is one or the other: the
+// tree, or the file chosen, with the way back to the tree.
 export function FileBrowser({
   source,
   files,
@@ -191,6 +193,21 @@ export function FileBrowser({
   }
   // While filtering, every folder with a match is open.
   const isOpen = (path: string) => query !== '' || expanded.has(path)
+  const phone = usePhone()
+
+  if (phone && selected) {
+    return (
+      <div className="fb-phone">
+        <button type="button" className="phone-back" onClick={() => onOpen(null)}>
+          <ChevronLeft size={22} />
+          <span>All files</span>
+        </button>
+        <div className="panel fb-detail">
+          <FileDetail key={selected.path} source={source} file={selected} onRemoved={() => onOpen(null)} />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="panel fb">
@@ -210,7 +227,11 @@ export function FileBrowser({
         </div>
       </div>
       <div className="fb-detail">
-        {selected ? (
+        {phone ? (
+          <div className="fb-none muted">
+            {files.length} {files.length === 1 ? 'file' : 'files'}, {bytes(total)}.
+          </div>
+        ) : selected ? (
           <FileDetail key={selected.path} source={source} file={selected} onRemoved={() => onOpen(null)} />
         ) : (
           <div className="fb-none muted">

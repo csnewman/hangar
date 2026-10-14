@@ -2234,8 +2234,26 @@ code {
     border-bottom: 1px solid var(--border);
   }
 
+  /* The tree is the page's own list: it scrolls with it, its rows
+     tall enough to tap. */
   .fb-rows {
-    max-height: 40vh;
+    max-height: none;
+  }
+
+  .fb-row {
+    min-height: 44px;
+    font-size: 15px;
+  }
+
+  .fb-phone {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .fb-phone > .phone-back {
+    align-self: flex-start;
+    margin-left: -8px;
   }
 }
 
@@ -3458,20 +3476,47 @@ a.reason {
   gap: 10px;
 }
 
-.phone-account-screen > .section {
+.phone-screen-sections > .section {
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin: 0;
 }
 
-.phone-account-screen > .section > * {
+.phone-screen-sections > .section > * {
   margin: 0;
 }
 
 /* The bar names the screen. */
-.phone-account-screen .section-title {
+.phone-screen-sections .section-title:first-child {
   display: none;
+}
+
+@media (max-width: 760px) {
+  .inline-form {
+    flex-wrap: wrap;
+  }
+
+  .field-inline {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .field-inline select {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* A path, whether it is sensitive, and its remove button keep a line. */
+  .inline-form.path-row {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .path-row input.grow {
+    width: auto;
+    min-width: 0;
+  }
 }
 
 /* A phone screen with a bar, a body that scrolls and a foot: the whole

@@ -340,7 +340,7 @@ function PhoneAccount() {
     return (
       <div className="phone-screen">
         <PhoneNav back={{ onBack: back, label: 'Account' }} title={screens[shown]} />
-        <div className="phone-screen-body phone-account-screen">
+        <div className="phone-screen-body phone-screen-sections">
           {shown === 'password' && <ChangePassword />}
           {shown === 'ssh-keys' && <Keys only="ssh" />}
           {shown === 'sign-in-keys' && <Keys only="sign-in" />}
