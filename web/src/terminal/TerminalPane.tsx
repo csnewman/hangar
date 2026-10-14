@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import { copyText, shortcut, useContextMenu } from '../code/ContextMenu'
 import { Connection, type SessionInfo, type TerminalSize } from './connection'
+import { TerminalKeys, type KeyTarget } from './TerminalKeys'
 import { onDarkChange } from '../theme'
 import { darkTheme, lightTheme, prefersDark } from './theme'
 
@@ -53,6 +54,7 @@ export function TerminalPane({
   session,
   dir,
   run,
+  keys = false,
   events,
 }: {
   env: string
@@ -61,6 +63,8 @@ export function TerminalPane({
   dir?: string
   // run is a command typed into a new session once it starts.
   run?: string
+  // keys shows the keys a phone's keyboard lacks, and a box to write in.
+  keys?: boolean
   events: PaneEvents
 }) {
   const host = useRef<HTMLDivElement>(null)
@@ -81,6 +85,13 @@ export function TerminalPane({
   const claimRef = useRef<() => void>(() => {})
   // typedRef marks input as a person's, for a paste from the menu.
   const typedRef = useRef<() => void>(() => {})
+  const keyTarget = useRef<KeyTarget | null>(null)
+  // Ctrl from the phone's keys, held for the next key.
+  const [ctrl, setCtrl] = useState(false)
+  const ctrlRef = useRef(false)
+  useEffect(() => {
+    ctrlRef.current = ctrl
+  })
   // The session to attach to is taken when the pane mounts: once a new
   // session has its ID the parent records it, and the pane carries on
   // rather than attaching again. Starting another forgets it.
@@ -305,8 +316,36 @@ export function TerminalPane({
     for (const ev of ['keydown', 'paste', 'compositionend'] as const) el.addEventListener(ev, typed, true)
     typedRef.current = typed
     const sending = () => !replaying && (size === null || size.mine || performance.now() - typedAt < 100)
-    term.onData((d) => sending() && conn?.input(d))
+    term.onData((d) => {
+      if (!sending()) return
+      // A character typed with the phone's Ctrl held.
+      if (ctrlRef.current && d.length === 1 && d >= ' ') {
+        d = control(d)
+        setCtrl(false)
+      }
+      conn?.input(d)
+    })
     term.onBinary((d) => sending() && conn?.input(Uint8Array.from(d, (c) => c.charCodeAt(0))))
+    keyTarget.current = {
+      press: (key, code, keyCode, ctrlKey = false) => {
+        const ev = new KeyboardEvent('keydown', { key, code, ctrlKey, bubbles: true, cancelable: true })
+        // The terminal reads keyCode, which a constructed event cannot be
+        // given.
+        Object.defineProperty(ev, 'keyCode', { get: () => keyCode })
+        Object.defineProperty(ev, 'which', { get: () => keyCode })
+        term.textarea?.dispatchEvent(ev)
+      },
+      type: (text) => {
+        typed()
+        term.input(text, true)
+      },
+      submit: (text) => {
+        typed()
+        if (text) term.paste(text)
+        term.input('\r', true)
+      },
+      focus: () => term.focus(),
+    }
     claimRef.current = () => {
       if (want) conn?.claim(want.cols, want.rows)
       term.focus()
@@ -386,33 +425,44 @@ export function TerminalPane({
   }
 
   return (
-    <div className="term-pane">
-      <div ref={host} className="term-host" onContextMenu={openMenu} />
-      {menu.menu}
-      {state === 'live' && sizing && <SizeBar sizing={sizing} onFit={() => claimRef.current()} />}
-      {state !== 'live' && (
-        <div className={`term-status term-status-${state}`}>
-          {state === 'connecting' && 'Connecting…'}
-          {state === 'reconnecting' && <>Reconnecting… {reason && <span className="muted">({reason})</span>}</>}
-          {state === 'ended' && (
-            <>
-              The session has ended.
-              <button
-                type="button"
-                className="btn btn-ghost"
-                onClick={() => {
-                  initial.current = undefined
-                  setRestart((n) => n + 1)
-                }}
-              >
-                Start another
-              </button>
-            </>
-          )}
-        </div>
-      )}
-    </div>
+    <>
+      <div className="term-pane">
+        <div ref={host} className="term-host" onContextMenu={openMenu} />
+        {menu.menu}
+        {state === 'live' && sizing && <SizeBar sizing={sizing} onFit={() => claimRef.current()} />}
+        {state !== 'live' && (
+          <div className={`term-status term-status-${state}`}>
+            {state === 'connecting' && 'Connecting…'}
+            {state === 'reconnecting' && <>Reconnecting… {reason && <span className="muted">({reason})</span>}</>}
+            {state === 'ended' && (
+              <>
+                The session has ended.
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => {
+                    initial.current = undefined
+                    setRestart((n) => n + 1)
+                  }}
+                >
+                  Start another
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+      {keys && <TerminalKeys target={() => keyTarget.current} ctrl={ctrl} onCtrl={setCtrl} />}
+    </>
   )
+}
+
+// control is the character Ctrl makes of c, as a terminal sends it.
+function control(c: string): string {
+  if (c === ' ') return '\0'
+  if (c === '?') return '\x7f'
+  const code = c.toUpperCase().charCodeAt(0)
+  return code >= 0x40 && code <= 0x5f ? String.fromCharCode(code - 0x40) : c
 }
 
 // SizeBar says when the terminal is drawn at another window's size, with

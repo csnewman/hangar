@@ -5,6 +5,7 @@ import { useState } from 'react'
 import { useOutletContext, useSearchParams } from 'react-router'
 
 import { api, type Environment } from '../api'
+import { usePhone } from '../phone'
 import { TerminalPane } from './TerminalPane'
 
 // TerminalTab is an environment's terminal sessions: a strip of them, and
@@ -15,6 +16,7 @@ import { TerminalPane } from './TerminalPane'
 // keystrokes and all.
 export function TerminalTab() {
   const env = useOutletContext<Environment>()
+  const phone = usePhone()
   const qc = useQueryClient()
   const [params, setParams] = useSearchParams()
   const chosen = params.get('session') ?? undefined
@@ -103,6 +105,7 @@ export function TerminalTab() {
         key={pane.key}
         env={env.id}
         session={attachTo}
+        keys={phone}
         events={{
           attached: (s) => {
             if (s.id !== chosen) setParams({ session: s.id }, { replace: true })

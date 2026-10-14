@@ -23,3 +23,25 @@ export function installable(): boolean {
   const nav = navigator as Navigator & { standalone?: boolean }
   return nav.standalone === false && !window.matchMedia('(display-mode: standalone)').matches
 }
+
+// On a phone the on-screen keyboard covers the bottom of the page rather
+// than shrinking it, and Safari scrolls the page to keep the field typed in
+// in sight. The phone's layout is fitted to what the keyboard leaves
+// instead, the visual viewport, as --phone-top and --phone-height, and
+// data-keyboard is set on the page while the keyboard is up.
+const vv = window.visualViewport
+if (vv) {
+  const fit = () => {
+    // Zoomed in, the page is as it was.
+    if (Math.abs(vv.scale - 1) > 0.01) return
+    const root = document.documentElement.style
+    root.setProperty('--phone-top', `${vv.offsetTop}px`)
+    root.setProperty('--phone-height', `${vv.height}px`)
+    // Far shorter than the window: the keyboard, not a browser's bars.
+    if (window.innerHeight - vv.height > 150) document.documentElement.dataset.keyboard = ''
+    else delete document.documentElement.dataset.keyboard
+  }
+  vv.addEventListener('resize', fit)
+  vv.addEventListener('scroll', fit)
+  fit()
+}
