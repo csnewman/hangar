@@ -3386,12 +3386,105 @@ a.reason {
   background: var(--surface);
 }
 
-/* A phone screen with a bar, a body that scrolls and a foot. */
+/* A choice of one among rows. */
+.phone-radios {
+  display: contents;
+}
+
+.phone-radio {
+  align-items: flex-start;
+}
+
+.phone-radio-mark {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  margin-top: 1px;
+  border: 2px solid var(--border-strong);
+  border-radius: 11px;
+  box-sizing: border-box;
+}
+
+.phone-radio[aria-checked='true'] .phone-radio-mark {
+  border-color: var(--accent);
+  background: radial-gradient(circle, var(--accent) 0 5px, transparent 5.5px);
+}
+
+.phone-radio-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.phone-radio-desc {
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+/* A row holding a control, not leading anywhere. */
+.phone-row-plain {
+  cursor: default;
+}
+
+.phone-row-plain:active {
+  background: transparent;
+}
+
+/* A key or token on a phone: what it is, and what can be done to it. */
+.phone-key {
+  align-items: flex-start;
+  cursor: default;
+}
+
+.phone-key:active {
+  background: transparent;
+}
+
+.phone-key .public-key {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.phone-key-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+/* A form on a phone: its fields one above another. */
+.phone-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.phone-account-screen > .section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+}
+
+.phone-account-screen > .section > * {
+  margin: 0;
+}
+
+/* The bar names the screen. */
+.phone-account-screen .section-title {
+  display: none;
+}
+
+/* A phone screen with a bar, a body that scrolls and a foot: the whole
+   of the main area, or of an environment's tab. */
 .phone-screen {
   flex: 1;
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+.main > .phone-screen {
+  height: 100%;
 }
 
 .phone-screen-body {
@@ -3405,7 +3498,7 @@ a.reason {
 }
 
 .phone-screen-body > * {
-  flex-shrink: 0;
+  flex: none;
 }
 
 /* An environment in the list: the row leads to its screen, and a stopped

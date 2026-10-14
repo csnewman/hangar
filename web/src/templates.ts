@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { api, type Me, type Spec, type Team, type Template } from './api'
+import { formatMemory } from './components/format'
 
 export const templatesKey = ['templates'] as const
 
@@ -127,4 +128,14 @@ export const blankSpec: Spec = {
 export function repoName(url: string): string {
   const tail = url.replace(/\.git$/, '').split(/[/:]/).filter(Boolean)
   return tail.slice(-2).join('/') || url
+}
+
+// specLine summarises what an environment or template is in a line, as
+// SpecChips does in chips.
+export function specLine(spec: Spec, namePattern?: string): string {
+  const parts = [`${spec.cpus} vCPU`, formatMemory(spec.memory_mib), spec.display === 'desktop' ? 'Desktop' : 'Headless']
+  if (spec.gpu !== 'none') parts.push(spec.gpu === 'passthrough' ? 'GPU passthrough' : 'Virtual GPU')
+  if (spec.repos.length > 0) parts.push(spec.repos.length === 1 ? repoName(spec.repos[0].url) : `${spec.repos.length} repos`)
+  if (namePattern) parts.push('Named')
+  return parts.join(' · ')
 }

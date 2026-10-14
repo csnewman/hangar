@@ -3,29 +3,31 @@ import { Copy, KeyRound, Plus } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 
 import { api, type LoginKey, type SSHKey } from '../api'
+import { usePhone } from '../phone'
 import { profileKey } from '../profile'
 import { useMe } from '../session'
 import { ConfirmButton } from './ConfirmButton'
 
 // Keys are the user's SSH keys, which sign for their environments, and
-// their sign-in keys, which sign them in to them.
-export function Keys() {
+// their sign-in keys, which sign them in to them. only shows one kind.
+export function Keys({ only }: { only?: 'ssh' | 'sign-in' }) {
   const profile = useQuery({ queryKey: profileKey, queryFn: api.profile })
   if (profile.isPending) return null
   if (profile.isError) return <div className="alert">{profile.error.message}</div>
   const { keys, login_keys, secrets } = profile.data
   return (
     <>
-      {!secrets && (
+      {!secrets && only !== 'sign-in' && (
         <div className="alert">This server has no secret key (HANGAR_SECRET_KEY_FILE), so it cannot keep SSH keys.</div>
       )}
-      <SSHKeys keys={keys} disabled={!secrets} />
-      <LoginKeys keys={login_keys} />
+      {only !== 'sign-in' && <SSHKeys keys={keys} disabled={!secrets} />}
+      {only !== 'ssh' && <LoginKeys keys={login_keys} />}
     </>
   )
 }
 
 function SSHKeys({ keys, disabled }: { keys: SSHKey[]; disabled: boolean }) {
+  const phone = usePhone()
   const qc = useQueryClient()
   const [name, setName] = useState('')
   const [importing, setImporting] = useState(false)
@@ -51,19 +53,28 @@ function SSHKeys({ keys, disabled }: { keys: SSHKey[]; disabled: boolean }) {
         Environments sign with these through an SSH agent; the private key stays on the server. Add the public key to
         GitHub or wherever git pushes.
       </p>
-      <div className="panel">
-        {keys.length === 0 ? (
-          <div className="empty">No keys.</div>
-        ) : (
-          <table className="table">
-            <tbody>
-              {keys.map((k) => (
-                <KeyRow key={k.id} sshKey={k} />
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {phone ? (
+        <div className="phone-list">
+          {keys.length === 0 && <div className="phone-row phone-row-empty">No keys.</div>}
+          {keys.map((k) => (
+            <KeyRow key={k.id} sshKey={k} phone />
+          ))}
+        </div>
+      ) : (
+        <div className="panel">
+          {keys.length === 0 ? (
+            <div className="empty">No keys.</div>
+          ) : (
+            <table className="table">
+              <tbody>
+                {keys.map((k) => (
+                  <KeyRow key={k.id} sshKey={k} />
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
       <form className="panel form key-form" onSubmit={submit}>
         <div className="field-row">
           <label className="field grow">
@@ -101,7 +112,7 @@ function SSHKeys({ keys, disabled }: { keys: SSHKey[]; disabled: boolean }) {
   )
 }
 
-function KeyRow({ sshKey }: { sshKey: SSHKey }) {
+function KeyRow({ sshKey, phone = false }: { sshKey: SSHKey; phone?: boolean }) {
   const qc = useQueryClient()
   const remove = useMutation({
     mutationFn: () => api.deleteSSHKey(sshKey.id),
@@ -113,6 +124,29 @@ function KeyRow({ sshKey }: { sshKey: SSHKey }) {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
     })
+  }
+  if (phone) {
+    return (
+      <div className="phone-row phone-key">
+        <span className="phone-row-main">
+          <span className="strong">{sshKey.name}</span>
+          <span className="phone-row-sub mono">{sshKey.fingerprint}</span>
+          <code className="public-key">{sshKey.public_key}</code>
+          <span className="phone-key-actions">
+            <button type="button" className="btn btn-ghost" onClick={copy}>
+              <Copy size={13} />
+              {copied ? 'Copied' : 'Copy public key'}
+            </button>
+            <ConfirmButton
+              label="Delete"
+              confirmLabel="Delete?"
+              onConfirm={() => remove.mutate()}
+              disabled={remove.isPending}
+            />
+          </span>
+        </span>
+      </div>
+    )
   }
   return (
     <tr>
@@ -141,6 +175,7 @@ function KeyRow({ sshKey }: { sshKey: SSHKey }) {
 // environments through the SSH gateway.
 function LoginKeys({ keys }: { keys: LoginKey[] }) {
   const me = useMe()
+  const phone = usePhone()
   const qc = useQueryClient()
   const [publicKey, setPublicKey] = useState('')
   const refresh = () => qc.invalidateQueries({ queryKey: profileKey })
@@ -174,33 +209,54 @@ function LoginKeys({ keys }: { keys: LoginKey[] }) {
         reaches any environment of yours, and VS Code's Remote-SSH does the same.
         {!gw && ' This server runs no SSH gateway (HANGAR_SSH_LISTEN).'}
       </p>
-      <div className="panel">
-        {keys.length === 0 ? (
-          <div className="empty">No keys.</div>
-        ) : (
-          <table className="table">
-            <tbody>
-              {keys.map((k) => (
-                <tr key={k.id}>
-                  <td>
-                    <div className="strong">{k.name}</div>
-                    <div className="muted small mono public-key">{k.fingerprint}</div>
-                    <div className="muted small">added {new Date(k.created_at).toLocaleString()}</div>
-                  </td>
-                  <td className="num">
-                    <ConfirmButton
-                      label="Remove"
-                      confirmLabel="Remove?"
-                      onConfirm={() => remove.mutate(k.id)}
-                      disabled={remove.isPending}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+      {phone ? (
+        <div className="phone-list">
+          {keys.length === 0 && <div className="phone-row phone-row-empty">No keys.</div>}
+          {keys.map((k) => (
+            <div key={k.id} className="phone-row phone-key">
+              <span className="phone-row-main">
+                <span className="strong">{k.name}</span>
+                <span className="phone-row-sub mono public-key">{k.fingerprint}</span>
+                <span className="phone-row-sub">added {new Date(k.created_at).toLocaleString()}</span>
+              </span>
+              <ConfirmButton
+                label="Remove"
+                confirmLabel="Remove?"
+                onConfirm={() => remove.mutate(k.id)}
+                disabled={remove.isPending}
+              />
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="panel">
+          {keys.length === 0 ? (
+            <div className="empty">No keys.</div>
+          ) : (
+            <table className="table">
+              <tbody>
+                {keys.map((k) => (
+                  <tr key={k.id}>
+                    <td>
+                      <div className="strong">{k.name}</div>
+                      <div className="muted small mono public-key">{k.fingerprint}</div>
+                      <div className="muted small">added {new Date(k.created_at).toLocaleString()}</div>
+                    </td>
+                    <td className="num">
+                      <ConfirmButton
+                        label="Remove"
+                        confirmLabel="Remove?"
+                        onConfirm={() => remove.mutate(k.id)}
+                        disabled={remove.isPending}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
       <form className="panel form key-form" onSubmit={submit}>
         <label className="field">
           <span>Public key, as in ~/.ssh/id_ed25519.pub</span>

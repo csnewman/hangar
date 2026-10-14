@@ -5,10 +5,22 @@ import { Link, useNavigate, useSearchParams } from 'react-router'
 
 import { api, type Template } from '../api'
 import { PageHeader } from '../components/PageHeader'
+import { PhoneFoot, PhoneHead, PhoneNav, PhoneRow, PhoneSection, PhoneValue } from '../components/Phone'
 import { SpecChips } from '../components/SpecChips'
 import { environmentsKey } from '../environments'
+import { usePhone } from '../phone'
 import { useMe } from '../session'
-import { checkName, fillTemplate, groupTemplates, ownerLabel, patternGroups, repoName, templateVars, useTemplates } from '../templates'
+import {
+  checkName,
+  fillTemplate,
+  groupTemplates,
+  ownerLabel,
+  patternGroups,
+  repoName,
+  specLine,
+  templateVars,
+  useTemplates,
+} from '../templates'
 import { useTeams } from '../teams'
 
 export function NewEnvironmentPage() {
@@ -40,6 +52,101 @@ export function NewEnvironmentPage() {
   const teams = useTeams()
   const groups = groupTemplates(templates.data ?? [], me, teams.data)
   const ordered = [...groups.mine, ...groups.teams.flatMap((g) => g.templates), ...groups.collaborating, ...groups.others]
+
+  // On a phone, choosing and naming are two screens: the name's is the
+  // template's, with step=name.
+  const phone = usePhone()
+  if (phone) {
+    if (chosen && params.get('step') === 'name') {
+      return (
+        <form className="phone-screen" onSubmit={submit}>
+          <PhoneNav
+            back={{ to: `/environments/new?template=${chosen.id}`, label: 'templates' }}
+            title="Name it"
+            sub={chosen.name}
+          />
+          <div className="phone-screen-body">
+            <label className="field">
+              <span>Name</span>
+              <input
+                autoFocus
+                required
+                autoCapitalize="none"
+                autoCorrect="off"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={chosen.name_hint ? undefined : 'my-agent'}
+                aria-invalid={problem !== null}
+              />
+              <small className={problem ? 'field-error' : undefined}>
+                {problem ?? chosen.name_hint ?? 'It becomes the environment’s hostname, in lower case.'}
+              </small>
+            </label>
+            <PhonePreview template={chosen} name={name} />
+            {create.error && <div className="alert">{create.error.message}</div>}
+          </div>
+          <PhoneFoot>
+            <button type="submit" className="btn btn-primary" disabled={create.isPending || !name || problem !== null}>
+              {create.isPending ? 'Creating…' : 'Create environment'}
+            </button>
+          </PhoneFoot>
+        </form>
+      )
+    }
+    const section = (title: string, list: Template[]) =>
+      list.length > 0 && (
+        <PhoneSection key={title} title={title}>
+          <div role="radiogroup" aria-label={title} className="phone-radios">
+            {list.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="radio"
+                aria-checked={t.id === chosenID}
+                className="phone-row phone-radio"
+                onClick={() => choose(t)}
+              >
+                <span className="phone-radio-mark" aria-hidden="true" />
+                <span className="phone-row-main">
+                  <span className="phone-radio-head">
+                    <span className="strong">{t.name}</span>
+                    <span className="phone-row-sub">{ownerLabel(t, me)}</span>
+                  </span>
+                  {t.description && <span className="phone-radio-desc">{t.description}</span>}
+                  <span className="phone-row-sub">{specLine(t.spec, t.name_pattern)}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </PhoneSection>
+      )
+    return (
+      <div className="phone-screen">
+        <div className="phone-screen-body">
+          <PhoneHead back={{ to: '/environments', label: 'Environments' }} title="New environment" />
+          {templates.isSuccess && ordered.length === 0 && (
+            <p className="phone-note">
+              There are no templates yet. <Link to="/templates/new">Make one</Link> first.
+            </p>
+          )}
+          {section('Yours', groups.mine)}
+          {groups.teams.map((g) => section(`Team ${g.team.name}`, g.templates))}
+          {section('Shared with you to edit', groups.collaborating)}
+          {section(me.admin ? 'Everyone else’s' : 'Shared by others', groups.others)}
+        </div>
+        <PhoneFoot>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={!chosen}
+            onClick={() => setParams({ template: chosen!.id, step: 'name' })}
+          >
+            Next
+          </button>
+        </PhoneFoot>
+      </div>
+    )
+  }
 
   return (
     <div className="page page-narrow">
@@ -162,5 +269,37 @@ function Preview({ template: t, name }: { template: Template; name: string }) {
         <SpecChips spec={t.spec} />
       </div>
     </div>
+  )
+}
+
+// PhonePreview is Preview as a phone's list.
+function PhonePreview({ template: t, name }: { template: Template; name: string }) {
+  const me = useMe()
+  const vars = templateVars(t, name, me.username)
+  const groups = patternGroups(t.name_pattern)
+  return (
+    <PhoneSection title={`${t.name} gives it`}>
+      <PhoneRow label="Image" sub={t.spec.image} mono />
+      {t.spec.repos.map((r) => (
+        <PhoneRow
+          key={r.path}
+          label="Clones"
+          mono
+          sub={
+            `${repoName(r.url)}${r.ref ? ` at ${fillTemplate(r.ref, vars)}` : ''} into ${fillTemplate(r.path, vars)}` +
+            (r.branch ? `, on ${fillTemplate(r.branch, vars)}` : '')
+          }
+        />
+      ))}
+      {t.spec.editor_path && <PhoneRow label="Editor opens" sub={fillTemplate(t.spec.editor_path, vars)} mono />}
+      {groups.length > 0 && (
+        <PhoneRow
+          label="From the name"
+          mono
+          sub={groups.map((g) => `{${g}} = ${vars[g] === undefined ? '…' : vars[g] || '(empty)'}`).join(', ')}
+        />
+      )}
+      <PhoneRow label="Runs as" end={<PhoneValue>{specLine(t.spec)}</PhoneValue>} />
+    </PhoneSection>
   )
 }
