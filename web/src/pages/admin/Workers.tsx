@@ -83,10 +83,10 @@ function WorkerRow({ worker: w }: { worker: Worker }) {
         )}
         {error && <div className="reason reason-bad">{error.message}</div>}
       </td>
-      <td>
+      <td data-label="vCPUs">
         <Meter used={w.allocated.cpus} total={w.capacity.cpus} label={`${w.allocated.cpus} / ${w.capacity.cpus}`} />
       </td>
-      <td>
+      <td data-label="Memory">
         <Meter
           used={w.allocated.memory_mib}
           total={w.capacity.memory_mib}
@@ -115,7 +115,9 @@ function WorkerRow({ worker: w }: { worker: Worker }) {
           ))}
         </div>
       </td>
-      <td className="muted nowrap">{formatAgo(w.last_seen_at)}</td>
+      <td className="muted nowrap" data-label="Seen">
+        {formatAgo(w.last_seen_at)}
+      </td>
       <td>
         <div className="actions">
           {w.revoked ? (

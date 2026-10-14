@@ -83,7 +83,9 @@ export function ImagesPage() {
                       {x.description && <div className="muted small">{x.description}</div>}
                     </td>
                     <td>{ownerName(x)}</td>
-                    <td className="num">{x.tag_count}</td>
+                    <td className="num" data-label="Tags">
+                      {x.tag_count}
+                    </td>
                     <td className="muted nowrap">{formatAgo(x.updated_at)}</td>
                   </tr>
                 ))}

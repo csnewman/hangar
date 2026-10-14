@@ -115,8 +115,12 @@ function UserRow({ user: u }: { user: User }) {
           />
         )}
       </td>
-      <td className="num">{u.environments}</td>
-      <td className="muted nowrap">{formatAgo(u.created_at)}</td>
+      <td className="num" data-label="Environments">
+        {u.environments}
+      </td>
+      <td className="muted nowrap" data-label="Created">
+        {formatAgo(u.created_at)}
+      </td>
       <td>
         <div className="actions">
           {u.has_password && !self && (

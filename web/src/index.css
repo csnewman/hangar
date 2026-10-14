@@ -3524,6 +3524,92 @@ a.reason {
   display: none;
 }
 
+@media (max-width: 760px) {
+  .phone-page-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  /* A table on a phone is a list: each row a block, its first cell a line
+     of its own and the rest flowing after it, the headings left out. */
+  .table thead {
+    display: none;
+  }
+
+  .table,
+  .table tbody {
+    display: block;
+  }
+
+  .table tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .table tr:last-child {
+    border-bottom: 0;
+  }
+
+  .table td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .table td:first-child {
+    flex: 1 1 100%;
+  }
+
+  .table td:empty {
+    display: none;
+  }
+
+  .table .num {
+    text-align: left;
+  }
+
+  .table .actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .tiles {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  /* A figure says what it counts, as its heading did. */
+  .table td[data-label]::before {
+    content: attr(data-label) ' ';
+    color: var(--muted);
+  }
+
+  .table .nowrap {
+    white-space: normal;
+  }
+
+  .table .empty {
+    flex: 1;
+    padding: 16px 0;
+  }
+
+  .page-head {
+    margin-bottom: 0;
+  }
+
+  .phone-page > .section,
+  .page > .section {
+    margin-top: 16px;
+  }
+}
+
 /* A phone screen with a bar, a body that scrolls and a foot: the whole
    of the main area, or of an environment's tab. */
 .phone-screen {

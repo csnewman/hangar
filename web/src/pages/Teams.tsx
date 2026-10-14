@@ -89,8 +89,12 @@ function TeamTable({
                     <div className="muted small mono">{t.slug}</div>
                   </td>
                   <td>{t.role ? roleLabels[t.role] : <span className="muted">—</span>}</td>
-                  <td className="num">{t.member_count}</td>
-                  <td className="num">{t.templates}</td>
+                  <td className="num" data-label="Members">
+                    {t.member_count}
+                  </td>
+                  <td className="num" data-label="Templates">
+                    {t.templates}
+                  </td>
                 </tr>
               ))}
             </tbody>
