@@ -3,9 +3,11 @@ import { Link } from 'react-router'
 
 import type { Template } from '../api'
 import { PageHeader } from '../components/PageHeader'
+import { PhoneHead, PhoneRow, PhoneSection } from '../components/Phone'
 import { SpecChips } from '../components/SpecChips'
+import { usePhone } from '../phone'
 import { useMe } from '../session'
-import { groupTemplates, useTemplates } from '../templates'
+import { groupTemplates, specLine, useTemplates } from '../templates'
 import { useTeams } from '../teams'
 
 export function TemplatesPage() {
@@ -13,19 +15,33 @@ export function TemplatesPage() {
   const templates = useTemplates()
   const teams = useTeams()
   const { mine, teams: teamGroups, collaborating, others } = groupTemplates(templates.data ?? [], me, teams.data)
+  const phone = usePhone()
 
   return (
-    <div className="page">
-      <PageHeader
-        title="Templates"
-        subtitle="Recipes for environments: the image, repositories to clone, and how it runs."
-        actions={
-          <Link to="/templates/new" className="btn btn-primary">
-            <Plus size={15} />
-            New template
-          </Link>
-        }
-      />
+    <div className={phone ? 'page phone-page' : 'page'}>
+      {phone && (
+        <PhoneHead
+          back={{ to: '/more', label: 'More' }}
+          title="Templates"
+          actions={
+            <Link to="/templates/new" className="phone-icon-btn" aria-label="New template">
+              <Plus size={22} />
+            </Link>
+          }
+        />
+      )}
+      {!phone && (
+        <PageHeader
+          title="Templates"
+          subtitle="Recipes for environments: the image, repositories to clone, and how it runs."
+          actions={
+            <Link to="/templates/new" className="btn btn-primary">
+              <Plus size={15} />
+              New template
+            </Link>
+          }
+        />
+      )}
 
       {templates.isError && <div className="alert">Could not load templates: {templates.error.message}</div>}
 
@@ -81,6 +97,29 @@ function TemplateSection({
   loading?: boolean
   empty?: React.ReactNode
 }) {
+  const me = useMe()
+  if (usePhone()) {
+    return (
+      <PhoneSection
+        title={
+          <>
+            {title} · {templates.length}
+          </>
+        }
+        note={!loading && templates.length === 0 ? empty : undefined}
+      >
+        {templates.map((t) => (
+          <PhoneRow
+            key={t.id}
+            to={`/templates/${t.id}`}
+            label={t.name}
+            sub={`${specLine(t.spec, t.name_pattern)} · ${t.team ? `team ${t.team.name}` : t.owner.id === me.id ? 'yours' : `by ${t.owner.display_name || t.owner.username}`}`}
+            end={<VisibilityBadge template={t} />}
+          />
+        ))}
+      </PhoneSection>
+    )
+  }
   return (
     <section className="section">
       <h2 className="section-title">

@@ -3519,6 +3519,11 @@ a.reason {
   }
 }
 
+/* An empty list says so in its note alone. */
+.phone-section > .phone-list:empty {
+  display: none;
+}
+
 /* A phone screen with a bar, a body that scrolls and a foot: the whole
    of the main area, or of an environment's tab. */
 .phone-screen {
