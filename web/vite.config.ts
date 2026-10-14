@@ -14,5 +14,8 @@ export default defineConfig({
     host: true,
     port: 5173,
     strictPort: true,
+    // The UI on a phone, through `tailscale serve` on this machine: Vite
+    // answers only the hosts it is told of, *.localhost among them.
+    allowedHosts: ['.ts.net'],
   },
 })
