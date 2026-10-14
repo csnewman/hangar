@@ -199,6 +199,7 @@ func (h *handler) terminalSocket(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
+	go h.keepAlive(ctx, c)
 	go func() {
 		defer cancel()
 		for {

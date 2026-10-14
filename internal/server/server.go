@@ -85,7 +85,11 @@ type Config struct {
 	// host named after PublicURL's, which image names start with:
 	// registry.<host>, or registry-<host> in the prefix style.
 	Registry bool
-	Log      *slog.Logger
+	// SocketPing is how often a browser's socket -- a terminal, the Code
+	// tab, a desktop -- is pinged, and how long its pong may take; one that
+	// does not answer is closed. Zero is 20 seconds.
+	SocketPing time.Duration
+	Log        *slog.Logger
 }
 
 type Server struct {
@@ -188,6 +192,7 @@ func New(cfg Config) (*Server, error) {
 		Packs:        packStore,
 		Audit:        auditLog,
 		AutoSignIn:   cfg.AutoSignIn,
+		SocketPing:   cfg.SocketPing,
 		Log:          log,
 	}
 	var sshKey ssh.Signer

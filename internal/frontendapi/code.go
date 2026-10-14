@@ -78,6 +78,7 @@ func (h *handler) codeSocket(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
+	go h.keepAlive(ctx, c)
 	var received atomic.Bool
 	done := make(chan struct{}, 2)
 	go func() {

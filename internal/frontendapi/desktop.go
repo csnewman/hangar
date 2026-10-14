@@ -64,6 +64,7 @@ func (h *handler) desktopSocket(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
+	go h.keepAlive(ctx, c)
 	conn := websocket.NetConn(ctx, c, websocket.MessageBinary)
 	var sent atomic.Int64
 	done := make(chan struct{}, 2)

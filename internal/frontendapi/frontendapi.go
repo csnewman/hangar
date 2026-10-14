@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/getkin/kin-openapi/openapi3"
 	"github.com/getkin/kin-openapi/openapi3filter"
@@ -64,7 +65,10 @@ type Config struct {
 	AutoSignIn string
 	// SSH is where people reach the SSH gateway. Nil when there is none.
 	SSH *SSHGateway
-	Log *slog.Logger
+	// SocketPing is how often a browser's socket is pinged, and how long
+	// its pong may take. Zero is 20 seconds.
+	SocketPing time.Duration
+	Log        *slog.Logger
 }
 
 type handler struct {
@@ -83,6 +87,7 @@ type handler struct {
 	// autoSignIn is Config.AutoSignIn.
 	autoSignIn string
 	ssh        *SSHGateway
+	socketPing time.Duration
 	log        *slog.Logger
 }
 
@@ -105,7 +110,10 @@ func New(cfg Config) (http.Handler, error) {
 
 	h := &handler{envs: cfg.Environments, templates: cfg.Templates, teams: cfg.Teams,
 		registry: cfg.Registry, registryHost: cfg.RegistryHost, workers: cfg.Workers, users: cfg.Users,
-		profiles: cfg.Profiles, packs: cfg.Packs, audit: cfg.Audit, tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, ssh: cfg.SSH, log: cfg.Log}
+		profiles: cfg.Profiles, packs: cfg.Packs, audit: cfg.Audit, tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, ssh: cfg.SSH, socketPing: cfg.SocketPing, log: cfg.Log}
+	if h.socketPing == 0 {
+		h.socketPing = 20 * time.Second
+	}
 	strict := NewStrictHandlerWithOptions(h, []StrictMiddlewareFunc{rules.enforce}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			writeError(w, http.StatusBadRequest, err.Error())

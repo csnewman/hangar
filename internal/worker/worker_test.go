@@ -239,65 +239,8 @@ func quiet() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)
 func TestTerminal(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), ProfileBlobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, Log: quiet()})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go srv.Run(ctx)
-	hs := httptest.NewServer(srv.Handler())
-	defer hs.Close()
-	signIn(t, srv, hs.URL)
-
-	w, err := worker.New(writeConfig(t, hs.URL), worker.NewSimulated(50*time.Millisecond), quiet())
-	if err != nil {
-		t.Fatal(err)
-	}
-	werr := make(chan error, 1)
-	go func() { werr <- w.Run(ctx) }()
-	// The worker stops before the server does: the server's Close waits for
-	// the worker's held request for its desired set.
-	defer func() {
-		cancel()
-		<-werr
-	}()
-
-	var tmpl struct{ ID string }
-	call(t, hs.URL, http.MethodPost, "/api/frontend/templates", `{"name":"t","visibility":"private","spec":`+
-		`{"image":"img","cpus":1,"memory_mib":512,"display":"none","gpu":"none","repos":[],"placement":{}}}`, &tmpl)
-	var env api.Environment
-	call(t, hs.URL, http.MethodPost, "/api/frontend/environments", `{"template_id":"`+tmpl.ID+`","name":"term"}`, &env)
-	waitFor(t, hs.URL, env.ID, func(e *api.Environment) bool { return e != nil && e.Phase == api.PhaseRunning })
-
+	srv, hs, env, dial := openTerminals(t, ctx, 0)
 	u, _ := url.Parse(hs.URL)
-	dial := func(query string) (*websocket.Conn, terminal.Reply) {
-		t.Helper()
-		ws := strings.Replace(hs.URL, "http", "ws", 1) + "/api/frontend/environments/" + env.ID + "/terminal?" + query
-		var c *websocket.Conn
-		var err error
-		// The worker's tunnel may still be coming up.
-		for range 50 {
-			c, _, err = websocket.Dial(ctx, ws, &websocket.DialOptions{HTTPHeader: http.Header{
-				"Cookie": {cookieHeader(browser.Jar.Cookies(u))},
-			}})
-			if err == nil {
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if err != nil {
-			t.Fatal(err)
-		}
-		c.SetReadLimit(-1)
-		_, first, err := c.Read(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var r terminal.Reply
-		if err := json.Unmarshal(first, &r); err != nil || r.Err != "" {
-			t.Fatalf("attach reply %s: %v", first, err)
-		}
-		return c, r
-	}
 	readUntil := func(c *websocket.Conn, want string) {
 		t.Helper()
 		rctx, rcancel := context.WithTimeout(ctx, 15*time.Second)
@@ -364,6 +307,119 @@ func TestTerminal(t *testing.T) {
 	}})
 	if err == nil || resp == nil || resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("a stranger opening the terminal: %v %v", resp, err)
+	}
+}
+
+// openTerminals starts a server, pinging browsers' sockets every ping (zero
+// for its default), a worker on the simulated runtime, and an environment
+// on it, and gives a way to open a terminal window on that environment.
+func openTerminals(t *testing.T, ctx context.Context, ping time.Duration) (*server.Server, *httptest.Server, api.Environment, func(query string) (*websocket.Conn, terminal.Reply)) {
+	t.Helper()
+	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), ProfileBlobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, SocketPing: ping, Log: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Run(ctx)
+	hs := httptest.NewServer(srv.Handler())
+	t.Cleanup(hs.Close)
+	signIn(t, srv, hs.URL)
+
+	wctx, wcancel := context.WithCancel(ctx)
+	w, err := worker.New(writeConfig(t, hs.URL), worker.NewSimulated(50*time.Millisecond), quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	werr := make(chan error, 1)
+	go func() { werr <- w.Run(wctx) }()
+	// The worker stops before the server does: the server's Close waits for
+	// the worker's held request for its desired set.
+	t.Cleanup(func() {
+		wcancel()
+		<-werr
+	})
+
+	var tmpl struct{ ID string }
+	call(t, hs.URL, http.MethodPost, "/api/frontend/templates", `{"name":"t","visibility":"private","spec":`+
+		`{"image":"img","cpus":1,"memory_mib":512,"display":"none","gpu":"none","repos":[],"placement":{}}}`, &tmpl)
+	var env api.Environment
+	call(t, hs.URL, http.MethodPost, "/api/frontend/environments", `{"template_id":"`+tmpl.ID+`","name":"term"}`, &env)
+	waitFor(t, hs.URL, env.ID, func(e *api.Environment) bool { return e != nil && e.Phase == api.PhaseRunning })
+
+	u, _ := url.Parse(hs.URL)
+	dial := func(query string) (*websocket.Conn, terminal.Reply) {
+		t.Helper()
+		ws := strings.Replace(hs.URL, "http", "ws", 1) + "/api/frontend/environments/" + env.ID + "/terminal?" + query
+		var c *websocket.Conn
+		var err error
+		// The worker's tunnel may still be coming up.
+		for range 50 {
+			c, _, err = websocket.Dial(ctx, ws, &websocket.DialOptions{HTTPHeader: http.Header{
+				"Cookie": {cookieHeader(browser.Jar.Cookies(u))},
+			}})
+			if err == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.SetReadLimit(-1)
+		_, first, err := c.Read(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var r terminal.Reply
+		if err := json.Unmarshal(first, &r); err != nil || r.Err != "" {
+			t.Fatalf("attach reply %s: %v", first, err)
+		}
+		return c, r
+	}
+	return srv, hs, env, dial
+}
+
+// A window that goes away without closing its socket -- a phone put away,
+// a network gone -- stops being counted once it fails to answer the
+// server's ping, and the session is left to the windows still there.
+func TestTerminalForgetsGoneWindows(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	_, hs, env, dial := openTerminals(t, ctx, 200*time.Millisecond)
+
+	here, r := dial("cols=100&rows=30")
+	defer here.CloseNow()
+	// A window that is there answers pings, which it does while it reads.
+	go func() {
+		for {
+			if _, _, err := here.Read(ctx); err != nil {
+				return
+			}
+		}
+	}()
+	gone, _ := dial("session=" + r.Session.ID)
+	defer gone.CloseNow()
+
+	var sessions []struct{ Clients int }
+	call(t, hs.URL, http.MethodGet, "/api/frontend/environments/"+env.ID+"/terminals", "", &sessions)
+	if len(sessions) != 1 || sessions[0].Clients != 2 {
+		t.Fatalf("sessions %+v, want one with 2 windows", sessions)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		call(t, hs.URL, http.MethodGet, "/api/frontend/environments/"+env.ID+"/terminals", "", &sessions)
+		if len(sessions) == 1 && sessions[0].Clients == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the window that went away is still counted: %+v", sessions)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	// The one still there stays: it is held through several pings.
+	time.Sleep(time.Second)
+	call(t, hs.URL, http.MethodGet, "/api/frontend/environments/"+env.ID+"/terminals", "", &sessions)
+	if len(sessions) != 1 || sessions[0].Clients != 1 {
+		t.Fatalf("after the pings, sessions %+v, want one with 1 window", sessions)
 	}
 }
 
