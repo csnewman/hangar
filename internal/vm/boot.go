@@ -301,15 +301,27 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 				keys = listAgentKeys(sess, as)
 				m.log.Info("the owner's SSH agent in the guest", "keys", keys.String())
 			}
-			if err := m.clone(ctx, sess, r.URL, git("clone", "--progress", "--", r.URL, partial)); err != nil {
+			// A git host refusing the keys is told which were offered.
+			refused := func(err error) error {
 				if keys != nil && strings.Contains(err.Error(), "(publickey") {
 					return fmt.Errorf("%s: %s", strings.TrimRight(err.Error(), "."), keys.refused())
 				}
 				return err
 			}
+			if err := m.clone(ctx, sess, r.URL, git("clone", "--progress", "--", r.URL, partial)); err != nil {
+				return refused(err)
+			}
 			if r.Ref != "" {
 				if err := run(time.Minute, "checking out "+r.Ref, git("-C", partial, "checkout", r.Ref)...); err != nil {
 					return err
+				}
+			}
+			// Its submodules, as the commit checked out names them, and
+			// theirs: a repository is not all there without them.
+			if done("test", "-e", partial+"/.gitmodules") {
+				if err := m.clone(ctx, sess, r.URL+"'s submodules",
+					git("-C", partial, "submodule", "update", "--init", "--recursive", "--progress")); err != nil {
+					return refused(err)
 				}
 			}
 			if err := run(time.Minute, "moving the clone to "+r.Path, "mv", "-T", "--", partial, r.Path); err != nil {
