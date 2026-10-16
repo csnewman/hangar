@@ -2525,6 +2525,20 @@ a.reason {
   font-size: 13px;
 }
 
+/* Logs shown beside the progress, from a button that reads as a link. */
+.start-logs {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.start-logs:hover {
+  color: var(--accent-hover);
+}
+
 .start-bar,
 .start-line-bar {
   overflow: hidden;

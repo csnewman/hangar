@@ -49,10 +49,9 @@ const Workspace = lazy(() => import('../code/CodeTab').then((m) => ({ default: m
 
 // EnvironmentPage is one environment. On a computer it is the environment's
 // workspace, the whole page, with every way into it as a tab or tool window
-// there; a link to one of the sections below opens it in the workspace. On
-// a phone the summary is the environment's screen, leading to each tab, and
-// a tab fills the screen under a bar back to it; the tabs are routes, so
-// one can be linked to and survives a reload.
+// there. On a phone the summary is the environment's screen, leading to each
+// tab, and a tab fills the screen under a bar back to it; the tabs are
+// routes, so one can be linked to and survives a reload.
 export function EnvironmentPage() {
   const phone = usePhone()
   const { id } = useParams()
@@ -105,7 +104,7 @@ export function EnvironmentPage() {
   return (
     <EnvContext.Provider value={env}>
       <Suspense fallback={<div className="workspace" />}>
-        <Workspace env={env} section={segment} />
+        <Workspace env={env} />
       </Suspense>
     </EnvContext.Provider>
   )

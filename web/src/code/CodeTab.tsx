@@ -17,7 +17,6 @@ import {
   TextSearch,
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router'
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef } from 'react-resizable-panels'
 
 import type { Environment, EnvironmentLogName } from '../api'
@@ -33,6 +32,7 @@ import { CodeTerminal } from './CodeTerminal'
 import { isMac, shortcut } from './ContextMenu'
 import { containerShell, DockerView } from './DockerView'
 import { EditorArea, tabKey, type Tab } from './EditorArea'
+import { EditorStatusContext, EditorStatusStore } from './editorStatus'
 import { PerformanceView } from './PerformanceView'
 import { ProjectView } from './ProjectView'
 import { Languages, LanguagesContext, type Usages } from './lsp'
@@ -43,7 +43,7 @@ import { Maximise } from './maximise'
 import { PhoneCode } from './PhoneCode'
 import { repoFor } from './repos'
 import { FindInFiles, GotoFile, OpenFolder, type Jump } from './Search'
-import { StatusBar } from './StatusBar'
+import { EditorItems, StatusBar } from './StatusBar'
 import { UsagesView } from './UsagesView'
 import { useGitStatus } from './useGitStatus'
 
@@ -64,42 +64,26 @@ export function CodeTab() {
       </div>
     )
   }
-  return <Connected key={env.id} env={env.id} request={null} />
+  return <Connected key={env.id} env={env.id} />
 }
-
-// A request to show one of the environment's sections, from a link to it;
-// n changes with each.
-type Request = { section: string; n: number } | null
 
 // Workspace is an environment's page on a computer: its files, terminals,
 // desktop and logs as the tabs and tool windows of one workspace, with a
-// status bar along its foot. A link to one of the environment's sections
-// (its logs, its desktop) shows it here, and the address goes back to the
-// environment's own. While the environment is not running there are no
-// files or terminals to show, and the workspace offers to start it, beside
-// its details and its logs.
-export function Workspace({ env, section }: { env: Environment; section: string }) {
-  const navigate = useNavigate()
-  const [request, setRequest] = useState<Request>(null)
-  const [linked, setLinked] = useState('')
-  if (section !== linked) {
-    setLinked(section)
-    if (section) setRequest((r) => ({ section, n: (r?.n ?? 0) + 1 }))
-  }
+// status bar along its foot. While the environment is not running there
+// are no files or terminals to show, and the workspace offers to start it,
+// beside its details and its logs.
+export function Workspace({ env }: { env: Environment }) {
   useEffect(() => {
     nameTab(environmentTab(env.id))
   }, [env.id])
-  useEffect(() => {
-    if (section) navigate(`/environments/${env.id}`, { replace: true })
-  }, [section, env.id, navigate])
-  if (env.phase !== 'running') return <Idle env={env} request={request} />
-  return <Connected key={env.id} env={env.id} request={request} />
+  if (env.phase !== 'running') return <Idle env={env} />
+  return <Connected key={env.id} env={env.id} />
 }
 
 // Idle is the workspace of an environment that is not running: what it is
 // doing and the way to start it, its details and settings below, and its
 // logs, which its worker keeps whatever the machine is doing.
-function Idle({ env, request }: { env: Environment; request: Request }) {
+function Idle({ env }: { env: Environment }) {
   const details = useRef<HTMLDivElement>(null)
   const logsPanel = usePanelRef()
   const [logsShown, setLogsShown] = useState(true)
@@ -118,11 +102,6 @@ function Idle({ env, request }: { env: Environment; request: Request }) {
     logsPanel.current?.expand()
     setLogsShown(true)
   }
-  useEffect(() => {
-    if (request?.section === 'logs') showLogs()
-    // Only a new request shows them.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [request])
   const layout = useDefaultLayout({ id: 'hangar.idle.v', storage: localStorage })
 
   return (
@@ -131,7 +110,7 @@ function Idle({ env, request }: { env: Environment; request: Request }) {
         <Group orientation="vertical" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
           <Panel id="idle" minSize="30%">
             <div className="workspace-idle">
-              <IdleCard env={env} />
+              <IdleCard env={env} onLogs={showLogs} />
               <div ref={details}>
                 <SummaryTab />
               </div>
@@ -168,7 +147,7 @@ function Idle({ env, request }: { env: Environment; request: Request }) {
 }
 
 // IdleCard says what a stopped environment is doing, and starts it.
-function IdleCard({ env }: { env: Environment }) {
+function IdleCard({ env, onLogs }: { env: Environment; onLogs: () => void }) {
   const { start, busy, error } = useEnvironmentActions(env)
   const phase = env.phase
   if (env.desired === 'deleted' || phase === 'deleting') {
@@ -182,7 +161,7 @@ function IdleCard({ env }: { env: Environment }) {
     return (
       <section className="workspace-card">
         <h2>Starting {env.name}</h2>
-        <StartProgress env={env} />
+        <StartProgress env={env} onLogs={onLogs} />
         <p className="muted small">Your tabs and tool windows come back once its editor service answers.</p>
       </section>
     )
@@ -227,7 +206,7 @@ function IdleCard({ env }: { env: Environment }) {
 // The connection works in the environment's folder, unless this browser tab
 // has opened another, which it remembers for itself alone. On a phone it
 // shows PhoneCode.
-function Connected({ env, request }: { env: string; request: Request }) {
+function Connected({ env }: { env: string }) {
   const phone = usePhone()
   const folderKey = `hangar.code.${env}.folder`
   const [folder, setFolder] = useState(() => {
@@ -254,7 +233,7 @@ function Connected({ env, request }: { env: string; request: Request }) {
   }, [env, folder])
   if (!client) return <div className="code-page" />
   if (phone) return <PhoneCode client={client} />
-  return <CodeView key={folder} env={env} client={client} folder={folder} onFolder={choose} request={request} />
+  return <CodeView key={folder} env={env} client={client} folder={folder} onFolder={choose} />
 }
 
 // A colour per user, so the same person's caret is the same colour
@@ -305,13 +284,11 @@ function CodeView({
   client,
   folder,
   onFolder,
-  request,
 }: {
   env: string
   client: CodeClient
   folder: string
   onFolder: (dir: string) => void
-  request: Request
 }) {
   const environment = useEnv()
   const hasDesktop = environment.spec.display !== 'none'
@@ -326,6 +303,8 @@ function CodeView({
   useEffect(() => client.on('state', (s, w) => { setState(s); setWhy(w) }), [client])
 
   const latency = useLatency(client, state === 'live')
+  // What the editor shown says of its file, for the status bar.
+  const [editorStatus] = useState(() => new EditorStatusStore())
 
   // Git status, reloaded whenever files or the repository change.
   const [status, reloadStatus] = useGitStatus(client)
@@ -636,19 +615,6 @@ function CodeView({
   const showEnvironment = () => open({ kind: 'environment', path: 'environment', title: 'Environment' })
   const showPerformancePage = () => open({ kind: 'performance', path: 'performance', title: 'Performance' })
 
-  // A link to one of the environment's sections shows it.
-  useEffect(() => {
-    if (!request) return
-    const show: Record<string, () => void> = {
-      desktop: () => open({ kind: 'desktop', path: 'desktop', title: 'Desktop' }),
-      logs: () => showBottom('logs'),
-      terminal: () => showBottom('terminal'),
-      performance: () => showTool('performance'),
-    }
-    show[request.section]?.()
-    // Only a new request shows anything.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [request])
   const dropTool = (name: ToolName, side: Side) => {
     moveTool(name, side)
     setChosen((c) => ({ ...c, [side]: name }))
@@ -808,32 +774,34 @@ function CodeView({
                     <Separator key="left-sep" className="code-split code-split-v" />,
                   ]}
                   <Panel id="editors" minSize="25%">
-                    <EditorArea
-                      client={client}
-                      tabs={store.tabs}
-                      active={store.active}
-                      opened={opened}
-                      jump={jump}
-                      user={user}
-                      status={status}
-                      canReopen={canReopen}
-                      onActivate={(key) => setStore((s) => ({ ...s, active: key }))}
-                      onMove={(key, to) =>
-                        setStore((s) => {
-                          const tab = s.tabs.find((t) => tabKey(t) === key)
-                          if (!tab) return s
-                          const tabs = s.tabs.filter((t) => t !== tab)
-                          tabs.splice(to, 0, tab)
-                          return { ...s, tabs }
-                        })
-                      }
-                      onOpen={open}
-                      onClose={close}
-                      onCloseMany={closeTabs}
-                      onReopen={reopen}
-                      onReveal={revealInProject}
-                      onShowCommit={showCommit}
-                    />
+                    <EditorStatusContext.Provider value={editorStatus}>
+                      <EditorArea
+                        client={client}
+                        tabs={store.tabs}
+                        active={store.active}
+                        opened={opened}
+                        jump={jump}
+                        user={user}
+                        status={status}
+                        canReopen={canReopen}
+                        onActivate={(key) => setStore((s) => ({ ...s, active: key }))}
+                        onMove={(key, to) =>
+                          setStore((s) => {
+                            const tab = s.tabs.find((t) => tabKey(t) === key)
+                            if (!tab) return s
+                            const tabs = s.tabs.filter((t) => t !== tab)
+                            tabs.splice(to, 0, tab)
+                            return { ...s, tabs }
+                          })
+                        }
+                        onOpen={open}
+                        onClose={close}
+                        onCloseMany={closeTabs}
+                        onReopen={reopen}
+                        onReveal={revealInProject}
+                        onShowCommit={showCommit}
+                      />
+                    </EditorStatusContext.Provider>
                   </Panel>
                   {right.length > 0 && [
                     <Separator key="right-sep" className="code-split code-split-v" />,
@@ -924,7 +892,12 @@ function CodeView({
           env={environment}
           onEnvironment={showEnvironment}
           onPerformance={() => showTool('performance')}
-          right={latency !== null && <Latency ms={latency} />}
+          right={
+            <>
+              <EditorItems store={editorStatus} client={client} languages={languages} />
+              {latency !== null && <Latency ms={latency} />}
+            </>
+          }
         >
           {branch && (
             <button

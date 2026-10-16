@@ -19,7 +19,7 @@ import {
 } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
 import { gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap, selectNextOccurrence } from '@codemirror/search'
-import { Compartment, EditorSelection, EditorState, Prec, type Extension } from '@codemirror/state'
+import { Compartment, countColumn, EditorSelection, EditorState, Prec, type Extension } from '@codemirror/state'
 import {
   crosshairCursor,
   drawSelection,
@@ -46,8 +46,8 @@ import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './Cont
 import { baseText, gitGutter, hunkAt, rollback, setBase, staged, type Hunk } from './gitGutter'
 import { isDark, onDarkChange } from '../theme'
 import { blameField, blameGutter, blameMarkers, setBlame } from './blame'
+import { EditorStatusContext } from './editorStatus'
 import { languageId, Languages, LanguagesContext, type ServerState } from './lsp'
-import { ServerChip } from './LspPanel'
 import type { Jump } from './Search'
 
 // codeHighlight colours code by the page's --syn-* colours (code.css), which
@@ -191,6 +191,25 @@ export async function languageFor(name: string): Promise<Extension> {
   }
 }
 
+// languageName is the name of the language a file's name says it is
+// written in.
+function languageName(name: string): string | null {
+  return LanguageDescription.matchFilename(languages, name)?.name ?? null
+}
+
+// caret is where the main caret is, as a line and a column (a tab counted
+// to its stop), and how much is selected.
+function caret(state: EditorState) {
+  const r = state.selection.main
+  const line = state.doc.lineAt(r.head)
+  return {
+    line: line.number,
+    col: countColumn(line.text.slice(0, r.head - line.from), state.tabSize) + 1,
+    selected: state.selection.ranges.reduce((n, x) => n + x.to - x.from, 0),
+    selectedLines: r.empty ? 0 : state.doc.lineAt(r.to).number - state.doc.lineAt(r.from).number + 1,
+  }
+}
+
 // ideaKeys are IntelliJ's line keys, over CodeMirror's own where they
 // differ: Ctrl+D duplicates, Ctrl+Y deletes a line (redo is Ctrl+Shift+Z),
 // Alt+Shift+Up/Down moves one, Alt+J (Ctrl+G on a Mac) selects the next
@@ -261,6 +280,8 @@ export function CodeEditor({
   const blameSlot = useRef(new Compartment())
   const languages = useContext(LanguagesContext)
   const [server, setServer] = useState<ServerState | null>(null)
+  // The status bar is told where the caret is, the language, and the server.
+  const status = useContext(EditorStatusContext)
   // A file the user may not write -- a library's, reached by going to a
   // definition -- is shown, not edited.
   const readOnly = !file.writable
@@ -432,6 +453,9 @@ export function CodeEditor({
           EditorState.readOnly.of(readOnly),
           yCollab(file.text, file.awareness, { undoManager: undo }),
           gitGutter((v, h, e) => setHunk({ view: v, h, x: e.clientX, y: e.clientY })),
+          EditorView.updateListener.of((u) => {
+            if (u.selectionSet || u.docChanged) status?.set(path, caret(u.state))
+          }),
           EditorView.domEventHandlers({
             contextmenu: (e, v) => {
               openMenuRef.current(v, e)
@@ -446,6 +470,15 @@ export function CodeEditor({
     view.dom.addEventListener('contextmenu', (e) => {
       if (!(e.target as HTMLElement).closest('.cm-gutters')) return
       gutterMenuRef.current(view, e)
+    })
+    status?.set(path, {
+      ...caret(view.state),
+      language: languageName(path.split('/').pop() ?? ''),
+      readOnly,
+      goto: () => {
+        gotoLine(view)
+        view.focus()
+      },
     })
     let disposed = false
     languageFor(file.path.split('/').pop() ?? '').then((ext) => {
@@ -513,8 +546,13 @@ export function CodeEditor({
       offGit()
       view.destroy()
       undo.destroy()
+      status?.set(path, null)
     }
-  }, [file, user.name, user.color, client, path, languages, outside, readOnly])
+  }, [file, user.name, user.color, client, path, languages, outside, readOnly, status])
+
+  useEffect(() => {
+    status?.set(path, { server })
+  }, [status, path, server])
 
   // Annotations: loaded when asked for, again as git's state moves (a
   // commit), and gone when closed.
@@ -579,7 +617,6 @@ export function CodeEditor({
   return (
     <>
       <div ref={host} className="code-editor" />
-      <ServerChip server={server} readOnly={readOnly} client={client} languages={languages} />
       {menu.menu}
       {hunk && (
         <HunkPopover

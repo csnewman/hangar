@@ -10,7 +10,11 @@ import { useEnvironmentActions } from '../environmentActions'
 import { splitByOwner, sshCommand, useEnvironments } from '../environments'
 import { useMe } from '../session'
 import { environmentTab, homeTab, otherTab } from '../workspaceLinks'
-import { copyText, useContextMenu, type MenuItem } from './ContextMenu'
+import type { CodeClient } from './client'
+import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
+import { useEditorStatus, type EditorStatusStore } from './editorStatus'
+import type { Languages } from './lsp'
+import { ServerChip } from './LspPanel'
 
 // StatusBar is the foot of an environment's workspace, as an editor's is:
 // the way back to Hangar's own pages, the environment and what it is doing,
@@ -188,5 +192,39 @@ export function StatusBar({
       )}
       {menu.menu}
     </footer>
+  )
+}
+
+// EditorItems are the status bar's account of the file being edited: where
+// the caret is, which goes to a line when clicked, the file's language, and
+// what knows its code.
+export function EditorItems({
+  store,
+  client,
+  languages,
+}: {
+  store: EditorStatusStore
+  client: CodeClient
+  languages: Languages
+}) {
+  const s = useEditorStatus(store)
+  if (!s) return null
+  const selection =
+    s.selected > 0
+      ? ` (${s.selected} ${s.selected === 1 ? 'char' : 'chars'}${s.selectedLines > 1 ? `, ${s.selectedLines} lines` : ''})`
+      : ''
+  return (
+    <>
+      <button
+        type="button"
+        className="code-statusbar-item"
+        title={`Go to Line (${shortcut(isMac ? 'Mod+Alt+G' : 'Mod+G')})`}
+        onClick={s.goto}
+      >
+        {`${s.line}:${s.col}${selection}`}
+      </button>
+      {s.language && <span className="code-statusbar-info">{s.language}</span>}
+      <ServerChip server={s.server} readOnly={s.readOnly} client={client} languages={languages} />
+    </>
   )
 }

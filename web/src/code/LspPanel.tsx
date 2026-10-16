@@ -6,9 +6,9 @@ import type { CodeClient, ServerInfo } from './client'
 import { copyText, shortcut } from './ContextMenu'
 import type { Languages, ServerState } from './lsp'
 
-// ServerChip says, in the editor's corner, what knows the file's code: its
+// ServerChip says, in the status bar, what knows the file's code: its
 // language server, starting, running, or missing. Clicked, it opens the
-// server's panel.
+// server's panel above it.
 export function ServerChip({
   server,
   readOnly,

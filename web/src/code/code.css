@@ -292,13 +292,13 @@
   align-items: center;
   gap: 2px;
   height: 26px;
+  min-width: 0;
   padding: 0 6px;
   border-top: 1px solid var(--border);
   background: var(--surface);
   color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
-  overflow: hidden;
 }
 
 .code-statusbar-home {
@@ -1659,27 +1659,24 @@
 
 /* The language server chip in an editor's corner, its panel above it. */
 .code-lsp-box {
+  position: relative;
+  flex: none;
+}
+
+.code-lsp-box > .code-lsp-panel {
   position: absolute;
-  right: 14px;
-  bottom: 6px;
-  z-index: 4;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
 }
 
 .code-lsp {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 1px 7px;
-  border-radius: 9px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
+  gap: 8px;
+  height: 22px;
+  padding: 0 7px;
   color: var(--muted);
-  font-size: 11px;
-  opacity: 0.85;
 }
 
 .code-lsp-missing {

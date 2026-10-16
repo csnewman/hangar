@@ -44,8 +44,9 @@ function formatLeft(seconds: number): string {
 
 // StartProgress is where a starting environment has got: each step of the
 // start, the one in hand, and how much of it is done where that can be
-// measured.
-export function StartProgress({ env }: { env: Environment }) {
+// measured. Its logs are the Logs tab's, or onLogs shows them where they
+// are beside it.
+export function StartProgress({ env, onLogs }: { env: Environment; onLogs?: () => void }) {
   const p = env.progress
   const current = p ? steps.findIndex((s) => s.step === p.step) : -1
   const f = p ? fraction(p) : null
@@ -73,7 +74,14 @@ export function StartProgress({ env }: { env: Environment }) {
       </ol>
       <div className="start-detail">
         <span>
-          {reasonText(env)} <Link to={`/environments/${env.id}/logs`}>Logs</Link>
+          {reasonText(env)}{' '}
+          {onLogs ? (
+            <button type="button" className="start-logs" onClick={onLogs}>
+              Logs
+            </button>
+          ) : (
+            <Link to={`/environments/${env.id}/logs`}>Logs</Link>
+          )}
         </span>
         {p && f !== null && (
           <span className="muted">
