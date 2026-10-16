@@ -1,6 +1,6 @@
 import './code.css'
 
-import { Container, FolderTree, GitCompare, GitGraph, ListTree, Monitor, SquareTerminal, TextSearch } from 'lucide-react'
+import { Activity, Container, FolderTree, GitCompare, GitGraph, ListTree, Monitor, SquareTerminal, TextSearch } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   Group,
@@ -19,6 +19,7 @@ import { CodeTerminal } from './CodeTerminal'
 import { isMac, shortcut } from './ContextMenu'
 import { containerShell, DockerView } from './DockerView'
 import { EditorArea, tabKey, type Tab } from './EditorArea'
+import { PerformanceView } from './PerformanceView'
 import { ProjectView } from './ProjectView'
 import { Languages, LanguagesContext, type Usages } from './lsp'
 import { GitLog } from './GitLog'
@@ -97,17 +98,23 @@ function colourFor(name: string) {
 type Store = { tabs: Tab[]; active: string | null }
 
 // A tool window that moves between the sides, and the side it is on.
-type ToolName = 'project' | 'changes' | 'docker'
+type ToolName = 'project' | 'changes' | 'docker' | 'performance'
 type Bottom = 'terminal' | 'find' | 'log'
 type Side = 'left' | 'right'
 type Sides = Record<ToolName, Side>
-const defaultSides: Sides = { project: 'left', changes: 'right', docker: 'right' }
-const toolNames: ToolName[] = ['project', 'changes', 'docker']
-const toolTitles: Record<ToolName, string> = { project: 'Project', changes: 'Changes', docker: 'Docker' }
+const defaultSides: Sides = { project: 'left', changes: 'right', docker: 'right', performance: 'right' }
+const toolNames: ToolName[] = ['project', 'changes', 'docker', 'performance']
+const toolTitles: Record<ToolName, string> = {
+  project: 'Project',
+  changes: 'Changes',
+  docker: 'Docker',
+  performance: 'Performance',
+}
 const toolIcons: Record<ToolName, ReactNode> = {
   project: <FolderTree size={16} />,
   changes: <GitCompare size={16} />,
   docker: <Container size={16} />,
+  performance: <Activity size={16} />,
 }
 
 function sidesFrom(settings: Record<string, unknown>): Sides {
@@ -133,7 +140,8 @@ function CodeView({
   folder: string
   onFolder: (dir: string) => void
 }) {
-  const hasDesktop = useEnv().spec.display !== 'none'
+  const environment = useEnv()
+  const hasDesktop = environment.spec.display !== 'none'
   // What this tab remembers -- open tabs, open folders -- is kept per
   // folder.
   const scope = folder ? `${env}:${folder}` : env
@@ -476,6 +484,12 @@ function CodeView({
           open({ kind: 'file', path: abs.startsWith(client.root + '/') ? abs.slice(client.root.length + 1) : abs })
         }
         onHide={() => hideTool('docker')}
+      />
+    ) : name === 'performance' ? (
+      <PerformanceView
+        env={environment}
+        active={shown[sides.performance] && showing(sides.performance) === 'performance'}
+        onHide={() => hideTool('performance')}
       />
     ) : (
       <ChangesView

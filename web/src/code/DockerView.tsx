@@ -416,8 +416,8 @@ export function DockerView({
 function Detail({ label, children }: { label: string; children: ReactNode }) {
   return (
     <>
-      <span className="code-docker-detail-label">{label}</span>
-      <span className="code-docker-detail-value">{children}</span>
+      <span className="code-detail-label">{label}</span>
+      <span className="code-detail-value">{children}</span>
     </>
   )
 }
@@ -458,13 +458,13 @@ function ContainerDetails({
 }) {
   const running = c.state === 'running'
   return (
-    <div className="code-docker-details">
-      <div className="code-docker-details-head">
+    <div className="code-details">
+      <div className="code-details-head">
         <span className={`code-docker-dot code-docker-${c.state}`} />
         <span className="strong">{c.name}</span>
         <span className="muted small">{c.status}</span>
       </div>
-      <div className="code-docker-detail-grid">
+      <div className="code-detail-grid">
         <Detail label="Image">{c.image}</Detail>
         <Detail label="ID">
           <button type="button" className="code-link" title="Copy it" onClick={() => copyText(c.id)}>
@@ -482,7 +482,7 @@ function ContainerDetails({
         )}
         <ComposeFiles files={c.configFiles} onOpenFile={onOpenFile} />
       </div>
-      <div className="code-docker-details-actions">
+      <div className="code-details-actions">
         {running || c.state === 'paused' ? (
           <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={() => act('stop')}>
             <Square size={12} /> Stop
@@ -531,20 +531,20 @@ function ProjectDetails({
   const dir = list.find((c) => c.workingDir)?.workingDir
   const files = list.find((c) => c.configFiles?.length)?.configFiles
   return (
-    <div className="code-docker-details">
-      <div className="code-docker-details-head">
+    <div className="code-details">
+      <div className="code-details-head">
         <Layers size={13} className="code-docker-icon" />
         <span className="strong">{name}</span>
         <span className="muted small">
           Compose project, {up} of {list.length} running
         </span>
       </div>
-      <div className="code-docker-detail-grid">
+      <div className="code-detail-grid">
         {dir && <Detail label="Directory">{dir}</Detail>}
         <ComposeFiles files={files} onOpenFile={onOpenFile} />
         <Detail label="Services">{list.map((c) => `${c.service ?? c.name} (${c.state})`).join(', ')}</Detail>
       </div>
-      <div className="code-docker-details-actions">
+      <div className="code-details-actions">
         <button
           type="button"
           className="btn btn-ghost btn-sm"

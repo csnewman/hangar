@@ -1859,8 +1859,9 @@
   cursor: pointer;
 }
 
-/* The details of the container or project chosen in the list. */
-.code-docker-details {
+/* The details of what is chosen in a tool window's list: a container, a
+   project, a process. */
+.code-details {
   flex: none;
   max-height: 55%;
   overflow: auto;
@@ -1869,24 +1870,24 @@
   font-size: 12.5px;
 }
 
-.code-docker-details-head {
+.code-details-head {
   display: flex;
   align-items: center;
   gap: 7px;
   margin-bottom: 6px;
 }
 
-.code-docker-detail-grid {
+.code-detail-grid {
   display: grid;
   grid-template-columns: max-content 1fr;
   gap: 3px 12px;
 }
 
-.code-docker-detail-label {
+.code-detail-label {
   color: var(--muted);
 }
 
-.code-docker-detail-value {
+.code-detail-value {
   min-width: 0;
   overflow-wrap: anywhere;
   display: flex;
@@ -1902,14 +1903,14 @@
   text-align: left;
 }
 
-.code-docker-details-actions {
+.code-details-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   margin-top: 10px;
 }
 
-.code-docker-details-actions .btn {
+.code-details-actions .btn {
   padding: 3px 8px;
   font-size: 12px;
   gap: 4px;
@@ -1917,6 +1918,149 @@
 
 .code-docker-danger {
   color: var(--danger);
+}
+
+/* The Performance tool window: usage, then the processes. */
+.code-perf {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-perf-usage {
+  flex: none;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) minmax(40px, 30%);
+  align-items: center;
+  gap: 2px 10px;
+  padding: 8px 10px 4px;
+  font-size: 12px;
+}
+
+.code-perf-label {
+  color: var(--muted);
+}
+
+.code-perf-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-perf-trend .sparkline {
+  display: block;
+  height: 18px;
+  margin: 0;
+}
+
+.code-perf-head,
+.code-perf-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+}
+
+.code-perf-head {
+  flex: none;
+  height: 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.code-perf-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.code-perf-sort.code-perf-num,
+.code-perf-sort.code-perf-mem {
+  justify-content: flex-end;
+}
+
+.code-perf-sort-on {
+  color: var(--text);
+}
+
+.code-perf-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0;
+}
+
+.code-perf-row {
+  min-height: 24px;
+  white-space: nowrap;
+  cursor: default;
+  user-select: none;
+}
+
+.code-perf-row:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-perf-row-on,
+.code-perf-row-on:hover {
+  background: var(--sidebar-active);
+}
+
+.code-perf-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.code-perf-proc {
+  flex: none;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-perf-cmd {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.code-perf-num,
+.code-perf-mem {
+  flex: none;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.code-perf-num {
+  width: 46px;
+}
+
+.code-perf-mem {
+  width: 64px;
+}
+
+.code-perf-command {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  overflow-wrap: anywhere;
+}
+
+.code-perf-protected {
+  margin: 10px 0 0;
 }
 
 /* The Changes window's Local and Branch views. */

@@ -35,7 +35,8 @@ export function StatTile({
   )
 }
 
-function Sparkline({ values, max }: { values: number[]; max?: number }) {
+// Sparkline is a series' recent trend, without axes.
+export function Sparkline({ values, max }: { values: number[]; max?: number }) {
   const w = 120
   const h = 28
   const top = max ?? Math.max(...values, 1e-9)
