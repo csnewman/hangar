@@ -454,11 +454,17 @@ func (s *Server) workerAuth(next http.HandlerFunc) http.Handler {
 			return
 		}
 		id, err := s.workers.Authenticate(r.Context(), cred)
-		if err != nil {
-			if !errors.Is(err, workers.ErrUnauthorized) {
-				s.log.Error("authenticating worker", "err", err)
-			}
+		switch {
+		case errors.Is(err, workers.ErrUnauthorized):
 			writeError(w, http.StatusUnauthorized, "invalid credential")
+			return
+		case err != nil:
+			// Only a credential refused is a 401: a worker takes that as
+			// revoked and powers its environments off, which a database
+			// that could not answer, as workers come back after an outage
+			// say, must not do.
+			s.log.Error("authenticating worker", "err", err)
+			writeError(w, http.StatusServiceUnavailable, "the credential could not be checked just now")
 			return
 		}
 		next(w, r.WithContext(context.WithValue(r.Context(), workerIDKey{}, id)))

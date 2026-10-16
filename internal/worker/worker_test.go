@@ -132,6 +132,67 @@ func TestRevokedWorkerStops(t *testing.T) {
 	}
 }
 
+// A server that cannot check a worker's credential, its database gone, says
+// so with a 503, which the worker waits out: only a credential refused
+// stops it, powering its environments off.
+func TestWorkerOutlastsItsServersDatabase(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	d := dbtest.Open(t)
+	srv, err := server.New(server.Config{DB: d, Blobs: blob.NewMemory(), ProfileBlobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, Log: quiet()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Run(ctx)
+	hs := httptest.NewServer(srv.Handler())
+	defer hs.Close()
+	signIn(t, srv, hs.URL)
+
+	cfg := writeConfig(t, hs.URL)
+	w, err := worker.New(cfg, worker.NewSimulated(time.Millisecond), quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	werr := make(chan error, 1)
+	go func() { werr <- w.Run(ctx) }()
+
+	var workers []api.Worker
+	deadline := time.Now().Add(10 * time.Second)
+	for len(workers) == 0 && time.Now().Before(deadline) {
+		call(t, hs.URL, http.MethodGet, "/api/frontend/workers", "", &workers)
+		time.Sleep(20 * time.Millisecond)
+	}
+	if len(workers) == 0 {
+		t.Fatal("worker never registered")
+	}
+	credential, err := os.ReadFile(cfg.Server.CredentialFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Closing waits for the worker's held request; the pool refuses new
+	// ones from the start.
+	go d.Close()
+	time.Sleep(100 * time.Millisecond)
+
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, hs.URL+"/api/worker/v1/desired", nil)
+	req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(credential)))
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("with the database gone, the worker's credential got %d, want 503", resp.StatusCode)
+	}
+	select {
+	case err := <-werr:
+		t.Fatalf("the worker stopped while its server's database was gone: %v", err)
+	case <-time.After(3 * time.Second):
+	}
+	cancel()
+	<-werr
+}
+
 func writeConfig(t *testing.T, url string, extra ...string) *worker.Config {
 	t.Helper()
 	cfg, err := worker.LoadConfig(configFile(t, url, extra...))

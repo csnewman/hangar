@@ -172,12 +172,17 @@ func Serve(ctx context.Context, base, credential string, handle Handler, log *sl
 	url := strings.Replace(strings.TrimRight(base, "/"), "http", "ws", 1) + "/api/worker/v1/tunnel"
 	backoff := time.Second
 	for {
-		err := serveOnce(ctx, url, credential, handle)
+		connected, err := serveOnce(ctx, url, credential, handle)
 		if ctx.Err() != nil {
 			return nil
 		}
 		if websocket.CloseStatus(err) == websocket.StatusPolicyViolation || errors.Is(err, errRefused) {
 			return err
+		}
+		// The backoff is for a server that cannot be reached; once one was,
+		// a drop is a new outage, and the first retry comes soon.
+		if connected {
+			backoff = time.Second
 		}
 		log.Warn("worker tunnel dropped, redialling", "err", err, "after", backoff)
 		select {
@@ -191,27 +196,28 @@ func Serve(ctx context.Context, base, credential string, handle Handler, log *sl
 
 var errRefused = errors.New("the server refused the worker's tunnel")
 
-func serveOnce(ctx context.Context, url, credential string, handle Handler) error {
+// serveOnce holds one tunnel until it drops, and says whether it was made.
+func serveOnce(ctx context.Context, url, credential string, handle Handler) (bool, error) {
 	c, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Authorization": {"Bearer " + credential}},
 	})
 	if err != nil {
 		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-			return errRefused
+			return false, errRefused
 		}
-		return err
+		return false, err
 	}
 	c.SetReadLimit(-1)
 	sess, err := yamux.Server(websocket.NetConn(ctx, c, websocket.MessageBinary), muxConfig())
 	if err != nil {
 		c.Close(websocket.StatusInternalError, "")
-		return err
+		return false, err
 	}
 	defer sess.Close()
 	for {
 		stream, err := sess.Accept()
 		if err != nil {
-			return err
+			return true, err
 		}
 		go func() {
 			br := bufio.NewReader(stream)
