@@ -14,15 +14,18 @@ export type DiffAgainst = { base: string; baseLabel: string; from?: string; to?:
 // BranchChanges is the Changes window's Branch view: everything the branch
 // has changed since it left its base (the repository's main branch, or one
 // chosen), committed or not, and the commits since. A file opens its diff
-// against the base as it was where the branch left it.
+// against the base as it was where the branch left it. repo is the
+// repository, by a path in it, the folder's own when none is given.
 export function BranchChanges({
   client,
   status,
+  repo,
   onDiff,
   onOpen,
 }: {
   client: CodeClient
   status: GitStatus | null
+  repo?: string
   onDiff: (path: string, against: DiffAgainst) => void
   onOpen: (path: string) => void
 }) {
@@ -33,14 +36,14 @@ export function BranchChanges({
   const menu = useContextMenu()
 
   const load = useCallback(() => {
-    client.branchChanges(base).then(
+    client.branchChanges(base, repo).then(
       (d) => {
         setData(d)
         setError('')
       },
       (e: Error) => setError(e.message),
     )
-  }, [client, base])
+  }, [client, base, repo])
   // Again whenever what git reports changes: the status is reloaded then.
   useEffect(load, [load, status])
 
@@ -48,7 +51,7 @@ export function BranchChanges({
   const pickBase = async (e: MouseEvent) => {
     const anchor = e.currentTarget.getBoundingClientRect()
     try {
-      const b = await client.branches()
+      const b = await client.branches(repo)
       setPicker({ anchor, branches: { ...b, local: b.local.filter((br) => br.name !== b.current) } })
     } catch {
       // Without the branches there is nothing to choose from.

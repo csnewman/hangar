@@ -700,6 +700,53 @@
   display: inline-flex;
 }
 
+/* A folder holding several repositories: each a group, its name, kind
+   and branch at its head, and fetch, pull and push at the end of it. */
+.code-repo + .code-repo {
+  border-top: 1px solid var(--border);
+}
+
+.code-repo {
+  padding-bottom: 4px;
+}
+
+.code-repo-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 4px 2px 10px;
+  white-space: nowrap;
+}
+
+.code-repo-head .code-branch-btn {
+  margin-left: 0;
+}
+
+.code-repo-icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.code-repo-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* What a change is, where its letter does not say: a submodule's commit
+   having moved. */
+.code-change-tag,
+.phone-change-tag {
+  flex: none;
+  padding: 0 6px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .code-commit {
   flex: none;
   border-top: 1px solid var(--border);
@@ -2596,6 +2643,110 @@
   text-align: left;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
+}
+
+/* Changes of a folder holding several repositories: a group for each. */
+.phone-repo {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.phone-repo-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin: 0 4px;
+}
+
+.phone-repo-head > .phone-row-sub {
+  flex: none;
+}
+
+.phone-repo-icon {
+  flex: none;
+  color: var(--muted);
+}
+
+.phone-repo-name {
+  flex: none;
+  max-width: 65%;
+  font-size: 17px;
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The branch gives way to the repository's name. */
+.phone-repo-branch {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  margin-left: auto;
+  padding: 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  font-family: var(--code-font);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.phone-repo-branch > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.phone-repo-branch > span:first-of-type {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.phone-repo-note {
+  min-height: 52px;
+  gap: 10px;
+}
+
+.phone-repo-note .btn {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+}
+
+/* How many commits are not pushed, which opens them. */
+.phone-repo-count {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* History's choice of repository, the phone's own picker under a chip. */
+.phone-repo-pick {
+  align-self: flex-start;
+  position: relative;
+  margin: 4px 0 12px;
+}
+
+.phone-repo-pick select {
+  appearance: none;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
 }
 
 .phone-badge {

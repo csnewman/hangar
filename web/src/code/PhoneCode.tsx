@@ -9,6 +9,7 @@ import {
   ChevronUp,
   File,
   Folder,
+  FolderGit2,
   GitBranch,
   GitCommitHorizontal,
   History as HistoryIcon,
@@ -21,9 +22,10 @@ import type { Environment } from '../api'
 import { formatAgo } from '../components/format'
 import { useEnv } from '../pages/Environment'
 import { changeWhere } from './BranchChanges'
-import type { Change, CodeClient, CommitInfo, Entry, GitStatus, LogCommit } from './client'
+import type { Change, CodeClient, CommitInfo, Entry, GitStatus, LogCommit, Repo } from './client'
 import { codeHighlight, codeTheme, followScheme, languageFor } from './CodeEditor'
 import { DiffView, type DiffStats } from './DiffView'
+import { commitAll, usable, within } from './repos'
 import { useGitStatus } from './useGitStatus'
 
 // PhoneCode is the Code tab on a phone, as screens a phone moves between,
@@ -56,6 +58,7 @@ export function PhoneCode({ client }: { client: CodeClient }) {
       from: params.get('from') ?? undefined,
       to: params.get('to') ?? undefined,
       tl: params.get('tl') ?? undefined,
+      repo: params.get('repo') ?? undefined,
     }
     return (
       <DiffScreen
@@ -73,21 +76,32 @@ export function PhoneCode({ client }: { client: CodeClient }) {
   }
   const file = params.get('file')
   if (file !== null) return <FileScreen client={client} path={file} onBack={back} />
+  const repo = params.get('repo') ?? undefined
   const commit = params.get('commit')
   if (commit !== null) {
     return (
       <CommitScreen
         client={client}
         hash={commit}
+        repo={repo}
         onBack={back}
         onDiff={(path, a) => go({ diff: path, ...a })}
-        onCommit={(hash) => go({ commit: hash })}
+        onCommit={(hash) => go({ commit: hash, repo })}
       />
     )
   }
   const view = params.get('view')
   if (view === 'history') {
-    return <HistoryScreen client={client} status={status} onBack={back} onCommit={(hash) => go({ commit: hash })} />
+    return (
+      <HistoryScreen
+        client={client}
+        status={status}
+        repo={repo ?? ''}
+        onRepo={(r) => go({ view: 'history', repo: r }, true)}
+        onBack={back}
+        onCommit={(hash) => go({ commit: hash, repo })}
+      />
+    )
   }
   if (view === 'files') {
     return (
@@ -108,17 +122,18 @@ export function PhoneCode({ client }: { client: CodeClient }) {
       status={status}
       reload={reload}
       onDiff={(path) => go({ diff: path })}
-      onCommit={(hash) => go({ commit: hash })}
-      onHistory={() => go({ view: 'history' })}
+      onCommit={(hash, repo) => go({ commit: hash, repo })}
+      onHistory={(repo) => go({ view: 'history', repo })}
     />
   )
 }
 
 // Against is what a diff compares the file with, as the URL carries it:
 // a commit (base) and its label (bl), the file's name there (from), and a
-// later commit (to) and its label (tl) in place of the working tree. A
-// diff with none of them is the working tree's with HEAD.
-type Against = { base?: string; bl?: string; from?: string; to?: string; tl?: string }
+// later commit (to) and its label (tl) in place of the working tree, and
+// the repository those commits are in. A diff with none of them is the
+// working tree's with HEAD.
+type Against = { base?: string; bl?: string; from?: string; to?: string; tl?: string; repo?: string }
 
 // staged is whether a change has anything staged, and partly whether
 // some of it is not.
@@ -126,7 +141,10 @@ const staged = (c: Change) => c.index !== '.' && c.index !== '?'
 const partly = (c: Change) => staged(c) && c.worktree !== '.'
 
 // ChangesScreen is the first screen: the branch, what is uncommitted, a
-// box to commit what is ticked, and the commits not yet pushed.
+// box to commit what is ticked, and the commits not yet pushed. A folder
+// holding several repositories shows each as a group of its own, with
+// its branch and what it has to push or pull; one message commits every
+// group with files ticked.
 function ChangesScreen({
   env,
   client,
@@ -141,8 +159,8 @@ function ChangesScreen({
   status: GitStatus | null
   reload: () => void
   onDiff: (path: string) => void
-  onCommit: (hash: string) => void
-  onHistory: () => void
+  onCommit: (hash: string, repo?: string) => void
+  onHistory: (repo?: string) => void
 }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -162,40 +180,42 @@ function ChangesScreen({
     }
   }
 
-  // The commits not pushed: those HEAD is ahead of its upstream by.
-  const ahead = status?.ahead ?? 0
-  const [unpushed, setUnpushed] = useState<LogCommit[]>([])
-  const head = `${status?.branch}:${ahead}:${status?.behind}`
-  useEffect(() => {
-    if (!ahead) return
-    let live = true
-    client.log('HEAD', 0, ahead).then(
-      (l) => live && setUnpushed(l.commits),
-      () => {},
-    )
-    return () => {
-      live = false
-    }
-  }, [client, ahead, head])
-
+  const repos = status?.repos ?? []
+  const one = repos.length === 1 ? repos[0] : undefined
+  const unpushed = useUnpushed(client, one)
   const changes = status?.changes ?? []
   const included = changes.filter(staged)
+  const into = repos.filter((r) => r.changes.some(staged)).length
   const commit = () =>
     act(async () => {
-      await client.commit(message)
+      await commitAll(client, repos, message, false)
       setMessage('')
     }, 'Committing…')
+
+  const rows = (r: Repo) =>
+    r.changes.map((c) => (
+      <ChangeRow key={c.path} change={c} repo={r} busy={!!busy} act={act} client={client} onDiff={onDiff} />
+    ))
 
   return (
     <div className="phone-code">
       <TopHead env={env} title="Changes">
-        {status?.repo && (
+        {one ? (
           <span className="phone-chip">
             <GitBranch size={15} />
             <span>
-              {status.branch === '(detached)' ? 'detached HEAD' : status.branch} · {client.root}
+              {branchName(one)} · {one.path ? `${client.root}/${one.path}` : client.root}
             </span>
           </span>
+        ) : (
+          repos.length > 1 && (
+            <span className="phone-chip">
+              <FolderGit2 size={15} />
+              <span>
+                {client.root} · {repos.length} repositories
+              </span>
+            </span>
+          )
         )}
       </TopHead>
       {status && !status.repo && (
@@ -204,124 +224,246 @@ function ChangesScreen({
         </div>
       )}
       {(busy || error) && <div className={busy ? 'phone-code-busy' : 'notice phone-code-error'}>{busy || error}</div>}
-      {status?.repo && (
+      {one && (
         <>
           <h2 className="phone-heading">Uncommitted · {changes.length}</h2>
+          {one.error && <div className="notice phone-code-error">{one.error}</div>}
           {changes.length > 0 ? (
+            <div className="phone-list">{rows(one)}</div>
+          ) : (
+            !one.error && <div className="phone-empty phone-code-none">Nothing to commit.</div>
+          )}
+        </>
+      )}
+      {repos.length > 1 &&
+        repos.map((r) => (
+          <section key={r.path} className="phone-repo">
+            <div className="phone-repo-head">
+              <FolderGit2 size={16} className="phone-repo-icon" />
+              <span className="phone-repo-name">{r.name}</span>
+              {r.kind !== 'folder' && <span className="phone-row-sub">{r.kind}</span>}
+              {r.branch && (
+                <span className="phone-repo-branch">
+                  <GitBranch size={13} />
+                  <span>{branchName(r)}</span>
+                  {!!r.ahead && <span className="phone-row-sub">↑{r.ahead}</span>}
+                  {!!r.behind && <span className="phone-row-sub">↓{r.behind}</span>}
+                </span>
+              )}
+            </div>
             <div className="phone-list">
-              {changes.map((c) => (
-                <div key={c.path} className="phone-row phone-change">
-                  <label className="phone-change-check">
-                    <input
-                      type="checkbox"
-                      checked={staged(c)}
-                      ref={(el) => {
-                        if (el) el.indeterminate = partly(c)
-                      }}
-                      disabled={!!busy}
-                      aria-label={`Include ${c.path} in the commit`}
-                      onChange={() =>
-                        act(() => (staged(c) && !partly(c) ? client.unstage(c.path) : client.stage(c.path)))
-                      }
-                    />
-                  </label>
-                  <button type="button" className="phone-change-open" onClick={() => onDiff(c.path)}>
-                    <Badge letter={letterOf(c)} />
-                    <span className="phone-row-main">
-                      <span className="phone-change-name">{c.path.split('/').pop()}</span>
-                      {changeWhere(c) && <Tail text={changeWhere(c)} />}
-                    </span>
-                    <ChevronRight size={16} className="phone-row-chev" />
+              {r.uninitialised ? (
+                <div className="phone-row phone-repo-note">
+                  <span className="phone-row-main phone-row-sub">Named, but never cloned.</span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={!!busy}
+                    onClick={() => act(() => client.initSubmodule(r.path), `Checking out ${r.name}…`)}
+                  >
+                    Check out
                   </button>
                 </div>
-              ))}
+              ) : r.error ? (
+                <div className="phone-row phone-repo-note phone-row-sub">{r.error}</div>
+              ) : r.changes.length === 0 ? (
+                <div className="phone-row phone-repo-note phone-row-sub">Nothing to commit</div>
+              ) : (
+                rows(r)
+              )}
+              {!!r.ahead && (
+                <div className="phone-row phone-repo-note">
+                  <button type="button" className="phone-repo-count" onClick={() => onHistory(r.path)}>
+                    {r.ahead} commit{r.ahead === 1 ? '' : 's'} not pushed
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={!!busy}
+                    onClick={() => act(() => client.push(r.path), `Pushing ${r.name}…`)}
+                  >
+                    <ArrowUpFromLine size={15} />
+                    Push
+                  </button>
+                </div>
+              )}
+              {!!r.behind && (
+                <div className="phone-row phone-repo-note">
+                  <span className="phone-row-main phone-row-sub">
+                    {r.behind} commit{r.behind === 1 ? '' : 's'} not pulled
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={!!busy}
+                    onClick={() => act(() => client.pull(r.path), `Pulling ${r.name}…`)}
+                  >
+                    <ArrowDownToLine size={15} />
+                    Pull
+                  </button>
+                </div>
+              )}
             </div>
-          ) : (
-            <div className="phone-empty phone-code-none">Nothing to commit.</div>
-          )}
-          {changes.length > 0 && (
-            <>
-              <textarea
-                className="phone-commit-message"
-                rows={2}
-                placeholder={included.length ? 'Commit message' : 'Tick the files to commit'}
-                aria-label="Commit message"
-                value={message}
-                onChange={(e) => setMessage(e.target.value)}
-              />
-              <button
-                type="button"
-                className="btn btn-primary phone-wide-btn"
-                disabled={!!busy || !included.length || !message.trim()}
-                onClick={commit}
-              >
-                Commit {included.length} file{included.length === 1 ? '' : 's'}
-              </button>
-            </>
-          )}
+          </section>
+        ))}
+      {changes.length > 0 && (
+        <>
+          <textarea
+            className="phone-commit-message"
+            rows={2}
+            placeholder={included.length ? 'Commit message' : 'Tick the files to commit'}
+            aria-label="Commit message"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+          />
+          <button
+            type="button"
+            className="btn btn-primary phone-wide-btn"
+            disabled={!!busy || !included.length || !message.trim()}
+            onClick={commit}
+          >
+            Commit {included.length} file{included.length === 1 ? '' : 's'}
+            {into > 1 && ` in ${into} repositories`}
+          </button>
+        </>
+      )}
 
-          {ahead > 0 && (
-            <>
-              <h2 className="phone-heading">Not pushed · {ahead}</h2>
-              <div className="phone-list">
-                {unpushed.map((c) => (
-                  <CommitRow key={c.hash} commit={c} onOpen={() => onCommit(c.hash)} />
-                ))}
-                <button
-                  type="button"
-                  className="phone-row phone-row-accent"
-                  disabled={!!busy}
-                  onClick={() => act(() => client.push(), 'Pushing…')}
-                >
-                  <ArrowUpFromLine size={18} />
-                  <span className="phone-row-main">Push</span>
-                </button>
-              </div>
-            </>
-          )}
-          {!!status.behind && (
-            <>
-              <h2 className="phone-heading">Not pulled · {status.behind}</h2>
-              <div className="phone-list">
-                <button
-                  type="button"
-                  className="phone-row phone-row-accent"
-                  disabled={!!busy}
-                  onClick={() => act(() => client.pull(), 'Pulling…')}
-                >
-                  <ArrowDownToLine size={18} />
-                  <span className="phone-row-main">Pull</span>
-                </button>
-              </div>
-            </>
-          )}
-
-          <div className="phone-list phone-code-gap">
-            <button type="button" className="phone-row" onClick={onHistory}>
-              <HistoryIcon size={18} />
-              <span className="phone-row-main">History</span>
-              <ChevronRight size={16} className="phone-row-chev" />
+      {one && !!one.ahead && (
+        <>
+          <h2 className="phone-heading">Not pushed · {one.ahead}</h2>
+          <div className="phone-list">
+            {unpushed.map((c) => (
+              <CommitRow key={c.hash} commit={c} onOpen={() => onCommit(c.hash, one.path || undefined)} />
+            ))}
+            <button
+              type="button"
+              className="phone-row phone-row-accent"
+              disabled={!!busy}
+              onClick={() => act(() => client.push(one.path), 'Pushing…')}
+            >
+              <ArrowUpFromLine size={18} />
+              <span className="phone-row-main">Push</span>
             </button>
           </div>
         </>
+      )}
+      {one && !!one.behind && (
+        <>
+          <h2 className="phone-heading">Not pulled · {one.behind}</h2>
+          <div className="phone-list">
+            <button
+              type="button"
+              className="phone-row phone-row-accent"
+              disabled={!!busy}
+              onClick={() => act(() => client.pull(one.path), 'Pulling…')}
+            >
+              <ArrowDownToLine size={18} />
+              <span className="phone-row-main">Pull</span>
+            </button>
+          </div>
+        </>
+      )}
+
+      {status?.repo && (
+        <div className="phone-list phone-code-gap">
+          <button type="button" className="phone-row" onClick={() => onHistory(one?.path || undefined)}>
+            <HistoryIcon size={18} />
+            <span className="phone-row-main">History</span>
+            <ChevronRight size={16} className="phone-row-chev" />
+          </button>
+        </div>
       )}
     </div>
   )
 }
 
+const branchName = (r: Repo) => (r.branch === '(detached)' ? 'detached HEAD' : r.branch)
+
+// useUnpushed is the commits a repository's HEAD is ahead of its upstream
+// by.
+function useUnpushed(client: CodeClient, repo: Repo | undefined): LogCommit[] {
+  const ahead = repo?.ahead ?? 0
+  const path = repo?.path
+  const [unpushed, setUnpushed] = useState<LogCommit[]>([])
+  const head = `${repo?.branch}:${ahead}:${repo?.behind}`
+  useEffect(() => {
+    if (!ahead) return
+    let live = true
+    client.log('HEAD', 0, ahead, undefined, path).then(
+      (l) => live && setUnpushed(l.commits),
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [client, ahead, path, head])
+  return ahead ? unpushed : []
+}
+
+// ChangeRow is an uncommitted change: ticked to go in the next commit,
+// and opening its diff. Its folder is named from its repository.
+function ChangeRow({
+  change: c,
+  repo,
+  busy,
+  act,
+  client,
+  onDiff,
+}: {
+  change: Change
+  repo: Repo
+  busy: boolean
+  act: (fn: () => Promise<void>) => void
+  client: CodeClient
+  onDiff: (path: string) => void
+}) {
+  const where = changeWhere(within(repo, c))
+  return (
+    <div className="phone-row phone-change">
+      <label className="phone-change-check">
+        <input
+          type="checkbox"
+          checked={staged(c)}
+          ref={(el) => {
+            if (el) el.indeterminate = partly(c)
+          }}
+          disabled={busy}
+          aria-label={`Include ${c.path} in the commit`}
+          onChange={() => act(() => (staged(c) && !partly(c) ? client.unstage(c.path) : client.stage(c.path)))}
+        />
+      </label>
+      <button type="button" className="phone-change-open" onClick={() => onDiff(c.path)}>
+        <Badge letter={letterOf(c)} />
+        <span className="phone-row-main">
+          <span className="phone-change-name">{c.path.split('/').pop()}</span>
+          {where && <Tail text={where} />}
+        </span>
+        {c.submodule && <span className="phone-change-tag">new commits</span>}
+        <ChevronRight size={16} className="phone-row-chev" />
+      </button>
+    </div>
+  )
+}
+
 // HistoryScreen is the commits reachable from HEAD, newest first, a page
-// at a time.
+// at a time, of one of the folder's repositories (by its path).
 function HistoryScreen({
   client,
   status,
+  repo,
+  onRepo,
   onBack,
   onCommit,
 }: {
   client: CodeClient
   status: GitStatus | null
+  repo: string
+  onRepo: (repo: string) => void
   onBack: () => void
   onCommit: (hash: string) => void
 }) {
+  const choices = usable(status?.repos ?? [])
+  const shown = choices.find((r) => r.path === repo)
   const [commits, setCommits] = useState<LogCommit[] | null>(null)
   const [more, setMore] = useState(false)
   const [error, setError] = useState('')
@@ -331,7 +473,7 @@ function HistoryScreen({
   const load = useCallback(
     async (skip: number) => {
       try {
-        const log = await client.log('HEAD', skip, page)
+        const log = await client.log('HEAD', skip, page, undefined, repo)
         setCommits((c) => (skip === 0 ? log.commits : [...(c ?? []), ...log.commits]))
         setMore(log.more)
         setError('')
@@ -341,19 +483,32 @@ function HistoryScreen({
         setLoading(false)
       }
     },
-    [client],
+    [client, repo],
   )
   // From the top again whenever the repository changes: HEAD may have
   // moved.
-  const head = `${status?.branch}:${status?.ahead}:${status?.behind}`
+  const head = `${shown?.branch}:${shown?.ahead}:${shown?.behind}`
   useEffect(() => {
     load(0)
   }, [load, head])
 
   return (
     <div className="phone-code-screen">
-      <ScreenBar title="History" sub={status?.branch} onBack={onBack} />
+      <ScreenBar title="History" sub={shown?.branch} onBack={onBack} />
       <div className="phone-code">
+        {choices.length > 1 && (
+          <label className="phone-chip phone-repo-pick">
+            <FolderGit2 size={15} />
+            <select aria-label="Repository" value={repo} onChange={(e) => onRepo(e.target.value)}>
+              {choices.map((r) => (
+                <option key={r.path} value={r.path}>
+                  {r.name}
+                </option>
+              ))}
+            </select>
+            <ChevronDown size={15} />
+          </label>
+        )}
         {error && <div className="notice phone-code-error">{error}</div>}
         {commits && (
           <div className="phone-list">
@@ -470,17 +625,19 @@ function FilesScreen({
 function CommitScreen({
   client,
   hash,
+  repo,
   onBack,
   onDiff,
   onCommit,
 }: {
   client: CodeClient
   hash: string
+  repo?: string
   onBack: () => void
   onDiff: (path: string, against: Against) => void
   onCommit: (hash: string) => void
 }) {
-  const info = useCommit(client, hash)
+  const info = useCommit(client, hash, repo)
   const short = hash.slice(0, 7)
   const [subject, ...body] = (info.data?.message ?? '').split('\n')
   return (
@@ -518,7 +675,7 @@ function CommitScreen({
                   key={f.path}
                   type="button"
                   className="phone-row"
-                  onClick={() => onDiff(f.path, commitAgainst(info.data!, f.from))}
+                  onClick={() => onDiff(f.path, commitAgainst(info.data!, f.from, repo))}
                 >
                   <Badge letter={f.status} />
                   <span className="phone-row-main">
@@ -541,29 +698,30 @@ function CommitScreen({
 
 // commitAgainst is what a commit's file is compared with: the commit's
 // first parent, under the name the file had there.
-function commitAgainst(info: CommitInfo, from?: string): Against {
+function commitAgainst(info: CommitInfo, from?: string, repo?: string): Against {
   return {
     base: info.parents[0] ?? `${info.hash}^`,
     bl: info.parents[0] ? info.parents[0].slice(0, 7) : 'nothing',
     to: info.hash,
     tl: info.hash.slice(0, 7),
     from,
+    repo,
   }
 }
 
-function useCommit(client: CodeClient, hash: string | undefined) {
+function useCommit(client: CodeClient, hash: string | undefined, repo?: string) {
   const [state, setState] = useState<{ hash?: string; data?: CommitInfo; error?: string }>({})
   useEffect(() => {
     if (!hash) return
     let live = true
-    client.commitInfo(hash).then(
+    client.commitInfo(hash, repo).then(
       (data) => live && setState({ hash, data }),
       (e: Error) => live && setState({ hash, error: e.message }),
     )
     return () => {
       live = false
     }
-  }, [client, hash])
+  }, [client, hash, repo])
   return state.hash === hash ? state : {}
 }
 
@@ -592,7 +750,7 @@ function DiffScreen({
   const [stats, setStats] = useState<DiffStats | null>(null)
   const [confirm, setConfirm] = useState(false)
   const [error, setError] = useState('')
-  const commit = useCommit(client, against.to)
+  const commit = useCommit(client, against.to, against.repo)
 
   const files: { path: string; from?: string }[] = against.to
     ? (commit.data?.files ?? [])
@@ -603,9 +761,11 @@ function DiffScreen({
   const step = (by: number) => {
     const f = files[at + by]
     if (!f) return
-    onStep(f.path, commit.data ? commitAgainst(commit.data, f.from) : {})
+    onStep(f.path, commit.data ? commitAgainst(commit.data, f.from, against.repo) : {})
   }
   const local = !against.base && !against.to
+  // A submodule's commit is moved in the submodule, not reverted here.
+  const revertable = local && !status?.changes.find((c) => c.path === path)?.submodule
   const revert = async () => {
     setConfirm(false)
     // What to show once it is gone: the next file, else the one before.
@@ -658,12 +818,12 @@ function DiffScreen({
         />
       </div>
       {files.length > 0 && (
-        <div className={local ? 'phone-diff-foot' : 'phone-diff-foot phone-diff-foot-two'}>
+        <div className={revertable ? 'phone-diff-foot' : 'phone-diff-foot phone-diff-foot-two'}>
           <button type="button" className="btn" disabled={at <= 0} onClick={() => step(-1)}>
             <ChevronUp size={16} />
             Previous
           </button>
-          {local &&
+          {revertable &&
             (confirm ? (
               <button type="button" className="btn btn-danger" onClick={revert}>
                 Discard?

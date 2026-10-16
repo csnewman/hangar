@@ -172,7 +172,10 @@ test('files, git and a shared document', async () => {
 
 		const st = await a.call('git.status')
 		assert.equal(st.repo, true)
-		assert.equal(st.branch, 'main')
+		assert.deepEqual(
+			st.repos.map((r: any) => [r.path, r.name, r.kind, r.branch]),
+			[['', 'repo', 'folder', 'main']],
+		)
 		assert.equal(st.changes.length, 0)
 
 		// Both windows open the file and see it, line endings as LF.
@@ -272,7 +275,7 @@ test('partial staging, amending, branches, push and pull', async () => {
 
 		// Back to main, and to a remote branch with no local one.
 		await a.call('git.checkout', { name: 'main' })
-		assert.equal((await a.call('git.status')).branch, 'main')
+		assert.equal((await a.call('git.status')).repos[0].branch, 'main')
 		execFileSync('git', ['-C', other, 'checkout', '-q', '-b', 'only-remote'])
 		execFileSync('git', ['-C', other, 'push', '-q', 'origin', 'only-remote'])
 		await a.call('git.fetch')
@@ -957,5 +960,122 @@ test("a file's history, and finding and replacing in a folder", async () => {
 		git('checkout', '--', 'hist')
 	} finally {
 		a.close()
+	}
+})
+
+test('the repositories in a folder: submodules, clones within it, and a folder of clones', async () => {
+	const top = join(dir, 'multi')
+	const app = join(top, 'app')
+	const sh = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, '-c', 'protocol.file.allow=always', ...args]).toString()
+	const repo = (at: string, file: string) => {
+		execFileSync('git', ['init', '-q', '-b', 'main', at])
+		writeFileSync(join(at, file), 'one\n')
+		sh(at, 'add', '.')
+		sh(at, 'commit', '-q', '-m', `${file} one`)
+	}
+	repo(join(top, 'lib'), 'lib.txt')
+	repo(app, 'app.txt')
+	sh(app, 'submodule', 'add', '-q', '../lib', 'mods/lib')
+	sh(app, 'submodule', 'add', '-q', '../lib', 'mods/later')
+	sh(app, 'commit', '-q', '-m', 'submodules')
+	// One named but not cloned, as a clone without --recurse-submodules
+	// leaves it.
+	sh(app, 'submodule', 'deinit', '-q', '-f', 'mods/later')
+	// A clone of its own inside, which app does not know of.
+	repo(join(app, 'tools'), 'tool.txt')
+
+	writeFileSync(join(app, 'app.txt'), 'two\n')
+	writeFileSync(join(app, 'tools', 'tool.txt'), 'two\n')
+	writeFileSync(join(app, 'mods', 'lib', 'lib.txt'), 'two\n')
+	const a = new Client()
+	try {
+		await a.call('hello', { root: app })
+		const st = await a.call('git.status')
+		assert.deepEqual(
+			st.repos.map((r: any) => [r.path, r.kind, r.parent, !!r.uninitialised]),
+			[
+				['', 'folder', undefined, false],
+				['mods/later', 'submodule', '', true],
+				['mods/lib', 'submodule', '', false],
+				['tools', 'clone', undefined, false],
+			],
+		)
+		// Each file's change is in its own repository, named from the
+		// folder; a submodule with only changes of its own is not one of
+		// its parent's.
+		const paths = (r: any) => r.changes.map((c: any) => c.path)
+		assert.deepEqual(st.repos.map(paths), [['app.txt'], [], ['mods/lib/lib.txt'], ['tools/tool.txt']])
+		assert.deepEqual(st.changes.map((c: any) => c.path).sort(), ['app.txt', 'mods/lib/lib.txt', 'tools/tool.txt'])
+		assert.equal(st.repos[2].branch, 'main')
+
+		// Staging and committing go to the file's repository.
+		await a.call('git.stage', { path: 'mods/lib/lib.txt' })
+		assert.match(sh(join(app, 'mods/lib'), 'diff', '--cached', '--name-only'), /^lib.txt$/m)
+		await a.call('git.commit', { message: 'lib two', repo: 'mods/lib' })
+		assert.equal(sh(join(app, 'mods/lib'), 'log', '-1', '--format=%s').trim(), 'lib two')
+		assert.equal(sh(app, 'log', '-1', '--format=%s').trim(), 'submodules')
+
+		// Its commit having moved is a change of app's, compared by commit.
+		const after = await a.call('git.status')
+		const moved = after.repos[0].changes.find((c: any) => c.path === 'mods/lib')
+		assert.deepEqual(moved, { path: 'mods/lib', index: '.', worktree: 'M', submodule: true })
+		const was = sh(app, 'rev-parse', 'HEAD:mods/lib').trim()
+		const now = sh(join(app, 'mods/lib'), 'rev-parse', 'HEAD').trim()
+		assert.deepEqual(await a.call('git.diff', { path: 'mods/lib' }), {
+			path: 'mods/lib',
+			head: `Subproject commit ${was}\n`,
+			working: `Subproject commit ${now}\n`,
+		})
+		// Staged, with changes of the submodule's own besides, it is staged
+		// alone: those are the submodule's to commit.
+		writeFileSync(join(app, 'mods/lib/lib.txt'), 'dirty\n')
+		await a.call('git.stage', { path: 'mods/lib' })
+		const both = (await a.call('git.status')).repos[0].changes.find((c: any) => c.path === 'mods/lib')
+		assert.deepEqual([both.index, both.worktree], ['M', '.'])
+		await a.call('git.commit', { message: 'move lib' })
+		sh(join(app, 'mods/lib'), 'checkout', '-q', '--', 'lib.txt')
+		assert.equal(sh(app, 'rev-parse', 'HEAD:mods/lib').trim(), now)
+
+		// A nested clone's file: its diff, its history, its blame.
+		const d = await a.call('git.diff', { path: 'tools/tool.txt' })
+		assert.deepEqual([d.path, d.head, d.working], ['tools/tool.txt', 'one\n', 'two\n'])
+		const log = await a.call('git.log', { repo: 'tools', ref: 'HEAD', skip: 0, max: 10 })
+		assert.deepEqual(log.commits.map((c: any) => c.subject), ['tool.txt one'])
+		const info = await a.call('git.commitInfo', { repo: 'tools', hash: log.commits[0].hash })
+		assert.deepEqual(info.files, [{ path: 'tools/tool.txt', status: 'A' }])
+		assert.equal((await a.call('git.blame', { path: 'tools/tool.txt' })).lines.length, 1)
+		assert.equal((await a.call('git.branches', { repo: 'tools/tool.txt' })).current, 'main')
+
+		// A commit in a submodule, made elsewhere, is announced.
+		a.events.length = 0
+		writeFileSync(join(app, 'mods/lib/lib.txt'), 'three\n')
+		sh(join(app, 'mods/lib'), 'commit', '-q', '-am', 'lib three')
+		await until('a change to the submodule', () => a.events.some((e) => e.event === 'git.changed'))
+
+		// The submodule not cloned is cloned on asking.
+		await a.call('git.initSubmodule', { path: 'mods/later' })
+		assert.ok(existsSync(join(app, 'mods/later/lib.txt')))
+		const later = (await a.call('git.status')).repos.find((r: any) => r.path === 'mods/later')
+		assert.equal(later.uninitialised, undefined)
+
+		// A folder in no repository, holding clones: each is found.
+		await a.call('hello', { root: top })
+		const ws = await a.call('git.status')
+		assert.deepEqual(
+			ws.repos.map((r: any) => [r.path, r.kind]),
+			[
+				['app', 'clone'],
+				['app/mods/later', 'submodule'],
+				['app/mods/lib', 'submodule'],
+				['app/tools', 'clone'],
+				['lib', 'clone'],
+			],
+		)
+		// The submodule's commit moved again, above.
+		assert.deepEqual(ws.changes.map((c: any) => c.path), ['app/app.txt', 'app/mods/lib', 'app/tools/tool.txt'])
+		await assert.rejects(a.call('git.branches'), /not a git repository/)
+	} finally {
+		a.close()
+		rmSync(top, { recursive: true, force: true })
 	}
 })

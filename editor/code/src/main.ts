@@ -21,7 +21,7 @@ import { parseArgs } from 'node:util'
 import { Docker } from './docker.js'
 import { Documents } from './docs.js'
 import { Files } from './files.js'
-import { Git } from './git.js'
+import { Repos } from './repos.js'
 import { Search } from './search.js'
 import { SettingsFile } from './settings.js'
 import { Connection, type Folder } from './connection.js'
@@ -45,7 +45,7 @@ const folders = new Map<string, Folder>()
 const folder = (dir: string): Folder => {
 	let f = folders.get(dir)
 	if (!f) {
-		f = { root: dir, files: new Files(dir), git: new Git(dir), search: new Search(dir), hubs: new Map() }
+		f = { root: dir, files: new Files(dir), repos: new Repos(dir), search: new Search(dir), hubs: new Map() }
 		folders.set(dir, f)
 	}
 	return f

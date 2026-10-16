@@ -23,6 +23,7 @@ import { ProjectView } from './ProjectView'
 import { Languages, LanguagesContext, type Usages } from './lsp'
 import { GitLog } from './GitLog'
 import { PhoneCode } from './PhoneCode'
+import { repoFor } from './repos'
 import { FindInFiles, GotoFile, OpenFolder, type Jump } from './Search'
 import { UsagesView } from './UsagesView'
 import { useGitStatus } from './useGitStatus'
@@ -253,7 +254,7 @@ function CodeView({
   // The Git Log reads the history once first shown, and is kept after. A
   // commit asked for elsewhere (the blame) is found and chosen in it.
   const [logSeen, setLogSeen] = useState(false)
-  const [logFocus, setLogFocus] = useState<{ hash: string; n: number } | null>(null)
+  const [logFocus, setLogFocus] = useState<{ hash: string; repo?: string; n: number } | null>(null)
   const [logHistory, setLogHistory] = useState<{ path: string; n: number } | null>(null)
   const showHistory = (path: string) => {
     setLogHistory((h) => ({ path, n: (h?.n ?? 0) + 1 }))
@@ -274,8 +275,9 @@ function CodeView({
       const was = s.tabs.findIndex((t) => keyOf(t) === s.active)
       return { tabs, active: was >= 0 ? keyOf(tabs[was]) : s.active }
     })
-  const showCommit = (hash: string) => {
-    setLogFocus((f) => ({ hash, n: (f?.n ?? 0) + 1 }))
+  // showCommit finds a commit of the repository a file is in.
+  const showCommit = (hash: string, path: string) => {
+    setLogFocus((f) => ({ hash, repo: repoFor(status?.repos ?? [], path)?.path, n: (f?.n ?? 0) + 1 }))
     showBottom('log')
   }
   useEffect(() => {
@@ -600,6 +602,7 @@ function CodeView({
                 <div className="code-side-slot" hidden={bottom !== 'log'}>
                   <GitLog
                     client={client}
+                    repos={status?.repos ?? []}
                     focus={logFocus}
                     history={logHistory}
                     onDiff={(path, against) => open({ kind: 'diff', path, ...against })}

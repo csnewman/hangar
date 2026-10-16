@@ -6,10 +6,11 @@ import { isAbsolute, resolve } from 'node:path'
 import type { Documents, SharedDoc } from './docs.js'
 import { ENCODINGS, type Clash, type Encoding, type Separator } from './fileops.js'
 import type { Files } from './files.js'
-import type { Git } from './git.js'
 import type { Action, Docker } from './docker.js'
 import { Hub } from './hub.js'
 import { find, type Message } from './lsp.js'
+import type { Git } from './git.js'
+import type { Repos } from './repos.js'
 import type { Search } from './search.js'
 import { settingsPath, type SettingsFile } from './settings.js'
 
@@ -18,9 +19,12 @@ const CHANNEL_YJS = 0x79 // 'y'
 const CHANNEL_LSP = 0x6c // 'l'
 const MAX_FRAME = 64 << 20
 
-// Folder is what serves one folder: its files, its git, searches in it, and
-// its language servers, by language, shared by every tab.
-export type Folder = { root: string; files: Files; git: Git; search: Search; hubs: Map<string, Hub> }
+// Folder is what serves one folder: its files, its git repositories,
+// searches in it, and its language servers, by language, shared by every
+// tab.
+export type Folder = { root: string; files: Files; repos: Repos; search: Search; hubs: Map<string, Hub> }
+
+type Named = { path: string; from?: string }
 
 // Services are the service's own: the folder it was started on, the one
 // serving any other folder, and the shared documents, which are everyone's
@@ -71,7 +75,7 @@ export class Connection {
 	private watch() {
 		this.unwatch()
 		const offFiles = this.f.files.onChange((dirs) => this.event('fs.changed', { dirs }))
-		const offGit = this.f.git.onChange(() => this.event('git.changed', {}))
+		const offGit = this.f.repos.onChange(() => this.event('git.changed', {}))
 		this.unwatch = () => {
 			offFiles()
 			offGit()
@@ -294,57 +298,66 @@ export class Connection {
 			case 'search.replace':
 				return this.f.search.replace(this.textQuery(p), str('replacement'), Array.isArray(p.paths) ? strs('paths') : undefined)
 			case 'git.status':
-				return this.f.git.status()
-			case 'git.diff':
-				return this.f.git.diff(
-					str('path'),
-					typeof p.against === 'string' && p.against ? p.against : 'HEAD',
-					typeof p.from === 'string' && p.from ? p.from : undefined,
-					typeof p.to === 'string' && p.to ? p.to : undefined,
+				return this.f.repos.status()
+			// These act on a file or folder, in the repository it is in.
+			case 'git.diff': {
+				const from = opt('from')
+				return this.inRepo(str('path'), async (git, abs, base) =>
+					named(base, await git.diff(abs, opt('against') ?? 'HEAD', from && this.abs(from), opt('to'))),
 				)
-			case 'git.log':
-				return this.f.git.log(
-					typeof p.ref === 'string' && p.ref ? p.ref : undefined,
-					typeof p.skip === 'number' ? p.skip : 0,
-					typeof p.max === 'number' ? p.max : 300,
-					opt('path'),
-				)
+			}
+			case 'git.log': {
+				const path = opt('path')
+				const log = (git: Git, abs?: string) =>
+					git.log(opt('ref'), typeof p.skip === 'number' ? p.skip : 0, typeof p.max === 'number' ? p.max : 300, abs)
+				return path ? this.inRepo(path, log) : this.ofRepo(opt('repo'), (git) => log(git))
+			}
 			case 'git.ignore':
-				return this.f.git.ignore(str('path'), p.dir === true)
+				return this.inRepo(str('path'), (git, abs) => git.ignore(abs, p.dir === true))
 			case 'git.blob':
-				return this.f.git.blob(str('rev'), str('path'))
-			case 'git.commitInfo':
-				return this.f.git.commitInfo(str('hash'))
+				return this.inRepo(str('path'), (git, abs) => git.blob(str('rev'), abs))
 			case 'git.blame':
-				return this.f.git.blame(str('path'))
-			case 'git.branchChanges':
-				return this.f.git.branchChanges(typeof p.base === 'string' ? p.base : undefined)
+				return this.inRepo(str('path'), (git, abs) => git.blame(abs))
 			case 'git.stage':
-				return this.f.git.stage(str('path'))
+				return this.inRepo(str('path'), (git, abs) => git.stage(abs))
 			case 'git.unstage':
-				return this.f.git.unstage(str('path'))
+				return this.inRepo(str('path'), (git, abs) => git.unstage(abs))
 			case 'git.rollback':
-				return this.f.git.rollback(str('path'))
-			case 'git.commit':
-				return this.f.git.commit(str('message'), p.amend === true)
-			case 'git.lastMessage':
-				return this.f.git.lastMessage()
+				return this.inRepo(str('path'), (git, abs) => git.rollback(abs))
 			case 'git.show':
-				return this.f.git.show(str('path'), p.from === 'HEAD' ? 'HEAD' : 'index')
+				return this.inRepo(str('path'), (git, abs) => git.show(abs, p.from === 'HEAD' ? 'HEAD' : 'index'))
 			case 'git.setIndex':
-				return this.f.git.setIndex(str('path'), str('content'))
+				return this.inRepo(str('path'), (git, abs) => git.setIndex(abs, str('content')))
+			case 'git.initSubmodule':
+				return this.inRepo(str('path'), (git, abs) => git.initSubmodule(abs))
+			// The rest act on a whole repository: repo is a path in it, the
+			// folder's own repository when none is given.
+			case 'git.commitInfo':
+				return this.ofRepo(opt('repo'), async (git, base) => {
+					const info = await git.commitInfo(str('hash'))
+					return { ...info, files: info.files.map((f) => named(base, f)) }
+				})
+			case 'git.branchChanges':
+				return this.ofRepo(opt('repo'), async (git, base) => {
+					const changes = await git.branchChanges(typeof p.base === 'string' ? p.base : undefined)
+					return { ...changes, changes: changes.changes.map((c) => named(base, c)) }
+				})
+			case 'git.commit':
+				return this.ofRepo(opt('repo'), (git) => git.commit(str('message'), p.amend === true))
+			case 'git.lastMessage':
+				return this.ofRepo(opt('repo'), (git) => git.lastMessage())
 			case 'git.branches':
-				return this.f.git.branches()
+				return this.ofRepo(opt('repo'), (git) => git.branches())
 			case 'git.checkout':
-				return this.f.git.checkout(str('name'))
+				return this.ofRepo(opt('repo'), (git) => git.checkout(str('name')))
 			case 'git.createBranch':
-				return this.f.git.createBranch(str('name'))
+				return this.ofRepo(opt('repo'), (git) => git.createBranch(str('name')))
 			case 'git.push':
-				return this.f.git.push()
+				return this.ofRepo(opt('repo'), (git) => git.push())
 			case 'git.pull':
-				return this.f.git.pull()
+				return this.ofRepo(opt('repo'), (git) => git.pull())
 			case 'git.fetch':
-				return this.f.git.fetch()
+				return this.ofRepo(opt('repo'), (git) => git.fetch())
 			case 'doc.open':
 				return this.openDoc(str('path'))
 			case 'doc.close':
@@ -352,6 +365,24 @@ export class Connection {
 			default:
 				throw new Error(`no such method: ${method}`)
 		}
+	}
+
+	private abs(path: string): string {
+		return resolve(this.f.root, path)
+	}
+
+	// inRepo runs fn on the repository a path is in, with the path made
+	// absolute and where that repository's paths start in the folder.
+	private async inRepo<T>(path: string, fn: (git: Git, abs: string, base: string) => Promise<T>): Promise<T> {
+		const { git, abs, base } = await this.f.repos.at(path)
+		return fn(git, abs, base)
+	}
+
+	// ofRepo runs fn on a whole repository, named by a path in it: the
+	// folder's own when none is given.
+	private async ofRepo<T>(path: string | undefined, fn: (git: Git, base: string) => Promise<T>): Promise<T> {
+		const { git, base } = await this.f.repos.at(path ?? '', true)
+		return fn(git, base)
 	}
 
 	private textQuery(p: Record<string, unknown>) {
@@ -370,7 +401,9 @@ export class Connection {
 	private async list(path: string) {
 		const entries = await this.f.files.list(path)
 		const dir = this.f.files.abs(path)
-		const ignored = await this.f.git.ignored(entries.map((e) => resolve(dir, e.name))).catch(() => new Set<string>())
+		const ignored = await this.ofRepo(dir, (git) => git.ignored(entries.map((e) => resolve(dir, e.name)))).catch(
+			() => new Set<string>(),
+		)
 		for (const e of entries) if (ignored.has(resolve(dir, e.name))) e.ignored = true
 		return entries
 	}
@@ -496,4 +529,11 @@ export class Connection {
 		for (const [n, doc] of this.open) doc.leave(this, n)
 		this.open.clear()
 	}
+}
+
+// named gives a repository's paths in what it returns their names in the
+// folder.
+function named<T extends Named>(base: string, v: T): T {
+	if (!base) return v
+	return { ...v, path: base + v.path, ...(v.from !== undefined && { from: base + v.from }) }
 }

@@ -13,10 +13,15 @@ export type Change = {
 	worktree: string
 	// For a rename, the path it had.
 	from?: string
+	// For a submodule, git's four letters for it: S, then C where its
+	// commit moved, M where it has tracked changes, U untracked files.
+	submodule?: string
 }
 
 export type Status = {
 	repo: boolean
+	// Why git could not read a repository it found.
+	error?: string
 	branch?: string
 	ahead?: number
 	behind?: number
@@ -173,6 +178,14 @@ function run(cwd: string, args: string[], input?: string, timeout = 0, env: Node
 
 const network = 120_000
 
+async function isDir(p: string): Promise<boolean> {
+	try {
+		return (await lstat(p)).isDirectory()
+	} catch {
+		return false
+	}
+}
+
 const statusArgs = ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all', '--find-renames', '--', '.']
 
 // parseStatus reads porcelain v2 status, its paths made the root's: they
@@ -191,10 +204,16 @@ function parseStatus(out: string, prefix: string): Status {
 			status.behind = Number(b.slice(1))
 		} else if (line.startsWith('1 ')) {
 			const f = line.split(' ')
-			status.changes.push({ index: f[1][0], worktree: f[1][1], path: own(f.slice(8).join(' ')) })
+			status.changes.push({ index: f[1][0], worktree: f[1][1], path: own(f.slice(8).join(' ')), ...sub(f[2]) })
 		} else if (line.startsWith('2 ')) {
 			const f = line.split(' ')
-			status.changes.push({ index: f[1][0], worktree: f[1][1], path: own(f.slice(9).join(' ')), from: own(parts[++i]) })
+			status.changes.push({
+				index: f[1][0],
+				worktree: f[1][1],
+				path: own(f.slice(9).join(' ')),
+				from: own(parts[++i]),
+				...sub(f[2]),
+			})
 		} else if (line.startsWith('u ')) {
 			const f = line.split(' ')
 			status.changes.push({ index: 'U', worktree: 'U', path: own(f.slice(10).join(' ')) })
@@ -203,6 +222,10 @@ function parseStatus(out: string, prefix: string): Status {
 		}
 	}
 	return status
+}
+
+function sub(letters: string): { submodule?: string } {
+	return letters.startsWith('S') ? { submodule: letters } : {}
 }
 
 // Git answers for the repository the root is in, which may be the root or
@@ -234,6 +257,17 @@ export class Git {
 		return this.found
 	}
 
+	// top is the repository's top folder and the root's path from it, or
+	// null where the root is in none.
+	async top(): Promise<{ top: string; prefix: string } | null> {
+		try {
+			const { top, prefix } = await this.where()
+			return { top, prefix }
+		} catch {
+			return null
+		}
+	}
+
 	private rel(path: string): string {
 		return relative(this.root, isAbsolute(path) ? resolve(path) : resolve(this.root, path))
 	}
@@ -263,16 +297,21 @@ export class Git {
 		let out: string
 		try {
 			where = await this.where()
-			out = await run(this.root, statusArgs)
 		} catch {
 			return { repo: false, changes: [] }
+		}
+		try {
+			out = await run(this.root, statusArgs)
+		} catch (e) {
+			return { repo: false, changes: [], error: e instanceof Error ? e.message : String(e) }
 		}
 		let status = parseStatus(out, where.prefix)
 		// A file moved without git being told is a deletion and an untracked
 		// file, and git finds the rename only among files it knows of. They
 		// are made known in a copy of the index, which status is asked again
-		// with; the repository's own index is left as it was.
-		const untracked = status.changes.filter((c) => c.index === '?')
+		// with; the repository's own index is left as it was. A folder
+		// untracked as a whole is a repository of its own, never a rename.
+		const untracked = status.changes.filter((c) => c.index === '?' && !c.path.endsWith('/'))
 		if (untracked.length > 0 && untracked.length <= 2000 && status.changes.some((c) => c.worktree === 'D')) {
 			try {
 				status = await this.withRenames(where, untracked)
@@ -334,6 +373,7 @@ export class Git {
 		const rel = this.rel(path)
 		revision(against)
 		if (to) revision(to)
+		if (await isDir(join(this.root, rel))) return this.submoduleDiff(rel, against, to)
 		let was = from ? this.rel(from) : rel
 		let head = ''
 		try {
@@ -368,6 +408,16 @@ export class Git {
 			return { path: rel, from: was !== rel ? was : undefined, head: '', working: '', binary: true }
 		}
 		return { path: rel, from: was !== rel ? was : undefined, head, working }
+	}
+
+	// submoduleDiff compares a submodule as git's own diff does: by the
+	// commit each side names, the working tree's being the one it has
+	// checked out.
+	private async submoduleDiff(rel: string, against: string, to?: string) {
+		const named = (s: string) => `Subproject commit ${s.trim()}\n`
+		const at = (rev: string) => run(this.root, ['rev-parse', '--verify', '--quiet', `${rev}:./${rel}`]).then(named, () => '')
+		const working = to ? await at(to) : await run(join(this.root, rel), ['rev-parse', 'HEAD']).then(named, () => '')
+		return { path: rel, head: await at(against), working }
 	}
 
 	// blob is a file as a commit has it, base64, with its size; empty when
@@ -726,6 +776,13 @@ export class Git {
 	// needing a merge is left for the terminal.
 	async pull() {
 		await run(this.root, ['pull', '--ff-only'], undefined, network)
+		this.changed()
+	}
+
+	// initSubmodule checks out a submodule the repository names but has
+	// not cloned, and the submodules within it.
+	async initSubmodule(path: string) {
+		await run(this.root, ['submodule', 'update', '--init', '--recursive', '--', `./${this.rel(path)}`], undefined, network)
 		this.changed()
 	}
 

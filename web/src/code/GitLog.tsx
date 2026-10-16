@@ -3,9 +3,11 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type Mouse
 
 import { changeWhere, type DiffAgainst } from './BranchChanges'
 import { BranchPicker, type PickerAction } from './BranchPicker'
-import type { Branches, CodeClient, CommitInfo, LogCommit, Ref } from './client'
+import type { Branches, CodeClient, CommitInfo, LogCommit, Ref, Repo } from './client'
 import { copyText, useContextMenu, type MenuItem } from './ContextMenu'
 import { layout, type GraphRow } from './graph'
+import { RepoPicker } from './RepoPicker'
+import { repoFor } from './repos'
 import { ToolWindow } from './ToolWindow'
 
 // How many commits are read at a time; more as the list is scrolled.
@@ -17,17 +19,21 @@ const laneWidth = 12
 // branch (or one) as a graph of how they forked and merged, newest first,
 // filtered by what is typed, and the chosen commit's message and files,
 // each opening its diff in that commit. It shows one file's or folder's
-// history when asked, until that is cleared.
+// history when asked, until that is cleared. Of a folder holding several
+// repositories, it shows one at a time, chosen in its title bar.
 export function GitLog({
   client,
+  repos,
   focus,
   history,
   onDiff,
   onHide,
 }: {
   client: CodeClient
-  // focus is a commit to find and choose, each time it changes.
-  focus?: { hash: string; n: number } | null
+  repos: Repo[]
+  // focus is a commit to find and choose, each time it changes, in the
+  // repository given (a path in it).
+  focus?: { hash: string; repo?: string; n: number } | null
   // history is a path whose history to show, each time it changes.
   history?: { path: string; n: number } | null
   onDiff: (path: string, against: DiffAgainst) => void
@@ -35,6 +41,10 @@ export function GitLog({
 }) {
   const [ref, setRef] = useState<string | undefined>(undefined)
   const [path, setPath] = useState<string | undefined>(undefined)
+  const [chosen, setChosen] = useState('')
+  // The repository shown: the one the path whose history is shown is in,
+  // else the one chosen.
+  const repo = path !== undefined ? (repoFor(repos, path)?.path ?? '') : chosen
   useEffect(() => {
     if (!history) return
     setPath(history.path)
@@ -60,7 +70,7 @@ export function GitLog({
       try {
         const skip = next ? count.current : 0
         const max = next ? page : Math.max(page, count.current)
-        const log = await client.log(ref, skip, max, path)
+        const log = await client.log(ref, skip, max, path, repo)
         setCommits((c) => (next ? [...c, ...log.commits] : log.commits))
         setMore(log.more)
         setError('')
@@ -70,7 +80,7 @@ export function GitLog({
         loading.current = false
       }
     },
-    [client, ref, path],
+    [client, ref, path, repo],
   )
   useEffect(() => {
     count.current = 0
@@ -140,6 +150,7 @@ export function GitLog({
     setFilter('')
     setRef(undefined)
     setPath(undefined)
+    setChosen(focus.repo ?? '')
     setSelected(focus.hash)
     setSeek(focus.hash)
   }, [focus])
@@ -186,7 +197,7 @@ export function GitLog({
   const pickRef = async (e: MouseEvent) => {
     const anchor = e.currentTarget.getBoundingClientRect()
     try {
-      setPicker({ anchor, branches: await client.branches() })
+      setPicker({ anchor, branches: await client.branches(repo) })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     }
@@ -215,6 +226,16 @@ export function GitLog({
       title="Git Log"
       extra={
         <>
+          <RepoPicker
+            repos={repos}
+            value={repo}
+            onPick={(r) => {
+              setChosen(r)
+              setPath(undefined)
+              setRef(undefined)
+              setSelected(null)
+            }}
+          />
           <button type="button" className="code-branch-btn" title="Show another branch's history" onClick={pickRef}>
             <GitBranch size={12} />
             {ref === undefined ? 'All branches' : ref === 'HEAD' ? 'The current branch' : ref}
@@ -304,7 +325,7 @@ export function GitLog({
             </div>
           )}
         </div>
-        <CommitDetails client={client} hash={selected} onSelect={setSelected} onDiff={onDiff} />
+        <CommitDetails client={client} repo={repo} hash={selected} onSelect={setSelected} onDiff={onDiff} />
       </div>
       {picker && (
         <BranchPicker
@@ -389,11 +410,13 @@ function refTitle(r: Ref) {
 // parents, and the files it changed, each opening its diff in it.
 function CommitDetails({
   client,
+  repo,
   hash,
   onSelect,
   onDiff,
 }: {
   client: CodeClient
+  repo: string
   hash: string | null
   onSelect: (hash: string) => void
   onDiff: (path: string, against: DiffAgainst) => void
@@ -403,7 +426,7 @@ function CommitDetails({
   useEffect(() => {
     if (!hash) return
     let live = true
-    client.commitInfo(hash).then(
+    client.commitInfo(hash, repo).then(
       (i) => {
         if (!live) return
         setInfo(i)
@@ -414,7 +437,7 @@ function CommitDetails({
     return () => {
       live = false
     }
-  }, [client, hash])
+  }, [client, hash, repo])
 
   if (!hash) return <div className="code-log-details code-note">Choose a commit to see its message and files.</div>
   if (error) return <div className="code-log-details code-note code-note-error">{error}</div>

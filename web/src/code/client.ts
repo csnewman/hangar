@@ -59,14 +59,34 @@ export interface Change {
   index: string
   worktree: string
   from?: string
+  // A submodule whose commit has moved, for its parent to record.
+  submodule?: boolean
 }
 
-export interface GitStatus {
-  repo: boolean
+// A Repo is a git repository in the folder: the one the folder is in
+// (path ''), a submodule another names, or a clone of its own. Its
+// changes' paths are the folder's.
+export interface Repo {
+  path: string
+  name: string
+  kind: 'folder' | 'submodule' | 'clone'
+  // The repository naming a submodule.
+  parent?: string
+  // A submodule named but not cloned.
+  uninitialised?: boolean
+  // Why git cannot read it.
+  error?: string
   branch?: string
   ahead?: number
   behind?: number
   changes: Change[]
+}
+
+// GitStatus is every repository in the folder, and all their changes.
+export interface GitStatus {
+  repo: boolean
+  changes: Change[]
+  repos: Repo[]
 }
 
 export interface Diff {
@@ -684,8 +704,18 @@ export class CodeClient {
   ignore(path: string, dir: boolean) {
     return this.request<void>('git.ignore', { path, dir })
   }
-  status() {
-    return this.request<GitStatus>('git.status')
+  async status(): Promise<GitStatus> {
+    const s = await this.request<GitStatus & { branch?: string; ahead?: number; behind?: number }>('git.status')
+    if (s.repos) return s
+    // The editor disk of an environment is built apart from this page, and
+    // one whose service lists no repositories reports the folder's own,
+    // its fields beside the changes.
+    const { branch, ahead, behind, ...rest } = s
+    const name = this.root.split('/').pop() || this.root
+    return {
+      ...rest,
+      repos: s.repo ? [{ path: '', name, kind: 'folder', branch, ahead, behind, changes: s.changes }] : [],
+    }
   }
   // diff is a file as HEAD has it, or another commit (against), under the
   // name it had there (from), beside the working tree's or a later
@@ -695,15 +725,19 @@ export class CodeClient {
   }
   // log is a page of the history: every branch's, or ref's; of a path,
   // the commits that changed it.
-  log(ref: string | undefined, skip: number, max: number, path?: string) {
-    return this.request<Log>('git.log', { ref, skip, max, path })
+  //
+  // The calls that act on a whole repository take repo, a path in it,
+  // the folder's own repository when none is given; the others act on
+  // the repository their path is in.
+  log(ref: string | undefined, skip: number, max: number, path?: string, repo?: string) {
+    return this.request<Log>('git.log', { ref, skip, max, path, repo })
   }
   // blob is a file as a commit has it, base64; empty when it has none.
   blob(rev: string, path: string) {
     return this.request<{ size: number; data: string }>('git.blob', { rev, path })
   }
-  commitInfo(hash: string) {
-    return this.request<CommitInfo>('git.commitInfo', { hash })
+  commitInfo(hash: string, repo?: string) {
+    return this.request<CommitInfo>('git.commitInfo', { hash, repo })
   }
   // blame is who last changed each line of a file, as it is on disk.
   blame(path: string) {
@@ -711,8 +745,8 @@ export class CodeClient {
   }
   // branchChanges is what the branch has changed since it left base, the
   // repository's main branch when none is given.
-  branchChanges(base?: string) {
-    return this.request<BranchChanges>('git.branchChanges', { base })
+  branchChanges(base?: string, repo?: string) {
+    return this.request<BranchChanges>('git.branchChanges', { base, repo })
   }
   stage(path: string) {
     return this.request<void>('git.stage', { path })
@@ -723,11 +757,11 @@ export class CodeClient {
   rollback(path: string) {
     return this.request<void>('git.rollback', { path })
   }
-  commit(message: string, amend = false) {
-    return this.request<void>('git.commit', { message, amend })
+  commit(message: string, amend = false, repo?: string) {
+    return this.request<void>('git.commit', { message, amend, repo })
   }
-  lastMessage() {
-    return this.request<string>('git.lastMessage')
+  lastMessage(repo?: string) {
+    return this.request<string>('git.lastMessage', { repo })
   }
   // show is a file as HEAD or the index has it; null where it has none.
   async show(path: string, from: 'HEAD' | 'index') {
@@ -737,23 +771,27 @@ export class CodeClient {
   setIndex(path: string, content: string) {
     return this.request<void>('git.setIndex', { path, content })
   }
-  branches() {
-    return this.request<Branches>('git.branches')
+  branches(repo?: string) {
+    return this.request<Branches>('git.branches', { repo })
   }
-  checkout(name: string) {
-    return this.request<void>('git.checkout', { name })
+  checkout(name: string, repo?: string) {
+    return this.request<void>('git.checkout', { name, repo })
   }
-  createBranch(name: string) {
-    return this.request<void>('git.createBranch', { name })
+  createBranch(name: string, repo?: string) {
+    return this.request<void>('git.createBranch', { name, repo })
   }
-  push() {
-    return this.request<void>('git.push')
+  push(repo?: string) {
+    return this.request<void>('git.push', { repo })
   }
-  pull() {
-    return this.request<void>('git.pull')
+  pull(repo?: string) {
+    return this.request<void>('git.pull', { repo })
   }
-  fetch() {
-    return this.request<void>('git.fetch')
+  fetch(repo?: string) {
+    return this.request<void>('git.fetch', { repo })
+  }
+  // initSubmodule clones a submodule its repository names, and its own.
+  initSubmodule(path: string) {
+    return this.request<void>('git.initSubmodule', { path })
   }
 
   // open returns the shared document for a file, opening it on the service

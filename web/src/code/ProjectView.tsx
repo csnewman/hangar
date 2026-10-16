@@ -486,7 +486,7 @@ export function ProjectView({
         {
           label: 'Compare with Branch…',
           onSelect: () =>
-            client.branches().then((b) =>
+            client.branches(path).then((b) =>
               menu.openAt(x, y, [
                 { heading: 'Compare with' },
                 ...[...b.local.map((l) => l.name), ...b.remote]
@@ -525,12 +525,17 @@ export function ProjectView({
       items.push(
         'separator',
         { label: 'Stage', disabled: change.worktree === '.', onSelect: () => act(() => client.stage(path)) },
-        {
-          label: change.index === '?' ? 'Delete Unversioned File' : 'Rollback',
-          confirm: change.index === '?' ? `Delete ${nameOf(path)}?` : `Discard all changes to ${nameOf(path)}?`,
-          danger: true,
-          onSelect: () => act(() => client.rollback(path)),
-        },
+        // A submodule's commit is moved in the submodule.
+        ...(change.submodule
+          ? []
+          : [
+              {
+                label: change.index === '?' ? 'Delete Unversioned File' : 'Rollback',
+                confirm: change.index === '?' ? `Delete ${nameOf(path)}?` : `Discard all changes to ${nameOf(path)}?`,
+                danger: true,
+                onSelect: () => act(() => client.rollback(path)),
+              },
+            ]),
       )
     }
     return items

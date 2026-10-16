@@ -247,7 +247,7 @@ export function CodeEditor({
   jump?: (Jump & { n: number }) | null
   onReveal: (path: string) => void
   // onShowCommit shows a commit in the Git Log: one clicked in the blame.
-  onShowCommit: (hash: string) => void
+  onShowCommit: (hash: string, path: string) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -532,7 +532,7 @@ export function CodeEditor({
         () => live && setAnnotating(false),
       )
     view.dispatch({
-      effects: blameSlot.current.reconfigure(Prec.highest(blameGutter((hash) => onShowCommitRef.current(hash)))),
+      effects: blameSlot.current.reconfigure(Prec.highest(blameGutter((hash) => onShowCommitRef.current(hash, path)))),
     })
     load()
     let timer: ReturnType<typeof setTimeout> | undefined

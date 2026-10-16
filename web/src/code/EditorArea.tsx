@@ -50,7 +50,7 @@ export function EditorArea({
   onCloseMany: (keys: string[]) => void
   onReopen: () => void
   onReveal: (path: string) => void
-  onShowCommit: (hash: string) => void
+  onShowCommit: (hash: string, path: string) => void
 }) {
   const current = tabs.find((t) => tabKey(t) === active) ?? null
   const menu = useContextMenu()
@@ -173,7 +173,7 @@ function FileTab({
   user: { name: string; color: string }
   jump: (Jump & { n: number }) | null
   onReveal: (path: string) => void
-  onShowCommit: (hash: string) => void
+  onShowCommit: (hash: string, path: string) => void
 }) {
   const [shown, setShown] = useState<FileView | null>(view ?? (opensAsImage(path) ? 'image' : null))
   useEffect(() => {
@@ -206,7 +206,7 @@ function TextTab({
   user: { name: string; color: string }
   jump: (Jump & { n: number }) | null
   onReveal: (path: string) => void
-  onShowCommit: (hash: string) => void
+  onShowCommit: (hash: string, path: string) => void
 }) {
   const [file, setFile] = useState<SharedFile | null>(null)
   const [error, setError] = useState('')
