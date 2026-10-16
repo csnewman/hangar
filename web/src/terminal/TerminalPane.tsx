@@ -14,6 +14,7 @@ import { Eye } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
 import { copyText, shortcut, useContextMenu } from '../code/ContextMenu'
+import { onReturn } from '../heartbeat'
 import { Connection, type SessionInfo, type TerminalSize } from './connection'
 import { TerminalKeys, type KeyTarget } from './TerminalKeys'
 import { onDarkChange } from '../theme'
@@ -368,17 +369,17 @@ export function TerminalPane({
       show()
     })
     resize.observe(el)
-    // A phone suspends a page it has put away, connections and all. Coming
-    // back to it, the connection is made again at once, not when its
+    // A phone suspends a page it has put away, connections and all, and a
+    // network can go for a while. Coming back to the page, or the network
+    // coming back, the connection is made again at once, not when its
     // backoff runs out.
-    const visible = () => {
-      if (document.hidden || retry === undefined) return
+    const offReturn = onReturn(() => {
+      if (retry === undefined) return
       clearTimeout(retry)
       retry = undefined
       backoff = 500
       connect()
-    }
-    document.addEventListener('visibilitychange', visible)
+    })
     const offScheme = onDarkChange((dark) => (term.options.theme = dark ? darkTheme : lightTheme))
     term.focus()
 
@@ -387,7 +388,7 @@ export function TerminalPane({
       clearTimeout(start)
       clearTimeout(retry)
       offScheme()
-      document.removeEventListener('visibilitychange', visible)
+      offReturn()
       resize.disconnect()
       conn?.close()
       term.dispose()

@@ -109,7 +109,7 @@ func (h *handler) codeSocket(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return
 			}
-			if kind != websocket.MessageBinary {
+			if answerPing(ctx, c, kind, msg) || kind != websocket.MessageBinary {
 				continue
 			}
 			var hdr [4]byte

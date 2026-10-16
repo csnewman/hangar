@@ -8,13 +8,17 @@
 //
 // A dropped connection is reconnected. Open documents keep their Y.Doc
 // across it and are opened again, so nothing typed meanwhile is lost: Yjs
-// merges it when the documents sync.
+// merges it when the documents sync. A connection that stops answering is
+// taken as dropped (Heartbeat), and one dropped is tried again at once when
+// the page is shown again or the network comes back.
 
 import * as decoding from 'lib0/decoding'
 import * as encoding from 'lib0/encoding'
 import * as awarenessProtocol from 'y-protocols/awareness'
 import * as syncProtocol from 'y-protocols/sync'
 import * as Y from 'yjs'
+
+import { Heartbeat, onReturn } from '../heartbeat'
 
 const CHANNEL_JSON = 0x72 // 'r'
 const CHANNEL_YJS = 0x79 // 'y'
@@ -388,6 +392,8 @@ export class CodeClient {
   private byNumber = new Map<number, SharedFile>()
   private retry: ReturnType<typeof setTimeout> | undefined
   private backoff = 500
+  private beat: Heartbeat | undefined
+  private offReturn: () => void
   private closed = false
   // ready is settled while the connection is live, and pending while it
   // is being made or made again.
@@ -408,6 +414,13 @@ export class CodeClient {
     this.env = env
     this.want = want
     this.ready = new Promise((r) => (this.markReady = r))
+    this.offReturn = onReturn(() => {
+      if (this.retry === undefined) return
+      clearTimeout(this.retry)
+      this.retry = undefined
+      this.backoff = 500
+      this.connect()
+    })
     this.connect()
   }
 
@@ -448,22 +461,38 @@ export class CodeClient {
         ws.close(4000, e instanceof Error ? e.message : String(e))
       }
     }
-    ws.onmessage = (e) => this.receive(new Uint8Array(e.data as ArrayBuffer))
-    ws.onclose = (e) => {
-      if (this.ws !== ws) return
-      this.ws = null
-      for (const w of this.waiting.values()) w.reject(new Error('the connection dropped'))
-      this.waiting.clear()
-      this.byNumber.clear()
-      // Language servers end with the connection.
-      this.lspHandlers.clear()
-      if (this.closed) return
-      // Requests wait for the connection to be back, not fail at once.
-      if (this.state === 'live') this.ready = new Promise((r) => (this.markReady = r))
-      this.setState('reconnecting', e.reason)
-      this.retry = setTimeout(() => this.connect(), this.backoff)
-      this.backoff = Math.min(this.backoff * 2, 8000)
+    const beat = new Heartbeat(ws, (why) => {
+      this.dropped(ws, why)
+      ws.close()
+    })
+    this.beat = beat
+    ws.onmessage = (e) => {
+      if (typeof e.data === 'string') beat.answered(e.data)
+      else this.receive(new Uint8Array(e.data as ArrayBuffer))
     }
+    ws.onclose = (e) => this.dropped(ws, e.reason)
+  }
+
+  // dropped is what follows a connection ending, or being taken as gone:
+  // what waits on it fails or waits for the next, and the next is made.
+  private dropped(ws: WebSocket, why: string) {
+    if (this.ws !== ws) return
+    this.ws = null
+    this.beat?.stop()
+    for (const w of this.waiting.values()) w.reject(new Error('the connection dropped'))
+    this.waiting.clear()
+    this.byNumber.clear()
+    // Language servers end with the connection.
+    this.lspHandlers.clear()
+    if (this.closed) return
+    // Requests wait for the connection to be back, not fail at once.
+    if (this.state === 'live') this.ready = new Promise((r) => (this.markReady = r))
+    this.setState('reconnecting', why)
+    this.retry = setTimeout(() => {
+      this.retry = undefined
+      this.connect()
+    }, this.backoff)
+    this.backoff = Math.min(this.backoff * 2, 8000)
   }
 
   private receive(msg: Uint8Array) {
@@ -835,6 +864,8 @@ export class CodeClient {
   close() {
     this.closed = true
     clearTimeout(this.retry)
+    this.beat?.stop()
+    this.offReturn()
     this.ws?.close()
   }
 }

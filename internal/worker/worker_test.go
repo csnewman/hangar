@@ -262,6 +262,23 @@ func TestTerminal(t *testing.T) {
 	first.Write(ctx, websocket.MessageBinary, append([]byte{terminal.FrameInput}, "echo mark-$((40+2))\n"...))
 	readUntil(first, "mark-42")
 
+	// A window asks whether it is still connected with a "ping" of its own,
+	// which the server answers.
+	if err := first.Write(ctx, websocket.MessageText, []byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	pctx, pcancel := context.WithTimeout(ctx, 15*time.Second)
+	defer pcancel()
+	for {
+		kind, msg, err := first.Read(pctx)
+		if err != nil {
+			t.Fatalf("waiting for the pong: %v", err)
+		}
+		if kind == websocket.MessageText && string(msg) == "pong" {
+			break
+		}
+	}
+
 	// Another window on the same session sees what was already there.
 	second, r := dial("session=" + session)
 	if r.Session.Clients != 2 {

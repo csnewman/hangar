@@ -222,7 +222,7 @@ func (h *handler) terminalSocket(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		if kind != websocket.MessageBinary || len(msg) == 0 {
+		if answerPing(ctx, c, kind, msg) || kind != websocket.MessageBinary || len(msg) == 0 {
 			continue
 		}
 		switch msg[0] {

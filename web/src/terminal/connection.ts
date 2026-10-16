@@ -1,6 +1,8 @@
 // The browser end of a terminal session: a WebSocket to the server, which
 // carries the internal/terminal protocol with each frame as one message.
 
+import { Heartbeat } from '../heartbeat'
+
 export interface SessionInfo {
   id: string
   title: string
@@ -56,6 +58,7 @@ export interface ConnectionEvents {
 // answers.
 export class Connection {
   private ws: WebSocket
+  private beat: Heartbeat
   private done = false
   private encoder = new TextEncoder()
 
@@ -75,8 +78,10 @@ export class Connection {
     this.ws.binaryType = 'arraybuffer'
 
     let attached = false
+    this.beat = new Heartbeat(this.ws, (why) => this.finish(() => events.lost(attached ? why : 'could not connect')))
     this.ws.onmessage = (e) => {
       if (typeof e.data === 'string') {
+        if (this.beat.answered(e.data)) return
         const reply = JSON.parse(e.data) as Reply
         if (reply.err || !reply.session) {
           this.finish(() => events.lost(reply.err ?? 'the session could not be opened'))
@@ -106,6 +111,7 @@ export class Connection {
   private finish(report: () => void) {
     if (this.done) return
     this.done = true
+    this.beat.stop()
     report()
     this.ws.close()
   }
@@ -145,6 +151,7 @@ export class Connection {
 
   close() {
     this.done = true
+    this.beat.stop()
     this.ws.close()
   }
 }

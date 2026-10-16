@@ -3,6 +3,7 @@ import { AppWindow, Clipboard, Eye, Keyboard, Maximize, MousePointer2, Scaling }
 import { useEffect, useRef, useState } from 'react'
 
 import { api } from '../api'
+import { Heartbeat, onReturn } from '../heartbeat'
 import { useEnv } from '../pages/Environment'
 import { usePhone } from '../phone'
 
@@ -62,13 +63,28 @@ function DesktopView({ env, name }: { env: string; name: string }) {
     const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
     const url = `${scheme}://${location.host}/api/frontend/environments/${env}/desktop`
     let rfb: RFB | null = null
+    let beat: Heartbeat | undefined
     let retry: ReturnType<typeof setTimeout> | undefined
     let backoff = 500
     let disposed = false
 
     const connect = () => {
-      rfb = new RFB(el, url, { shared: true, wsProtocols: ['binary'] })
+      // The socket is made here, not by noVNC, so that it can carry the
+      // heartbeat's text messages beside noVNC's own.
+      const ws = new WebSocket(url, ['binary'])
+      const current = new RFB(el, ws, { shared: true })
+      rfb = current
       rfbRef.current = rfb
+      const vnc = ws.onmessage
+      const live = new Heartbeat(ws, (why) => {
+        setReason(why)
+        current.disconnect()
+      })
+      beat = live
+      ws.onmessage = (e) => {
+        if (typeof e.data === 'string') live.answered(e.data)
+        else vnc?.call(ws, e)
+      }
       // The picture is scaled to the tab. The desktop's own size is set
       // through Hangar, not by the viewer: see resizeDesktop.
       rfb.resizeSession = false
@@ -83,11 +99,15 @@ function DesktopView({ env, name }: { env: string; name: string }) {
         setReason('')
       })
       rfb.addEventListener('disconnect', ((e: CustomEvent<{ clean: boolean }>) => {
+        live.stop()
         rfbRef.current = null
         if (disposed) return
         setState('reconnecting')
-        setReason(e.detail.clean ? '' : 'the connection dropped')
-        retry = setTimeout(connect, backoff)
+        if (!e.detail.clean) setReason((r) => r || 'the connection dropped')
+        retry = setTimeout(() => {
+          retry = undefined
+          connect()
+        }, backoff)
         backoff = Math.min(backoff * 2, 10000)
       }) as EventListener)
       // Whatever is copied on the desktop reaches this browser's clipboard;
@@ -102,11 +122,22 @@ function DesktopView({ env, name }: { env: string; name: string }) {
       start = undefined
       connect()
     }, 0)
+    // Coming back to the page, or the network coming back, a dropped
+    // connection is made again at once, not when its backoff runs out.
+    const offReturn = onReturn(() => {
+      if (retry === undefined) return
+      clearTimeout(retry)
+      retry = undefined
+      backoff = 500
+      connect()
+    })
 
     return () => {
       disposed = true
       clearTimeout(start)
       clearTimeout(retry)
+      offReturn()
+      beat?.stop()
       rfb?.disconnect()
       rfbRef.current = null
     }

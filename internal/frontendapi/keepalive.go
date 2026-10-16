@@ -30,3 +30,16 @@ func (h *handler) keepAlive(ctx context.Context, c *websocket.Conn) {
 		}
 	}
 }
+
+// answerPing answers a browser's own check that its socket is still there,
+// a text message "ping", with "pong", and says whether msg was one. A
+// browser cannot see the socket's pings, so a network gone would leave it
+// showing a terminal or a desktop as live, and sending what is typed into
+// nothing, until its own TCP gave up minutes later.
+func answerPing(ctx context.Context, c *websocket.Conn, kind websocket.MessageType, msg []byte) bool {
+	if kind != websocket.MessageText || string(msg) != "ping" {
+		return false
+	}
+	c.Write(ctx, websocket.MessageText, []byte("pong"))
+	return true
+}

@@ -74,8 +74,19 @@ func (h *handler) desktopSocket(w http.ResponseWriter, r *http.Request) {
 		done <- struct{}{}
 	}()
 	go func() {
-		io.Copy(stream, conn)
-		done <- struct{}{}
+		defer func() { done <- struct{}{} }()
+		for {
+			kind, msg, err := c.Read(ctx)
+			if err != nil {
+				return
+			}
+			if answerPing(ctx, c, kind, msg) || kind != websocket.MessageBinary {
+				continue
+			}
+			if _, err := stream.Write(msg); err != nil {
+				return
+			}
+		}
 	}()
 	<-done
 	if sent.Load() == 0 {
