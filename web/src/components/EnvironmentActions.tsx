@@ -1,28 +1,14 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Pause, Play, Square } from 'lucide-react'
-import { useNavigate } from 'react-router'
 
-import { api, type Environment } from '../api'
-import { environmentsKey } from '../environments'
+import type { Environment } from '../api'
+import { useEnvironmentActions } from '../environmentActions'
 import { ConfirmButton } from './ConfirmButton'
 
 // EnvironmentActions are the controls for one environment, the same wherever
 // it is shown.
 export function EnvironmentActions({ env, afterDelete }: { env: Environment; afterDelete?: string }) {
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  const refresh = () => qc.invalidateQueries({ queryKey: environmentsKey })
-  const start = useMutation({ mutationFn: () => api.startEnvironment(env.id), onSettled: refresh })
-  const stop = useMutation({ mutationFn: () => api.stopEnvironment(env.id), onSettled: refresh })
-  const suspend = useMutation({ mutationFn: () => api.suspendEnvironment(env.id), onSettled: refresh })
-  const remove = useMutation({
-    mutationFn: () => api.deleteEnvironment(env.id),
-    onSuccess: () => afterDelete && navigate(afterDelete),
-    onSettled: refresh,
-  })
-  const busy = start.isPending || stop.isPending || suspend.isPending || remove.isPending
+  const { start, stop, suspend, remove, busy, error } = useEnvironmentActions(env, afterDelete)
   const deleting = env.desired === 'deleted'
-  const error = start.error ?? stop.error ?? suspend.error ?? remove.error
 
   return (
     <div className="actions">

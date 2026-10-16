@@ -24,6 +24,7 @@ import { splitByOwner, useEnvironments } from '../environments'
 import { Logo } from './Logo'
 import { PhaseDot } from './Status'
 import { UserMenu } from './UserMenu'
+import { useEnvironmentTarget } from '../workspaceLinks'
 
 // Sidebar is the inventory: every environment the user can reach, as a tree,
 // then the user's own settings, and administration for administrators. Who
@@ -247,11 +248,17 @@ function TreeGroup({
 }
 
 function TreeItems({ environments, nested = false }: { environments: Environment[]; nested?: boolean }) {
+  const target = useEnvironmentTarget()
   return (
     <ul className={nested ? 'tree tree-nested' : 'tree'}>
       {environments.map((e) => (
         <li key={e.id}>
-          <NavLink to={`/environments/${e.id}`} className="tree-item" title={`${e.name} — ${e.phase}`}>
+          <NavLink
+            to={`/environments/${e.id}`}
+            target={target(e.id)}
+            className="tree-item"
+            title={`${e.name} — ${e.phase}`}
+          >
             <PhaseDot phase={e.phase} workerOnline={e.worker_online} />
             <span className="tree-name">{e.name}</span>
           </NavLink>

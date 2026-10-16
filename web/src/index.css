@@ -508,7 +508,6 @@ h1 {
   height: 100%;
 }
 
-.page-flush > .env-bar,
 .page-flush > .env-reason,
 .page-flush > .start-progress {
   flex: none;
@@ -2276,72 +2275,6 @@ a.reason {
   display: block;
 }
 
-/* An environment's page: its name, status, tabs and actions in one bar. The
-   tabs fold to their icons when the bar is too narrow for their labels. */
-.env-bar {
-  container-type: inline-size;
-  display: flex;
-  align-items: stretch;
-  gap: 18px;
-  min-height: 46px;
-  padding: 0 20px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-
-/* The name keeps its place; the section tabs give way first. */
-.env-ident {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex: none;
-  max-width: 34%;
-  min-width: 0;
-}
-
-.env-owner {
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.env-name {
-  font-size: 15px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.env-tabs {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow-x: auto;
-  scrollbar-width: none;
-  border-bottom: none;
-}
-
-.env-tabs .tab {
-  padding: 0 11px;
-  margin-bottom: -1px;
-}
-
-.env-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  flex: none;
-}
-
-@container (max-width: 1380px) {
-  .env-tabs .tab-label {
-    display: none;
-  }
-
-  .env-tabs .tab {
-    padding: 0 10px;
-  }
-}
-
 .env-reason {
   margin: 12px 20px 0;
 }
@@ -2786,50 +2719,6 @@ a.reason {
 
 .app-tip[hidden] {
   display: none;
-}
-
-/* The environment's bar folded away: a tab at the top to bring it back. */
-.env-bar[hidden] {
-  display: none;
-}
-
-.page-flush {
-  position: relative;
-}
-
-.env-bar-reveal {
-  position: absolute;
-  top: 0;
-  left: 50%;
-  z-index: 20;
-  transform: translateX(-50%);
-  display: grid;
-  place-items: center;
-  width: 44px;
-  height: 14px;
-  padding: 0;
-  border: 1px solid var(--border);
-  border-top: none;
-  border-radius: 0 0 7px 7px;
-  background: var(--surface);
-  color: var(--muted);
-  cursor: pointer;
-  opacity: 0.7;
-}
-
-.env-bar-reveal:hover {
-  opacity: 1;
-  color: var(--text);
-}
-
-.env-bar-hide {
-  gap: 0;
-  padding: 6px 8px;
-}
-
-/* A line of no text, so it is as tall as the buttons with text beside it. */
-.env-bar-hide::before {
-  content: '\200b';
 }
 
 /* The phone's layout (phone.ts): a bar of tabs at the foot in place of the

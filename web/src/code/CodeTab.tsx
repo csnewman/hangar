@@ -1,18 +1,32 @@
 import './code.css'
 
-import { Activity, Container, FolderTree, GitCompare, GitGraph, ListTree, Monitor, SquareTerminal, TextSearch } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
-  Group,
-  Panel,
-  Separator,
-  useDefaultLayout,
-  usePanelRef,
-} from 'react-resizable-panels'
+  Activity,
+  Container,
+  FolderTree,
+  GitBranch,
+  GitCompare,
+  GitGraph,
+  ListTree,
+  Monitor,
+  ScrollText,
+  SignalHigh,
+  SignalLow,
+  SignalMedium,
+  SquareTerminal,
+  TextSearch,
+} from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router'
+import { Group, Panel, Separator, useDefaultLayout, usePanelRef } from 'react-resizable-panels'
 
-import { useEnv } from '../pages/Environment'
+import type { Environment, EnvironmentLogName } from '../api'
+import { useEnvironmentActions } from '../environmentActions'
+import { SummaryTab, useEnv } from '../pages/Environment'
 import { usePhone } from '../phone'
 import { useMe } from '../session'
+import { StartProgress } from '../components/StartProgress'
+import { environmentTab, nameTab } from '../workspaceLinks'
 import { ChangesView } from './ChangesView'
 import { CodeClient, type ConnectionState } from './client'
 import { CodeTerminal } from './CodeTerminal'
@@ -23,9 +37,13 @@ import { PerformanceView } from './PerformanceView'
 import { ProjectView } from './ProjectView'
 import { Languages, LanguagesContext, type Usages } from './lsp'
 import { GitLog } from './GitLog'
+import { useLatency } from './latency'
+import { LogsView } from './LogsView'
+import { Maximise } from './maximise'
 import { PhoneCode } from './PhoneCode'
 import { repoFor } from './repos'
 import { FindInFiles, GotoFile, OpenFolder, type Jump } from './Search'
+import { StatusBar } from './StatusBar'
 import { UsagesView } from './UsagesView'
 import { useGitStatus } from './useGitStatus'
 
@@ -46,7 +64,160 @@ export function CodeTab() {
       </div>
     )
   }
-  return <Connected key={env.id} env={env.id} />
+  return <Connected key={env.id} env={env.id} request={null} />
+}
+
+// A request to show one of the environment's sections, from a link to it;
+// n changes with each.
+type Request = { section: string; n: number } | null
+
+// Workspace is an environment's page on a computer: its files, terminals,
+// desktop and logs as the tabs and tool windows of one workspace, with a
+// status bar along its foot. A link to one of the environment's sections
+// (its logs, its desktop) shows it here, and the address goes back to the
+// environment's own. While the environment is not running there are no
+// files or terminals to show, and the workspace offers to start it, beside
+// its details and its logs.
+export function Workspace({ env, section }: { env: Environment; section: string }) {
+  const navigate = useNavigate()
+  const [request, setRequest] = useState<Request>(null)
+  const [linked, setLinked] = useState('')
+  if (section !== linked) {
+    setLinked(section)
+    if (section) setRequest((r) => ({ section, n: (r?.n ?? 0) + 1 }))
+  }
+  useEffect(() => {
+    nameTab(environmentTab(env.id))
+  }, [env.id])
+  useEffect(() => {
+    if (section) navigate(`/environments/${env.id}`, { replace: true })
+  }, [section, env.id, navigate])
+  if (env.phase !== 'running') return <Idle env={env} request={request} />
+  return <Connected key={env.id} env={env.id} request={request} />
+}
+
+// Idle is the workspace of an environment that is not running: what it is
+// doing and the way to start it, its details and settings below, and its
+// logs, which its worker keeps whatever the machine is doing.
+function Idle({ env, request }: { env: Environment; request: Request }) {
+  const details = useRef<HTMLDivElement>(null)
+  const logsPanel = usePanelRef()
+  const [logsShown, setLogsShown] = useState(true)
+  const starting = env.phase === 'starting' || env.phase === 'pending'
+  // A start shows its console; otherwise the worker's account of the last.
+  const [show, setShow] = useState<{ log: EnvironmentLogName; n: number }>({
+    log: starting ? 'console' : 'worker',
+    n: 0,
+  })
+  const [wasStarting, setWasStarting] = useState(starting)
+  if (starting !== wasStarting) {
+    setWasStarting(starting)
+    if (starting) setShow((s) => ({ log: 'console', n: s.n + 1 }))
+  }
+  const showLogs = () => {
+    logsPanel.current?.expand()
+    setLogsShown(true)
+  }
+  useEffect(() => {
+    if (request?.section === 'logs') showLogs()
+    // Only a new request shows them.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request])
+  const layout = useDefaultLayout({ id: 'hangar.idle.v', storage: localStorage })
+
+  return (
+    <div className="workspace">
+      <div className="workspace-body">
+        <Group orientation="vertical" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+          <Panel id="idle" minSize="30%">
+            <div className="workspace-idle">
+              <IdleCard env={env} />
+              <div ref={details}>
+                <SummaryTab />
+              </div>
+            </div>
+          </Panel>
+          <Separator className="code-split code-split-h" />
+          <Panel
+            id="logs"
+            panelRef={logsPanel}
+            defaultSize="35%"
+            minSize="90px"
+            collapsible
+            collapsedSize={0}
+            onResize={(size) => setLogsShown(size.asPercentage > 0)}
+          >
+            <LogsView env={env.id} show={show} onHide={() => logsPanel.current?.collapse()} />
+          </Panel>
+        </Group>
+      </div>
+      <StatusBar
+        env={env}
+        onEnvironment={() => details.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+        right={
+          !logsShown && (
+            <button type="button" className="code-statusbar-item" onClick={showLogs}>
+              <ScrollText size={12} />
+              Logs
+            </button>
+          )
+        }
+      />
+    </div>
+  )
+}
+
+// IdleCard says what a stopped environment is doing, and starts it.
+function IdleCard({ env }: { env: Environment }) {
+  const { start, busy, error } = useEnvironmentActions(env)
+  const phase = env.phase
+  if (env.desired === 'deleted' || phase === 'deleting') {
+    return (
+      <section className="workspace-card">
+        <h2>Deleting {env.name}</h2>
+      </section>
+    )
+  }
+  if (phase === 'starting' || phase === 'pending') {
+    return (
+      <section className="workspace-card">
+        <h2>Starting {env.name}</h2>
+        <StartProgress env={env} />
+        <p className="muted small">Your tabs and tool windows come back once its editor service answers.</p>
+      </section>
+    )
+  }
+  if (phase === 'stopping' || phase === 'suspending') {
+    return (
+      <section className="workspace-card">
+        <h2>
+          {phase === 'stopping' ? 'Stopping' : 'Suspending'} {env.name}
+        </h2>
+        {env.reason && <p className="muted">{env.reason}</p>}
+      </section>
+    )
+  }
+  const resume = phase === 'suspended'
+  return (
+    <section className="workspace-card">
+      <h2>{phase === 'failed' ? `${env.name} did not start` : `${env.name} is ${phase}`}</h2>
+      {phase === 'failed' ? (
+        <p>{env.reason ?? 'Its logs below say why.'}</p>
+      ) : (
+        <p className="muted">
+          {resume
+            ? 'Its memory is kept on disk: resuming it carries on where it was.'
+            : 'Its disks are kept: starting it boots the same files, and your tabs come back as you left them.'}
+        </p>
+      )}
+      <div className="workspace-card-actions">
+        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => start.mutate()}>
+          {resume ? 'Resume' : phase === 'failed' ? 'Start again' : 'Start'} {env.name}
+        </button>
+        {error && <span className="action-error">{error.message}</span>}
+      </div>
+    </section>
+  )
 }
 
 // Connected holds the tab's connection to the environment. It is made in an
@@ -56,7 +227,7 @@ export function CodeTab() {
 // The connection works in the environment's folder, unless this browser tab
 // has opened another, which it remembers for itself alone. On a phone it
 // shows PhoneCode.
-function Connected({ env }: { env: string }) {
+function Connected({ env, request }: { env: string; request: Request }) {
   const phone = usePhone()
   const folderKey = `hangar.code.${env}.folder`
   const [folder, setFolder] = useState(() => {
@@ -83,7 +254,7 @@ function Connected({ env }: { env: string }) {
   }, [env, folder])
   if (!client) return <div className="code-page" />
   if (phone) return <PhoneCode client={client} />
-  return <CodeView key={folder} env={env} client={client} folder={folder} onFolder={choose} />
+  return <CodeView key={folder} env={env} client={client} folder={folder} onFolder={choose} request={request} />
 }
 
 // A colour per user, so the same person's caret is the same colour
@@ -99,7 +270,7 @@ type Store = { tabs: Tab[]; active: string | null }
 
 // A tool window that moves between the sides, and the side it is on.
 type ToolName = 'project' | 'changes' | 'docker' | 'performance'
-type Bottom = 'terminal' | 'find' | 'log'
+type Bottom = 'terminal' | 'find' | 'log' | 'logs'
 type Side = 'left' | 'right'
 type Sides = Record<ToolName, Side>
 const defaultSides: Sides = { project: 'left', changes: 'right', docker: 'right', performance: 'right' }
@@ -134,11 +305,13 @@ function CodeView({
   client,
   folder,
   onFolder,
+  request,
 }: {
   env: string
   client: CodeClient
   folder: string
   onFolder: (dir: string) => void
+  request: Request
 }) {
   const environment = useEnv()
   const hasDesktop = environment.spec.display !== 'none'
@@ -152,6 +325,8 @@ function CodeView({
   const [why, setWhy] = useState('')
   useEffect(() => client.on('state', (s, w) => { setState(s); setWhy(w) }), [client])
 
+  const latency = useLatency(client, state === 'live')
+
   // Git status, reloaded whenever files or the repository change.
   const [status, reloadStatus] = useGitStatus(client)
 
@@ -160,6 +335,13 @@ function CodeView({
   const leftPanel = usePanelRef()
   const rightPanel = usePanelRef()
   const terminal = usePanelRef()
+  // The panel above the bottom one, folded away when the bottom one is
+  // maximised.
+  const top = usePanelRef()
+  const [maximised, setMaximised] = useState(false)
+  const restore = () => {
+    if (top.current?.isCollapsed()) top.current.expand()
+  }
 
   // Open tabs, remembered per environment.
   const storeKey = `hangar.code.${scope}.tabs`
@@ -183,6 +365,7 @@ function CodeView({
   // active one opened again included.
   const [opened, setOpened] = useState(0)
   const open = (tab: Tab) => {
+    restore()
     setStore((s) => ({
       tabs: s.tabs.some((t) => tabKey(t) === tabKey(tab)) ? s.tabs : [...s.tabs, tab],
       active: tabKey(tab),
@@ -296,6 +479,22 @@ function CodeView({
     else showBottom(w)
   }
   const [usages, setUsages] = useState<Usages | null>(null)
+  const maximise = useMemo(
+    () => ({
+      maximised,
+      toggle: () => {
+        if (maximised) {
+          top.current?.expand()
+          return
+        }
+        fold('terminal', true)
+        top.current?.collapse()
+      },
+    }),
+    // fold reads only refs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [maximised, top],
+  )
 
   // Language servers, which open the files they point at as tabs, and list
   // usages in the Find tool window.
@@ -432,6 +631,24 @@ function CodeView({
     else showTool(name)
   }
   const hideTool = (name: ToolName) => fold(sides[name], false)
+
+  // The environment's own pages open as tabs.
+  const showEnvironment = () => open({ kind: 'environment', path: 'environment', title: 'Environment' })
+  const showPerformancePage = () => open({ kind: 'performance', path: 'performance', title: 'Performance' })
+
+  // A link to one of the environment's sections shows it.
+  useEffect(() => {
+    if (!request) return
+    const show: Record<string, () => void> = {
+      desktop: () => open({ kind: 'desktop', path: 'desktop', title: 'Desktop' }),
+      logs: () => showBottom('logs'),
+      terminal: () => showBottom('terminal'),
+      performance: () => showTool('performance'),
+    }
+    show[request.section]?.()
+    // Only a new request shows anything.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request])
   const dropTool = (name: ToolName, side: Side) => {
     moveTool(name, side)
     setChosen((c) => ({ ...c, [side]: name }))
@@ -489,6 +706,7 @@ function CodeView({
       <PerformanceView
         env={environment}
         active={shown[sides.performance] && showing(sides.performance) === 'performance'}
+        onMore={showPerformancePage}
         onHide={() => hideTool('performance')}
       />
     ) : (
@@ -529,151 +747,227 @@ function CodeView({
 
   const left = toolNames.filter((n) => sides[n] === 'left')
   const right = toolNames.filter((n) => sides[n] === 'right')
+  // The branch the folder's repository, or else its first, is on.
+  const branch = status?.repos.find((r) => r.branch)
   // The row's sizes are remembered for each set of sides in use.
   const arrangement = `${left.length > 0 ? 'left' : ''}|${right.length > 0 ? 'right' : ''}`
 
   return (
     <LanguagesContext.Provider value={languages}>
-      <div className="code-page">
-        <Stripe side="left" over={dragging?.over === 'left'}>
-          {left.map(toolButton)}
-          <span className="code-tool-spacer" />
-          {hasDesktop && (
+      <div className="workspace">
+        <div className="code-page">
+          <Stripe side="left" over={dragging?.over === 'left'}>
+            {left.map(toolButton)}
+            <span className="code-tool-spacer" />
+            {hasDesktop && (
+              <StripeButton
+                on={store.active === 'desktop:desktop'}
+                title="Desktop (connected while its tab is shown)"
+                onClick={() => open({ kind: 'desktop', path: 'desktop', title: 'Desktop' })}
+              >
+                <Monitor size={16} />
+              </StripeButton>
+            )}
             <StripeButton
-              on={store.active === 'desktop:desktop'}
-              title="Desktop (connected while its tab is shown)"
-              onClick={() => open({ kind: 'desktop', path: 'desktop', title: 'Desktop' })}
+              on={false}
+              title={`Find in Files (${shortcut('Mod+Shift+F')})`}
+              onClick={() => setPopup('find')}
             >
-              <Monitor size={16} />
+              <TextSearch size={16} />
             </StripeButton>
-          )}
-          <StripeButton on={false} title={`Find in Files (${shortcut('Mod+Shift+F')})`} onClick={() => setPopup('find')}>
-            <TextSearch size={16} />
-          </StripeButton>
-          <StripeButton on={shown.terminal && bottom === 'find'} title="Find" onClick={() => toggleBottom('find')}>
-            <ListTree size={16} />
-          </StripeButton>
-          <StripeButton on={shown.terminal && bottom === 'log'} title="Git Log" onClick={() => toggleBottom('log')}>
-            <GitGraph size={16} />
-          </StripeButton>
-          <StripeButton on={shown.terminal && bottom === 'terminal'} title="Terminal" onClick={() => toggleBottom('terminal')}>
-            <SquareTerminal size={16} />
-          </StripeButton>
-        </Stripe>
-        <div className="code-main">
-          <Group orientation="vertical" defaultLayout={outer.defaultLayout} onLayoutChanged={outer.onLayoutChanged}>
-            <Panel id="top" minSize="30%">
-              <ToolRow key={arrangement} arrangement={arrangement}>
-                {left.length > 0 && [toolPanel('left'), <Separator key="left-sep" className="code-split code-split-v" />]}
-                <Panel id="editors" minSize="25%">
-                  <EditorArea
-                    client={client}
-                    tabs={store.tabs}
-                    active={store.active}
-                    opened={opened}
-                    jump={jump}
-                    user={user}
-                    status={status}
-                    canReopen={canReopen}
-                    onActivate={(key) => setStore((s) => ({ ...s, active: key }))}
-                    onMove={(key, to) =>
-                      setStore((s) => {
-                        const tab = s.tabs.find((t) => tabKey(t) === key)
-                        if (!tab) return s
-                        const tabs = s.tabs.filter((t) => t !== tab)
-                        tabs.splice(to, 0, tab)
-                        return { ...s, tabs }
-                      })
-                    }
-                    onOpen={open}
-                    onClose={close}
-                    onCloseMany={closeTabs}
-                    onReopen={reopen}
-                    onReveal={revealInProject}
-                    onShowCommit={showCommit}
-                  />
-                </Panel>
-                {right.length > 0 && [<Separator key="right-sep" className="code-split code-split-v" />, toolPanel('right')]}
-              </ToolRow>
-            </Panel>
-            <Separator className="code-split code-split-h" />
-            <Panel
-              id="terminal"
-              panelRef={terminal}
-              defaultSize="30%"
-              minSize="90px"
-              collapsible
-              collapsedSize={0}
-              onResize={track('terminal')}
+            <StripeButton on={shown.terminal && bottom === 'find'} title="Find" onClick={() => toggleBottom('find')}>
+              <ListTree size={16} />
+            </StripeButton>
+            <StripeButton on={shown.terminal && bottom === 'log'} title="Git Log" onClick={() => toggleBottom('log')}>
+              <GitGraph size={16} />
+            </StripeButton>
+            <StripeButton on={shown.terminal && bottom === 'logs'} title="Logs" onClick={() => toggleBottom('logs')}>
+              <ScrollText size={16} />
+            </StripeButton>
+            <StripeButton
+              on={shown.terminal && bottom === 'terminal'}
+              title="Terminal"
+              onClick={() => toggleBottom('terminal')}
             >
-              <div className="code-side-slot" hidden={bottom !== 'terminal'}>
-                <CodeTerminal env={env} openIn={termIn} onHide={() => fold('terminal', false)} />
-              </div>
-              <div className="code-side-slot" hidden={bottom !== 'find'}>
-                <UsagesView client={client} usages={usages} onJump={openAt} onHide={() => fold('terminal', false)} />
-              </div>
-              {logSeen && (
-                <div className="code-side-slot" hidden={bottom !== 'log'}>
-                  <GitLog
-                    client={client}
-                    repos={status?.repos ?? []}
-                    focus={logFocus}
-                    history={logHistory}
-                    onDiff={(path, against) => open({ kind: 'diff', path, ...against })}
-                    onHide={() => fold('terminal', false)}
-                  />
-                </div>
-              )}
-            </Panel>
-          </Group>
+              <SquareTerminal size={16} />
+            </StripeButton>
+          </Stripe>
+          <div className="code-main">
+            <Group orientation="vertical" defaultLayout={outer.defaultLayout} onLayoutChanged={outer.onLayoutChanged}>
+              <Panel
+                id="top"
+                panelRef={top}
+                minSize="30%"
+                collapsible
+                collapsedSize={0}
+                onResize={(size) => setMaximised(size.asPercentage === 0)}
+              >
+                <ToolRow key={arrangement} arrangement={arrangement}>
+                  {left.length > 0 && [
+                    toolPanel('left'),
+                    <Separator key="left-sep" className="code-split code-split-v" />,
+                  ]}
+                  <Panel id="editors" minSize="25%">
+                    <EditorArea
+                      client={client}
+                      tabs={store.tabs}
+                      active={store.active}
+                      opened={opened}
+                      jump={jump}
+                      user={user}
+                      status={status}
+                      canReopen={canReopen}
+                      onActivate={(key) => setStore((s) => ({ ...s, active: key }))}
+                      onMove={(key, to) =>
+                        setStore((s) => {
+                          const tab = s.tabs.find((t) => tabKey(t) === key)
+                          if (!tab) return s
+                          const tabs = s.tabs.filter((t) => t !== tab)
+                          tabs.splice(to, 0, tab)
+                          return { ...s, tabs }
+                        })
+                      }
+                      onOpen={open}
+                      onClose={close}
+                      onCloseMany={closeTabs}
+                      onReopen={reopen}
+                      onReveal={revealInProject}
+                      onShowCommit={showCommit}
+                    />
+                  </Panel>
+                  {right.length > 0 && [
+                    <Separator key="right-sep" className="code-split code-split-v" />,
+                    toolPanel('right'),
+                  ]}
+                </ToolRow>
+              </Panel>
+              <Separator className="code-split code-split-h" />
+              <Panel
+                id="terminal"
+                panelRef={terminal}
+                defaultSize="30%"
+                minSize="90px"
+                collapsible
+                collapsedSize={0}
+                onResize={track('terminal')}
+              >
+                <Maximise.Provider value={maximise}>
+                  <div className="code-side-slot" hidden={bottom !== 'terminal'}>
+                    <CodeTerminal env={env} openIn={termIn} onHide={() => fold('terminal', false)} />
+                  </div>
+                  <div className="code-side-slot" hidden={bottom !== 'find'}>
+                    <UsagesView
+                      client={client}
+                      usages={usages}
+                      onJump={openAt}
+                      onHide={() => fold('terminal', false)}
+                    />
+                  </div>
+                  {logSeen && (
+                    <div className="code-side-slot" hidden={bottom !== 'log'}>
+                      <GitLog
+                        client={client}
+                        repos={status?.repos ?? []}
+                        focus={logFocus}
+                        history={logHistory}
+                        onDiff={(path, against) => open({ kind: 'diff', path, ...against })}
+                        onHide={() => fold('terminal', false)}
+                      />
+                    </div>
+                  )}
+                  {bottom === 'logs' && (
+                    <div className="code-side-slot">
+                      <LogsView env={env} show={null} onHide={() => fold('terminal', false)} />
+                    </div>
+                  )}
+                </Maximise.Provider>
+              </Panel>
+            </Group>
+          </div>
+          <Stripe side="right" over={dragging?.over === 'right'}>
+            {right.map(toolButton)}
+          </Stripe>
+          {dragging && (
+            <div className="code-drag-ghost" style={{ left: dragging.x + 12, top: dragging.y + 12 }}>
+              {toolIcons[dragging.tool]}
+              {toolTitles[dragging.tool]}
+            </div>
+          )}
+          {(popup === 'goto' || popup === 'everywhere') && (
+            <GotoFile
+              client={client}
+              title={popup === 'goto' ? 'Go to File' : 'Search Everywhere'}
+              recent={recent}
+              onOpen={openAt}
+              onClose={() => setPopup(null)}
+            />
+          )}
+          {popup === 'find' && (
+            <FindInFiles
+              client={client}
+              dir={findIn.dir}
+              replace={findIn.replace}
+              onOpen={openAt}
+              onFindWindow={(u) => {
+                setUsages(u)
+                showBottom('find')
+              }}
+              onClose={() => {
+                setPopup(null)
+                setFindIn({})
+              }}
+            />
+          )}
+          {popup === 'folder' && <OpenFolder client={client} onChoose={onFolder} onClose={() => setPopup(null)} />}
+        </div>
+        <StatusBar
+          env={environment}
+          onEnvironment={showEnvironment}
+          onPerformance={() => showTool('performance')}
+          right={latency !== null && <Latency ms={latency} />}
+        >
+          {branch && (
+            <button
+              type="button"
+              className="code-statusbar-item"
+              title={`${branch.name}: ${status?.repos.length === 1 ? 'its changes' : 'the repositories and their changes'}`}
+              onClick={() => showTool('changes')}
+            >
+              <GitBranch size={12} />
+              <span className="code-statusbar-branch">{branch.branch}</span>
+              {!!branch.ahead && <span>↑{branch.ahead}</span>}
+              {!!branch.behind && <span>↓{branch.behind}</span>}
+              {(status?.repos.length ?? 0) > 1 && <span className="muted">+{(status?.repos.length ?? 1) - 1}</span>}
+            </button>
+          )}
           {state !== 'live' && (
-            <div className="code-status">
+            <span className="code-statusbar-warn" role="status">
               {state === 'connecting' ? 'Connecting to the environment…' : `Reconnecting…${why ? ` (${why})` : ''}`}
               {folder && state === 'reconnecting' && (
-                <button type="button" className="btn btn-ghost" onClick={() => onFolder('')}>
+                <button type="button" className="code-statusbar-item" onClick={() => onFolder('')}>
                   Back to the environment&rsquo;s folder
                 </button>
               )}
-            </div>
+            </span>
           )}
-        </div>
-        <Stripe side="right" over={dragging?.over === 'right'}>
-          {right.map(toolButton)}
-        </Stripe>
-        {dragging && (
-          <div className="code-drag-ghost" style={{ left: dragging.x + 12, top: dragging.y + 12 }}>
-            {toolIcons[dragging.tool]}
-            {toolTitles[dragging.tool]}
-          </div>
-        )}
-        {(popup === 'goto' || popup === 'everywhere') && (
-          <GotoFile
-            client={client}
-            title={popup === 'goto' ? 'Go to File' : 'Search Everywhere'}
-            recent={recent}
-            onOpen={openAt}
-            onClose={() => setPopup(null)}
-          />
-        )}
-        {popup === 'find' && (
-          <FindInFiles
-            client={client}
-            dir={findIn.dir}
-            replace={findIn.replace}
-            onOpen={openAt}
-            onFindWindow={(u) => {
-              setUsages(u)
-              showBottom('find')
-            }}
-            onClose={() => {
-              setPopup(null)
-              setFindIn({})
-            }}
-          />
-        )}
-        {popup === 'folder' && <OpenFolder client={client} onChoose={onFolder} onClose={() => setPopup(null)} />}
+        </StatusBar>
       </div>
     </LanguagesContext.Provider>
+  )
+}
+
+// Latency is how long the way to the environment and back takes, coloured
+// by how it will feel to type over it.
+function Latency({ ms }: { ms: number }) {
+  const [tone, Icon] = ms < 150 ? ['good', SignalHigh] : ms < 400 ? ['busy', SignalMedium] : ['bad', SignalLow]
+  return (
+    <span
+      className={`code-statusbar-info tone-${tone}`}
+      title="How long a request takes to reach the environment and come back, through Hangar's server and its worker"
+    >
+      <Icon size={13} />
+      {Math.round(ms)} ms
+    </span>
   )
 }
 

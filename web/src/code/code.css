@@ -2,6 +2,7 @@
    in Hangar's colours. Its colours are shared by the phone's screens
    (PhoneCode.tsx). */
 
+.workspace,
 .code-page,
 .phone-code,
 .phone-code-screen {
@@ -55,7 +56,7 @@
   font-size: 13px;
 }
 
-:root[data-theme='dark'] :is(.code-page, .phone-code, .phone-code-screen) {
+:root[data-theme='dark'] :is(.workspace, .code-page, .phone-code, .phone-code-screen) {
   --code-bg: #15191f;
   --code-active-line: rgb(255 255 255 / 0.04);
   --code-selection: rgb(59 155 224 / 0.3);
@@ -212,21 +213,215 @@
   background: var(--accent);
 }
 
-.code-status {
-  position: absolute;
-  top: 8px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 5px 12px;
-  border-radius: 6px;
-  background: var(--surface);
+/* An environment's workspace: the editor and its tool windows, or what to
+   do while it is not running, over a status bar that runs the width of the
+   page. */
+.workspace {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface-2);
+  font-size: 13px;
+}
+
+.workspace > .code-page {
+  min-height: 0;
+}
+
+.workspace-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.workspace-idle {
+  height: 100%;
+  overflow-y: auto;
+  padding-bottom: 28px;
+  box-sizing: border-box;
+  background: var(--bg);
+}
+
+.workspace-idle .page-pad,
+.code-page-tab > .page-pad {
+  max-width: 980px;
+  margin: 0 auto;
+}
+
+.workspace-card {
+  max-width: 924px;
+  margin: 28px auto 4px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
   border: 1px solid var(--border);
-  box-shadow: var(--shadow-pop);
-  font-size: 12.5px;
-  z-index: 5;
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.workspace-card h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.workspace-card p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.workspace-card-actions {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* One of the environment's own pages, in an editor tab. */
+.code-page-tab {
+  height: 100%;
+  overflow-y: auto;
+  padding-bottom: 28px;
+  box-sizing: border-box;
+  background: var(--bg);
+}
+
+.code-statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 26px;
+  padding: 0 6px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.code-statusbar-home {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-right: 2px;
+  border-radius: 5px;
+}
+
+.code-statusbar-home:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-statusbar-item {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 7px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.code-statusbar-item:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.code-statusbar-item:disabled {
+  cursor: default;
+}
+
+.code-statusbar-env {
+  color: var(--text);
+}
+
+.code-statusbar-name {
+  font-weight: 650;
+}
+
+.code-statusbar-phase {
+  color: var(--muted);
+}
+
+.code-statusbar-branch {
+  font-family: var(--code-font);
+  font-size: 11.5px;
+  color: var(--text);
+}
+
+.code-statusbar-notice {
+  color: var(--busy);
+  font-weight: 600;
+}
+
+.code-statusbar-warn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  color: var(--busy);
+  font-weight: 600;
+}
+
+.code-statusbar-warn .code-statusbar-item {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.code-statusbar-info {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-statusbar-error {
+  min-width: 0;
+  padding: 0 7px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--danger);
+}
+
+.code-statusbar-spacer {
+  flex: 1;
+}
+
+/* The Logs tool window's log fills it. */
+.code-logs {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px 8px;
+  box-sizing: border-box;
+}
+
+.code-logs .log-text {
+  flex: 1;
+  min-height: 0;
+  max-height: none;
+}
+
+.code-logs-pick {
+  height: 22px;
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
 }
 
 /* Tool windows */

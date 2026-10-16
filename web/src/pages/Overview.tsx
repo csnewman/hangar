@@ -11,6 +11,7 @@ import { StartLine } from '../components/StartProgress'
 import { PhaseBadge } from '../components/Status'
 import { splitByOwner, useEnvironments } from '../environments'
 import { usePhone } from '../phone'
+import { useEnvironmentTarget } from '../workspaceLinks'
 
 export function OverviewPage() {
   if (usePhone()) return <PhoneEnvironments />
@@ -80,6 +81,7 @@ function EnvironmentTable({
   empty: React.ReactNode
 }) {
   const cols = showOwner ? 7 : 6
+  const target = useEnvironmentTarget()
   return (
     <div className="panel">
       <table className="table">
@@ -98,7 +100,7 @@ function EnvironmentTable({
           {environments.map((e) => (
             <tr key={e.id}>
               <td>
-                <Link to={`/environments/${e.id}`} className="strong row-link">
+                <Link to={`/environments/${e.id}`} target={target(e.id)} className="strong row-link">
                   {e.name}
                 </Link>
                 <div className="muted small">{e.template}</div>

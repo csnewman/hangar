@@ -4,6 +4,8 @@ import type { CodeClient, GitStatus, SharedFile } from './client'
 import { CodeEditor } from './CodeEditor'
 import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { DesktopTab } from '../desktop/DesktopTab'
+import { SummaryTab } from '../pages/Environment'
+import { PerformanceTab } from '../pages/Performance'
 import { CompareView, DiffView } from './DiffView'
 import { DockerLogs } from './DockerView'
 import { HexView } from './HexView'
@@ -73,7 +75,7 @@ export function EditorArea({
       },
       { label: 'Close All', onSelect: () => onCloseMany(keys) },
     ]
-    if (t.kind === 'logs' || t.kind === 'desktop') return closing
+    if (t.kind !== 'file' && t.kind !== 'diff' && t.kind !== 'compare') return closing
     return [
       ...closing,
       'separator',
@@ -136,6 +138,16 @@ export function EditorArea({
         {current?.kind === 'desktop' && (
           <div className="code-desktop">
             <DesktopTab />
+          </div>
+        )}
+        {current?.kind === 'environment' && (
+          <div className="code-page-tab">
+            <SummaryTab />
+          </div>
+        )}
+        {current?.kind === 'performance' && (
+          <div className="code-page-tab">
+            <PerformanceTab />
           </div>
         )}
         {current?.kind === 'logs' && (

@@ -1,18 +1,31 @@
-import { Binary, ChevronDown, File, FileText, GitCompare, Image as ImageIcon, Monitor, X } from 'lucide-react'
+import {
+  Activity,
+  Binary,
+  ChevronDown,
+  File,
+  FileText,
+  GitCompare,
+  Image as ImageIcon,
+  Monitor,
+  Settings2,
+  X,
+} from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 
 import { useContextMenu } from './ContextMenu'
 import { opensAsImage, viewNames, type FileView } from './views'
 
 // A tab is a file, its changes, a container's logs (path is then the
-// container's ID, and title its name), or the environment's desktop, which
-// is connected only while its tab is the one shown. A diff is against
+// container's ID, and title its name), the environment's desktop, which
+// is connected only while its tab is the one shown, or one of the
+// environment's own pages: its details and settings (environment), and
+// its usage over time and processes (performance). A diff is against
 // HEAD, or against base (a commit, labelled baseLabel), where the file was
 // named from; and of the working tree, or of a commit (to, labelled
 // toLabel), as a commit's own changes are. A file opens in the view its
 // content calls for, or the one chosen with Open With (view).
 export type Tab = {
-  kind: 'file' | 'diff' | 'compare' | 'logs' | 'desktop'
+  kind: 'file' | 'diff' | 'compare' | 'logs' | 'desktop' | 'environment' | 'performance'
   path: string
   // other is what a compare tab shows the file beside: another file, or
   // the clipboard (clipboard:<id>).
@@ -277,6 +290,10 @@ export function TabBar({
                   <FileText size={13} className="code-icon-file" />
                 ) : t.kind === 'desktop' ? (
                   <Monitor size={13} className="code-icon-file" />
+                ) : t.kind === 'environment' ? (
+                  <Settings2 size={13} className="code-icon-file" />
+                ) : t.kind === 'performance' ? (
+                  <Activity size={13} className="code-icon-file" />
                 ) : t.view === 'hex' ? (
                   <Binary size={13} className="code-icon-file" />
                 ) : t.view === 'image' || (!t.view && opensAsImage(t.path)) ? (

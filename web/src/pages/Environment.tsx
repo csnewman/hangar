@@ -1,7 +1,5 @@
 import {
   Activity,
-  ChevronDown,
-  ChevronUp,
   Code2,
   Copy,
   ExternalLink,
@@ -13,12 +11,11 @@ import {
   SquareTerminal,
   type LucideIcon,
 } from 'lucide-react'
-import { useState } from 'react'
-import { Link, NavLink, Outlet, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router'
+import { lazy, Suspense, useContext, useState } from 'react'
+import { Link, Outlet, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router'
 
 import type { Environment } from '../api'
 import { useMe } from '../session'
-import { EnvironmentActions } from '../components/EnvironmentActions'
 import { formatAgo, shortDigest } from '../components/format'
 import { PageHeader } from '../components/PageHeader'
 import { PhoneNav } from '../components/Phone'
@@ -29,7 +26,7 @@ import { SettingsPanel, TemplateDrift } from '../components/EnvironmentSettings'
 import { EnvironmentPorts } from '../components/EnvironmentPorts'
 import { ImageUpdate } from '../components/ImageUpdate'
 import { StartProgress } from '../components/StartProgress'
-import { desktop } from '../desktop'
+import { EnvContext } from '../envContext'
 import { PhaseBadge, RendererBadge } from '../components/Status'
 import { sshCommand, useEnvironments, webURL } from '../environments'
 import { usePhone } from '../phone'
@@ -46,39 +43,25 @@ const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: 'logs', label: 'Logs', icon: ScrollText },
 ]
 
-const barKey = 'hangar.env.bar.hidden'
+// The workspace carries the editor, terminal and desktop, so it is fetched
+// when an environment is first opened, not with the app.
+const Workspace = lazy(() => import('../code/CodeTab').then((m) => ({ default: m.Workspace })))
 
-// EnvironmentPage is one environment: its header and actions, and a tab for
-// each way into it. The tabs are routes, so a console can be linked to and
-// survives a reload. On a phone the summary is the environment's screen,
-// leading to each tab, and a tab fills the screen under a bar back to it.
+// EnvironmentPage is one environment. On a computer it is the environment's
+// workspace, the whole page, with every way into it as a tab or tool window
+// there; a link to one of the sections below opens it in the workspace. On
+// a phone the summary is the environment's screen, leading to each tab, and
+// a tab fills the screen under a bar back to it; the tabs are routes, so
+// one can be linked to and survives a reload.
 export function EnvironmentPage() {
   const phone = usePhone()
   const { id } = useParams()
-  const me = useMe()
   const envs = useEnvironments()
   const env = envs.data?.find((e) => e.id === id)
   // The tab is the path's segment after the environment's ID.
   const segment = useLocation().pathname.split('/')[3] ?? ''
   const tab = tabs.find((t) => t.to === segment) ?? tabs[0]
-  useTitle(env?.name, env && tab.label)
-  // The bar can be folded away, for more of the tab, as this browser
-  // remembers.
-  const [barHidden, setBarHidden] = useState(() => {
-    try {
-      return localStorage.getItem(barKey) === 'true'
-    } catch {
-      return false
-    }
-  })
-  const hideBar = (hidden: boolean) => {
-    setBarHidden(hidden)
-    try {
-      localStorage.setItem(barKey, String(hidden))
-    } catch {
-      // Remembered for this page regardless.
-    }
-  }
+  useTitle(env?.name, env && phone && tab.label)
 
   if (envs.isPending) return <div className="page" />
   if (!env) {
@@ -92,19 +75,19 @@ export function EnvironmentPage() {
     )
   }
 
-  const notice =
-    env.phase === 'starting' ? (
-      <StartProgress env={env} />
-    ) : (
-      env.reason && (
-        <div className="notice env-reason">
-          {env.reason}
-          {env.phase === 'failed' && <Link to={`/environments/${env.id}/logs`}>See its logs</Link>}
-        </div>
-      )
-    )
-
   if (phone) {
+    const notice =
+      env.phase === 'starting' ? (
+        <StartProgress env={env} />
+      ) : (
+        env.reason && (
+          <div className="notice env-reason">
+            {env.reason}
+            {env.phase === 'failed' && <Link to={`/environments/${env.id}/logs`}>See its logs</Link>}
+          </div>
+        )
+      )
+
     const summary = tab === tabs[0]
     // The Code and Terminal tabs have bars of their own, with the way back.
     const bar = !summary && tab.to !== 'code' && tab.to !== 'terminal'
@@ -120,81 +103,20 @@ export function EnvironmentPage() {
   }
 
   return (
-    <div className="page page-flush">
-      {barHidden && (
-        <button type="button" className="env-bar-reveal" title={`Show ${env.name}'s bar`} onClick={() => hideBar(false)}>
-          <ChevronDown size={13} />
-        </button>
-      )}
-      <div className="env-bar" hidden={barHidden}>
-        <div className="env-ident">
-          {env.owner_id !== me.id && (
-            <>
-              <span className="env-owner">{env.owner}</span>
-              <span className="crumb-sep">/</span>
-            </>
-          )}
-          <h1 className="env-name" title={env.name}>
-            {env.name}
-          </h1>
-          <PhaseBadge phase={env.phase} desired={env.desired} workerOnline={env.worker_online} />
-        </div>
-        <nav className="tabs env-tabs">
-          {tabs.map((t) => (
-            <NavLink key={t.label} to={t.to} end={t.end} className="tab" title={t.label}>
-              <t.icon size={15} />
-              <span className="tab-label">{t.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-        <div className="env-actions">
-          {desktop && env.phase === 'running' && <DesktopActions env={env.id} />}
-          <EnvironmentActions env={env} afterDelete="/environments" />
-          <button
-            type="button"
-            className="btn btn-ghost env-bar-hide"
-            title="Fold this bar away, for more room"
-            aria-label="Fold this bar away"
-            onClick={() => hideBar(true)}
-          >
-            <ChevronUp size={14} />
-          </button>
-        </div>
-      </div>
-      {notice}
-      <div className="tab-body">
-        <Outlet context={env} />
-      </div>
-    </div>
+    <EnvContext.Provider value={env}>
+      <Suspense fallback={<div className="workspace" />}>
+        <Workspace env={env} section={segment} />
+      </Suspense>
+    </EnvContext.Provider>
   )
 }
 
-// DesktopActions are what the desktop app adds: the environment opened in
-// desktop VS Code, or in a terminal.
-function DesktopActions({ env }: { env: string }) {
-  const [error, setError] = useState('')
-  return (
-    <div className="actions">
-      {error && <span className="action-error">{error}</span>}
-      <button type="button" className="btn btn-ghost" title="Open in desktop VS Code" onClick={() => desktop?.openInVSCode(env)}>
-        <Code2 size={13} />
-        VS Code
-      </button>
-      <button
-        type="button"
-        className="btn btn-ghost"
-        title="Open a terminal on this machine, over SSH"
-        onClick={async () => setError((await desktop?.openTerminal(env)) ?? '')}
-      >
-        <SquareTerminal size={13} />
-        Terminal
-      </button>
-    </div>
-  )
-}
-
+// useEnv is the environment the page is about: the workspace's, or the
+// one its route's outlet was given.
 export function useEnv() {
-  return useOutletContext<Environment>()
+  const shown = useContext(EnvContext)
+  const routed = useOutletContext<Environment>()
+  return shown ?? routed
 }
 
 export function SummaryTab() {
@@ -319,7 +241,10 @@ export function SummaryTab() {
       </div>
       <EnvironmentPorts env={env} />
       <EnvironmentPacks env={env} />
-      <SettingsPanel key={`${env.id}:${env.spec.cpus}:${env.spec.memory_mib}:${env.spec.display}:${env.spec.gpu}:${env.spec.dax}`} env={env} />
+      <SettingsPanel
+        key={`${env.id}:${env.spec.cpus}:${env.spec.memory_mib}:${env.spec.display}:${env.spec.gpu}:${env.spec.dax}`}
+        env={env}
+      />
       <section className="section">
         <h2 className="section-title">Activity</h2>
         <AuditActivity subjects={[`environment:${env.id}`]} pageSize={5} />

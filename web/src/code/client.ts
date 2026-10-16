@@ -573,6 +573,21 @@ export class CodeClient {
     return (await this.call(method, params)) as T
   }
 
+  // ping is how long, in milliseconds, a request takes to reach the service
+  // and be answered: through Hangar's server and the worker's tunnel to the
+  // environment, and back. A service too old to know the request answers
+  // that it does not, which takes as long.
+  async ping(): Promise<number> {
+    await this.ready
+    const start = performance.now()
+    try {
+      await this.call('ping')
+    } catch (e) {
+      if (!(e instanceof Error && e.message.startsWith('no such method'))) throw e
+    }
+    return performance.now() - start
+  }
+
   list(path: string) {
     return this.request<Entry[]>('fs.list', { path })
   }

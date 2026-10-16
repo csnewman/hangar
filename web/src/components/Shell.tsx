@@ -3,6 +3,7 @@ import { Outlet, useMatch } from 'react-router'
 
 import { desktop } from '../desktop'
 import { usePhone } from '../phone'
+import { homeTab, nameTab } from '../workspaceLinks'
 import { PhoneTabs } from './PhoneTabs'
 import { Sidebar } from './Sidebar'
 
@@ -31,9 +32,11 @@ function store(key: string, value: string) {
 
 // Shell is the frame every signed-in page sits in: the inventory down the
 // left, and the page beside it. The inventory is as wide as it is dragged,
-// or folded to its icons, and this browser remembers which. On a phone the
-// sidebar is a bar of tabs at the foot instead, left out on an environment's
-// own screens, which have their way back at the top.
+// or folded to its icons, and this browser remembers which. An environment's
+// workspace has the whole page, in a tab of its own, and its status bar
+// leads back here. On a phone the sidebar is a bar of tabs at the foot
+// instead, left out on an environment's own screens, which have their way
+// back at the top.
 export function Shell() {
   const phone = usePhone()
   const environment = useMatch('/environments/:id/*')
@@ -52,6 +55,10 @@ export function Shell() {
       store(collapsedKey, String(!c))
       return !c
     })
+
+  useEffect(() => {
+    if (!inEnvironment && !phone) nameTab(homeTab)
+  }, [inEnvironment, phone])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -91,10 +98,10 @@ export function Shell() {
     store(widthKey, String(defaultWidth))
   }
 
-  // An environment's tab in the desktop app is that environment and nothing
-  // else: the app's own tabs move between environments, and the control
-  // panel's tab keeps the sidebar.
-  if (desktop?.tab === 'environment') {
+  // An environment's workspace is that environment and nothing else: the
+  // browser's tabs, or the desktop app's, move between environments, and
+  // the tab with Hangar's own pages keeps the sidebar.
+  if (desktop?.tab === 'environment' || (inEnvironment && !phone)) {
     return (
       <div className="app">
         <main className="main">

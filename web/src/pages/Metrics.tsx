@@ -1,15 +1,14 @@
-import { useOutletContext } from 'react-router'
-
-import type { Environment, EnvironmentStats } from '../api'
+import type { EnvironmentStats } from '../api'
 import { LineChart } from '../components/charts'
 import { formatBytes, formatCores, formatMemory, formatPercent, formatRate } from '../components/format'
 import { useEnvironments } from '../environments'
 import { useHistory } from '../history'
+import { useEnv } from './Environment'
 
 // MetricsTab is what one environment is using: the latest figures, and how
 // they have moved since this page started watching.
 export function MetricsTab() {
-  const env = useOutletContext<Environment>()
+  const env = useEnv()
   useEnvironments({ watching: true })
   const history = useHistory<EnvironmentStats>(`env:${env.id}`, env.stats)
   const s = env.stats

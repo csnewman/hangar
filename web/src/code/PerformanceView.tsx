@@ -1,7 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowDown, ExternalLink, ListTree } from 'lucide-react'
+import { ArrowDown, ChartLine, ListTree } from 'lucide-react'
 import { useMemo, useState, type MouseEvent, type ReactNode } from 'react'
-import { Link } from 'react-router'
 
 import { api, type Environment, type EnvironmentStats, type ProcessInfo } from '../api'
 import { Sparkline } from '../components/charts'
@@ -18,7 +17,18 @@ type Shown = { p: ProcessInfo; depth: number }
 // environment is using, then the processes using it, as a list or as the
 // tree of which started which, and the one chosen in detail with the ways
 // to stop it. It reads the processes only while it is shown (active).
-export function PerformanceView({ env, active, onHide }: { env: Environment; active: boolean; onHide: () => void }) {
+// onMore opens the environment's usage over time.
+export function PerformanceView({
+  env,
+  active,
+  onMore,
+  onHide,
+}: {
+  env: Environment
+  active: boolean
+  onMore: () => void
+  onHide: () => void
+}) {
   const qc = useQueryClient()
   const list = useQuery({
     queryKey: ['processes', env.id],
@@ -97,9 +107,9 @@ export function PerformanceView({ env, active, onHide }: { env: Environment; act
           >
             <ListTree size={13} />
           </button>
-          <Link className="code-tool-btn" title="Open the Performance page" to={`/environments/${env.id}/performance`}>
-            <ExternalLink size={13} />
-          </Link>
+          <button type="button" className="code-tool-btn" title="Show its usage over time" onClick={onMore}>
+            <ChartLine size={13} />
+          </button>
         </>
       }
     >

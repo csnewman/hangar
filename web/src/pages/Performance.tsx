@@ -1,8 +1,8 @@
-import { useOutletContext, useSearchParams } from 'react-router'
+import { useSearchParams } from 'react-router'
 
-import type { Environment } from '../api'
 import { PhoneChoice } from '../components/Phone'
 import { usePhone } from '../phone'
+import { useEnv } from './Environment'
 import { MetricsTab } from './Metrics'
 import { ProcessesTab } from './Processes'
 
@@ -11,7 +11,7 @@ import { ProcessesTab } from './Processes'
 // has neither, and says so once. On a phone they are two views of the one
 // screen.
 export function PerformanceTab() {
-  const env = useOutletContext<Environment>()
+  const env = useEnv()
   const phone = usePhone()
   const [params, setParams] = useSearchParams()
   if (phone && env.phase === 'running') {

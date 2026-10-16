@@ -170,6 +170,9 @@ export class Connection {
 		switch (method) {
 			case 'hello':
 				return this.hello(p.root)
+			// Answered at once, so the browser can time the way here and back.
+			case 'ping':
+				return null
 			case 'fs.list':
 				return this.list(str('path'))
 			case 'fs.read':

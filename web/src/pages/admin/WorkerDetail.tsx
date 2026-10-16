@@ -12,6 +12,7 @@ import { OnlineBadge, PhaseBadge, RendererBadge } from '../../components/Status'
 import { useEnvironments } from '../../environments'
 import { useHistory } from '../../history'
 import { Activity } from '../../components/Activity'
+import { useEnvironmentTarget } from '../../workspaceLinks'
 
 // WorkerDetailPage is one worker: how loaded its machine is, what it holds,
 // and the images in its local store.
@@ -159,6 +160,7 @@ function GPU({ gpu: g }: { gpu: GPUInfo }) {
 function Environments({ worker: w }: { worker: Worker }) {
   const envs = useEnvironments()
   const here = (envs.data ?? []).filter((e) => e.worker_id === w.id)
+  const target = useEnvironmentTarget()
   return (
     <section className="section">
       <h2 className="section-title">
@@ -180,7 +182,7 @@ function Environments({ worker: w }: { worker: Worker }) {
             {here.map((e) => (
               <tr key={e.id}>
                 <td>
-                  <Link to={`/environments/${e.id}`} className="strong row-link">
+                  <Link to={`/environments/${e.id}`} target={target(e.id)} className="strong row-link">
                     {e.name}
                   </Link>
                   <div className="muted small">{e.template}</div>
@@ -275,6 +277,7 @@ function ImageRow({
     onSettled: () => qc.invalidateQueries({ queryKey: ['workers', w.id] }),
   })
   const inUse = img.environments.length > 0
+  const target = useEnvironmentTarget()
   return (
     <tr>
       <td>
@@ -319,7 +322,7 @@ function ImageRow({
         {inUse ? (
           <div className="labels">
             {img.environments.map((id) => (
-              <Link key={id} to={`/environments/${id}`} className="label">
+              <Link key={id} to={`/environments/${id}`} target={target(id)} className="label">
                 {names.get(id) ?? id.slice(0, 8)}
               </Link>
             ))}

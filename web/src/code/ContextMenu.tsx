@@ -37,12 +37,14 @@ export function copyText(text: string) {
   navigator.clipboard?.writeText(text).catch(() => {})
 }
 
-// A menu opens with its left edge at x, or its right edge for 'right'.
+// A menu opens with its left edge at x, or its right edge for 'right'; and
+// its top at y, or its bottom when it opens up, as one from a bar at the
+// foot of the window does.
 type Align = 'left' | 'right'
 
 // n counts the menus opened, so each, a submenu opened in its place too,
 // is placed afresh.
-type Open = { x: number; y: number; items: MenuItem[]; align?: Align; n: number }
+type Open = { x: number; y: number; items: MenuItem[]; align?: Align; up?: boolean; n: number }
 
 let opened = 0
 
@@ -56,14 +58,23 @@ export function useContextMenu() {
     setState({ x: e.clientX, y: e.clientY, items, n: ++opened })
   }, [])
   // openAt opens it at a point, for a menu whose items load first or one
-  // under a button.
+  // under a button, or over one.
   const openAt = useCallback(
-    (x: number, y: number, items: MenuItem[], align?: Align) => setState({ x, y, items, align, n: ++opened }),
+    (x: number, y: number, items: MenuItem[], align?: Align, up?: boolean) =>
+      setState({ x, y, items, align, up, n: ++opened }),
     [],
   )
   const close = useCallback(() => setState(null), [])
   const menu = state && (
-    <ContextMenu key={state.n} x={state.x} y={state.y} align={state.align} items={state.items} onClose={close} />
+    <ContextMenu
+      key={state.n}
+      x={state.x}
+      y={state.y}
+      align={state.align}
+      up={state.up}
+      items={state.items}
+      onClose={close}
+    />
   )
   return { open, openAt, close, menu }
 }
@@ -75,12 +86,14 @@ export function ContextMenu({
   x,
   y,
   align = 'left',
+  up = false,
   items,
   onClose,
 }: {
   x: number
   y: number
   align?: Align
+  up?: boolean
   items: MenuItem[]
   onClose: () => void
 }) {
@@ -94,11 +107,11 @@ export function ContextMenu({
     const r = el.getBoundingClientRect()
     setPos({
       left: Math.max(4, Math.min(align === 'right' ? x - r.width : x, window.innerWidth - r.width - 4)),
-      // Below the point, else as far up as it must go to fit.
-      top: Math.max(4, Math.min(y, window.innerHeight - r.height - 4)),
+      // Below the point, else as far up as it must go to fit; or above it.
+      top: Math.max(4, Math.min(up ? y - r.height : y, window.innerHeight - r.height - 4)),
     })
     el.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
-  }, [x, y, align])
+  }, [x, y, align, up])
 
   useEffect(() => {
     const away = (e: Event) => {
