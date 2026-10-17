@@ -6,7 +6,7 @@ import { formatMemory, formatPercent } from '../components/format'
 import { Logo } from '../components/Logo'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
-import { openInVSCode, useEnvironmentActions } from '../environmentActions'
+import { useEnvironmentActions, vscodeItems } from '../environmentActions'
 import { splitByOwner, sshCommand, useEnvironments } from '../environments'
 import { useMe } from '../session'
 import { environmentTab, homeTab, otherTab } from '../workspaceLinks'
@@ -46,11 +46,6 @@ export function StatusBar({
   const running = env.phase === 'running'
   const s = env.stats
 
-  const openVSCode = () => {
-    setError('')
-    openInVSCode(env.id).then(setError)
-  }
-
   const items = (): MenuItem[] => {
     const others = splitByOwner(envs.data ?? [], me).mine.filter((e) => e.id !== env.id)
     const out: MenuItem[] = []
@@ -68,13 +63,8 @@ export function StatusBar({
     out.push({ label: 'Hangar Home', onSelect: () => window.open('/environments', otherTab(homeTab)) })
     out.push('separator')
     if (onEnvironment) out.push({ label: 'Environment', detail: 'details and settings', onSelect: onEnvironment })
-    out.push({ label: 'Open in VS Code', detail: 'in a new tab', disabled: !running, onSelect: openVSCode })
+    out.push(...vscodeItems(env.id, running, setError))
     if (desktop) {
-      out.push({
-        label: 'Open in Desktop VS Code',
-        disabled: !running,
-        onSelect: () => desktop?.openInVSCode(env.id),
-      })
       out.push({
         label: 'Open a Terminal Here',
         detail: 'over SSH',

@@ -2,6 +2,8 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router'
 
 import { api, type Environment } from './api'
+import type { MenuItem } from './code/ContextMenu'
+import { desktop } from './desktop'
 import { environmentsKey } from './environments'
 
 // useEnvironmentActions is what can be done to an environment, wherever its
@@ -29,12 +31,13 @@ export function useEnvironmentActions(env: Environment, afterDelete?: string) {
   }
 }
 
-// openInVSCode opens the environment in VS Code in a new browser tab. It is
-// called in a click, so the tab is opened then, which a browser allows, and
-// sent on once the editor has its ticket. It resolves to what went wrong,
-// or '' when nothing did.
-export function openInVSCode(id: string): Promise<string> {
-  const w = window.open('', '_blank')
+// openVSCodeTab opens the environment in VS Code in the browser, where it
+// is called in a click: in a browser, a new tab, opened in the click, which
+// a browser allows, and sent on once the editor has its ticket; in the
+// desktop app, a tab of its window. It resolves to what went wrong, or ''
+// when nothing did.
+export function openVSCodeTab(id: string): Promise<string> {
+  const w = desktop ? null : window.open('', '_blank')
   return api.openEditor(id).then(
     (r) => {
       if (w) w.location.href = r.url
@@ -46,4 +49,32 @@ export function openInVSCode(id: string): Promise<string> {
       return e.message
     },
   )
+}
+
+// openVSCode opens the environment in VS Code: in the desktop app, the VS
+// Code installed beside it, over SSH; in a browser, VS Code in a new tab.
+export function openVSCode(id: string): Promise<string> {
+  if (desktop)
+    return desktop.openInVSCode(id).then(
+      () => '',
+      (e: Error) => e.message,
+    )
+  return openVSCodeTab(id)
+}
+
+// vscodeItems are a menu's ways into VS Code: in the desktop app the VS
+// Code installed beside it, and VS Code in a tab of the app's window; in a
+// browser VS Code in a new tab. onError hears what went wrong, or '' as
+// one starts.
+export function vscodeItems(id: string, running: boolean, onError: (message: string) => void): MenuItem[] {
+  const run = (open: (id: string) => Promise<string>) => () => {
+    onError('')
+    open(id).then(onError)
+  }
+  if (!desktop)
+    return [{ label: 'Open in VS Code', detail: 'in a new tab', disabled: !running, onSelect: run(openVSCodeTab) }]
+  return [
+    { label: 'Open in VS Code', detail: 'installed', disabled: !running, onSelect: run(openVSCode) },
+    { label: 'VS Code in a Tab', detail: 'in this window', disabled: !running, onSelect: run(openVSCodeTab) },
+  ]
 }

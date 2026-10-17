@@ -11,7 +11,7 @@ import { Meter, PaneBar, PaneRoot, SearchField, Segmented, Tile } from '../compo
 import { PhoneEnvironments } from '../components/PhoneEnvironments'
 import { StartLine } from '../components/StartProgress'
 import { PhaseDot } from '../components/Status'
-import { openInVSCode, useEnvironmentActions } from '../environmentActions'
+import { useEnvironmentActions, vscodeItems } from '../environmentActions'
 import { splitByOwner, sshCommand, useEnvironments } from '../environments'
 import { usePhone } from '../phone'
 import { useMe } from '../session'
@@ -166,17 +166,7 @@ function LaunchRow({ env, open, owner }: { env: Environment; open: boolean; owne
         : 'Start and Open'
 
   const items = (): MenuItem[] => {
-    const out: MenuItem[] = [
-      {
-        label: 'Open in VS Code',
-        detail: 'in a new tab',
-        disabled: !running,
-        onSelect: () => {
-          setError('')
-          openInVSCode(env.id).then(setError)
-        },
-      },
-    ]
+    const out: MenuItem[] = vscodeItems(env.id, running, setError)
     if (me.ssh) {
       const ssh = me.ssh
       out.push({ label: 'Copy SSH Command', onSelect: () => copyText(sshCommand(ssh, env, env.owner_id === me.id)) })

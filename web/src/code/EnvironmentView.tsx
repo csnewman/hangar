@@ -23,7 +23,7 @@ import { CPUField, MemoryField } from '../components/MachineFields'
 import { Banner, CopyField, Row, Rows, Section } from '../components/Pane'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
-import { openInVSCode, useEnvironmentActions } from '../environmentActions'
+import { openVSCode, openVSCodeTab, useEnvironmentActions, vscodeItems } from '../environmentActions'
 import { changeable, environmentsKey, longestWebName, sshCommand, webURL } from '../environments'
 import { copyName, packPath } from '../pages/Packs'
 import { useMe } from '../session'
@@ -188,17 +188,7 @@ function Head({ env }: { env: Environment }) {
   const s = env.spec
 
   const more = (): MenuItem[] => {
-    const out: MenuItem[] = [
-      {
-        label: 'Open in VS Code',
-        detail: 'in a new tab',
-        disabled: !running,
-        onSelect: () => {
-          setError('')
-          openInVSCode(env.id).then(setError)
-        },
-      },
-    ]
+    const out: MenuItem[] = vscodeItems(env.id, running, setError)
     if (me.ssh) {
       const ssh = me.ssh
       out.push({ label: 'Copy SSH Command', onSelect: () => copyText(sshCommand(ssh, env, env.owner_id === me.id)) })
@@ -607,10 +597,10 @@ function Connect({ env, onDesktop }: { env: Environment; onDesktop?: () => void 
           type="button"
           className="btn btn-ghost btn-sm"
           disabled={!running}
-          title={notRunning ?? 'In a new tab'}
+          title={notRunning ?? (desktop ? 'The VS Code installed beside the app' : 'In a new tab')}
           onClick={() => {
             setError('')
-            openInVSCode(env.id).then(setError)
+            openVSCode(env.id).then(setError)
           }}
         >
           <Code2 size={13} />
@@ -621,11 +611,14 @@ function Connect({ env, onDesktop }: { env: Environment; onDesktop?: () => void 
             type="button"
             className="btn btn-ghost btn-sm"
             disabled={!running}
-            title={notRunning}
-            onClick={() => desktop?.openInVSCode(env.id)}
+            title={notRunning ?? 'VS Code in the browser, in a tab of this window'}
+            onClick={() => {
+              setError('')
+              openVSCodeTab(env.id).then(setError)
+            }}
           >
             <Code2 size={13} />
-            Desktop VS Code
+            VS Code in a Tab
           </button>
         )}
         {onDesktop && env.spec.display === 'desktop' && (

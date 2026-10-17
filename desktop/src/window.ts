@@ -11,7 +11,8 @@
 // session, so one sign-in covers them all.
 //
 // Pages are routed to the tab they belong in: an environment's pages to its
-// tab, everything else to the control panel. A link is caught in the page
+// tab, VS Code in the browser for an environment to a tab of its own, and
+// everything else to the control panel. A link is caught in the page
 // before the web UI follows it (see preload-page.ts); a move the web UI
 // makes by itself, such as to a new environment it has just created, is
 // caught here once made, and taken back where it happened.
@@ -27,18 +28,25 @@ import type { Bounds, SavedWindow, Server } from './store'
 // The bar's height, in the page's CSS pixels.
 export const barHeight = 40
 
-// Role is what a tab is for: the control panel, or one environment.
-export type Role = { kind: 'panel' } | { kind: 'env'; env: string }
+// Role is what a tab is for: the control panel, one environment, or the
+// browser VS Code of the environment with that short ID.
+export type Role = { kind: 'panel' } | { kind: 'env'; env: string } | { kind: 'editor'; short: string }
 
 // roleFor is the tab a page of this server belongs in: its environment's,
-// for /environments/<id> and anything under it, and the control panel for
-// everything else.
+// for /environments/<id> and anything under it; an environment's editor,
+// served as code<short ID> joined to the server's host (code<short>.<host>,
+// or code<short>-<host>); and the control panel for everything else.
 export function roleFor(server: Server, url: string): Role | null {
   let u: URL
   try {
     u = new URL(url)
   } catch {
     return null
+  }
+  const own = new URL(server.url)
+  const editor = /^code([a-z0-9]+)[.-](.+)$/.exec(u.hostname)
+  if (editor && editor[2] === own.hostname && u.protocol === own.protocol && u.port === own.port) {
+    return { kind: 'editor', short: editor[1] }
   }
   if (u.origin !== server.url) return null
   const m = /^\/environments\/([^/]+)/.exec(u.pathname)
@@ -47,7 +55,11 @@ export function roleFor(server: Server, url: string): Role | null {
 }
 
 const same = (a: Role, b: Role | null) =>
-  !!b && a.kind === b.kind && (a.kind === 'panel' || (b.kind === 'env' && a.env === b.env))
+  !!b &&
+  a.kind === b.kind &&
+  (a.kind === 'panel' ||
+    (a.kind === 'env' && b.kind === 'env' && a.env === b.env) ||
+    (a.kind === 'editor' && b.kind === 'editor' && a.short === b.short))
 
 export interface Tab {
   id: number
@@ -187,6 +199,11 @@ export class ServerWindow {
     return shows(this.active) ? this.active : this.tabs.find(shows)
   }
 
+  // editorTab is the tab showing an environment's editor, if one does.
+  editorTab(short: string): Tab | undefined {
+    return this.tabs.find((t) => t.role.kind === 'editor' && t.role.short === short)
+  }
+
   // make builds a tab's view and wires its events; the caller places it.
   // The events find the tab's window through the tab, which a drag to
   // another window changes.
@@ -194,7 +211,9 @@ export class ServerWindow {
     const view = new WebContentsView({
       webPreferences: {
         partition: partition(this.server),
-        preload: join(__dirname, 'preload-page.js'),
+        // An editor is served by the environment, so what runs in it has no
+        // way to the app.
+        preload: role.kind === 'editor' ? undefined : join(__dirname, 'preload-page.js'),
         contextIsolation: true,
         sandbox: true,
         // A tab out of sight keeps its timers, so its sockets keep their
@@ -280,10 +299,23 @@ export class ServerWindow {
   }
 
   // route shows a page of this server in the tab it belongs in: its
-  // environment's -- made if there is none -- or the control panel.
+  // environment's -- made if there is none -- or the control panel. An
+  // editor already open in a tab is shown as it is: it signed in once, and
+  // its page has the state of the session.
   route(url: string, opts: { activate?: boolean } = {}) {
     const role = roleFor(this.server, url)
     if (!role) return
+    if (role.kind === 'editor') {
+      let tab = this.editorTab(role.short)
+      if (!tab) {
+        tab = this.make(role, url)
+        this.place(tab)
+      }
+      if (opts.activate !== false) this.activate(tab)
+      else this.layout()
+      this.onChange()
+      return
+    }
     let tab = role.kind === 'panel' ? this.panel : this.envTab(role.env)
     if (!tab) {
       tab = this.make(role, url)
@@ -418,11 +450,14 @@ export class ServerWindow {
   saved(): SavedWindow {
     const [x, y] = this.win.getPosition()
     const [width, height] = this.win.getSize()
+    // An editor's tab is not kept: the address it was opened at signed it in
+    // once, and does not again.
+    const kept = this.tabs.filter((t) => t.role.kind !== 'editor')
     return {
       id: this.id,
       server: this.server.id,
-      tabs: this.tabs.filter((t) => t !== this.panel).map((t) => t.view.webContents.getURL()),
-      active: this.tabs.indexOf(this.active),
+      tabs: kept.filter((t) => t !== this.panel).map((t) => t.view.webContents.getURL()),
+      active: Math.max(0, kept.indexOf(this.active)),
       bounds: { x, y, width, height },
     }
   }
