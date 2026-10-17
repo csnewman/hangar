@@ -392,15 +392,30 @@
 
 .newenv-machine {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px 14px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .newenv-machine label {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+}
+
+.newenv-machine > label > span:first-child {
+  width: 56px;
+  color: var(--muted);
+}
+
+.newenv-machine-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.newenv-machine-row label > span:first-child {
   color: var(--muted);
 }
 

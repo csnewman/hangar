@@ -1325,30 +1325,96 @@ input:focus {
   color: var(--bad);
 }
 
-/* A machine's memory: its number, its unit, and the size in the other. */
-.memory-field {
+/* A machine's vCPUs and memory: the value, and beside it what it comes
+   to, or why it may not fit. */
+.machine-field {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 6px 8px;
 }
 
-.field .memory-field input,
-.memory-field input {
+.field .machine-field input,
+.machine-field input {
   width: 84px;
 }
 
-.field .memory-field select,
-.memory-field select {
+.field .machine-field select,
+.machine-field select {
   width: auto;
 }
 
-.memory-field-note {
+/* vCPUs: a number between buttons that step it, drawn as one control. */
+.cpu-field {
+  display: inline-flex;
+  align-items: stretch;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.cpu-field:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Over the input styles of whatever form it is in. */
+.machine-field .cpu-field input[type='text'],
+.machine-field .cpu-field input[type='text']:focus {
+  width: 44px;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  padding: 0 4px;
+  text-align: center;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.cpu-field button {
+  width: 26px;
+  border: 0;
+  background: var(--bg);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.cpu-field button:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.cpu-field button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.cpu-field button:first-child {
+  border-right: 1px solid var(--border);
+}
+
+.cpu-field button:last-child {
+  border-left: 1px solid var(--border);
+}
+
+.machine-note {
   font-size: 12px;
   color: var(--muted);
 }
 
-.memory-field-note.field-error {
+.machine-note-warn {
+  color: var(--busy);
+}
+
+.machine-note-error {
   color: var(--bad);
 }
 

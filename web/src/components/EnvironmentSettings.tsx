@@ -3,7 +3,7 @@ import { useState } from 'react'
 
 import { api, type Environment, type EnvironmentSettings, type TemplateSetting } from '../api'
 import { changeable, environmentsKey } from '../environments'
-import { MemoryField } from './MemoryField'
+import { CPUField, MemoryField } from './MachineFields'
 
 const settingNames: Record<TemplateSetting, string> = {
   image: 'image',
@@ -106,18 +106,15 @@ export function SettingsForm({
         <div className="field-row">
           <label className="field">
             <span>vCPUs</span>
-            <input
-              type="number"
-              min={1}
-              max={64}
-              required
-              value={form.cpus}
-              onChange={(e) => setForm({ ...form, cpus: Number(e.target.value) })}
-            />
+            <CPUField cpus={form.cpus} memory={form.memory_mib} onChange={(cpus) => setForm({ ...form, cpus })} />
           </label>
           <label className="field">
             <span>Memory</span>
-            <MemoryField mib={form.memory_mib} onChange={(memory_mib) => setForm({ ...form, memory_mib })} />
+            <MemoryField
+              mib={form.memory_mib}
+              cpus={form.cpus}
+              onChange={(memory_mib) => setForm({ ...form, memory_mib })}
+            />
           </label>
         </div>
         <div className="field-row">

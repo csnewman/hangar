@@ -6,7 +6,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { api, type Access, type Display, type GPU, type Repo, type Template, type TemplateInput } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { formatMemory } from '../components/format'
-import { MemoryField } from '../components/MemoryField'
+import { CPUField, MemoryField } from '../components/MachineFields'
 import { PageHeader } from '../components/PageHeader'
 import {
   ApplyBar,
@@ -310,18 +310,11 @@ function Editor({ existing }: { existing?: Template }) {
         <div className="field-row">
           <label className="field">
             <span>vCPUs</span>
-            <input
-              type="number"
-              min={1}
-              max={64}
-              required
-              value={spec.cpus}
-              onChange={(e) => setSpec({ cpus: Number(e.target.value) })}
-            />
+            <CPUField cpus={spec.cpus} memory={spec.memory_mib} onChange={(cpus) => setSpec({ cpus })} />
           </label>
           <label className="field">
             <span>Memory</span>
-            <MemoryField mib={spec.memory_mib} onChange={(memory_mib) => setSpec({ memory_mib })} />
+            <MemoryField mib={spec.memory_mib} cpus={spec.cpus} onChange={(memory_mib) => setSpec({ memory_mib })} />
           </label>
         </div>
         <div className="field-row">
@@ -773,19 +766,20 @@ function Editor({ existing }: { existing?: Template }) {
                 )}
               </Row>
               <Row label={label('vCPUs', 'tpl-cpus')} modified={changed('cpus')}>
-                <input
+                <CPUField
                   id="tpl-cpus"
-                  type="number"
-                  className="pane-number"
-                  min={1}
-                  max={64}
-                  required
-                  value={spec.cpus}
-                  onChange={(e) => setSpec({ cpus: Number(e.target.value) })}
+                  cpus={spec.cpus}
+                  memory={spec.memory_mib}
+                  onChange={(cpus) => setSpec({ cpus })}
                 />
               </Row>
               <Row label={label('Memory', 'tpl-memory')} modified={changed('memory')}>
-                <MemoryField id="tpl-memory" mib={spec.memory_mib} onChange={(memory_mib) => setSpec({ memory_mib })} />
+                <MemoryField
+                  id="tpl-memory"
+                  mib={spec.memory_mib}
+                  cpus={spec.cpus}
+                  onChange={(memory_mib) => setSpec({ memory_mib })}
+                />
               </Row>
               <Row label={label('Display', 'tpl-display')} modified={changed('display')}>
                 <select

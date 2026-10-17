@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 
-import { api, type Environment, type Me } from './api'
+import { api, type Environment, type Me, type Resources } from './api'
 
 export const environmentsKey = ['environments'] as const
 
@@ -80,4 +80,22 @@ export function settingsSummary(env: Environment): string {
     `${s.display === 'desktop' ? 'desktop' : 'headless'}, ${s.gpu === 'none' ? 'no GPU' : `${s.gpu} GPU`}` +
     (s.dax ? ', image files mapped from the host' : '')
   )
+}
+
+// useWorkerSizes is the capacity of each worker online, largest first: how
+// big a machine can be and still find a worker that could hold it.
+export function useWorkerSizes() {
+  return useQuery({ queryKey: ['worker-sizes'], queryFn: api.workerSizes, staleTime: 30_000, refetchInterval: 60_000 })
+}
+
+// machineFit says whether some worker online could hold a machine of cpus
+// and mib, whatever it is running, and the most any one has of each. With
+// no worker online there is nothing to say.
+export function machineFit(sizes: Resources[] | undefined, cpus: number, mib: number) {
+  if (!sizes || sizes.length === 0) return null
+  return {
+    cpus: Math.max(...sizes.map((s) => s.cpus)),
+    memory: Math.max(...sizes.map((s) => s.memory_mib)),
+    fits: sizes.some((s) => s.cpus >= cpus && s.memory_mib >= mib),
+  }
 }

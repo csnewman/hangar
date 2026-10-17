@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 
 import { api, type EnvironmentSettings, type Template } from '../api'
-import { MemoryField } from '../components/MemoryField'
+import { CPUField, MemoryField } from '../components/MachineFields'
 import { Row, Rows, SearchField, Segmented, Tile } from '../components/Pane'
 import { desktop } from '../desktop'
 import { PhoneFoot, PhoneHead, PhoneNav, PhoneRow, PhoneSection, PhoneValue } from '../components/Phone'
@@ -502,48 +502,49 @@ function NewEnvironmentForm({
           ) : (
             <span className="newenv-machine">
               <label>
-                vCPUs
-                <input
-                  type="number"
-                  className="pane-input pane-number"
-                  min={1}
-                  max={64}
-                  value={m.cpus}
-                  onChange={(e) => onMachine({ ...m, cpus: Number(e.target.value) })}
+                <span>vCPUs</span>
+                <CPUField
+                  className="pane-input"
+                  cpus={m.cpus}
+                  memory={m.memory_mib}
+                  onChange={(cpus) => onMachine({ ...m, cpus })}
                 />
               </label>
               <label>
-                Memory
+                <span>Memory</span>
                 <MemoryField
                   className="pane-input"
                   mib={m.memory_mib}
+                  cpus={m.cpus}
                   onChange={(memory_mib) => onMachine({ ...m, memory_mib })}
                 />
               </label>
-              <Segmented
-                label="Display"
-                value={m.display}
-                onChange={(display) => onMachine({ ...m, display })}
-                options={[
-                  { value: 'desktop', label: 'Desktop' },
-                  { value: 'none', label: 'Headless' },
-                ]}
-              />
-              <label>
-                GPU
-                <select
-                  className="pane-input"
-                  value={m.gpu}
-                  onChange={(e) => onMachine({ ...m, gpu: e.target.value as EnvironmentSettings['gpu'] })}
-                >
-                  <option value="none">None</option>
-                  <option value="virtual">Virtual</option>
-                  {s.gpu === 'passthrough' && <option value="passthrough">Passthrough</option>}
-                </select>
-              </label>
-              <button type="button" className="pane-link" onClick={() => onMachine(null)}>
-                Use the template’s
-              </button>
+              <span className="newenv-machine-row">
+                <Segmented
+                  label="Display"
+                  value={m.display}
+                  onChange={(display) => onMachine({ ...m, display })}
+                  options={[
+                    { value: 'desktop', label: 'Desktop' },
+                    { value: 'none', label: 'Headless' },
+                  ]}
+                />
+                <label>
+                  <span>GPU</span>
+                  <select
+                    className="pane-input"
+                    value={m.gpu}
+                    onChange={(e) => onMachine({ ...m, gpu: e.target.value as EnvironmentSettings['gpu'] })}
+                  >
+                    <option value="none">None</option>
+                    <option value="virtual">Virtual</option>
+                    {s.gpu === 'passthrough' && <option value="passthrough">Passthrough</option>}
+                  </select>
+                </label>
+                <button type="button" className="pane-link" onClick={() => onMachine(null)}>
+                  Use the template’s
+                </button>
+              </span>
             </span>
           )}
         </Row>

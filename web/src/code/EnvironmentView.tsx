@@ -19,7 +19,7 @@ import { api, type Environment, type EnvironmentSettings, type TemplateSetting }
 import { Conflicts, CopyChoice, fromWhat, useEnvironmentPacks } from '../components/EnvironmentPacks'
 import { formatAgo, formatBytes, formatMemory, shortDigest } from '../components/format'
 import { imageBuild, imageRisk, useImageChange } from '../components/ImageUpdate'
-import { MemoryField } from '../components/MemoryField'
+import { CPUField, MemoryField } from '../components/MachineFields'
 import { Banner, CopyField, Row, Rows, Section } from '../components/Pane'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
@@ -766,19 +766,10 @@ function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
       <fieldset className="pane-fields" disabled={!ok}>
         <Rows>
           <Row label="vCPUs" modified={changed('cpus')}>
-            <input
-              type="number"
-              className="pane-number"
-              min={1}
-              max={64}
-              required
-              aria-label="vCPUs"
-              value={f.form.cpus}
-              onChange={(e) => f.set({ cpus: Number(e.target.value) })}
-            />
+            <CPUField cpus={f.form.cpus} memory={f.form.memory_mib} onChange={(cpus) => f.set({ cpus })} />
           </Row>
           <Row label="Memory" modified={changed('memory_mib')}>
-            <MemoryField mib={f.form.memory_mib} onChange={(memory_mib) => f.set({ memory_mib })} />
+            <MemoryField mib={f.form.memory_mib} cpus={f.form.cpus} onChange={(memory_mib) => f.set({ memory_mib })} />
           </Row>
           <Row label="Display" modified={changed('display')}>
             {(['desktop', 'none'] as const).map((d) => (
