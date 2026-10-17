@@ -22,13 +22,18 @@ if [ ! -d \$k ]; then
     cd \$k
     git init -q && git add -A && git -c user.name=b -c user.email=b@localhost commit -qm upstream
     for p in $repo/internal/kernel/patches/*.patch; do [ -e "\$p" ] && patch -p1 --forward --fuzz=0 < "\$p" >/dev/null; done
-    make ARCH=arm64 tinyconfig >/dev/null
-    ./scripts/kconfig/merge_config.sh -m -O . .config $repo/internal/kernel/hangar.config \
-        $repo/internal/kernel/hangar-arm64.config >/dev/null 2>&1 || true
 fi
 cd \$k
 rsync -a $repo/internal/kernel/tree/ ./
+# The config is made afresh from the fragments each time, so a change to
+# them is built; what it leaves the same is not rebuilt.
+make ARCH=arm64 tinyconfig >/dev/null
+./scripts/kconfig/merge_config.sh -m -O . .config $repo/internal/kernel/hangar.config \
+    $repo/internal/kernel/hangar-arm64.config >/dev/null 2>&1 || true
 make ARCH=arm64 olddefconfig >/dev/null
+for o in \$(grep -h '^CONFIG_.*=y' $repo/internal/kernel/hangar.config $repo/internal/kernel/hangar-arm64.config); do
+    grep -qx "\$o" .config || echo "not built in: \$o"
+done
 s=\$(date +%s)
 make ARCH=arm64 -j\$(nproc) Image > /var/tmp/kernel-dev.log 2>&1 || { grep -E "error|Error" /var/tmp/kernel-dev.log | head -20; exit 1; }
 mkdir -p $repo/out/kernel-dev && cp arch/arm64/boot/Image $repo/out/kernel-dev/vmlinuz

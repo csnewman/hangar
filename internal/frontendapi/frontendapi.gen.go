@@ -823,11 +823,30 @@ type EnvironmentStats struct {
 	DiskWriteBps  float32 `json:"disk_write_bps"`
 
 	// GPUCPUs The GPU backend's part of support_cpus, where software rendering runs.
-	GPUCPUs        float32 `json:"gpu_cpus"`
-	MemoryTotalMiB int     `json:"memory_total_mib"`
-	MemoryUsedMiB  int     `json:"memory_used_mib"`
-	NetRxBps       float32 `json:"net_rx_bps"`
-	NetTxBps       float32 `json:"net_tx_bps"`
+	GPUCPUs float32 `json:"gpu_cpus"`
+
+	// HostMemoryMiB The worker's memory the guest's RAM takes up: what the guest has touched and not handed back.
+	HostMemoryMiB int `json:"host_memory_mib"`
+
+	// MachineMemoryMaxMiB What its memory can be resized up to while it runs, as far as its worker has room; absent for a machine that cannot be resized while it runs.
+	MachineMemoryMaxMiB *int `json:"machine_memory_max_mib,omitempty"`
+
+	// MachineMemoryMiB The memory the machine has, as its monitor says; after a resize it reaches the new size in the guest's own time.
+	MachineMemoryMiB int `json:"machine_memory_mib"`
+
+	// MachineMemoryMinMiB What its memory can be resized down to while it runs; absent for a machine that cannot be resized while it runs.
+	MachineMemoryMinMiB *int `json:"machine_memory_min_mib,omitempty"`
+
+	// MemoryCachedMiB The guest's cache of files, which it counts as free and would give up for its programs, but which its worker holds for it all the same.
+	MemoryCachedMiB int `json:"memory_cached_mib"`
+
+	// MemoryTotalMiB All the memory the guest sees.
+	MemoryTotalMiB int `json:"memory_total_mib"`
+
+	// MemoryUsedMiB What the guest's programs use, as it sees it.
+	MemoryUsedMiB int     `json:"memory_used_mib"`
+	NetRxBps      float32 `json:"net_rx_bps"`
+	NetTxBps      float32 `json:"net_tx_bps"`
 
 	// SupportCPUs Host cores the processes serving it beside its vCPUs use: its GPU backend, file system and network. No vCPU limit holds them.
 	SupportCPUs float32 `json:"support_cpus"`
@@ -1504,7 +1523,10 @@ type WorkerStats struct {
 	DiskUsedBytes  int64   `json:"disk_used_bytes"`
 
 	// GPUCPUs The GPU backends' part of support_cpus, where software rendering runs.
-	GPUCPUs        float32 `json:"gpu_cpus"`
+	GPUCPUs float32 `json:"gpu_cpus"`
+
+	// GuestMemoryMiB The memory its environments' RAM takes up (host_memory_mib), summed.
+	GuestMemoryMiB int     `json:"guest_memory_mib"`
 	Load1          float32 `json:"load1"`
 	MemoryTotalMiB int     `json:"memory_total_mib"`
 	MemoryUsedMiB  int     `json:"memory_used_mib"`

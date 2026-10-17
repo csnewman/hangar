@@ -179,6 +179,18 @@ type Runtime struct {
 	// backend's environment for it; gpu is nil without a GPU backend.
 	gpu    *api.GPUInfo
 	gpuEnv []string
+	// memoryMaxMiB is what a machine's memory can grow to while it runs
+	// (UseCapacity); zero boots each with its own, for as long as it runs.
+	memoryMaxMiB int
+}
+
+// UseCapacity has machines booted after it able to grow to the
+// worker's whole offer of memory while they run. The room is address space,
+// not memory: the guest takes none of it until it is resized into it.
+func (r *Runtime) UseCapacity(offered api.Resources) {
+	r.mu.Lock()
+	r.memoryMaxMiB = offered.MemoryMiB
+	r.mu.Unlock()
 }
 
 // UseSharedFiles has environments booted from now on served the files they
@@ -422,6 +434,10 @@ type machine struct {
 	// suspendFailed is set when suspending failed, so it is not tried
 	// again until something else is asked for.
 	suspendFailed bool
+	// memoryAsked is the memory the running machine was last asked to
+	// resize to, so a size it cannot take is tried once, not on every
+	// desired set.
+	memoryAsked int
 	// image is the copy of its image the environment was made over, once
 	// it has first started.
 	image *api.ImageCopy
@@ -569,6 +585,7 @@ func (m *machine) control(ctx context.Context) {
 			if !running && !failed {
 				m.boot(ctx, *spec)
 			}
+			m.fitMemory(ctx)
 		case api.DesiredSuspended:
 			// Only a running machine has memory to keep. One that is not
 			// stays as it is: stopped, failed, or already suspended.
@@ -636,9 +653,34 @@ func (m *machine) boot(ctx context.Context, spec api.EnvironmentSpec) {
 	}
 	m.mu.Lock()
 	m.running = inst
+	m.memoryAsked = spec.Spec.MemoryMiB
 	m.mu.Unlock()
 	m.set(api.PhaseRunning, "")
 	go m.sample(inst, spec.Spec.CPUs)
+}
+
+// fitMemory resizes the running machine's memory to what its spec says, if
+// it has not been asked to already. One that booted with no room to resize
+// takes the size when it next starts.
+func (m *machine) fitMemory(ctx context.Context) {
+	m.mu.Lock()
+	inst, spec := m.running, m.spec
+	if inst == nil || spec == nil || spec.Spec.MemoryMiB == m.memoryAsked {
+		m.mu.Unlock()
+		return
+	}
+	want := spec.Spec.MemoryMiB
+	m.memoryAsked = want
+	m.mu.Unlock()
+
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	asked, err := inst.ResizeMemory(rctx, want)
+	if err != nil {
+		m.log.Warn("resizing memory", "mib", want, "err", err)
+		return
+	}
+	m.log.Info("resizing memory", "mib", asked)
 }
 
 // lost handles a machine that exited without being asked to.

@@ -49,7 +49,10 @@ type InstanceConfig struct {
 	Disks []ch.Disk `json:"disks"`
 
 	MemoryMiB int `json:"memory_mib"`
-	CPUs      int `json:"cpus"`
+	// MemoryMaxMiB, above MemoryMiB, is what the memory can be resized up
+	// to while the machine runs (ch.Config.MemoryMaxMB).
+	MemoryMaxMiB int `json:"memory_max_mib,omitempty"`
+	CPUs         int `json:"cpus"`
 	// DaxMiB sizes the window the base's files are mapped through. Zero
 	// reads every file through the backend instead.
 	DaxMiB int `json:"dax_mib"`
@@ -157,6 +160,32 @@ func (i *Instance) supportPids() (gpu int, others []int) {
 	return gpu, others
 }
 
+// Memory is the machine's memory, as its monitor has it.
+func (i *Instance) Memory(ctx context.Context) (ch.Memory, error) {
+	if i.api == nil {
+		return ch.Memory{}, errors.New("the monitor has no API socket")
+	}
+	return i.api.Memory(ctx)
+}
+
+// ResizeMemory asks the guest to have mib MiB of memory, or as near as it
+// can be resized to, and returns what it asked for. The guest plugs memory
+// in and gives it back in its own time; Memory says how far it has got.
+func (i *Instance) ResizeMemory(ctx context.Context, mib int) (int, error) {
+	m, err := i.Memory(ctx)
+	if err != nil {
+		return 0, err
+	}
+	if !m.Resizable() {
+		return m.Boot, errors.New("it booted with no room to resize its memory; it takes a new size when it next starts")
+	}
+	want := m.Fit(mib)
+	if want == m.Requested {
+		return want, nil
+	}
+	return want, i.api.ResizeMemory(ctx, want)
+}
+
 // Pid is the monitor's process ID.
 func (i *Instance) Pid() int {
 	if i.cmd == nil || i.cmd.Process == nil {
@@ -245,6 +274,7 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 		Initrd:       initrd,
 		Disks:        cfg.Disks,
 		MemoryMB:     cfg.MemoryMiB,
+		MemoryMaxMB:  cfg.MemoryMaxMiB,
 		CPUs:         cfg.CPUs,
 		ConsoleFile:  cfg.ConsoleFile,
 		ConsoleTTY:   caps.ConsoleTTY,

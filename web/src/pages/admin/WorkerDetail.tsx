@@ -202,6 +202,13 @@ function Machine({ worker: w }: { worker: Worker }) {
             max={s.memory_total_mib}
           />
           <StatTile
+            label="Environments' memory"
+            value={formatMemory(s.guest_memory_mib)}
+            detail={`held, of ${formatMemory(w.allocated.memory_mib)} they reserve`}
+            trend={pick((x) => x.guest_memory_mib)}
+            max={s.memory_total_mib}
+          />
+          <StatTile
             label="Disk"
             value={formatBytes(s.disk_used_bytes)}
             detail={s.disk_total_bytes ? `of ${formatBytes(s.disk_total_bytes)}` : undefined}
@@ -299,6 +306,7 @@ function Environments({ worker: w, className }: { worker: Worker; className: str
             <td className="num nowrap">{e.stats ? formatPercent(e.stats.cpu_percent) : '—'}</td>
             <td className="num nowrap">
               {e.stats ? `${formatMemory(e.stats.memory_used_mib)} of ${formatMemory(e.stats.memory_total_mib)}` : '—'}
+              {e.stats && <div className="muted small">{formatMemory(e.stats.host_memory_mib)} held</div>}
             </td>
           </tr>
         ))}

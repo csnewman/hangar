@@ -159,3 +159,104 @@ func TestDAXSetting(t *testing.T) {
 		t.Fatalf("after resetting: dax %v, changes %v", got.Spec.DAX, got.TemplateChanges)
 	}
 }
+
+// A running environment's memory alone can change, within what its machine
+// can be resized between and its worker has room for; the worker is told.
+func TestMemoryWhileRunning(t *testing.T) {
+	d := dbtest.Open(t)
+	em, tm := environments.NewManager(d), templates.NewManager(d)
+	u, _ := users.NewManager(d).Create(ctx, users.NewUser{Username: "owner", Password: "password1"})
+	p := users.Principal{UserID: u.ID, Username: u.Username}
+	tpl, err := tm.Create(ctx, p, templates.Input{Name: "t",
+		Spec: api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 2, MemoryMiB: 4096, Display: api.DisplayNone}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env, err := em.Create(ctx, p, api.CreateEnvironment{TemplateID: tpl.ID, Name: "e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := func(sql string, args ...any) {
+		t.Helper()
+		if err := d.Transact(ctx, func(tx db.Tx) error { _, err := tx.Exec(ctx, sql, args...); return err }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var worker string
+	if err := d.Transact(ctx, func(tx db.Tx) error {
+		return tx.QueryRow(ctx, `INSERT INTO workers (name, credential_hash, last_seen_at, cpus, memory_mib)
+			VALUES ('w', '\x00', now(), 8, 12288) RETURNING id`).Scan(&worker)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	version := func() (v int64) {
+		t.Helper()
+		if err := d.Transact(ctx, func(tx db.Tx) error {
+			return tx.QueryRow(ctx, `SELECT desired_version FROM workers WHERE id = $1`, worker).Scan(&v)
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	memory := func(mib int) environments.Settings {
+		return environments.Settings{CPUs: 2, MemoryMiB: mib, Display: api.DisplayNone, GPU: api.GPUNone}
+	}
+
+	// Booted before it could be resized, it reports no range.
+	set(`UPDATE environments SET worker_id = $2, phase = 'running', stats = '{"machine_memory_mib": 4096}'
+		WHERE id = $1`, env.ID, worker)
+	if _, err := em.UpdateSettings(ctx, p, env.ID, memory(6144)); !errors.Is(err, environments.ErrConflict) {
+		t.Fatalf("resizing a machine that cannot be: %v, want ErrConflict", err)
+	}
+
+	set(`UPDATE environments SET stats = '{"machine_memory_mib": 4096, "machine_memory_min_mib": 1024,
+		"machine_memory_max_mib": 12288}' WHERE id = $1`, env.ID)
+	before := version()
+	got, err := em.UpdateSettings(ctx, p, env.ID, memory(6144))
+	if err != nil {
+		t.Fatalf("growing it: %v", err)
+	}
+	if got.MemoryMiB != 6144 || got.Desired != api.DesiredRunning {
+		t.Fatalf("after growing: %d MiB, desired %s", got.MemoryMiB, got.Desired)
+	}
+	if version() == before {
+		t.Error("its worker's desired set did not change")
+	}
+	if _, err := em.UpdateSettings(ctx, p, env.ID, memory(2048)); err != nil {
+		t.Fatalf("shrinking it: %v", err)
+	}
+	if _, err := em.UpdateSettings(ctx, p, env.ID, memory(512)); !errors.Is(err, environments.ErrConflict) {
+		t.Errorf("shrinking below what it booted with: %v, want ErrConflict", err)
+	}
+	// Its programs use most of what it has: it keeps room above them.
+	if _, err := em.UpdateSettings(ctx, p, env.ID, memory(4096)); err != nil {
+		t.Fatal(err)
+	}
+	set(`UPDATE environments SET stats = stats || '{"memory_used_mib": 1700}' WHERE id = $1`, env.ID)
+	if _, err := em.UpdateSettings(ctx, p, env.ID, memory(1536)); !errors.Is(err, environments.ErrConflict) {
+		t.Errorf("shrinking below what its programs use: %v, want ErrConflict", err)
+	}
+	if _, err := em.UpdateSettings(ctx, p, env.ID, memory(1700+environments.ShrinkHeadroomMiB)); err != nil {
+		t.Errorf("shrinking to what its programs use and the headroom: %v", err)
+	}
+
+	// Another environment on the worker takes most of its room.
+	other, err := em.Create(ctx, p, api.CreateEnvironment{TemplateID: tpl.ID, Name: "other",
+		Machine: &api.Machine{CPUs: 2, MemoryMiB: 8192, Display: api.DisplayNone, GPU: api.GPUNone}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set(`UPDATE environments SET worker_id = $2, phase = 'running' WHERE id = $1`, other.ID, worker)
+	if _, err := em.UpdateSettings(ctx, p, env.ID, memory(6144)); !errors.Is(err, environments.ErrConflict) {
+		t.Errorf("growing past the worker's room: %v, want ErrConflict", err)
+	}
+	if _, err := em.UpdateSettings(ctx, p, env.ID, memory(4096)); err != nil {
+		t.Errorf("growing within it: %v", err)
+	}
+
+	s := memory(4096)
+	s.CPUs = 4
+	if _, err := em.UpdateSettings(ctx, p, env.ID, s); !errors.Is(err, environments.ErrConflict) {
+		t.Errorf("changing its vCPUs while it runs: %v, want ErrConflict", err)
+	}
+}

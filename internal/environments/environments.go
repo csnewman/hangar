@@ -44,13 +44,16 @@ type Manager struct {
 func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 
 // columns are an environment's, its worker's being online among them: seen
-// within workers.OnlineWindow and not revoked.
+// within workers.OnlineWindow and not revoked, and the memory its worker
+// has room for it to have, what the others there take aside.
 var columns = `e.id, e.short_id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
 	e.spec, e.image, e.image_digest, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
 	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress, w.gpu,
 	tm.spec, coalesce(tm.revision, 0), e.template_revision, e.image_pin_want, e.image_update, e.image_rollback, e.ports_public,
 	coalesce(w.last_seen_at > now() - interval '` + strconv.Itoa(int(workers.OnlineWindow.Seconds())) + ` seconds'
-		AND w.revoked_at IS NULL, false)`
+		AND w.revoked_at IS NULL, false),
+	coalesce(w.memory_mib - (SELECT coalesce(sum(o.memory_mib), 0) FROM environments o WHERE o.worker_id = w.id
+		AND o.id <> e.id AND ` + strings.ReplaceAll(workers.Occupying, "e.", "o.") + `), 0)`
 
 const from = `environments e
 	JOIN users u ON u.id = e.owner_id
@@ -66,9 +69,10 @@ func scan(row pgx.Row) (api.Environment, error) {
 	var spec, stats, progress, gpu, tspec, update, rollback []byte
 	var trev, erev int64
 	var pinWant *string
+	var room int
 	err := row.Scan(&e.ID, &e.ShortID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.ImageDigest, &e.CPUs,
 		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats,
-		&progress, &gpu, &tspec, &trev, &erev, &pinWant, &update, &rollback, &e.PortsPublic, &e.WorkerOnline)
+		&progress, &gpu, &tspec, &trev, &erev, &pinWant, &update, &rollback, &e.PortsPublic, &e.WorkerOnline, &room)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}
@@ -81,6 +85,10 @@ func scan(row pgx.Row) (api.Environment, error) {
 		e.Stats = &api.EnvironmentStats{}
 		if err := json.Unmarshal(stats, e.Stats); err != nil {
 			return e, err
+		}
+		// It can grow only as far as its worker has room.
+		if s := e.Stats; s.MachineMemoryMaxMiB > 0 {
+			s.MachineMemoryMaxMiB = max(min(s.MachineMemoryMaxMiB, room), e.MemoryMiB)
 		}
 	}
 	if progress != nil && e.Phase == api.PhaseStarting {

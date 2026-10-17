@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/procs"
 	"github.com/csnewman/hangar/internal/terminal"
 )
@@ -41,6 +42,17 @@ type Simulated struct {
 	terminals map[string]*terminal.Manager
 	// procs lists this machine's processes for every environment.
 	procs *procs.Server
+	// memoryMaxMiB is what a running environment's memory can be resized
+	// to, as a real worker's can (UseCapacity).
+	memoryMaxMiB int
+}
+
+// UseCapacity has running environments resizable up to the worker's offer
+// of memory.
+func (s *Simulated) UseCapacity(offered api.Resources) {
+	s.mu.Lock()
+	s.memoryMaxMiB = offered.MemoryMiB
+	s.mu.Unlock()
 }
 
 type simEnv struct {
@@ -89,7 +101,7 @@ func (s *Simulated) Observe() []api.ObservedEnvironment {
 			}
 		}
 		if e.phase == api.PhaseRunning {
-			e.wander()
+			e.wander(s.memoryMaxMiB)
 			u := e.usage
 			o.Stats = &u
 		}
@@ -198,10 +210,15 @@ func (s *Simulated) notify() {
 }
 
 // wander moves the pretend measurement a little, within what the
-// environment's spec allows.
-func (e *simEnv) wander() {
+// environment's spec allows. Its memory takes its spec's size at once, and
+// can be resized up to maxMiB while it runs.
+func (e *simEnv) wander(maxMiB int) {
 	u := &e.usage
 	u.MemoryTotalMiB = e.spec.MemoryMiB
+	u.MachineMemoryMiB = e.spec.MemoryMiB
+	if maxMiB > e.spec.MemoryMiB && u.MachineMemoryMaxMiB == 0 {
+		u.MachineMemoryMinMiB, u.MachineMemoryMaxMiB = ch.BootMemoryMB(e.spec.MemoryMiB), maxMiB
+	}
 	if u.MemoryUsedMiB == 0 {
 		u.MemoryUsedMiB = e.spec.MemoryMiB / 4
 		u.DiskUsedBytes = 600 << 20
@@ -210,6 +227,8 @@ func (e *simEnv) wander() {
 	u.CPUPercent = step(u.CPUPercent, 12, 1, 95)
 	u.MemoryUsedMiB = int(step(float64(u.MemoryUsedMiB), float64(e.spec.MemoryMiB)/20, 128,
 		float64(e.spec.MemoryMiB)*0.9))
+	u.MemoryCachedMiB = min(u.MemoryUsedMiB/2, e.spec.MemoryMiB-u.MemoryUsedMiB)
+	u.HostMemoryMiB = min(u.MemoryUsedMiB+u.MemoryCachedMiB+200, e.spec.MemoryMiB)
 	u.DiskUsedBytes += int64(rand.IntN(4 << 20))
 	burst := func(v float64) float64 {
 		if rand.IntN(4) == 0 {

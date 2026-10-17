@@ -26,7 +26,7 @@ import { Banner, CopyField, IndexedPage, Row, Rows, Section } from '../component
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
 import { openVSCode, openVSCodeTab, useEnvironmentActions, vscodeItems } from '../environmentActions'
-import { changeable, environmentsKey, longestWebName, sshCommand, webURL } from '../environments'
+import { changeable, environmentsKey, liveMemory, longestWebName, sshCommand, webURL } from '../environments'
 import { copyName, packPath } from '../pages/Packs'
 import { useMe } from '../session'
 import { homeTab, otherTab } from '../workspaceLinks'
@@ -684,51 +684,76 @@ function useSettingsForm(env: Environment) {
 
 function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
   const ok = changeable(env)
+  const live = ok ? undefined : liveMemory(env)
   const changed = (key: keyof EnvironmentSettings) => f.changes.some((c) => c.key === key)
   const placement = Object.entries(env.spec.placement ?? {})
+  // While it runs, its memory alone can change.
+  const fixed = (children: ReactNode) =>
+    live ? (
+      <fieldset className="pane-fields pane-fields-inline" disabled>
+        {children}
+      </fieldset>
+    ) : (
+      children
+    )
+  const has = env.stats?.machine_memory_mib
 
   return (
     <>
-      <fieldset className="pane-fields" disabled={!ok}>
+      <fieldset className="pane-fields" disabled={!ok && !live}>
         <Rows>
           <Row label="vCPUs" modified={changed('cpus')}>
-            <CPUField cpus={f.form.cpus} memory={f.form.memory_mib} onChange={(cpus) => f.set({ cpus })} />
+            {fixed(<CPUField cpus={f.form.cpus} memory={f.form.memory_mib} onChange={(cpus) => f.set({ cpus })} />)}
           </Row>
           <Row label="Memory" modified={changed('memory_mib')}>
-            <MemoryField mib={f.form.memory_mib} cpus={f.form.cpus} onChange={(memory_mib) => f.set({ memory_mib })} />
+            <MemoryField
+              mib={f.form.memory_mib}
+              cpus={f.form.cpus}
+              running={live}
+              onChange={(memory_mib) => f.set({ memory_mib })}
+            />
+            {live && has && Math.abs(has - env.memory_mib) > 2 && (
+              <span className="muted small">It has {formatMemory(has)} now</span>
+            )}
           </Row>
           <Row label="Display" modified={changed('display')}>
-            {(['desktop', 'none'] as const).map((d) => (
-              <label key={d} className="check">
-                <input
-                  type="radio"
-                  name={`display-${env.id}`}
-                  checked={f.form.display === d}
-                  onChange={() => f.set({ display: d })}
-                />
-                <span>{d === 'desktop' ? 'Desktop' : 'Headless'}</span>
-              </label>
-            ))}
+            {fixed(
+              (['desktop', 'none'] as const).map((d) => (
+                <label key={d} className="check">
+                  <input
+                    type="radio"
+                    name={`display-${env.id}`}
+                    checked={f.form.display === d}
+                    onChange={() => f.set({ display: d })}
+                  />
+                  <span>{d === 'desktop' ? 'Desktop' : 'Headless'}</span>
+                </label>
+              )),
+            )}
           </Row>
           <Row label="GPU" modified={changed('gpu')}>
-            <select
-              aria-label="GPU"
-              value={f.form.gpu}
-              onChange={(e) => f.set({ gpu: e.target.value as EnvironmentSettings['gpu'] })}
-            >
-              <option value="none">None</option>
-              <option value="virtual">Virtual</option>
-              {env.spec.gpu === 'passthrough' && <option value="passthrough">Passthrough</option>}
-            </select>
+            {fixed(
+              <select
+                aria-label="GPU"
+                value={f.form.gpu}
+                onChange={(e) => f.set({ gpu: e.target.value as EnvironmentSettings['gpu'] })}
+              >
+                <option value="none">None</option>
+                <option value="virtual">Virtual</option>
+                {env.spec.gpu === 'passthrough' && <option value="passthrough">Passthrough</option>}
+              </select>,
+            )}
           </Row>
           <Row label="Image files" modified={changed('dax')}>
-            <label
-              className="check"
-              title="Their memory is shared with other environments on the image, but programs run from large files, such as a browser, start slower"
-            >
-              <input type="checkbox" checked={f.form.dax} onChange={(e) => f.set({ dax: e.target.checked })} />
-              <span>Map them from the worker's memory (DAX)</span>
-            </label>
+            {fixed(
+              <label
+                className="check"
+                title="Their memory is shared with other environments on the image, but programs run from large files, such as a browser, start slower"
+              >
+                <input type="checkbox" checked={f.form.dax} onChange={(e) => f.set({ dax: e.target.checked })} />
+                <span>Map them from the worker's memory (DAX)</span>
+              </label>,
+            )}
           </Row>
           {placement.length > 0 && (
             <Row label="Placement">
@@ -742,7 +767,9 @@ function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
         <Info size={12} />
         {ok
           ? 'They apply when it next starts.'
-          : 'Stop the environment to change these. They apply when it next starts.'}
+          : live
+            ? 'Its memory changes as it runs. Stop the environment to change the rest; they apply when it next starts.'
+            : 'Stop the environment to change these. They apply when it next starts.'}
       </p>
     </>
   )
@@ -760,7 +787,9 @@ function ApplyBar({ env, form: f }: { env: Environment; form: SettingsForm }) {
     onSettled: () => qc.invalidateQueries({ queryKey: environmentsKey }),
   })
   const n = f.changes.length
-  const ok = changeable(env)
+  const live = !changeable(env) && !!liveMemory(env)
+  const memoryOnly = f.changes.every((c) => c.key === 'memory_mib')
+  const ok = changeable(env) || (live && memoryOnly)
   return (
     <div className="pane-apply">
       <strong className="pane-modified">
@@ -771,8 +800,12 @@ function ApplyBar({ env, form: f }: { env: Environment; form: SettingsForm }) {
           <span className="action-error">{save.error.message}</span>
         ) : (
           <>
-            {f.changes.map((c) => `${c.word} ${c.show(f.saved)} → ${c.show(f.form)}`).join(', ')}. Applied when it
-            starts.
+            {f.changes.map((c) => `${c.word} ${c.show(f.saved)} → ${c.show(f.form)}`).join(', ')}.{' '}
+            {live
+              ? memoryOnly
+                ? 'Applied as it runs.'
+                : 'Stop it to apply them; memory alone changes as it runs.'
+              : 'Applied when it starts.'}
           </>
         )}
       </span>

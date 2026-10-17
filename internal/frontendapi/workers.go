@@ -139,6 +139,7 @@ func workerStats(s *api.WorkerStats) *WorkerStats {
 		Load1:          float32(s.Load1),
 		MemoryUsedMiB:  s.MemoryUsedMiB,
 		MemoryTotalMiB: s.MemoryTotalMiB,
+		GuestMemoryMiB: s.GuestMemoryMiB,
 		DiskUsedBytes:  s.DiskUsedBytes,
 		DiskTotalBytes: s.DiskTotalBytes,
 	}

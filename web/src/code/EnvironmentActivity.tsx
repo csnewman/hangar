@@ -136,7 +136,10 @@ function describe(e: AuditEvent): { what: string; detail?: string } {
         const c = d[key] as Change<never> | undefined
         return c && c.from !== c.to ? [`${label} ${show(c.from)} → ${show(c.to)}`] : []
       })
-      return { what: 'changed its settings', detail: changed.join(' · ') || undefined }
+      return {
+        what: d.running ? 'resized its memory as it ran' : 'changed its settings',
+        detail: changed.join(' · ') || undefined,
+      }
     }
     case 'environment.reset_to_template':
       return { what: 'reset it to its template' }

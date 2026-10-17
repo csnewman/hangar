@@ -66,6 +66,7 @@ func main() {
 	retry := flag.Duration("retry", 500*time.Millisecond, "delay between connection attempts")
 	flag.Parse()
 
+	widenReclaim()
 	go serveTerminals()
 	go serveEditor()
 	go serveDesktop()

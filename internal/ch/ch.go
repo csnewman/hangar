@@ -19,7 +19,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// reclaimMinAge is how long a guest's page goes untouched before DAMON
+// reclaims it, handing it back to the host. Read again, a page comes from
+// the host's own page cache: the guest's disks are files there.
+const reclaimMinAge = 5 * time.Minute
 
 // maxDiskQueues bounds a disk's queues. Each is a thread in the monitor with
 // an io_uring and its own descriptors, half a dozen of them: past a few
@@ -56,6 +62,11 @@ type Config struct {
 	Disks    []Disk // first disk becomes /dev/vda
 	MemoryMB int
 	CPUs     int
+
+	// MemoryMaxMB, above MemoryMB, lets the guest's memory be resized while
+	// it runs, from BootMemoryMB(MemoryMB) up to MemoryMaxMB. Zero gives it
+	// MemoryMB for as long as it runs.
+	MemoryMaxMB int
 
 	// ConsoleFile, when set, writes the guest serial console to this file
 	// instead of attaching it to the terminal. Used for unattended runs.
@@ -112,8 +123,8 @@ type Config struct {
 	GpuShmMiB int
 	GpuShmID  int
 
-	// APISocket, when set, lets ch-remote drive the running VM, which is how
-	// the balloon is resized.
+	// APISocket, when set, is where the running monitor is driven from
+	// (API): suspended, and its memory resized.
 	APISocket string
 
 	// Seccomp selects the monitor's syscall filtering: "true", "false",
@@ -160,7 +171,7 @@ func (c *Config) Args() ([]string, error) {
 		// guest's memory directly. Huge pages come from the host's shmem
 		// policy rather than from a flag here -- Cloud Hypervisor already
 		// asks for them with madvise.
-		"--memory", fmt.Sprintf("size=%dM,shared=on", c.MemoryMB),
+		"--memory", c.memory(),
 
 		// free-page-reporting is the whole point of the balloon: the guest
 		// hands back pages as it frees them and the host takes them without
@@ -259,6 +270,45 @@ func (c *Config) Args() ([]string, error) {
 	return args, nil
 }
 
+// BootMemoryMB is how much of a resizable machine of mb MiB is there from
+// boot: a quarter, in whole 128 MiB, and at least 1 GiB. It can never be
+// resized below it. The rest is virtio-mem, which the guest onlines as
+// movable memory while it is at most three times what it booted with, so
+// that it can be unplugged again; the kernel's own allocations, which cannot
+// move, are left the quarter.
+func BootMemoryMB(mb int) int {
+	return min(max(mb/4/virtioMemAlignMB*virtioMemAlignMB, 1024), mb)
+}
+
+// virtioMemAlignMB is what Cloud Hypervisor's virtio-mem region is sized in,
+// and virtioMemBlockMB what is plugged and unplugged in.
+const (
+	virtioMemAlignMB = 128
+	virtioMemBlockMB = 2
+)
+
+// memory is the --memory argument: mb MiB, all of it there from boot, or
+// with MemoryMaxMB, a boot size and the rest of mb plugged into a region
+// that reaches MemoryMaxMB.
+func (c *Config) memory() string {
+	if c.MemoryMaxMB <= c.MemoryMB {
+		return fmt.Sprintf("size=%dM,shared=on", c.MemoryMB)
+	}
+	boot := BootMemoryMB(c.MemoryMB)
+	region := (c.MemoryMaxMB - boot + virtioMemAlignMB - 1) / virtioMemAlignMB * virtioMemAlignMB
+	arg := fmt.Sprintf("size=%dM,shared=on,hotplug_method=virtio-mem,hotplug_size=%dM", boot, region)
+	if plugged := plugged(c.MemoryMB-boot, region); plugged > 0 {
+		arg += fmt.Sprintf(",hotplugged_size=%dM", plugged)
+	}
+	return arg
+}
+
+// plugged is mb in whole virtio-mem blocks, rounded up, and at most region.
+func plugged(mb, region int) int {
+	mb = (mb + virtioMemBlockMB - 1) / virtioMemBlockMB * virtioMemBlockMB
+	return min(max(mb, 0), region)
+}
+
 func (c *Config) cmdline() string {
 	// No root= : the initramfs mounts the base read-only, the upper layer
 	// read-write, stacks overlayfs and switch_roots into the result.
@@ -268,6 +318,20 @@ func (c *Config) cmdline() string {
 	// inside a guest, one owner's processes need not pay to be kept from
 	// each other.
 	cl += " mitigations=off"
+	// Memory plugged in is onlined movable while the guest has three times
+	// as much movable as it booted with, the kernel's own allocations
+	// keeping the rest, and in the kernel's zone beyond: a guest grown far
+	// past its boot size still has room for page tables and caches.
+	cl += " memory_hotplug.online_policy=auto-movable"
+	// Memory the guest frees goes back to the host by the balloon's free
+	// page reporting, but its file cache is not free and would be kept for
+	// as long as it runs. DAMON reclaims pages untouched for minAge,
+	// whatever memory is free, so the cache of what was read once goes
+	// back too. Anonymous memory is left alone: the guest has no swap. The
+	// agent widens what it watches to the memory virtio-mem plugs in.
+	cl += fmt.Sprintf(" damon_reclaim.enabled=Y damon_reclaim.min_age=%d damon_reclaim.skip_anon=Y"+
+		" damon_reclaim.wmarks_high=1000 damon_reclaim.wmarks_mid=999 damon_reclaim.wmarks_low=0",
+		reclaimMinAge.Microseconds())
 	if c.ExtraCmdline != "" {
 		cl += " " + c.ExtraCmdline
 	}

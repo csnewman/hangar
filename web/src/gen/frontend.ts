@@ -727,7 +727,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Changes a stopped environment's size, display and GPU, which take effect when it next starts. */
+        /** @description Changes a stopped environment's size, display and GPU, which take effect when it next starts, or a running one's memory alone, which its machine is resized to as it runs: within what it can be resized between (EnvironmentStats) and what its worker has room for. */
         put: operations["updateEnvironmentSettings"];
         post?: never;
         delete?: never;
@@ -1773,6 +1773,8 @@ export interface components {
             load1: number;
             memory_used_mib: number;
             memory_total_mib: number;
+            /** @description The memory its environments' RAM takes up (host_memory_mib), summed. */
+            guest_memory_mib: number;
             /** Format: int64 */
             disk_used_bytes: number;
             /** Format: int64 */
@@ -1799,8 +1801,20 @@ export interface components {
             gpu_cpus: number;
             /** @description Of the environment's own vCPUs; 100 is all of them busy. */
             cpu_percent: number;
+            /** @description What the guest's programs use, as it sees it. */
             memory_used_mib: number;
+            /** @description All the memory the guest sees. */
             memory_total_mib: number;
+            /** @description The guest's cache of files, which it counts as free and would give up for its programs, but which its worker holds for it all the same. */
+            memory_cached_mib: number;
+            /** @description The worker's memory the guest's RAM takes up: what the guest has touched and not handed back. */
+            host_memory_mib: number;
+            /** @description The memory the machine has, as its monitor says; after a resize it reaches the new size in the guest's own time. */
+            machine_memory_mib: number;
+            /** @description What its memory can be resized down to while it runs; absent for a machine that cannot be resized while it runs. */
+            machine_memory_min_mib?: number;
+            /** @description What its memory can be resized up to while it runs, as far as its worker has room; absent for a machine that cannot be resized while it runs. */
+            machine_memory_max_mib?: number;
             /**
              * Format: int64
              * @description What its writable layer and Docker store take on the worker.

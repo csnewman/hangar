@@ -241,6 +241,13 @@ function Usage({ env }: { env: Environment }) {
         max={s.memory_total_mib}
       />
       <Meter
+        label="On worker"
+        value={formatMemory(s.host_memory_mib)}
+        title={`What its worker holds for it: what it uses, its ${formatMemory(s.memory_cached_mib)} cache of files, and memory it has yet to hand back`}
+        trend={pick((x) => x.host_memory_mib)}
+        max={s.memory_total_mib}
+      />
+      <Meter
         label="Disk"
         value={`${formatRate(s.disk_read_bps)} in · ${formatRate(s.disk_write_bps)} out`}
         trend={pick((x) => x.disk_read_bps + x.disk_write_bps)}
@@ -254,11 +261,25 @@ function Usage({ env }: { env: Environment }) {
   )
 }
 
-function Meter({ label, value, trend, max }: { label: string; value: string; trend: number[]; max?: number }) {
+function Meter({
+  label,
+  value,
+  title,
+  trend,
+  max,
+}: {
+  label: string
+  value: string
+  title?: string
+  trend: number[]
+  max?: number
+}) {
   return (
     <>
-      <span className="code-perf-label">{label}</span>
-      <span className="code-perf-value" title={value}>
+      <span className="code-perf-label" title={title}>
+        {label}
+      </span>
+      <span className="code-perf-value" title={title ? `${value}: ${title}` : value}>
         {value}
       </span>
       <span className="code-perf-trend">{trend.length > 1 && <Sparkline values={trend} max={max} />}</span>

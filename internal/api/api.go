@@ -529,10 +529,26 @@ type EnvironmentStats struct {
 	// environment beside its vCPUs: its GPU backend, file system and
 	// network. GPUCPUs is the GPU backend's part, which is where software
 	// rendering runs. No vCPU limit holds either.
-	SupportCPUs    float64 `json:"support_cpus"`
-	GPUCPUs        float64 `json:"gpu_cpus"`
-	MemoryUsedMiB  int     `json:"memory_used_mib"`
-	MemoryTotalMiB int     `json:"memory_total_mib"`
+	SupportCPUs float64 `json:"support_cpus"`
+	GPUCPUs     float64 `json:"gpu_cpus"`
+	// MemoryUsedMiB and MemoryTotalMiB are the guest's own view: what its
+	// programs use, and all it has. MemoryCachedMiB is its cache of files,
+	// which it would give up for its programs and counts as free, but which
+	// the host holds for it all the same.
+	MemoryUsedMiB   int `json:"memory_used_mib"`
+	MemoryTotalMiB  int `json:"memory_total_mib"`
+	MemoryCachedMiB int `json:"memory_cached_mib"`
+	// HostMemoryMiB is the worker's memory the guest's RAM takes up: what the
+	// guest has touched and not handed back.
+	HostMemoryMiB int `json:"host_memory_mib"`
+	// MachineMemoryMiB is the memory the machine has, as its monitor says,
+	// which reaches a new size in the guest's own time. A machine that can
+	// be resized while it runs can be to between MachineMemoryMinMiB and
+	// MachineMemoryMaxMiB, which the server holds to what its worker has
+	// room for; both are zero for one that cannot.
+	MachineMemoryMiB    int `json:"machine_memory_mib"`
+	MachineMemoryMinMiB int `json:"machine_memory_min_mib,omitempty"`
+	MachineMemoryMaxMiB int `json:"machine_memory_max_mib,omitempty"`
 	// DiskUsedBytes is what its writable layer and Docker store take up on
 	// the worker.
 	DiskUsedBytes int64   `json:"disk_used_bytes"`
@@ -552,6 +568,9 @@ type WorkerStats struct {
 	Load1          float64 `json:"load1"`
 	MemoryUsedMiB  int     `json:"memory_used_mib"`
 	MemoryTotalMiB int     `json:"memory_total_mib"`
+	// GuestMemoryMiB is the memory its environments' RAM takes up
+	// (EnvironmentStats.HostMemoryMiB), summed.
+	GuestMemoryMiB int `json:"guest_memory_mib"`
 	// DiskUsedBytes and DiskTotalBytes are for the filesystem environments
 	// are kept on.
 	DiskUsedBytes  int64 `json:"disk_used_bytes"`

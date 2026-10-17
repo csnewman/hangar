@@ -2,6 +2,7 @@ package vm
 
 import (
 	"bufio"
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +14,11 @@ import (
 
 // sampleEvery is how often a running machine is measured.
 const sampleEvery = 5 * time.Second
+
+// shrinkPatience is how long a guest has to give back memory it was asked
+// to. One that has not by then is using it, and asking on would have it
+// kill what it runs to find more, so it keeps what it has.
+const shrinkPatience = 2 * time.Minute
 
 // counters are the cumulative figures rates are worked out from.
 type counters struct {
@@ -33,9 +39,13 @@ type counters struct {
 // the host's CPUs when it renders in software, and no vCPU limit holds it.
 // Memory, disk and network come from inside the guest through its agent:
 // the guest knows what it has free, and sees its own devices whichever
-// backend serves them.
+// backend serves them. What its memory costs the host, and how big the
+// machine is, are the host's and the monitor's to say.
 func (m *machine) sample(inst *Instance, cpus int) {
 	var prev *counters
+	// shrinking is since when the guest has had more memory than it was
+	// asked to.
+	var shrinking time.Time
 	t := time.NewTicker(sampleEvery)
 	defer t.Stop()
 	for {
@@ -44,7 +54,29 @@ func (m *machine) sample(inst *Instance, cpus int) {
 
 		if pid := inst.Pid(); pid != 0 {
 			now.cpuTicks = processTicks(pid)
+			st.HostMemoryMiB = int(guestRAM(pid) >> 20)
 		}
+		mctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if mem, err := inst.Memory(mctx); err == nil {
+			st.MachineMemoryMiB = mem.Actual
+			if mem.Resizable() {
+				st.MachineMemoryMinMiB, st.MachineMemoryMaxMiB = mem.Boot, mem.Max
+			}
+			switch {
+			case mem.Requested >= mem.Actual:
+				shrinking = time.Time{}
+			case shrinking.IsZero():
+				shrinking = now.at
+			case now.at.Sub(shrinking) > shrinkPatience:
+				m.log.Warn("the guest could not give back the memory asked of it; it keeps what it has",
+					"asked_mib", mem.Requested, "has_mib", mem.Actual)
+				if _, err := inst.ResizeMemory(mctx, mem.Actual); err != nil {
+					m.log.Warn("resizing memory", "mib", mem.Actual, "err", err)
+				}
+				shrinking = time.Time{}
+			}
+		}
+		cancel()
 		gpu, others := inst.supportPids()
 		host := readProcs()
 		if gpu != 0 {
@@ -95,7 +127,7 @@ func (m *machine) sample(inst *Instance, cpus int) {
 // guest reads the guest's /proc/meminfo, /proc/net/dev and /proc/diskstats,
 // concatenated.
 func guest(text string, st *api.EnvironmentStats, c *counters) {
-	var total, avail int
+	var total, avail, buffers, cached, shmem int
 	sc := bufio.NewScanner(strings.NewReader(text))
 	for sc.Scan() {
 		line := sc.Text()
@@ -119,6 +151,12 @@ func guest(text string, st *api.EnvironmentStats, c *counters) {
 					total = kib
 				case "MemAvailable":
 					avail = kib
+				case "Buffers":
+					buffers = kib
+				case "Cached":
+					cached = kib
+				case "Shmem":
+					shmem = kib
 				}
 			}
 			continue
@@ -134,6 +172,9 @@ func guest(text string, st *api.EnvironmentStats, c *counters) {
 	}
 	st.MemoryTotalMiB = total / 1024
 	st.MemoryUsedMiB = (total - avail) / 1024
+	// Shared memory -- tmpfs, mostly -- is counted as cached, but it is
+	// files nothing else holds, and it cannot be given up.
+	st.MemoryCachedMiB = max(buffers+cached-shmem, 0) / 1024
 }
 
 // isWholeDisk is true for the guest's virtio disks themselves, and false for

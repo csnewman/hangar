@@ -172,6 +172,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		Log:         m.log,
 	}
 	m.rt.mu.Lock()
+	cfg.MemoryMaxMiB = m.rt.memoryMaxMiB
 	if root, view := m.rt.filesRoot, m.rt.filesView; root != "" && view != nil {
 		cfg.SharedFiles = root
 		cfg.SharedView = func(ctx context.Context) nfs.View { return view(ctx, m.id) }

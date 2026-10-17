@@ -1082,7 +1082,9 @@ paths:
       operationId: updateEnvironmentSettings
       description: >-
         Changes a stopped environment's size, display and GPU, which take
-        effect when it next starts.
+        effect when it next starts, or a running one's memory alone, which
+        its machine is resized to as it runs: within what it can be resized
+        between (EnvironmentStats) and what its worker has room for.
       requestBody:
         required: true
         content:
@@ -2635,7 +2637,7 @@ components:
     WorkerStats:
       type: object
       description: The worker's machine as a whole, as last measured.
-      required: [cpu_percent, support_cpus, gpu_cpus, load1, memory_used_mib, memory_total_mib, disk_used_bytes, disk_total_bytes]
+      required: [cpu_percent, support_cpus, gpu_cpus, load1, memory_used_mib, memory_total_mib, guest_memory_mib, disk_used_bytes, disk_total_bytes]
       properties:
         cpu_percent: { type: number }
         support_cpus:
@@ -2649,6 +2651,9 @@ components:
         load1: { type: number }
         memory_used_mib: { type: integer }
         memory_total_mib: { type: integer }
+        guest_memory_mib:
+          type: integer
+          description: The memory its environments' RAM takes up (host_memory_mib), summed.
         disk_used_bytes: { type: integer, format: int64 }
         disk_total_bytes: { type: integer, format: int64 }
 
@@ -2677,7 +2682,7 @@ components:
       description: >-
         What a running environment uses, as its worker last measured it.
         Rates are per second.
-      required: [cpu_percent, support_cpus, gpu_cpus, memory_used_mib, memory_total_mib, disk_used_bytes, disk_read_bps, disk_write_bps, net_rx_bps, net_tx_bps]
+      required: [cpu_percent, support_cpus, gpu_cpus, memory_used_mib, memory_total_mib, memory_cached_mib, host_memory_mib, machine_memory_mib, disk_used_bytes, disk_read_bps, disk_write_bps, net_rx_bps, net_tx_bps]
       properties:
         support_cpus:
           type: number
@@ -2690,8 +2695,38 @@ components:
         cpu_percent:
           type: number
           description: Of the environment's own vCPUs; 100 is all of them busy.
-        memory_used_mib: { type: integer }
-        memory_total_mib: { type: integer }
+        memory_used_mib:
+          type: integer
+          description: What the guest's programs use, as it sees it.
+        memory_total_mib:
+          type: integer
+          description: All the memory the guest sees.
+        memory_cached_mib:
+          type: integer
+          description: >-
+            The guest's cache of files, which it counts as free and would give
+            up for its programs, but which its worker holds for it all the same.
+        host_memory_mib:
+          type: integer
+          description: >-
+            The worker's memory the guest's RAM takes up: what the guest has
+            touched and not handed back.
+        machine_memory_mib:
+          type: integer
+          description: >-
+            The memory the machine has, as its monitor says; after a resize it
+            reaches the new size in the guest's own time.
+        machine_memory_min_mib:
+          type: integer
+          description: >-
+            What its memory can be resized down to while it runs; absent for a
+            machine that cannot be resized while it runs.
+        machine_memory_max_mib:
+          type: integer
+          description: >-
+            What its memory can be resized up to while it runs, as far as its
+            worker has room; absent for a machine that cannot be resized while
+            it runs.
         disk_used_bytes:
           type: integer
           format: int64

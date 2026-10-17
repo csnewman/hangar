@@ -138,18 +138,22 @@ function parse(text: string, unit: Unit): { mib: number; unit: Unit } | null {
 // much the largest worker online has, or that none has as much -- with
 // cpus, if given, as well -- or what is wrong with what was typed.
 // className is given to its input and unit, for the form it is in.
+// running is what a running machine's memory can be resized between, for
+// one being resized as it runs.
 export function MemoryField({
   mib,
   onChange,
   cpus,
   id,
   className,
+  running,
 }: {
   mib: number
   onChange: (mib: number) => void
   cpus?: number
   id?: string
   className?: string
+  running?: { min: number; max: number }
 }) {
   const sizes = useWorkerSizes()
   const [unit, setUnit] = useState<Unit>(() => unitFor(mib))
@@ -169,6 +173,11 @@ export function MemoryField({
   if (!parsed) note = { text: 'A number, such as 6 or 1.5', tone: 'error' }
   else if (parsed.mib < minMiB || parsed.mib > maxMiB)
     note = { text: `Between ${formatMemory(minMiB)} and ${formatMemory(maxMiB)}`, tone: 'error' }
+  else if (running && mib < running.min)
+    note = { text: `While it runs, it can go down to ${formatMemory(running.min)}`, tone: 'warn' }
+  else if (running && mib > running.max)
+    note = { text: `While it runs, it can go up to ${formatMemory(running.max)}`, tone: 'warn' }
+  else if (running) note = { text: `${formatMemory(running.min)} to ${formatMemory(running.max)} while it runs` }
   else if (fit && mib > fit.memory)
     note = { text: `No worker has ${formatMemory(mib)}; the most is ${formatMemory(fit.memory)}`, tone: 'warn' }
   else if (fit && !fit.fits && cpus !== undefined && cpus <= fit.cpus)

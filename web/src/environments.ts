@@ -48,6 +48,21 @@ export function changeable(env: Environment): boolean {
   return env.desired === 'stopped' || (!env.worker_id && env.phase === 'pending')
 }
 
+// shrinkHeadroomMiB is the room a running environment's memory keeps above
+// what its programs use when it shrinks, as the server holds it to.
+const shrinkHeadroomMiB = 512
+
+// liveMemory is what a running environment's memory can be resized
+// between as it runs, or undefined when it cannot be: one stopped, or one
+// that started with no room to resize.
+export function liveMemory(env: Environment): { min: number; max: number } | undefined {
+  const s = env.stats
+  if (env.desired !== 'running' || env.phase !== 'running' || !env.worker_online || !s?.machine_memory_max_mib)
+    return undefined
+  const used = Math.min(s.memory_used_mib + shrinkHeadroomMiB, env.memory_mib)
+  return { min: Math.max(s.machine_memory_min_mib ?? 0, used), max: s.machine_memory_max_mib }
+}
+
 // webURL is where an environment's web server called name is reached, or
 // its plain one with no name, over the same scheme as Hangar itself.
 export function webURL(name: string, short: string, suffix: string): string {

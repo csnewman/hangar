@@ -102,3 +102,76 @@ func (a *API) Restore(ctx context.Context, dir string) error {
 
 // Shutdown stops the monitor process.
 func (a *API) Shutdown(ctx context.Context) error { return a.put(ctx, "vmm.shutdown", nil) }
+
+// Memory is a running guest's memory as its monitor has it, in MiB.
+type Memory struct {
+	// Boot is what the guest booted with, and Max what it can be resized up
+	// to; they are the same for a guest whose memory cannot be resized.
+	Boot, Max int
+	// Requested is what it was last asked to have, and Actual what it has:
+	// the guest plugs memory in and gives it back in its own time, and may
+	// not manage to give back all it is asked to.
+	Requested, Actual int
+}
+
+// Resizable reports whether the guest's memory can be resized while it runs.
+func (m Memory) Resizable() bool { return m.Max > m.Boot }
+
+// Fit is the size nearest mb the guest can be resized to: between Boot and
+// Max, in whole blocks above Boot.
+func (m Memory) Fit(mb int) int {
+	if !m.Resizable() {
+		return m.Boot
+	}
+	return m.Boot + plugged(min(mb, m.Max)-m.Boot, m.Max-m.Boot)
+}
+
+// Memory reads the guest's memory.
+func (a *API) Memory(ctx context.Context) (Memory, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://localhost/api/v1/vm.info", nil)
+	if err != nil {
+		return Memory{}, err
+	}
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return Memory{}, fmt.Errorf("vm.info: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		msg, _ := io.ReadAll(resp.Body)
+		return Memory{}, fmt.Errorf("vm.info: %s: %s", resp.Status, bytes.TrimSpace(msg))
+	}
+	var info struct {
+		Config struct {
+			Memory struct {
+				Size           int64  `json:"size"`
+				HotplugSize    *int64 `json:"hotplug_size"`
+				HotpluggedSize *int64 `json:"hotplugged_size"`
+			} `json:"memory"`
+		} `json:"config"`
+		MemoryActualSize int64 `json:"memory_actual_size"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return Memory{}, fmt.Errorf("vm.info: %w", err)
+	}
+	mb := func(p *int64) int {
+		if p == nil {
+			return 0
+		}
+		return int(*p >> 20)
+	}
+	c := info.Config.Memory
+	boot := int(c.Size >> 20)
+	return Memory{
+		Boot:      boot,
+		Max:       boot + mb(c.HotplugSize),
+		Requested: boot + mb(c.HotpluggedSize),
+		Actual:    int(info.MemoryActualSize >> 20),
+	}, nil
+}
+
+// ResizeMemory asks the guest to have mb MiB, which must be one Fit gives.
+// It returns once asked; Memory says how far the guest has got.
+func (a *API) ResizeMemory(ctx context.Context, mb int) error {
+	return a.put(ctx, "vm.resize", map[string]int64{"desired_ram": int64(mb) << 20})
+}

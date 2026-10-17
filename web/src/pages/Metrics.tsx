@@ -60,11 +60,15 @@ export function MetricsTab() {
         />
         <LineChart
           title="Memory"
-          current={`${formatMemory(s.memory_used_mib)} of ${formatMemory(s.memory_total_mib)}`}
+          current={`${formatMemory(s.memory_used_mib)} used, ${formatMemory(s.memory_cached_mib)} cache, of ${formatMemory(s.memory_total_mib)} · ${formatMemory(s.host_memory_mib)} on its worker`}
           times={times}
           max={s.memory_total_mib}
           format={mib}
-          series={[{ name: 'Memory', values: pick((x) => x.memory_used_mib) }]}
+          series={[
+            { name: 'Used', values: pick((x) => x.memory_used_mib) },
+            { name: 'With cache', values: pick((x) => x.memory_used_mib + x.memory_cached_mib) },
+            { name: 'On its worker', values: pick((x) => x.host_memory_mib) },
+          ]}
         />
         <LineChart
           title="Disk I/O"

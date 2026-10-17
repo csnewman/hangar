@@ -234,16 +234,24 @@ func environmentStats(s *api.EnvironmentStats) *EnvironmentStats {
 	if s == nil {
 		return nil
 	}
-	return &EnvironmentStats{
-		CPUPercent:     float32(s.CPUPercent),
-		SupportCPUs:    float32(s.SupportCPUs),
-		GPUCPUs:        float32(s.GPUCPUs),
-		MemoryUsedMiB:  s.MemoryUsedMiB,
-		MemoryTotalMiB: s.MemoryTotalMiB,
-		DiskUsedBytes:  s.DiskUsedBytes,
-		DiskReadBps:    float32(s.DiskReadBps),
-		DiskWriteBps:   float32(s.DiskWriteBps),
-		NetRxBps:       float32(s.NetRxBps),
-		NetTxBps:       float32(s.NetTxBps),
+	out := &EnvironmentStats{
+		CPUPercent:       float32(s.CPUPercent),
+		SupportCPUs:      float32(s.SupportCPUs),
+		GPUCPUs:          float32(s.GPUCPUs),
+		MemoryUsedMiB:    s.MemoryUsedMiB,
+		MemoryTotalMiB:   s.MemoryTotalMiB,
+		MemoryCachedMiB:  s.MemoryCachedMiB,
+		HostMemoryMiB:    s.HostMemoryMiB,
+		MachineMemoryMiB: s.MachineMemoryMiB,
+		DiskUsedBytes:    s.DiskUsedBytes,
+		DiskReadBps:      float32(s.DiskReadBps),
+		DiskWriteBps:     float32(s.DiskWriteBps),
+		NetRxBps:         float32(s.NetRxBps),
+		NetTxBps:         float32(s.NetTxBps),
 	}
+	if s.MachineMemoryMaxMiB > 0 {
+		lo, hi := s.MachineMemoryMinMiB, s.MachineMemoryMaxMiB
+		out.MachineMemoryMinMiB, out.MachineMemoryMaxMiB = &lo, &hi
+	}
+	return out
 }

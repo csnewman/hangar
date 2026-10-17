@@ -15,6 +15,7 @@ import (
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/users"
+	"github.com/csnewman/hangar/internal/workers"
 )
 
 // The settings an environment may differ from its template in, as
@@ -77,7 +78,8 @@ func varsOf(e api.Environment) templates.Vars {
 // Settings are what of an environment may change after it is made: its
 // size, whether it has a desktop and a virtual GPU, and whether its image's
 // files are mapped from the host. They are the machine's, so they take
-// effect when it next starts.
+// effect when it next starts, but for its memory, which a running machine
+// can be resized to.
 type Settings struct {
 	CPUs      int
 	MemoryMiB int
@@ -90,6 +92,15 @@ type Settings struct {
 // settings, which it must be stopped for: a running machine has its size,
 // and a suspended one's saved memory was made at it.
 func changing(ctx context.Context, tx db.Tx, p users.Principal, id string) (api.Environment, error) {
+	e, err := locked(ctx, tx, p, id)
+	if err != nil {
+		return e, err
+	}
+	return e, stoppedForChange(e)
+}
+
+// locked reads and locks an environment p may reach.
+func locked(ctx context.Context, tx db.Tx, p users.Principal, id string) (api.Environment, error) {
 	if !db.ValidUUID(id) {
 		return api.Environment{}, ErrNotFound
 	}
@@ -97,20 +108,63 @@ func changing(ctx context.Context, tx db.Tx, p users.Principal, id string) (api.
 		p.Admin, p.UserID, id); err != nil {
 		return api.Environment{}, err
 	}
-	e, err := scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM `+from+` WHERE `+visible+` AND e.id = $3`,
+	return scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM `+from+` WHERE `+visible+` AND e.id = $3`,
 		p.Admin, p.UserID, id))
-	if err != nil {
-		return e, err
-	}
+}
+
+// stoppedForChange fails for an environment whose settings cannot change as
+// it is: one with a machine up, or one suspended.
+func stoppedForChange(e api.Environment) error {
 	switch {
 	case e.Desired == api.DesiredSuspended || e.Phase == api.PhaseSuspended:
-		return e, fmt.Errorf("%w: the environment is suspended; stop it first, which ends what is running in it", ErrConflict)
+		return fmt.Errorf("%w: the environment is suspended; stop it first, which ends what is running in it", ErrConflict)
 	// One not yet placed has no machine to start with the settings it had.
 	case e.Desired != api.DesiredStopped && !(e.WorkerID == "" && e.Phase == api.PhasePending) ||
 		e.Phase == api.PhaseStopping:
-		return e, fmt.Errorf("%w: stop the environment first; the change takes effect when it next starts", ErrConflict)
+		return fmt.Errorf("%w: stop the environment first; the change takes effect when it next starts", ErrConflict)
 	}
-	return e, nil
+	return nil
+}
+
+// ShrinkHeadroomMiB is the room a running environment's memory keeps
+// above what its programs use when it shrinks. A guest asked to give back
+// memory it is using gives up its caches first, then kills what it is
+// running to find it.
+const ShrinkHeadroomMiB = 512
+
+// running is whether an environment's machine is up and meant to stay so,
+// on a worker that is reporting: one whose memory can be resized.
+func running(e api.Environment) bool {
+	return e.Desired == api.DesiredRunning && e.Phase == api.PhaseRunning && e.WorkerID != "" && e.WorkerOnline
+}
+
+// resizable fails for a memory size a running environment cannot be
+// resized to: outside what its machine can be resized between, or more
+// than its worker has room for.
+func resizable(ctx context.Context, tx db.Tx, e api.Environment, mib int) error {
+	st := e.Stats
+	switch {
+	case st == nil || st.MachineMemoryMaxMiB == 0:
+		return fmt.Errorf("%w: it started with no room to resize its memory while it runs; stop it to change its memory, and from its next start it can be resized while it runs", ErrConflict)
+	case mib < st.MachineMemoryMinMiB:
+		return fmt.Errorf("%w: while it runs, its memory can go down to %d MiB, what it started with; stop it to go lower", ErrConflict, st.MachineMemoryMinMiB)
+	case mib > st.MachineMemoryMaxMiB:
+		return fmt.Errorf("%w: while it runs, its memory can go up to %d MiB, all its worker has room for", ErrConflict, st.MachineMemoryMaxMiB)
+	case mib < e.Spec.MemoryMiB && mib < st.MemoryUsedMiB+ShrinkHeadroomMiB:
+		return fmt.Errorf("%w: its programs use %d MiB, so while it runs its memory can go down to %d MiB; stop it, or what uses the memory, to go lower",
+			ErrConflict, st.MemoryUsedMiB, st.MemoryUsedMiB+ShrinkHeadroomMiB)
+	}
+	if mib <= e.Spec.MemoryMiB {
+		return nil
+	}
+	room, err := workers.RoomFor(ctx, tx, e.WorkerID, e.ID)
+	if err != nil {
+		return err
+	}
+	if mib > room.FreeMemMiB {
+		return fmt.Errorf("%w: its worker, %s, has room for %d MiB of memory for it, and it asks for %d MiB", ErrConflict, room.Name, max(room.FreeMemMiB, 0), mib)
+	}
+	return nil
 }
 
 // saveSpec stores an environment's changed spec, and the template revision
@@ -150,15 +204,26 @@ func checkGPU(ctx context.Context, tx db.Tx, e api.Environment, gpu api.GPU) err
 }
 
 // UpdateSettings changes a stopped environment's size, display, GPU and
-// whether its image's files are mapped from the host.
+// whether its image's files are mapped from the host, or a running one's
+// memory, which its machine is resized to as it runs.
 // They are held to what a template may ask, and a GPU passed through is
 // only a template's to ask for.
 func (m *Manager) UpdateSettings(ctx context.Context, p users.Principal, id string, s Settings) (api.Environment, error) {
 	var e api.Environment
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		cur, err := changing(ctx, tx, p, id)
+		cur, err := locked(ctx, tx, p, id)
 		if err != nil {
 			return err
+		}
+		c := cur.Spec
+		live := running(cur) && s.CPUs == c.CPUs && s.Display == c.Display && s.GPU == c.GPU && s.DAX == c.DAX
+		if !live {
+			if err := stoppedForChange(cur); err != nil {
+				if running(cur) {
+					return fmt.Errorf("%w: stop the environment to change its vCPUs, display or GPU; its memory alone can change while it runs", ErrConflict)
+				}
+				return err
+			}
 		}
 		spec := cur.Spec
 		spec.CPUs, spec.MemoryMiB, spec.Display, spec.GPU, spec.DAX = s.CPUs, s.MemoryMiB, s.Display, s.GPU, s.DAX
@@ -173,8 +238,19 @@ func (m *Manager) UpdateSettings(ctx context.Context, p users.Principal, id stri
 		if err := checkGPU(ctx, tx, cur, spec.GPU); err != nil {
 			return err
 		}
+		if live && spec.MemoryMiB != c.MemoryMiB {
+			if err := resizable(ctx, tx, cur, spec.MemoryMiB); err != nil {
+				return err
+			}
+		}
 		if err := saveSpec(ctx, tx, id, spec, nil); err != nil {
 			return err
+		}
+		if live {
+			// The worker resizes the machine when it sees the new spec.
+			if err := workers.Bump(ctx, tx, cur.WorkerID); err != nil {
+				return err
+			}
 		}
 		if e, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM `+from+` WHERE e.id = $1`, id)); err != nil {
 			return err
@@ -187,6 +263,7 @@ func (m *Manager) UpdateSettings(ctx context.Context, p users.Principal, id stri
 				"display":    map[string]api.Display{"from": cur.Spec.Display, "to": spec.Display},
 				"gpu":        map[string]api.GPU{"from": cur.Spec.GPU, "to": spec.GPU},
 				"dax":        map[string]bool{"from": cur.Spec.DAX, "to": spec.DAX},
+				"running":    live,
 			}})
 	})
 	return e, err

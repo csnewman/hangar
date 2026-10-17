@@ -63,6 +63,13 @@ type GPUReporter interface {
 	GPU() *api.GPUInfo
 }
 
+// CapacityUser is a runtime that sizes what it runs by what the worker
+// offers: a machine whose memory can be resized while it runs can grow to
+// all of it.
+type CapacityUser interface {
+	UseCapacity(api.Resources)
+}
+
 // RendererLabel is the label a worker gives itself for what its virtual
 // GPUs render with, software or hardware, so a template can ask for one by
 // placement. A label of that name in the configuration wins.
@@ -225,6 +232,9 @@ func New(cfg *Config, rt Runtime, log *slog.Logger) (*Worker, error) {
 	}
 	w := &Worker{cfg: cfg, rt: rt, client: newClient(cfg.Server.URL), capacity: offered, log: log,
 		sys: &sysStats{path: cfg.Storage.Environments}}
+	if c, ok := rt.(CapacityUser); ok {
+		c.UseCapacity(offered)
+	}
 	if f, ok := rt.(SharedFiles); ok && cfg.Storage.Files != "" {
 		f.UseSharedFiles(cfg.Storage.Files, w.filesView)
 	}
@@ -313,6 +323,7 @@ func (w *Worker) reportLoop(ctx context.Context) error {
 					if e.Stats != nil {
 						st.Stats.SupportCPUs += e.Stats.SupportCPUs
 						st.Stats.GPUCPUs += e.Stats.GPUCPUs
+						st.Stats.GuestMemoryMiB += e.Stats.HostMemoryMiB
 					}
 				}
 			}

@@ -1020,3 +1020,12 @@
     padding-bottom: 24px;
   }
 }
+
+/* A value that cannot change while the rest of its form can. */
+.pane-fields-inline {
+  display: contents;
+}
+
+.pane-fields-inline:disabled > * {
+  opacity: 0.55;
+}

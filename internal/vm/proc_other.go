@@ -13,3 +13,6 @@ func sysProcAttr() *syscall.SysProcAttr { return nil }
 
 // diskUsage is a file's size where allocated blocks are not to hand.
 func diskUsage(fi fs.FileInfo) int64 { return fi.Size() }
+
+// guestRAM is unknown where environments cannot run.
+func guestRAM(int) int64 { return 0 }
