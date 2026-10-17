@@ -663,11 +663,15 @@ type CopyName struct {
 	Name string `json:"name"`
 }
 
-// CreateEnvironment defines model for CreateEnvironment.
+// CreateEnvironment An environment made from a template. settings, if given, are the machine's size, display, GPU and image mapping in place of the template's, held to what a template may ask; a GPU passed through is only a template's to ask for.
 type CreateEnvironment struct {
 	// Name A DNS label in either case, since it becomes the hostname in lower case, and whatever else the template's name pattern demands. Branch names made from it keep its case.
-	Name       string `json:"name"`
-	TemplateID string `json:"template_id"`
+	Name string `json:"name"`
+
+	// Repos The repositories to clone, in place of the template's, which may use the template's variables as its own do. The editor then opens on the first of them, or the home folder with none.
+	Repos      *[]Repo              `json:"repos,omitempty"`
+	Settings   *EnvironmentSettings `json:"settings,omitempty"`
+	TemplateID string               `json:"template_id"`
 }
 
 // CreateTeam defines model for CreateTeam.

@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -192,7 +193,8 @@ func (m *Manager) ByShortID(ctx context.Context, p users.Principal, short string
 //
 // The template's spec is resolved for the new name and copied into the
 // environment, in the same transaction that reads it, so the environment is
-// exactly what the template said at that moment.
+// exactly what the template said at that moment, apart from the machine and
+// repositories req gives in place of the template's.
 func (m *Manager) Create(ctx context.Context, p users.Principal, req api.CreateEnvironment) (api.Environment, error) {
 	var e api.Environment
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
@@ -201,6 +203,9 @@ func (m *Manager) Create(ctx context.Context, p users.Principal, req api.CreateE
 			return fmt.Errorf("%w: no such template", ErrInvalid)
 		}
 		if err != nil {
+			return err
+		}
+		if tspec, err = withOwn(tspec, req); err != nil {
 			return err
 		}
 		var owner string
@@ -255,6 +260,30 @@ func (m *Manager) Create(ctx context.Context, p users.Principal, req api.CreateE
 			Details: map[string]any{"cpus": spec.CPUs, "memory_mib": spec.MemoryMiB, "access": spec.Access}})
 	})
 	return e, err
+}
+
+// withOwn is a template's spec with the machine and repositories req gives
+// in place of its own, held to what a template may ask. The editor opens on
+// the first repository given, or the home folder with none.
+func withOwn(t api.TemplateSpec, req api.CreateEnvironment) (api.TemplateSpec, error) {
+	if req.Machine == nil && req.Repos == nil {
+		return t, nil
+	}
+	if m := req.Machine; m != nil {
+		if m.GPU == api.GPUPassthrough && t.GPU != api.GPUPassthrough {
+			return t, fmt.Errorf("%w: a GPU passed through is only a template's to ask for", ErrInvalid)
+		}
+		t.CPUs, t.MemoryMiB, t.Display, t.GPU, t.DAX = m.CPUs, m.MemoryMiB, m.Display, m.GPU, m.DAX
+	}
+	if req.Repos != nil {
+		// An empty editor folder resolves to the first repository's.
+		t.Repos, t.EditorPath = slices.Clone(*req.Repos), ""
+	}
+	checked, err := templates.Validate(t)
+	if err != nil {
+		return t, fmt.Errorf("%w%s", ErrInvalid, trimInvalid(err))
+	}
+	return checked, nil
 }
 
 // Ref names an environment in the audit log.

@@ -274,6 +274,21 @@ type Environment struct {
 type CreateEnvironment struct {
 	TemplateID string `json:"template_id"`
 	Name       string `json:"name"`
+	// Machine, if set, sizes the environment in place of its template.
+	Machine *Machine `json:"machine,omitempty"`
+	// Repos, if set, are cloned in place of the template's, an empty list
+	// cloning nothing.
+	Repos *[]Repo `json:"repos,omitempty"`
+}
+
+// Machine is an environment's size and display, its GPU, and whether its
+// image's files are mapped from the host.
+type Machine struct {
+	CPUs      int     `json:"cpus"`
+	MemoryMiB int     `json:"memory_mib"`
+	Display   Display `json:"display"`
+	GPU       GPU     `json:"gpu"`
+	DAX       bool    `json:"dax"`
 }
 
 // Worker is the public view of one worker.

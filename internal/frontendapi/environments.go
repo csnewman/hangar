@@ -21,10 +21,19 @@ func (h *handler) ListEnvironments(ctx context.Context, _ ListEnvironmentsReques
 }
 
 func (h *handler) CreateEnvironment(ctx context.Context, req CreateEnvironmentRequestObject) (CreateEnvironmentResponseObject, error) {
-	e, err := h.envs.Create(ctx, principal(ctx), api.CreateEnvironment{
-		TemplateID: req.Body.TemplateID,
-		Name:       req.Body.Name,
-	})
+	in := api.CreateEnvironment{TemplateID: req.Body.TemplateID, Name: req.Body.Name}
+	if m := req.Body.Settings; m != nil {
+		in.Machine = &api.Machine{CPUs: m.CPUs, MemoryMiB: m.MemoryMiB, Display: api.Display(m.Display),
+			GPU: api.GPU(m.GPU), DAX: m.Dax != nil && *m.Dax}
+	}
+	if rs := req.Body.Repos; rs != nil {
+		repos := make([]api.Repo, len(*rs))
+		for i, r := range *rs {
+			repos[i] = api.Repo{URL: r.URL, Ref: deref(r.Ref), Path: r.Path, Branch: deref(r.Branch)}
+		}
+		in.Repos = &repos
+	}
+	e, err := h.envs.Create(ctx, principal(ctx), in)
 	switch {
 	case errors.Is(err, environments.ErrInvalid):
 		return CreateEnvironment400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil

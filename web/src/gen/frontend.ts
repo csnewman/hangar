@@ -1456,10 +1456,14 @@ export interface components {
             /** Format: date-time */
             updated_at: string;
         };
+        /** @description An environment made from a template. settings, if given, are the machine's size, display, GPU and image mapping in place of the template's, held to what a template may ask; a GPU passed through is only a template's to ask for. */
         CreateEnvironment: {
             template_id: string;
             /** @description A DNS label in either case, since it becomes the hostname in lower case, and whatever else the template's name pattern demands. Branch names made from it keep its case. */
             name: string;
+            settings?: components["schemas"]["EnvironmentSettings"];
+            /** @description The repositories to clone, in place of the template's, which may use the template's variables as its own do. The editor then opens on the first of them, or the home folder with none. */
+            repos?: components["schemas"]["Repo"][];
         };
         /**
          * @description Whether the environment has a graphical desktop.
