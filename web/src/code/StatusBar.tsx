@@ -1,12 +1,12 @@
 import { Activity, BellDot, ChevronUp } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
-import { api, type Environment } from '../api'
+import type { Environment } from '../api'
 import { formatMemory, formatPercent } from '../components/format'
 import { Logo } from '../components/Logo'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
-import { useEnvironmentActions } from '../environmentActions'
+import { openInVSCode, useEnvironmentActions } from '../environmentActions'
 import { splitByOwner, sshCommand, useEnvironments } from '../environments'
 import { useMe } from '../session'
 import { environmentTab, homeTab, otherTab } from '../workspaceLinks'
@@ -30,8 +30,9 @@ export function StatusBar({
   right,
 }: {
   env: Environment
-  // onEnvironment shows its details and settings.
-  onEnvironment: () => void
+  // onEnvironment shows its details and settings, where they are not shown
+  // already.
+  onEnvironment?: () => void
   // onPerformance shows what it is using, while that can be shown.
   onPerformance?: () => void
   children?: ReactNode
@@ -47,19 +48,7 @@ export function StatusBar({
 
   const openVSCode = () => {
     setError('')
-    // The tab is opened in the click, which a browser allows, and sent on
-    // once the editor has its ticket.
-    const w = window.open('', '_blank')
-    api.openEditor(env.id).then(
-      (r) => {
-        if (w) w.location.href = r.url
-        else window.open(r.url, '_blank')
-      },
-      (e: Error) => {
-        w?.close()
-        setError(e.message)
-      },
-    )
+    openInVSCode(env.id).then(setError)
   }
 
   const items = (): MenuItem[] => {
@@ -78,7 +67,7 @@ export function StatusBar({
     }
     out.push({ label: 'Hangar Home', onSelect: () => window.open('/environments', otherTab(homeTab)) })
     out.push('separator')
-    out.push({ label: 'Environment', detail: 'details and settings', onSelect: onEnvironment })
+    if (onEnvironment) out.push({ label: 'Environment', detail: 'details and settings', onSelect: onEnvironment })
     out.push({ label: 'Open in VS Code', detail: 'in a new tab', disabled: !running, onSelect: openVSCode })
     if (desktop) {
       out.push({
@@ -164,7 +153,7 @@ export function StatusBar({
         <ChevronUp size={11} />
       </button>
       {children}
-      {env.image_update && (
+      {env.image_update && onEnvironment && (
         <button
           type="button"
           className="code-statusbar-item code-statusbar-notice"

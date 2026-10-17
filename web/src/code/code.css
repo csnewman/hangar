@@ -237,46 +237,9 @@
   display: flex;
 }
 
-.workspace-idle {
-  height: 100%;
-  overflow-y: auto;
-  padding-bottom: 28px;
-  box-sizing: border-box;
-  background: var(--bg);
-}
-
-.workspace-idle .page-pad,
 .code-page-tab > .page-pad {
   max-width: 980px;
   margin: 0 auto;
-}
-
-.workspace-card {
-  max-width: 924px;
-  margin: 28px auto 4px;
-  padding: 20px 24px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--surface);
-}
-
-.workspace-card h2 {
-  margin: 0;
-  font-size: 17px;
-}
-
-.workspace-card p {
-  margin: 0;
-  line-height: 1.5;
-}
-
-.workspace-card-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }
 
 /* One of the environment's own pages, in an editor tab. */
@@ -286,6 +249,606 @@
   padding-bottom: 28px;
   box-sizing: border-box;
   background: var(--bg);
+}
+
+/* The Environment tab: a header, notices, then sections beside an index. */
+.envtab {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  font-size: 13px;
+  container-type: inline-size;
+}
+
+.envtab-banner {
+  flex: none;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-soft);
+}
+
+.envtab-banner-warn {
+  background: var(--warn-bg);
+  border-bottom-color: var(--warn-border);
+}
+
+.envtab-banner-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.envtab-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 4px 0;
+}
+
+.envtab-banner-row > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.envtab-banner-warn .envtab-banner-row > svg {
+  color: var(--busy);
+}
+
+.envtab-banner-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.envtab-banner-text strong {
+  font-weight: 600;
+}
+
+.envtab-banner-actions {
+  display: flex;
+  gap: 14px;
+  flex: none;
+}
+
+.envtab-banner-list {
+  margin: 0 0 8px 24px;
+  padding: 0;
+  list-style: none;
+  max-height: 140px;
+  overflow: auto;
+}
+
+/* A button that reads as a link, for a banner's or a list's actions. */
+.envtab-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.envtab-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.envtab-link:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.envtab-link-danger {
+  color: var(--danger);
+}
+
+.envtab-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px 14px 22px;
+  border-bottom: 1px solid var(--border);
+}
+
+.envtab-head-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.envtab-head-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.envtab-head-title h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.envtab-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.envtab-state strong {
+  font-weight: 600;
+}
+
+.envtab-head-sub {
+  font-size: 12.5px;
+}
+
+.envtab-head-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.envtab-head-actions .code-tool-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.envtab-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.envtab-index {
+  flex: none;
+  width: 168px;
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  overflow-y: auto;
+}
+
+.envtab-index-item {
+  height: 26px;
+  padding: 0 14px;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.envtab-index-item:hover {
+  background: var(--sidebar-hover);
+}
+
+.envtab-index-on,
+.envtab-index-on:hover {
+  background: var(--sidebar-active);
+  font-weight: 600;
+}
+
+.envtab-scroll {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.envtab-page {
+  max-width: 780px;
+  padding: 20px 28px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.envtab-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* A section's title is a rule with its name at the start, as IntelliJ's. */
+.envtab-rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.envtab-rule::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.envtab-rule h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.envtab-rows {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 136px minmax(0, 1fr);
+  gap: 8px 16px;
+  align-items: start;
+}
+
+.envtab-rows dt {
+  padding-top: 4px;
+  color: var(--muted);
+}
+
+.envtab-rows dd {
+  margin: 0;
+  min-width: 0;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.envtab-rows dd .mono,
+.envtab-table .mono {
+  overflow-wrap: anywhere;
+}
+
+/* A setting changed and not yet applied, as IntelliJ marks one. */
+.envtab-rows dt.envtab-modified,
+.envtab-modified {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.envtab-note {
+  color: var(--busy);
+  font-size: 12.5px;
+}
+
+.envtab-pill {
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.envtab-pill-warn {
+  margin-left: 0;
+  background: var(--warn-bg);
+  color: var(--busy);
+}
+
+.envtab-copy {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.envtab-copy code {
+  padding: 0 8px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.envtab-copy button {
+  flex: none;
+  align-self: stretch;
+  width: 28px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.envtab-copy button:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.envtab-web {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.envtab-web-name {
+  width: 96px;
+  font-weight: 600;
+}
+
+.envtab-web-acts {
+  width: 56px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.envtab-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.envtab-table th {
+  padding: 0 10px 5px 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.envtab-table td {
+  padding: 5px 10px 5px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.envtab-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.envtab-copychoice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.envtab-copychoice select {
+  height: 26px;
+  min-width: 150px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0 6px;
+}
+
+.envtab-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.envtab-segment {
+  height: 24px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.envtab-segment-on {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+.envtab-fields {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.envtab-fields:disabled dd {
+  opacity: 0.55;
+}
+
+.envtab-fields select,
+.envtab-number {
+  height: 26px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0 6px;
+}
+
+.envtab-number {
+  width: 74px;
+}
+
+.envtab-fields .check {
+  margin: 0;
+}
+
+.envtab-hint {
+  margin: 2px 0 0 152px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.envtab-apply {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 0 16px 0 22px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.envtab-apply-what {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.envtab-activity {
+  display: flex;
+  flex-direction: column;
+}
+
+.envtab-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.envtab-event-who {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.envtab-event-system,
+.envtab-event-worker {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.envtab-event-main {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.envtab-event-main strong {
+  font-weight: 600;
+}
+
+.envtab-event-at {
+  flex: none;
+  white-space: nowrap;
+}
+
+.envtab-activity-foot {
+  display: flex;
+  gap: 16px;
+  padding-top: 8px;
+  font-size: 12.5px;
+}
+
+.envtab-delete {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 8px;
+}
+
+.envtab-delete p {
+  flex: 1;
+  min-width: 260px;
+  margin: 0;
+}
+
+.envtab-danger {
+  color: var(--danger);
+}
+
+/* In a narrow pane the index goes, and each label sits over its value. */
+@container (max-width: 640px) {
+  .envtab-index {
+    display: none;
+  }
+
+  .envtab-page {
+    padding: 16px 16px 40px;
+  }
+
+  .envtab-head {
+    flex-wrap: wrap;
+    padding: 12px 12px 12px 16px;
+  }
+
+  .envtab-rows {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .envtab-rows dt {
+    padding-top: 8px;
+    font-size: 12px;
+  }
+
+  .envtab-hint {
+    margin-left: 0;
+  }
+
+  .envtab-apply {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+  }
+
+  .envtab-apply-what {
+    flex-basis: 100%;
+    order: -1;
+  }
+}
+
+/* How a start is going, or why one failed, above the sections. */
+.envtab-lead {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.envtab-lead h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.envtab-lead p {
+  margin: 0;
+  line-height: 1.5;
 }
 
 .code-statusbar {

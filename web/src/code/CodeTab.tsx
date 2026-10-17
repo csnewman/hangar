@@ -20,8 +20,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef } from 'react-resizable-panels'
 
 import type { Environment, EnvironmentLogName } from '../api'
-import { useEnvironmentActions } from '../environmentActions'
-import { SummaryTab, useEnv } from '../pages/Environment'
+import { useEnv } from '../pages/Environment'
 import { usePhone } from '../phone'
 import { useMe } from '../session'
 import { StartProgress } from '../components/StartProgress'
@@ -33,6 +32,7 @@ import { isMac, shortcut } from './ContextMenu'
 import { containerShell, DockerView } from './DockerView'
 import { EditorArea, tabKey, type Tab } from './EditorArea'
 import { EditorStatusContext, EditorStatusStore } from './editorStatus'
+import { EnvironmentView } from './EnvironmentView'
 import { PerformanceView } from './PerformanceView'
 import { ProjectView } from './ProjectView'
 import { Languages, LanguagesContext, type Usages } from './lsp'
@@ -80,11 +80,10 @@ export function Workspace({ env }: { env: Environment }) {
   return <Connected key={env.id} env={env.id} />
 }
 
-// Idle is the workspace of an environment that is not running: what it is
-// doing and the way to start it, its details and settings below, and its
-// logs, which its worker keeps whatever the machine is doing.
+// Idle is the workspace of an environment that is not running: its own
+// page, which says what it is doing and starts it, and its logs, which its
+// worker keeps whatever the machine is doing.
 function Idle({ env }: { env: Environment }) {
-  const details = useRef<HTMLDivElement>(null)
   const logsPanel = usePanelRef()
   const [logsShown, setLogsShown] = useState(true)
   const starting = env.phase === 'starting' || env.phase === 'pending'
@@ -109,12 +108,7 @@ function Idle({ env }: { env: Environment }) {
       <div className="workspace-body">
         <Group orientation="vertical" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
           <Panel id="idle" minSize="30%">
-            <div className="workspace-idle">
-              <IdleCard env={env} onLogs={showLogs} />
-              <div ref={details}>
-                <SummaryTab />
-              </div>
-            </div>
+            <EnvironmentView env={env} lead={<IdleLead env={env} onLogs={showLogs} />} />
           </Panel>
           <Separator className="code-split code-split-h" />
           <Panel
@@ -132,7 +126,6 @@ function Idle({ env }: { env: Environment }) {
       </div>
       <StatusBar
         env={env}
-        onEnvironment={() => details.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
         right={
           !logsShown && (
             <button type="button" className="code-statusbar-item" onClick={showLogs}>
@@ -146,21 +139,21 @@ function Idle({ env }: { env: Environment }) {
   )
 }
 
-// IdleCard says what a stopped environment is doing, and starts it.
-function IdleCard({ env, onLogs }: { env: Environment; onLogs: () => void }) {
-  const { start, busy, error } = useEnvironmentActions(env)
+// IdleLead says how a start, stop or deletion is going, or why a start
+// failed; a stopped or suspended environment's page needs nothing above it.
+function IdleLead({ env, onLogs }: { env: Environment; onLogs: () => void }) {
   const phase = env.phase
   if (env.desired === 'deleted' || phase === 'deleting') {
     return (
-      <section className="workspace-card">
-        <h2>Deleting {env.name}</h2>
+      <section className="envtab-lead">
+        <h3>Deleting {env.name}</h3>
       </section>
     )
   }
   if (phase === 'starting' || phase === 'pending') {
     return (
-      <section className="workspace-card">
-        <h2>Starting {env.name}</h2>
+      <section className="envtab-lead">
+        <h3>Starting {env.name}</h3>
         <StartProgress env={env} onLogs={onLogs} />
         <p className="muted small">Your tabs and tool windows come back once its editor service answers.</p>
       </section>
@@ -168,35 +161,28 @@ function IdleCard({ env, onLogs }: { env: Environment; onLogs: () => void }) {
   }
   if (phase === 'stopping' || phase === 'suspending') {
     return (
-      <section className="workspace-card">
-        <h2>
+      <section className="envtab-lead">
+        <h3>
           {phase === 'stopping' ? 'Stopping' : 'Suspending'} {env.name}
-        </h2>
+        </h3>
         {env.reason && <p className="muted">{env.reason}</p>}
       </section>
     )
   }
-  const resume = phase === 'suspended'
-  return (
-    <section className="workspace-card">
-      <h2>{phase === 'failed' ? `${env.name} did not start` : `${env.name} is ${phase}`}</h2>
-      {phase === 'failed' ? (
-        <p>{env.reason ?? 'Its logs below say why.'}</p>
-      ) : (
-        <p className="muted">
-          {resume
-            ? 'Its memory is kept on disk: resuming it carries on where it was.'
-            : 'Its disks are kept: starting it boots the same files, and your tabs come back as you left them.'}
-        </p>
-      )}
-      <div className="workspace-card-actions">
-        <button type="button" className="btn btn-primary" disabled={busy} onClick={() => start.mutate()}>
-          {resume ? 'Resume' : phase === 'failed' ? 'Start again' : 'Start'} {env.name}
-        </button>
-        {error && <span className="action-error">{error.message}</span>}
-      </div>
-    </section>
-  )
+  if (phase === 'failed') {
+    return (
+      <section className="envtab-lead">
+        <h3>{env.name} did not start</h3>
+        <p>{env.reason ?? 'Its logs say why.'}</p>
+        <div>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onLogs}>
+            Show its logs
+          </button>
+        </div>
+      </section>
+    )
+  }
+  return null
 }
 
 // Connected holds the tab's connection to the environment. It is made in an

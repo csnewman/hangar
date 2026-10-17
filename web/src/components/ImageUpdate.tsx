@@ -5,8 +5,40 @@ import { api, type Environment } from '../api'
 import { changeable, environmentsKey } from '../environments'
 import { formatAgo, formatBytes, shortDigest } from './format'
 
-function build(digest: string): string {
+// imageBuild names a build of an image by its digest.
+export function imageBuild(digest: string): string {
   return digest ? shortDigest(digest) : 'an earlier build'
+}
+
+// useImageChange is what can be done about an environment's image: upgrade
+// it to the newer copy, roll back an upgrade or keep it, or cancel either
+// before the start that would make it. Upgrading and rolling back need it
+// stopped.
+export function useImageChange(env: Environment) {
+  const qc = useQueryClient()
+  const done = () => qc.invalidateQueries({ queryKey: environmentsKey })
+  const upgrade = useMutation({ mutationFn: (force: boolean) => api.upgradeEnvironmentImage(env.id, force), onSettled: done })
+  const rollback = useMutation({ mutationFn: () => api.rollbackEnvironmentImage(env.id), onSettled: done })
+  const keep = useMutation({ mutationFn: () => api.keepEnvironmentImage(env.id), onSettled: done })
+  const cancel = useMutation({ mutationFn: () => api.cancelEnvironmentImageChange(env.id), onSettled: done })
+  return {
+    upgrade,
+    rollback,
+    keep,
+    cancel,
+    error: upgrade.error ?? rollback.error ?? keep.error ?? cancel.error,
+    busy: upgrade.isPending || rollback.isPending || keep.isPending || cancel.isPending,
+    stopped: changeable(env),
+  }
+}
+
+// imageRisk is what upgrading would leave hiding the newer build's files:
+// risky when the writable disk holds some, or the package database; clean
+// when it was compared and holds none.
+export function imageRisk(u: Environment['image_update']) {
+  const risky = !!u && u.checked && !u.error && ((u.conflicts ?? []).length > 0 || !!u.packages)
+  const clean = !!u && u.checked && !u.error && !risky
+  return { risky, clean }
 }
 
 // ImageUpdate offers an environment the newer copy of its image its
@@ -14,16 +46,8 @@ function build(digest: string): string {
 // once upgraded, offers to roll back or keep it. Each change is made at the
 // environment's next start.
 export function ImageUpdate({ env }: { env: Environment }) {
-  const qc = useQueryClient()
   const [showAll, setShowAll] = useState(false)
-  const done = () => qc.invalidateQueries({ queryKey: environmentsKey })
-  const upgrade = useMutation({ mutationFn: (force: boolean) => api.upgradeEnvironmentImage(env.id, force), onSettled: done })
-  const rollback = useMutation({ mutationFn: () => api.rollbackEnvironmentImage(env.id), onSettled: done })
-  const keep = useMutation({ mutationFn: () => api.keepEnvironmentImage(env.id), onSettled: done })
-  const cancel = useMutation({ mutationFn: () => api.cancelEnvironmentImageChange(env.id), onSettled: done })
-  const error = upgrade.error ?? rollback.error ?? keep.error ?? cancel.error
-  const busy = upgrade.isPending || rollback.isPending || keep.isPending || cancel.isPending
-  const stopped = changeable(env)
+  const { upgrade, rollback, keep, cancel, error, busy, stopped } = useImageChange(env)
   const stopFirst = stopped ? undefined : 'Stop the environment first'
 
   const u = env.image_update
@@ -38,11 +62,11 @@ export function ImageUpdate({ env }: { env: Environment }) {
           {change === 'upgrade' ? (
             <>
               Its next start upgrades <strong>{env.spec.image}</strong>
-              {u && <> to {build(u.digest)}</>}, keeping a copy of its writable disk to roll back to.
+              {u && <> to {imageBuild(u.digest)}</>}, keeping a copy of its writable disk to roll back to.
             </>
           ) : (
             <>
-              Its next start rolls back to {build(rb?.digest ?? '')} and the writable disk it had then, losing what has
+              Its next start rolls back to {imageBuild(rb?.digest ?? '')} and the writable disk it had then, losing what has
               been written to it since the upgrade.
             </>
           )}
@@ -59,8 +83,7 @@ export function ImageUpdate({ env }: { env: Environment }) {
 
   const conflicts = u?.conflicts ?? []
   const more = u?.more_conflicts ?? 0
-  const risky = !!u && u.checked && !u.error && (conflicts.length > 0 || !!u.packages)
-  const clean = !!u && u.checked && !u.error && !risky
+  const { risky, clean } = imageRisk(u)
   const shown = showAll ? conflicts : conflicts.slice(0, 5)
 
   return (
@@ -68,7 +91,7 @@ export function ImageUpdate({ env }: { env: Environment }) {
       {rb && (
         <div className="notice drift">
           <div>
-            Upgraded from {build(rb.digest)} {formatAgo(rb.at)}. Its writable disk from before ({formatBytes(rb.size_bytes)}) is
+            Upgraded from {imageBuild(rb.digest)} {formatAgo(rb.at)}. Its writable disk from before ({formatBytes(rb.size_bytes)}) is
             kept, to roll back to.
           </div>
           <div className="drift-actions">
@@ -98,8 +121,8 @@ export function ImageUpdate({ env }: { env: Environment }) {
         <div className="notice drift image-update">
           <div>
             <div>
-              A newer build of <strong>{env.spec.image}</strong> is available: {build(u.digest)}, where this
-              environment has {build(env.image_digest ?? '')}.
+              A newer build of <strong>{env.spec.image}</strong> is available: {imageBuild(u.digest)}, where this
+              environment has {imageBuild(env.image_digest ?? '')}.
             </div>
             <div className="muted small">
               {!u.checked &&

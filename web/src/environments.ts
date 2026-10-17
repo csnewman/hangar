@@ -54,6 +54,17 @@ export function webURL(name: string, short: string, suffix: string): string {
   return `${window.location.protocol}//${name ? `${name}-` : ''}env${short}${suffix}/`
 }
 
+// A DNS label is at most this long, and the name before -env<short> shares
+// one with it.
+const maxLabel = 63
+
+// longestWebName is how long a name before an environment's web host may
+// be. In the prefix style the machine's own name shares the label too.
+export function longestWebName(short: string, suffix: string): number {
+  const sharing = suffix.startsWith('-') ? suffix.split('.')[0].length : 0
+  return maxLabel - `-env${short}`.length - sharing
+}
+
 // sshCommand reaches the environment through the SSH gateway: by its name
 // alone for its owner, and by owner/name for anyone else who can see it.
 export function sshCommand(gw: { host: string; port: number }, env: Environment, own: boolean) {

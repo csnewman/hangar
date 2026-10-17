@@ -28,3 +28,22 @@ export function useEnvironmentActions(env: Environment, afterDelete?: string) {
     error: start.error ?? stop.error ?? suspend.error ?? remove.error,
   }
 }
+
+// openInVSCode opens the environment in VS Code in a new browser tab. It is
+// called in a click, so the tab is opened then, which a browser allows, and
+// sent on once the editor has its ticket. It resolves to what went wrong,
+// or '' when nothing did.
+export function openInVSCode(id: string): Promise<string> {
+  const w = window.open('', '_blank')
+  return api.openEditor(id).then(
+    (r) => {
+      if (w) w.location.href = r.url
+      else window.open(r.url, '_blank')
+      return ''
+    },
+    (e: Error) => {
+      w?.close()
+      return e.message
+    },
+  )
+}

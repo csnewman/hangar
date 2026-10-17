@@ -2,7 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { api, type Environment, type EnvironmentSettings, type TemplateSetting } from '../api'
-import { changeable, environmentsKey, settingsSummary } from '../environments'
+import { changeable, environmentsKey } from '../environments'
 
 const settingNames: Record<TemplateSetting, string> = {
   image: 'image',
@@ -62,41 +62,6 @@ export function TemplateDrift({ env }: { env: Environment }) {
       </div>
       {reset.error && <div className="alert">{reset.error.message}</div>}
     </div>
-  )
-}
-
-// SettingsPanel shows the settings an environment may change after it is
-// made, and changes them while it is stopped; they take effect when it next
-// starts.
-export function SettingsPanel({ env }: { env: Environment }) {
-  const [editing, setEditing] = useState(false)
-  const ok = changeable(env)
-
-  return (
-    <section className="panel form section">
-      <div className="form-section-head">
-        <h2>Settings</h2>
-        {!editing && (
-          <button
-            type="button"
-            className="btn btn-ghost"
-            disabled={!ok}
-            title={ok ? undefined : 'Stop the environment to change these'}
-            onClick={() => setEditing(true)}
-          >
-            Change
-          </button>
-        )}
-      </div>
-      {!editing ? (
-        <p className="muted small">
-          {settingsSummary(env)}.{' '}
-          {ok ? 'Changes take effect when it next starts.' : 'Stop the environment to change them.'}
-        </p>
-      ) : (
-        <SettingsForm env={env} onDone={() => setEditing(false)} onCancel={() => setEditing(false)} />
-      )}
-    </section>
   )
 }
 

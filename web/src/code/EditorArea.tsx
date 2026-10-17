@@ -4,10 +4,11 @@ import type { CodeClient, GitStatus, SharedFile } from './client'
 import { CodeEditor } from './CodeEditor'
 import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { DesktopTab } from '../desktop/DesktopTab'
-import { SummaryTab } from '../pages/Environment'
+import { useEnv } from '../pages/Environment'
 import { PerformanceTab } from '../pages/Performance'
 import { CompareView, DiffView } from './DiffView'
 import { DockerLogs } from './DockerView'
+import { EnvironmentView } from './EnvironmentView'
 import { HexView } from './HexView'
 import { ImageView } from './ImageView'
 import type { Jump } from './Search'
@@ -54,6 +55,7 @@ export function EditorArea({
   onReveal: (path: string) => void
   onShowCommit: (hash: string, path: string) => void
 }) {
+  const env = useEnv()
   const current = tabs.find((t) => tabKey(t) === active) ?? null
   const menu = useContextMenu()
 
@@ -141,9 +143,7 @@ export function EditorArea({
           </div>
         )}
         {current?.kind === 'environment' && (
-          <div className="code-page-tab">
-            <SummaryTab />
-          </div>
+          <EnvironmentView env={env} onDesktop={() => onOpen({ kind: 'desktop', path: 'desktop', title: 'Desktop' })} />
         )}
         {current?.kind === 'performance' && (
           <div className="code-page-tab">

@@ -3,88 +3,47 @@ import { Link } from 'react-router'
 
 import { api, type AttachedPack, type Environment } from '../api'
 import { copyName, packPath } from '../pages/Packs'
-import { usePhone } from '../phone'
 import { useMe } from '../session'
 
 // fromWhat says how an environment came to use a copy.
-const fromWhat: Record<AttachedPack['from'], string> = {
+export const fromWhat: Record<AttachedPack['from'], string> = {
   environment: 'chosen here',
   template: "the template's",
   kept: 'the one it was given',
   default: 'your default',
 }
 
-// EnvironmentPacks is the packs an environment has and the copy it uses of
-// each, which its owner changes, and the conflicts found as paths became
-// shared, which its owner resolves.
+// EnvironmentPacks is a phone's list of the packs an environment has and
+// the copy it uses of each, which its owner changes, and the conflicts found
+// as paths became shared, which its owner resolves.
 export function EnvironmentPacks({ env }: { env: Environment }) {
   const me = useMe()
   const own = env.owner_id === me.id
-  const packs = useQuery({
-    queryKey: ['environment', env.id, 'packs'],
-    queryFn: () => api.environmentPacks(env.id),
-    refetchInterval: 10_000,
-  })
-  const conflicts = useQuery({
-    queryKey: ['environment', env.id, 'conflicts'],
-    queryFn: () => api.environmentConflicts(env.id),
-    refetchInterval: 5_000,
-  })
-  const phone = usePhone()
+  const { packs, conflicts } = useEnvironmentPacks(env.id)
   if (!packs.data || packs.data.length === 0) return null
-  if (phone) {
-    return (
-      <section className="phone-section">
-        <h2 className="phone-heading">Files</h2>
-        <div className="phone-list">
-          {packs.data.map((a) => (
-            <div key={a.pack.id} className="phone-row phone-pack">
-              <span className="phone-row-main">
-                <Link to={packPath(a.pack.id, a.copy.id)} className="strong">
-                  {a.pack.name}
-                </Link>
-                <span className="phone-row-sub">
-                  {a.listed ? 'its template lists it' : 'attaches itself'} · {fromWhat[a.from]}
-                </span>
-                {own ? (
-                  <span className="phone-pack-copy">
-                    <CopyChoice env={env.id} attached={a} />
-                  </span>
-                ) : (
-                  <span className="phone-row-sub">{copyName(a.copy, me.id)}</span>
-                )}
-              </span>
-            </div>
-          ))}
-        </div>
-        {conflicts.data && conflicts.data.length > 0 && (
-          <Conflicts env={env.id} own={own} conflicts={conflicts.data} names={packs.data} />
-        )}
-      </section>
-    )
-  }
   return (
-    <section className="section">
-      <h2 className="section-title">Files</h2>
-      <div className="panel">
-        <table className="table">
-          <tbody>
-            {packs.data.map((a) => (
-              <tr key={a.pack.id}>
-                <td>
-                  <Link to={packPath(a.pack.id, a.copy.id)} className="strong">
-                    {a.pack.name}
-                  </Link>
-                  <div className="muted small">{a.listed ? 'its template lists it' : 'attaches itself'}</div>
-                </td>
-                <td>
-                  {own ? <CopyChoice env={env.id} attached={a} /> : copyName(a.copy, me.id)}
-                  <div className="muted small">{fromWhat[a.from]}</div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <section className="phone-section">
+      <h2 className="phone-heading">Files</h2>
+      <div className="phone-list">
+        {packs.data.map((a) => (
+          <div key={a.pack.id} className="phone-row phone-pack">
+            <span className="phone-row-main">
+              <Link to={packPath(a.pack.id, a.copy.id)} className="strong">
+                {a.pack.name}
+              </Link>
+              <span className="phone-row-sub">
+                {a.listed ? 'its template lists it' : 'attaches itself'} · {fromWhat[a.from]}
+              </span>
+              {own ? (
+                <span className="phone-pack-copy">
+                  <CopyChoice env={env.id} attached={a} />
+                </span>
+              ) : (
+                <span className="phone-row-sub">{copyName(a.copy, me.id)}</span>
+              )}
+            </span>
+          </div>
+        ))}
       </div>
       {conflicts.data && conflicts.data.length > 0 && (
         <Conflicts env={env.id} own={own} conflicts={conflicts.data} names={packs.data} />
@@ -93,7 +52,24 @@ export function EnvironmentPacks({ env }: { env: Environment }) {
   )
 }
 
-function CopyChoice({ env, attached }: { env: string; attached: AttachedPack }) {
+// useEnvironmentPacks is the packs an environment has, with the copy it
+// uses of each, and the conflicts found as their paths became shared.
+export function useEnvironmentPacks(env: string) {
+  const packs = useQuery({
+    queryKey: ['environment', env, 'packs'],
+    queryFn: () => api.environmentPacks(env),
+    refetchInterval: 10_000,
+  })
+  const conflicts = useQuery({
+    queryKey: ['environment', env, 'conflicts'],
+    queryFn: () => api.environmentConflicts(env),
+    refetchInterval: 5_000,
+  })
+  return { packs, conflicts }
+}
+
+// CopyChoice chooses which copy of a pack an environment uses.
+export function CopyChoice({ env, attached }: { env: string; attached: AttachedPack }) {
   const me = useMe()
   const qc = useQueryClient()
   const copies = useQuery({
@@ -127,7 +103,9 @@ function CopyChoice({ env, attached }: { env: string; attached: AttachedPack }) 
   )
 }
 
-function Conflicts({
+// Conflicts lists the files an environment had of its own where paths
+// became shared, which its owner resolves.
+export function Conflicts({
   env,
   own,
   conflicts,
