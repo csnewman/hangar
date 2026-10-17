@@ -130,8 +130,7 @@ export function repoName(url: string): string {
   return tail.slice(-2).join('/') || url
 }
 
-// specLine summarises what an environment or template is in a line, as
-// SpecChips does in chips.
+// specLine summarises what an environment or template is in a line.
 export function specLine(spec: Spec, namePattern?: string): string {
   const parts = [`${spec.cpus} vCPU`, formatMemory(spec.memory_mib), spec.display === 'desktop' ? 'Desktop' : 'Headless']
   if (spec.gpu !== 'none') parts.push(spec.gpu === 'passthrough' ? 'GPU passthrough' : 'Virtual GPU')

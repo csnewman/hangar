@@ -55,7 +55,7 @@ export function EnvironmentActivity({ env }: { env: string }) {
         {more && (
           <button
             type="button"
-            className="envtab-link"
+            className="pane-link"
             disabled={log.isFetchingNextPage}
             onClick={() => {
               setShown((n) => n + 10)

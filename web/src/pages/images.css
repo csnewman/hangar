@@ -1,0 +1,15 @@
+/* The Images page's repositories. */
+
+.images-mark {
+  flex: none;
+  color: var(--muted);
+}
+
+.images-path {
+  font-size: 12.5px;
+}
+
+.images-hint {
+  display: block;
+  line-height: 1.5;
+}

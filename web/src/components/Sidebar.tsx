@@ -1,152 +1,86 @@
 import {
   Boxes,
-  ChevronRight,
   FolderSync,
   History,
-  LayoutGrid,
+  Layers,
   LayoutTemplate,
   MonitorUp,
   PanelLeftClose,
   PanelLeftOpen,
-  Plus,
   Server,
-  UserRound,
+  Settings,
   Users,
   UsersRound,
 } from 'lucide-react'
-import { useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { Link, NavLink, useLocation } from 'react-router'
 
-import type { Environment } from '../api'
 import { desktop } from '../desktop'
 import { useMe } from '../session'
-import { splitByOwner, useEnvironments } from '../environments'
+import { useEnvironments } from '../environments'
 import { Logo } from './Logo'
-import { PhaseDot } from './Status'
 import { UserMenu } from './UserMenu'
-import { useEnvironmentTarget } from '../workspaceLinks'
 
-// Sidebar is the inventory: every environment the user can reach, as a tree,
-// then the user's own settings, and administration for administrators. Who
-// is signed in sits at its foot, below whatever scrolls.
+// Sidebar is Hangar's own sections: environments, then what they are made
+// from, then administration for administrators, and at its foot your
+// settings and who is signed in. Each environment's workspace is a tab of
+// its own, so the environments are a page here, not a tree: the Environments
+// item says how many are running.
 export function Sidebar({ collapsed = false, onToggle }: { collapsed?: boolean; onToggle: () => void }) {
   const me = useMe()
   const envs = useEnvironments()
-  const { mine, others } = splitByOwner(envs.data ?? [], me)
-
-  if (collapsed) {
-    // Folded to its icons: the environments are on the Overview.
-    return (
-      <aside className="sidebar sidebar-collapsed">
-        <SidebarHead collapsed onToggle={onToggle} />
-        <div className="sidebar-scroll">
-          <nav className="side-nav">
-            <SideIcon to="/environments" end icon={<LayoutGrid size={17} />} label="Overview" />
-            <SideIcon to="/templates" icon={<LayoutTemplate size={17} />} label="Templates" />
-            <SideIcon to="/images" icon={<Boxes size={17} />} label="Images" />
-            <SideIcon to="/teams" icon={<UsersRound size={17} />} label="Teams" />
-            <SideIcon to="/environments/new" icon={<Plus size={17} />} label="New environment" />
-          </nav>
-          <nav className="side-nav side-group">
-            <SideIcon to="/files" icon={<FolderSync size={17} />} label="Files" />
-            <SideIcon to="/account" icon={<UserRound size={17} />} label="Account" />
-          </nav>
-          {me.admin && (
-            <nav className="side-nav side-group">
-              <SideIcon to="/admin/workers" icon={<Server size={17} />} label="Workers" />
-              <SideIcon to="/admin/users" icon={<Users size={17} />} label="Users" />
-              <SideIcon to="/admin/audit" icon={<History size={17} />} label="Audit log" />
-            </nav>
-          )}
-        </div>
-        <div className="sidebar-foot">
-          <OpenInDesktop collapsed />
-          <UserMenu collapsed />
-        </div>
-      </aside>
+  const running = (envs.data ?? []).filter((e) => e.owner_id === me.id && e.phase === 'running').length
+  const items: { to: string; label: string; icon: ReactNode; end?: boolean; count?: string }[] = [
+    {
+      to: '/environments',
+      label: 'Environments',
+      icon: <Layers size={16} />,
+      count: running > 0 ? `${running} running` : undefined,
+    },
+    { to: '/templates', label: 'Templates', icon: <LayoutTemplate size={16} /> },
+    { to: '/images', label: 'Images', icon: <Boxes size={16} /> },
+    { to: '/files', label: 'Files', icon: <FolderSync size={16} /> },
+    { to: '/teams', label: 'Teams', icon: <UsersRound size={16} /> },
+  ]
+  const admin: typeof items = [
+    { to: '/admin/workers', label: 'Workers', icon: <Server size={16} /> },
+    { to: '/admin/users', label: 'Users', icon: <Users size={16} /> },
+    { to: '/admin/audit', label: 'Audit log', icon: <History size={16} /> },
+  ]
+  const link = (i: (typeof items)[number]) =>
+    collapsed ? (
+      <SideIcon key={i.to} to={i.to} end={i.end} icon={i.icon} label={i.count ? `${i.label}, ${i.count}` : i.label} />
+    ) : (
+      <NavLink key={i.to} to={i.to} end={i.end} className="side-link">
+        {i.icon}
+        <span>{i.label}</span>
+        {i.count && <span className="side-count">{i.count}</span>}
+      </NavLink>
     )
-  }
-
   return (
-    <aside className="sidebar">
-      <SidebarHead onToggle={onToggle} />
+    <aside className={collapsed ? 'sidebar sidebar-collapsed' : 'sidebar'}>
+      <SidebarHead collapsed={collapsed} onToggle={onToggle} />
       <div className="sidebar-scroll">
-        <nav className="side-nav">
-          <NavLink to="/environments" end className="side-link">
-            <LayoutGrid size={16} />
-            <span>Overview</span>
-          </NavLink>
-          <NavLink to="/templates" className="side-link">
-            <LayoutTemplate size={16} />
-            <span>Templates</span>
-          </NavLink>
-          <NavLink to="/images" className="side-link">
-            <Boxes size={16} />
-            <span>Images</span>
-          </NavLink>
-          <NavLink to="/teams" className="side-link">
-            <UsersRound size={16} />
-            <span>Teams</span>
-          </NavLink>
+        <nav className="side-nav" aria-label="Hangar">
+          {items.map(link)}
         </nav>
-
-        <div className="side-section">
-          <div className="side-heading">
-            <span>Environments</span>
-            <Link to="/environments/new" className="icon-btn" title="New environment" aria-label="New environment">
-              <Plus size={15} />
-            </Link>
-          </div>
-          {me.admin ? (
-            <>
-              <TreeGroup id="mine" label="Mine" environments={mine} defaultOpen />
-              {others.map((g) => (
-                <TreeGroup key={g.owner} id={`owner:${g.owner}`} label={g.owner} environments={g.environments} />
-              ))}
-            </>
-          ) : (
-            <TreeItems environments={mine} />
-          )}
-          {envs.isSuccess && envs.data.length === 0 && <div className="side-empty">No environments yet.</div>}
-        </div>
-
-        <div className="side-section">
-          <div className="side-heading">
-            <span>You</span>
-          </div>
-          <NavLink to="/files" className="side-link">
-            <FolderSync size={16} />
-            <span>Files</span>
-          </NavLink>
-          <NavLink to="/account" className="side-link">
-            <UserRound size={16} />
-            <span>Account</span>
-          </NavLink>
-        </div>
-
         {me.admin && (
-          <div className="side-section">
-            <div className="side-heading">
-              <span>Administration</span>
-            </div>
-            <NavLink to="/admin/workers" className="side-link">
-              <Server size={16} />
-              <span>Workers</span>
-            </NavLink>
-            <NavLink to="/admin/users" className="side-link">
-              <Users size={16} />
-              <span>Users</span>
-            </NavLink>
-            <NavLink to="/admin/audit" className="side-link">
-              <History size={16} />
-              <span>Audit log</span>
-            </NavLink>
-          </div>
+          <nav className="side-section" aria-label="Administration">
+            {!collapsed && (
+              <div className="side-heading">
+                <span>Administration</span>
+              </div>
+            )}
+            {admin.map(link)}
+          </nav>
         )}
       </div>
       <div className="sidebar-foot">
-        <OpenInDesktop />
-        <UserMenu />
+        {link({ to: '/settings', label: 'Settings', icon: <Settings size={16} /> })}
+        <div className={collapsed ? 'side-user side-user-collapsed' : 'side-user'}>
+          <UserMenu collapsed={collapsed} />
+          {!collapsed && <OpenInDesktop />}
+        </div>
       </div>
     </aside>
   )
@@ -180,20 +114,18 @@ function SidebarHead({ collapsed = false, onToggle }: { collapsed?: boolean; onT
 // naming this server and page, which the app opens in this server's window
 // -- an environment's page in that environment's tab. It is not shown
 // inside the app.
-function OpenInDesktop({ collapsed = false }: { collapsed?: boolean }) {
+function OpenInDesktop() {
   const { pathname, search } = useLocation()
   if (desktop) return null
   const q = new URLSearchParams({ server: window.location.origin, path: pathname + search })
-  const label = 'Open in desktop app'
   return (
     <a
       href={`hangar://open?${q}`}
-      className={collapsed ? 'side-link side-icon' : 'side-link'}
-      title={collapsed ? label : 'Opens this page in the Hangar desktop app, if it is installed'}
-      aria-label={label}
+      className="icon-btn side-desktop"
+      title="Open this page in the Hangar desktop app, if it is installed"
+      aria-label="Open in the desktop app"
     >
-      <MonitorUp size={collapsed ? 17 : 16} />
-      {!collapsed && <span>{label}</span>}
+      <MonitorUp size={15} />
     </a>
   )
 }
@@ -203,67 +135,5 @@ function SideIcon({ to, icon, label, end }: { to: string; icon: ReactNode; label
     <NavLink to={to} end={end} className="side-link side-icon" title={label} aria-label={label}>
       {icon}
     </NavLink>
-  )
-}
-
-function readOpen(id: string, fallback: boolean): boolean {
-  try {
-    const v = localStorage.getItem(`hangar.tree.${id}`)
-    return v === null ? fallback : v === '1'
-  } catch {
-    return fallback
-  }
-}
-
-function TreeGroup({
-  id,
-  label,
-  environments,
-  defaultOpen = false,
-}: {
-  id: string
-  label: string
-  environments: Environment[]
-  defaultOpen?: boolean
-}) {
-  const [open, setOpen] = useState(() => readOpen(id, defaultOpen))
-  const toggle = () => {
-    setOpen(!open)
-    try {
-      localStorage.setItem(`hangar.tree.${id}`, open ? '0' : '1')
-    } catch {
-      // Remembering which groups are open is a convenience.
-    }
-  }
-  return (
-    <div className="tree-group">
-      <button type="button" className="tree-toggle" onClick={toggle} aria-expanded={open}>
-        <ChevronRight size={14} className={open ? 'chev chev-open' : 'chev'} />
-        <span className="tree-label">{label}</span>
-        <span className="tree-count">{environments.length}</span>
-      </button>
-      {open && <TreeItems environments={environments} nested />}
-    </div>
-  )
-}
-
-function TreeItems({ environments, nested = false }: { environments: Environment[]; nested?: boolean }) {
-  const target = useEnvironmentTarget()
-  return (
-    <ul className={nested ? 'tree tree-nested' : 'tree'}>
-      {environments.map((e) => (
-        <li key={e.id}>
-          <NavLink
-            to={`/environments/${e.id}`}
-            target={target(e.id)}
-            className="tree-item"
-            title={`${e.name} — ${e.phase}`}
-          >
-            <PhaseDot phase={e.phase} workerOnline={e.worker_online} />
-            <span className="tree-name">{e.name}</span>
-          </NavLink>
-        </li>
-      ))}
-    </ul>
   )
 }

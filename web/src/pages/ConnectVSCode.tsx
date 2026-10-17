@@ -72,8 +72,8 @@ export function ConnectVSCodePage() {
           <>
             <h1>Signed in</h1>
             <p className="muted">
-              {target.editor} is signed in as {me.username}. You can close this tab. The token is under Account, where
-              it can be revoked.
+              {target.editor} is signed in as {me.username}. You can close this tab. The token is under Settings, Access
+              tokens, where it can be revoked.
             </p>
           </>
         ) : (
@@ -82,7 +82,7 @@ export function ConnectVSCodePage() {
             <p className="muted">
               The Hangar extension in {target.editor} asks to act as <strong>{me.username}</strong>: to list, start and
               stop your environments and open them over SSH. It gets an access token for a year, which you can revoke
-              under Account.
+              under Settings, Access tokens.
             </p>
             <p className="muted small">Allow it only if you started this from {target.editor} yourself.</p>
             {allow.error && <div className="alert">{allow.error.message}</div>}

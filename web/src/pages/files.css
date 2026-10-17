@@ -1,0 +1,62 @@
+/* The Files page's packs: their paths, copies and settings. */
+
+.files-form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.files-mark {
+  flex: none;
+  color: var(--muted);
+}
+
+.files-paths .files-path {
+  width: 100%;
+}
+
+.files-paths .files-sensitive {
+  width: 80px;
+  text-align: center;
+}
+
+.files-paths .files-remove {
+  width: 32px;
+  padding-right: 0;
+  text-align: right;
+}
+
+.files-hint {
+  display: block;
+  line-height: 1.5;
+}
+
+.files-copy {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.files-copy strong {
+  font-weight: 600;
+}
+
+.files-copy-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.files-make {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.files-new {
+  flex: none;
+  align-self: center;
+}

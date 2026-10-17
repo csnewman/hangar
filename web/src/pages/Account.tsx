@@ -1,85 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Copy, History, KeyRound, LockKeyhole, Monitor, Moon, Plus, Sun, TicketCheck } from 'lucide-react'
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { Copy, History, KeyRound, LockKeyhole, Plus, TicketCheck } from 'lucide-react'
+import { useState, type FormEvent } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router'
 
 import { api } from '../api'
-import { usePhone } from '../phone'
 import { profileKey } from '../profile'
-import { meKey, useMe } from '../session'
-import { onThemeChoice, setTheme, type Theme } from '../theme'
-import { PageHeader } from '../components/PageHeader'
+import { useMe } from '../session'
 import { Activity } from '../components/Activity'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { Keys } from '../components/Keys'
 import { formatAgo } from '../components/format'
 import { PhoneChoice, PhoneHead, PhoneNav, PhoneRow, PhoneSection, PhoneValue } from '../components/Phone'
-
-export function AccountPage() {
-  const me = useMe()
-  if (usePhone()) return <PhoneAccount />
-  return (
-    <div className="page page-narrow">
-      <PageHeader title="Account" />
-      <div className="panel">
-        <dl className="props">
-          <div className="prop">
-            <dt>Username</dt>
-            <dd>{me.username}</dd>
-          </div>
-          <div className="prop">
-            <dt>Name</dt>
-            <dd>{me.display_name || <span className="muted">not set</span>}</dd>
-          </div>
-          <div className="prop">
-            <dt>Role</dt>
-            <dd>{me.admin ? 'Administrator' : 'User'}</dd>
-          </div>
-        </dl>
-      </div>
-      <Appearance />
-      {me.has_password && <ChangePassword />}
-      <Keys />
-      <AccessTokens />
-      <section className="section">
-        <h2 className="section-title">Your activity</h2>
-        <Activity subjects={[`actor:${me.id}`]} />
-      </section>
-    </div>
-  )
-}
-
-// Appearance is the person's theme: their system's, or always light or
-// dark. It shows at once, and is kept for wherever they sign in.
-function Appearance() {
-  const [theme, choose, save] = useThemeChoice()
-  const options: { value: Theme; label: string; icon: ReactNode; about: string }[] = [
-    { value: 'system', label: 'System', icon: <Monitor size={14} />, about: 'Light or dark as your device is set' },
-    { value: 'light', label: 'Light', icon: <Sun size={14} />, about: 'Always light' },
-    { value: 'dark', label: 'Dark', icon: <Moon size={14} />, about: 'Always dark' },
-  ]
-  return (
-    <section className="section">
-      <h2 className="section-title">Appearance</h2>
-      <div className="panel form">
-        <div className="field">
-          <span>Theme</span>
-          <div className="segmented" role="radiogroup" aria-label="Theme">
-            {options.map((o) => (
-              <label key={o.value} className={theme === o.value ? 'seg seg-on' : 'seg'} title={o.about}>
-                <input type="radio" name="theme" checked={theme === o.value} onChange={() => choose(o.value)} />
-                {o.icon}
-                {o.label}
-              </label>
-            ))}
-          </div>
-        </div>
-        <small className="muted">Kept with your account, so it follows you to every browser and the desktop app.</small>
-        {save.error && <div className="alert">{save.error.message}</div>}
-      </div>
-    </section>
-  )
-}
+import { tokensKey, useThemeChoice } from './themeChoice'
 
 function ChangePassword() {
   const [current, setCurrent] = useState('')
@@ -151,31 +83,9 @@ function ChangePassword() {
   )
 }
 
-// useThemeChoice is the person's theme, and a way to choose another.
-function useThemeChoice() {
-  const me = useMe()
-  const qc = useQueryClient()
-  const [theme, setChosen] = useState<Theme>(me.theme)
-  // Chosen in another tab, it shows here as chosen too.
-  useEffect(() => onThemeChoice(setChosen), [])
-  const save = useMutation({
-    mutationFn: (t: Theme) => api.setPreferences({ theme: t }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
-  })
-  const choose = (t: Theme) => {
-    setChosen(t)
-    setTheme(t)
-    save.mutate(t)
-  }
-  return [theme, choose, save] as const
-}
-
-const tokensKey = ['tokens']
-
 // AccessTokens sign tools in as the user -- the VS Code extension, scripts
-// calling the API -- each revocable on its own.
+// calling the API -- each revocable on its own, as a phone lists them.
 function AccessTokens() {
-  const phone = usePhone()
   const qc = useQueryClient()
   const tokens = useQuery({ queryKey: tokensKey, queryFn: api.tokens })
   const [name, setName] = useState('')
@@ -232,62 +142,28 @@ function AccessTokens() {
           </div>
         </div>
       )}
-      {phone ? (
-        <div className="phone-list">
-          {tokens.isError && <div className="alert">{tokens.error.message}</div>}
-          {tokens.data?.length === 0 && <div className="phone-row phone-row-empty">No tokens.</div>}
-          {tokens.data?.map((t) => (
-            <div key={t.id} className="phone-row phone-key">
-              <span className="phone-row-main">
-                <span className="strong">{t.name}</span>
-                <span className="phone-row-sub">
-                  {t.last_used_at ? `used ${formatAgo(t.last_used_at)}` : 'never used'} ·{' '}
-                  {t.expires_at ? `expires ${new Date(t.expires_at).toLocaleDateString()}` : 'does not expire'}
-                </span>
+      <div className="phone-list">
+        {tokens.isError && <div className="alert">{tokens.error.message}</div>}
+        {tokens.data?.length === 0 && <div className="phone-row phone-row-empty">No tokens.</div>}
+        {tokens.data?.map((t) => (
+          <div key={t.id} className="phone-row phone-key">
+            <span className="phone-row-main">
+              <span className="strong">{t.name}</span>
+              <span className="phone-row-sub">
+                {t.last_used_at ? `used ${formatAgo(t.last_used_at)}` : 'never used'} ·{' '}
+                {t.expires_at ? `expires ${new Date(t.expires_at).toLocaleDateString()}` : 'does not expire'}
               </span>
-              <ConfirmButton
-                label="Revoke"
-                confirmLabel="Revoke?"
-                onConfirm={() => revoke.mutate(t.id)}
-                disabled={revoke.isPending}
-              />
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="panel">
-          {tokens.isError ? (
-            <div className="alert">{tokens.error.message}</div>
-          ) : !tokens.data || tokens.data.length === 0 ? (
-            <div className="empty">{tokens.isPending ? '' : 'No tokens.'}</div>
-          ) : (
-            <table className="table">
-              <tbody>
-                {tokens.data.map((t) => (
-                  <tr key={t.id}>
-                    <td className="strong">{t.name}</td>
-                    <td className="muted nowrap">
-                      {t.last_used_at ? `used ${formatAgo(t.last_used_at)}` : 'never used'}
-                    </td>
-                    <td className="muted nowrap">
-                      {t.expires_at ? `expires ${new Date(t.expires_at).toLocaleDateString()}` : 'does not expire'}
-                    </td>
-                    <td className="num">
-                      <ConfirmButton
-                        label="Revoke"
-                        confirmLabel="Revoke?"
-                        onConfirm={() => revoke.mutate(t.id)}
-                        disabled={revoke.isPending}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-      <form className={phone ? 'phone-form' : 'inline-form'} onSubmit={submit}>
+            </span>
+            <ConfirmButton
+              label="Revoke"
+              confirmLabel="Revoke?"
+              onConfirm={() => revoke.mutate(t.id)}
+              disabled={revoke.isPending}
+            />
+          </div>
+        ))}
+      </div>
+      <form className="phone-form" onSubmit={submit}>
         <input
           className="grow"
           placeholder="Name: VS Code on my laptop"
@@ -324,7 +200,7 @@ type Screen = keyof typeof screens
 // PhoneAccount is the account as a phone shows it: who the person is and
 // their theme, then a row for each kind of key or token, each a screen of
 // its own.
-function PhoneAccount() {
+export function PhoneAccount() {
   const me = useMe()
   const location = useLocation()
   const navigate = useNavigate()

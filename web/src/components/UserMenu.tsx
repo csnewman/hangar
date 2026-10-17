@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ChevronsUpDown, FolderSync, LogOut, UserRound } from 'lucide-react'
+import { ChevronsUpDown, LogOut, Settings } from 'lucide-react'
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useNavigate } from 'react-router'
@@ -7,8 +7,8 @@ import { Link, useNavigate } from 'react-router'
 import { api } from '../api'
 import { announceSessionChange, useMe } from '../session'
 
-// UserMenu is who is signed in, at the foot of the sidebar, with their own
-// pages and signing out. Folded, it is their initials alone. Its menu opens
+// UserMenu is who is signed in, at the foot of the sidebar, with their
+// settings and signing out. Folded, it is their initials alone. Its menu opens
 // above the button, drawn on the page itself, not in the sidebar, which
 // clips what overflows it when folded.
 export function UserMenu({ collapsed = false }: { collapsed?: boolean }) {
@@ -77,13 +77,9 @@ export function UserMenu({ collapsed = false }: { collapsed?: boolean }) {
               <div className="strong">{name}</div>
               <div className="muted small">{me.username}</div>
             </div>
-            <Link to="/files" className="menu-item" role="menuitem" onClick={() => setOpen(false)}>
-              <FolderSync size={15} />
-              Files
-            </Link>
-            <Link to="/account" className="menu-item" role="menuitem" onClick={() => setOpen(false)}>
-              <UserRound size={15} />
-              Account
+            <Link to="/settings" className="menu-item" role="menuitem" onClick={() => setOpen(false)}>
+              <Settings size={15} />
+              Settings
             </Link>
             <button type="button" className="menu-item" role="menuitem" onClick={() => logout.mutate()}>
               <LogOut size={15} />

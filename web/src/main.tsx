@@ -9,7 +9,7 @@ import { RequireAdmin, RequireAuth } from './auth'
 import { meKey, onSessionChange } from './session'
 import { Shell } from './components/Shell'
 import './index.css'
-import { AccountPage } from './pages/Account'
+import { AccountPage, SettingsPage } from './pages/Settings'
 import { ConnectVSCodePage } from './pages/ConnectVSCode'
 import { FilesPage } from './pages/Files'
 import { PackPage, PackRedirect } from './pages/Packs'
@@ -22,8 +22,7 @@ import { LoginPage } from './pages/Login'
 import { MorePage } from './pages/More'
 import { LogsTab } from './pages/LogsTab'
 import { WorkerDetailPage } from './pages/admin/WorkerDetail'
-import { NewEnvironmentPage } from './pages/NewEnvironment'
-import { OverviewPage } from './pages/Overview'
+import { NewEnvironmentRoute, OverviewPage } from './pages/Overview'
 import { EditorTab } from './pages/EditorTab'
 import { TemplateEditorPage } from './pages/TemplateEditor'
 import { TemplatesPage } from './pages/Templates'
@@ -75,7 +74,7 @@ const router = createBrowserRouter([
         children: [
           { index: true, element: <Navigate to="/environments" replace /> },
           { path: 'environments', element: <OverviewPage /> },
-          { path: 'environments/new', element: <NewEnvironmentPage /> },
+          { path: 'environments/new', element: <NewEnvironmentRoute /> },
           {
             path: 'environments/:id',
             element: <EnvironmentPage />,
@@ -110,6 +109,8 @@ const router = createBrowserRouter([
           { path: 'teams', element: <TeamsPage /> },
           { path: 'teams/:id', element: <TeamPage /> },
           { path: 'account', element: <AccountPage /> },
+          { path: 'settings', element: <SettingsPage /> },
+          { path: 'settings/:page', element: <SettingsPage /> },
           // The phone's way to what the sidebar holds.
           { path: 'more', element: <MorePage /> },
           { path: 'files', element: <FilesPage /> },
@@ -144,6 +145,14 @@ const router = createBrowserRouter([
           },
           {
             path: 'admin/users',
+            element: (
+              <RequireAdmin>
+                <UsersPage />
+              </RequireAdmin>
+            ),
+          },
+          {
+            path: 'admin/users/:id',
             element: (
               <RequireAdmin>
                 <UsersPage />

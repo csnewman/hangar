@@ -1,0 +1,96 @@
+/* The templates: the list beside the chosen one's editor. */
+
+.md-list-head .tpl-new {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+
+.md-none p {
+  margin: 0 0 12px;
+}
+
+/* The editor is one form: its head, its sections scrolling, and the bar
+   that applies them at the foot. */
+.tpl-form {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tpl-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.tpl-hint {
+  flex-basis: 100%;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.tpl-memory {
+  width: 96px;
+}
+
+/* A value that holds several controls, one under another. */
+.tpl-block {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.tpl-block .check {
+  align-items: flex-start;
+}
+
+.tpl-block .check span small {
+  display: block;
+}
+
+.tpl-repos input {
+  width: 100%;
+}
+
+.tpl-repos th:last-child,
+.tpl-repos td:last-child {
+  width: 28px;
+  padding-right: 0;
+}
+
+.tpl-kv {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 520px;
+}
+
+.tpl-kv input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The packs field names itself; here the row's label does. */
+.tpl-packs > .field > span:first-child {
+  display: none;
+}
+
+.tpl-packs > .field {
+  gap: 8px;
+  font-weight: 400;
+  color: var(--text);
+}
+
+.tpl-collaborators .people {
+  margin-top: 0;
+}

@@ -1,15 +1,28 @@
-import { Globe, Lock, Plus, Users } from 'lucide-react'
+import './templates.css'
+
+import { Globe, Lock, Plus } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
 
 import type { Template } from '../api'
-import { PageHeader } from '../components/PageHeader'
+import {
+  ListGroup,
+  ListItem,
+  ListPane,
+  MasterDetail,
+  NoneChosen,
+  PaneRoot,
+  SearchField,
+  Tile,
+} from '../components/Pane'
 import { PhoneHead, PhoneRow, PhoneSection } from '../components/Phone'
-import { SpecChips } from '../components/SpecChips'
 import { usePhone } from '../phone'
 import { useMe } from '../session'
 import { groupTemplates, specLine, useTemplates } from '../templates'
 import { useTeams } from '../teams'
 
+// TemplatesPage is the templates: on a computer the list, with nothing yet
+// chosen beside it; on a phone a screen of them, grouped as the list is.
 export function TemplatesPage() {
   const me = useMe()
   const templates = useTemplates()
@@ -17,31 +30,31 @@ export function TemplatesPage() {
   const { mine, teams: teamGroups, collaborating, others } = groupTemplates(templates.data ?? [], me, teams.data)
   const phone = usePhone()
 
+  if (!phone) {
+    return (
+      <TemplatesLayout>
+        <NoneChosen>
+          <p>Choose a template to see and change it, or make a new one.</p>
+          <Link to="/templates/new" className="btn btn-primary btn-sm">
+            <Plus size={14} />
+            New template
+          </Link>
+        </NoneChosen>
+      </TemplatesLayout>
+    )
+  }
+
   return (
-    <div className={phone ? 'page phone-page' : 'page'}>
-      {phone && (
-        <PhoneHead
-          back={{ to: '/more', label: 'More' }}
-          title="Templates"
-          actions={
-            <Link to="/templates/new" className="phone-icon-btn" aria-label="New template">
-              <Plus size={22} />
-            </Link>
-          }
-        />
-      )}
-      {!phone && (
-        <PageHeader
-          title="Templates"
-          subtitle="Recipes for environments: the image, repositories to clone, and how it runs."
-          actions={
-            <Link to="/templates/new" className="btn btn-primary">
-              <Plus size={15} />
-              New template
-            </Link>
-          }
-        />
-      )}
+    <div className="page phone-page">
+      <PhoneHead
+        back={{ to: '/more', label: 'More' }}
+        title="Templates"
+        actions={
+          <Link to="/templates/new" className="phone-icon-btn" aria-label="New template">
+            <Plus size={22} />
+          </Link>
+        }
+      />
 
       {templates.isError && <div className="alert">Could not load templates: {templates.error.message}</div>}
 
@@ -86,52 +99,105 @@ export function TemplatesPage() {
   )
 }
 
+// TemplatesLayout is the templates down the left, grouped by whose they
+// are, and beside them the one chosen (children).
+export function TemplatesLayout({ children }: { children?: ReactNode }) {
+  return (
+    <PaneRoot>
+      <MasterDetail list={<TemplateList />}>{children}</MasterDetail>
+    </PaneRoot>
+  )
+}
+
+function TemplateList() {
+  const me = useMe()
+  const templates = useTemplates()
+  const teams = useTeams()
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const matches = (t: Template) =>
+    !q || [t.name, t.description ?? '', t.spec.image].some((s) => s.toLowerCase().includes(q))
+  const {
+    mine,
+    teams: teamGroups,
+    collaborating,
+    others,
+  } = groupTemplates((templates.data ?? []).filter(matches), me, teams.data)
+  const item = (t: Template) => (
+    <ListItem
+      key={t.id}
+      to={`/templates/${t.id}`}
+      mark={<Tile name={t.name} />}
+      title={t.name}
+      sub={specLine(t.spec, t.name_pattern)}
+      end={t.environments > 0 ? `${t.environments} env${t.environments === 1 ? '' : 's'}` : undefined}
+    />
+  )
+  const none = mine.length + collaborating.length + others.length + teamGroups.flatMap((g) => g.templates).length === 0
+
+  return (
+    <ListPane
+      head={
+        <>
+          <SearchField value={query} onChange={setQuery} placeholder="Templates" />
+          <Link to="/templates/new" className="pane-icon-btn tpl-new" aria-label="New template" title="New template">
+            <Plus size={15} />
+          </Link>
+        </>
+      }
+    >
+      {templates.isError && <div className="md-empty-list">Could not load templates: {templates.error.message}</div>}
+      {mine.length > 0 && <ListGroup title="Yours">{mine.map(item)}</ListGroup>}
+      {teamGroups
+        .filter((g) => g.templates.length > 0)
+        .map(({ team, templates: owned }) => (
+          <ListGroup key={team.id} title={`Team ${team.name}`}>
+            {owned.map(item)}
+          </ListGroup>
+        ))}
+      {collaborating.length > 0 && <ListGroup title="Shared with you to edit">{collaborating.map(item)}</ListGroup>}
+      {others.length > 0 && (
+        <ListGroup title={me.admin ? 'Everyone else’s' : 'Shared by others'}>{others.map(item)}</ListGroup>
+      )}
+      {templates.isSuccess && none && (
+        <div className="md-empty-list">{q ? 'No template matches.' : 'No templates yet.'}</div>
+      )}
+    </ListPane>
+  )
+}
+
+// TemplateSection is one group of templates on a phone's screen of them.
 function TemplateSection({
   title,
   templates,
   loading = false,
   empty,
 }: {
-  title: React.ReactNode
+  title: ReactNode
   templates: Template[]
   loading?: boolean
-  empty?: React.ReactNode
+  empty?: ReactNode
 }) {
   const me = useMe()
-  if (usePhone()) {
-    return (
-      <PhoneSection
-        title={
-          <>
-            {title} · {templates.length}
-          </>
-        }
-        note={!loading && templates.length === 0 ? empty : undefined}
-      >
-        {templates.map((t) => (
-          <PhoneRow
-            key={t.id}
-            to={`/templates/${t.id}`}
-            label={t.name}
-            sub={`${specLine(t.spec, t.name_pattern)} · ${t.team ? `team ${t.team.name}` : t.owner.id === me.id ? 'yours' : `by ${t.owner.display_name || t.owner.username}`}`}
-            end={<VisibilityBadge template={t} />}
-          />
-        ))}
-      </PhoneSection>
-    )
-  }
   return (
-    <section className="section">
-      <h2 className="section-title">
-        {title} <span className="section-count">{templates.length}</span>
-      </h2>
-      {!loading && templates.length === 0 && empty && <div className="panel empty-state">{empty}</div>}
-      <div className="cards">
-        {templates.map((t) => (
-          <TemplateCard key={t.id} template={t} />
-        ))}
-      </div>
-    </section>
+    <PhoneSection
+      title={
+        <>
+          {title} · {templates.length}
+        </>
+      }
+      note={!loading && templates.length === 0 ? empty : undefined}
+    >
+      {templates.map((t) => (
+        <PhoneRow
+          key={t.id}
+          to={`/templates/${t.id}`}
+          label={t.name}
+          sub={`${specLine(t.spec, t.name_pattern)} · ${t.team ? `team ${t.team.name}` : t.owner.id === me.id ? 'yours' : `by ${t.owner.display_name || t.owner.username}`}`}
+          end={<VisibilityBadge template={t} />}
+        />
+      ))}
+    </PhoneSection>
   )
 }
 
@@ -152,44 +218,5 @@ export function VisibilityBadge({ template: t }: { template: Template }) {
       <Lock size={11} />
       private
     </span>
-  )
-}
-
-function TemplateCard({ template: t }: { template: Template }) {
-  return (
-    <div className="card">
-      <div className="card-head">
-        <Link to={`/templates/${t.id}`} className="card-title">
-          {t.name}
-        </Link>
-        <VisibilityBadge template={t} />
-      </div>
-      {t.description && <p className="card-desc">{t.description}</p>}
-      <SpecChips spec={t.spec} namePattern={t.name_pattern} />
-      <div className="card-foot">
-        <span className="muted small">
-          {t.team ? `team ${t.team.name}` : `by ${t.owner.display_name || t.owner.username}`}
-          {t.collaborators.length + t.collaborator_teams.length > 0 && (
-            <span
-              title={[
-                ...t.collaborators.map((c) => c.display_name || c.username),
-                ...t.collaborator_teams.map((c) => `team ${c.name}`),
-              ].join(', ')}
-            >
-              {' '}
-              <Users size={11} className="inline-icon" /> +{t.collaborators.length + t.collaborator_teams.length}
-            </span>
-          )}
-        </span>
-        <div className="actions">
-          <Link to={`/templates/${t.id}`} className="btn btn-ghost">
-            {t.can_edit ? 'Edit' : 'View'}
-          </Link>
-          <Link to={`/environments/new?template=${t.id}`} className="btn btn-primary">
-            Use
-          </Link>
-        </div>
-      </div>
-    </div>
   )
 }

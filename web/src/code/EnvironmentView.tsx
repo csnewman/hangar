@@ -1,6 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  BellDot,
   Code2,
   Copy,
   ExternalLink,
@@ -13,7 +12,6 @@ import {
   Square,
   Trash2,
   Undo2,
-  X,
 } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
@@ -21,10 +19,11 @@ import { api, type Environment, type EnvironmentSettings, type TemplateSetting }
 import { Conflicts, CopyChoice, fromWhat, useEnvironmentPacks } from '../components/EnvironmentPacks'
 import { formatAgo, formatBytes, formatMemory, shortDigest } from '../components/format'
 import { imageBuild, imageRisk, useImageChange } from '../components/ImageUpdate'
+import { Banner, CopyField, Row, Rows, Section } from '../components/Pane'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
 import { openInVSCode, useEnvironmentActions } from '../environmentActions'
-import { changeable, environmentsKey, longestWebName, sshCommand, webURL } from '../environments'
+import { changeable, environmentsKey, longestWebName, sshCommand, webURL, withSize } from '../environments'
 import { copyName, packPath } from '../pages/Packs'
 import { useMe } from '../session'
 import { homeTab, otherTab } from '../workspaceLinks'
@@ -129,7 +128,7 @@ export function EnvironmentView({
           ))}
         </nav>
         <div className="envtab-scroll" ref={scroller}>
-          <div className="envtab-page">
+          <div className="pane-page">
             {lead}
             <Section id="overview" title="Overview">
               <Overview env={env} />
@@ -159,30 +158,6 @@ export function EnvironmentView({
       </div>
       {settings.changes.length > 0 && <ApplyBar env={env} form={settings} />}
     </div>
-  )
-}
-
-function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
-  return (
-    <section className="envtab-section" data-section={id} aria-labelledby={`envtab-${id}`}>
-      <div className="envtab-rule">
-        <h3 id={`envtab-${id}`}>{title}</h3>
-      </div>
-      {children}
-    </section>
-  )
-}
-
-function Rows({ children }: { children: ReactNode }) {
-  return <dl className="envtab-rows">{children}</dl>
-}
-
-function Row({ label, modified, children }: { label: string; modified?: boolean; children: ReactNode }) {
-  return (
-    <>
-      <dt className={modified ? 'envtab-modified' : undefined}>{label}</dt>
-      <dd>{children}</dd>
-    </>
   )
 }
 
@@ -249,9 +224,9 @@ function Head({ env }: { env: Environment }) {
 
   const problem = error || actions.error?.message || reset.error?.message
   return (
-    <header className="envtab-head">
-      <div className="envtab-head-main">
-        <div className="envtab-head-title">
+    <header className="pane-head">
+      <div className="pane-head-main">
+        <div className="pane-head-title">
           <h2>{env.name}</h2>
           <span className="envtab-state">
             <PhaseDot phase={env.phase} workerOnline={env.worker_online} />
@@ -259,14 +234,14 @@ function Head({ env }: { env: Environment }) {
             {state.detail && <span className="muted">{state.detail}</span>}
           </span>
         </div>
-        <div className="envtab-head-sub muted">
+        <div className="pane-head-sub muted">
           {env.template} · {env.owner} · {s.cpus} vCPU{s.cpus === 1 ? '' : 's'}, {formatMemory(s.memory_mib)},{' '}
           {s.display === 'desktop' ? 'desktop' : 'headless'}
           {s.gpu !== 'none' && `, ${s.gpu} GPU`}
         </div>
         {problem && <div className="action-error">{problem}</div>}
       </div>
-      <div className="envtab-head-actions">
+      <div className="pane-head-actions">
         {env.desired === 'running' ? (
           <>
             {running && (
@@ -366,38 +341,6 @@ function driftNames(env: Environment): string {
   return (env.template_changes ?? []).map((c) => settingNames[c]).join(', ')
 }
 
-// Banner is a notice across the top of the page, as an IDE puts one across
-// the top of an editor: what it is about, and what can be done.
-function Banner({
-  tone,
-  children,
-  actions,
-  onDismiss,
-  below,
-}: {
-  tone: 'warn' | 'info'
-  children: ReactNode
-  actions?: ReactNode
-  onDismiss?: () => void
-  below?: ReactNode
-}) {
-  return (
-    <div className={`envtab-banner envtab-banner-${tone}`} role="status">
-      <div className="envtab-banner-row">
-        {tone === 'warn' ? <BellDot size={14} /> : <Info size={14} />}
-        <div className="envtab-banner-text">{children}</div>
-        {actions && <div className="envtab-banner-actions">{actions}</div>}
-        {onDismiss && (
-          <button type="button" className="code-tool-btn" aria-label="Dismiss" title="Dismiss" onClick={onDismiss}>
-            <X size={13} />
-          </button>
-        )}
-      </div>
-      {below}
-    </div>
-  )
-}
-
 // Banners are what needs deciding about the environment: a newer build of
 // its image, an upgrade to keep or roll back, a change waiting for its next
 // start, and how it differs from its template.
@@ -423,7 +366,7 @@ function Banners({ env }: { env: Environment }) {
         key="change"
         tone="info"
         actions={
-          <button type="button" className="envtab-link" disabled={image.busy} onClick={() => image.cancel.mutate()}>
+          <button type="button" className="pane-link" disabled={image.busy} onClick={() => image.cancel.mutate()}>
             Cancel
           </button>
         }
@@ -451,7 +394,7 @@ function Banners({ env }: { env: Environment }) {
             <>
               <button
                 type="button"
-                className="envtab-link"
+                className="pane-link"
                 disabled={image.busy || !image.stopped}
                 title={stopFirst ?? 'Go back to the earlier image and writable disk at its next start'}
                 onClick={() => image.rollback.mutate()}
@@ -460,7 +403,7 @@ function Banners({ env }: { env: Environment }) {
               </button>
               <button
                 type="button"
-                className="envtab-link"
+                className="pane-link"
                 disabled={image.busy}
                 title="Keep the upgrade and free the copy's space"
                 onClick={() => image.keep.mutate()}
@@ -486,13 +429,13 @@ function Banners({ env }: { env: Environment }) {
           actions={
             <>
               {risky && conflicts.length > 0 && (
-                <button type="button" className="envtab-link" onClick={() => setDetails((d) => !d)}>
+                <button type="button" className="pane-link" onClick={() => setDetails((d) => !d)}>
                   {details ? 'Hide Files' : 'Files…'}
                 </button>
               )}
               <button
                 type="button"
-                className={risky || u.error ? 'envtab-link envtab-link-danger' : 'envtab-link'}
+                className={risky || u.error ? 'pane-link pane-link-danger' : 'pane-link'}
                 disabled={image.busy || !image.stopped || !u.checked}
                 title={
                   stopFirst ?? 'At its next start, keeping its disks and a copy of its writable disk to roll back to'
@@ -506,7 +449,7 @@ function Banners({ env }: { env: Environment }) {
           below={
             details &&
             risky && (
-              <ul className="envtab-banner-list mono small">
+              <ul className="pane-banner-list mono small">
                 {conflicts.map((c) => (
                   <li key={c}>{c}</li>
                 ))}
@@ -545,7 +488,7 @@ function Banners({ env }: { env: Environment }) {
         actions={
           <button
             type="button"
-            className="envtab-link"
+            className="pane-link"
             disabled={!ok || reset.isPending}
             title={ok ? 'Take the template’s settings, keeping this environment’s disks' : 'Stop the environment first'}
             onClick={() => reset.mutate()}
@@ -569,8 +512,8 @@ function Banners({ env }: { env: Environment }) {
   const error = image.error ?? reset.error
   if (error) {
     out.push(
-      <div key="error" className="envtab-banner envtab-banner-error" role="alert">
-        <div className="envtab-banner-row">{error.message}</div>
+      <div key="error" className="pane-banner pane-banner-error" role="alert">
+        <div className="pane-banner-row">{error.message}</div>
       </div>,
     )
   }
@@ -592,7 +535,7 @@ function Overview({ env }: { env: Environment }) {
             {env.template} <span className="muted">(deleted)</span>
           </span>
         )}
-        {drift && <span className="envtab-note">differs in {drift}</span>}
+        {drift && <span className="pane-note">differs in {drift}</span>}
       </Row>
       <Row label="Image">
         <span className="mono">{env.image}</span>
@@ -601,7 +544,7 @@ function Overview({ env }: { env: Environment }) {
             @ {shortDigest(env.image_digest).replace('sha256:', '')}
           </span>
         )}
-        {env.image_update && <span className="envtab-pill envtab-pill-warn">newer build ready</span>}
+        {env.image_update && <span className="pane-pill pane-pill-warn">newer build ready</span>}
       </Row>
       <Row label="Worker">
         {env.worker ?? <span className="muted">not placed yet</span>}
@@ -629,28 +572,6 @@ function Overview({ env }: { env: Environment }) {
         <CopyField text={env.id} />
       </Row>
     </Rows>
-  )
-}
-
-// CopyField is text to copy, in a box with its Copy button.
-function CopyField({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <span className="envtab-copy">
-      <code className="mono">{text}</code>
-      <button
-        type="button"
-        aria-label="Copy"
-        title={copied ? 'Copied' : 'Copy'}
-        onClick={() => {
-          copyText(text)
-          setCopied(true)
-          setTimeout(() => setCopied(false), 1500)
-        }}
-      >
-        <Copy size={12} />
-      </button>
-    </span>
   )
 }
 
@@ -724,7 +645,7 @@ function Connect({ env, onDesktop }: { env: Environment; onDesktop?: () => void 
         <>
           <Row label="Web servers">
             <div className="envtab-web">
-              <table className="envtab-table">
+              <table className="pane-table">
                 <tbody>
                   {['', ...(env.spec.web_names ?? [])].map((n) => {
                     const url = webURL(n, env.short_id, suffix)
@@ -770,14 +691,14 @@ function Connect({ env, onDesktop }: { env: Environment; onDesktop?: () => void 
             </div>
           </Row>
           <Row label="Who can reach them">
-            <span className="envtab-segmented" role="radiogroup" aria-label="Who can reach its web servers">
+            <span className="pane-segmented" role="radiogroup" aria-label="Who can reach its web servers">
               {[false, true].map((p) => (
                 <button
                   key={String(p)}
                   type="button"
                   role="radio"
                   aria-checked={pub === p}
-                  className={pub === p ? 'envtab-segment envtab-segment-on' : 'envtab-segment'}
+                  className={pub === p ? 'pane-segment pane-segment-on' : 'pane-segment'}
                   disabled={ports.isPending}
                   onClick={() => pub !== p && ports.mutate(p)}
                 >
@@ -797,10 +718,6 @@ function Connect({ env, onDesktop }: { env: Environment; onDesktop?: () => void 
     </Rows>
   )
 }
-
-// The memory sizes offered; the environment's own is added if it is not
-// one of them.
-const memorySizes = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64].map((g) => g * 1024)
 
 function fromSpec(spec: Environment['spec']): EnvironmentSettings {
   return { cpus: spec.cpus, memory_mib: spec.memory_mib, display: spec.display, gpu: spec.gpu, dax: spec.dax ?? false }
@@ -841,19 +758,17 @@ function useSettingsForm(env: Environment) {
 function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
   const ok = changeable(env)
   const changed = (key: keyof EnvironmentSettings) => f.changes.some((c) => c.key === key)
-  const memories = memorySizes.includes(f.form.memory_mib)
-    ? memorySizes
-    : [...memorySizes, f.form.memory_mib].sort((a, b) => a - b)
+  const memories = withSize(f.form.memory_mib)
   const placement = Object.entries(env.spec.placement ?? {})
 
   return (
     <>
-      <fieldset className="envtab-fields" disabled={!ok}>
+      <fieldset className="pane-fields" disabled={!ok}>
         <Rows>
           <Row label="vCPUs" modified={changed('cpus')}>
             <input
               type="number"
-              className="envtab-number"
+              className="pane-number"
               min={1}
               max={64}
               required
@@ -916,7 +831,7 @@ function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
           )}
         </Rows>
       </fieldset>
-      <p className="envtab-hint muted small">
+      <p className="pane-hint muted small">
         <Info size={12} />
         {ok
           ? 'They apply when it next starts.'
@@ -940,11 +855,11 @@ function ApplyBar({ env, form: f }: { env: Environment; form: SettingsForm }) {
   const n = f.changes.length
   const ok = changeable(env)
   return (
-    <div className="envtab-apply">
-      <strong className="envtab-modified">
+    <div className="pane-apply">
+      <strong className="pane-modified">
         {n} change{n === 1 ? '' : 's'}
       </strong>
-      <span className="envtab-apply-what muted">
+      <span className="pane-apply-what muted">
         {save.error ? (
           <span className="action-error">{save.error.message}</span>
         ) : (
@@ -983,7 +898,7 @@ function ApplyBar({ env, form: f }: { env: Environment; form: SettingsForm }) {
 
 function Repositories({ env }: { env: Environment }) {
   return (
-    <table className="envtab-table">
+    <table className="pane-table">
       <thead>
         <tr>
           <th>Folder</th>
@@ -997,7 +912,7 @@ function Repositories({ env }: { env: Environment }) {
             <td>
               <span className="mono">{r.path}</span>
               {env.spec.editor_path === r.path && (
-                <span className="envtab-pill" title="The folder the editor opens on">
+                <span className="pane-pill" title="The folder the editor opens on">
                   opens
                 </span>
               )}
@@ -1030,7 +945,7 @@ function Files({ env }: { env: Environment }) {
   if (packs.data.length === 0) return <p className="muted">It has no packs.</p>
   return (
     <>
-      <table className="envtab-table">
+      <table className="pane-table">
         <thead>
           <tr>
             <th>Pack</th>

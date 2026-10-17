@@ -1,0 +1,46 @@
+/* Teams: the list of teams beside the chosen one. */
+
+.teams-new {
+  flex: none;
+  padding: 0 8px;
+}
+
+.teams-lead {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.teams-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.teams-add select {
+  height: 28px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0 6px;
+}
+
+.teams-roles {
+  display: block;
+  line-height: 1.5;
+}
+
+.teams-delete {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.teams-delete p {
+  flex: 1;
+  min-width: 260px;
+  margin: 0;
+}

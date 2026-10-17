@@ -1,0 +1,747 @@
+/* Hangar's own pages, laid out as an IDE lays out its settings: a list of
+   things on the left and the chosen one beside it, edited where it is
+   shown, in sections of labelled rows under titled rules. */
+
+/* A page that fills the window, scrolling inside rather than as a whole. */
+.pane-root {
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  font-size: 13px;
+}
+
+.pane-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 60px;
+  padding: 8px 24px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.pane-bar h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.pane-bar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pane-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  box-sizing: border-box;
+  padding: 0 8px 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+}
+
+.pane-search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.pane-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  padding: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+}
+
+.pane-search kbd {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 11px;
+}
+
+/* The list and the chosen one. */
+.md {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.md-list {
+  flex: none;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.md-list-head {
+  flex: none;
+  display: flex;
+  gap: 6px;
+  padding: 12px 12px 4px;
+}
+
+.md-list-head .pane-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.md-list-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 12px;
+}
+
+.md-group {
+  padding: 14px 14px 6px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.md-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px 7px 12px;
+  border-left: 2px solid transparent;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.md-item:hover {
+  background: var(--sidebar-hover);
+  text-decoration: none;
+}
+
+.md-item.active {
+  background: var(--sidebar-active);
+  border-left-color: var(--accent);
+}
+
+.md-item > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.md-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.md-item-title,
+.md-item-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.md-item-title {
+  font-weight: 600;
+}
+
+.md-item-sub {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.md-item-end {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.md-empty-list {
+  padding: 10px 14px;
+  color: var(--muted);
+}
+
+.md-detail {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+.md-none {
+  margin: auto;
+  max-width: 360px;
+  padding: 24px;
+  text-align: center;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+/* The chosen one's head: its mark, name and what it is, and what is done
+   to it. */
+.pane-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px 14px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+.pane-head-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.pane-head-title {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+}
+
+.pane-head-title h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.pane-head-sub {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.pane-head-actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.pane-head-actions .code-tool-btn,
+.pane-head-actions .pane-icon-btn {
+  width: 28px;
+  height: 28px;
+}
+
+.pane-scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.pane-page {
+  max-width: 780px;
+  padding: 20px 28px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.pane-page-wide {
+  max-width: 1040px;
+}
+
+.pane-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* A section's title is a rule with its name at the start. */
+.pane-rule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pane-rule::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.pane-rule h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.pane-rule-extra {
+  order: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.pane-rows {
+  margin: 0;
+  display: grid;
+  grid-template-columns: 136px minmax(0, 1fr);
+  gap: 8px 16px;
+  align-items: start;
+}
+
+.pane-rows > dt {
+  padding-top: 4px;
+  color: var(--muted);
+}
+
+.pane-rows > dd {
+  margin: 0;
+  min-width: 0;
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+.pane-rows .mono,
+.pane-table .mono {
+  overflow-wrap: anywhere;
+}
+
+/* A setting changed and not yet applied. */
+.pane-rows > dt.pane-modified,
+.pane-modified {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.pane-fields {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.pane-fields:disabled dd {
+  opacity: 0.55;
+}
+
+.pane-input,
+.pane-fields select,
+.pane-fields input[type='text'],
+.pane-fields input[type='number'],
+.pane-fields input[type='password'],
+.pane-fields input:not([type]),
+.pane-fields textarea {
+  height: 28px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0 8px;
+}
+
+.pane-fields textarea {
+  height: auto;
+  min-height: 56px;
+  padding: 6px 8px;
+  line-height: 1.45;
+  resize: vertical;
+}
+
+.pane-fields input:focus,
+.pane-fields select:focus,
+.pane-fields textarea:focus,
+.pane-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.pane-wide {
+  width: 100%;
+  max-width: 520px;
+}
+
+.pane-number {
+  width: 74px;
+}
+
+.pane-fields .check {
+  margin: 0;
+}
+
+.pane-hint {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pane-rows + .pane-hint,
+.pane-fields + .pane-hint {
+  margin-left: 152px;
+}
+
+.pane-note {
+  font-size: 12.5px;
+  color: var(--busy);
+}
+
+.pane-pill {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pane-pill-warn {
+  background: var(--warn-bg);
+  color: var(--busy);
+}
+
+.pane-pill-grey {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.pane-pill-good {
+  background: var(--good-bg);
+  color: var(--good);
+}
+
+/* Text to copy, in a box with its Copy button. */
+.pane-copy {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.pane-copy code {
+  padding: 0 8px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pane-copy button {
+  flex: none;
+  align-self: stretch;
+  width: 28px;
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.pane-copy button:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.pane-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.pane-table th {
+  padding: 0 12px 6px 0;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+.pane-table td {
+  padding: 6px 12px 6px 0;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.pane-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.pane-table .num {
+  text-align: right;
+}
+
+.pane-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.pane-segment {
+  height: 24px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.pane-segment-on {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 0 0 1px var(--border-strong);
+}
+
+.pane-segment:disabled {
+  cursor: default;
+}
+
+/* A button that reads as a link. */
+.pane-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--accent);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pane-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.pane-link:disabled {
+  color: var(--muted);
+  cursor: default;
+}
+
+.pane-link-danger {
+  color: var(--danger);
+}
+
+.pane-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.pane-icon-btn:hover:not(:disabled) {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.pane-icon-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* A notice across the top, as an IDE puts one across an editor. */
+.pane-banner {
+  flex: none;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-soft);
+}
+
+.pane-banner-warn {
+  background: var(--warn-bg);
+  border-bottom-color: var(--warn-border);
+}
+
+.pane-banner-error {
+  background: var(--danger-bg);
+  color: var(--danger);
+}
+
+.pane-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 4px 0;
+}
+
+.pane-banner-row > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.pane-banner-warn .pane-banner-row > svg {
+  color: var(--busy);
+}
+
+.pane-banner-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.pane-banner-text strong {
+  font-weight: 600;
+}
+
+.pane-banner-actions {
+  flex: none;
+  display: flex;
+  gap: 14px;
+}
+
+.pane-banner-list {
+  margin: 0 0 8px 24px;
+  padding: 0;
+  list-style: none;
+  max-height: 140px;
+  overflow: auto;
+}
+
+/* The bar at the foot that applies what has been changed. */
+.pane-apply {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+  padding: 0 16px 0 24px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.pane-apply-what {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+/* A thing's mark: its initials on a colour of its own. */
+.pane-tile {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pane-tile-small {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+.pane-meter {
+  flex: none;
+  display: inline-block;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.pane-meter > span {
+  display: block;
+  height: 100%;
+  background: var(--series-1);
+}
+
+/* In a narrow pane each label sits over its value. */
+@container (max-width: 640px) {
+  .pane-page {
+    padding: 16px 16px 40px;
+  }
+
+  .pane-head {
+    flex-wrap: wrap;
+    padding: 12px 12px 12px 16px;
+  }
+
+  .pane-rows {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
+  }
+
+  .pane-rows > dt {
+    padding-top: 8px;
+    font-size: 12px;
+  }
+
+  .pane-rows + .pane-hint,
+  .pane-fields + .pane-hint {
+    margin-left: 0;
+  }
+
+  .pane-apply {
+    flex-wrap: wrap;
+    padding: 8px 12px;
+  }
+
+  .pane-apply-what {
+    flex-basis: 100%;
+    order: -1;
+  }
+}
+
+.md-detail {
+  container-type: inline-size;
+}

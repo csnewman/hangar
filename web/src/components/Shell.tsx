@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
+import { useEffect, useState } from 'react'
 import { Outlet, useMatch } from 'react-router'
 
 import { desktop } from '../desktop'
@@ -7,11 +7,8 @@ import { homeTab, nameTab } from '../workspaceLinks'
 import { PhoneTabs } from './PhoneTabs'
 import { Sidebar } from './Sidebar'
 
-const widthKey = 'hangar.sidebar.width'
 const collapsedKey = 'hangar.sidebar.collapsed'
-const defaultWidth = 252
-const minWidth = 180
-const maxWidth = 480
+const width = 220
 const collapsedWidth = 52
 
 function stored(key: string): string | null {
@@ -30,25 +27,18 @@ function store(key: string, value: string) {
   }
 }
 
-// Shell is the frame every signed-in page sits in: the inventory down the
-// left, and the page beside it. The inventory is as wide as it is dragged,
-// or folded to its icons, and this browser remembers which. An environment's
-// workspace has the whole page, in a tab of its own, and its status bar
-// leads back here. On a phone the sidebar is a bar of tabs at the foot
-// instead, left out on an environment's own screens, which have their way
-// back at the top.
+// Shell is the frame every signed-in page sits in: Hangar's sections down
+// the left, folded to their icons if this browser was asked to, and the page
+// beside them. An environment's workspace has the whole page, in a tab of its
+// own, and its status bar leads back here. On a phone the sections are a bar
+// of tabs at the foot instead, left out on an environment's own screens,
+// which have their way back at the top.
 export function Shell() {
   const phone = usePhone()
   const environment = useMatch('/environments/:id/*')
   const creating = useMatch('/environments/new')
   const inEnvironment = environment !== null && creating === null
-  const [width, setWidth] = useState(() => {
-    const w = Number(stored(widthKey))
-    return w >= minWidth && w <= maxWidth ? w : defaultWidth
-  })
   const [collapsed, setCollapsed] = useState(() => stored(collapsedKey) === 'true')
-  const [dragging, setDragging] = useState(false)
-  const start = useRef<{ x: number; width: number } | null>(null)
 
   const toggle = () =>
     setCollapsed((c) => {
@@ -73,30 +63,6 @@ export function Shell() {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
-
-  const onPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    e.currentTarget.setPointerCapture(e.pointerId)
-    start.current = { x: e.clientX, width }
-    setDragging(true)
-  }
-  const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (!start.current) return
-    setWidth(Math.min(maxWidth, Math.max(minWidth, start.current.width + e.clientX - start.current.x)))
-  }
-  const onPointerUp = () => {
-    if (!start.current) return
-    start.current = null
-    setDragging(false)
-    setWidth((w) => {
-      store(widthKey, String(w))
-      return w
-    })
-  }
-  const reset = () => {
-    setWidth(defaultWidth)
-    store(widthKey, String(defaultWidth))
-  }
 
   // An environment's workspace is that environment and nothing else: the
   // browser's tabs, or the desktop app's, move between environments, and
@@ -123,28 +89,12 @@ export function Shell() {
   }
 
   return (
-    <div className={dragging ? 'app app-dragging' : 'app'}>
+    <div className="app">
       <div
         className="app-body"
         style={{ gridTemplateColumns: `${collapsed ? collapsedWidth : width}px minmax(0, 1fr)` }}
       >
-        <div className="sidebar-frame">
-          <Sidebar collapsed={collapsed} onToggle={toggle} />
-          {!collapsed && (
-            <div
-              className="sidebar-handle"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize the sidebar"
-              title="Drag to resize; double-click to reset"
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onPointerCancel={onPointerUp}
-              onDoubleClick={reset}
-            />
-          )}
-        </div>
+        <Sidebar collapsed={collapsed} onToggle={toggle} />
         <main className="main">
           <Outlet />
         </main>

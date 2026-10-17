@@ -16,15 +16,16 @@ import {
   SquareTerminal,
   TextSearch,
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Group, Panel, Separator, useDefaultLayout, usePanelRef } from 'react-resizable-panels'
+import { useSearchParams } from 'react-router'
 
 import type { Environment, EnvironmentLogName } from '../api'
 import { useEnv } from '../pages/Environment'
 import { usePhone } from '../phone'
 import { useMe } from '../session'
 import { StartProgress } from '../components/StartProgress'
-import { environmentTab, nameTab } from '../workspaceLinks'
+import { environmentTab, nameTab, useWorkspaceTab, type WorkspaceShow } from '../workspaceLinks'
 import { ChangesView } from './ChangesView'
 import { CodeClient, type ConnectionState } from './client'
 import { CodeTerminal } from './CodeTerminal'
@@ -73,12 +74,30 @@ export function CodeTab() {
 // are no files or terminals to show, and the workspace offers to start it,
 // beside its details and its logs.
 export function Workspace({ env }: { env: Environment }) {
+  const [params, setParams] = useSearchParams()
+  const [ask, setAsk] = useState<WorkspaceAsk | null>(() =>
+    params.get('show') === 'environment' ? { show: 'environment', n: 1 } : null,
+  )
   useEffect(() => {
     nameTab(environmentTab(env.id))
   }, [env.id])
-  if (env.phase !== 'running') return <Idle env={env} />
-  return <Connected key={env.id} env={env.id} />
+  // The ask in the address is taken once, not again at each reload.
+  useEffect(() => {
+    if (params.has('show')) setParams({}, { replace: true })
+  }, [params, setParams])
+  useWorkspaceTab(env.id, (show) => setAsk((a) => ({ show, n: (a?.n ?? 0) + 1 })))
+  return (
+    <AskContext.Provider value={ask}>
+      {env.phase !== 'running' ? <Idle env={env} /> : <Connected key={env.id} env={env.id} />}
+    </AskContext.Provider>
+  )
 }
+
+// WorkspaceAsk is what the workspace has been asked to show, by its address
+// or by another tab; n counts the asks, so asking twice shows twice.
+type WorkspaceAsk = { show: WorkspaceShow; n: number }
+
+const AskContext = createContext<WorkspaceAsk | null>(null)
 
 // Idle is the workspace of an environment that is not running: its own
 // page, which says what it is doing and starts it, and its logs, which its
@@ -599,6 +618,14 @@ function CodeView({
 
   // The environment's own pages open as tabs.
   const showEnvironment = () => open({ kind: 'environment', path: 'environment', title: 'Environment' })
+  const ask = useContext(AskContext)
+  const showAsked = useRef(showEnvironment)
+  useEffect(() => {
+    showAsked.current = showEnvironment
+  })
+  useEffect(() => {
+    if (ask?.show === 'environment') showAsked.current()
+  }, [ask])
   const showPerformancePage = () => open({ kind: 'performance', path: 'performance', title: 'Performance' })
 
   const dropTool = (name: ToolName, side: Side) => {

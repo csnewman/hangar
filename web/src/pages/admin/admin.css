@@ -1,0 +1,79 @@
+/* A worker in the list: its name and state, then what it has given its
+   environments. */
+.admin-worker {
+  align-items: flex-start;
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
+.admin-worker > .phase-dot {
+  margin-top: 5px;
+}
+
+.admin-worker .md-item-main {
+  gap: 5px;
+}
+
+.admin-worker-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.admin-meters {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  gap: 3px 6px;
+  align-items: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* A worker's capacity: what it has given its environments, and how busy
+   it is. */
+.admin-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.admin-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.admin-tile strong {
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.admin-tile .pane-meter {
+  max-width: 100%;
+}
+
+/* The audit log's filters, under its bar. */
+.admin-filters {
+  flex: none;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.admin-filters input {
+  flex: 1;
+  min-width: 260px;
+}
+
+.admin-audit {
+  max-width: 1180px;
+  padding: 16px 24px 48px;
+}

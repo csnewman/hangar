@@ -1,0 +1,424 @@
+/* The environments, as a launcher: the list, and beside it ways to start. */
+.launch {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 20px 24px 40px;
+}
+
+.launch-main {
+  flex: 1;
+  min-width: 0;
+  max-width: 1100px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.launch-list {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.launch-group {
+  margin: 0;
+  padding: 9px 16px 7px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.launch-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 12px 11px 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.launch-row:last-child {
+  border-bottom: 0;
+}
+
+.launch-row:hover {
+  background: var(--bg);
+}
+
+.launch-who {
+  width: 220px;
+  flex: none;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.launch-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.launch-name a {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.launch-name a:hover {
+  color: var(--accent);
+}
+
+.launch-tab {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--accent);
+}
+
+.launch-state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.launch-state strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.launch-state > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launch-where {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.launch-repo {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.launch-repo > .mono {
+  flex: none;
+}
+
+.launch-repo .branch {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.launch-repo .branch .mono {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.launch-repo .mono {
+  font-size: 12px;
+}
+
+.launch-usage {
+  flex: none;
+  width: 150px;
+  display: grid;
+  grid-template-columns: 30px 64px 1fr;
+  gap: 3px 6px;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.launch-usage-num {
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.launch-actions {
+  flex: none;
+  min-width: 150px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.launch-empty {
+  padding: 48px 24px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 10px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.launch-empty p {
+  margin: 0 0 12px;
+}
+
+.launch-side {
+  flex: none;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.launch-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.launch-card h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.launch-card p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.launch-template {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 6px 6px 0;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+
+.launch-template:hover {
+  text-decoration: none;
+  background: var(--bg);
+}
+
+.launch-template > svg {
+  flex: none;
+  color: var(--muted);
+}
+
+.launch-template-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.launch-template-main .small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.launch-repo-form {
+  display: flex;
+  gap: 6px;
+}
+
+.launch-repo-form input {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.launch-total strong {
+  font-weight: 650;
+}
+
+@media (max-width: 1180px) {
+  .launch {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .launch-side {
+    width: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .launch-side > * {
+    flex: 1 1 260px;
+  }
+
+  .launch-usage {
+    display: none;
+  }
+}
+
+/* The New Environment dialog. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(16 24 40 / 0.32);
+}
+
+.newenv {
+  width: 960px;
+  max-width: 100%;
+  height: 620px;
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 24px 60px rgb(16 24 40 / 0.3);
+  font-size: 13px;
+}
+
+.newenv-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 12px 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.newenv-head h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.newenv-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.newenv-list {
+  flex: none;
+  width: 280px;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.newenv-list .md-item {
+  width: 100%;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.newenv-list .md-item.active {
+  background: var(--sidebar-active);
+}
+
+.newenv-form {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.newenv-about {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.newenv-about .strong {
+  font-size: 15px;
+}
+
+.newenv-name {
+  width: 260px;
+}
+
+.newenv-url {
+  width: 100%;
+  max-width: 420px;
+  font-size: 12px;
+}
+
+.newenv-repo {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 6px;
+}
+
+.newenv-repo .branch {
+  margin-left: 0;
+}
+
+.newenv-machine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+
+.newenv-machine label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.newenv-foot {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 56px;
+  padding: 0 16px 0 20px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.newenv-foot .check {
+  margin: 0;
+}
+
+.newenv-spacer {
+  flex: 1;
+}

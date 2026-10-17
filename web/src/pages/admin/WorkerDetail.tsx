@@ -1,9 +1,12 @@
+import './admin.css'
+
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback } from 'react'
+import { ScrollText } from 'lucide-react'
+import { useCallback, useRef } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { api, type GPUInfo, type LocalImage, type Worker, type WorkerStats } from '../../api'
-import { Meter, StatTile } from '../../components/charts'
+import { Meter as ChartMeter, StatTile } from '../../components/charts'
 import { ConfirmButton } from '../../components/ConfirmButton'
 import { LogView } from '../../components/LogView'
 import { formatAgo, formatBytes, formatCores, formatMemory, formatPercent, shortDigest } from '../../components/format'
@@ -12,14 +15,24 @@ import { OnlineBadge, PhaseBadge, RendererBadge } from '../../components/Status'
 import { useEnvironments } from '../../environments'
 import { useHistory } from '../../history'
 import { Activity } from '../../components/Activity'
+import { DetailHead, DetailPage, Meter, NoneChosen, Section } from '../../components/Pane'
+import { usePhone } from '../../phone'
 import { useEnvironmentTarget } from '../../workspaceLinks'
+import { WorkersPane } from './Workers'
 
 // WorkerDetailPage is one worker: how loaded its machine is, what it holds,
-// and the images in its local store.
+// and the images in its local store. On a computer it is the Workers page
+// with this worker chosen.
 export function WorkerDetailPage() {
   const { id } = useParams()
+  if (!usePhone()) return <WorkersPane id={id} />
+  return <WorkerPage id={id!} />
+}
+
+function WorkerPage({ id }: { id: string }) {
   // Kept polling while hidden, since the tiles chart what the page sees.
-  const worker = useQuery({ queryKey: ['workers', id], queryFn: () => api.worker(id!), refetchIntervalInBackground: true })
+  const worker = useQuery({ queryKey: ['workers', id], queryFn: () => api.worker(id), refetchIntervalInBackground: true })
+  const envs = useEnvironments()
 
   if (worker.isPending) return <div className="page" />
   if (worker.isError) {
@@ -33,6 +46,7 @@ export function WorkerDetailPage() {
     )
   }
   const w = worker.data
+  const here = (envs.data ?? []).filter((e) => e.worker_id === w.id)
   return (
     <div className="page">
       <PageHeader
@@ -52,10 +66,33 @@ export function WorkerDetailPage() {
           </span>
         }
       />
-      <Machine worker={w} />
-      <Environments worker={w} />
-      <Images worker={w} />
-      <WorkerLog worker={w} />
+      <section className="section">
+        <h2 className="section-title">Machine</h2>
+        <Machine worker={w} />
+        <Allocation worker={w} />
+      </section>
+      <section className="section">
+        <h2 className="section-title">
+          Environments <span className="section-count">{here.length}</span>
+        </h2>
+        <div className="panel">
+          <Environments worker={w} className="table" />
+        </div>
+        {w.unknown.length > 0 && <Unknown worker={w} />}
+      </section>
+      <section className="section">
+        <h2 className="section-title">
+          Local images <span className="section-count">{w.images.length}</span>
+          {w.images.length > 0 && <span className="muted small">{formatBytes(imagesSize(w))} on disk</span>}
+        </h2>
+        <div className="panel">
+          <Images worker={w} className="table" />
+        </div>
+      </section>
+      <section className="section">
+        <h2 className="section-title">Log</h2>
+        <WorkerLog worker={w} />
+      </section>
       <section className="section">
         <h2 className="section-title">Activity</h2>
         <Activity subjects={[`worker:${w.id}`]} />
@@ -64,13 +101,179 @@ export function WorkerDetailPage() {
   )
 }
 
+// WorkerDetail is the chosen worker beside the list: its head, with
+// revoking it, then its capacity, machine, environments, image copies, log
+// and activity.
+export function WorkerDetail({ id }: { id: string }) {
+  // Kept polling while hidden, since the tiles chart what the page sees.
+  const worker = useQuery({ queryKey: ['workers', id], queryFn: () => api.worker(id), refetchIntervalInBackground: true })
+  const scroll = useRef<HTMLDivElement>(null)
+  if (worker.isPending) return null
+  if (worker.isError) return <NoneChosen>No such worker.</NoneChosen>
+  const w = worker.data
+  const labels = Object.entries(w.labels)
+  const toLog = () => {
+    const el = scroll.current?.querySelector<HTMLElement>('[data-section="log"]')
+    if (el && scroll.current) scroll.current.scrollTo({ top: el.offsetTop - 16, behavior: 'smooth' })
+  }
+  return (
+    <>
+      <DetailHead
+        mark={<span className={`phase-dot ${workerTone(w)}`} aria-hidden="true" />}
+        title={w.name}
+        sub={
+          <>
+            <span className={w.revoked ? 'pane-pill pane-pill-warn' : w.online ? 'pane-pill pane-pill-good' : 'pane-pill pane-pill-grey'}>
+              {w.revoked ? 'revoked' : w.online ? 'online' : 'offline'}
+            </span>
+            {labels.map(([k, v]) => (
+              <span key={k} className="label mono">
+                {k}={v}
+              </span>
+            ))}
+            <span>last seen {formatAgo(w.last_seen_at)}</span>
+          </>
+        }
+        actions={
+          <>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={toLog} disabled={!w.online}>
+              <ScrollText size={13} />
+              Its Log
+            </button>
+            <WorkerRemoval worker={w} />
+          </>
+        }
+      />
+      <DetailPage wide scrollRef={scroll}>
+        <Section id="capacity" title="Capacity">
+          <Capacity worker={w} />
+        </Section>
+        <Section id="machine" title="Machine">
+          <Machine worker={w} />
+        </Section>
+        <Section id="environments" title="Environments">
+          <Environments worker={w} className="pane-table" />
+          {w.unknown.length > 0 && <Unknown worker={w} />}
+        </Section>
+        <Section
+          id="images"
+          title="Image copies"
+          extra={w.images.length > 0 && <span className="muted">{formatBytes(imagesSize(w))} on disk</span>}
+        >
+          <Images worker={w} className="pane-table" />
+        </Section>
+        <Section id="log" title="Log">
+          <WorkerLog worker={w} />
+        </Section>
+        <Section id="activity" title="Activity">
+          <Activity subjects={[`worker:${w.id}`]} />
+        </Section>
+      </DetailPage>
+    </>
+  )
+}
+
+// WorkerRemoval revokes a worker, whose credential is then refused, and
+// removes a revoked one.
+export function WorkerRemoval({ worker: w }: { worker: Worker }) {
+  const qc = useQueryClient()
+  const refresh = () => qc.invalidateQueries({ queryKey: ['workers'] })
+  const revoke = useMutation({ mutationFn: () => api.revokeWorker(w.id), onSettled: refresh })
+  const remove = useMutation({ mutationFn: () => api.deleteWorker(w.id), onSettled: refresh })
+  const error = revoke.error ?? remove.error
+  return (
+    <>
+      {error && <span className="action-error">{error.message}</span>}
+      {w.revoked ? (
+        <ConfirmButton label="Remove" confirmLabel="Remove?" disabled={remove.isPending} onConfirm={() => remove.mutate()} />
+      ) : (
+        <ConfirmButton label="Revoke" confirmLabel="Revoke?" disabled={revoke.isPending} onConfirm={() => revoke.mutate()} />
+      )}
+    </>
+  )
+}
+
+// workerTone is the colour of a worker's dot: online, offline or revoked.
+function workerTone(w: Worker): string {
+  return w.revoked ? 'tone-bad' : w.online ? 'tone-good' : 'tone-idle'
+}
+
+function imagesSize(w: Worker): number {
+  return w.images.reduce((n, i) => n + i.size_bytes, 0)
+}
+
+// useHere is the environments placed on the worker.
+function useHere(w: Worker) {
+  const envs = useEnvironments()
+  return (envs.data ?? []).filter((e) => e.worker_id === w.id)
+}
+
+// Capacity is what the worker has given its environments, against what it
+// has, and how busy its processors are.
+function Capacity({ worker: w }: { worker: Worker }) {
+  const here = useHere(w)
+  const s = w.stats
+  const tile = (label: string, value: string, used: number, total: number, detail: string, colour?: string) => (
+    <div className="admin-tile">
+      <span className="muted small">{label}</span>
+      <strong>{value}</strong>
+      <Meter value={total > 0 ? used / total : 0} width={200} colour={colour} />
+      <span className="muted small">{detail}</span>
+    </div>
+  )
+  const by = (f: (e: (typeof here)[number]) => string) => here.map(f).join(', ') || 'nothing placed'
+  return (
+    <div className="admin-tiles">
+      {tile(
+        'vCPUs allocated',
+        `${w.allocated.cpus} of ${w.capacity.cpus}`,
+        w.allocated.cpus,
+        w.capacity.cpus,
+        by((e) => `${e.name} ${e.cpus}`),
+      )}
+      {tile(
+        'Memory allocated',
+        `${formatMemory(w.allocated.memory_mib)} of ${formatMemory(w.capacity.memory_mib)}`,
+        w.allocated.memory_mib,
+        w.capacity.memory_mib,
+        by((e) => `${e.name} ${formatMemory(e.memory_mib)}`),
+        'var(--series-2)',
+      )}
+      {s
+        ? tile('Host CPU', formatPercent(s.cpu_percent), s.cpu_percent, 100, `load ${s.load1.toFixed(2)}, 1-minute average`)
+        : tile('Host CPU', '—', 0, 1, 'not reported yet')}
+    </div>
+  )
+}
+
+// Allocation is what the worker has given its environments, as meters.
+function Allocation({ worker: w }: { worker: Worker }) {
+  return (
+    <div className="panel capacity">
+      <div className="capacity-row">
+        <span className="muted">Allocated vCPUs</span>
+        <ChartMeter used={w.allocated.cpus} total={w.capacity.cpus} label={`${w.allocated.cpus} of ${w.capacity.cpus}`} />
+      </div>
+      <div className="capacity-row">
+        <span className="muted">Allocated memory</span>
+        <ChartMeter
+          used={w.allocated.memory_mib}
+          total={w.capacity.memory_mib}
+          label={`${formatMemory(w.allocated.memory_mib)} of ${formatMemory(w.capacity.memory_mib)}`}
+        />
+      </div>
+    </div>
+  )
+}
+
+// Machine is how busy the worker's machine is, charted as the page sees it,
+// and what its virtual GPUs render with.
 function Machine({ worker: w }: { worker: Worker }) {
   const history = useHistory<WorkerStats>(`worker:${w.id}`, w.stats)
   const s = w.stats
   const pick = (f: (s: WorkerStats) => number) => history.map((h) => f(h.value))
   return (
-    <section className="section">
-      <h2 className="section-title">Machine</h2>
+    <>
       {!s ? (
         <div className="panel empty-state">This worker has not reported its usage yet.</div>
       ) : (
@@ -100,21 +303,7 @@ function Machine({ worker: w }: { worker: Worker }) {
         </div>
       )}
       {w.gpu && <GPU gpu={w.gpu} />}
-      <div className="panel capacity">
-        <div className="capacity-row">
-          <span className="muted">Allocated vCPUs</span>
-          <Meter used={w.allocated.cpus} total={w.capacity.cpus} label={`${w.allocated.cpus} of ${w.capacity.cpus}`} />
-        </div>
-        <div className="capacity-row">
-          <span className="muted">Allocated memory</span>
-          <Meter
-            used={w.allocated.memory_mib}
-            total={w.capacity.memory_mib}
-            label={`${formatMemory(w.allocated.memory_mib)} of ${formatMemory(w.capacity.memory_mib)}`}
-          />
-        </div>
-      </div>
-    </section>
+    </>
   )
 }
 
@@ -157,106 +346,92 @@ function GPU({ gpu: g }: { gpu: GPUInfo }) {
   )
 }
 
-function Environments({ worker: w }: { worker: Worker }) {
+// Environments is a table of the environments placed on the worker, each a
+// link to its workspace in a tab of its own.
+function Environments({ worker: w, className }: { worker: Worker; className: string }) {
   const envs = useEnvironments()
-  const here = (envs.data ?? []).filter((e) => e.worker_id === w.id)
+  const here = useHere(w)
   const target = useEnvironmentTarget()
   return (
-    <section className="section">
-      <h2 className="section-title">
-        Environments <span className="section-count">{here.length}</span>
-      </h2>
-      <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Owner</th>
-              <th>Status</th>
-              <th className="num">Size</th>
-              <th className="num">CPU</th>
-              <th className="num">Memory</th>
-            </tr>
-          </thead>
-          <tbody>
-            {here.map((e) => (
-              <tr key={e.id}>
-                <td>
-                  <Link to={`/environments/${e.id}`} target={target(e.id)} className="strong row-link">
-                    {e.name}
-                  </Link>
-                  <div className="muted small">{e.template}</div>
-                </td>
-                <td>{e.owner}</td>
-                <td>
-                  <PhaseBadge phase={e.phase} desired={e.desired} workerOnline={e.worker_online} />
-                  {e.reason && <div className="reason">{e.reason}</div>}
-                </td>
-                <td className="num nowrap">
-                  {e.cpus} vCPU · {formatMemory(e.memory_mib)}
-                </td>
-                <td className="num nowrap">{e.stats ? formatPercent(e.stats.cpu_percent) : '—'}</td>
-                <td className="num nowrap">
-                  {e.stats ? `${formatMemory(e.stats.memory_used_mib)} of ${formatMemory(e.stats.memory_total_mib)}` : '—'}
-                </td>
-              </tr>
-            ))}
-            {envs.isSuccess && here.length === 0 && (
-              <tr>
-                <td colSpan={6} className="empty">
-                  Nothing is placed on this worker.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      {w.unknown.length > 0 && <Unknown worker={w} />}
-    </section>
+    <table className={className}>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Owner</th>
+          <th>Status</th>
+          <th className="num">Size</th>
+          <th className="num">CPU</th>
+          <th className="num">Memory</th>
+        </tr>
+      </thead>
+      <tbody>
+        {here.map((e) => (
+          <tr key={e.id}>
+            <td>
+              <Link to={`/environments/${e.id}`} target={target(e.id)} className="strong row-link">
+                {e.name}
+              </Link>
+              <div className="muted small">{e.template}</div>
+            </td>
+            <td>{e.owner}</td>
+            <td>
+              <PhaseBadge phase={e.phase} desired={e.desired} workerOnline={e.worker_online} />
+              {e.reason && <div className="reason">{e.reason}</div>}
+            </td>
+            <td className="num nowrap">
+              {e.cpus} vCPU · {formatMemory(e.memory_mib)}
+            </td>
+            <td className="num nowrap">{e.stats ? formatPercent(e.stats.cpu_percent) : '—'}</td>
+            <td className="num nowrap">
+              {e.stats ? `${formatMemory(e.stats.memory_used_mib)} of ${formatMemory(e.stats.memory_total_mib)}` : '—'}
+            </td>
+          </tr>
+        ))}
+        {envs.isSuccess && here.length === 0 && (
+          <tr>
+            <td colSpan={6} className="empty">
+              Nothing is placed on this worker.
+            </td>
+          </tr>
+        )}
+      </tbody>
+    </table>
   )
 }
 
-function Images({ worker: w }: { worker: Worker }) {
+// Images is a table of the copies of images in the worker's local store.
+function Images({ worker: w, className }: { worker: Worker; className: string }) {
   const envs = useEnvironments()
   const names = new Map((envs.data ?? []).map((e) => [e.id, e.name]))
-  const total = w.images.reduce((n, i) => n + i.size_bytes, 0)
   return (
-    <section className="section">
-      <h2 className="section-title">
-        Local images <span className="section-count">{w.images.length}</span>
-        {w.images.length > 0 && <span className="muted small">{formatBytes(total)} on disk</span>}
-      </h2>
-      <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Image</th>
-              <th className="num">Size</th>
-              <th>Used by</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {w.images.map((img) => (
-              <ImageRow
-                key={`${img.ref}@${img.digest}`}
-                worker={w}
-                image={img}
-                pending={w.pending_removals.some((r) => r.ref === img.ref && r.digest === img.digest)}
-                names={names}
-              />
-            ))}
-            {w.images.length === 0 && (
-              <tr>
-                <td colSpan={4} className="empty">
-                  The worker holds no images. It fetches one when an environment first needs it.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </section>
+    <table className={className}>
+      <thead>
+        <tr>
+          <th>Image</th>
+          <th className="num">Size</th>
+          <th>Used by</th>
+          <th />
+        </tr>
+      </thead>
+      <tbody>
+        {w.images.map((img) => (
+          <ImageRow
+            key={`${img.ref}@${img.digest}`}
+            worker={w}
+            image={img}
+            pending={w.pending_removals.some((r) => r.ref === img.ref && r.digest === img.digest)}
+            names={names}
+          />
+        ))}
+        {w.images.length === 0 && (
+          <tr>
+            <td colSpan={4} className="empty">
+              The worker holds no images. It fetches one when an environment first needs it.
+            </td>
+          </tr>
+        )}
+      </tbody>
+    </table>
   )
 }
 
@@ -379,14 +554,9 @@ function Unknown({ worker: w }: { worker: Worker }) {
 // memory: why it could not start an environment, among the rest.
 function WorkerLog({ worker: w }: { worker: Worker }) {
   const load = useCallback((offset?: number) => api.workerLog(w.id, offset), [w.id])
-  return (
-    <section className="section">
-      <h2 className="section-title">Log</h2>
-      {w.online ? (
-        <LogView key={w.id} load={load} />
-      ) : (
-        <p className="muted small">The worker is not connected, so its log cannot be read.</p>
-      )}
-    </section>
+  return w.online ? (
+    <LogView key={w.id} load={load} />
+  ) : (
+    <p className="muted small">The worker is not connected, so its log cannot be read.</p>
   )
 }
