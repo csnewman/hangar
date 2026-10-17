@@ -285,6 +285,96 @@
   gap: 10px;
 }
 
+/* A page with an index of its sections: a column beside them, or a row of
+   chips over them that scrolls sideways. */
+.ix {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.ix-chips {
+  flex-direction: column;
+}
+
+.ix-index {
+  flex: none;
+  display: flex;
+  scrollbar-width: none;
+}
+
+.ix-column > .ix-index {
+  width: 168px;
+  flex-direction: column;
+  padding: 12px 0;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  overflow-y: auto;
+}
+
+.ix-item {
+  flex: none;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.ix-column .ix-item {
+  height: 26px;
+  padding: 0 14px;
+}
+
+.ix-column .ix-item:hover {
+  background: var(--sidebar-hover);
+}
+
+.ix-column .ix-on,
+.ix-column .ix-on:hover {
+  background: var(--sidebar-active);
+  font-weight: 600;
+}
+
+.ix-chips > .ix-index {
+  gap: 6px;
+  padding: 8px 24px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.ix-chips .ix-item {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.ix-chips .ix-item:hover {
+  color: var(--text);
+}
+
+.ix-chips .ix-on,
+.ix-chips .ix-on:hover {
+  background: var(--sidebar-active);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.ix-scroll {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
 /* A section's title is a rule with its name at the start. */
 .pane-rule {
   display: flex;
@@ -721,8 +811,44 @@
   background: var(--series-1);
 }
 
-/* In a narrow pane each label sits over its value. */
+/* In a narrow pane each label sits over its value, and an index beside the
+   page is a row of chips over it. */
 @container (max-width: 640px) {
+  .ix-column {
+    flex-direction: column;
+  }
+
+  .ix-column > .ix-index,
+  .ix-chips > .ix-index {
+    width: auto;
+    flex-direction: row;
+    gap: 6px;
+    padding: 8px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+
+  .ix-column .ix-item,
+  .ix-chips .ix-item {
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 15px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 14px;
+  }
+
+  .ix-column .ix-on,
+  .ix-column .ix-on:hover,
+  .ix-chips .ix-on,
+  .ix-chips .ix-on:hover {
+    background: var(--sidebar-active);
+    color: var(--accent);
+  }
+
   .pane-page {
     padding: 16px 16px 40px;
   }

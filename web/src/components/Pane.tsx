@@ -1,7 +1,7 @@
 import './pane.css'
 
 import { BellDot, Copy, Info, Search, X } from 'lucide-react'
-import { useState, type ReactNode, type Ref } from 'react'
+import { useEffect, useRef, useState, type ReactNode, type Ref } from 'react'
 import { NavLink } from 'react-router'
 
 import { copyText } from '../code/ContextMenu'
@@ -197,19 +197,121 @@ export function DetailHead({
   )
 }
 
-// DetailPage is the chosen one's sections, scrolling under its head.
+// DetailPage is the chosen one's sections, scrolling under its head. With
+// sections named, a row of chips over them jumps to each (see IndexedPage).
 export function DetailPage({
   children,
   wide = false,
-  scrollRef,
+  sections,
 }: {
   children: ReactNode
   wide?: boolean
-  scrollRef?: Ref<HTMLDivElement>
+  sections?: IndexEntry[]
 }) {
+  if (sections && sections.length > 1) {
+    return (
+      <IndexedPage sections={sections} wide={wide}>
+        {children}
+      </IndexedPage>
+    )
+  }
   return (
-    <div className="pane-scroll" ref={scrollRef}>
+    <div className="pane-scroll">
       <div className={wide ? 'pane-page pane-page-wide' : 'pane-page'}>{children}</div>
+    </div>
+  )
+}
+
+// IndexEntry is one section an index jumps to: the id its Section is given,
+// and what the index calls it.
+export type IndexEntry = { id: string; label: string }
+
+// IndexedPage is a page of sections with an index of them that jumps to
+// each and marks the one being read as the page scrolls. layout says where
+// the index is: 'column' beside the sections, where the page has the room
+// and nothing else beside it, or a row of chips over them where it is
+// narrow; 'chips' a row of chips over them always, for a page beside a list.
+export function IndexedPage({
+  sections,
+  layout = 'chips',
+  wide = false,
+  children,
+}: {
+  sections: IndexEntry[]
+  layout?: 'column' | 'chips'
+  wide?: boolean
+  children: ReactNode
+}) {
+  const scroller = useRef<HTMLDivElement>(null)
+  const [current, setCurrent] = useState(sections[0]?.id ?? '')
+  // While a jump scrolls, the section jumped to stays chosen, though the
+  // page may end before it reaches the top.
+  const jumping = useRef(false)
+  const ids = sections.map((s) => s.id).join(' ')
+
+  useEffect(() => {
+    const root = scroller.current
+    if (!root) return
+    const onScroll = () => {
+      if (jumping.current) return
+      const top = root.getBoundingClientRect().top
+      const bottom = root.getBoundingClientRect().bottom
+      const list = ids.split(' ').map((id) => ({ id, el: root.querySelector(`[data-section="${id}"]`) }))
+      let at = list[0].id
+      for (const { id, el } of list) {
+        if (el && el.getBoundingClientRect().top - top <= 40) at = id
+      }
+      // At the end of the page the sections after it cannot reach the top:
+      // one of them that is in view stays chosen.
+      const end = root.scrollTop + root.clientHeight >= root.scrollHeight - 2
+      setCurrent((was) => {
+        const el = list.find((s) => s.id === was)?.el
+        const shown = el && el.getBoundingClientRect().top < bottom
+        return end && shown && list.findIndex((s) => s.id === was) > list.findIndex((s) => s.id === at) ? was : at
+      })
+    }
+    const settled = () => {
+      jumping.current = false
+    }
+    root.addEventListener('scroll', onScroll, { passive: true })
+    root.addEventListener('scrollend', settled)
+    return () => {
+      root.removeEventListener('scroll', onScroll)
+      root.removeEventListener('scrollend', settled)
+    }
+  }, [ids])
+
+  const jump = (id: string) => {
+    const root = scroller.current
+    const el = root?.querySelector<HTMLElement>(`[data-section="${id}"]`)
+    if (!root || !el) return
+    const top = Math.min(el.offsetTop - 16, root.scrollHeight - root.clientHeight)
+    setCurrent(id)
+    if (Math.abs(root.scrollTop - top) < 1) return
+    jumping.current = true
+    // A browser without scrollend is given the time a smooth scroll takes.
+    if (!('onscrollend' in window)) setTimeout(() => (jumping.current = false), 1000)
+    root.scrollTo({ top, behavior: 'smooth' })
+  }
+
+  return (
+    <div className={`ix ix-${layout}`}>
+      <nav className="ix-index" aria-label="Sections">
+        {sections.map((s) => (
+          <button
+            key={s.id}
+            type="button"
+            className={s.id === current ? 'ix-item ix-on' : 'ix-item'}
+            aria-current={s.id === current ? 'true' : undefined}
+            onClick={() => jump(s.id)}
+          >
+            {s.label}
+          </button>
+        ))}
+      </nav>
+      <div className="ix-scroll" ref={scroller}>
+        <div className={wide ? 'pane-page pane-page-wide' : 'pane-page'}>{children}</div>
+      </div>
     </div>
   )
 }

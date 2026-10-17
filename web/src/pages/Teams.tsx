@@ -124,7 +124,7 @@ function Members({ team: t }: { team: Team }) {
     />
   ))
   return (
-    <Section title={`Members · ${members.length}`}>
+    <Section id="members" title={`Members · ${members.length}`}>
       {members.length === 0 ? (
         <p className="muted">No members yet.</p>
       ) : (
@@ -421,10 +421,18 @@ function TeamDetail({ id }: { id: string }) {
               )
             }
           />
-          <DetailPage>
+          <DetailPage
+            sections={[
+              { id: 'members', label: 'Members' },
+              { id: 'templates', label: 'Templates' },
+              ...(t.can_manage ? [{ id: 'settings', label: 'Settings' }] : []),
+              { id: 'activity', label: 'Activity' },
+              ...(me.admin ? [{ id: 'delete', label: 'Delete' }] : []),
+            ]}
+          >
             {t.description && <p className="teams-lead">{t.description}</p>}
             <Members team={t} />
-            <Section title={`Templates · ${owned.length}`}>
+            <Section id="templates" title={`Templates · ${owned.length}`}>
               {owned.length === 0 ? (
                 <p className="muted">
                   The team owns no templates{t.templates > owned.length ? ' you can see' : ''}.
@@ -454,11 +462,11 @@ function TeamDetail({ id }: { id: string }) {
               )}
             </Section>
             {settings}
-            <Section title="Activity">
+            <Section id="activity" title="Activity">
               <Activity subjects={[`team:${t.id}`]} pageSize={10} />
             </Section>
             {me.admin && (
-              <Section title="Delete">
+              <Section id="delete" title="Delete">
                 <div className="teams-delete">
                   <p className="muted">
                     {t.templates > 0
@@ -510,7 +518,7 @@ function TeamFrame({ team: t, children }: { team: Team; children: (settings: Rea
   ].filter(Boolean) as string[]
 
   const settings = t.can_manage && (
-    <Section title="Settings">
+    <Section id="settings" title="Settings">
       <fieldset className="pane-fields">
         <Rows>
           <Row label="Name" modified={name !== t.name}>

@@ -2,7 +2,7 @@ import './admin.css'
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ScrollText } from 'lucide-react'
-import { useCallback, useRef } from 'react'
+import { useCallback } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { api, type GPUInfo, type LocalImage, type Worker, type WorkerStats } from '../../api'
@@ -30,14 +30,12 @@ export function WorkerDetailPage() {
 export function WorkerDetail({ id }: { id: string }) {
   // Kept polling while hidden, since the tiles chart what the page sees.
   const worker = useQuery({ queryKey: ['workers', id], queryFn: () => api.worker(id), refetchIntervalInBackground: true })
-  const scroll = useRef<HTMLDivElement>(null)
   if (worker.isPending) return null
   if (worker.isError) return <NoneChosen>No such worker.</NoneChosen>
   const w = worker.data
   const labels = Object.entries(w.labels)
   const toLog = () => {
-    const el = scroll.current?.querySelector<HTMLElement>('[data-section="log"]')
-    if (el && scroll.current) scroll.current.scrollTo({ top: el.offsetTop - 16, behavior: 'smooth' })
+    document.querySelector('[data-section="log"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
   return (
     <>
@@ -67,7 +65,17 @@ export function WorkerDetail({ id }: { id: string }) {
           </>
         }
       />
-      <DetailPage wide scrollRef={scroll}>
+      <DetailPage
+        wide
+        sections={[
+          { id: 'capacity', label: 'Capacity' },
+          { id: 'machine', label: 'Machine' },
+          { id: 'environments', label: 'Environments' },
+          { id: 'images', label: 'Image copies' },
+          { id: 'log', label: 'Log' },
+          { id: 'activity', label: 'Activity' },
+        ]}
+      >
         <Section id="capacity" title="Capacity">
           <Capacity worker={w} />
         </Section>

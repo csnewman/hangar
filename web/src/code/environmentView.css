@@ -30,52 +30,6 @@
   font-weight: 600;
 }
 
-.envtab-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
-.envtab-index {
-  flex: none;
-  width: 168px;
-  padding: 12px 0;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid var(--border);
-  background: var(--bg);
-  overflow-y: auto;
-}
-
-.envtab-index-item {
-  height: 26px;
-  padding: 0 14px;
-  border: 0;
-  background: none;
-  font: inherit;
-  text-align: left;
-  color: var(--text);
-  cursor: pointer;
-}
-
-.envtab-index-item:hover {
-  background: var(--sidebar-hover);
-}
-
-.envtab-index-on,
-.envtab-index-on:hover {
-  background: var(--sidebar-active);
-  font-weight: 600;
-}
-
-.envtab-scroll {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-}
-
 .envtab-web {
   flex: 1;
   min-width: 0;
@@ -183,41 +137,6 @@
 
 .envtab-danger {
   color: var(--danger);
-}
-
-/* In a narrow pane, a phone's included, the index is a row of chips over
-   the sections, which scrolls sideways. */
-@container (max-width: 640px) {
-  .envtab-body {
-    flex-direction: column;
-  }
-
-  .envtab-index {
-    flex-direction: row;
-    width: auto;
-    gap: 6px;
-    padding: 8px 12px;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: none;
-  }
-
-  .envtab-index-item {
-    flex: none;
-    height: 30px;
-    padding: 0 12px;
-    border-radius: 15px;
-    background: var(--surface-2);
-    font-size: 14px;
-  }
-
-  .envtab-index-on,
-  .envtab-index-on:hover {
-    background: var(--sidebar-active);
-    color: var(--accent);
-  }
 }
 
 /* How a start is going, or why one failed, above the sections. */

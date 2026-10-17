@@ -570,7 +570,14 @@ function PackBody({
 
   return (
     <>
-      <DetailPage>
+      <DetailPage
+        sections={[
+          { id: 'paths', label: 'Paths' },
+          { id: 'settings', label: 'Settings' },
+          { id: 'copies', label: 'Copies' },
+          { id: 'files', label: 'Files' },
+        ]}
+      >
         {!disabled && <ReachWarning pack={pack} />}
         {disabled && (
           <p className="pane-hint">
@@ -579,12 +586,12 @@ function PackBody({
               : "Only the pack's owner, or its team's members, change it."}
           </p>
         )}
-        <Section title="Paths">
+        <Section id="paths" title="Paths">
           <fieldset className="pane-fields files-fields" disabled={disabled}>
             <PathRows value={paths} onChange={setPaths} />
           </fieldset>
         </Section>
-        <Section title="Settings">
+        <Section id="settings" title="Settings">
           <fieldset className="pane-fields files-fields" disabled={disabled}>
             <Rows>
               <Row label="Name" modified={name !== pack.name}>
@@ -632,10 +639,11 @@ function PackBody({
             theirs as their own.
           </p>
         </Section>
-        <Section title="Copies">
+        <Section id="copies" title="Copies">
           <Copies pack={pack} copies={copies} chosen={chosen} onChoose={onChoose} />
         </Section>
         <Section
+          id="files"
           title="Files"
           extra={
             copies.length > 1 && (

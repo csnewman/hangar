@@ -167,8 +167,14 @@ function UserDetail({ user: u }: { user: User }) {
           </>
         }
       />
-      <DetailPage>
-        <Section title="Account">
+      <DetailPage
+        sections={[
+          { id: 'account', label: 'Account' },
+          { id: 'environments', label: 'Environments' },
+          { id: 'activity', label: 'Activity' },
+        ]}
+      >
+        <Section id="account" title="Account">
           <Rows>
             <Row label="Username">
               <span className="mono">{u.username}</span>
@@ -215,7 +221,7 @@ function UserDetail({ user: u }: { user: User }) {
             </Row>
           </Rows>
         </Section>
-        <Section title="Environments">
+        <Section id="environments" title="Environments">
           {theirs.length === 0 ? (
             <p className="muted">
               {u.environments > 0 ? `Owns ${u.environments}.` : 'Owns none.'}
@@ -253,6 +259,7 @@ function UserDetail({ user: u }: { user: User }) {
           )}
         </Section>
         <Section
+          id="activity"
           title="Activity"
           extra={<Link to={`/admin/audit?subject=${encodeURIComponent(`user:${u.id}`)}`}>In the audit log</Link>}
         >

@@ -249,7 +249,21 @@ function Editor({ existing }: { existing?: Template }) {
           )
         }
       />
-      <DetailPage>
+      <DetailPage
+        sections={[
+          { id: 'general', label: 'General' },
+          { id: 'machine', label: 'Machine' },
+          { id: 'workspace', label: 'Workspace' },
+          { id: 'naming', label: 'Naming' },
+          { id: 'placement', label: 'Placement' },
+          ...(existing
+            ? [
+                { id: 'collaborators', label: 'Collaborators' },
+                { id: 'activity', label: 'Activity' },
+              ]
+            : []),
+        ]}
+      >
         {existing && !editable && (
           <div className="notice">
             You can use this template, but only its {existing.team ? "team's members" : 'owner'} and collaborators can
@@ -258,7 +272,7 @@ function Editor({ existing }: { existing?: Template }) {
         )}
         {remove.error && <div className="alert">{remove.error.message}</div>}
         <fieldset disabled={!editable} className="pane-fields tpl-fields">
-          <PaneSection title="General">
+          <PaneSection id="general" title="General">
             <Rows>
               <Row label={label('Name', 'tpl-name')} modified={changed('name')}>
                 <input
@@ -317,7 +331,7 @@ function Editor({ existing }: { existing?: Template }) {
             </Rows>
           </PaneSection>
 
-          <PaneSection title="Machine">
+          <PaneSection id="machine" title="Machine">
             <Rows>
               <Row label={label('Image', 'tpl-image')} modified={changed('image')}>
                 <input
@@ -397,7 +411,11 @@ function Editor({ existing }: { existing?: Template }) {
             </Rows>
           </PaneSection>
 
-          <PaneSection title="Workspace" extra={<span className="muted">Cloned when the environment is created.</span>}>
+          <PaneSection
+            id="workspace"
+            title="Workspace"
+            extra={<span className="muted">Cloned when the environment is created.</span>}
+          >
             <Rows>
               <Row label="Repositories" modified={changed('repos')}>
                 <div className="tpl-block">
@@ -547,7 +565,7 @@ function Editor({ existing }: { existing?: Template }) {
             </Rows>
           </PaneSection>
 
-          <PaneSection title="Naming" extra={<span className="muted">Leave empty to allow any name.</span>}>
+          <PaneSection id="naming" title="Naming" extra={<span className="muted">Leave empty to allow any name.</span>}>
             <Rows>
               <Row label={label('Names must match', 'tpl-pattern')} modified={changed('name_pattern')}>
                 <input
@@ -571,7 +589,7 @@ function Editor({ existing }: { existing?: Template }) {
             </Rows>
           </PaneSection>
 
-          <PaneSection title="Placement">
+          <PaneSection id="placement" title="Placement">
             <Rows>
               <Row label="Worker labels" modified={changed('placement')}>
                 <div className="tpl-block">
@@ -626,6 +644,7 @@ function Editor({ existing }: { existing?: Template }) {
 
         {existing && (
           <PaneSection
+            id="collaborators"
             title="Collaborators"
             extra={<span className="muted">People edit it; a team's viewers use it and its members edit it.</span>}
           >
@@ -633,7 +652,7 @@ function Editor({ existing }: { existing?: Template }) {
           </PaneSection>
         )}
         {existing && (
-          <PaneSection title="Activity">
+          <PaneSection id="activity" title="Activity">
             <Activity subjects={[`template:${existing.id}`]} pageSize={10} />
           </PaneSection>
         )}

@@ -15,14 +15,14 @@ import {
   Trash2,
   Undo2,
 } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 
 import { api, type Environment, type EnvironmentSettings, type TemplateSetting } from '../api'
 import { Conflicts, CopyChoice, fromWhat, useEnvironmentPacks } from '../components/EnvironmentPacks'
 import { formatAgo, formatBytes, formatMemory, shortDigest } from '../components/format'
 import { imageBuild, imageRisk, useImageChange } from '../components/imageChange'
 import { CPUField, MemoryField } from '../components/MachineFields'
-import { Banner, CopyField, Row, Rows, Section } from '../components/Pane'
+import { Banner, CopyField, IndexedPage, Row, Rows, Section } from '../components/Pane'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
 import { openVSCode, openVSCodeTab, useEnvironmentActions, vscodeItems } from '../environmentActions'
@@ -60,105 +60,36 @@ export function EnvironmentView({
     { id: 'activity', label: 'Activity' },
     { id: 'delete', label: 'Delete' },
   ]
-  const scroller = useRef<HTMLDivElement>(null)
-  const [current, setCurrent] = useState('overview')
-  // While a jump scrolls, the section jumped to stays chosen, though the
-  // page may end before it reaches the top.
-  const jumping = useRef(false)
-  const ids = sections.map((s) => s.id).join(' ')
-
-  useEffect(() => {
-    const root = scroller.current
-    if (!root) return
-    const onScroll = () => {
-      if (jumping.current) return
-      const top = root.getBoundingClientRect().top
-      const bottom = root.getBoundingClientRect().bottom
-      const list = ids.split(' ').map((id) => ({ id, el: root.querySelector(`[data-section="${id}"]`) }))
-      let at = list[0].id
-      for (const { id, el } of list) {
-        if (el && el.getBoundingClientRect().top - top <= 40) at = id
-      }
-      // At the end of the page the sections after it cannot reach the top:
-      // one of them that is in view stays chosen.
-      const end = root.scrollTop + root.clientHeight >= root.scrollHeight - 2
-      setCurrent((was) => {
-        const el = list.find((s) => s.id === was)?.el
-        const shown = el && el.getBoundingClientRect().top < bottom
-        return end && shown && list.findIndex((s) => s.id === was) > list.findIndex((s) => s.id === at) ? was : at
-      })
-    }
-    const settled = () => {
-      jumping.current = false
-    }
-    root.addEventListener('scroll', onScroll, { passive: true })
-    root.addEventListener('scrollend', settled)
-    return () => {
-      root.removeEventListener('scroll', onScroll)
-      root.removeEventListener('scrollend', settled)
-    }
-  }, [ids])
-
-  const jump = (id: string) => {
-    const root = scroller.current
-    const el = root?.querySelector<HTMLElement>(`[data-section="${id}"]`)
-    if (!root || !el) return
-    const top = Math.min(el.offsetTop - 16, root.scrollHeight - root.clientHeight)
-    setCurrent(id)
-    if (Math.abs(root.scrollTop - top) < 1) return
-    jumping.current = true
-    // A browser without scrollend is given the time a smooth scroll takes.
-    if (!('onscrollend' in window)) setTimeout(() => (jumping.current = false), 1000)
-    root.scrollTo({ top, behavior: 'smooth' })
-  }
-
   return (
     <div className="envtab">
       <Banners env={env} />
       <Head env={env} />
-      <div className="envtab-body">
-        <nav className="envtab-index" aria-label="Sections">
-          {sections.map((s) => (
-            <button
-              key={s.id}
-              type="button"
-              className={s.id === current ? 'envtab-index-item envtab-index-on' : 'envtab-index-item'}
-              aria-current={s.id === current ? 'true' : undefined}
-              onClick={() => jump(s.id)}
-            >
-              {s.label}
-            </button>
-          ))}
-        </nav>
-        <div className="envtab-scroll" ref={scroller}>
-          <div className="pane-page">
-            {lead}
-            <Section id="overview" title="Overview">
-              <Overview env={env} />
-            </Section>
-            <Section id="connect" title="Connect">
-              <Connect env={env} onDesktop={onDesktop} />
-            </Section>
-            <Section id="machine" title="Machine">
-              <Machine env={env} form={settings} />
-            </Section>
-            {env.spec.repos.length > 0 && (
-              <Section id="repositories" title="Repositories">
-                <Repositories env={env} />
-              </Section>
-            )}
-            <Section id="files" title="Files">
-              <Files env={env} />
-            </Section>
-            <Section id="activity" title="Activity">
-              <EnvironmentActivity env={env.id} />
-            </Section>
-            <Section id="delete" title="Delete">
-              <Delete env={env} />
-            </Section>
-          </div>
-        </div>
-      </div>
+      <IndexedPage sections={sections} layout="column">
+        {lead}
+        <Section id="overview" title="Overview">
+          <Overview env={env} />
+        </Section>
+        <Section id="connect" title="Connect">
+          <Connect env={env} onDesktop={onDesktop} />
+        </Section>
+        <Section id="machine" title="Machine">
+          <Machine env={env} form={settings} />
+        </Section>
+        {env.spec.repos.length > 0 && (
+          <Section id="repositories" title="Repositories">
+            <Repositories env={env} />
+          </Section>
+        )}
+        <Section id="files" title="Files">
+          <Files env={env} />
+        </Section>
+        <Section id="activity" title="Activity">
+          <EnvironmentActivity env={env.id} />
+        </Section>
+        <Section id="delete" title="Delete">
+          <Delete env={env} />
+        </Section>
+      </IndexedPage>
       {settings.changes.length > 0 && <ApplyBar env={env} form={settings} />}
     </div>
   )
