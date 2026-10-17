@@ -173,3 +173,15 @@ func nonNilStrings(s []string) []string {
 	}
 	return s
 }
+
+func (h *handler) ListWorkerSizes(ctx context.Context, _ ListWorkerSizesRequestObject) (ListWorkerSizesResponseObject, error) {
+	sizes, err := h.workers.Sizes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make(ListWorkerSizes200JSONResponse, len(sizes))
+	for i, s := range sizes {
+		out[i] = Resources{CPUs: s.CPUs, MemoryMiB: s.MemoryMiB}
+	}
+	return out, nil
+}

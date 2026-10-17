@@ -234,6 +234,7 @@ export const api = {
     unwrap(client.DELETE('/api/frontend/teams/{id}/members/{user}', { params: { path: { id, user } } })),
 
   workers: () => unwrap(client.GET('/api/frontend/workers')),
+  workerSizes: () => unwrap(client.GET('/api/frontend/worker-sizes')),
   worker: (id: string) => unwrap(client.GET('/api/frontend/workers/{id}', byID(id))),
   removeWorkerImage: (id: string, ref: string, digest: string) =>
     unwrap(client.POST('/api/frontend/workers/{id}/images/remove', { ...byID(id), body: { ref, digest } })),

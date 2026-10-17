@@ -1423,6 +1423,23 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
+  /api/frontend/worker-sizes:
+    get:
+      operationId: listWorkerSizes
+      description: >-
+        The capacity of each worker online, largest first, without saying
+        which is which: how big an environment can be and still find a worker
+        that could hold it, whatever each is running.
+      responses:
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "200":
+          description: The sizes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Resources" }
+
   /api/frontend/workers:
     get:
       operationId: listWorkers

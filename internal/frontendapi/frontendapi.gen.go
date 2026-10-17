@@ -1927,6 +1927,9 @@ type ServerInterface interface {
 	// (PATCH /api/frontend/users/{id})
 	UpdateUser(w http.ResponseWriter, r *http.Request, id ID)
 
+	// (GET /api/frontend/worker-sizes)
+	ListWorkerSizes(w http.ResponseWriter, r *http.Request)
+
 	// (GET /api/frontend/workers)
 	ListWorkers(w http.ResponseWriter, r *http.Request)
 
@@ -3940,6 +3943,20 @@ func (siw *ServerInterfaceWrapper) UpdateUser(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// ListWorkerSizes operation middleware
+func (siw *ServerInterfaceWrapper) ListWorkerSizes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListWorkerSizes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListWorkers operation middleware
 func (siw *ServerInterfaceWrapper) ListWorkers(w http.ResponseWriter, r *http.Request) {
 
@@ -4325,6 +4342,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/environments/{id}/editor", wrapper.OpenEditor)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/frontend/environments/{id}/desktop/size", wrapper.ResizeDesktop)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/environments/{id}/terminals/{session}", wrapper.CloseTerminal)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/worker-sizes", wrapper.ListWorkerSizes)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers", wrapper.ListWorkers)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/workers/{id}/log", wrapper.GetWorkerLog)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/workers/{id}", wrapper.DeleteWorker)
@@ -9200,6 +9218,41 @@ func (response UpdateUser409JSONResponse) VisitUpdateUserResponse(w http.Respons
 	return err
 }
 
+type ListWorkerSizesRequestObject struct {
+}
+
+type ListWorkerSizesResponseObject interface {
+	VisitListWorkerSizesResponse(w http.ResponseWriter) error
+}
+
+type ListWorkerSizes200JSONResponse []Resources
+
+func (response ListWorkerSizes200JSONResponse) VisitListWorkerSizesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListWorkerSizes401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListWorkerSizes401JSONResponse) VisitListWorkerSizesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListWorkersRequestObject struct {
 }
 
@@ -9907,6 +9960,9 @@ type StrictServerInterface interface {
 
 	// (PATCH /api/frontend/users/{id})
 	UpdateUser(ctx context.Context, request UpdateUserRequestObject) (UpdateUserResponseObject, error)
+
+	// (GET /api/frontend/worker-sizes)
+	ListWorkerSizes(ctx context.Context, request ListWorkerSizesRequestObject) (ListWorkerSizesResponseObject, error)
 
 	// (GET /api/frontend/workers)
 	ListWorkers(ctx context.Context, request ListWorkersRequestObject) (ListWorkersResponseObject, error)
@@ -12205,6 +12261,30 @@ func (sh *strictHandler) UpdateUser(w http.ResponseWriter, r *http.Request, id I
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(UpdateUserResponseObject); ok {
 		if err := validResponse.VisitUpdateUserResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListWorkerSizes operation middleware
+func (sh *strictHandler) ListWorkerSizes(w http.ResponseWriter, r *http.Request) {
+	var request ListWorkerSizesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListWorkerSizes(ctx, request.(ListWorkerSizesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListWorkerSizes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListWorkerSizesResponseObject); ok {
+		if err := validResponse.VisitListWorkerSizesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

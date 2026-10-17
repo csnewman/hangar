@@ -3,6 +3,7 @@ package workers_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/csnewman/hangar/internal/api"
@@ -335,5 +336,38 @@ func TestStartProgress(t *testing.T) {
 	report(api.ObservedEnvironment{Phase: api.PhaseRunning})
 	if got, _ := em.Get(ctx, p, env.ID); got.Progress != nil {
 		t.Fatalf("a running environment reports progress: %+v", got.Progress)
+	}
+}
+
+// Sizes are the capacities of the workers online, largest first; a revoked
+// one, or one that has never reported, is not among them.
+func TestSizes(t *testing.T) {
+	d := dbtest.Open(t)
+	wm := workers.NewManager(d)
+	for name, c := range map[string]api.Resources{"small": {CPUs: 2, MemoryMiB: 4096}, "big": {CPUs: 8, MemoryMiB: 16384},
+		"gone": {CPUs: 32, MemoryMiB: 65536}} {
+		w, err := wm.Register(ctx, api.RegisterWorker{Name: name})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := wm.ReportStatus(ctx, w.ID, api.WorkerStatus{Capacity: c}); err != nil {
+			t.Fatal(err)
+		}
+		if name == "gone" {
+			if err := wm.Revoke(ctx, w.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := wm.Register(ctx, api.RegisterWorker{Name: "silent"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := wm.Sizes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []api.Resources{{CPUs: 8, MemoryMiB: 16384}, {CPUs: 2, MemoryMiB: 4096}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("sizes %v, want %v", got, want)
 	}
 }

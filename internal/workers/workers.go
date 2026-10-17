@@ -249,6 +249,30 @@ func (m *Manager) List(ctx context.Context) ([]api.Worker, error) {
 	return out, err
 }
 
+// Sizes are the capacities of the workers online and not revoked, largest
+// first, without which worker is which: how big an environment can be and
+// still find a worker that could hold it, whatever each is running.
+func (m *Manager) Sizes(ctx context.Context) ([]api.Resources, error) {
+	out := []api.Resources{}
+	err := m.db.Transact(ctx, func(tx db.Tx) error {
+		rows, err := tx.Query(ctx, `SELECT cpus, memory_mib FROM workers
+			WHERE revoked_at IS NULL AND last_seen_at > now() - $1::interval
+			ORDER BY cpus DESC, memory_mib DESC`, OnlineWindow)
+		if err != nil {
+			return err
+		}
+		out, err = pgx.CollectRows(rows, func(r pgx.CollectableRow) (api.Resources, error) {
+			var s api.Resources
+			return s, r.Scan(&s.CPUs, &s.MemoryMiB)
+		})
+		return err
+	})
+	if out == nil {
+		out = []api.Resources{}
+	}
+	return out, err
+}
+
 // Get returns one worker.
 func (m *Manager) Get(ctx context.Context, id string) (api.Worker, error) {
 	if !db.ValidUUID(id) {
