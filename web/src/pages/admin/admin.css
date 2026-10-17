@@ -77,3 +77,34 @@
   max-width: 1180px;
   padding: 16px 24px 48px;
 }
+
+/* A table wider than a narrow pane scrolls inside its section, not the
+   page sideways. */
+.admin-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.admin-scroll > .pane-table {
+  min-width: 520px;
+}
+
+@media (max-width: 640px) {
+  .admin-filters {
+    padding: 8px 16px;
+  }
+
+  .admin-filters input {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .admin-audit {
+    padding: 12px 16px 32px;
+  }
+}
+
+/* A worker's labels under its name keep each to one line. */
+.md-detail .pane-head-sub .label {
+  white-space: nowrap;
+}

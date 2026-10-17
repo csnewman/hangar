@@ -6,99 +6,22 @@ import { useCallback, useRef } from 'react'
 import { Link, useParams } from 'react-router'
 
 import { api, type GPUInfo, type LocalImage, type Worker, type WorkerStats } from '../../api'
-import { Meter as ChartMeter, StatTile } from '../../components/charts'
+import { StatTile } from '../../components/charts'
 import { ConfirmButton } from '../../components/ConfirmButton'
 import { LogView } from '../../components/LogView'
 import { formatAgo, formatBytes, formatCores, formatMemory, formatPercent, shortDigest } from '../../components/format'
-import { PageHeader } from '../../components/PageHeader'
-import { OnlineBadge, PhaseBadge, RendererBadge } from '../../components/Status'
+import { PhaseBadge, RendererBadge } from '../../components/Status'
 import { useEnvironments } from '../../environments'
 import { useHistory } from '../../history'
 import { Activity } from '../../components/Activity'
 import { DetailHead, DetailPage, Meter, NoneChosen, Section } from '../../components/Pane'
-import { usePhone } from '../../phone'
 import { useEnvironmentTarget } from '../../workspaceLinks'
 import { WorkersPane } from './Workers'
 
-// WorkerDetailPage is one worker: how loaded its machine is, what it holds,
-// and the images in its local store. On a computer it is the Workers page
-// with this worker chosen.
+// WorkerDetailPage is one worker: the Workers page with this worker chosen.
 export function WorkerDetailPage() {
   const { id } = useParams()
-  if (!usePhone()) return <WorkersPane id={id} />
-  return <WorkerPage id={id!} />
-}
-
-function WorkerPage({ id }: { id: string }) {
-  // Kept polling while hidden, since the tiles chart what the page sees.
-  const worker = useQuery({ queryKey: ['workers', id], queryFn: () => api.worker(id), refetchIntervalInBackground: true })
-  const envs = useEnvironments()
-
-  if (worker.isPending) return <div className="page" />
-  if (worker.isError) {
-    return (
-      <div className="page">
-        <PageHeader crumbs={[{ label: 'Workers', to: '/admin/workers' }]} title="Not found" />
-        <div className="panel empty-state">
-          No such worker. <Link to="/admin/workers">Back to workers</Link>
-        </div>
-      </div>
-    )
-  }
-  const w = worker.data
-  const here = (envs.data ?? []).filter((e) => e.worker_id === w.id)
-  return (
-    <div className="page">
-      <PageHeader
-        crumbs={[{ label: 'Administration' }, { label: 'Workers', to: '/admin/workers' }]}
-        title={w.name}
-        subtitle={
-          <span className="subtitle-row">
-            <OnlineBadge online={w.online} revoked={w.revoked} />
-            <span>last seen {formatAgo(w.last_seen_at)}</span>
-            <span className="labels">
-              {Object.entries(w.labels).map(([k, v]) => (
-                <span key={k} className="label mono">
-                  {k}={v}
-                </span>
-              ))}
-            </span>
-          </span>
-        }
-      />
-      <section className="section">
-        <h2 className="section-title">Machine</h2>
-        <Machine worker={w} />
-        <Allocation worker={w} />
-      </section>
-      <section className="section">
-        <h2 className="section-title">
-          Environments <span className="section-count">{here.length}</span>
-        </h2>
-        <div className="panel">
-          <Environments worker={w} className="table" />
-        </div>
-        {w.unknown.length > 0 && <Unknown worker={w} />}
-      </section>
-      <section className="section">
-        <h2 className="section-title">
-          Local images <span className="section-count">{w.images.length}</span>
-          {w.images.length > 0 && <span className="muted small">{formatBytes(imagesSize(w))} on disk</span>}
-        </h2>
-        <div className="panel">
-          <Images worker={w} className="table" />
-        </div>
-      </section>
-      <section className="section">
-        <h2 className="section-title">Log</h2>
-        <WorkerLog worker={w} />
-      </section>
-      <section className="section">
-        <h2 className="section-title">Activity</h2>
-        <Activity subjects={[`worker:${w.id}`]} />
-      </section>
-    </div>
-  )
+  return <WorkersPane id={id} />
 }
 
 // WorkerDetail is the chosen worker beside the list: its head, with
@@ -152,7 +75,9 @@ export function WorkerDetail({ id }: { id: string }) {
           <Machine worker={w} />
         </Section>
         <Section id="environments" title="Environments">
-          <Environments worker={w} className="pane-table" />
+          <div className="admin-scroll">
+            <Environments worker={w} className="pane-table" />
+          </div>
           {w.unknown.length > 0 && <Unknown worker={w} />}
         </Section>
         <Section
@@ -160,7 +85,9 @@ export function WorkerDetail({ id }: { id: string }) {
           title="Image copies"
           extra={w.images.length > 0 && <span className="muted">{formatBytes(imagesSize(w))} on disk</span>}
         >
-          <Images worker={w} className="pane-table" />
+          <div className="admin-scroll">
+            <Images worker={w} className="pane-table" />
+          </div>
         </Section>
         <Section id="log" title="Log">
           <WorkerLog worker={w} />
@@ -242,26 +169,6 @@ function Capacity({ worker: w }: { worker: Worker }) {
       {s
         ? tile('Host CPU', formatPercent(s.cpu_percent), s.cpu_percent, 100, `load ${s.load1.toFixed(2)}, 1-minute average`)
         : tile('Host CPU', '—', 0, 1, 'not reported yet')}
-    </div>
-  )
-}
-
-// Allocation is what the worker has given its environments, as meters.
-function Allocation({ worker: w }: { worker: Worker }) {
-  return (
-    <div className="panel capacity">
-      <div className="capacity-row">
-        <span className="muted">Allocated vCPUs</span>
-        <ChartMeter used={w.allocated.cpus} total={w.capacity.cpus} label={`${w.allocated.cpus} of ${w.capacity.cpus}`} />
-      </div>
-      <div className="capacity-row">
-        <span className="muted">Allocated memory</span>
-        <ChartMeter
-          used={w.allocated.memory_mib}
-          total={w.capacity.memory_mib}
-          label={`${formatMemory(w.allocated.memory_mib)} of ${formatMemory(w.capacity.memory_mib)}`}
-        />
-      </div>
     </div>
   )
 }

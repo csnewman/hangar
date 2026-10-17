@@ -1,16 +1,14 @@
 import './images.css'
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Boxes, Globe, Lock, UsersRound, X } from 'lucide-react'
+import { Boxes, UsersRound, X } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
 import { api, type ImageRepository } from '../api'
 import { Activity } from '../components/Activity'
 import { ConfirmButton } from '../components/ConfirmButton'
-import { CopyCode } from '../components/CopyCode'
 import { formatAgo, formatBytes, shortDigest } from '../components/format'
-import { PageHeader } from '../components/PageHeader'
 import {
   CopyField,
   DetailHead,
@@ -36,95 +34,13 @@ import { useTitle } from '../title'
 const imagesKey = ['images'] as const
 
 // ImagesPage lists the repositories in Hangar's registry the caller may
-// pull, and says how to push one. On a computer the repositories are a
-// list, and the push instructions sit beside it until one is chosen.
+// pull, and says how to push one. The repositories are a list, and the push
+// instructions sit beside it until one is chosen.
 export function ImagesPage() {
-  if (usePhone()) return <PlainImages />
   return (
     <ImagesLayout>
       <PushingPage />
     </ImagesLayout>
-  )
-}
-
-function PlainImages() {
-  const me = useMe()
-  const images = useQuery({ queryKey: imagesKey, queryFn: api.images, enabled: !!me.registry, refetchInterval: 15_000 })
-
-  if (!me.registry) {
-    return (
-      <div className="page">
-        <PageHeader title="Images" />
-        <div className="panel empty-state">This server runs no registry of its own.</div>
-      </div>
-    )
-  }
-  const list = images.data ?? []
-  const namespace = me.username.toLowerCase()
-
-  return (
-    <div className="page">
-      <PageHeader
-        title="Images"
-        subtitle="Hangar's own registry: images for your templates, kept here and published nowhere else."
-      />
-
-      <section className="panel form section">
-        <div className="form-section-head">
-          <h2>Pushing an image</h2>
-        </div>
-        <p className="muted small">
-          Sign in with your username and an <Link to="/settings/access-tokens">access token</Link> as the password. Build on one of
-          Hangar's images, which boot as a machine, and push to your own namespace or a team's.
-        </p>
-        <CopyCode text={`docker login ${me.registry} -u ${me.username}`} />
-        <CopyCode text={`docker push ${me.registry}/${namespace}/my-image:latest`} />
-        <p className="muted small">
-          Then name <code>{`${me.registry}/${namespace}/my-image:latest`}</code> as a template's image.
-        </p>
-      </section>
-
-      {images.isError && <div className="alert">Could not load images: {images.error.message}</div>}
-      <section className="section">
-        <h2 className="section-title">
-          Repositories <span className="section-count">{list.length}</span>
-        </h2>
-        {images.isSuccess && list.length === 0 ? (
-          <div className="panel empty-state">No repositories yet. Push an image to make one.</div>
-        ) : (
-          <div className="panel">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Repository</th>
-                  <th>Owner</th>
-                  <th className="num">Tags</th>
-                  <th>Updated</th>
-                </tr>
-              </thead>
-              <tbody>
-                {list.map((x) => (
-                  <tr key={x.id}>
-                    <td>
-                      <Link to={`/images/${x.id}`} className="strong mono">
-                        {x.path}
-                      </Link>{' '}
-                      <VisibilityBadge repo={x} />
-                      {x.description && <div className="muted small">{x.description}</div>}
-                    </td>
-                    <td>{ownerName(x)}</td>
-                    <td className="num" data-label="Tags">
-                      {x.tag_count}
-                    </td>
-                    <td className="muted nowrap">{formatAgo(x.updated_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-    </div>
   )
 }
 
@@ -133,186 +49,17 @@ function ownerName(x: ImageRepository): string {
   return x.owner ? x.owner.display_name || x.owner.username : ''
 }
 
-function VisibilityBadge({ repo: x }: { repo: ImageRepository }) {
-  if (x.visibility === 'shared') {
-    return (
-      <span className="badge badge-good" title="Everyone can pull it">
-        <Globe size={11} />
-        shared
-      </span>
-    )
-  }
-  return (
-    <span className="badge badge-idle" title="Only its owner and collaborators can pull it">
-      <Lock size={11} />
-      private
-    </span>
-  )
-}
-
 // ImagePage shows one repository: how to pull it, its tags, and who may use
-// it. On a computer it is shown beside the list of repositories.
+// it, beside the list of repositories.
 export function ImagePage() {
   const { id = '' } = useParams()
-  if (usePhone()) return <PlainImage />
   return (
-    <ImagesLayout>
+    <ImagesLayout chosen>
       <ImageDetail key={id} id={id} />
     </ImagesLayout>
   )
 }
 
-function PlainImage() {
-  const { id } = useParams()
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  const image = useQuery({ queryKey: [...imagesKey, id], queryFn: () => api.image(id!), refetchInterval: 15_000 })
-  useTitle(image.data?.path)
-  const done = (x: ImageRepository) => {
-    qc.setQueryData([...imagesKey, id], x)
-    qc.invalidateQueries({ queryKey: imagesKey })
-  }
-  const update = useMutation({
-    mutationFn: (visibility: 'private' | 'shared') =>
-      api.updateImage(id!, { visibility, description: image.data?.description || undefined }),
-    onSuccess: done,
-  })
-  const deleteTag = useMutation({ mutationFn: (tag: string) => api.deleteImageTag(id!, tag), onSuccess: done })
-  const remove = useMutation({
-    mutationFn: () => api.deleteImage(id!),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: imagesKey })
-      navigate('/images')
-    },
-  })
-
-  if (image.isPending) return <div className="page" />
-  if (image.isError) {
-    return (
-      <div className="page">
-        <PageHeader crumbs={[{ label: 'Images', to: '/images' }]} title="Not found" />
-        <div className="panel empty-state">
-          This repository does not exist, or it is not shared with you. <Link to="/images">Back to images</Link>
-        </div>
-      </div>
-    )
-  }
-  const x = image.data
-  const tags = x.tags ?? []
-  const error = update.error ?? deleteTag.error ?? remove.error
-
-  return (
-    <div className="page page-narrow">
-      <PageHeader
-        crumbs={[{ label: 'Images', to: '/images' }]}
-        title={<span className="mono">{x.path}</span>}
-        subtitle={
-          <span className="subtitle-row">
-            <VisibilityBadge repo={x} />
-            <span>
-              {x.team ? (
-                <>
-                  team <Link to={`/teams/${x.team.id}`}>{x.team.name}</Link>
-                </>
-              ) : (
-                ownerName(x)
-              )}
-            </span>
-          </span>
-        }
-        actions={
-          x.can_manage && <ConfirmButton label="Delete" confirmLabel="Delete?" onConfirm={() => remove.mutate()} />
-        }
-      />
-      {error && <div className="alert">{error.message}</div>}
-      {x.description && <p className="page-lead">{x.description}</p>}
-
-      <section className="panel form section">
-        <div className="field">
-          <span>Pull</span>
-          <CopyCode text={`${x.name}:${tags[0]?.name ?? 'latest'}`} />
-          <small>Name it as a template's image; workers pull it from Hangar themselves.</small>
-        </div>
-        <div className="field">
-          <span>Who can pull it</span>
-          <div className="segmented" role="radiogroup">
-            {(['private', 'shared'] as const).map((v) => (
-              <label key={v} className={x.visibility === v ? 'seg seg-on' : 'seg'}>
-                <input
-                  type="radio"
-                  name="visibility"
-                  checked={x.visibility === v}
-                  disabled={!x.can_manage || update.isPending}
-                  onChange={() => update.mutate(v)}
-                />
-                {v === 'private' ? 'Owner and collaborators' : 'Everyone'}
-              </label>
-            ))}
-          </div>
-          {!x.can_manage && <small>Only its owner can change who can pull it.</small>}
-        </div>
-      </section>
-
-      <section className="section">
-        <h2 className="section-title">
-          Tags <span className="section-count">{tags.length}</span>
-        </h2>
-        {tags.length === 0 ? (
-          <div className="panel empty-state">No tags.</div>
-        ) : (
-          <div className="panel">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Tag</th>
-                  <th>Digest</th>
-                  <th className="num">Size</th>
-                  <th>Pushed</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {tags.map((t) => (
-                  <tr key={t.name}>
-                    <td className="mono strong">{t.name}</td>
-                    <td className="mono muted small" title={t.digest}>
-                      {shortDigest(t.digest)}
-                    </td>
-                    <td className="num nowrap">{formatBytes(t.size_bytes)}</td>
-                    <td className="muted nowrap">{formatAgo(t.updated_at)}</td>
-                    <td>
-                      {x.can_push && (
-                        <div className="actions">
-                          <ConfirmButton
-                            label="Delete"
-                            confirmLabel="Delete?"
-                            disabled={deleteTag.isPending}
-                            onConfirm={() => deleteTag.mutate(t.name)}
-                          />
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <Collaborators repo={x} onChange={done} />
-
-      <section className="section">
-        <h2 className="section-title">Activity</h2>
-        <Activity subjects={[`image:${x.path}`]} />
-      </section>
-    </div>
-  )
-}
-
-// Collaborators are people, who push, and teams, whose viewers pull and
-// whose members push: in a panel of their own, or bare, in a section that
-// has a heading.
 function Collaborators({
   repo: x,
   onChange,
@@ -425,11 +172,14 @@ function Collaborators({
   )
 }
 
-// ImagesLayout is the Images page on a computer: the repositories the caller
-// may pull down the left, grouped by whose they are, and beside them the
-// chosen one, or what children show.
-function ImagesLayout({ children }: { children: ReactNode }) {
+// ImagesLayout is the Images page: the repositories the caller may pull
+// down the left, grouped by whose they are, and beside them the chosen one,
+// or what children show. chosen says one is, which on a phone is a screen
+// of its own; there the list ends with how to push an image, which on a
+// computer stands beside it.
+function ImagesLayout({ children, chosen = false }: { children: ReactNode; chosen?: boolean }) {
   const me = useMe()
+  const phone = usePhone()
   const images = useQuery({ queryKey: imagesKey, queryFn: api.images, enabled: !!me.registry, refetchInterval: 15_000 })
   const [query, setQuery] = useState('')
   if (!me.registry) {
@@ -452,8 +202,14 @@ function ImagesLayout({ children }: { children: ReactNode }) {
   return (
     <PaneRoot>
       <MasterDetail
+        chosen={chosen}
+        back={{ to: '/images', label: 'Images' }}
         list={
-          <ListPane head={<SearchField value={query} onChange={setQuery} placeholder="Repositories" />}>
+          <ListPane
+            title="Images"
+            back={{ to: '/more', label: 'More' }}
+            head={<SearchField value={query} onChange={setQuery} placeholder="Repositories" />}
+          >
             {images.isError && <div className="md-empty-list">Could not load images: {images.error.message}</div>}
             {groups
               .filter((g) => g.repos.length > 0)
@@ -476,6 +232,16 @@ function ImagesLayout({ children }: { children: ReactNode }) {
               ))}
             {images.isSuccess && list.length === 0 && (
               <div className="md-empty-list">{q ? 'No repository has that name.' : 'No repositories yet.'}</div>
+            )}
+            {phone && (
+              <div className="images-push">
+                <Section title="Pushing an image">
+                  <PushCommands
+                    registry={me.registry}
+                    refName={`${me.registry}/${me.username.toLowerCase()}/my-image:latest`}
+                  />
+                </Section>
+              </div>
             )}
           </ListPane>
         }
@@ -635,7 +401,7 @@ function ImageDetail({ id }: { id: string }) {
           {tags.length === 0 ? (
             <p className="pane-hint">No tags.</p>
           ) : (
-            <table className="pane-table">
+            <table className="pane-table images-tags">
               <thead>
                 <tr>
                   <th>Tag</th>
@@ -648,7 +414,7 @@ function ImageDetail({ id }: { id: string }) {
               <tbody>
                 {tags.map((t) => (
                   <tr key={t.name}>
-                    <td className="mono strong">{t.name}</td>
+                    <td className="mono strong nowrap">{t.name}</td>
                     <td className="mono muted small" title={t.digest}>
                       {shortDigest(t.digest)}
                     </td>

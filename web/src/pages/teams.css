@@ -44,3 +44,20 @@
   min-width: 260px;
   margin: 0;
 }
+
+@media (max-width: 640px) {
+  .teams-new {
+    width: 40px;
+    justify-content: center;
+  }
+
+  .teams-add {
+    flex-wrap: wrap;
+  }
+
+  .teams-add select {
+    flex: 1 1 140px;
+    height: 40px;
+    font-size: 16px;
+  }
+}

@@ -8,8 +8,8 @@ import type { Environment } from '../api'
 import { copyText, useContextMenu, type MenuItem } from '../code/ContextMenu'
 import { formatAgo, formatMemory, formatPercent } from '../components/format'
 import { Meter, PaneBar, PaneRoot, SearchField, Segmented, Tile } from '../components/Pane'
-import { PhoneEnvironments } from '../components/PhoneEnvironments'
 import { StartLine } from '../components/StartProgress'
+import { InstallHint } from '../components/InstallHint'
 import { PhaseDot } from '../components/Status'
 import { useEnvironmentActions, vscodeItems } from '../environmentActions'
 import { splitByOwner, sshCommand, useEnvironments } from '../environments'
@@ -17,11 +17,11 @@ import { usePhone } from '../phone'
 import { useMe } from '../session'
 import { useTeams } from '../teams'
 import { groupTemplates, repoName, specLine, useTemplates } from '../templates'
+import { useTitle } from '../title'
 import { openEnvironment, useOpenWorkspaces } from '../workspaceLinks'
-import { NewEnvironmentDialog, NewEnvironmentPage } from './NewEnvironment'
+import { NewEnvironmentDialog } from './NewEnvironment'
 
 export function OverviewPage() {
-  if (usePhone()) return <PhoneEnvironments />
   return <Launcher />
 }
 
@@ -39,16 +39,19 @@ function matches(e: Environment, q: string) {
   )
 }
 
-// Launcher is Hangar's home on a computer, as an IDE's welcome screen is:
+// Launcher is Hangar's home, as an IDE's welcome screen is:
 // work happens in each environment's own tab, so this is where they are
 // found, started and opened, and where new ones are made. Running ones come
 // first, the most recently changed first. Beside them: templates to start
 // from, a repository to start from, and what is running. creating shows
-// the New Environment dialog over it.
+// the New Environment dialog over it. On a phone an environment opens in
+// place, as its own screen.
 export function Launcher({ creating = false }: { creating?: boolean }) {
   const me = useMe()
+  const phone = usePhone()
   const navigate = useNavigate()
   const envs = useEnvironments()
+  useTitle('Environments')
   const open = useOpenWorkspaces()
   const [query, setQuery] = useState('')
   const [everyone, setEveryone] = useState(false)
@@ -76,13 +79,27 @@ export function Launcher({ creating = false }: { creating?: boolean }) {
 
   return (
     <PaneRoot>
-      <PaneBar title="Environments">
+      <PaneBar
+        title="Environments"
+        aside={
+          phone && (
+            <Link
+              to="/environments/new"
+              className="pane-round-btn"
+              aria-label="New environment"
+              title="New environment"
+            >
+              <Plus size={20} />
+            </Link>
+          )
+        }
+      >
         <SearchField
           inputRef={search}
           value={query}
           onChange={setQuery}
           placeholder="Search names, repositories, branches"
-          keys={navigator.platform.startsWith('Mac') ? '⌘K' : 'Ctrl K'}
+          keys={phone ? undefined : navigator.platform.startsWith('Mac') ? '⌘K' : 'Ctrl K'}
           width={320}
         />
         {hasOthers && (
@@ -96,13 +113,16 @@ export function Launcher({ creating = false }: { creating?: boolean }) {
             ]}
           />
         )}
-        <Link to="/environments/new" className="btn btn-primary btn-sm">
-          <Plus size={14} />
-          New Environment
-        </Link>
+        {!phone && (
+          <Link to="/environments/new" className="btn btn-primary btn-sm">
+            <Plus size={14} />
+            New Environment
+          </Link>
+        )}
       </PaneBar>
       <div className="launch">
         <div className="launch-main">
+          {phone && <InstallHint />}
           {envs.isError && <div className="alert">Could not load environments: {envs.error.message}</div>}
           {envs.isSuccess && shown.length === 0 && (
             <div className="launch-empty">
@@ -123,16 +143,16 @@ export function Launcher({ creating = false }: { creating?: boolean }) {
             <section className="launch-list" aria-label="Environments">
               {running.length > 0 && <h2 className="launch-group">Running</h2>}
               {running.map((e) => (
-                <LaunchRow key={e.id} env={e} open={open.has(e.id)} owner={e.owner_id !== me.id} />
+                <LaunchRow key={e.id} env={e} open={open.has(e.id)} owner={e.owner_id !== me.id} phone={phone} />
               ))}
               {resting.length > 0 && <h2 className="launch-group">Not running</h2>}
               {resting.map((e) => (
-                <LaunchRow key={e.id} env={e} open={open.has(e.id)} owner={e.owner_id !== me.id} />
+                <LaunchRow key={e.id} env={e} open={open.has(e.id)} owner={e.owner_id !== me.id} phone={phone} />
               ))}
             </section>
           )}
         </div>
-        <StartPanel environments={mine} />
+        <StartPanel environments={mine} phone={phone} />
       </div>
       {creating && <NewEnvironmentDialog onClose={() => navigate('/environments')} />}
     </PaneRoot>
@@ -141,9 +161,12 @@ export function Launcher({ creating = false }: { creating?: boolean }) {
 
 // LaunchRow is one environment: where its code is, what it is doing, what
 // it is using, and the way into it. open says its workspace is in a tab
-// already; owner shows whose it is, for one of someone else's.
-function LaunchRow({ env, open, owner }: { env: Environment; open: boolean; owner: boolean }) {
+// already; owner shows whose it is, for one of someone else's. On a phone
+// the row leads to the environment's screen, and offers only to start one
+// that is not running.
+function LaunchRow({ env, open, owner, phone }: { env: Environment; open: boolean; owner: boolean; phone: boolean }) {
   const me = useMe()
+  const navigate = useNavigate()
   const actions = useEnvironmentActions(env)
   const menu = useContextMenu()
   const [error, setError] = useState('')
@@ -153,6 +176,10 @@ function LaunchRow({ env, open, owner }: { env: Environment; open: boolean; owne
   const s = env.stats
 
   const enter = () => {
+    if (phone) {
+      navigate(`/environments/${env.id}`)
+      return
+    }
     openEnvironment(env.id)
     if (env.desired !== 'running') actions.start.mutate()
   }
@@ -213,6 +240,55 @@ function LaunchRow({ env, open, owner }: { env: Environment; open: boolean; owne
   }
 
   const problem = error || actions.error?.message
+  if (phone) {
+    return (
+      <div className="launch-row launch-row-phone">
+        <Link to={`/environments/${env.id}`} className="launch-row-link">
+          <Tile name={env.name} />
+          <div className="launch-who">
+            <div className="launch-name">
+              <span className="launch-name-text">{env.name}</span>
+              {owner && <span className="pane-pill pane-pill-grey">{env.owner}</span>}
+            </div>
+            <div className="launch-state">
+              <PhaseDot phase={env.phase} workerOnline={env.worker_online} />
+              <strong>{env.phase.charAt(0).toUpperCase() + env.phase.slice(1)}</strong>
+              {env.phase === 'starting' ? (
+                <StartLine env={env} />
+              ) : (
+                <span>
+                  {running ? (env.worker ? `on ${env.worker}` : '') : (env.reason ?? formatAgo(env.updated_at))}
+                  {running && s ? ` · CPU ${formatPercent(s.cpu_percent)}` : ''}
+                </span>
+              )}
+            </div>
+            {repo && (
+              <span className="launch-repo">
+                <span className="mono">{repoName(repo.url)}</span>
+                {repo.branch && (
+                  <span className="branch">
+                    <GitBranch size={11} />
+                    <span className="mono">{repo.branch}</span>
+                  </span>
+                )}
+              </span>
+            )}
+            {problem && <div className="action-error">{problem}</div>}
+          </div>
+        </Link>
+        {env.desired !== 'running' && env.desired !== 'deleted' && (
+          <button
+            type="button"
+            className="pane-link launch-start"
+            disabled={busy || env.phase === 'stopping' || env.phase === 'suspending'}
+            onClick={() => actions.start.mutate()}
+          >
+            {env.phase === 'suspended' ? 'Resume' : 'Start'}
+          </button>
+        )}
+      </div>
+    )
+  }
   return (
     <div className="launch-row">
       <Tile name={env.name} />
@@ -314,7 +390,7 @@ function LaunchRow({ env, open, owner }: { env: Environment; open: boolean; owne
 // StartPanel is beside the list: the templates to make one from, a
 // repository to make one from, and what the user's running environments
 // take.
-function StartPanel({ environments }: { environments: Environment[] }) {
+function StartPanel({ environments, phone }: { environments: Environment[]; phone: boolean }) {
   const me = useMe()
   const navigate = useNavigate()
   const templates = useTemplates()
@@ -362,47 +438,52 @@ function StartPanel({ environments }: { environments: Environment[] }) {
           </Link>
         )}
       </section>
-      <form className="launch-card" onSubmit={fromRepo}>
-        <h3>Or from a repository</h3>
-        <div className="launch-repo-form">
-          <input
-            className="pane-input mono"
-            aria-label="Repository URL"
-            placeholder="https://github.com/…"
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-          />
-          <button type="submit" className="btn btn-ghost btn-sm" disabled={!url.trim()}>
-            Next
-          </button>
-        </div>
-        <p className="muted small">Cloned into a new environment, on the template you choose next.</p>
-      </form>
-      <section className="launch-card">
-        <h3>Running</h3>
-        <p className="launch-total">
-          {running.length === 0 ? (
-            'Nothing is running.'
-          ) : (
-            <>
-              <strong>{running.length}</strong> running, taking <strong>{cpus}</strong> vCPU{cpus === 1 ? '' : 's'} and{' '}
-              <strong>{formatMemory(memory)}</strong>.
-            </>
-          )}
-        </p>
-        {suspended.length > 0 && (
-          <p className="muted small">
-            {suspended.length} suspended, keeping {suspended.length === 1 ? 'its' : 'their'} memory on disk.
+      {!phone && (
+        <form className="launch-card" onSubmit={fromRepo}>
+          <h3>Or from a repository</h3>
+          <div className="launch-repo-form">
+            <input
+              className="pane-input mono"
+              aria-label="Repository URL"
+              placeholder="https://github.com/…"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+            />
+            <button type="submit" className="btn btn-ghost btn-sm" disabled={!url.trim()}>
+              Next
+            </button>
+          </div>
+          <p className="muted small">Cloned into a new environment, on the template you choose next.</p>
+        </form>
+      )}
+      {!phone && (
+        <section className="launch-card">
+          <h3>Running</h3>
+          <p className="launch-total">
+            {running.length === 0 ? (
+              'Nothing is running.'
+            ) : (
+              <>
+                <strong>{running.length}</strong> running, taking <strong>{cpus}</strong> vCPU{cpus === 1 ? '' : 's'}{' '}
+                and <strong>{formatMemory(memory)}</strong>.
+              </>
+            )}
           </p>
-        )}
-      </section>
+          {suspended.length > 0 && (
+            <p className="muted small">
+              {suspended.length} suspended, keeping {suspended.length === 1 ? 'its' : 'their'} memory on disk.
+            </p>
+          )}
+        </section>
+      )}
     </aside>
   )
 }
 
-// NewEnvironmentRoute is /environments/new: on a phone its own screens, on
-// a computer the New Environment dialog over the environments.
+// NewEnvironmentRoute is /environments/new: the New Environment dialog
+// over the environments, or on a phone as a screen of its own.
 export function NewEnvironmentRoute() {
-  if (usePhone()) return <NewEnvironmentPage />
+  const navigate = useNavigate()
+  if (usePhone()) return <NewEnvironmentDialog onClose={() => navigate('/environments')} />
   return <Launcher creating />
 }

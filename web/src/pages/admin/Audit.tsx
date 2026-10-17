@@ -5,14 +5,15 @@ import { useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
 
 import { Activity } from '../../components/Activity'
-import { PageHeader } from '../../components/PageHeader'
+import { PhoneBack } from '../../components/Phone'
 import { PaneBar, PaneRoot } from '../../components/Pane'
 import { usePhone } from '../../phone'
 
 // AuditPage is the whole audit log, narrowed by the subjects in the URL:
 // every link into it from an environment, a template, a worker, an image or
-// a person is one of these. On a computer it fills the window, the filters
-// under its bar and the events scrolling beneath them.
+// a person is one of these. It fills the window, the filters under its bar
+// and the events scrolling beneath them; a phone has its way back to More
+// above.
 export function AuditPage() {
   const [params, setParams] = useSearchParams()
   const subjects = params.getAll('subject')
@@ -56,36 +57,22 @@ export function AuditPage() {
     </>
   )
 
-  if (!phone) {
-    return (
-      <PaneRoot>
-        <PaneBar title="Audit log">
-          <span className="muted">
-            What people did, and what Hangar and its workers decided on their own, newest first.
-          </span>
-        </PaneBar>
-        <form className="admin-filters pane-fields" onSubmit={add}>
-          {filters}
-        </form>
-        <div className="pane-scroll">
-          <div className="admin-audit">
-            <Activity subjects={subjects} />
-          </div>
-        </div>
-      </PaneRoot>
-    )
-  }
-
   return (
-    <div className="page">
-      <PageHeader
-        title="Audit log"
-        subtitle="Everything people did, and everything Hangar and its workers decided on their own, newest first."
-      />
-      <form className="inline-form audit-filters" onSubmit={add}>
+    <PaneRoot>
+      {phone && <PhoneBack back={{ to: '/more', label: 'More' }} />}
+      <PaneBar title="Audit log">
+        <span className="muted">
+          What people did, and what Hangar and its workers decided on their own, newest first.
+        </span>
+      </PaneBar>
+      <form className="admin-filters pane-fields" onSubmit={add}>
         {filters}
       </form>
-      <Activity subjects={subjects} />
-    </div>
+      <div className="pane-scroll">
+        <div className="admin-audit">
+          <Activity subjects={subjects} />
+        </div>
+      </div>
+    </PaneRoot>
   )
 }

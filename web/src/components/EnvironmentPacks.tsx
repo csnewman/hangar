@@ -1,8 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router'
 
-import { api, type AttachedPack, type Environment } from '../api'
-import { copyName, packPath } from '../pages/Packs'
+import { api, type AttachedPack } from '../api'
+import { copyName } from '../pages/Packs'
 import { useMe } from '../session'
 
 // fromWhat says how an environment came to use a copy.
@@ -11,45 +10,6 @@ export const fromWhat: Record<AttachedPack['from'], string> = {
   template: "the template's",
   kept: 'the one it was given',
   default: 'your default',
-}
-
-// EnvironmentPacks is a phone's list of the packs an environment has and
-// the copy it uses of each, which its owner changes, and the conflicts found
-// as paths became shared, which its owner resolves.
-export function EnvironmentPacks({ env }: { env: Environment }) {
-  const me = useMe()
-  const own = env.owner_id === me.id
-  const { packs, conflicts } = useEnvironmentPacks(env.id)
-  if (!packs.data || packs.data.length === 0) return null
-  return (
-    <section className="phone-section">
-      <h2 className="phone-heading">Files</h2>
-      <div className="phone-list">
-        {packs.data.map((a) => (
-          <div key={a.pack.id} className="phone-row phone-pack">
-            <span className="phone-row-main">
-              <Link to={packPath(a.pack.id, a.copy.id)} className="strong">
-                {a.pack.name}
-              </Link>
-              <span className="phone-row-sub">
-                {a.listed ? 'its template lists it' : 'attaches itself'} · {fromWhat[a.from]}
-              </span>
-              {own ? (
-                <span className="phone-pack-copy">
-                  <CopyChoice env={env.id} attached={a} />
-                </span>
-              ) : (
-                <span className="phone-row-sub">{copyName(a.copy, me.id)}</span>
-              )}
-            </span>
-          </div>
-        ))}
-      </div>
-      {conflicts.data && conflicts.data.length > 0 && (
-        <Conflicts env={env.id} own={own} conflicts={conflicts.data} names={packs.data} />
-      )}
-    </section>
-  )
 }
 
 // useEnvironmentPacks is the packs an environment has, with the copy it

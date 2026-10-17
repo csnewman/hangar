@@ -532,10 +532,6 @@ h1 {
   padding: 22px 28px 64px;
 }
 
-.page-narrow {
-  max-width: 720px;
-}
-
 /* An environment's page fills the height: its bar stays at the top and
    only the section under it scrolls. */
 .page-flush {
@@ -597,17 +593,6 @@ h1 {
   margin-top: 0;
 }
 
-.section-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 10px;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--muted);
-}
-
 /* A section's title with an action beside it. */
 .section-head {
   display: flex;
@@ -617,19 +602,6 @@ h1 {
   margin-bottom: 10px;
 }
 
-.section-head .section-title {
-  margin: 0;
-}
-
-.section-count {
-  font-size: 11.5px;
-  font-weight: 500;
-  padding: 0 7px;
-  border-radius: 999px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-}
-
 .notice {
   padding: 9px 13px;
   margin-bottom: 14px;
@@ -637,13 +609,6 @@ h1 {
   background: var(--surface-2);
   border: 1px solid var(--border);
   font-size: 13px;
-}
-
-.notice-good {
-  background: var(--good-bg);
-  border-color: transparent;
-  color: var(--good);
-  margin: 12px 0 0;
 }
 
 /* Tabs and consoles */
@@ -776,10 +741,6 @@ h1 {
 
 .row-link {
   color: var(--text);
-}
-
-.row-disabled td {
-  opacity: 0.6;
 }
 
 .you {
@@ -1251,22 +1212,6 @@ input:focus {
   color: var(--accent);
 }
 
-.subtitle-row {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.form-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  border: none;
-  margin: 0;
-  padding: 0;
-  min-width: 0;
-}
-
 .form-section-head {
   display: flex;
   align-items: baseline;
@@ -1294,27 +1239,8 @@ input:focus {
   background: var(--surface-2);
 }
 
-.repo-remove {
-  align-self: flex-end;
-  margin-bottom: 5px;
-}
-
-.btn-add {
-  align-self: flex-start;
-}
-
 .field.grow {
   flex: 1;
-}
-
-.kv {
-  align-items: center;
-  gap: 8px;
-}
-
-.kv input {
-  flex: 1;
-  min-width: 0;
 }
 
 .kv-eq {
@@ -2086,15 +2012,6 @@ code {
   resize: vertical;
 }
 
-.public-key {
-  display: block;
-  margin-top: 6px;
-  max-width: 520px;
-  overflow-wrap: anywhere;
-  font-size: 11.5px;
-  color: var(--text-muted, inherit);
-}
-
 /* The profile's file browser: a tree of folders beside the file chosen. */
 .fb {
   display: grid;
@@ -2305,10 +2222,6 @@ code {
   flex: 1;
 }
 
-.key-form {
-  margin-top: 12px;
-}
-
 .notice-row {
   display: flex;
   align-items: center;
@@ -2368,18 +2281,6 @@ a.reason {
 
 .activity-more {
   padding: 8px;
-}
-
-.audit-filters {
-  margin: 0 0 12px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.audit-filters .label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
 }
 
 .procs-bar {
@@ -2449,22 +2350,6 @@ a.reason {
 
 .sort-on {
   color: var(--text);
-}
-
-.ssh-command {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-.token-reveal {
-  display: block;
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: var(--surface-2);
-  overflow-wrap: anywhere;
-  user-select: all;
 }
 
 /* A start's progress: its steps, the one in hand, and a bar where it can
@@ -2588,19 +2473,6 @@ a.reason {
   padding-top: 0;
 }
 
-/* A team's description, under its name. */
-.page-lead {
-  margin: -8px 0 16px;
-  color: var(--muted);
-}
-
-/* A form along the bottom of a panel, below its table. */
-.panel-foot {
-  margin: 0;
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
-}
-
 /* A change here reaches other people. */
 .notice-warn {
   background: var(--warn-bg);
@@ -2647,17 +2519,6 @@ a.reason {
   justify-content: space-between;
   gap: 8px 16px;
   margin-bottom: 12px;
-}
-.drift-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.image-conflicts {
-  margin: 6px 0 0;
-  padding-left: 18px;
-  max-height: 180px;
-  overflow: auto;
 }
 
 /* Logs: an environment's, or a worker's. */
@@ -2796,13 +2657,6 @@ a.reason {
   padding-top: 18px;
 }
 
-.phone-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
 .phone-title {
   font-size: 28px;
   font-weight: 700;
@@ -2867,6 +2721,18 @@ a.reason {
   border-bottom: 0;
 }
 
+.phone-row-mark {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .phone-row:hover {
   text-decoration: none;
 }
@@ -2903,11 +2769,6 @@ a.reason {
   color: var(--accent);
 }
 
-.phone-row-danger,
-.phone-row-danger > svg:first-child {
-  color: var(--danger);
-}
-
 .phone-empty {
   padding: 24px 4px;
   color: var(--muted);
@@ -2933,16 +2794,6 @@ a.reason {
   gap: 4px;
 }
 
-.phone-section {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.phone-section > .phone-heading {
-  margin-top: 14px;
-}
-
 .phone-note {
   margin: 0 4px;
   font-size: 13px;
@@ -2950,36 +2801,10 @@ a.reason {
   color: var(--muted);
 }
 
-.phone-row-value {
-  flex: none;
-  max-width: 55%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--muted);
-}
-
 .phone-row .mono,
 .phone-row code {
   font-size: 13px;
   overflow-wrap: anywhere;
-}
-
-.phone-copy {
-  cursor: default;
-}
-
-.phone-copy code {
-  padding: 0;
-  background: none;
-}
-
-.phone-copy:active {
-  background: transparent;
-}
-
-.phone-copy .phone-icon-btn {
-  margin: -6px -8px -6px 0;
 }
 
 .phone-foot {
@@ -3048,38 +2873,6 @@ a.reason {
 
 .phone-event .phone-row-main > * {
   overflow-wrap: anywhere;
-}
-
-.phone-pack {
-  cursor: default;
-}
-
-.phone-pack:active {
-  background: transparent;
-}
-
-.phone-pack-copy {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-.phone-pack-copy select {
-  flex: 1;
-  min-width: 0;
-}
-
-/* An environment's screen on a phone: its head and its details, spaced as
-   one list of sections. */
-.phone-env-page {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.phone-env-page > .notice {
-  margin: 8px 0 0;
 }
 
 /* Choices that may not fit across, scrolled sideways. */
@@ -3295,94 +3088,6 @@ a.reason {
   background: var(--surface);
 }
 
-/* A choice of one among rows. */
-.phone-radios {
-  display: contents;
-}
-
-.phone-radio {
-  align-items: flex-start;
-}
-
-.phone-radio-mark {
-  flex: none;
-  width: 22px;
-  height: 22px;
-  margin-top: 1px;
-  border: 2px solid var(--border-strong);
-  border-radius: 11px;
-  box-sizing: border-box;
-}
-
-.phone-radio[aria-checked='true'] .phone-radio-mark {
-  border-color: var(--accent);
-  background: radial-gradient(circle, var(--accent) 0 5px, transparent 5.5px);
-}
-
-.phone-radio-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.phone-radio-desc {
-  font-size: 14px;
-  line-height: 1.35;
-}
-
-/* A row holding a control, not leading anywhere. */
-.phone-row-plain {
-  cursor: default;
-}
-
-.phone-row-plain:active {
-  background: transparent;
-}
-
-/* A key or token on a phone: what it is, and what can be done to it. */
-.phone-key {
-  align-items: flex-start;
-  cursor: default;
-}
-
-.phone-key:active {
-  background: transparent;
-}
-
-.phone-key .public-key {
-  font-size: 12px;
-  overflow-wrap: anywhere;
-}
-
-.phone-key-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 6px;
-}
-
-/* A form on a phone: its fields one above another. */
-.phone-form {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.phone-screen-sections > .section {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 0;
-}
-
-.phone-screen-sections > .section > * {
-  margin: 0;
-}
-
-/* The bar names the screen. */
-.phone-screen-sections .section-title:first-child {
-  display: none;
-}
-
 @media (max-width: 760px) {
   .inline-form {
     flex-wrap: wrap;
@@ -3397,22 +3102,6 @@ a.reason {
     flex: 1;
     min-width: 0;
   }
-
-  /* A path, whether it is sensitive, and its remove button keep a line. */
-  .inline-form.path-row {
-    flex-wrap: nowrap;
-    align-items: center;
-  }
-
-  .path-row input.grow {
-    width: auto;
-    min-width: 0;
-  }
-}
-
-/* An empty list says so in its note alone. */
-.phone-section > .phone-list:empty {
-  display: none;
 }
 
 @media (max-width: 760px) {
@@ -3547,78 +3236,6 @@ a.reason {
   font-size: 16px;
 }
 
-/* A phone screen with a bar, a body that scrolls and a foot: the whole
-   of the main area, or of an environment's tab. */
-.phone-screen {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.main > .phone-screen {
-  height: 100%;
-}
-
-.phone-screen-body {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 16px 24px;
-}
-
-.phone-screen-body > * {
-  flex: none;
-}
-
-/* An environment in the list: the row leads to its screen, and a stopped
-   one has its start button beside. */
-.phone-env {
-  padding: 0;
-}
-
-.phone-env-link {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-height: 60px;
-  padding: 8px 14px;
-  color: var(--text);
-}
-
-.phone-env-link:hover {
-  text-decoration: none;
-}
-
-.phone-env-name {
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.phone-env-sub {
-  font-size: 13px;
-  color: var(--muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.phone-env .reason {
-  max-width: none;
-  margin-top: 0;
-}
-
-.phone-env-start {
-  flex: none;
-  min-height: 36px;
-  margin-right: 12px;
-}
-
 .install-hint {
   display: flex;
   align-items: flex-start;
@@ -3649,14 +3266,6 @@ a.reason {
   color: var(--muted);
 }
 
-/* An environment's own screen. */
-.phone-env-head {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 8px;
-}
-
 .phone-back {
   align-self: flex-start;
   display: flex;
@@ -3678,33 +3287,6 @@ a.reason {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.phone-env-ident {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 6px;
-}
-
-.phone-env-head .notice {
-  margin: 0;
-}
-
-.phone-env-head .start-progress {
-  margin: 0;
-}
-
-.phone-env-actions .actions {
-  justify-content: flex-start;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.phone-env-actions .btn {
-  min-height: 40px;
-  padding: 0 16px;
-  font-size: 15px;
 }
 
 /* A tab of an environment, under a bar back to its screen. */
@@ -4010,4 +3592,24 @@ button.phone-back {
   max-height: 60%;
   overflow-y: auto;
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.25);
+}
+
+/* A phone's screen for an environment: its way back, over the Environment
+   tab's page. */
+.env-screen {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+}
+
+.env-screen > .envtab {
+  flex: 1;
+  min-height: 0;
+}
+
+.env-screen .phone-back-bar {
+  flex: none;
+  margin: 0;
+  padding: 4px 12px 0;
 }

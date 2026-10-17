@@ -7,8 +7,9 @@ import { api, type EnvironmentSettings, type Template } from '../api'
 import { CPUField, MemoryField } from '../components/MachineFields'
 import { Row, Rows, SearchField, Segmented, Tile } from '../components/Pane'
 import { desktop } from '../desktop'
-import { PhoneFoot, PhoneHead, PhoneNav, PhoneRow, PhoneSection, PhoneValue } from '../components/Phone'
+import { PhoneFoot, PhoneNav } from '../components/Phone'
 import { environmentsKey, useEnvironments } from '../environments'
+import { usePhone } from '../phone'
 import { useMe } from '../session'
 import {
   checkName,
@@ -22,165 +23,6 @@ import {
   useTemplates,
 } from '../templates'
 import { useTeams } from '../teams'
-
-// NewEnvironmentPage is a phone's way to make an environment. On a computer
-// it is the New Environment dialog over the environments.
-export function NewEnvironmentPage() {
-  const me = useMe()
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  const [params, setParams] = useSearchParams()
-  const templates = useTemplates()
-  const [name, setName] = useState('')
-
-  const chosenID = params.get('template')
-  const chosen = templates.data?.find((t) => t.id === chosenID)
-  const choose = (t: Template) => setParams({ template: t.id }, { replace: true })
-
-  const create = useMutation({
-    mutationFn: () => api.createEnvironment({ template_id: chosen!.id, name }),
-    onSuccess: (env) => {
-      qc.invalidateQueries({ queryKey: environmentsKey })
-      navigate(`/environments/${env.id}`)
-    },
-  })
-
-  const problem = chosen ? checkName(name, chosen) : null
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    if (chosen && !problem) create.mutate()
-  }
-
-  const teams = useTeams()
-  const groups = groupTemplates(templates.data ?? [], me, teams.data)
-  const ordered = [...groups.mine, ...groups.teams.flatMap((g) => g.templates), ...groups.collaborating, ...groups.others]
-
-  // Choosing and naming are two screens: the name's is the template's, with
-  // step=name.
-  if (chosen && params.get('step') === 'name') {
-    return (
-      <form className="phone-screen" onSubmit={submit}>
-        <PhoneNav
-          back={{ to: `/environments/new?template=${chosen.id}`, label: 'templates' }}
-          title="Name it"
-          sub={chosen.name}
-        />
-        <div className="phone-screen-body">
-          <label className="field">
-            <span>Name</span>
-            <input
-              autoFocus
-              required
-              autoCapitalize="none"
-              autoCorrect="off"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder={chosen.name_hint ? undefined : 'my-agent'}
-              aria-invalid={problem !== null}
-            />
-            <small className={problem ? 'field-error' : undefined}>
-              {problem ?? chosen.name_hint ?? 'It becomes the environment’s hostname, in lower case.'}
-            </small>
-          </label>
-          <PhonePreview template={chosen} name={name} />
-          {create.error && <div className="alert">{create.error.message}</div>}
-        </div>
-        <PhoneFoot>
-          <button type="submit" className="btn btn-primary" disabled={create.isPending || !name || problem !== null}>
-            {create.isPending ? 'Creating…' : 'Create environment'}
-          </button>
-        </PhoneFoot>
-      </form>
-    )
-  }
-  const section = (title: string, list: Template[]) =>
-    list.length > 0 && (
-      <PhoneSection key={title} title={title}>
-        <div role="radiogroup" aria-label={title} className="phone-radios">
-          {list.map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              role="radio"
-              aria-checked={t.id === chosenID}
-              className="phone-row phone-radio"
-              onClick={() => choose(t)}
-            >
-              <span className="phone-radio-mark" aria-hidden="true" />
-              <span className="phone-row-main">
-                <span className="phone-radio-head">
-                  <span className="strong">{t.name}</span>
-                  <span className="phone-row-sub">{ownerLabel(t, me)}</span>
-                </span>
-                {t.description && <span className="phone-radio-desc">{t.description}</span>}
-                <span className="phone-row-sub">{specLine(t.spec, t.name_pattern)}</span>
-              </span>
-            </button>
-          ))}
-        </div>
-      </PhoneSection>
-    )
-  return (
-    <div className="phone-screen">
-      <div className="phone-screen-body">
-        <PhoneHead back={{ to: '/environments', label: 'Environments' }} title="New environment" />
-        {templates.isSuccess && ordered.length === 0 && (
-          <p className="phone-note">
-            There are no templates yet. <Link to="/templates/new">Make one</Link> first.
-          </p>
-        )}
-        {section('Yours', groups.mine)}
-        {groups.teams.map((g) => section(`Team ${g.team.name}`, g.templates))}
-        {section('Shared with you to edit', groups.collaborating)}
-        {section(me.admin ? 'Everyone else’s' : 'Shared by others', groups.others)}
-      </div>
-      <PhoneFoot>
-        <button
-          type="button"
-          className="btn btn-primary"
-          disabled={!chosen}
-          onClick={() => setParams({ template: chosen!.id, step: 'name' })}
-        >
-          Next
-        </button>
-      </PhoneFoot>
-    </div>
-  )
-}
-
-// PhonePreview is what the environment will be, with what is known of it
-// filled into its template: all but its short ID, which it is given when
-// made.
-function PhonePreview({ template: t, name }: { template: Template; name: string }) {
-  const me = useMe()
-  const vars = templateVars(t, name, me.username)
-  const groups = patternGroups(t.name_pattern)
-  return (
-    <PhoneSection title={`${t.name} gives it`}>
-      <PhoneRow label="Image" sub={t.spec.image} mono />
-      {t.spec.repos.map((r) => (
-        <PhoneRow
-          key={r.path}
-          label="Clones"
-          mono
-          sub={
-            `${repoName(r.url)}${r.ref ? ` at ${fillTemplate(r.ref, vars)}` : ''} into ${fillTemplate(r.path, vars)}` +
-            (r.branch ? `, on ${fillTemplate(r.branch, vars)}` : '')
-          }
-        />
-      ))}
-      {t.spec.editor_path && <PhoneRow label="Editor opens" sub={fillTemplate(t.spec.editor_path, vars)} mono />}
-      {groups.length > 0 && (
-        <PhoneRow
-          label="From the name"
-          mono
-          sub={groups.map((g) => `{${g}} = ${vars[g] === undefined ? '…' : vars[g] || '(empty)'}`).join(', ')}
-        />
-      )}
-      <PhoneRow label="Runs as" end={<PhoneValue>{specLine(t.spec)}</PhoneValue>} />
-    </PhoneSection>
-  )
-}
 
 // The browser remembers whether a new environment's workspace is opened in
 // a tab of its own.
@@ -199,6 +41,11 @@ const repoPath = (url: string) => `/workspace/${repoName(url).split('/').pop() |
 export function NewEnvironmentDialog({ onClose }: { onClose: () => void }) {
   const me = useMe()
   const qc = useQueryClient()
+  const phone = usePhone()
+  const navigate = useNavigate()
+  // On a phone the templates are a screen of their own, chosen from the
+  // form.
+  const [picking, setPicking] = useState(false)
   const [params, setParams] = useSearchParams()
   const templates = useTemplates()
   const teams = useTeams()
@@ -231,6 +78,7 @@ export function NewEnvironmentDialog({ onClose }: { onClose: () => void }) {
     next.set('template', t.id)
     setParams(next, { replace: true })
     setMachine(null)
+    setPicking(false)
   }
 
   const create = useMutation({
@@ -253,6 +101,15 @@ export function NewEnvironmentDialog({ onClose }: { onClose: () => void }) {
   const submit = (e: FormEvent) => {
     e.preventDefault()
     if (!chosen || problem || !name) return
+    if (phone) {
+      create.mutate(chosen, {
+        onSuccess: (env) => {
+          qc.invalidateQueries({ queryKey: environmentsKey })
+          navigate(`/environments/${env.id}`)
+        },
+      })
+      return
+    }
     // The tab is opened in the click, which a browser allows, and sent to
     // the workspace once the environment is made.
     const tab = openTab && !desktop ? window.open('', '_blank') : null
@@ -292,6 +149,87 @@ export function NewEnvironmentDialog({ onClose }: { onClose: () => void }) {
       </div>
     )
 
+  const form = chosen && (
+    <NewEnvironmentForm
+      template={chosen}
+      name={name}
+      onName={setName}
+      problem={problem}
+      repo={repo}
+      onRepo={setRepo}
+      machine={machine}
+      onMachine={setMachine}
+    />
+  )
+  const list = (
+    <>
+      {templates.isSuccess && ordered.length === 0 && (
+        <p className="md-empty-list">
+          There are no templates yet. <Link to="/templates/new">Make one</Link> first.
+        </p>
+      )}
+      {group('Yours', groups.mine)}
+      {groups.teams.map((g) => group(g.team.name, g.templates))}
+      {group('Shared with you to edit', groups.collaborating)}
+      {group(me.admin ? 'Everyone else’s' : 'Shared by others', groups.others)}
+    </>
+  )
+
+  if (phone) {
+    return (
+      <form className="newenv-phone" onSubmit={submit}>
+        <PhoneNav
+          back={
+            picking
+              ? { onBack: () => setPicking(false), label: 'New environment' }
+              : { onBack: onClose, label: 'Environments' }
+          }
+          title={picking ? 'Choose a template' : 'New environment'}
+        />
+        {picking ? (
+          <div className="newenv-phone-list">
+            <div className="md-list-head">
+              <SearchField value={query} onChange={setQuery} placeholder="Templates" />
+            </div>
+            <div role="radiogroup" aria-label="Template">
+              {list}
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="newenv-phone-body">
+              {chosen ? (
+                <>
+                  <button type="button" className="newenv-phone-template" onClick={() => setPicking(true)}>
+                    <Tile name={chosen.name} />
+                    <span className="md-item-main">
+                      <span className="md-item-title">{chosen.name}</span>
+                      <span className="md-item-sub">{specLine(chosen.spec)}</span>
+                    </span>
+                    <span className="pane-link">Change</span>
+                  </button>
+                  {form}
+                </>
+              ) : (
+                <div className="md-none">{templates.isPending ? 'Loading…' : list}</div>
+              )}
+            </div>
+            <PhoneFoot>
+              {create.error && <div className="alert">{create.error.message}</div>}
+              <button
+                type="submit"
+                className="btn btn-primary"
+                disabled={!chosen || !name || problem !== null || create.isPending}
+              >
+                {create.isPending ? 'Creating…' : 'Create'}
+              </button>
+            </PhoneFoot>
+          </>
+        )}
+      </form>
+    )
+  }
+
   return (
     <div
       className="dialog-backdrop"
@@ -324,29 +262,10 @@ export function NewEnvironmentDialog({ onClose }: { onClose: () => void }) {
               <SearchField value={query} onChange={setQuery} placeholder="Templates" />
             </div>
             <div className="md-list-body" role="radiogroup" aria-label="Template">
-              {templates.isSuccess && ordered.length === 0 && (
-                <p className="md-empty-list">
-                  There are no templates yet. <Link to="/templates/new">Make one</Link> first.
-                </p>
-              )}
-              {group('Yours', groups.mine)}
-              {groups.teams.map((g) => group(g.team.name, g.templates))}
-              {group('Shared with you to edit', groups.collaborating)}
-              {group(me.admin ? 'Everyone else’s' : 'Shared by others', groups.others)}
+              {list}
             </div>
           </div>
-          {chosen ? (
-            <NewEnvironmentForm
-              template={chosen}
-              name={name}
-              onName={setName}
-              problem={problem}
-              repo={repo}
-              onRepo={setRepo}
-              machine={machine}
-              onMachine={setMachine}
-            />
-          ) : (
+          {form || (
             <div className="md-none">{templates.isPending ? 'Loading…' : 'Choose a template.'}</div>
           )}
         </div>

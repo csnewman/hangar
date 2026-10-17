@@ -24,8 +24,6 @@ import {
   SearchField,
   Section,
 } from '../components/Pane'
-import { PhoneHead, PhoneNav, PhoneRow, PhoneSection } from '../components/Phone'
-import { usePhone } from '../phone'
 import { useMe } from '../session'
 import { canGive, useTeams } from '../teams'
 
@@ -68,94 +66,6 @@ export function copyName(c: Copy, me: string): string {
   return `${c.name} (${c.team ?? c.owner})`
 }
 
-// PackList lists the packs the caller may use, the built-in ones first, for
-// a phone's Files screen.
-export function PackList() {
-  const me = useMe()
-  const [creating, setCreating] = useState(false)
-  const packs = usePacks()
-  const list = packs.data ?? []
-  return (
-    <>
-      {creating && <CreateForm onDone={() => setCreating(false)} />}
-      {packs.isError && <div className="alert">Could not load packs: {packs.error.message}</div>}
-      <PhoneSection title="Packs">
-        {list.map((k) => (
-          <PhoneRow
-            key={k.id}
-            to={packPath(k.id)}
-            label={k.name}
-            sub={`${ownerOf(k)} · ${reaches(k, me.id)} · ${k.default_copy_id ? 'a shared copy' : 'your own copy'}`}
-          />
-        ))}
-        {!creating && <PhoneRow onClick={() => setCreating(true)} icon={Plus} label="New pack" tone="accent" />}
-      </PhoneSection>
-    </>
-  )
-}
-
-function CreateForm({ onDone }: { onDone: () => void }) {
-  const me = useMe()
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  const teams = useTeams()
-  const owners = (teams.data ?? []).filter((t) => canGive(t, me.admin))
-  const [name, setName] = useState('')
-  const [team, setTeam] = useState('')
-  const [attach, setAttach] = useState<Pack['attach']>('owner')
-  const [paths, setPaths] = useState<PackPath[]>([{ path: '', sensitive: false }])
-  const create = useMutation({
-    mutationFn: (body: PackInput) => api.createPack(body),
-    onSuccess: (k) => {
-      qc.invalidateQueries({ queryKey: packsKey })
-      onDone()
-      navigate(packPath(k.id))
-    },
-  })
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    create.mutate({ name, team_id: team || undefined, attach, paths: cleanPaths(paths) })
-  }
-  return (
-    <form className="panel form form-spaced" onSubmit={submit}>
-      <div className="field-row">
-        <label className="field grow">
-          <span>Name</span>
-          <input autoFocus required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
-        </label>
-        <label className="field">
-          <span>Owner</span>
-          <select
-            value={team}
-            onChange={(e) => {
-              setTeam(e.target.value)
-              setAttach(e.target.value ? 'team' : 'owner')
-            }}
-          >
-            <option value="">You</option>
-            {owners.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-      <AttachField value={attach} onChange={setAttach} team={team !== ''} builtin={false} admin={me.admin} />
-      <PathsEditor value={paths} onChange={setPaths} />
-      {create.error && <div className="alert">{create.error.message}</div>}
-      <div className="form-actions">
-        <button type="button" className="btn btn-ghost" onClick={onDone}>
-          Cancel
-        </button>
-        <button type="submit" className="btn btn-primary" disabled={!name.trim() || create.isPending}>
-          Make pack
-        </button>
-      </div>
-    </form>
-  )
-}
-
 // cleanPaths are the paths as they are sent: trimmed, without empty rows.
 function cleanPaths(paths: PackPath[]): PackPath[] {
   return paths.map((p) => ({ ...p, path: p.path.trim() })).filter((p) => p.path !== '')
@@ -172,133 +82,6 @@ function attachOptions(value: Pack['attach'], team: boolean, builtin: boolean, a
   return options
 }
 
-function AttachField({
-  value,
-  onChange,
-  team,
-  builtin,
-  admin,
-  disabled,
-}: {
-  value: Pack['attach']
-  onChange: (a: Pack['attach']) => void
-  team: boolean
-  builtin: boolean
-  admin: boolean
-  disabled?: boolean
-}) {
-  const options = attachOptions(value, team, builtin, admin)
-  return (
-    <label className="field">
-      <span>Reaches</span>
-      <select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as Pack['attach'])}>
-        {options.map(([v, label]) => (
-          <option key={v} value={v}>
-            {label}
-          </option>
-        ))}
-      </select>
-      <small className="muted">
-        A template keeps self-attaching packs out of its environments with its access settings.
-      </small>
-    </label>
-  )
-}
-
-// SquashField chooses who environments' users act as on a pack's files,
-// as an NFS export's squash options do.
-function SquashField({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: Pack['squash']
-  onChange: (s: Pack['squash']) => void
-  disabled?: boolean
-}) {
-  return (
-    <label className="field">
-      <span>Ownership</span>
-      <select value={value} disabled={disabled} onChange={(e) => onChange(e.target.value as Pack['squash'])}>
-        <option value="all_squash">One owner: everyone acts as the environment's user (all_squash)</option>
-        <option value="root_squash">Real owners, root acting as nobody (root_squash)</option>
-        <option value="no_root_squash">Real owners, root included (no_root_squash)</option>
-      </select>
-      <small className="muted">
-        With one owner, every file is the environment's user's, whoever makes it, and changing an owner changes nothing.
-        With real owners, a file made by root, or another user, is theirs, as on any disk.
-      </small>
-    </label>
-  )
-}
-
-// PathsEditor edits a pack's paths, a row each.
-function PathsEditor({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: PackPath[]
-  onChange: (v: PackPath[]) => void
-  disabled?: boolean
-}) {
-  const set = (i: number, p: Partial<PackPath>) => onChange(value.map((x, j) => (j === i ? { ...x, ...p } : x)))
-  return (
-    <div className="field">
-      <span>Paths</span>
-      {value.map((p, i) => (
-        <div key={i} className="inline-form path-row">
-          <input
-            className="mono grow"
-            spellCheck={false}
-            disabled={disabled}
-            value={p.path}
-            placeholder={i === 0 ? '~/.npmrc, /workspace/app/.env or ~/.config/tool/' : ''}
-            onChange={(e) => set(i, { path: e.target.value })}
-          />
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={p.sensitive}
-              disabled={disabled || p.path.startsWith('!')}
-              onChange={(e) => set(i, { sensitive: e.target.checked })}
-            />
-            <span>Sensitive</span>
-          </label>
-          {!disabled && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              title="Remove"
-              onClick={() => onChange(value.filter((_, j) => j !== i))}
-            >
-              <X size={14} />
-            </button>
-          )}
-        </div>
-      ))}
-      {!disabled && (
-        <div>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => onChange([...value, { path: '', sensitive: false }])}
-          >
-            <Plus size={14} />
-            Add a path
-          </button>
-        </div>
-      )}
-      <small className="muted">
-        In the home directory with <code>~/</code>, or absolute. One ending in <code>/</code> shares a directory and
-        everything in it; one starting with <code>!</code> leaves a path in such a directory to each environment. Every
-        file under a sensitive path is kept from environments whose template withholds sensitive files. A file at an
-        absolute path is written once the directory it is in exists, so a repository cloned there is cloned first.
-      </small>
-    </div>
-  )
-}
-
 // PackRedirect sends a pack's address from before it was under Files to
 // its page.
 export function PackRedirect() {
@@ -307,193 +90,19 @@ export function PackRedirect() {
 }
 
 // PackPage is one pack: the files of one of its copies -- the caller's
-// default unless another is chosen -- and its paths and settings. On a
-// computer it is shown beside the list of packs.
+// default unless another is chosen -- and its paths and settings, beside
+// the list of packs.
 export function PackPage() {
-  const me = useMe()
-  const phone = usePhone()
   const { id = '' } = useParams()
-  const [search, setSearch] = useSearchParams()
-  const pack = useQuery({ queryKey: ['pack', id], queryFn: () => api.pack(id) })
-  const copies = useQuery({ queryKey: ['pack', id, 'copies'], queryFn: () => api.copies(id) })
-
-  if (!phone) {
-    return (
-      <PacksLayout>
-        <PackDetail key={id} id={id} />
-      </PacksLayout>
-    )
-  }
-  if (pack.isPending || copies.isPending) return <div className="page" />
-  if (pack.isError) return <div className="page alert">{pack.error.message}</div>
-  if (copies.isError) return <div className="page alert">{copies.error.message}</div>
-  const k = pack.data
-  const own = copies.data.find((c) => c.personal)
-  const fallback = k.default_copy_id ?? own?.id ?? copies.data[0]?.id
-  const chosen = copies.data.find((c) => c.id === search.get('copy'))?.id ?? fallback
-  const choose = (c: string) => setSearch(!c || c === fallback ? {} : { copy: c }, { replace: true })
-
-  // On a phone the copy and its files are the pack's screen, and its paths
-  // and settings a screen of their own.
-  if (search.get('show') === 'settings') {
-    const back = () => {
-      const next = new URLSearchParams(search)
-      next.delete('show')
-      setSearch(next, { replace: true })
-    }
-    return (
-      <div className="phone-screen">
-        <PhoneNav back={{ onBack: back, label: k.name }} title="Paths and settings" sub={k.name} />
-        <div className="phone-screen-body phone-screen-sections">
-          <PackSettings key={k.updated_at} pack={k} />
-        </div>
-      </div>
-    )
-  }
   return (
-    <div className="page phone-page">
-      <PhoneHead back={{ to: '/files', label: 'Files' }} title={k.name}>
-        <p className="phone-note">{[ownerOf(k), reaches(k, me.id), k.description].filter(Boolean).join(' · ')}</p>
-      </PhoneHead>
-      <CopyBar pack={k} copies={copies.data} chosen={chosen} onChoose={choose} />
-      {chosen && <CopyFiles key={chosen} copy={chosen} pack={k} />}
-      <PhoneSection>
-        <PhoneRow
-          to={`?${new URLSearchParams({ ...Object.fromEntries(search), show: 'settings' })}`}
-          label="Paths and settings"
-          sub={`${k.paths.length} ${k.paths.length === 1 ? 'path' : 'paths'}`}
-        />
-      </PhoneSection>
-    </div>
+    <PacksLayout chosen>
+      <PackDetail key={id} id={id} />
+    </PacksLayout>
   )
 }
 
-// CopyBar chooses the copy shown, sets it as the default, and makes and
-// deletes shared copies.
-function CopyBar({
-  pack,
-  copies,
-  chosen,
-  onChoose,
-}: {
-  pack: Pack
-  copies: Copy[]
-  chosen?: string
-  onChoose: (id: string) => void
-}) {
-  const me = useMe()
-  const qc = useQueryClient()
-  const teams = useTeams()
-  const owners = (teams.data ?? []).filter((t) => canGive(t, me.admin))
-  const [making, setMaking] = useState(false)
-  const [name, setName] = useState('')
-  const [team, setTeam] = useState('')
-  const refresh = () => {
-    qc.invalidateQueries({ queryKey: ['pack', pack.id] })
-    qc.invalidateQueries({ queryKey: packsKey })
-  }
-  const current = copies.find((c) => c.id === chosen)
-  const isDefault = (c?: Copy) => (pack.default_copy_id ? pack.default_copy_id === c?.id : !!c?.personal)
-  const setDefault = useMutation({
-    mutationFn: () => api.setDefaultCopy(pack.id, current?.personal ? undefined : chosen),
-    onSettled: refresh,
-  })
-  const create = useMutation({
-    mutationFn: () => api.createCopy(pack.id, name.trim(), team || undefined),
-    onSuccess: (c) => {
-      setMaking(false)
-      setName('')
-      onChoose(c.id)
-    },
-    onSettled: refresh,
-  })
-  const remove = useMutation({
-    mutationFn: (id: string) => api.deleteCopy(id),
-    onSuccess: () => onChoose(''),
-    onSettled: refresh,
-  })
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    if (name.trim()) create.mutate()
-  }
-  return (
-    <section className="section">
-      <div className="inline-form">
-        <label className="field-inline">
-          <span>Copy</span>
-          <select value={chosen} onChange={(e) => onChoose(e.target.value)}>
-            {copies.map((c) => (
-              <option key={c.id} value={c.id}>
-                {copyName(c, me.id)}
-                {isDefault(c) ? ' · your default' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        {current && !isDefault(current) && (
-          <button type="button" className="btn btn-ghost" onClick={() => setDefault.mutate()}>
-            Use by default
-          </button>
-        )}
-        {current && !current.personal && current.can_delete && (
-          <ConfirmButton
-            label="Delete copy"
-            confirmLabel="Delete its files?"
-            onConfirm={() => remove.mutate(current.id)}
-            disabled={remove.isPending}
-          />
-        )}
-        {!making && (
-          <button type="button" className="btn btn-ghost" onClick={() => setMaking(true)}>
-            <Plus size={14} />
-            Shared copy
-          </button>
-        )}
-      </div>
-      {making && (
-        <form className="inline-form" onSubmit={submit}>
-          <input
-            autoFocus
-            className="grow"
-            placeholder="Name, such as staging"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-          />
-          <select value={team} onChange={(e) => setTeam(e.target.value)}>
-            <option value="">Yours</option>
-            {owners.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name}'s
-              </option>
-            ))}
-          </select>
-          <button type="submit" className="btn btn-primary" disabled={!name.trim() || create.isPending}>
-            Make
-          </button>
-          <button type="button" className="btn btn-ghost" onClick={() => setMaking(false)}>
-            Cancel
-          </button>
-        </form>
-      )}
-      <p className="muted small">
-        Your own copy follows you into every environment that has the pack, unless you choose another here or on an
-        environment, or its template pins one. A shared copy is one set of files a team, or you, keep apart.
-      </p>
-      {[setDefault.error, create.error, remove.error].map(
-        (e) =>
-          e && (
-            <div key={e.message} className="alert">
-              {e.message}
-            </div>
-          ),
-      )}
-    </section>
-  )
-}
-
-// CopyFiles is one copy's files, in the browser: under a heading of its
-// own, or bare, in a section that has one.
-function CopyFiles({ copy, pack, bare = false }: { copy: string; pack: Pack; bare?: boolean }) {
+// CopyFiles is one copy's files, in the browser.
+function CopyFiles({ copy, pack }: { copy: string; pack: Pack }) {
   const key = useMemo(() => ['copy', copy] as const, [copy])
   const files = useQuery({ queryKey: key, queryFn: () => api.copy(copy), refetchInterval: 3000 })
   const [open, setOpen] = useState<string | null>(null)
@@ -515,7 +124,7 @@ function CopyFiles({ copy, pack, bare = false }: { copy: string; pack: Pack; bar
   if (files.isError) return <div className="alert">{files.error.message}</div>
   if (!files.data) return null
   const c = files.data.copy
-  const body = (
+  return (
     <>
       {!c.personal && c.can_write && c.team && (
         <div className="notice notice-warn">
@@ -525,13 +134,6 @@ function CopyFiles({ copy, pack, bare = false }: { copy: string; pack: Pack; bar
       )}
       <FileBrowser source={source} files={files.data.files} paths={shared} open={open} onOpen={setOpen} />
     </>
-  )
-  if (bare) return body
-  return (
-    <section className="section">
-      <h2 className="section-title">Files</h2>
-      {body}
-    </section>
   )
 }
 
@@ -615,90 +217,6 @@ function BuiltinDefaults({ pack, defaults }: { pack: Pack; defaults: PackPath[] 
   )
 }
 
-function PackSettings({ pack }: { pack: Pack }) {
-  const me = useMe()
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  const [name, setName] = useState(pack.name)
-  const [description, setDescription] = useState(pack.description)
-  const [attach, setAttach] = useState(pack.attach)
-  const [squash, setSquash] = useState(pack.squash)
-  const [paths, setPaths] = useState<PackPath[]>(pack.paths)
-  const refresh = () => {
-    qc.invalidateQueries({ queryKey: packsKey })
-    qc.invalidateQueries({ queryKey: ['pack', pack.id] })
-  }
-  const save = useMutation({
-    mutationFn: () => api.updatePack(pack.id, { name, description, attach, squash, paths: cleanPaths(paths) }),
-    onSettled: refresh,
-  })
-  const remove = useMutation({
-    mutationFn: () => api.deletePack(pack.id),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: packsKey })
-      navigate('/files')
-    },
-  })
-  const disabled = !pack.can_change
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    save.mutate()
-  }
-  return (
-    <section className="section">
-      <h2 className="section-title">Paths and settings</h2>
-      {!disabled && <ReachWarning pack={pack} />}
-      {disabled && (
-        <p className="muted small">
-          {pack.builtin
-            ? 'An administrator changes the built-in packs.'
-            : "Only the pack's owner, or its team's members, change it."}
-        </p>
-      )}
-      <form className="panel form form-spaced" onSubmit={submit}>
-        <label className="field">
-          <span>Name</span>
-          <input required maxLength={100} disabled={disabled} value={name} onChange={(e) => setName(e.target.value)} />
-        </label>
-        <label className="field">
-          <span>Description</span>
-          <input disabled={disabled} value={description} onChange={(e) => setDescription(e.target.value)} />
-        </label>
-        <AttachField
-          value={attach}
-          onChange={setAttach}
-          team={!!pack.team_id}
-          builtin={pack.builtin}
-          admin={me.admin}
-          disabled={disabled}
-        />
-        <PathsEditor value={paths} onChange={setPaths} disabled={disabled} />
-        <SquashField value={squash} onChange={setSquash} disabled={disabled} />
-        <p className="muted small">
-          Copies keep their files under a path taken out, no longer shared; environments keep theirs as their own.
-          Templates list this pack by its ID, <code>{pack.id}</code>.
-        </p>
-        {save.error && <div className="alert">{save.error.message}</div>}
-        {!disabled && (
-          <div className="form-actions">
-            {pack.can_delete && (
-              <ConfirmButton
-                label="Delete pack"
-                confirmLabel="Delete it and every copy?"
-                onConfirm={() => remove.mutate()}
-                disabled={remove.isPending}
-              />
-            )}
-            <button type="submit" className="btn btn-primary" disabled={save.isPending}>
-              Save
-            </button>
-          </div>
-        )}
-      </form>
-    </section>
-  )
-}
-
 // squashOptions are who environments' users act as on a pack's files, as
 // an NFS export's squash options say.
 const squashOptions: [Pack['squash'], string][] = [
@@ -710,10 +228,11 @@ const squashOptions: [Pack['squash'], string][] = [
 // lowerFirst starts a phrase in lower case, for the middle of a line.
 const lowerFirst = (t: string) => t.charAt(0).toLowerCase() + t.slice(1)
 
-// PacksLayout is the Files page on a computer: the packs the caller may use
-// down the left, grouped by whose they are, and beside them the chosen
-// one, or what children show.
-export function PacksLayout({ children }: { children: ReactNode }) {
+// PacksLayout is the Files page: the packs the caller may use down the
+// left, grouped by whose they are, and beside them the chosen one, or what
+// children show. chosen says a pack, or a new one's form, is shown, which
+// on a phone is a screen of its own.
+export function PacksLayout({ children, chosen = false }: { children: ReactNode; chosen?: boolean }) {
   const me = useMe()
   const packs = usePacks()
   const [query, setQuery] = useState('')
@@ -732,8 +251,12 @@ export function PacksLayout({ children }: { children: ReactNode }) {
   return (
     <PaneRoot>
       <MasterDetail
+        chosen={chosen}
+        back={{ to: '/files', label: 'Files' }}
         list={
           <ListPane
+            title="Files"
+            back={{ to: '/more', label: 'More' }}
             head={
               <>
                 <SearchField value={query} onChange={setQuery} placeholder="Packs and paths" />
@@ -872,7 +395,7 @@ export function NewPack() {
       />
       <DetailPage>
         <Section title="Pack">
-          <fieldset className="pane-fields">
+          <fieldset className="pane-fields files-fields">
             <Rows>
               <Row label="Name">
                 <input
@@ -1057,12 +580,12 @@ function PackBody({
           </p>
         )}
         <Section title="Paths">
-          <fieldset className="pane-fields" disabled={disabled}>
+          <fieldset className="pane-fields files-fields" disabled={disabled}>
             <PathRows value={paths} onChange={setPaths} />
           </fieldset>
         </Section>
         <Section title="Settings">
-          <fieldset className="pane-fields" disabled={disabled}>
+          <fieldset className="pane-fields files-fields" disabled={disabled}>
             <Rows>
               <Row label="Name" modified={name !== pack.name}>
                 <input
@@ -1132,7 +655,7 @@ function PackBody({
           }
         >
           {current && copies.length <= 1 && <p className="pane-hint">{copyName(current, me.id)} copy</p>}
-          {chosen && <CopyFiles key={chosen} copy={chosen} pack={pack} bare />}
+          {chosen && <CopyFiles key={chosen} copy={chosen} pack={pack} />}
         </Section>
       </DetailPage>
       {!disabled && (changed.length > 0 || save.error) && (

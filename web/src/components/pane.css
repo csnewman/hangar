@@ -30,6 +30,13 @@
   font-weight: 700;
 }
 
+.pane-bar-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .pane-bar-actions {
   margin-left: auto;
   display: flex;
@@ -391,10 +398,6 @@
   max-width: 520px;
 }
 
-.pane-number {
-  width: 74px;
-}
-
 .pane-fields .check {
   margin: 0;
 }
@@ -540,6 +543,19 @@
 
 .pane-segment:disabled {
   cursor: default;
+}
+
+/* A phone's add button beside a screen's title. */
+.pane-round-btn {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 20px;
+  background: var(--surface-2);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* A button that reads as a link. */
@@ -716,6 +732,15 @@
     padding: 12px 12px 12px 16px;
   }
 
+  /* The head's buttons go under its name, rather than squeeze it. */
+  .pane-head-main {
+    flex-basis: calc(100% - 60px);
+  }
+
+  .pane-head-actions {
+    flex-wrap: wrap;
+  }
+
   .pane-rows {
     grid-template-columns: minmax(0, 1fr);
     gap: 2px;
@@ -744,4 +769,128 @@
 
 .md-detail {
   container-type: inline-size;
+}
+
+/* On a phone the list and the chosen one are screens of their own, and
+   what is touched is big enough for a thumb, its text large enough that
+   the phone does not zoom in to it. */
+.md-phone {
+  flex-direction: column;
+}
+
+.md-phone > .md-list {
+  flex: 1;
+  width: auto;
+  border-right: 0;
+}
+
+.md-phone .md-list-head {
+  padding: 4px 16px 4px;
+}
+
+.md-phone .md-list > .phone-screen-head {
+  padding: 18px 16px 6px;
+}
+
+.md-phone .phone-back-bar {
+  flex: none;
+  margin: 0;
+  padding: 4px 8px 0;
+}
+
+.md-phone .md-group {
+  padding: 18px 20px 6px;
+}
+
+.md-phone .md-item {
+  min-height: 56px;
+  padding: 8px 16px 8px 18px;
+  border-left: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.md-phone .md-item-title {
+  font-size: 16px;
+}
+
+.md-phone .md-item-sub {
+  font-size: 13px;
+}
+
+@media (max-width: 640px) {
+  .pane-search {
+    height: 40px;
+    border-radius: 10px;
+  }
+
+  .pane-search input,
+  .pane-input,
+  .pane-fields select,
+  .pane-fields input[type='text'],
+  .pane-fields input[type='number'],
+  .pane-fields input[type='password'],
+  .pane-fields input:not([type]),
+  .pane-fields textarea {
+    font-size: 16px;
+  }
+
+  .pane-input,
+  .pane-fields select,
+  .pane-fields input[type='text'],
+  .pane-fields input[type='number'],
+  .pane-fields input[type='password'],
+  .pane-fields input:not([type]) {
+    height: 40px;
+  }
+
+  .pane-root .btn-sm,
+  .md-detail .btn-sm {
+    min-height: 40px;
+    padding: 6px 14px;
+    font-size: 15px;
+  }
+
+  .pane-segment {
+    height: 34px;
+    font-size: 14px;
+  }
+
+  .pane-copy {
+    height: 40px;
+  }
+
+  .pane-copy button {
+    width: 42px;
+  }
+
+  .pane-bar {
+    flex-wrap: wrap;
+    padding: 18px 16px 10px;
+    border-bottom: 0;
+    background: var(--bg);
+  }
+
+  .pane-bar h1 {
+    font-size: 30px;
+  }
+
+  .pane-bar-title {
+    width: 100%;
+  }
+
+  .pane-bar-actions {
+    margin-left: 0;
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .pane-bar-actions .pane-search {
+    flex: 1;
+    width: auto !important;
+  }
+
+  .pane-apply {
+    padding-bottom: 24px;
+  }
 }

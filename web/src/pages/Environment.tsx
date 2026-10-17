@@ -1,5 +1,6 @@
 import {
   Activity,
+  ChevronRight,
   Code2,
   FileCode2,
   LayoutDashboard,
@@ -9,12 +10,13 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { lazy, Suspense, useContext } from 'react'
-import { Link, Outlet, useLocation, useNavigate, useOutletContext, useParams, useSearchParams } from 'react-router'
+import { Link, Outlet, useLocation, useNavigate, useOutletContext, useParams } from 'react-router'
 
 import type { Environment } from '../api'
 import { PageHeader } from '../components/PageHeader'
-import { PhoneNav } from '../components/Phone'
-import { PhoneEnvironmentDetails, PhoneEnvironmentHead, PhoneEnvironmentSettings } from '../components/PhoneEnvironment'
+import { formatMemory, formatPercent } from '../components/format'
+import { Section } from '../components/Pane'
+import { PhoneBack, PhoneNav } from '../components/Phone'
 import { StartProgress } from '../components/StartProgress'
 import { EnvContext } from '../envContext'
 import { useEnvironments } from '../environments'
@@ -106,23 +108,76 @@ export function useEnv() {
   return shown ?? routed
 }
 
-// SummaryTab is a phone's screen for an environment: what it is, the way
-// into each of its tabs, and its settings as a screen of their own. On a
-// computer the workspace's Environment tab shows it.
+// The Environment tab's page, fetched with the screen that shows it.
+const EnvironmentView = lazy(() => import('../code/EnvironmentView').then((m) => ({ default: m.EnvironmentView })))
+
+// SummaryTab is a phone's screen for an environment: the Environment tab's
+// page, as on a computer, led by the ways into its terminal, code, desktop,
+// performance and logs, which are screens of their own.
 export function SummaryTab() {
   const env = useEnv()
-  const [params, setParams] = useSearchParams()
-  const location = useLocation()
   const navigate = useNavigate()
-  if (params.get('show') === 'settings') {
-    // Back is a step back, unless the screen was opened directly.
-    const back = () => (location.key !== 'default' ? navigate(-1) : setParams({}, { replace: true }))
-    return <PhoneEnvironmentSettings env={env} onBack={back} />
-  }
   return (
-    <div className="page-pad phone-env-page">
-      <PhoneEnvironmentHead env={env} />
-      <PhoneEnvironmentDetails env={env} />
+    <div className="env-screen">
+      <PhoneBack back={{ to: '/environments', label: 'Environments' }} />
+      <Suspense fallback={null}>
+        <EnvironmentView
+          env={env}
+          lead={<PhoneOpen env={env} />}
+          onDesktop={() => navigate(`/environments/${env.id}/desktop`)}
+        />
+      </Suspense>
     </div>
+  )
+}
+
+// PhoneOpen is how a start is going, or why one failed, and the ways into
+// the environment's own screens.
+function PhoneOpen({ env }: { env: Environment }) {
+  const running = env.phase === 'running'
+  const s = env.stats
+  const rows = [
+    { to: 'terminal', label: 'Terminal', sub: 'Its sessions, and new ones', icon: SquareTerminal },
+    { to: 'code', label: 'Code', sub: 'Files and changes', icon: FileCode2 },
+    ...(env.spec.display === 'desktop' ? [{ to: 'desktop', label: 'Desktop', sub: '', icon: Monitor }] : []),
+    {
+      to: 'performance',
+      label: 'Performance',
+      sub: running && s ? `CPU ${formatPercent(s.cpu_percent)} · ${formatMemory(s.memory_used_mib)}` : '',
+      icon: Activity,
+    },
+    { to: 'logs', label: 'Logs', sub: 'Its console, and its worker’s account of it', icon: ScrollText },
+  ]
+  return (
+    <>
+      {env.phase === 'starting' && (
+        <section className="envtab-lead">
+          <h3>Starting {env.name}</h3>
+          <StartProgress env={env} />
+        </section>
+      )}
+      {env.phase === 'failed' && (
+        <section className="envtab-lead">
+          <h3>{env.name} did not start</h3>
+          <p>{env.reason ?? 'Its logs say why.'}</p>
+        </section>
+      )}
+      <Section title="Open">
+        <div className="phone-list">
+          {rows.map((r) => (
+            <Link key={r.to} to={`/environments/${env.id}/${r.to}`} className="phone-row">
+              <span className="phone-row-mark">
+                <r.icon size={17} />
+              </span>
+              <span className="phone-row-main">
+                <span>{r.label}</span>
+                {r.sub && <span className="phone-row-sub">{r.sub}</span>}
+              </span>
+              <ChevronRight size={16} className="phone-row-chev" />
+            </Link>
+          ))}
+        </div>
+      </Section>
+    </>
   )
 }

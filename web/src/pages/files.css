@@ -53,10 +53,16 @@
 .files-make {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .files-new {
   flex: none;
   align-self: center;
+}
+
+/* A choice whose options are long sentences keeps within a narrow pane. */
+.files-fields select {
+  max-width: 100%;
 }

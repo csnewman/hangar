@@ -1,3 +1,5 @@
+import './environmentView.css'
+
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   Code2,
@@ -18,7 +20,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { api, type Environment, type EnvironmentSettings, type TemplateSetting } from '../api'
 import { Conflicts, CopyChoice, fromWhat, useEnvironmentPacks } from '../components/EnvironmentPacks'
 import { formatAgo, formatBytes, formatMemory, shortDigest } from '../components/format'
-import { imageBuild, imageRisk, useImageChange } from '../components/ImageUpdate'
+import { imageBuild, imageRisk, useImageChange } from '../components/imageChange'
 import { CPUField, MemoryField } from '../components/MachineFields'
 import { Banner, CopyField, Row, Rows, Section } from '../components/Pane'
 import { PhaseDot } from '../components/Status'

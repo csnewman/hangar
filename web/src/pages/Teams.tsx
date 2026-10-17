@@ -3,11 +3,10 @@ import './teams.css'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Plus, Undo2 } from 'lucide-react'
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useLocation, useNavigate, useParams } from 'react-router'
 
 import { api, type CreateTeam, type Team, type TeamMember, type TeamRole } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
-import { PageHeader } from '../components/PageHeader'
 import {
   ApplyBar,
   DetailHead,
@@ -24,7 +23,6 @@ import {
   Section,
   Tile,
 } from '../components/Pane'
-import { usePhone } from '../phone'
 import { useMe } from '../session'
 import { templatesKey, useTemplates } from '../templates'
 import { canGive, roleHints, roleLabels, teamsKey, useTeams } from '../teams'
@@ -34,181 +32,15 @@ import { Activity } from '../components/Activity'
 // chosen one (TeamPage). Administrators make teams here. A phone shows the
 // list and each team as screens of their own.
 export function TeamsPage() {
-  if (usePhone()) return <PhoneTeams />
   return <TeamsPane />
 }
 
 export function TeamPage() {
   const { id } = useParams()
-  if (usePhone()) return <PhoneTeam />
   return <TeamsPane id={id} />
 }
 
-function PhoneTeams() {
-  const me = useMe()
-  const [creating, setCreating] = useState(false)
-  const teams = useTeams()
-  const list = teams.data ?? []
-  const mine = list.filter((t) => t.role)
-  const others = list.filter((t) => !t.role)
-
-  return (
-    <div className="page">
-      <PageHeader
-        title="Teams"
-        subtitle="Teams own templates, and give each member a role over them."
-        actions={
-          me.admin &&
-          !creating && (
-            <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
-              <Plus size={15} />
-              New team
-            </button>
-          )
-        }
-      />
-
-      {creating && <CreateForm onDone={() => setCreating(false)} />}
-      {teams.isError && <div className="alert">Could not load teams: {teams.error.message}</div>}
-
-      <TeamTable
-        title="Yours"
-        teams={mine}
-        loading={teams.isPending}
-        empty={me.admin ? 'You are in no team.' : 'You are in no team. An administrator adds people to teams.'}
-      />
-      {others.length > 0 && <TeamTable title="Other teams" teams={others} />}
-    </div>
-  )
-}
-
-function TeamTable({
-  title,
-  teams,
-  loading = false,
-  empty,
-}: {
-  title: string
-  teams: Team[]
-  loading?: boolean
-  empty?: string
-}) {
-  return (
-    <section className="section">
-      <h2 className="section-title">
-        {title} <span className="section-count">{teams.length}</span>
-      </h2>
-      {!loading && teams.length === 0 && empty && <div className="panel empty-state">{empty}</div>}
-      {teams.length > 0 && (
-        <div className="panel">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Team</th>
-                <th>Your role</th>
-                <th className="num">Members</th>
-                <th className="num">Templates</th>
-              </tr>
-            </thead>
-            <tbody>
-              {teams.map((t) => (
-                <tr key={t.id}>
-                  <td>
-                    <Link to={`/teams/${t.id}`} className="strong">
-                      {t.name}
-                    </Link>
-                    <div className="muted small mono">{t.slug}</div>
-                  </td>
-                  <td>{t.role ? roleLabels[t.role] : <span className="muted">—</span>}</td>
-                  <td className="num" data-label="Members">
-                    {t.member_count}
-                  </td>
-                  <td className="num" data-label="Templates">
-                    {t.templates}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  )
-}
-
 const blank: CreateTeam = { slug: '', name: '', description: '' }
-
-function CreateForm({ onDone }: { onDone: () => void }) {
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  const [form, setForm] = useState<CreateTeam>(blank)
-  const [slugEdited, setSlugEdited] = useState(false)
-  const create = useMutation({
-    mutationFn: api.createTeam,
-    onSuccess: (t) => {
-      qc.invalidateQueries({ queryKey: teamsKey })
-      onDone()
-      navigate(`/teams/${t.id}`)
-    },
-  })
-  const submit = (e: FormEvent) => {
-    e.preventDefault()
-    create.mutate({ ...form, description: form.description || undefined })
-  }
-
-  return (
-    <form className="panel form form-spaced" onSubmit={submit}>
-      <div className="field-row">
-        <label className="field">
-          <span>Name</span>
-          <input
-            autoFocus
-            required
-            maxLength={100}
-            value={form.name}
-            onChange={(e) =>
-              setForm({ ...form, name: e.target.value, slug: slugEdited ? form.slug : slugFor(e.target.value) })
-            }
-            placeholder="Platform"
-          />
-        </label>
-        <label className="field">
-          <span>Slug</span>
-          <input
-            required
-            className="mono"
-            maxLength={63}
-            pattern="[a-z0-9]+([._\-][a-z0-9]+)*"
-            value={form.slug}
-            onChange={(e) => {
-              setSlugEdited(true)
-              setForm({ ...form, slug: e.target.value })
-            }}
-            placeholder="platform"
-          />
-          <small>Names the team in paths, such as its images. It cannot change later.</small>
-        </label>
-      </div>
-      <label className="field">
-        <span>Description</span>
-        <input
-          maxLength={1000}
-          value={form.description ?? ''}
-          onChange={(e) => setForm({ ...form, description: e.target.value })}
-        />
-      </label>
-      {create.error && <div className="alert">{create.error.message}</div>}
-      <div className="form-actions">
-        <button type="button" className="btn btn-ghost" onClick={onDone}>
-          Cancel
-        </button>
-        <button type="submit" className="btn btn-primary" disabled={create.isPending}>
-          Create team
-        </button>
-      </div>
-    </form>
-  )
-}
 
 // slugFor suggests a slug for a team's name.
 function slugFor(name: string): string {
@@ -219,163 +51,7 @@ function slugFor(name: string): string {
     .slice(0, 63)
 }
 
-// PhoneTeam shows a team: its members and roles, run by its admins, and the
-// templates it owns.
-function PhoneTeam() {
-  const { id } = useParams()
-  const me = useMe()
-  const qc = useQueryClient()
-  const navigate = useNavigate()
-  const team = useQuery({ queryKey: [...teamsKey, id], queryFn: () => api.team(id!), refetchInterval: 30_000 })
-  const templates = useTemplates()
-  const [editing, setEditing] = useState(false)
-  const remove = useMutation({
-    mutationFn: () => api.deleteTeam(id!),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: teamsKey })
-      navigate('/teams')
-    },
-  })
-
-  if (team.isPending) return <div className="page" />
-  if (team.isError) {
-    return (
-      <div className="page">
-        <PageHeader crumbs={[{ label: 'Teams', to: '/teams' }]} title="Not found" />
-        <div className="panel empty-state">
-          This team does not exist. <Link to="/teams">Back to teams</Link>
-        </div>
-      </div>
-    )
-  }
-  const t = team.data
-  const owned = (templates.data ?? []).filter((x) => x.team?.id === t.id)
-
-  return (
-    <div className="page page-narrow">
-      <PageHeader
-        crumbs={[{ label: 'Teams', to: '/teams' }]}
-        title={t.name}
-        subtitle={
-          <span className="subtitle-row">
-            <span className="mono">{t.slug}</span>
-            {t.role && <span>· you are {roleLabels[t.role].toLowerCase()}</span>}
-          </span>
-        }
-        actions={
-          <>
-            {t.can_manage && !editing && (
-              <button type="button" className="btn btn-ghost" onClick={() => setEditing(true)}>
-                Edit
-              </button>
-            )}
-            {me.admin && (
-              <ConfirmButton
-                label="Delete"
-                confirmLabel="Delete?"
-                disabled={t.templates > 0}
-                title={t.templates > 0 ? 'Owns templates: move or delete them first' : undefined}
-                onConfirm={() => remove.mutate()}
-              />
-            )}
-          </>
-        }
-      />
-      {remove.error && <div className="alert">{remove.error.message}</div>}
-      {editing ? (
-        <EditTeam team={t} onDone={() => setEditing(false)} />
-      ) : (
-        t.description && <p className="page-lead">{t.description}</p>
-      )}
-
-      <Members team={t} />
-
-      <section className="section">
-        <h2 className="section-title">
-          Templates <span className="section-count">{owned.length}</span>
-        </h2>
-        {owned.length === 0 ? (
-          <div className="panel empty-state">
-            The team owns no templates{t.templates > owned.length ? ' you can see' : ''}.
-            {(t.role === 'member' || t.role === 'admin' || me.admin) && (
-              <>
-                {' '}
-                <Link to={`/templates/new?team=${t.id}`}>Make one</Link>.
-              </>
-            )}
-          </div>
-        ) : (
-          <div className="panel">
-            <table className="table">
-              <tbody>
-                {owned.map((x) => (
-                  <tr key={x.id}>
-                    <td>
-                      <Link to={`/templates/${x.id}`} className="strong">
-                        {x.name}
-                      </Link>
-                      {x.description && <div className="muted small">{x.description}</div>}
-                    </td>
-                    <td className="muted">{x.visibility}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      <section className="section">
-        <h2 className="section-title">Activity</h2>
-        <Activity subjects={[`team:${t.id}`]} />
-      </section>
-    </div>
-  )
-}
-
-function EditTeam({ team: t, onDone }: { team: Team; onDone: () => void }) {
-  const qc = useQueryClient()
-  const [name, setName] = useState(t.name)
-  const [description, setDescription] = useState(t.description)
-  const save = useMutation({
-    mutationFn: () => api.updateTeam(t.id, { name, description: description || undefined }),
-    onSuccess: (updated) => {
-      qc.setQueryData([...teamsKey, t.id], updated)
-      qc.invalidateQueries({ queryKey: teamsKey })
-      qc.invalidateQueries({ queryKey: templatesKey })
-      onDone()
-    },
-  })
-  return (
-    <form
-      className="panel form form-spaced"
-      onSubmit={(e) => {
-        e.preventDefault()
-        save.mutate()
-      }}
-    >
-      <label className="field">
-        <span>Name</span>
-        <input autoFocus required maxLength={100} value={name} onChange={(e) => setName(e.target.value)} />
-      </label>
-      <label className="field">
-        <span>Description</span>
-        <input maxLength={1000} value={description} onChange={(e) => setDescription(e.target.value)} />
-      </label>
-      {save.error && <div className="alert">{save.error.message}</div>}
-      <div className="form-actions">
-        <button type="button" className="btn btn-ghost" onClick={onDone}>
-          Cancel
-        </button>
-        <button type="submit" className="btn btn-primary" disabled={save.isPending}>
-          Save
-        </button>
-      </div>
-    </form>
-  )
-}
-
-function Members({ team: t, pane = false }: { team: Team; pane?: boolean }) {
+function Members({ team: t }: { team: Team }) {
   const qc = useQueryClient()
   const [adding, setAdding] = useState('')
   const [addRole, setAddRole] = useState<TeamRole>('member')
@@ -402,7 +78,7 @@ function Members({ team: t, pane = false }: { team: Team; pane?: boolean }) {
   const error = set.error ?? remove.error
 
   const hints = (
-    <p className={pane ? 'pane-hint teams-roles' : 'muted small'}>
+    <p className="pane-hint teams-roles">
       {(['viewer', 'member', 'admin'] as const).map((r) => (
         <span key={r}>
           <strong>{roleLabels[r]}</strong>: {roleHints[r].toLowerCase()}.{' '}
@@ -411,7 +87,7 @@ function Members({ team: t, pane = false }: { team: Team; pane?: boolean }) {
     </p>
   )
   const adder = t.can_manage && (
-    <div className={pane ? 'teams-add' : 'inline-form panel-foot'}>
+    <div className="teams-add">
       <select value={adding} onChange={(e) => setAdding(e.target.value)} aria-label="Add a member">
         <option value="">Add a person…</option>
         {candidates.map((p) => (
@@ -429,7 +105,7 @@ function Members({ team: t, pane = false }: { team: Team; pane?: boolean }) {
       </select>
       <button
         type="button"
-        className={pane ? 'btn btn-ghost btn-sm' : 'btn btn-ghost'}
+        className="btn btn-ghost btn-sm"
         disabled={!adding || set.isPending}
         onClick={() => set.mutate({ user: adding, role: addRole })}
       >
@@ -447,43 +123,19 @@ function Members({ team: t, pane = false }: { team: Team; pane?: boolean }) {
       onRemove={() => remove.mutate(m.person.id)}
     />
   ))
-  if (pane) {
-    return (
-      <Section title={`Members · ${members.length}`}>
-        {members.length === 0 ? (
-          <p className="muted">No members yet.</p>
-        ) : (
-          <table className="pane-table">
-            <tbody>{rows}</tbody>
-          </table>
-        )}
-        {adder}
-        {error && <div className="alert">{error.message}</div>}
-        {hints}
-      </Section>
-    )
-  }
   return (
-    <section className="section">
-      <h2 className="section-title">
-        Members <span className="section-count">{members.length}</span>
-      </h2>
-      <div className="panel">
-        <table className="table">
-          <tbody>
-            {rows}
-            {members.length === 0 && (
-              <tr>
-                <td className="empty">No members yet.</td>
-              </tr>
-            )}
-          </tbody>
+    <Section title={`Members · ${members.length}`}>
+      {members.length === 0 ? (
+        <p className="muted">No members yet.</p>
+      ) : (
+        <table className="pane-table">
+          <tbody>{rows}</tbody>
         </table>
-        {adder}
-      </div>
+      )}
+      {adder}
       {error && <div className="alert">{error.message}</div>}
       {hints}
-    </section>
+    </Section>
   )
 }
 
@@ -542,17 +194,19 @@ function MemberRow({
   )
 }
 
-// TeamsPane is the teams on a computer: the list on the left, mine first,
-// and the chosen team, or a new one being made, beside it.
+// TeamsPane is the teams: the list on the left, mine first, and the chosen
+// team, or a new one being made, beside it.
 function TeamsPane({ id }: { id?: string }) {
   const me = useMe()
   const teams = useTeams()
   const [query, setQuery] = useState('')
   const [creating, setCreating] = useState(false)
-  // Choosing a team leaves a new one unmade.
-  const [shownID, setShownID] = useState(id)
-  if (id !== shownID) {
-    setShownID(id)
+  // Going anywhere, choosing a team or back to the list, leaves a new one
+  // unmade.
+  const { key } = useLocation()
+  const [shownKey, setShownKey] = useState(key)
+  if (key !== shownKey) {
+    setShownKey(key)
     setCreating(false)
   }
   const q = query.trim().toLowerCase()
@@ -575,8 +229,12 @@ function TeamsPane({ id }: { id?: string }) {
   return (
     <PaneRoot>
       <MasterDetail
+        chosen={!!id || creating}
+        back={{ to: '/teams', label: 'Teams' }}
         list={
           <ListPane
+            title="Teams"
+            back={{ to: '/more', label: 'More' }}
             head={
               <>
                 <SearchField value={query} onChange={setQuery} placeholder="Search teams" />
@@ -765,7 +423,7 @@ function TeamDetail({ id }: { id: string }) {
           />
           <DetailPage>
             {t.description && <p className="teams-lead">{t.description}</p>}
-            <Members team={t} pane />
+            <Members team={t} />
             <Section title={`Templates · ${owned.length}`}>
               {owned.length === 0 ? (
                 <p className="muted">

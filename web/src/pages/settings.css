@@ -46,3 +46,94 @@
   display: block;
   line-height: 1.6;
 }
+
+/* The phone's list of settings: who is signed in at its head, and signing
+   out at its foot. */
+.settings-who {
+  margin: 8px 0 4px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-who .md-item-title {
+  font-size: 17px;
+}
+
+.settings-who-avatar {
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 15px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-signout {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: calc(100% - 32px);
+  min-height: 48px;
+  margin: 24px 16px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--danger);
+  font: inherit;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+/* In a narrow pane, a phone's, each key or token is a block of its own:
+   its name, then what it is, then its buttons. */
+@container (max-width: 640px) {
+  .pane-table.settings-table thead {
+    display: none;
+  }
+
+  .pane-table.settings-table,
+  .pane-table.settings-table tbody,
+  .pane-table.settings-table tr,
+  .pane-table.settings-table td {
+    display: block;
+    width: auto;
+  }
+
+  .pane-table.settings-table tr {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .pane-table.settings-table tr:last-child {
+    border-bottom: 0;
+  }
+
+  .pane-table.settings-table td,
+  .pane-table.settings-table tr:last-child td {
+    padding: 2px 0;
+    border-bottom: 0;
+    text-align: left;
+    white-space: normal;
+  }
+
+  .pane-table.settings-table td.num {
+    padding-top: 8px;
+  }
+
+  .settings-key-name {
+    width: auto;
+  }
+
+  .settings-public-key {
+    max-width: 100%;
+  }
+
+  .settings-row-actions {
+    flex-wrap: wrap;
+  }
+}

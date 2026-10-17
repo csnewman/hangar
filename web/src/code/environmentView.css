@@ -1,0 +1,243 @@
+/* The Environment tab, and an environment's screen on a phone. */
+
+/* The Environment tab: a header, notices, then sections beside an index.
+   Its sections, rows, banners and bar are Hangar's pages' own (pane.css). */
+.envtab {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  font-size: 13px;
+  container-type: inline-size;
+}
+
+.envtab-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.envtab-state > .muted {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.envtab-state strong {
+  font-weight: 600;
+}
+
+.envtab-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.envtab-index {
+  flex: none;
+  width: 168px;
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+  overflow-y: auto;
+}
+
+.envtab-index-item {
+  height: 26px;
+  padding: 0 14px;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.envtab-index-item:hover {
+  background: var(--sidebar-hover);
+}
+
+.envtab-index-on,
+.envtab-index-on:hover {
+  background: var(--sidebar-active);
+  font-weight: 600;
+}
+
+.envtab-scroll {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+
+.envtab-web {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.envtab-web-name {
+  width: 96px;
+  font-weight: 600;
+}
+
+.envtab-web-acts {
+  width: 56px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.envtab-copychoice {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.envtab-copychoice select {
+  height: 26px;
+  min-width: 150px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  padding: 0 6px;
+}
+
+.envtab-activity {
+  display: flex;
+  flex-direction: column;
+}
+
+.envtab-event {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.envtab-event-who {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.envtab-event-system,
+.envtab-event-worker {
+  background: var(--surface-2);
+  color: var(--muted);
+}
+
+.envtab-event-main {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.45;
+}
+
+.envtab-event-main strong {
+  font-weight: 600;
+}
+
+.envtab-event-at {
+  flex: none;
+  white-space: nowrap;
+}
+
+.envtab-activity-foot {
+  display: flex;
+  gap: 16px;
+  padding-top: 8px;
+  font-size: 12.5px;
+}
+
+.envtab-delete {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 8px;
+}
+
+.envtab-delete p {
+  flex: 1;
+  min-width: 260px;
+  margin: 0;
+}
+
+.envtab-danger {
+  color: var(--danger);
+}
+
+/* In a narrow pane, a phone's included, the index is a row of chips over
+   the sections, which scrolls sideways. */
+@container (max-width: 640px) {
+  .envtab-body {
+    flex-direction: column;
+  }
+
+  .envtab-index {
+    flex-direction: row;
+    width: auto;
+    gap: 6px;
+    padding: 8px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+  }
+
+  .envtab-index-item {
+    flex: none;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 15px;
+    background: var(--surface-2);
+    font-size: 14px;
+  }
+
+  .envtab-index-on,
+  .envtab-index-on:hover {
+    background: var(--sidebar-active);
+    color: var(--accent);
+  }
+}
+
+/* How a start is going, or why one failed, above the sections. */
+.envtab-lead {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.envtab-lead h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.envtab-lead p {
+  margin: 0;
+  line-height: 1.5;
+}

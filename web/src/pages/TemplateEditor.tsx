@@ -1,13 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Plus, Trash2, Undo2, UsersRound, X } from 'lucide-react'
-import { createContext, useContext, useState, type FormEvent, type ReactNode } from 'react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { api, type Access, type Display, type GPU, type Repo, type Template, type TemplateInput } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { formatMemory } from '../components/format'
 import { CPUField, MemoryField } from '../components/MachineFields'
-import { PageHeader } from '../components/PageHeader'
 import {
   ApplyBar,
   DetailHead,
@@ -19,10 +18,8 @@ import {
   Segmented,
   Tile,
 } from '../components/Pane'
-import { PhoneFoot, PhoneHead, PhoneNav, PhoneRow, PhoneSection } from '../components/Phone'
-import { usePhone } from '../phone'
 import { useMe } from '../session'
-import { blankSpec, builtinVariables, hangarImages, patternGroups, specLine, templatesKey } from '../templates'
+import { blankSpec, builtinVariables, hangarImages, patternGroups, templatesKey } from '../templates'
 import { canGive, teamsKey, useTeams } from '../teams'
 import { TemplatesLayout, VisibilityBadge } from './Templates'
 import { Activity } from '../components/Activity'
@@ -32,36 +29,25 @@ const blank: TemplateInput = { name: '', description: '', visibility: 'private',
 
 // TemplateEditorPage creates a template, or shows one: editable for its
 // owner, its team's members and its collaborators, read-only for anyone else
-// who can see it. ?team= makes a new template that team's. On a computer it
-// is the chosen one beside the list of templates.
+// who can see it. ?team= makes a new template that team's. It is the chosen
+// one beside the list of templates, or on a phone a screen of its own.
 export function TemplateEditorPage() {
   const { id } = useParams()
-  const phone = usePhone()
   const template = useQuery({
     queryKey: [...templatesKey, id],
     queryFn: () => api.template(id!),
     enabled: id !== undefined,
     refetchInterval: false,
   })
-  const frame = (children: ReactNode) => (phone ? children : <TemplatesLayout>{children}</TemplatesLayout>)
+  const frame = (children?: ReactNode) => <TemplatesLayout chosen>{children}</TemplatesLayout>
 
   if (id === undefined) return frame(<Editor />)
-  if (template.isPending) return phone ? <div className="page" /> : <TemplatesLayout />
+  if (template.isPending) return frame()
   if (template.isError) {
-    if (!phone) {
-      return frame(
-        <NoneChosen>
-          This template does not exist, or it is not shared with you. <Link to="/templates">Back to templates</Link>
-        </NoneChosen>,
-      )
-    }
-    return (
-      <div className="page">
-        <PageHeader crumbs={[{ label: 'Templates', to: '/templates' }]} title="Not found" />
-        <div className="panel empty-state">
-          This template does not exist, or it is not shared with you. <Link to="/templates">Back to templates</Link>
-        </div>
-      </div>
+    return frame(
+      <NoneChosen>
+        This template does not exist, or it is not shared with you. <Link to="/templates">Back to templates</Link>
+      </NoneChosen>,
     )
   }
   // Keyed so that switching templates starts the form afresh.
@@ -166,7 +152,6 @@ function Editor({ existing }: { existing?: Template }) {
   const [owner, setOwner] = useState(initialOwner)
   const ownerChoices = (teams.data ?? []).filter((t) => canGive(t, me.admin) || t.id === initialOwner)
   const [placement, setPlacement] = useState<[string, string][]>(() => Object.entries(existing?.spec.placement ?? {}))
-  const phone = usePhone()
   const editable = existing ? existing.can_edit : true
   const manageable = existing ? existing.can_manage : true
   const spec = form.spec
@@ -219,413 +204,6 @@ function Editor({ existing }: { existing?: Template }) {
 
   const setRepo = (i: number, patch: Partial<Repo>) =>
     setSpec({ repos: spec.repos.map((r, j) => (j === i ? { ...r, ...patch } : r)) })
-
-  const sections = (
-    <>
-      <Section id="general" title="General">
-        <label className="field">
-          <span>Name</span>
-          <input
-            required
-            maxLength={100}
-            value={form.name}
-            onChange={(e) => setForm({ ...form, name: e.target.value })}
-            placeholder="Monorepo with desktop"
-          />
-        </label>
-        <label className="field">
-          <span>Description</span>
-          <textarea
-            rows={2}
-            maxLength={2000}
-            value={form.description ?? ''}
-            onChange={(e) => setForm({ ...form, description: e.target.value })}
-            placeholder="What it is for, and who should use it."
-          />
-        </label>
-        <label className="field">
-          <span>Owner</span>
-          <select value={owner} disabled={!manageable} onChange={(e) => setOwner(e.target.value)}>
-            <option value="">
-              {existing && existing.team
-                ? 'Me — take it out of the team'
-                : existing && existing.owner.id !== me.id
-                  ? existing.owner.display_name || existing.owner.username
-                  : `Me (${me.username})`}
-            </option>
-            {ownerChoices.map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} (team)
-              </option>
-            ))}
-          </select>
-          {owner ? (
-            <small>The team's viewers use it, its members edit it, and its admins decide the rest.</small>
-          ) : (
-            !manageable && <small>Only the owner can give it to another.</small>
-          )}
-        </label>
-        <div className="field">
-          <span>Who can use it</span>
-          <div className="segmented" role="radiogroup">
-            {(['private', 'shared'] as const).map((v) => (
-              <label key={v} className={form.visibility === v ? 'seg seg-on' : 'seg'}>
-                <input
-                  type="radio"
-                  name="visibility"
-                  checked={form.visibility === v}
-                  disabled={!manageable}
-                  onChange={() => setForm({ ...form, visibility: v })}
-                />
-                {v === 'private' ? (owner ? 'The team and collaborators' : 'Owner and collaborators') : 'Everyone'}
-              </label>
-            ))}
-          </div>
-          {!manageable && <small>Only the owner can change who can use it.</small>}
-        </div>
-      </Section>
-
-      <Section id="machine" title="Machine">
-        <label className="field">
-          <span>Image</span>
-          <input
-            required
-            className="mono"
-            list="hangar-images"
-            value={spec.image}
-            onChange={(e) => setSpec({ image: e.target.value })}
-          />
-          <datalist id="hangar-images">
-            {hangarImages.map((i) => (
-              <option key={i.ref} value={i.ref}>
-                {i.label}
-              </option>
-            ))}
-          </datalist>
-          <small>
-            One of Hangar's images, or an OCI image built on one. <code>base</code> has Docker, GPU drivers, a desktop
-            and a browser; <code>minimal</code> has what an environment needs and a package manager for the rest.
-          </small>
-        </label>
-        <div className="field-row">
-          <label className="field">
-            <span>vCPUs</span>
-            <CPUField cpus={spec.cpus} memory={spec.memory_mib} onChange={(cpus) => setSpec({ cpus })} />
-          </label>
-          <label className="field">
-            <span>Memory</span>
-            <MemoryField mib={spec.memory_mib} cpus={spec.cpus} onChange={(memory_mib) => setSpec({ memory_mib })} />
-          </label>
-        </div>
-        <div className="field-row">
-          <label className="field">
-            <span>Display</span>
-            <select value={spec.display} onChange={(e) => setSpec({ display: e.target.value as Display })}>
-              <option value="desktop">Desktop</option>
-              <option value="none">Headless — lighter, no desktop</option>
-            </select>
-            {spec.display === 'desktop' && <small>Needs an image with a desktop, such as a base image.</small>}
-          </label>
-          <label className="field">
-            <span>GPU</span>
-            <select value={spec.gpu} onChange={(e) => setSpec({ gpu: e.target.value as GPU })}>
-              <option value="none">None</option>
-              <option value="virtual">Virtual — shared with other environments</option>
-              <option value="passthrough">Passthrough — a whole physical GPU</option>
-            </select>
-          </label>
-        </div>
-        {spec.gpu === 'passthrough' && (
-          <small className="muted">
-            A passthrough GPU pins the environment's memory and cannot be suspended. Add a placement rule below so it
-            lands on a worker that has one.
-          </small>
-        )}
-        <label className="check">
-          <input type="checkbox" checked={spec.dax ?? false} onChange={(e) => setSpec({ dax: e.target.checked })} />
-          <span>
-            Map image files from the host (DAX)
-            <small className="muted">
-              Shares the image's files in memory with other environments instead of each keeping a copy. Programs that
-              run from large files, such as a browser, can be many times slower with it.
-            </small>
-          </span>
-        </label>
-      </Section>
-
-      <Section id="workspace" title="Workspace" hint="Cloned when the environment is created.">
-        {spec.repos.map((r, i) => (
-          <div key={i} className="repo">
-            <div className="field-row">
-              <label className="field grow">
-                <span>Repository URL</span>
-                <input
-                  required
-                  className="mono"
-                  value={r.url}
-                  onChange={(e) => setRepo(i, { url: e.target.value })}
-                  placeholder="https://github.com/org/repo.git"
-                />
-              </label>
-              <button
-                type="button"
-                className="icon-btn repo-remove"
-                title="Remove repository"
-                aria-label="Remove repository"
-                onClick={() => setSpec({ repos: spec.repos.filter((_, j) => j !== i) })}
-              >
-                <Trash2 size={15} />
-              </button>
-            </div>
-            <div className="field-row">
-              <label className="field">
-                <span>Clone to</span>
-                <input
-                  required
-                  className="mono"
-                  value={r.path}
-                  onChange={(e) => setRepo(i, { path: e.target.value })}
-                  placeholder="/workspace/repo"
-                />
-              </label>
-              <label className="field">
-                <span>Check out</span>
-                <input
-                  className="mono"
-                  value={r.ref ?? ''}
-                  onChange={(e) => setRepo(i, { ref: e.target.value })}
-                  placeholder="default branch"
-                />
-              </label>
-              <label className="field">
-                <span>New branch</span>
-                <input
-                  className="mono"
-                  value={r.branch ?? ''}
-                  onChange={(e) => setRepo(i, { branch: e.target.value })}
-                  placeholder="agent/{name}"
-                />
-              </label>
-            </div>
-          </div>
-        ))}
-        {editable && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-add"
-            onClick={() => setSpec({ repos: [...spec.repos, { url: '', path: '/workspace/' }] })}
-          >
-            <Plus size={14} />
-            Add repository
-          </button>
-        )}
-        <small className="muted">
-          Paths, refs, new branches and the editor folder may use{' '}
-          {[...builtinVariables, ...patternGroups(form.name_pattern)].map((v, i, all) => (
-            <span key={v}>
-              <code>{`{${v}}`}</code>
-              {i < all.length - 2 ? ', ' : i === all.length - 2 ? ' and ' : ''}
-            </span>
-          ))}
-          , filled in as each environment is made; <code>{'{name:lower}'}</code> and <code>{'{name:upper}'}</code>{' '}
-          change the case. A named group in the name pattern, such as <code>{'(?P<ticket>[A-Z]+-[0-9]+)'}</code>, is a
-          variable of its own.
-        </small>
-        <label className="field">
-          <span>Open the editor in</span>
-          <input
-            className="mono"
-            value={spec.editor_path ?? ''}
-            onChange={(e) => setSpec({ editor_path: e.target.value })}
-            placeholder={spec.repos[0]?.path || '/workspace'}
-          />
-        </label>
-        <AccessField value={spec.access ?? {}} onChange={(access) => setSpec({ access })} />
-        {!spec.access?.no_editor_trust && (
-          <label className="field">
-            <span>VS Code also trusts</span>
-            <textarea
-              className="mono"
-              rows={2}
-              value={(spec.trusted_folders ?? []).join('\n')}
-              onChange={(e) => setSpec({ trusted_folders: e.target.value.split('\n') })}
-              placeholder="/workspace/shared"
-            />
-            <small className="muted">
-              One folder per line. The repositories and the editor's folder are trusted without being listed.
-            </small>
-          </label>
-        )}
-        <PacksField value={spec.packs ?? []} onChange={(packs) => setSpec({ packs })} />
-        <label className="field">
-          <span>Web servers</span>
-          <input
-            className="mono"
-            value={(spec.web_names ?? []).join(', ')}
-            onChange={(e) => setSpec({ web_names: e.target.value.split(/[\s,]+/) })}
-            placeholder="dashboard, customer-ui"
-          />
-          <small className="muted">
-            Names the environment's page links to, each reaching its web server at &lt;name&gt;-env&lt;id&gt; on
-            Hangar's host: HTTPS to its port 443, HTTP to its port 80.
-          </small>
-        </label>
-      </Section>
-
-      <Section id="naming" title="Naming" hint="Leave empty to allow any name.">
-        <div className="field-row">
-          <label className="field">
-            <span>Names must match</span>
-            <input
-              className="mono"
-              value={form.name_pattern ?? ''}
-              onChange={(e) => setForm({ ...form, name_pattern: e.target.value })}
-              placeholder="proj-[0-9]+"
-            />
-          </label>
-          <label className="field">
-            <span>Hint shown to people</span>
-            <input
-              value={form.name_hint ?? ''}
-              onChange={(e) => setForm({ ...form, name_hint: e.target.value })}
-              placeholder="A ticket, like proj-123"
-            />
-          </label>
-        </div>
-        <small className="muted">A regular expression the whole name must match.</small>
-      </Section>
-
-      <Section id="placement" title="Placement" hint="Runs only on workers with every one of these labels.">
-        {placement.map(([k, v], i) => (
-          <div key={i} className="field-row kv">
-            <input
-              className="mono"
-              placeholder="label"
-              value={k}
-              onChange={(e) => setPlacement(placement.map((p, j) => (j === i ? [e.target.value, p[1]] : p)))}
-            />
-            <span className="kv-eq">=</span>
-            <input
-              className="mono"
-              placeholder="value"
-              value={v}
-              onChange={(e) => setPlacement(placement.map((p, j) => (j === i ? [p[0], e.target.value] : p)))}
-            />
-            <button
-              type="button"
-              className="icon-btn"
-              title="Remove rule"
-              aria-label="Remove rule"
-              onClick={() => setPlacement(placement.filter((_, j) => j !== i))}
-            >
-              <Trash2 size={15} />
-            </button>
-          </div>
-        ))}
-        {editable && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-add"
-            onClick={() => setPlacement([...placement, ['', '']])}
-          >
-            <Plus size={14} />
-            Add rule
-          </button>
-        )}
-      </Section>
-    </>
-  )
-
-  // On a phone an existing template is an index of its sections, each a
-  // screen of its own (?section=); a new one is every section on one screen.
-  if (phone) {
-    const open = existing ? params.get('section') : 'all'
-    if (open) {
-      return (
-        <OpenSection.Provider value={open}>
-          <form className="phone-screen" onSubmit={submit}>
-            <PhoneNav
-              back={
-                existing
-                  ? { to: `/templates/${existing.id}`, label: existing.name }
-                  : { to: '/templates', label: 'Templates' }
-              }
-              title={existing ? (sectionTitles[open] ?? existing.name) : 'New template'}
-              sub={existing?.name}
-            />
-            <div className="phone-screen-body">
-              {existing && !editable && (
-                <div className="notice">
-                  You can use this template, but only its {existing.team ? "team's members" : 'owner'} and collaborators
-                  can change it.
-                </div>
-              )}
-              <fieldset disabled={!editable} className="form-stack">
-                {sections}
-              </fieldset>
-              {save.error && <div className="alert">{save.error.message}</div>}
-              {save.isSuccess && existing && <div className="notice notice-good">Saved.</div>}
-            </div>
-            {editable && (
-              <PhoneFoot>
-                <button type="submit" className="btn btn-primary" disabled={save.isPending}>
-                  {existing ? 'Save changes' : 'Create template'}
-                </button>
-              </PhoneFoot>
-            )}
-          </form>
-        </OpenSection.Provider>
-      )
-    }
-    const t = existing!
-    const placed = Object.entries(t.spec.placement ?? {})
-    return (
-      <div className="page phone-page">
-        <PhoneHead back={{ to: '/templates', label: 'Templates' }} title={t.name}>
-          <p className="phone-note">
-            {t.visibility} · {t.team ? `team ${t.team.name}` : `by ${t.owner.display_name || t.owner.username}`} · used
-            by {t.environments} environment{t.environments === 1 ? '' : 's'}
-          </p>
-        </PhoneHead>
-        <Link to={`/environments/new?template=${t.id}`} className="btn btn-primary">
-          Use template
-        </Link>
-        <PhoneSection>
-          <PhoneRow to="?section=general" label="General" sub={t.description || t.name} />
-          <PhoneRow to="?section=machine" label="Machine" sub={`${t.spec.image} · ${specLine(t.spec)}`} />
-          <PhoneRow
-            to="?section=workspace"
-            label="Workspace"
-            sub={[
-              t.spec.repos.length === 0
-                ? 'No repositories'
-                : t.spec.repos.length === 1
-                  ? t.spec.repos[0].url
-                  : `${t.spec.repos.length} repositories`,
-              t.spec.packs?.length ? `${t.spec.packs.length} packs` : '',
-            ]
-              .filter(Boolean)
-              .join(' · ')}
-          />
-          <PhoneRow to="?section=naming" label="Naming" sub={t.name_pattern || 'Any name'} />
-          <PhoneRow
-            to="?section=placement"
-            label="Placement"
-            sub={placed.length ? placed.map(([k, v]) => `${k}=${v}`).join(', ') : 'Any worker'}
-          />
-        </PhoneSection>
-        <Collaborators template={t} />
-        <section className="phone-section">
-          <h2 className="phone-heading">Activity</h2>
-          <Activity subjects={[`template:${t.id}`]} pageSize={5} />
-        </section>
-        {manageable && (
-          <ConfirmButton label="Delete template" confirmLabel="Delete it?" onConfirm={() => remove.mutate()} />
-        )}
-        {remove.error && <div className="alert">{remove.error.message}</div>}
-      </div>
-    )
-  }
 
   const hint = (text: ReactNode) => <small className="tpl-hint">{text}</small>
   const label = (text: string, id: string) => <label htmlFor={id}>{text}</label>
@@ -837,7 +415,7 @@ function Editor({ existing }: { existing?: Template }) {
                       <tbody>
                         {spec.repos.map((r, i) => (
                           <tr key={i}>
-                            <td>
+                            <td data-label="Repository URL">
                               <input
                                 required
                                 aria-label="Repository URL"
@@ -847,7 +425,7 @@ function Editor({ existing }: { existing?: Template }) {
                                 placeholder="https://github.com/org/repo.git"
                               />
                             </td>
-                            <td>
+                            <td data-label="Clone to">
                               <input
                                 required
                                 aria-label="Clone to"
@@ -857,7 +435,7 @@ function Editor({ existing }: { existing?: Template }) {
                                 placeholder="/workspace/repo"
                               />
                             </td>
-                            <td>
+                            <td data-label="Check out">
                               <input
                                 aria-label="Check out"
                                 className="mono"
@@ -866,7 +444,7 @@ function Editor({ existing }: { existing?: Template }) {
                                 placeholder="default branch"
                               />
                             </td>
-                            <td>
+                            <td data-label="New branch">
                               <input
                                 aria-label="New branch"
                                 className="mono"
@@ -1051,7 +629,7 @@ function Editor({ existing }: { existing?: Template }) {
             title="Collaborators"
             extra={<span className="muted">People edit it; a team's viewers use it and its members edit it.</span>}
           >
-            <Collaborators template={existing} bare />
+            <Collaborators template={existing} />
           </PaneSection>
         )}
         {existing && (
@@ -1141,15 +719,6 @@ const accessSettings: { key: keyof Access; label: string; hint: string }[] = [
 // but none of their credentials, and an editor that trusts nothing.
 const untrusted: Access = { no_sensitive_files: true, no_ssh_keys: true, no_registry: true, no_editor_trust: true }
 
-function AccessField({ value, onChange }: { value: Access; onChange: (a: Access) => void }) {
-  return (
-    <div className="field">
-      <span>What it is given of its owner's</span>
-      <AccessChecks value={value} onChange={onChange} />
-    </div>
-  )
-}
-
 // AccessChecks are what an environment is given of its owner's, each a
 // box to tick, and the preset for untrusted code.
 function AccessChecks({ value, onChange }: { value: Access; onChange: (a: Access) => void }) {
@@ -1179,44 +748,9 @@ function AccessChecks({ value, onChange }: { value: Access; onChange: (a: Access
   )
 }
 
-// OpenSection is the section a phone shows: one by its id, or 'all'. Off
-// a phone it is null, and every section shows.
-const OpenSection = createContext<string | null>(null)
-
-const sectionTitles: Record<string, string> = {
-  general: 'General',
-  machine: 'Machine',
-  workspace: 'Workspace',
-  naming: 'Naming',
-  placement: 'Placement',
-}
-
-function Section({ id, title, hint, children }: { id: string; title: string; hint?: string; children: ReactNode }) {
-  const open = useContext(OpenSection)
-  if (open && open !== 'all' && open !== id) return null
-  if (open && open !== 'all') {
-    return (
-      <section className="form-stack">
-        {hint && <p className="phone-note">{hint}</p>}
-        {children}
-      </section>
-    )
-  }
-  return (
-    <section className="panel form">
-      <div className="form-section-head">
-        <h2>{title}</h2>
-        {hint && <span className="muted small">{hint}</span>}
-      </div>
-      {children}
-    </section>
-  )
-}
-
 // Collaborators are people, who edit the template and choose who else can,
 // and teams, whose viewers use it and whose members edit it.
-// bare leaves out its panel and heading, for a section that has its own.
-function Collaborators({ template: t, bare = false }: { template: Template; bare?: boolean }) {
+function Collaborators({ template: t }: { template: Template }) {
   const me = useMe()
   const qc = useQueryClient()
   const [adding, setAdding] = useState('')
@@ -1240,8 +774,8 @@ function Collaborators({ template: t, bare = false }: { template: Template; bare
     else set.mutate({ users: [...ids, id], teams: teamIDs })
   }
 
-  const body = (
-    <>
+  return (
+    <div className="tpl-collaborators">
       <div className="people">
         {t.team ? (
           <span className="person person-owner">
@@ -1324,17 +858,7 @@ function Collaborators({ template: t, bare = false }: { template: Template; bare
         </div>
       )}
       {set.error && <div className="alert">{set.error.message}</div>}
-    </>
-  )
-  if (bare) return <div className="tpl-collaborators">{body}</div>
-  return (
-    <section className="panel form section">
-      <div className="form-section-head">
-        <h2>Collaborators</h2>
-        <span className="muted small">People edit it; a team's viewers use it and its members edit it.</span>
-      </div>
-      {body}
-    </section>
+    </div>
   )
 }
 

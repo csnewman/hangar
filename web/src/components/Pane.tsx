@@ -5,6 +5,8 @@ import { useState, type ReactNode, type Ref } from 'react'
 import { NavLink } from 'react-router'
 
 import { copyText } from '../code/ContextMenu'
+import { usePhone } from '../phone'
+import { PhoneBack, PhoneHead } from './Phone'
 
 // PaneRoot is a page that fills the window and scrolls inside: its bar at
 // the top, then a list beside the chosen one, or a page of its own.
@@ -13,11 +15,15 @@ export function PaneRoot({ children }: { children: ReactNode }) {
 }
 
 // PaneBar is a page's title, with what it is searched by and what it makes
-// at the far end.
-export function PaneBar({ title, children }: { title: string; children?: ReactNode }) {
+// at the far end. aside sits beside the title itself, as a phone puts its
+// add button.
+export function PaneBar({ title, aside, children }: { title: string; aside?: ReactNode; children?: ReactNode }) {
   return (
     <header className="pane-bar">
-      <h1>{title}</h1>
+      <div className="pane-bar-title">
+        <h1>{title}</h1>
+        {aside}
+      </div>
       {children && <div className="pane-bar-actions">{children}</div>}
     </header>
   )
@@ -63,7 +69,35 @@ export function SearchField({
 }
 
 // MasterDetail is a list of things on the left and the chosen one beside it.
-export function MasterDetail({ list, children }: { list: ReactNode; children: ReactNode }) {
+// On a phone they are two screens: the list until one is chosen, then the
+// chosen one, under a bar back to the list. chosen says whether one is;
+// back is that way back.
+export function MasterDetail({
+  list,
+  children,
+  chosen = false,
+  back,
+}: {
+  list: ReactNode
+  children: ReactNode
+  chosen?: boolean
+  back?: { to: string; label: string }
+}) {
+  const phone = usePhone()
+  if (phone) {
+    return (
+      <div className="md md-phone">
+        {chosen ? (
+          <div className="md-detail">
+            {back && <PhoneBack back={back} />}
+            {children}
+          </div>
+        ) : (
+          list
+        )}
+      </div>
+    )
+  }
   return (
     <div className="md">
       {list}
@@ -73,10 +107,23 @@ export function MasterDetail({ list, children }: { list: ReactNode; children: Re
 }
 
 // ListPane is the list: what it is searched by and made with at its head,
-// then its groups.
-export function ListPane({ head, children }: { head?: ReactNode; children: ReactNode }) {
+// then its groups. On a phone it is a screen of its own, under its title,
+// with back the way to where it was reached from.
+export function ListPane({
+  head,
+  title,
+  back,
+  children,
+}: {
+  head?: ReactNode
+  title?: string
+  back?: { to: string; label: string }
+  children: ReactNode
+}) {
+  const phone = usePhone()
   return (
-    <nav className="md-list">
+    <nav className="md-list" aria-label={title}>
+      {phone && title && <PhoneHead back={back} title={title} />}
       {head && <div className="md-list-head">{head}</div>}
       <div className="md-list-body">{children}</div>
     </nav>

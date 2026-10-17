@@ -90,3 +90,71 @@
 .tpl-collaborators .people {
   margin-top: 0;
 }
+
+/* In a narrow pane, a phone's included, each repository is a card of its
+   fields, one under another, each named. */
+@container (max-width: 640px) {
+  .tpl-form .pane-head-main {
+    flex: 1 1 calc(100% - 60px);
+  }
+
+  .tpl-form .pane-head-actions {
+    flex: 1 1 100%;
+  }
+
+  .tpl-repos thead {
+    display: none;
+  }
+
+  .tpl-repos,
+  .tpl-repos tbody,
+  .tpl-repos tr,
+  .tpl-repos td {
+    display: block;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .tpl-repos tr {
+    position: relative;
+    box-sizing: border-box;
+    margin-bottom: 8px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+
+  .tpl-repos td,
+  .tpl-repos tr:last-child td {
+    padding: 0 0 6px;
+    border-bottom: 0;
+  }
+
+  .tpl-repos td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 3px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .tpl-repos td:last-child {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: auto;
+    padding: 0;
+  }
+
+  .tpl-repos td:first-child {
+    padding-right: 32px;
+  }
+}
+
+@media (max-width: 640px) {
+  .md-list-head .tpl-new {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+  }
+}

@@ -13,3 +13,17 @@
   display: block;
   line-height: 1.5;
 }
+
+/* On a phone the list ends with how to push an image. */
+.images-push {
+  padding: 18px 16px 24px;
+  container-type: inline-size;
+}
+
+/* In a narrow pane a tag's age goes, which leaves its digest room. */
+@container (max-width: 440px) {
+  .images-tags th:nth-child(4),
+  .images-tags td:nth-child(4) {
+    display: none;
+  }
+}

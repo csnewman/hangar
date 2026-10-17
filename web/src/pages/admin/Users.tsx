@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ChevronDown, Plus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 
@@ -8,7 +8,6 @@ import { useMe } from '../../session'
 import { Activity } from '../../components/Activity'
 import { ConfirmButton } from '../../components/ConfirmButton'
 import { formatAgo, formatMemory } from '../../components/format'
-import { PageHeader } from '../../components/PageHeader'
 import {
   DetailHead,
   DetailPage,
@@ -27,18 +26,15 @@ import {
 } from '../../components/Pane'
 import { PhaseBadge } from '../../components/Status'
 import { useEnvironments } from '../../environments'
-import { usePhone } from '../../phone'
 import { useEnvironmentTarget } from '../../workspaceLinks'
 
 const usersKey = ['users'] as const
 
-// UsersPage is who can sign in, and who can administer Hangar. On a
-// computer it is a list of them beside the one chosen, or the form for a
-// new one; on a phone, a table of them.
+// UsersPage is who can sign in, and who can administer Hangar: a list of
+// them beside the one chosen, or the form for a new one.
 export function UsersPage() {
   const { id } = useParams()
-  if (!usePhone()) return <UsersPane id={id} />
-  return <UserTable />
+  return <UsersPane id={id} />
 }
 
 function UsersPane({ id }: { id?: string }) {
@@ -65,8 +61,12 @@ function UsersPane({ id }: { id?: string }) {
   return (
     <PaneRoot>
       <MasterDetail
+        chosen={!!id}
+        back={{ to: '/admin/users', label: 'Users' }}
         list={
           <ListPane
+            title="Users"
+            back={{ to: '/more', label: 'More' }}
             head={
               <>
                 <SearchField value={query} onChange={setQuery} placeholder="Users" />
@@ -276,180 +276,6 @@ function NewUser() {
         />
       </DetailPage>
     </>
-  )
-}
-
-function UserTable() {
-  const [creating, setCreating] = useState(false)
-  const users = useQuery({ queryKey: usersKey, queryFn: api.users, refetchInterval: 10_000 })
-
-  return (
-    <div className="page">
-      <PageHeader
-        crumbs={[{ label: 'Administration' }]}
-        title="Users"
-        subtitle="Who can sign in, and who can administer Hangar."
-        actions={
-          !creating && (
-            <button type="button" className="btn btn-primary" onClick={() => setCreating(true)}>
-              <Plus size={15} />
-              New user
-            </button>
-          )
-        }
-      />
-
-      {creating && <CreateForm onDone={() => setCreating(false)} />}
-      {users.isError && <div className="alert">Could not load users: {users.error.message}</div>}
-
-      <div className="panel">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>User</th>
-              <th>Role</th>
-              <th>Status</th>
-              <th className="num">Environments</th>
-              <th>Created</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {users.data?.map((u) => <UserRow key={u.id} user={u} />)}
-            {users.isPending && (
-              <tr>
-                <td colSpan={6} className="empty">
-                  Loading…
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-function UserRow({ user: u }: { user: User }) {
-  const me = useMe()
-  const qc = useQueryClient()
-  const [resetting, setResetting] = useState(false)
-  const update = useMutation({
-    mutationFn: (body: UpdateUser) => api.updateUser(u.id, body),
-    onSettled: () => qc.invalidateQueries({ queryKey: usersKey }),
-  })
-  const remove = useMutation({
-    mutationFn: () => api.deleteUser(u.id),
-    onSettled: () => qc.invalidateQueries({ queryKey: usersKey }),
-  })
-  const busy = update.isPending || remove.isPending
-  const error = update.error ?? remove.error
-  const self = u.id === me.id
-
-  return (
-    <tr className={u.disabled ? 'row-disabled' : undefined}>
-      <td>
-        <div className="strong">
-          {u.display_name || u.username}
-          {self && <span className="you">you</span>}
-        </div>
-        <div className="muted small">{u.username}</div>
-      </td>
-      <td>
-        <RoleSelect
-          admin={u.admin}
-          disabled={busy || self}
-          title={self ? 'Another administrator must change your role' : undefined}
-          onChange={(admin) => update.mutate({ admin })}
-        />
-      </td>
-      <td>
-        {u.disabled ? (
-          <span className="badge badge-bad">
-            <span className="dot" />
-            disabled
-          </span>
-        ) : (
-          <span className="badge badge-good">
-            <span className="dot" />
-            active
-          </span>
-        )}
-        {error && <div className="reason reason-bad">{error.message}</div>}
-        {resetting && (
-          <ResetPassword
-            onCancel={() => setResetting(false)}
-            onSubmit={(password) => update.mutate({ password }, { onSuccess: () => setResetting(false) })}
-          />
-        )}
-      </td>
-      <td className="num" data-label="Environments">
-        {u.environments}
-      </td>
-      <td className="muted nowrap" data-label="Created">
-        {formatAgo(u.created_at)}
-      </td>
-      <td>
-        <div className="actions">
-          {u.has_password && !self && (
-            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => setResetting(true)}>
-              Reset password
-            </button>
-          )}
-          {!self && (
-            <button
-              type="button"
-              className="btn btn-ghost"
-              disabled={busy}
-              onClick={() => update.mutate({ disabled: !u.disabled })}
-            >
-              {u.disabled ? 'Enable' : 'Disable'}
-            </button>
-          )}
-          <Link to={`/admin/audit?subject=${encodeURIComponent(`user:${u.id}`)}`} className="btn btn-ghost">
-            Activity
-          </Link>
-          {!self && (
-            <ConfirmButton
-              label="Delete"
-              confirmLabel="Delete?"
-              disabled={busy || u.environments > 0}
-              title={u.environments > 0 ? 'Owns environments: delete them first, or disable the user' : undefined}
-              onConfirm={() => remove.mutate()}
-            />
-          )}
-        </div>
-      </td>
-    </tr>
-  )
-}
-
-// RoleSelect shows a user's role as a badge that is also the control for
-// changing it.
-function RoleSelect({
-  admin,
-  disabled,
-  title,
-  onChange,
-}: {
-  admin: boolean
-  disabled: boolean
-  title?: string
-  onChange: (admin: boolean) => void
-}) {
-  return (
-    <span className={admin ? 'role-select role-admin' : 'role-select'} title={title}>
-      <select
-        aria-label="Role"
-        value={admin ? 'admin' : 'user'}
-        disabled={disabled}
-        onChange={(e) => onChange(e.target.value === 'admin')}
-      >
-        <option value="user">User</option>
-        <option value="admin">Administrator</option>
-      </select>
-      <ChevronDown size={12} />
-    </span>
   )
 }
 

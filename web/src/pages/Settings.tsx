@@ -7,6 +7,7 @@ import {
   History,
   KeyRound,
   LockKeyhole,
+  LogOut,
   MonitorUp,
   Palette,
   Plus,
@@ -15,7 +16,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
-import { Link, Navigate, useLocation, useParams, useSearchParams } from 'react-router'
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { api, type LoginKey, type SSHKey } from '../api'
 import { Activity } from '../components/Activity'
@@ -39,10 +40,9 @@ import {
 import { desktop } from '../desktop'
 import { usePhone } from '../phone'
 import { profileKey } from '../profile'
-import { useMe } from '../session'
+import { announceSessionChange, useMe } from '../session'
 import type { Theme } from '../theme'
 import { tokensKey, useThemeChoice } from './themeChoice'
-import { PhoneAccount } from './Account'
 
 type Page = {
   id: string
@@ -115,34 +115,45 @@ function accountPage(hash: string, show: string | null): string {
   return named[show ?? ''] ?? named[hash.replace(/^#/, '')] ?? 'account'
 }
 
-// AccountPage is the account on a phone, which shows it as a screen of its
-// own; on a computer it is the matching page of Settings.
+// AccountPage is where Account was: the matching page of Settings.
 export function AccountPage() {
   const { hash } = useLocation()
   const [params] = useSearchParams()
-  if (usePhone()) return <PhoneAccount />
   return <Navigate to={`/settings/${accountPage(hash, params.get('show'))}`} replace />
 }
 
 // SettingsPage is the user's own settings, laid out as an IDE lays out its
 // own: a list of pages in groups on the left, searched by name, and the
-// chosen one beside it. A phone shows its account screen.
+// chosen one beside it. On a phone the list is a screen of its own, the
+// tab Settings leads to, with who is signed in at its head and signing out
+// at its foot; a page is a screen under a bar back to it.
 export function SettingsPage() {
   const { page: id } = useParams()
   const me = useMe()
+  const phone = usePhone()
   const [query, setQuery] = useState('')
-  if (usePhone()) return <PhoneAccount />
   const page = pages.find((p) => p.id === id)
-  if (!page) return <Navigate to="/settings/account" replace />
+  if (!page && (id || !phone)) return <Navigate to={phone ? '/settings' : '/settings/account'} replace />
   const q = query.trim().toLowerCase()
-  const shown = pages.filter((p) => !q || p.label.toLowerCase().includes(q) || p.about.toLowerCase().includes(q))
+  const shown = pages.filter(
+    (p) =>
+      // The phone's list leads to the account from who is signed in.
+      !(phone && !q && p.id === 'account') &&
+      (!q || p.label.toLowerCase().includes(q) || p.about.toLowerCase().includes(q)),
+  )
   const groups = (['You', 'Keys', 'Apps'] as const).map((g) => ({ g, list: shown.filter((p) => p.group === g) }))
 
   return (
     <PaneRoot>
       <MasterDetail
+        chosen={!!page}
+        back={{ to: '/settings', label: 'Settings' }}
         list={
-          <ListPane head={<SearchField value={query} onChange={setQuery} placeholder="Search settings" />}>
+          <ListPane
+            title="Settings"
+            head={<SearchField value={query} onChange={setQuery} placeholder="Search settings" />}
+          >
+            {phone && !q && <Who />}
             {groups.map(
               ({ g, list }) =>
                 list.length > 0 && (
@@ -154,22 +165,72 @@ export function SettingsPage() {
                 ),
             )}
             {shown.length === 0 && <div className="md-empty-list">No setting matches.</div>}
+            {phone && <SignOut />}
           </ListPane>
         }
       >
-        <DetailHead title={page.label} sub={<span>{page.about}</span>} />
-        <DetailPage wide={page.id === 'activity'}>
-          {page.id === 'account' && <AccountSettings />}
-          {page.id === 'appearance' && <AppearanceSettings />}
-          {page.id === 'activity' && <Activity subjects={[`actor:${me.id}`]} />}
-          {page.id === 'ssh-keys' && <SSHKeySettings />}
-          {page.id === 'sign-in-keys' && <SignInKeySettings />}
-          {page.id === 'access-tokens' && <TokenSettings />}
-          {page.id === 'vscode' && <VSCodeSettings />}
-          {page.id === 'desktop-app' && <DesktopAppSettings />}
-        </DetailPage>
+        {page && (
+          <>
+            <DetailHead title={page.label} sub={<span>{page.about}</span>} />
+            <DetailPage wide={page.id === 'activity'}>
+              {page.id === 'account' && <AccountSettings />}
+              {page.id === 'appearance' && <AppearanceSettings />}
+              {page.id === 'activity' && <Activity subjects={[`actor:${me.id}`]} />}
+              {page.id === 'ssh-keys' && <SSHKeySettings />}
+              {page.id === 'sign-in-keys' && <SignInKeySettings />}
+              {page.id === 'access-tokens' && <TokenSettings />}
+              {page.id === 'vscode' && <VSCodeSettings />}
+              {page.id === 'desktop-app' && <DesktopAppSettings />}
+            </DetailPage>
+          </>
+        )}
       </MasterDetail>
     </PaneRoot>
+  )
+}
+
+// Who heads the phone's list of settings: who is signed in, leading to
+// their account.
+function Who() {
+  const me = useMe()
+  const name = me.display_name || me.username
+  return (
+    <Link to="/settings/account" className="md-item settings-who">
+      <span className="settings-who-avatar" aria-hidden="true">
+        {initials(name)}
+      </span>
+      <span className="md-item-main">
+        <span className="md-item-title">{name}</span>
+        <span className="md-item-sub">
+          {me.admin ? 'Administrator' : 'User'} · {me.username}
+        </span>
+      </span>
+    </Link>
+  )
+}
+
+function initials(name: string): string {
+  const parts = name.split(/[\s._@-]+/).filter(Boolean)
+  return (parts.length > 1 ? parts[0][0] + parts[1][0] : name.slice(0, 2)).toUpperCase()
+}
+
+// SignOut ends the phone's list of settings.
+function SignOut() {
+  const qc = useQueryClient()
+  const navigate = useNavigate()
+  const logout = useMutation({
+    mutationFn: api.logout,
+    onSettled: () => {
+      qc.clear()
+      announceSessionChange()
+      navigate('/login', { replace: true })
+    },
+  })
+  return (
+    <button type="button" className="settings-signout" disabled={logout.isPending} onClick={() => logout.mutate()}>
+      <LogOut size={17} />
+      Sign out
+    </button>
   )
 }
 
@@ -328,7 +389,7 @@ function SSHKeySettings() {
         {keys.length === 0 ? (
           <p className="muted">No keys.</p>
         ) : (
-          <table className="pane-table">
+          <table className="pane-table settings-table">
             <thead>
               <tr>
                 <th>Name</th>
@@ -468,7 +529,7 @@ function SignInKeySettings() {
         {keys.length === 0 ? (
           <p className="muted">No keys.</p>
         ) : (
-          <table className="pane-table">
+          <table className="pane-table settings-table">
             <thead>
               <tr>
                 <th>Name</th>
@@ -589,7 +650,7 @@ function TokenSettings() {
         ) : !tokens.data || tokens.data.length === 0 ? (
           <p className="muted">{tokens.isPending ? 'Loading…' : 'No tokens.'}</p>
         ) : (
-          <table className="pane-table">
+          <table className="pane-table settings-table">
             <thead>
               <tr>
                 <th>Name</th>

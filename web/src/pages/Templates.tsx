@@ -15,96 +15,35 @@ import {
   SearchField,
   Tile,
 } from '../components/Pane'
-import { PhoneHead, PhoneRow, PhoneSection } from '../components/Phone'
-import { usePhone } from '../phone'
 import { useMe } from '../session'
 import { groupTemplates, specLine, useTemplates } from '../templates'
 import { useTeams } from '../teams'
 
-// TemplatesPage is the templates: on a computer the list, with nothing yet
-// chosen beside it; on a phone a screen of them, grouped as the list is.
+// TemplatesPage is the templates, with nothing yet chosen beside them; on a
+// phone the list alone.
 export function TemplatesPage() {
-  const me = useMe()
-  const templates = useTemplates()
-  const teams = useTeams()
-  const { mine, teams: teamGroups, collaborating, others } = groupTemplates(templates.data ?? [], me, teams.data)
-  const phone = usePhone()
-
-  if (!phone) {
-    return (
-      <TemplatesLayout>
-        <NoneChosen>
-          <p>Choose a template to see and change it, or make a new one.</p>
-          <Link to="/templates/new" className="btn btn-primary btn-sm">
-            <Plus size={14} />
-            New template
-          </Link>
-        </NoneChosen>
-      </TemplatesLayout>
-    )
-  }
-
   return (
-    <div className="page phone-page">
-      <PhoneHead
-        back={{ to: '/more', label: 'More' }}
-        title="Templates"
-        actions={
-          <Link to="/templates/new" className="phone-icon-btn" aria-label="New template">
-            <Plus size={22} />
-          </Link>
-        }
-      />
-
-      {templates.isError && <div className="alert">Could not load templates: {templates.error.message}</div>}
-
-      <TemplateSection
-        title="Yours"
-        templates={mine}
-        loading={templates.isPending}
-        empty={
-          <>
-            You have no templates. <Link to="/templates/new">Make one</Link> to stop starting from scratch.
-          </>
-        }
-      />
-      {teamGroups.map(({ team, templates: owned }) => (
-        <TemplateSection
-          key={team.id}
-          title={
-            <>
-              Team <Link to={`/teams/${team.id}`}>{team.name}</Link>
-            </>
-          }
-          templates={owned}
-          empty={
-            team.role === 'viewer' ? (
-              'The team has no templates yet.'
-            ) : (
-              <>
-                The team has no templates yet. <Link to={`/templates/new?team=${team.id}`}>Make one</Link>.
-              </>
-            )
-          }
-        />
-      ))}
-      {collaborating.length > 0 && <TemplateSection title="Shared with you to edit" templates={collaborating} />}
-      <TemplateSection
-        title={me.admin ? 'Everyone else’s' : 'Shared by others'}
-        templates={others}
-        loading={templates.isPending}
-        empty="Nobody else has shared a template."
-      />
-    </div>
+    <TemplatesLayout>
+      <NoneChosen>
+        <p>Choose a template to see and change it, or make a new one.</p>
+        <Link to="/templates/new" className="btn btn-primary btn-sm">
+          <Plus size={14} />
+          New template
+        </Link>
+      </NoneChosen>
+    </TemplatesLayout>
   )
 }
 
 // TemplatesLayout is the templates down the left, grouped by whose they
-// are, and beside them the one chosen (children).
-export function TemplatesLayout({ children }: { children?: ReactNode }) {
+// are, and beside them the one chosen (children). chosen says one is, which
+// a phone shows on its own, under a way back to the list.
+export function TemplatesLayout({ children, chosen = false }: { children?: ReactNode; chosen?: boolean }) {
   return (
     <PaneRoot>
-      <MasterDetail list={<TemplateList />}>{children}</MasterDetail>
+      <MasterDetail list={<TemplateList />} chosen={chosen} back={{ to: '/templates', label: 'Templates' }}>
+        {children}
+      </MasterDetail>
     </PaneRoot>
   )
 }
@@ -137,6 +76,8 @@ function TemplateList() {
 
   return (
     <ListPane
+      title="Templates"
+      back={{ to: '/more', label: 'More' }}
       head={
         <>
           <SearchField value={query} onChange={setQuery} placeholder="Templates" />
@@ -163,41 +104,6 @@ function TemplateList() {
         <div className="md-empty-list">{q ? 'No template matches.' : 'No templates yet.'}</div>
       )}
     </ListPane>
-  )
-}
-
-// TemplateSection is one group of templates on a phone's screen of them.
-function TemplateSection({
-  title,
-  templates,
-  loading = false,
-  empty,
-}: {
-  title: ReactNode
-  templates: Template[]
-  loading?: boolean
-  empty?: ReactNode
-}) {
-  const me = useMe()
-  return (
-    <PhoneSection
-      title={
-        <>
-          {title} · {templates.length}
-        </>
-      }
-      note={!loading && templates.length === 0 ? empty : undefined}
-    >
-      {templates.map((t) => (
-        <PhoneRow
-          key={t.id}
-          to={`/templates/${t.id}`}
-          label={t.name}
-          sub={`${specLine(t.spec, t.name_pattern)} · ${t.team ? `team ${t.team.name}` : t.owner.id === me.id ? 'yours' : `by ${t.owner.display_name || t.owner.username}`}`}
-          end={<VisibilityBadge template={t} />}
-        />
-      ))}
-    </PhoneSection>
   )
 }
 
