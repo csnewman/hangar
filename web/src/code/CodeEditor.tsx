@@ -18,7 +18,7 @@ import {
   syntaxHighlighting,
 } from '@codemirror/language'
 import { languages } from '@codemirror/language-data'
-import { gotoLine, highlightSelectionMatches, openSearchPanel, searchKeymap, selectNextOccurrence } from '@codemirror/search'
+import { highlightSelectionMatches, selectNextOccurrence } from '@codemirror/search'
 import { Compartment, countColumn, EditorSelection, EditorState, Prec, type Extension } from '@codemirror/state'
 import {
   crosshairCursor,
@@ -35,7 +35,7 @@ import {
   ViewPlugin,
 } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
-import { formatDocument, LSPPlugin, renameSymbol } from '@codemirror/lsp-client'
+import { formatDocument, LSPPlugin } from '@codemirror/lsp-client'
 import { useContext, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next'
@@ -46,7 +46,11 @@ import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './Cont
 import { baseText, gitGutter, hunkAt, rollback, setBase, staged, type Hunk } from './gitGutter'
 import { isDark, onDarkChange } from '../theme'
 import { blameField, blameGutter, blameMarkers, setBlame } from './blame'
+import { openGotoLine, registerPopups, startRename } from './editorPopups'
 import { EditorStatusContext } from './editorStatus'
+import { findBar, openFind, openReplace } from './FindBar'
+import { GotoLine } from './GotoLine'
+import { RenamePopup } from './RenamePopup'
 import { languageId, Languages, LanguagesContext, type ServerState } from './lsp'
 import type { Jump } from './Search'
 
@@ -96,7 +100,8 @@ export const followScheme: Extension = [
 ]
 
 // editorSetup is CodeMirror's basic setup, less its own undo history: a
-// shared document's undo is Yjs's, which undoes only this window's edits.
+// shared document's undo is Yjs's, which undoes only this window's edits;
+// and with IntelliJ's find bar in place of CodeMirror's search panel.
 export const editorSetup: Extension = [
   lineNumbers(),
   highlightActiveLineGutter(),
@@ -115,7 +120,8 @@ export const editorSetup: Extension = [
   crosshairCursor(),
   highlightActiveLine(),
   highlightSelectionMatches(),
-  keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...searchKeymap, ...foldKeymap, indentWithTab]),
+  findBar,
+  keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...foldKeymap, indentWithTab]),
 ]
 
 // codeTheme follows the page's colours, so light and dark need no second
@@ -132,7 +138,52 @@ export const codeTheme = EditorView.theme({
   },
   '.cm-cursor': { borderLeftColor: 'var(--accent)' },
   '.cm-foldGutter .cm-gutterElement': { color: 'var(--muted)' },
-  '.cm-panels': { backgroundColor: 'var(--surface)', color: 'var(--text)' },
+  '.cm-panels': { backgroundColor: 'var(--surface)', color: 'var(--text)', fontFamily: 'var(--font)' },
+  '.cm-panels.cm-panels-top': { borderBottom: '1px solid var(--border)' },
+  '.cm-panels.cm-panels-bottom': { borderTop: '1px solid var(--border)' },
+  // Matches of the find bar, and the one selected, as IntelliJ marks them.
+  '.cm-searchMatch': { backgroundColor: 'var(--code-find-hit)', outline: 'none', borderRadius: '2px' },
+  '.cm-searchMatch.cm-searchMatch-selected': { backgroundColor: 'var(--code-find-on)' },
+  // A language server's message is a banner across the top of the editor,
+  // as IntelliJ's editor notifications are.
+  '.cm-panel.cm-dialog': {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    padding: '6px 8px 6px 12px',
+    fontSize: '12.5px',
+    backgroundColor: 'var(--accent-soft)',
+  },
+  '.cm-panel.cm-lsp-message-warning': { backgroundColor: 'var(--warn-bg)' },
+  '.cm-panel.cm-lsp-message-error': { backgroundColor: 'var(--danger-bg)' },
+  '.cm-dialog form': { flex: '1', display: 'flex', alignItems: 'center', gap: '12px', minWidth: '0' },
+  '.cm-dialog .cm-button': {
+    flex: 'none',
+    marginLeft: 'auto',
+    padding: '2px 10px',
+    border: '1px solid var(--border-strong)',
+    borderRadius: '5px',
+    background: 'var(--surface)',
+    backgroundImage: 'none',
+    color: 'var(--text)',
+    fontFamily: 'inherit',
+    fontSize: '12px',
+    cursor: 'pointer',
+  },
+  '.cm-dialog .cm-button:hover': { borderColor: 'var(--accent)' },
+  '.cm-dialog .cm-dialog-close': {
+    position: 'static',
+    width: '22px',
+    height: '22px',
+    border: 'none',
+    borderRadius: '5px',
+    background: 'none',
+    color: 'var(--muted)',
+    fontSize: '16px',
+    lineHeight: '1',
+    cursor: 'pointer',
+  },
+  '.cm-dialog .cm-dialog-close:hover': { backgroundColor: 'var(--sidebar-hover)', color: 'var(--text)' },
   '.cm-blame-gutter .cm-gutterElement': {
     boxSizing: 'border-box',
     width: 'var(--blame-width, 170px)',
@@ -234,7 +285,7 @@ const ideaKeys = Prec.high(
     { key: 'Shift-Alt-ArrowUp', run: moveLineUp, preventDefault: true },
     { key: 'Shift-Alt-ArrowDown', run: moveLineDown, preventDefault: true },
     { key: 'Alt-j', mac: 'Ctrl-g', run: selectNextOccurrence, preventDefault: true },
-    { key: 'Mod-g', mac: 'Mod-Alt-g', run: gotoLine, preventDefault: true },
+    { key: 'Mod-g', mac: 'Mod-Alt-g', run: openGotoLine, preventDefault: true },
   ]),
 )
 
@@ -280,6 +331,10 @@ export function CodeEditor({
   const blameSlot = useRef(new Compartment())
   const languages = useContext(LanguagesContext)
   const [server, setServer] = useState<ServerState | null>(null)
+  // What is shown over the editor: Go to Line, or a symbol being renamed.
+  const [popup, setPopup] = useState<
+    { kind: 'goto'; view: EditorView } | { kind: 'rename'; view: EditorView; from: number; to: number } | null
+  >(null)
   // The status bar is told where the caret is, the language, and the server.
   const status = useContext(EditorStatusContext)
   // A file the user may not write -- a library's, reached by going to a
@@ -310,6 +365,9 @@ export function CodeEditor({
       cmd(view)
       view.focus()
     }
+    // open runs what puts the keyboard somewhere of its own: the find bar,
+    // or a popup.
+    const open = (cmd: Command) => () => cmd(view)
     const items: MenuItem[] = [
       {
         label: 'Cut',
@@ -338,15 +396,9 @@ export function CodeEditor({
       { label: 'Redo', shortcut: shortcut('Mod+Shift+Z'), onSelect: run(redoKey.run!) },
       'separator',
       { label: 'Select All', shortcut: shortcut('Mod+A'), onSelect: run(selectAll) },
-      { label: 'Find', shortcut: shortcut('Mod+F'), onSelect: run(openSearchPanel) },
-      {
-        label: 'Replace',
-        onSelect: () => {
-          openSearchPanel(view)
-          view.dom.querySelector<HTMLInputElement>('.cm-search input[name=replace]')?.focus()
-        },
-      },
-      { label: 'Go to Line…', shortcut: shortcut(isMac ? 'Mod+Alt+G' : 'Mod+G'), onSelect: run(gotoLine) },
+      { label: 'Find…', shortcut: shortcut('Mod+F'), onSelect: open(openFind) },
+      { label: 'Replace…', shortcut: shortcut('Mod+R'), disabled: readOnly, onSelect: open(openReplace) },
+      { label: 'Go to Line…', shortcut: shortcut(isMac ? 'Mod+Alt+G' : 'Mod+G'), onSelect: open(openGotoLine) },
       'separator',
       { label: empty ? 'Duplicate Line' : 'Duplicate Selection', shortcut: shortcut('Mod+D'), onSelect: run(duplicate) },
       { label: 'Move Line Up', shortcut: shortcut('Alt+Shift+↑'), onSelect: run(moveLineUp) },
@@ -369,7 +421,7 @@ export function CodeEditor({
         0,
         { label: 'Go to Definition', shortcut: shortcut('Mod+B'), onSelect: run(goToDefinition) },
         { label: 'Find Usages', shortcut: shortcut('Alt+F7'), onSelect: run(findUsages) },
-        { label: 'Rename…', shortcut: shortcut('Shift+F6'), disabled: readOnly, onSelect: run(renameSymbol) },
+        { label: 'Rename…', shortcut: shortcut('Shift+F6'), disabled: readOnly, onSelect: open(startRename) },
         {
           label: 'Reformat Code',
           shortcut: shortcut('Mod+Alt+L'),
@@ -404,10 +456,7 @@ export function CodeEditor({
       {
         label: 'Go to Line…',
         shortcut: shortcut(isMac ? 'Mod+Alt+G' : 'Mod+G'),
-        onSelect: () => {
-          gotoLine(view)
-          view.focus()
-        },
+        onSelect: () => openGotoLine(view),
       },
     ]
     if (h) {
@@ -465,6 +514,10 @@ export function CodeEditor({
         ],
       }),
     })
+    registerPopups(view, {
+      gotoLine: () => setPopup({ kind: 'goto', view }),
+      rename: (from, to) => setPopup({ kind: 'rename', view, from, to }),
+    })
     // A right-click in the gutters -- the line numbers, the changes, the
     // annotations -- is the gutter's menu, not the browser's.
     view.dom.addEventListener('contextmenu', (e) => {
@@ -475,10 +528,7 @@ export function CodeEditor({
       ...caret(view.state),
       language: languageName(path.split('/').pop() ?? ''),
       readOnly,
-      goto: () => {
-        gotoLine(view)
-        view.focus()
-      },
+      goto: () => openGotoLine(view),
     })
     let disposed = false
     languageFor(file.path.split('/').pop() ?? '').then((ext) => {
@@ -618,6 +668,10 @@ export function CodeEditor({
     <>
       <div ref={host} className="code-editor" />
       {menu.menu}
+      {popup?.kind === 'goto' && <GotoLine view={popup.view} onClose={() => setPopup(null)} />}
+      {popup?.kind === 'rename' && (
+        <RenamePopup view={popup.view} from={popup.from} to={popup.to} onClose={() => setPopup(null)} />
+      )}
       {hunk && (
         <HunkPopover
           {...hunk}

@@ -7,7 +7,6 @@ import {
   languageServerExtensions,
   LSPClient,
   LSPPlugin,
-  renameSymbol,
   showSignatureHelp,
   Workspace,
   type Transport,
@@ -19,6 +18,7 @@ import { EditorView, keymap, type Command } from '@codemirror/view'
 
 import type { CodeClient, MissingServer } from './client'
 import { isMac } from './ContextMenu'
+import { startRename } from './editorPopups'
 import type { Jump } from './Search'
 
 // languageId is the LSP language ID for a file, from its name, or null for
@@ -308,7 +308,7 @@ const mod = (e: MouseEvent) => (isMac ? e.metaKey : e.ctrlKey)
 
 // ideaKeys are IntelliJ's keys for what a server answers: Ctrl/Cmd+B,
 // Ctrl/Cmd+click and F12 go to a definition, Alt+F7 and Shift+F12 find
-// usages, Shift+F6 renames, Ctrl+Alt+L (Cmd+Alt+L) reformats, and
+// usages, Shift+F6 (and F2) renames, Ctrl+Alt+L (Cmd+Alt+L) reformats, and
 // Ctrl/Cmd+P shows a call's parameters.
 function ideaKeys(c: ReturnType<typeof commands>): Extension {
   return [
@@ -318,7 +318,8 @@ function ideaKeys(c: ReturnType<typeof commands>): Extension {
         { key: 'F12', run: c.goToDefinition, preventDefault: true },
         { key: 'Alt-F7', run: c.findUsages, preventDefault: true },
         { key: 'Shift-F12', run: c.findUsages, preventDefault: true },
-        { key: 'Shift-F6', run: renameSymbol, preventDefault: true },
+        { key: 'Shift-F6', run: startRename, preventDefault: true },
+        { key: 'F2', run: startRename, preventDefault: true },
         { key: 'Mod-Alt-l', run: formatDocument, preventDefault: true },
         { key: 'Mod-p', run: showSignatureHelp, preventDefault: true },
       ]),
@@ -468,12 +469,22 @@ export class Languages {
       },
     }
     let workspace: HangarWorkspace | null = null
+    let last = { message: '', at: 0 }
     const client = new LSPClient({
       rootUri: fileUri(res.root),
       timeout: 15_000,
       // A server's information ("Finished loading packages") is not shown;
-      // its warnings and errors are.
-      notificationHandlers: { 'window/showMessage': (_c, p: { type?: number }) => (p?.type ?? 1) >= 3 },
+      // its warnings and errors are, each once: gopls sends the same one
+      // for each folder it loads, moments apart.
+      notificationHandlers: {
+        'window/showMessage': (_c, p: { type?: number; message?: string }) => {
+          if ((p?.type ?? 1) >= 3) return true
+          const now = Date.now()
+          if (p.message === last.message && now - last.at < 10_000) return true
+          last = { message: p.message ?? '', at: now }
+          return false
+        },
+      },
       workspace: (c) => (workspace = new HangarWorkspace(c, this.code, this.opener)),
       extensions: [...languageServerExtensions(), ideaKeys(this.commands)],
     }).connect(transport)
