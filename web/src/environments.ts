@@ -81,11 +81,3 @@ export function settingsSummary(env: Environment): string {
     (s.dax ? ', image files mapped from the host' : '')
   )
 }
-
-// memorySizes are the sizes of memory offered for a machine, in MiB; an
-// environment's or template's own is offered besides, if it is none of them.
-export const memorySizes = [1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64].map((g) => g * 1024)
-
-// withSize is memorySizes with mib among them.
-export const withSize = (mib: number) =>
-  memorySizes.includes(mib) ? memorySizes : [...memorySizes, mib].sort((a, b) => a - b)

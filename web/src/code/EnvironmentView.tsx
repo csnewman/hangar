@@ -19,11 +19,12 @@ import { api, type Environment, type EnvironmentSettings, type TemplateSetting }
 import { Conflicts, CopyChoice, fromWhat, useEnvironmentPacks } from '../components/EnvironmentPacks'
 import { formatAgo, formatBytes, formatMemory, shortDigest } from '../components/format'
 import { imageBuild, imageRisk, useImageChange } from '../components/ImageUpdate'
+import { MemoryField } from '../components/MemoryField'
 import { Banner, CopyField, Row, Rows, Section } from '../components/Pane'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
 import { openInVSCode, useEnvironmentActions } from '../environmentActions'
-import { changeable, environmentsKey, longestWebName, sshCommand, webURL, withSize } from '../environments'
+import { changeable, environmentsKey, longestWebName, sshCommand, webURL } from '../environments'
 import { copyName, packPath } from '../pages/Packs'
 import { useMe } from '../session'
 import { homeTab, otherTab } from '../workspaceLinks'
@@ -758,7 +759,6 @@ function useSettingsForm(env: Environment) {
 function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
   const ok = changeable(env)
   const changed = (key: keyof EnvironmentSettings) => f.changes.some((c) => c.key === key)
-  const memories = withSize(f.form.memory_mib)
   const placement = Object.entries(env.spec.placement ?? {})
 
   return (
@@ -778,17 +778,7 @@ function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
             />
           </Row>
           <Row label="Memory" modified={changed('memory_mib')}>
-            <select
-              aria-label="Memory"
-              value={f.form.memory_mib}
-              onChange={(e) => f.set({ memory_mib: Number(e.target.value) })}
-            >
-              {memories.map((m) => (
-                <option key={m} value={m}>
-                  {formatMemory(m)}
-                </option>
-              ))}
-            </select>
+            <MemoryField mib={f.form.memory_mib} onChange={(memory_mib) => f.set({ memory_mib })} />
           </Row>
           <Row label="Display" modified={changed('display')}>
             {(['desktop', 'none'] as const).map((d) => (

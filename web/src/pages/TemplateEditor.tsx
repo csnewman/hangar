@@ -6,6 +6,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { api, type Access, type Display, type GPU, type Repo, type Template, type TemplateInput } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { formatMemory } from '../components/format'
+import { MemoryField } from '../components/MemoryField'
 import { PageHeader } from '../components/PageHeader'
 import {
   ApplyBar,
@@ -319,16 +320,8 @@ function Editor({ existing }: { existing?: Template }) {
             />
           </label>
           <label className="field">
-            <span>Memory (MiB)</span>
-            <input
-              type="number"
-              min={512}
-              max={262144}
-              step={512}
-              required
-              value={spec.memory_mib}
-              onChange={(e) => setSpec({ memory_mib: Number(e.target.value) })}
-            />
+            <span>Memory</span>
+            <MemoryField mib={spec.memory_mib} onChange={(memory_mib) => setSpec({ memory_mib })} />
           </label>
         </div>
         <div className="field-row">
@@ -792,18 +785,7 @@ function Editor({ existing }: { existing?: Template }) {
                 />
               </Row>
               <Row label={label('Memory', 'tpl-memory')} modified={changed('memory')}>
-                <input
-                  id="tpl-memory"
-                  type="number"
-                  className="tpl-memory"
-                  min={512}
-                  max={262144}
-                  step={512}
-                  required
-                  value={spec.memory_mib}
-                  onChange={(e) => setSpec({ memory_mib: Number(e.target.value) })}
-                />
-                <span className="muted">MiB{spec.memory_mib >= 1024 && `, ${formatMemory(spec.memory_mib)}`}</span>
+                <MemoryField id="tpl-memory" mib={spec.memory_mib} onChange={(memory_mib) => setSpec({ memory_mib })} />
               </Row>
               <Row label={label('Display', 'tpl-display')} modified={changed('display')}>
                 <select

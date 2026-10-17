@@ -4,11 +4,11 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 
 import { api, type EnvironmentSettings, type Template } from '../api'
-import { formatMemory } from '../components/format'
+import { MemoryField } from '../components/MemoryField'
 import { Row, Rows, SearchField, Segmented, Tile } from '../components/Pane'
 import { desktop } from '../desktop'
 import { PhoneFoot, PhoneHead, PhoneNav, PhoneRow, PhoneSection, PhoneValue } from '../components/Phone'
-import { environmentsKey, useEnvironments, withSize } from '../environments'
+import { environmentsKey, useEnvironments } from '../environments'
 import { useMe } from '../session'
 import {
   checkName,
@@ -514,17 +514,11 @@ function NewEnvironmentForm({
               </label>
               <label>
                 Memory
-                <select
+                <MemoryField
                   className="pane-input"
-                  value={m.memory_mib}
-                  onChange={(e) => onMachine({ ...m, memory_mib: Number(e.target.value) })}
-                >
-                  {withSize(m.memory_mib).map((v) => (
-                    <option key={v} value={v}>
-                      {formatMemory(v)}
-                    </option>
-                  ))}
-                </select>
+                  mib={m.memory_mib}
+                  onChange={(memory_mib) => onMachine({ ...m, memory_mib })}
+                />
               </label>
               <Segmented
                 label="Display"

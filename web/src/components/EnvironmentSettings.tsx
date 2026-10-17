@@ -3,6 +3,7 @@ import { useState } from 'react'
 
 import { api, type Environment, type EnvironmentSettings, type TemplateSetting } from '../api'
 import { changeable, environmentsKey } from '../environments'
+import { MemoryField } from './MemoryField'
 
 const settingNames: Record<TemplateSetting, string> = {
   image: 'image',
@@ -115,16 +116,8 @@ export function SettingsForm({
             />
           </label>
           <label className="field">
-            <span>Memory (MiB)</span>
-            <input
-              type="number"
-              min={512}
-              max={262144}
-              step={512}
-              required
-              value={form.memory_mib}
-              onChange={(e) => setForm({ ...form, memory_mib: Number(e.target.value) })}
-            />
+            <span>Memory</span>
+            <MemoryField mib={form.memory_mib} onChange={(memory_mib) => setForm({ ...form, memory_mib })} />
           </label>
         </div>
         <div className="field-row">

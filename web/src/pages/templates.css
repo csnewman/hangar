@@ -35,10 +35,6 @@
   color: var(--muted);
 }
 
-.tpl-memory {
-  width: 96px;
-}
-
 /* A value that holds several controls, one under another. */
 .tpl-block {
   flex: 1;
