@@ -1,3 +1,4 @@
+import type { EditorView } from '@codemirror/view'
 import { useEffect, useState } from 'react'
 
 import type { CodeClient, GitStatus, SharedFile } from './client'
@@ -11,9 +12,11 @@ import { DockerLogs } from './DockerView'
 import { EnvironmentView } from './EnvironmentView'
 import { HexView } from './HexView'
 import { ImageView } from './ImageView'
+import { isMarkdown, MarkdownPreview, MarkdownSplit, useYText } from './MarkdownPreview'
+import { MediaView } from './MediaView'
 import type { Jump } from './Search'
 import { TabBar, tabKey, type Tab } from './TabBar'
-import { openWith, opensAsImage, type FileView } from './views'
+import { openWith, opensAs, type FileView } from './views'
 
 export { tabKey, type Tab } from './TabBar'
 
@@ -120,6 +123,7 @@ export function EditorArea({
             jump={jump}
             onReveal={onReveal}
             onShowCommit={onShowCommit}
+            onOpenFile={(path) => onOpen({ kind: 'file', path })}
           />
         )}
         {current?.kind === 'diff' && (
@@ -169,7 +173,8 @@ export function EditorArea({
 }
 
 // FileTab shows a file in the view chosen for it, else the one its content
-// calls for: an image as an image, other bytes as hex, text to edit.
+// calls for: an image as an image, a PDF, sound or video played, other bytes
+// as hex, text to edit.
 function FileTab({
   client,
   path,
@@ -178,6 +183,7 @@ function FileTab({
   jump,
   onReveal,
   onShowCommit,
+  onOpenFile,
 }: {
   client: CodeClient
   path: string
@@ -186,8 +192,9 @@ function FileTab({
   jump: (Jump & { n: number }) | null
   onReveal: (path: string) => void
   onShowCommit: (hash: string, path: string) => void
+  onOpenFile: (path: string) => void
 }) {
-  const [shown, setShown] = useState<FileView | null>(view ?? (opensAsImage(path) ? 'image' : null))
+  const [shown, setShown] = useState<FileView | null>(view ?? opensAs(path))
   useEffect(() => {
     if (shown) return
     client.probe(path).then(
@@ -198,13 +205,23 @@ function FileTab({
   }, [client, path, shown])
   if (shown === 'image') return <ImageView client={client} path={path} />
   if (shown === 'hex') return <HexView client={client} path={path} />
+  if (shown === 'pdf' || shown === 'media') return <MediaView client={client} path={path} kind={shown} />
   if (!shown) return <div className="code-empty"><p className="muted">Opening {path}…</p></div>
   return (
-    <TextTab client={client} path={path} user={user} jump={jump} onReveal={onReveal} onShowCommit={onShowCommit} />
+    <TextTab
+      client={client}
+      path={path}
+      user={user}
+      jump={jump}
+      onReveal={onReveal}
+      onShowCommit={onShowCommit}
+      onOpenFile={onOpenFile}
+    />
   )
 }
 
-// TextTab is a text file, shared with everyone who has it open.
+// TextTab is a text file, shared with everyone who has it open, and
+// Markdown beside its preview.
 function TextTab({
   client,
   path,
@@ -212,6 +229,7 @@ function TextTab({
   jump,
   onReveal,
   onShowCommit,
+  onOpenFile,
 }: {
   client: CodeClient
   path: string
@@ -219,6 +237,7 @@ function TextTab({
   jump: (Jump & { n: number }) | null
   onReveal: (path: string) => void
   onShowCommit: (hash: string, path: string) => void
+  onOpenFile: (path: string) => void
 }) {
   const [file, setFile] = useState<SharedFile | null>(null)
   const [error, setError] = useState('')
@@ -264,6 +283,20 @@ function TextTab({
 
   if (error) return <div className="code-empty"><p className="code-note-error">{error}</p></div>
   if (!file) return <div className="code-empty"><p className="muted">Opening {path}…</p></div>
+  if (isMarkdown(path)) {
+    return (
+      <MarkdownTab
+        client={client}
+        file={file}
+        path={path}
+        user={user}
+        jump={jump}
+        onReveal={onReveal}
+        onShowCommit={onShowCommit}
+        onOpenFile={onOpenFile}
+      />
+    )
+  }
   return (
     <CodeEditor
       file={file}
@@ -273,6 +306,47 @@ function TextTab({
       jump={jump}
       onReveal={onReveal}
       onShowCommit={onShowCommit}
+    />
+  )
+}
+
+// MarkdownTab is a Markdown file's editor and its preview, kept level.
+function MarkdownTab({
+  client,
+  file,
+  path,
+  user,
+  jump,
+  onReveal,
+  onShowCommit,
+  onOpenFile,
+}: {
+  client: CodeClient
+  file: SharedFile
+  path: string
+  user: { name: string; color: string }
+  jump: (Jump & { n: number }) | null
+  onReveal: (path: string) => void
+  onShowCommit: (hash: string, path: string) => void
+  onOpenFile: (path: string) => void
+}) {
+  const text = useYText(file.text)
+  const [view, setView] = useState<EditorView | null>(null)
+  return (
+    <MarkdownSplit
+      editor={
+        <CodeEditor
+          file={file}
+          user={user}
+          client={client}
+          path={path}
+          jump={jump}
+          onReveal={onReveal}
+          onShowCommit={onShowCommit}
+          onView={setView}
+        />
+      }
+      preview={<MarkdownPreview client={client} path={path} text={text} editor={view} onOpen={onOpenFile} />}
     />
   )
 }

@@ -4,6 +4,7 @@ import {
   ChevronDown,
   File,
   FileText,
+  FileVideo,
   GitCompare,
   Image as ImageIcon,
   Monitor,
@@ -13,7 +14,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 
 import { useContextMenu } from './ContextMenu'
-import { opensAsImage, viewNames, type FileView } from './views'
+import { opensAs, viewNames, type FileView } from './views'
 
 // A tab is a file, its changes, a container's logs (path is then the
 // container's ID, and title its name), the environment's desktop, which
@@ -296,8 +297,12 @@ export function TabBar({
                   <Activity size={13} className="code-icon-file" />
                 ) : t.view === 'hex' ? (
                   <Binary size={13} className="code-icon-file" />
-                ) : t.view === 'image' || (!t.view && opensAsImage(t.path)) ? (
+                ) : (t.view ?? opensAs(t.path)) === 'image' ? (
                   <ImageIcon size={13} className="code-icon-file" />
+                ) : (t.view ?? opensAs(t.path)) === 'pdf' ? (
+                  <FileText size={13} className="code-icon-file" />
+                ) : (t.view ?? opensAs(t.path)) === 'media' ? (
+                  <FileVideo size={13} className="code-icon-file" />
                 ) : (
                   <File size={13} className="code-icon-file" />
                 )}

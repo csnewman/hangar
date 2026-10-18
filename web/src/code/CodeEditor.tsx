@@ -50,9 +50,11 @@ import { openGotoLine, registerPopups, startRename } from './editorPopups'
 import { EditorStatusContext } from './editorStatus'
 import { findBar, openFind, openReplace } from './FindBar'
 import { GotoLine } from './GotoLine'
+import { indentation } from './indent'
 import { RenamePopup } from './RenamePopup'
 import { languageId, Languages, LanguagesContext, type ServerState } from './lsp'
 import type { Jump } from './Search'
+import { followSettings, prose, saveWord, setSpelling, spelling, spellingEnabled, suggestions, typoAt } from './spell'
 
 // codeHighlight colours code by the page's --syn-* colours (code.css), which
 // are IntelliJ's for light and dark, so one style serves both.
@@ -248,6 +250,10 @@ function languageName(name: string): string | null {
   return LanguageDescription.matchFilename(languages, name)?.name ?? null
 }
 
+// softWraps is whether a file's long lines wrap when it is opened: those
+// written to be read, as IntelliJ wraps them.
+const softWraps = prose
+
 // caret is where the main caret is, as a line and a column (a tab counted
 // to its stop), and how much is selected.
 function caret(state: EditorState) {
@@ -308,6 +314,7 @@ export function CodeEditor({
   jump,
   onReveal,
   onShowCommit,
+  onView,
 }: {
   file: SharedFile
   user: { name: string; color: string }
@@ -318,6 +325,9 @@ export function CodeEditor({
   onReveal: (path: string) => void
   // onShowCommit shows a commit in the Git Log: one clicked in the blame.
   onShowCommit: (hash: string, path: string) => void
+  // onView is told of the editor once it is made, and of none once it is
+  // gone: a Markdown preview keeps level with it.
+  onView?: (view: EditorView | null) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
   const viewRef = useRef<EditorView | null>(null)
@@ -329,6 +339,11 @@ export function CodeEditor({
   const onShowCommitRef = useRef(onShowCommit)
   onShowCommitRef.current = onShowCommit
   const blameSlot = useRef(new Compartment())
+  // Whether long lines wrap, which the menus change.
+  const [wrapped, setWrapped] = useState(() => softWraps(path))
+  const wrapSlot = useRef(new Compartment())
+  const onViewRef = useRef(onView)
+  onViewRef.current = onView
   const languages = useContext(LanguagesContext)
   const [server, setServer] = useState<ServerState | null>(null)
   // What is shown over the editor: Go to Line, or a symbol being renamed.
@@ -352,11 +367,21 @@ export function CodeEditor({
     if (content !== null) client.setIndex(path, crlf.current ? content.replace(/\n/g, '\r\n') : content).catch(() => {})
   }
 
-  const openMenu = (view: EditorView, e: MouseEvent) => {
+  const openMenu = (view: EditorView, e: MouseEvent, fixes?: { from: number; to: number; word: string; guesses: string[] }) => {
     // A right-click outside the selection moves the caret there first.
     const pos = view.posAtCoords({ x: e.clientX, y: e.clientY })
-    if (pos != null && !view.state.selection.ranges.some((r) => pos >= r.from && pos <= r.to)) {
+    if (!fixes && pos != null && !view.state.selection.ranges.some((r) => pos >= r.from && pos <= r.to)) {
       view.dispatch({ selection: { anchor: pos } })
+    }
+    // A word misspelt under the pointer is offered the dictionary's
+    // guesses, asked for before the menu opens.
+    const typo = !fixes && pos != null ? typoAt(view, pos) : null
+    if (typo) {
+      e.preventDefault()
+      const asked = suggestions(typo.word).catch(() => [] as string[])
+      const late = new Promise<string[]>((r) => setTimeout(() => r([]), 600))
+      Promise.race([asked, late]).then((guesses) => openMenuRef.current(view, e, { ...typo, guesses }))
+      return
     }
     const empty = view.state.selection.ranges.every((r) => r.empty)
     const line = view.state.doc.lineAt(view.state.selection.main.head)
@@ -409,6 +434,12 @@ export function CodeEditor({
         label: annotating ? 'Close Annotations' : 'Annotate with Git Blame',
         onSelect: () => setAnnotating((a) => !a),
       },
+      { label: 'Soft-Wrap', checked: wrapped, onSelect: () => setWrapped((w) => !w) },
+      {
+        label: 'Check Spelling',
+        checked: spellingEnabled(),
+        onSelect: () => setSpelling(client, !spellingEnabled()).catch(() => {}),
+      },
       'separator',
       { label: 'Copy Path', onSelect: () => copyText(`${client.root}/${path}`) },
       { label: 'Copy Reference', onSelect: () => copyText(`${path}:${line.number}`) },
@@ -438,6 +469,18 @@ export function CodeEditor({
         { label: 'Stage Change', onSelect: () => stage(view, h) },
       )
     }
+    if (fixes) {
+      const change = (to: string) => () => {
+        view.dispatch({ changes: { from: fixes.from, to: fixes.to, insert: to }, selection: { anchor: fixes.from + to.length } })
+        view.focus()
+      }
+      items.unshift(
+        { heading: `Typo: ${fixes.word}` },
+        ...fixes.guesses.map((to) => ({ label: `Change to ${to}`, disabled: readOnly, onSelect: change(to) })),
+        { label: `Save ${fixes.word} to Dictionary`, onSelect: () => saveWord(client, fixes.word).catch(() => {}) },
+        'separator',
+      )
+    }
     menu.open(e, items)
   }
   // gutterMenu is a right-click in the gutter: what concerns the line
@@ -451,6 +494,8 @@ export function CodeEditor({
         label: annotating ? 'Close Annotations' : 'Annotate with Git Blame',
         onSelect: () => setAnnotating((a) => !a),
       },
+      'separator',
+      { label: 'Soft-Wrap', checked: wrapped, onSelect: () => setWrapped((w) => !w) },
       'separator',
       { label: `Copy Reference (${path.split('/').pop()}:${line.number})`, onSelect: () => copyText(`${path}:${line.number}`) },
       {
@@ -499,6 +544,9 @@ export function CodeEditor({
           lsp.of([]),
           blameField,
           blameSlot.current.of([]),
+          wrapSlot.current.of(softWraps(path) ? EditorView.lineWrapping : []),
+          indentation(path, file.text.toString()),
+          spelling(path),
           EditorState.readOnly.of(readOnly),
           yCollab(file.text, file.awareness, { undoManager: undo }),
           gitGutter((v, h, e) => setHunk({ view: v, h, x: e.clientX, y: e.clientY })),
@@ -586,9 +634,11 @@ export function CodeEditor({
     const j = jumpRef.current
     if (!(j && j.path === path && j.focus === false)) view.focus()
     viewRef.current = view
+    onViewRef.current?.(view)
     setReady(true)
     return () => {
       disposed = true
+      onViewRef.current?.(null)
       offLanguages?.()
       setReady(false)
       viewRef.current = null
@@ -603,6 +653,12 @@ export function CodeEditor({
   useEffect(() => {
     status?.set(path, { server })
   }, [status, path, server])
+
+  useEffect(() => followSettings(client), [client])
+
+  useEffect(() => {
+    viewRef.current?.dispatch({ effects: wrapSlot.current.reconfigure(wrapped ? EditorView.lineWrapping : []) })
+  }, [ready, wrapped])
 
   // Annotations: loaded when asked for, again as git's state moves (a
   // commit), and gone when closed.

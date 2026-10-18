@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url'
+
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
@@ -6,6 +8,13 @@ import { defineConfig } from 'vite'
 // in compose.yaml, which sends /api/ to the Go server on the same origin.
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    // The spelling dictionaries' files, which their packages do not export.
+    alias: {
+      '@dict/en': fileURLToPath(new URL('./node_modules/dictionary-en', import.meta.url)),
+      '@dict/cspell': fileURLToPath(new URL('./node_modules/@cspell', import.meta.url)),
+    },
+  },
   build: {
     outDir: '../internal/webui/dist/app',
     emptyOutDir: true,

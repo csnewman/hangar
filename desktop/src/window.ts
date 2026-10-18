@@ -216,6 +216,8 @@ export class ServerWindow {
         preload: role.kind === 'editor' ? undefined : join(__dirname, 'preload-page.js'),
         contextIsolation: true,
         sandbox: true,
+        // Chromium's PDF viewer, which the Code tab shows a PDF in.
+        plugins: true,
         // A tab out of sight keeps its timers, so its sockets keep their
         // heartbeats and it is as it was when shown again.
         backgroundThrottling: false,
