@@ -5,12 +5,13 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/csnewman/hangar/internal/erofs"
 	"github.com/csnewman/hangar/internal/vm"
 )
 
@@ -65,11 +66,6 @@ func layer(t *testing.T, es ...entry) []byte {
 // what an upper layer changes, removes or makes opaque is as it says, and
 // what it leaves is the lower layer's.
 func TestBuildEROFS(t *testing.T) {
-	for _, tool := range []string{"mkfs.erofs", "fsck.erofs"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			t.Skip(tool + " is not installed")
-		}
-	}
 	long := strings.Repeat("d", 120) + "/" + strings.Repeat("f", 120)
 	bottom := layer(t,
 		entry{name: "./", typ: tar.TypeDir, mode: 0o755},
@@ -114,19 +110,16 @@ func TestBuildEROFS(t *testing.T) {
 	if st, err := os.Stat(img); err != nil || st.Size()%(2<<20) != 0 {
 		t.Fatalf("the image: %v, %v", st, err)
 	}
-	tree := filepath.Join(dir, "tree")
-	if out, err := exec.Command("fsck.erofs", "--extract="+tree, "--preserve-perms", img).CombinedOutput(); err != nil {
-		t.Fatalf("extracting the image: %v: %s", err, out)
-	}
+	tree := openEROFS(t, img)
 	read := func(p string) string {
-		b, err := os.ReadFile(filepath.Join(tree, p))
+		b, err := fs.ReadFile(tree, p)
 		if err != nil {
 			return "<" + err.Error() + ">"
 		}
 		return string(b)
 	}
 	exists := func(p string) bool {
-		_, err := os.Lstat(filepath.Join(tree, p))
+		_, err := fs.Lstat(tree, p)
 		return err == nil
 	}
 	for p, want := range map[string]string{
@@ -142,11 +135,11 @@ func TestBuildEROFS(t *testing.T) {
 			t.Errorf("%s is in the image", p)
 		}
 	}
-	if target, err := os.Readlink(filepath.Join(tree, "bin")); err != nil || target != "usr/bin" {
+	if target, err := fs.ReadLink(tree, "bin"); err != nil || target != "usr/bin" {
 		t.Errorf("bin links to %q (%v)", target, err)
 	}
 	for p, want := range map[string]os.FileMode{".": 0o755, "usr/bin/tool": 0o755, "etc/kept": 0o644} {
-		st, err := os.Stat(filepath.Join(tree, p))
+		st, err := fs.Stat(tree, p)
 		if err != nil || st.Mode().Perm() != want {
 			t.Errorf("%s has mode %v (%v), want %v", p, st.Mode().Perm(), err, want)
 		}
@@ -156,11 +149,6 @@ func TestBuildEROFS(t *testing.T) {
 // An image whose layers never say what / is gets the root Docker would give
 // it: root's, and 0755.
 func TestBuildEROFSRoot(t *testing.T) {
-	for _, tool := range []string{"mkfs.erofs", "fsck.erofs"} {
-		if _, err := exec.LookPath(tool); err != nil {
-			t.Skip(tool + " is not installed")
-		}
-	}
 	l := layer(t, entry{name: "etc/", typ: tar.TypeDir}, entry{name: "etc/a", body: "a\n"})
 	done := false
 	next := func() (io.ReadCloser, error) {
@@ -175,11 +163,22 @@ func TestBuildEROFSRoot(t *testing.T) {
 	if err := vm.BuildEROFS(context.Background(), img, next); err != nil {
 		t.Fatal(err)
 	}
-	tree := filepath.Join(dir, "tree")
-	if out, err := exec.Command("fsck.erofs", "--extract="+tree, "--preserve-perms", img).CombinedOutput(); err != nil {
-		t.Fatalf("extracting the image: %v: %s", err, out)
-	}
-	if st, err := os.Stat(tree); err != nil || st.Mode().Perm() != 0o755 {
+	tree := openEROFS(t, img)
+	if st, err := fs.Stat(tree, "."); err != nil || st.Mode().Perm() != 0o755 {
 		t.Errorf("/ has mode %v (%v), want 0755", st.Mode().Perm(), err)
 	}
+}
+
+func openEROFS(t *testing.T, path string) fs.FS {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	im, err := erofs.Open(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return im.FS()
 }

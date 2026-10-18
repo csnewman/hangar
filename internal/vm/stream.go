@@ -4,12 +4,12 @@ import (
 	"archive/tar"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path"
 	"strings"
+
+	"github.com/csnewman/hangar/internal/erofs"
 )
 
 // An image's layers are tar archives, each recording what it changes over
@@ -18,8 +18,8 @@ import (
 // merged here into the one tree they describe, as a single tar stream, top
 // layer first: a path's first entry is the one that stands, and a whiteout,
 // an opaque directory, or a non-directory replacing a directory hides what
-// the layers beneath had there. Nothing is unpacked: the stream goes
-// straight into mkfs.erofs, which accepts a file before its directory.
+// the layers beneath had there. Nothing is unpacked: each entry goes straight
+// into the image, which accepts a file before its directory.
 
 // layerMerge is what the layers above have said, for the ones beneath.
 type layerMerge struct {
@@ -58,7 +58,7 @@ func (m *layerMerge) hidden(p string) bool {
 }
 
 // layer adds one layer's entries, beneath those already added, to w.
-func (m *layerMerge) layer(r *tar.Reader, w *tar.Writer) error {
+func (m *layerMerge) layer(r *tar.Reader, w *erofs.Writer) error {
 	var whiteouts, opaque []string
 	for {
 		hdr, err := r.Next()
@@ -87,25 +87,11 @@ func (m *layerMerge) layer(r *tar.Reader, w *tar.Writer) error {
 			m.nondir[p] = true
 		}
 		hdr.Name = p
-		if hdr.Typeflag == tar.TypeDir {
-			hdr.Name += "/"
-		}
-		if p == "." {
-			// The root: its owner and mode are the image's /.
-			hdr.Name = "./"
-		}
 		if hdr.Typeflag == tar.TypeLink {
 			hdr.Linkname = clean(hdr.Linkname)
 		}
-		// PAX keeps extended attributes and long names as they came.
-		hdr.Format = tar.FormatPAX
-		if err := w.WriteHeader(hdr); err != nil {
+		if err := w.AddTarEntry(hdr, r); err != nil {
 			return err
-		}
-		if hdr.Typeflag == tar.TypeReg {
-			if _, err := io.Copy(w, r); err != nil {
-				return err
-			}
 		}
 	}
 	// A layer's whiteouts and opaque directories hide only what is beneath
@@ -120,25 +106,22 @@ func (m *layerMerge) layer(r *tar.Reader, w *tar.Writer) error {
 }
 
 // BuildEROFS writes the tree an image's layers describe to out as an EROFS
-// image, uncompressed with 4 KiB blocks, so a guest can map its files
-// directly, padded to a multiple of 2 MiB for persistent memory. next yields
-// the layers' uncompressed tar streams top first, and nil after the last.
-// It needs mkfs.erofs (erofs-utils).
+// image (internal/erofs), padded to a multiple of 2 MiB for persistent
+// memory. next yields the layers' uncompressed tar streams top first, and
+// nil after the last. An image whose layers never say what / is gets the
+// root Docker gives it: root's, and 0755.
 func BuildEROFS(ctx context.Context, out string, next func() (io.ReadCloser, error)) error {
-	cmd := exec.CommandContext(ctx, "mkfs.erofs", "--quiet", "--tar=f", "-b", "4096", out)
-	stdin, err := cmd.StdinPipe()
+	f, err := os.Create(out)
 	if err != nil {
 		return err
 	}
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	werr := func() error {
-		w := tar.NewWriter(stdin)
+	err = func() error {
+		w := erofs.NewWriter(f)
 		m := newLayerMerge()
 		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			rc, err := next()
 			if err != nil {
 				return err
@@ -152,30 +135,18 @@ func BuildEROFS(ctx context.Context, out string, next func() (io.ReadCloser, err
 				return err
 			}
 		}
-		if !m.seen["."] {
-			// No layer says what / is, as many do not: it is root's, and
-			// 0755, as Docker makes it. An entry after what it holds still
-			// sets its owner and mode.
-			hdr := &tar.Header{Name: "./", Typeflag: tar.TypeDir, Mode: 0o755, Format: tar.FormatPAX}
-			if err := w.WriteHeader(hdr); err != nil {
-				return err
-			}
-		}
 		return w.Close()
 	}()
-	stdin.Close()
-	if err := cmd.Wait(); err != nil {
-		os.Remove(out)
-		if werr != nil {
-			return werr
-		}
-		return fmt.Errorf("mkfs.erofs: %w: %s", err, lastLineOf([]byte(stderr.String())))
+	if cerr := f.Close(); err == nil {
+		err = cerr
 	}
-	if werr != nil {
-		os.Remove(out)
-		return werr
+	if err == nil {
+		err = padEROFS(out)
 	}
-	return padEROFS(out)
+	if err != nil {
+		os.Remove(out)
+	}
+	return err
 }
 
 // padEROFS rounds an image's size up to what a persistent-memory region is

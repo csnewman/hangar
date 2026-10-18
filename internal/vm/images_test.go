@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/binary"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -205,9 +204,6 @@ func TestImageStoreSourceWithoutBuildID(t *testing.T) {
 // persistent-memory region is aligned to, and handed out again after.
 func TestImageStoreEROFS(t *testing.T) {
 	linuxOnly(t)
-	if _, err := exec.LookPath("mkfs.erofs"); err != nil {
-		t.Skip("mkfs.erofs is not installed")
-	}
 	ctx := context.Background()
 	src := filepath.Join(t.TempDir(), "rootfs")
 	build(t, src, "one", "first")

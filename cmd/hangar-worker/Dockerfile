@@ -118,7 +118,7 @@ FROM ${UBUNTU} AS worker
 # first asked what it offers.
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-      ca-certificates passt e2fsprogs erofs-utils coreutils \
+      ca-certificates passt e2fsprogs coreutils \
       libepoxy0 libgbm1 libegl1 libgles2 libopengl0 libdrm2 libvulkan1 \
       libgl1-mesa-dri mesa-vulkan-drivers >/dev/null \
  && rm -rf /var/lib/apt/lists/*

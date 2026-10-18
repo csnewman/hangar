@@ -59,9 +59,6 @@ func preflight(cfg *Config) error {
 	}
 	switch cfg.ImageDevice {
 	case ImageDisk, ImagePmem:
-		if _, err := exec.LookPath("mkfs.erofs"); err != nil {
-			return fmt.Errorf("mkfs.erofs not found (apt install erofs-utils): %w", err)
-		}
 	default:
 		return fmt.Errorf("vm.image_device %q is neither %s nor %s", cfg.ImageDevice, ImageDisk, ImagePmem)
 	}

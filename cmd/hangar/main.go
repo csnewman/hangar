@@ -5,6 +5,8 @@
 package main
 
 import (
+	"archive/tar"
+	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/ch"
+	"github.com/csnewman/hangar/internal/erofs"
 	"github.com/csnewman/hangar/internal/host"
 	"github.com/csnewman/hangar/internal/image"
 	"github.com/csnewman/hangar/internal/kernel"
@@ -26,6 +29,7 @@ Usage:
   hangar build [flags]       build a distribution's images with mkosi
   hangar oci   [flags]       write built images as an OCI layout, to push
   hangar kernel [flags]      build the guest kernel
+  hangar erofs [flags] [dir] write a directory or a tar archive as an EROFS image
 
 Run "hangar <command> -h" for the flags of a command.
 `
@@ -48,6 +52,8 @@ func main() {
 		err = writeOCI(ctx, os.Args[2:])
 	case "kernel":
 		err = buildKernel(ctx, os.Args[2:])
+	case "erofs":
+		err = writeEROFS(os.Args[2:])
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return
@@ -196,4 +202,43 @@ func humanSize(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
+}
+
+// writeEROFS writes an EROFS image of a directory, or of a tar archive on
+// standard input.
+func writeEROFS(argv []string) error {
+	fs := flag.NewFlagSet("erofs", flag.ExitOnError)
+	out := fs.String("o", "", "the image to write")
+	fromTar := fs.Bool("tar", false, "read a tar archive from standard input rather than a directory")
+	fs.Usage = func() {
+		fmt.Fprint(fs.Output(), "Usage: hangar erofs -o IMAGE DIR\n       hangar erofs -o IMAGE -tar < ARCHIVE\n\n")
+		fs.PrintDefaults()
+	}
+	if err := fs.Parse(argv); err != nil {
+		return err
+	}
+	if *out == "" || *fromTar == (fs.NArg() == 1) || fs.NArg() > 1 {
+		fs.Usage()
+		os.Exit(2)
+	}
+	f, err := os.Create(*out)
+	if err != nil {
+		return err
+	}
+	w := erofs.NewWriter(f)
+	if *fromTar {
+		err = w.AddTar(tar.NewReader(bufio.NewReaderSize(os.Stdin, 1<<20)))
+	} else {
+		err = w.AddDir(fs.Arg(0))
+	}
+	if err == nil {
+		err = w.Close()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(*out)
+	}
+	return err
 }

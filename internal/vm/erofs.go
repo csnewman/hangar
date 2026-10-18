@@ -4,9 +4,10 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
+
+	"github.com/csnewman/hangar/internal/erofs"
 )
 
 // erofsFile is where a copy keeps its EROFS image, in the copy's directory,
@@ -22,8 +23,9 @@ const erofsAlign = 2 << 20
 var erofsLocks sync.Map
 
 // EROFS returns an EROFS image of an image's base, building it the first
-// time. It is uncompressed, with 4 KiB blocks, so a guest can map its files
-// directly (DAX) and every guest shares the host's page cache of it.
+// time (internal/erofs). It is uncompressed, with 4 KiB blocks, so a guest
+// can map its files directly (DAX) and every guest shares the host's page
+// cache of it.
 func (s *ImageStore) EROFS(ctx context.Context, img Image) (string, error) {
 	if img.Copy == "" {
 		return "", fmt.Errorf("the image at %s is not a copy in the store", img.Base)
@@ -36,31 +38,32 @@ func (s *ImageStore) EROFS(ctx context.Context, img Image) (string, error) {
 		return path, nil
 	}
 	tmp := path + ".building"
-	os.Remove(tmp)
-	cmd := exec.CommandContext(ctx, "mkfs.erofs", "--quiet", "-b", "4096", tmp, img.Base)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		os.Remove(tmp)
-		return "", fmt.Errorf("building the image's EROFS image: %w: %s", err, lastLineOf(out))
+	err := writeEROFS(tmp, img.Base)
+	if err == nil {
+		err = padEROFS(tmp)
 	}
-	if err := padEROFS(tmp); err != nil {
-		os.Remove(tmp)
-		return "", err
+	if err == nil {
+		err = os.Rename(tmp, path)
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err != nil {
 		os.Remove(tmp)
-		return "", err
+		return "", fmt.Errorf("building the image's EROFS image: %w", err)
 	}
 	return path, nil
 }
 
-func lastLineOf(b []byte) string {
-	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == ' ') {
-		b = b[:len(b)-1]
+func writeEROFS(out, dir string) error {
+	f, err := os.Create(out)
+	if err != nil {
+		return err
 	}
-	for i := len(b) - 1; i >= 0; i-- {
-		if b[i] == '\n' {
-			return string(b[i+1:])
-		}
+	w := erofs.NewWriter(f)
+	err = w.AddDir(dir)
+	if err == nil {
+		err = w.Close()
 	}
-	return string(b)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
