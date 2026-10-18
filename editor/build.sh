@@ -72,6 +72,12 @@ node -e '
 stamp=node_modules/.hangar-lock-sha
 lock_sha=$(sha256sum package-lock.json | cut -d' ' -f1)
 if [ "$(cat "$stamp" 2>/dev/null)" != "$lock_sha" ]; then
+	# The native modules build against Electron's headers (.npmrc names
+	# them). They are fetched once, first: modules building side by side
+	# each fetch them otherwise, and one can read another's half-written
+	# copy (an empty common.gypi).
+	node "$(npm root -g)/npm/node_modules/node-gyp/bin/node-gyp.js" install \
+		--target="$(npm config get target)" --dist-url="$(npm config get disturl)"
 	ELECTRON_SKIP_BINARY_DOWNLOAD=1 PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci
 	echo "$lock_sha" > "$stamp"
 fi
