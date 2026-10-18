@@ -72,7 +72,7 @@ export function EnvironmentPage() {
         env.reason && (
           <div className="notice env-reason">
             {env.reason}
-            {env.phase === 'failed' && <Link to={`/environments/${env.id}/logs`}>See its logs</Link>}
+            {env.phase === 'failed' && <Link to={`/environments/${env.id}/logs`}>See Logs</Link>}
           </div>
         )
       )
@@ -159,7 +159,7 @@ function PhoneOpen({ env }: { env: Environment }) {
       {env.phase === 'failed' && (
         <section className="envtab-lead">
           <h3>{env.name} did not start</h3>
-          <p>{env.reason ?? 'Its logs say why.'}</p>
+          <p>{env.reason ?? 'The logs say why.'}</p>
         </section>
       )}
       <Section title="Open">

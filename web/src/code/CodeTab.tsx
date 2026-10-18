@@ -200,10 +200,10 @@ function IdleLead({ env, onLogs }: { env: Environment; onLogs: () => void }) {
     return (
       <section className="envtab-lead">
         <h3>{env.name} did not start</h3>
-        <p>{env.reason ?? 'Its logs say why.'}</p>
+        <p>{env.reason ?? 'The logs say why.'}</p>
         <div>
           <button type="button" className="btn btn-ghost btn-sm" onClick={onLogs}>
-            Show its logs
+            Show Logs
           </button>
         </div>
       </section>

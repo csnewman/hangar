@@ -59,7 +59,7 @@ export function WorkerDetail({ id }: { id: string }) {
           <>
             <button type="button" className="btn btn-ghost btn-sm" onClick={toLog} disabled={!w.online}>
               <ScrollText size={13} />
-              Its Log
+              View Log
             </button>
             <WorkerRemoval worker={w} />
           </>
