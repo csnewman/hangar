@@ -1079,3 +1079,28 @@ test('the repositories in a folder: submodules, clones within it, and a folder o
 		rmSync(top, { recursive: true, force: true })
 	}
 })
+
+test('previewing files over HTTP, only under the secret path', async () => {
+	const a = new Client()
+	try {
+		await a.call('hello')
+		mkdirSync(join(root, 'site'), { recursive: true })
+		writeFileSync(join(root, 'site', 'index.html'), '<link rel=stylesheet href=style.css>hi')
+		writeFileSync(join(root, 'site', 'style.css'), 'body{}')
+		const { port, secret } = await a.call('preview.start')
+		assert.equal((await a.call('preview.start')).port, port)
+		const get = (path: string) => fetch(`http://127.0.0.1:${port}${path}`)
+		const page = await get(`/${secret}${root}/site/`)
+		assert.equal(page.status, 200)
+		assert.match(page.headers.get('content-type') ?? '', /text\/html/)
+		assert.equal(await page.text(), '<link rel=stylesheet href=style.css>hi')
+		const css = await get(`/${secret}${root}/site/style.css`)
+		assert.match(css.headers.get('content-type') ?? '', /text\/css/)
+		assert.equal((await get(`/${secret}${root}/site/missing.js`)).status, 404)
+		assert.equal((await get(`/wrong${root}/site/index.html`)).status, 404)
+		assert.equal((await get(`${root}/site/index.html`)).status, 404)
+		assert.equal((await get(`/${secret}${root}/site/../site/style.css`)).status, 200)
+	} finally {
+		a.close()
+	}
+})

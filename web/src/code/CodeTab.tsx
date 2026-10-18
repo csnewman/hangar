@@ -2,6 +2,7 @@ import './code.css'
 
 import {
   Activity,
+  CircleAlert,
   Container,
   FolderTree,
   GitBranch,
@@ -14,6 +15,7 @@ import {
   SignalLow,
   SignalMedium,
   SquareTerminal,
+  TableOfContents,
   TextSearch,
 } from 'lucide-react'
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -42,9 +44,11 @@ import { useLatency } from './latency'
 import { LogsView } from './LogsView'
 import { Maximise } from './maximise'
 import { PhoneCode } from './PhoneCode'
+import { counts, ProblemsView, useProblems } from './ProblemsView'
 import { repoFor } from './repos'
-import { FindInFiles, GotoFile, OpenFolder, type Jump } from './Search'
+import { FindInFiles, GotoFile, GotoSymbol, OpenFolder, type Jump } from './Search'
 import { EditorItems, StatusBar } from './StatusBar'
+import { StructureView } from './StructureView'
 import { UsagesView } from './UsagesView'
 import { useGitStatus } from './useGitStatus'
 
@@ -250,23 +254,88 @@ function colourFor(name: string) {
   return palette[h % palette.length]
 }
 
-type Store = { tabs: Tab[]; active: string | null }
+// The editors: one group of tabs, or two side by side, and which of them
+// is in use, where what is opened goes.
+type TabGroup = { tabs: Tab[]; active: string | null }
+type Store = { groups: TabGroup[]; focus: number }
+
+const noGroup: TabGroup = { tabs: [], active: null }
+
+// readStore is the tabs remembered, of either shape: one group, as they
+// were once kept, or the groups.
+function readStore(raw: string | null): Store {
+  try {
+    const s = JSON.parse(raw ?? '')
+    if (Array.isArray(s.groups) && s.groups.length && s.groups.every((g: TabGroup) => Array.isArray(g?.tabs))) {
+      const groups = (s.groups as TabGroup[]).slice(0, 2)
+      return { groups, focus: s.focus === 1 && groups.length > 1 ? 1 : 0 }
+    }
+    if (Array.isArray(s.tabs)) return { groups: [{ tabs: s.tabs, active: s.active ?? null }], focus: 0 }
+  } catch {
+    // Nothing remembered.
+  }
+  return { groups: [noGroup], focus: 0 }
+}
+
+// withGroup changes one group of tabs. A second group left with none is
+// gone, the other taking the whole width.
+function withGroup(s: Store, g: number, fn: (x: TabGroup) => TabGroup): Store {
+  const groups = s.groups.map((x, i) => (i === g ? fn(x) : x))
+  if (groups.length > 1 && groups.some((x) => x.tabs.length === 0)) {
+    const kept = groups.filter((x) => x.tabs.length > 0)
+    return { groups: kept.length ? kept : [noGroup], focus: 0 }
+  }
+  return groups.every((x, i) => x === s.groups[i]) ? s : { groups, focus: s.focus }
+}
+
+// without closes tabs in a group. When the active one goes, the nearest
+// survivor to its right, else its left, takes its place.
+function without(g: TabGroup, gone: Set<string>): TabGroup {
+  const tabs = g.tabs.filter((t) => !gone.has(tabKey(t)))
+  if (tabs.length === g.tabs.length) return g
+  let active = g.active
+  if (active && gone.has(active)) {
+    const i = g.tabs.findIndex((t) => tabKey(t) === active)
+    const next =
+      g.tabs.slice(i + 1).find((t) => !gone.has(tabKey(t))) ??
+      g.tabs
+        .slice(0, i)
+        .reverse()
+        .find((t) => !gone.has(tabKey(t)))
+    active = next ? tabKey(next) : null
+  }
+  return { tabs, active }
+}
+
+// withTab opens a tab in a group, or shows it if it is open there.
+const withTab = (g: TabGroup, tab: Tab): TabGroup => ({
+  tabs: g.tabs.some((t) => tabKey(t) === tabKey(tab)) ? g.tabs : [...g.tabs, tab],
+  active: tabKey(tab),
+})
 
 // A tool window that moves between the sides, and the side it is on.
-type ToolName = 'project' | 'changes' | 'docker' | 'performance'
-type Bottom = 'terminal' | 'find' | 'log' | 'logs'
+type ToolName = 'project' | 'structure' | 'changes' | 'docker' | 'performance'
+type Bottom = 'terminal' | 'find' | 'problems' | 'log' | 'logs'
 type Side = 'left' | 'right'
 type Sides = Record<ToolName, Side>
-const defaultSides: Sides = { project: 'left', changes: 'right', docker: 'right', performance: 'right' }
-const toolNames: ToolName[] = ['project', 'changes', 'docker', 'performance']
+const defaultSides: Sides = {
+  project: 'left',
+  structure: 'left',
+  changes: 'right',
+  docker: 'right',
+  performance: 'right',
+}
+const toolNames: ToolName[] = ['project', 'structure', 'changes', 'docker', 'performance']
 const toolTitles: Record<ToolName, string> = {
   project: 'Project',
+  structure: 'Structure',
   changes: 'Changes',
   docker: 'Docker',
   performance: 'Performance',
 }
 const toolIcons: Record<ToolName, ReactNode> = {
   project: <FolderTree size={16} />,
+  structure: <TableOfContents size={16} />,
   changes: <GitCompare size={16} />,
   docker: <Container size={16} />,
   performance: <Activity size={16} />,
@@ -282,7 +351,7 @@ function sidesFrom(settings: Record<string, unknown>): Sides {
   return out
 }
 
-type Popup = 'goto' | 'everywhere' | 'find' | 'folder' | null
+type Popup = 'goto' | 'everywhere' | 'find' | 'folder' | 'symbol' | null
 
 function CodeView({
   env,
@@ -331,12 +400,10 @@ function CodeView({
   const storeKey = `hangar.code.${scope}.tabs`
   const [store, setStore] = useState<Store>(() => {
     try {
-      const s = JSON.parse(localStorage.getItem(storeKey) ?? '')
-      if (Array.isArray(s.tabs)) return s
+      return readStore(localStorage.getItem(storeKey))
     } catch {
-      // Nothing remembered.
+      return readStore(null)
     }
-    return { tabs: [], active: null }
   })
   useEffect(() => {
     try {
@@ -348,49 +415,70 @@ function CodeView({
   // opened counts the tabs opened, so the tab bar shows each one, the
   // active one opened again included.
   const [opened, setOpened] = useState(0)
+  // open opens a tab in the group in use.
   const open = (tab: Tab) => {
     restore()
-    setStore((s) => ({
-      tabs: s.tabs.some((t) => tabKey(t) === tabKey(tab)) ? s.tabs : [...s.tabs, tab],
-      active: tabKey(tab),
-    }))
+    setStore((s) => withGroup(s, s.focus, (g) => withTab(g, tab)))
     setOpened((n) => n + 1)
   }
   // Closed tabs, most recent last, for reopening.
   const closed = useRef<Tab[]>([])
   const [canReopen, setCanReopen] = useState(false)
-  // closeTabs closes several tabs at once. When the active one goes, the
-  // nearest survivor to its right, else its left, takes its place.
-  const closeTabs = (keys: string[]) => {
+  // closeTabs closes several tabs of a group at once, by default the
+  // group in use.
+  const closeTabs = (keys: string[], group?: number) => {
     const gone = new Set(keys)
     setStore((s) => {
-      const tabs = s.tabs.filter((t) => !gone.has(tabKey(t)))
-      if (tabs.length === s.tabs.length) return s
-      closed.current.push(...s.tabs.filter((t) => gone.has(tabKey(t))).reverse())
-      closed.current = closed.current.slice(-30)
-      let active = s.active
-      if (active && gone.has(active)) {
-        const i = s.tabs.findIndex((t) => tabKey(t) === active)
-        const next = s.tabs.slice(i + 1).find((t) => !gone.has(tabKey(t))) ?? s.tabs.slice(0, i).reverse().find((t) => !gone.has(tabKey(t)))
-        active = next ? tabKey(next) : null
+      const g = group ?? s.focus
+      const was = s.groups[g]
+      if (!was) return s
+      const next = withGroup(s, g, (x) => without(x, gone))
+      if (next !== s) {
+        closed.current.push(...was.tabs.filter((t) => gone.has(tabKey(t))).reverse())
+        closed.current = closed.current.slice(-30)
       }
-      return { tabs, active }
+      return next
     })
     setCanReopen(true)
   }
-  const close = (key: string) => closeTabs([key])
+  const close = (key: string, group?: number) => closeTabs([key], group)
+  // split shows a tab in the other group, making it if there is one group,
+  // and moves it there rather than copying it if asked.
+  const split = (from: number, tab: Tab, move: boolean) =>
+    setStore((s) => {
+      const to = s.groups.length > 1 ? 1 - from : 1
+      const groups = s.groups.length > 1 ? [...s.groups] : [...s.groups, noGroup]
+      groups[to] = withTab(groups[to], tab)
+      const next = { groups, focus: to }
+      return move ? withGroup(next, from, (g) => without(g, new Set([tabKey(tab)]))) : next
+    })
+  // unsplit gathers both groups' tabs into one.
+  const unsplit = () =>
+    setStore((s) => {
+      if (s.groups.length < 2) return s
+      const [a, b] = s.groups
+      const keys = new Set(a.tabs.map(tabKey))
+      return {
+        groups: [{ tabs: [...a.tabs, ...b.tabs.filter((t) => !keys.has(tabKey(t)))], active: s.groups[s.focus].active }],
+        focus: 0,
+      }
+    })
+  const focusGroup = (g: number) => setStore((s) => (s.focus === g || g >= s.groups.length ? s : { ...s, focus: g }))
   const reopen = () => {
     const tab = closed.current.pop()
     setCanReopen(closed.current.length > 0)
     if (tab) open(tab)
   }
   const cycle = (by: number) =>
-    setStore((s) => {
-      if (s.tabs.length === 0) return s
-      const i = s.tabs.findIndex((t) => tabKey(t) === s.active)
-      return { ...s, active: tabKey(s.tabs[(i + by + s.tabs.length) % s.tabs.length]) }
-    })
-  const activeTab = store.tabs.find((t) => tabKey(t) === store.active)
+    setStore((s) =>
+      withGroup(s, s.focus, (g) => {
+        if (g.tabs.length === 0) return g
+        const i = g.tabs.findIndex((t) => tabKey(t) === g.active)
+        return { ...g, active: tabKey(g.tabs[(i + by + g.tabs.length) % g.tabs.length]) }
+      }),
+    )
+  const focused = store.groups[store.focus] ?? store.groups[0]
+  const activeTab = focused.tabs.find((t) => tabKey(t) === focused.active)
 
   // Reveal in Project: the tree opens the folders to a path and selects it.
   const [reveal, setReveal] = useState<{ path: string; n: number } | null>(null)
@@ -414,10 +502,11 @@ function CodeView({
     setFindIn({ dir, replace })
     setPopup('find')
   }
-  const [jump, setJump] = useState<(Jump & { n: number }) | null>(null)
+  // A jump is for the editor of the group in use, not the other.
+  const [jump, setJump] = useState<(Jump & { n: number; group: number }) | null>(null)
   const openAt = (j: Jump) => {
     open({ kind: 'file', path: j.path })
-    if (j.line > 0 || j.blame) setJump((x) => ({ ...j, n: (x?.n ?? 0) + 1 }))
+    if (j.line > 0 || j.blame) setJump((x) => ({ ...j, n: (x?.n ?? 0) + 1, group: store.focus }))
   }
   // The bottom panel shows the terminal, the Find tool window or the Git
   // Log, keeping the others.
@@ -445,10 +534,12 @@ function CodeView({
         }
         return p
       }
-      const keyOf = (t: Tab) => tabKey(t)
-      const tabs = s.tabs.map((t) => ({ ...t, path: follow(t.path), ...(t.other ? { other: follow(t.other) } : {}) }))
-      const was = s.tabs.findIndex((t) => keyOf(t) === s.active)
-      return { tabs, active: was >= 0 ? keyOf(tabs[was]) : s.active }
+      const groups = s.groups.map((g) => {
+        const tabs = g.tabs.map((t) => ({ ...t, path: follow(t.path), ...(t.other ? { other: follow(t.other) } : {}) }))
+        const was = g.tabs.findIndex((t) => tabKey(t) === g.active)
+        return { tabs, active: was >= 0 ? tabKey(tabs[was]) : g.active }
+      })
+      return { ...s, groups }
     })
   // showCommit finds a commit of the repository a file is in.
   const showCommit = (hash: string, path: string) => {
@@ -508,13 +599,25 @@ function CodeView({
     [client],
   )
 
+  const problems = useProblems(languages)
+  const problemCount = counts(problems)
+
   const recent = useMemo(
-    () => [...store.tabs].reverse().filter((t) => t.kind === 'file').map((t) => t.path),
-    [store.tabs],
+    () => [
+      ...new Set(
+        store.groups
+          .flatMap((g) => g.tabs)
+          .reverse()
+          .filter((t) => t.kind === 'file')
+          .map((t) => t.path),
+      ),
+    ],
+    [store.groups],
   )
 
   // Keys, chosen from those a browser leaves to the page: as IntelliJ,
-  // Ctrl/Cmd+Shift+O goes to a file, Ctrl/Cmd+Shift+F finds in files and
+  // Ctrl/Cmd+Shift+O goes to a file, Ctrl/Cmd+Alt+O to a symbol,
+  // Ctrl/Cmd+Shift+F finds in files and
   // Shift twice searches everywhere, wherever focus is; Alt+W closes a tab,
   // Alt+Shift+T reopens one, and Alt+[ and Alt+] step through them, except
   // in the terminal, which keeps its own Alt keys. They work while the Code
@@ -539,10 +642,16 @@ function CodeView({
       setPopup(e.code === 'KeyO' ? 'goto' : 'find')
       return
     }
+    if (mod && e.altKey && !e.shiftKey && e.code === 'KeyO') {
+      e.preventDefault()
+      e.stopPropagation()
+      setPopup('symbol')
+      return
+    }
     if ((e.target as HTMLElement).closest('.code-term')) return
     if (!e.altKey || e.ctrlKey || e.metaKey || popup) return
     const act = {
-      KeyW: !e.shiftKey && (() => store.active && close(store.active)),
+      KeyW: !e.shiftKey && (() => focused.active && close(focused.active)),
       KeyT: e.shiftKey && reopen,
       BracketLeft: !e.shiftKey && (() => cycle(-1)),
       BracketRight: !e.shiftKey && (() => cycle(1)),
@@ -657,7 +766,7 @@ function CodeView({
         reveal={reveal}
         onOpen={(path, view, stay) => {
           open({ kind: 'file', path, view })
-          if (stay) setJump((x) => ({ path, line: 0, focus: false, n: (x?.n ?? 0) + 1 }))
+          if (stay) setJump((x) => ({ path, line: 0, focus: false, n: (x?.n ?? 0) + 1, group: store.focus }))
         }}
         onTab={open}
         onDiff={(path) => open({ kind: 'diff', path })}
@@ -670,6 +779,13 @@ function CodeView({
         onAnnotate={(path) => openAt({ path, line: 0, blame: true })}
         onMoved={moved}
         onHide={() => hideTool('project')}
+      />
+    ) : name === 'structure' ? (
+      <StructureView
+        store={editorStatus}
+        active={shown[sides.structure] && showing(sides.structure) === 'structure'}
+        onJump={openAt}
+        onHide={() => hideTool('structure')}
       />
     ) : name === 'docker' ? (
       <DockerView
@@ -724,6 +840,43 @@ function CodeView({
     )
   }
 
+  // editorGroup is one group of tabs and the editor of its chosen one.
+  // Using either makes it the group in use.
+  const editorGroup = (g: TabGroup, i: number) => (
+    <EditorArea
+      client={client}
+      tabs={g.tabs}
+      active={g.active}
+      opened={i === store.focus ? opened : 0}
+      jump={jump?.group === i ? jump : null}
+      user={user}
+      status={status}
+      canReopen={canReopen}
+      split={{ groups: store.groups.length, focused: store.groups.length > 1 && i === store.focus }}
+      onFocus={() => focusGroup(i)}
+      onActivate={(key) => setStore((s) => ({ groups: s.groups.map((x, j) => (j === i ? { ...x, active: key } : x)), focus: i }))}
+      onMove={(key, to) =>
+        setStore((s) =>
+          withGroup(s, i, (x) => {
+            const tab = x.tabs.find((t) => tabKey(t) === key)
+            if (!tab) return x
+            const tabs = x.tabs.filter((t) => t !== tab)
+            tabs.splice(to, 0, tab)
+            return { ...x, tabs }
+          }),
+        )
+      }
+      onOpen={open}
+      onClose={(key) => close(key, i)}
+      onCloseMany={(keys) => closeTabs(keys, i)}
+      onReopen={reopen}
+      onReveal={revealInProject}
+      onShowCommit={showCommit}
+      onSplit={(tab, move) => split(i, tab, move)}
+      onUnsplit={unsplit}
+    />
+  )
+
   const left = toolNames.filter((n) => sides[n] === 'left')
   const right = toolNames.filter((n) => sides[n] === 'right')
   // The branch the folder's repository, or else its first, is on.
@@ -740,7 +893,7 @@ function CodeView({
             <span className="code-tool-spacer" />
             {hasDesktop && (
               <StripeButton
-                on={store.active === 'desktop:desktop'}
+                on={store.groups.some((g) => g.active === 'desktop:desktop')}
                 title="Desktop (connected while its tab is shown)"
                 onClick={() => open({ kind: 'desktop', path: 'desktop', title: 'Desktop' })}
               >
@@ -756,6 +909,18 @@ function CodeView({
             </StripeButton>
             <StripeButton on={shown.terminal && bottom === 'find'} title="Find" onClick={() => toggleBottom('find')}>
               <ListTree size={16} />
+            </StripeButton>
+            <StripeButton
+              on={shown.terminal && bottom === 'problems'}
+              title={`Problems: ${problemCount.errors} errors, ${problemCount.warnings} warnings`}
+              onClick={() => toggleBottom('problems')}
+            >
+              <CircleAlert size={16} />
+              {problemCount.errors + problemCount.warnings > 0 && (
+                <span className={problemCount.errors ? 'code-stripe-count code-stripe-count-bad' : 'code-stripe-count'}>
+                  {problemCount.errors || problemCount.warnings}
+                </span>
+              )}
             </StripeButton>
             <StripeButton on={shown.terminal && bottom === 'log'} title="Git Log" onClick={() => toggleBottom('log')}>
               <GitGraph size={16} />
@@ -788,32 +953,18 @@ function CodeView({
                   ]}
                   <Panel id="editors" minSize="25%">
                     <EditorStatusContext.Provider value={editorStatus}>
-                      <EditorArea
-                        client={client}
-                        tabs={store.tabs}
-                        active={store.active}
-                        opened={opened}
-                        jump={jump}
-                        user={user}
-                        status={status}
-                        canReopen={canReopen}
-                        onActivate={(key) => setStore((s) => ({ ...s, active: key }))}
-                        onMove={(key, to) =>
-                          setStore((s) => {
-                            const tab = s.tabs.find((t) => tabKey(t) === key)
-                            if (!tab) return s
-                            const tabs = s.tabs.filter((t) => t !== tab)
-                            tabs.splice(to, 0, tab)
-                            return { ...s, tabs }
-                          })
-                        }
-                        onOpen={open}
-                        onClose={close}
-                        onCloseMany={closeTabs}
-                        onReopen={reopen}
-                        onReveal={revealInProject}
-                        onShowCommit={showCommit}
-                      />
+                      {store.groups.length > 1 ? (
+                        <EditorSplit>
+                          {store.groups.map((g, i) => [
+                            i > 0 && <Separator key="sep" className="code-split code-split-v" />,
+                            <Panel key={i} id={`group-${i}`} minSize="15%">
+                              {editorGroup(g, i)}
+                            </Panel>,
+                          ])}
+                        </EditorSplit>
+                      ) : (
+                        editorGroup(store.groups[0], 0)
+                      )}
                     </EditorStatusContext.Provider>
                   </Panel>
                   {right.length > 0 && [
@@ -843,6 +994,9 @@ function CodeView({
                       onJump={openAt}
                       onHide={() => fold('terminal', false)}
                     />
+                  </div>
+                  <div className="code-side-slot" hidden={bottom !== 'problems'}>
+                    <ProblemsView problems={problems} onJump={openAt} onHide={() => fold('terminal', false)} />
                   </div>
                   {logSeen && (
                     <div className="code-side-slot" hidden={bottom !== 'log'}>
@@ -899,6 +1053,9 @@ function CodeView({
               }}
             />
           )}
+          {popup === 'symbol' && (
+            <GotoSymbol client={client} languages={languages} onOpen={openAt} onClose={() => setPopup(null)} />
+          )}
           {popup === 'folder' && <OpenFolder client={client} onChoose={onFolder} onClose={() => setPopup(null)} />}
         </div>
         <StatusBar
@@ -954,6 +1111,17 @@ function Latency({ ms }: { ms: number }) {
       <Icon size={13} />
       {Math.round(ms)} ms
     </span>
+  )
+}
+
+// EditorSplit lays two groups of editors side by side, the split between
+// them remembered.
+function EditorSplit({ children }: { children: ReactNode }) {
+  const layout = useDefaultLayout({ id: 'hangar.code.split', storage: localStorage })
+  return (
+    <Group orientation="horizontal" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+      {children}
+    </Group>
   )
 }
 

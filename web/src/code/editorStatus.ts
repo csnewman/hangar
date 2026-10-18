@@ -1,5 +1,7 @@
+import type { EditorView } from '@codemirror/view'
 import { createContext, useSyncExternalStore } from 'react'
 
+import type { Indent } from './indent'
 import type { ServerState } from './lsp'
 
 // EditorStatus is what the status bar says of the file being edited: where
@@ -17,6 +19,12 @@ export type EditorStatus = {
   readOnly: boolean
   // goto asks for a line to go to.
   goto: () => void
+  // view is the editor itself, for the Structure window; edits counts its
+  // changes, so what follows the file knows to read it again.
+  view: EditorView | null
+  edits: number
+  // indent is how the file is indented, and where that was learnt.
+  indent: Indent | null
 }
 
 // EditorStatusStore holds the status of the editor shown. The editor writes
@@ -56,6 +64,9 @@ export class EditorStatusStore {
               server: null,
               readOnly: false,
               goto: () => {},
+              view: null,
+              edits: 0,
+              indent: null,
             }),
         ...patch,
       }

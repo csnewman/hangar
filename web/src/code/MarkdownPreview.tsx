@@ -1,11 +1,19 @@
 import type { EditorView } from '@codemirror/view'
-import { Columns2, Eye, SquarePen } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import type * as Y from 'yjs'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 
 import type { CodeClient } from './client'
 import { toURL } from './ImageView'
-import { external, highlightBlocks, idPrefix, renderMarkdown, resolvePath, slugHeadings } from './markdown'
+import { isDark, onDarkChange } from '../theme'
+import {
+  external,
+  highlightBlocks,
+  idPrefix,
+  renderMarkdown,
+  renderMath,
+  renderMermaid,
+  resolvePath,
+  slugHeadings,
+} from './markdown'
 import { imageType } from './views'
 
 // The largest image read into a preview: the service's limit for bytes at
@@ -36,6 +44,9 @@ export function MarkdownPreview({
   const box = useRef<HTMLDivElement>(null)
   const images = useRef(new Map<string, string | null>())
   const [loaded, setLoaded] = useState(0)
+  // Diagrams are drawn in the page's light or dark.
+  const [dark, setDark] = useState(isDark)
+  useEffect(() => onDarkChange(setDark), [])
   // lock is the side being scrolled to match the other, whose own scroll
   // events are not followed back until it settles.
   const lock = useRef<{ side: 'editor' | 'preview'; until: number } | null>(null)
@@ -142,13 +153,18 @@ export function MarkdownPreview({
     slugHeadings(el)
     let live = true
     highlightBlocks(el, () => live)
+    // Typeset math and drawn diagrams change heights: the preview is put
+    // level with the editor again once they are in.
+    const again = () => follow.current.followEditor()
+    renderMath(el, () => live, again)
+    renderMermaid(el, dark, () => live, again)
     follow.current.followEditor()
     return () => {
       live = false
     }
     // src reads the images loaded, which loaded counts.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [text, loaded])
+  }, [text, loaded, dark])
 
   // Each side follows the other while it is the one being scrolled.
   useEffect(() => {
@@ -198,111 +214,4 @@ export function MarkdownPreview({
   }
 
   return <div ref={box} className="md-preview" onClick={onClick} />
-}
-
-// MarkdownLayout is what a Markdown file's tab shows: its editor, its
-// preview, or both side by side, as IntelliJ offers them.
-export type MarkdownLayout = 'editor' | 'split' | 'preview'
-
-const layoutKey = 'hangar.code.markdown'
-const ratioKey = 'hangar.code.markdown.ratio'
-
-function remembered<T>(key: string, parse: (v: string | null) => T): T {
-  try {
-    return parse(localStorage.getItem(key))
-  } catch {
-    return parse(null)
-  }
-}
-
-function remember(key: string, value: string) {
-  try {
-    localStorage.setItem(key, value)
-  } catch {
-    // Chosen again next time.
-  }
-}
-
-// useYText is a shared document's text, kept up with its edits, at most
-// every tenth of a second.
-export function useYText(text: Y.Text): string {
-  const [value, setValue] = useState(() => text.toString())
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const changed = () => {
-      if (timer) return
-      timer = setTimeout(() => {
-        timer = undefined
-        setValue(text.toString())
-      }, 100)
-    }
-    setValue(text.toString())
-    text.observe(changed)
-    return () => {
-      clearTimeout(timer)
-      text.unobserve(changed)
-    }
-  }, [text])
-  return value
-}
-
-// MarkdownSplit lays a Markdown file's editor and preview out as the
-// layout chosen last, which its buttons at the top right change, with the
-// split between them dragged.
-export function MarkdownSplit({ editor, preview }: { editor: ReactNode; preview: ReactNode }) {
-  const [layout, setLayout] = useState<MarkdownLayout>(() =>
-    remembered(layoutKey, (v) => (v === 'editor' || v === 'preview' ? v : 'split')),
-  )
-  const [ratio, setRatio] = useState(() =>
-    remembered(ratioKey, (v) => {
-      const n = Number(v)
-      return v && n >= 0.15 && n <= 0.85 ? n : 0.5
-    }),
-  )
-  const box = useRef<HTMLDivElement>(null)
-  const choose = (l: MarkdownLayout) => {
-    setLayout(l)
-    remember(layoutKey, l)
-  }
-  const drag = (e: React.PointerEvent) => {
-    const el = box.current
-    if (!el) return
-    e.preventDefault()
-    const rect = el.getBoundingClientRect()
-    const move = (m: PointerEvent) => setRatio(Math.min(Math.max((m.clientX - rect.left) / rect.width, 0.15), 0.85))
-    const up = (u: PointerEvent) => {
-      move(u)
-      remember(ratioKey, String(Math.min(Math.max((u.clientX - rect.left) / rect.width, 0.15), 0.85)))
-      window.removeEventListener('pointermove', move)
-      window.removeEventListener('pointerup', up)
-    }
-    window.addEventListener('pointermove', move)
-    window.addEventListener('pointerup', up)
-  }
-  const button = (l: MarkdownLayout, title: string, icon: ReactNode) => (
-    <button
-      type="button"
-      className={layout === l ? 'code-tool-btn code-tool-btn-on' : 'code-tool-btn'}
-      title={title}
-      aria-label={title}
-      aria-pressed={layout === l}
-      onClick={() => choose(l)}
-    >
-      {icon}
-    </button>
-  )
-  return (
-    <div ref={box} className={`md-split md-layout-${layout}`}>
-      <div className="md-split-editor" style={layout === 'split' ? { flexBasis: `${ratio * 100}%` } : undefined}>
-        {editor}
-      </div>
-      {layout === 'split' && <div className="md-split-bar" onPointerDown={drag} />}
-      {layout !== 'editor' && <div className="md-split-preview">{preview}</div>}
-      <div className="md-split-tools">
-        {button('editor', 'Editor Only', <SquarePen size={14} />)}
-        {button('split', 'Editor and Preview', <Columns2 size={14} />)}
-        {button('preview', 'Preview Only', <Eye size={14} />)}
-      </div>
-    </div>
-  )
 }

@@ -23,9 +23,9 @@ import (
 )
 
 // DialPorts connects to a running environment's port forwarder. With no
-// guest, a web server that reports what reached it listens on port 80, and
-// on 443 over TLS with a certificate of its own; nothing listens on any
-// other port.
+// guest, a web server that reports what reached it listens on ports 80 and
+// 8000, and on 443 over TLS with a certificate of its own; nothing listens
+// on any other port.
 func (s *Simulated) DialPorts(_ context.Context, id string) (net.Conn, error) {
 	s.mu.Lock()
 	e, ok := s.envs[id]
@@ -44,7 +44,7 @@ func (s *Simulated) DialPorts(_ context.Context, id string) (net.Conn, error) {
 		port := binary.BigEndian.Uint16(req[:])
 		srv := &http.Server{Handler: simulatedPort(id, int(port))}
 		switch port {
-		case 80:
+		case 80, 8000:
 		case 443:
 			cert, err := simulatedCert()
 			if err != nil {

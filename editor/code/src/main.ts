@@ -21,6 +21,7 @@ import { parseArgs } from 'node:util'
 import { Docker } from './docker.js'
 import { Documents } from './docs.js'
 import { Files } from './files.js'
+import { Preview } from './preview.js'
 import { Repos } from './repos.js'
 import { Search } from './search.js'
 import { SettingsFile } from './settings.js'
@@ -54,7 +55,8 @@ const folder = (dir: string): Folder => {
 if (existsSync(values.socket)) unlinkSync(values.socket)
 const settings = new SettingsFile()
 const docker = new Docker()
-const server = createServer((sock: Socket) => new Connection(sock, { root, folder, docs, settings, docker }))
+const preview = new Preview()
+const server = createServer((sock: Socket) => new Connection(sock, { root, folder, docs, settings, docker, preview }))
 server.listen(values.socket, () => console.log(`hangar-code: serving ${root} on ${values.socket}`))
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {

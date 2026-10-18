@@ -7,12 +7,14 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  Eye,
   File,
   Folder,
   FolderGit2,
   GitBranch,
   GitCommitHorizontal,
   History as HistoryIcon,
+  Table2,
   WrapText,
 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
@@ -25,7 +27,10 @@ import { changeWhere } from './BranchChanges'
 import type { Change, CodeClient, CommitInfo, Entry, GitStatus, LogCommit, Repo } from './client'
 import { codeHighlight, codeTheme, followScheme, languageFor } from './CodeEditor'
 import { DiffView, type DiffStats } from './DiffView'
+import { isMarkdown, MarkdownPreview } from './MarkdownPreview'
 import { commitAll, usable, within } from './repos'
+import { followSettings, spelling } from './spell'
+import { isTable, TableView } from './TableView'
 import { useGitStatus } from './useGitStatus'
 
 // PhoneCode is the Code tab on a phone, as screens a phone moves between,
@@ -75,7 +80,8 @@ export function PhoneCode({ client }: { client: CodeClient }) {
     )
   }
   const file = params.get('file')
-  if (file !== null) return <FileScreen client={client} path={file} onBack={back} />
+  if (file !== null)
+    return <FileScreen client={client} path={file} onBack={back} onFile={(path) => go({ file: path })} />
   const repo = params.get('repo') ?? undefined
   const commit = params.get('commit')
   if (commit !== null) {
@@ -848,52 +854,99 @@ function DiffScreen({
   )
 }
 
-// FileScreen is a file's text, to read.
-function FileScreen({ client, path, onBack }: { client: CodeClient; path: string; onBack: () => void }) {
+// FileScreen is a file's text, to read, its misspellings underlined. A
+// Markdown file shows rendered and a CSV or TSV file as a table; the
+// button beside Wrap shows its text.
+function FileScreen({
+  client,
+  path,
+  onBack,
+  onFile,
+}: {
+  client: CodeClient
+  path: string
+  onBack: () => void
+  onFile: (path: string) => void
+}) {
   const [wrap, setWrap] = useWrap()
   const host = useRef<HTMLDivElement>(null)
   const [error, setError] = useState('')
+  const [text, setText] = useState<string | null>(null)
+  const viewable = isMarkdown(path) || isTable(path)
+  const [rendered, setRendered] = useState(true)
+  const showText = !viewable || !rendered
+  useEffect(() => followSettings(client), [client])
   useEffect(() => {
-    const el = host.current
-    if (!el) return
-    let view: EditorView | null = null
     let live = true
-    Promise.all([client.read(path), languageFor(path.split('/').pop() ?? '')]).then(
-      ([text, lang]) => {
+    setText(null)
+    client.read(path).then(
+      (t) => {
         if (!live) return
-        if (text === null) {
-          setError('This file is too large to show, or not text.')
-          return
-        }
-        view = new EditorView({
-          parent: el,
-          doc: text,
-          extensions: [
-            lineNumbers(),
-            codeHighlight,
-            followScheme,
-            codeTheme,
-            lang,
-            EditorState.readOnly.of(true),
-            EditorView.editable.of(false),
-            wrap ? EditorView.lineWrapping : [],
-          ],
-        })
+        if (t === null) setError('This file is too large to show, or not text.')
+        else setText(t)
       },
       (e: Error) => live && setError(e.message),
     )
     return () => {
       live = false
+    }
+  }, [client, path])
+  useEffect(() => {
+    const el = host.current
+    if (!el || text === null || !showText) return
+    let view: EditorView | null = null
+    let live = true
+    languageFor(path.split('/').pop() ?? '').then((lang) => {
+      if (!live) return
+      view = new EditorView({
+        parent: el,
+        doc: text,
+        extensions: [
+          lineNumbers(),
+          codeHighlight,
+          followScheme,
+          codeTheme,
+          lang,
+          EditorState.readOnly.of(true),
+          EditorView.editable.of(false),
+          wrap ? EditorView.lineWrapping : [],
+          spelling(path),
+        ],
+      })
+    })
+    return () => {
+      live = false
       view?.destroy()
     }
-  }, [client, path, wrap])
+  }, [path, text, wrap, showText])
   return (
     <div className="phone-code-screen">
       <ScreenBar title={path.split('/').pop() ?? path} sub={<bdi>{dirOf(path)}</bdi>} onBack={onBack}>
-        <WrapButton wrap={wrap} onWrap={setWrap} />
+        {viewable && (
+          <button
+            type="button"
+            className={rendered ? 'phone-icon-btn phone-icon-btn-on' : 'phone-icon-btn'}
+            aria-pressed={rendered}
+            aria-label={isTable(path) ? 'Show as a table' : 'Show rendered'}
+            title={isTable(path) ? 'Show as a table' : 'Show rendered'}
+            onClick={() => setRendered((r) => !r)}
+          >
+            {isTable(path) ? <Table2 size={20} /> : <Eye size={20} />}
+          </button>
+        )}
+        {showText && <WrapButton wrap={wrap} onWrap={setWrap} />}
       </ScreenBar>
       {error && <div className="phone-empty">{error}</div>}
-      <div ref={host} className="phone-code-fill phone-code-text" hidden={!!error} />
+      {!error && text !== null && !showText && (
+        <div className="phone-code-fill phone-code-rendered">
+          {isTable(path) ? (
+            <TableView path={path} text={text} />
+          ) : (
+            <MarkdownPreview client={client} path={path} text={text} onOpen={onFile} />
+          )}
+        </div>
+      )}
+      <div ref={host} className="phone-code-fill phone-code-text" hidden={!!error || !showText} />
     </div>
   )
 }

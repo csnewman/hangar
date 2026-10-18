@@ -345,6 +345,28 @@ function ideaKeys(c: ReturnType<typeof commands>): Extension {
   ]
 }
 
+// A problem a language server has found in a file: where it is (lines and
+// columns from 1, the file as the Code tab names it), how bad (LSP's
+// severity: 1 an error, 2 a warning, 3 information, 4 a hint), and what it
+// says.
+export type Problem = {
+  path: string
+  line: number
+  col: number
+  severity: number
+  message: string
+  source?: string
+  code?: string
+}
+
+type Diagnostic = {
+  range: Range
+  severity?: number
+  message: string
+  source?: string
+  code?: string | number
+}
+
 // A language's server, as far as this tab knows: starting, ready with its
 // client, or missing, with why.
 export type ServerState =
@@ -359,6 +381,12 @@ export class Languages {
   private servers = new Map<string, Promise<ServerState>>()
   private numbers = new Map<number, string>()
   private listeners = new Set<() => void>()
+  // ready are the clients of the servers running, by language.
+  private ready = new Map<string, LSPClient>()
+  // problems are what each server last said of each file, by language and
+  // then file.
+  private problems = new Map<string, Map<string, Problem[]>>()
+  private problemListeners = new Set<() => void>()
   private code: CodeClient
   private opener: FileOpener
   // commands are going to a definition and finding usages, for menus.
@@ -375,6 +403,8 @@ export class Languages {
       const lang = this.numbers.get(server)
       if (lang === undefined) return
       this.numbers.delete(server)
+      this.ready.delete(lang)
+      this.forget(lang)
       // Restarted, by anyone: started again here too.
       if (why === 'restarted') this.servers.delete(lang)
       else {
@@ -390,7 +420,53 @@ export class Languages {
   private reset() {
     this.servers.clear()
     this.numbers.clear()
+    this.ready.clear()
+    for (const lang of [...this.problems.keys()]) this.forget(lang)
     this.changed()
+  }
+
+  // clients are the servers running, for asking all of them: Go to Symbol.
+  clients(): LSPClient[] {
+    return [...this.ready.values()]
+  }
+
+  // allProblems are what every server running has found, by file.
+  allProblems(): Problem[] {
+    return [...this.problems.values()].flatMap((files) => [...files.values()].flat())
+  }
+
+  // onProblems calls fn whenever a server says what it has found.
+  onProblems(fn: () => void): () => void {
+    this.problemListeners.add(fn)
+    return () => this.problemListeners.delete(fn)
+  }
+
+  private forget(lang: string) {
+    if (!this.problems.delete(lang)) return
+    for (const fn of this.problemListeners) fn()
+  }
+
+  private publish(lang: string, uri: string, diagnostics: Diagnostic[]) {
+    const abs = pathOf(uri)
+    const path = abs.startsWith(this.code.root + '/') ? abs.slice(this.code.root.length + 1) : abs
+    let files = this.problems.get(lang)
+    if (!files) this.problems.set(lang, (files = new Map()))
+    if (!diagnostics.length) files.delete(uri)
+    else {
+      files.set(
+        uri,
+        diagnostics.map((d) => ({
+          path,
+          line: d.range.start.line + 1,
+          col: d.range.start.character + 1,
+          severity: d.severity ?? 1,
+          message: d.message,
+          source: d.source,
+          code: d.code === undefined ? undefined : String(d.code),
+        })),
+      )
+    }
+    for (const fn of this.problemListeners) fn()
   }
 
   private changed() {
@@ -484,9 +560,26 @@ export class Languages {
           last = { message: p.message ?? '', at: now }
           return false
         },
+        // Every file's problems are kept for the Problems window; an open
+        // file's are shown in its editor as well, by the package.
+        'textDocument/publishDiagnostics': (_c, p: { uri: string; diagnostics: Diagnostic[] }) => {
+          this.publish(language, p.uri, p.diagnostics ?? [])
+          return false
+        },
       },
       workspace: (c) => (workspace = new HangarWorkspace(c, this.code, this.opener)),
-      extensions: [...languageServerExtensions(), ideaKeys(this.commands)],
+      extensions: [
+        ...languageServerExtensions(),
+        ideaKeys(this.commands),
+        // The Structure window shows symbols inside those that hold them,
+        // and Go to Symbol searches the workspace.
+        {
+          clientCapabilities: {
+            textDocument: { documentSymbol: { hierarchicalDocumentSymbolSupport: true } },
+            workspace: { symbol: {} },
+          },
+        },
+      ],
     }).connect(transport)
     // A mapping places a server's positions in files as they were when it
     // was made, and knows only the files open then; a reference in a file
@@ -513,6 +606,7 @@ export class Languages {
       }) as typeof m.mapPosition
       return m
     }
+    this.ready.set(language, client)
     return { state: 'ready', language, command: res.command, client }
   }
 

@@ -50,7 +50,8 @@ import { openGotoLine, registerPopups, startRename } from './editorPopups'
 import { EditorStatusContext } from './editorStatus'
 import { findBar, openFind, openReplace } from './FindBar'
 import { GotoLine } from './GotoLine'
-import { indentation } from './indent'
+import { editorConfig } from './editorconfig'
+import { indentation, indentFor, type Indent } from './indent'
 import { RenamePopup } from './RenamePopup'
 import { languageId, Languages, LanguagesContext, type ServerState } from './lsp'
 import type { Jump } from './Search'
@@ -346,6 +347,8 @@ export function CodeEditor({
   onViewRef.current = onView
   const languages = useContext(LanguagesContext)
   const [server, setServer] = useState<ServerState | null>(null)
+  const serverRef = useRef(server)
+  serverRef.current = server
   // What is shown over the editor: Go to Line, or a symbol being renamed.
   const [popup, setPopup] = useState<
     { kind: 'goto'; view: EditorView } | { kind: 'rename'; view: EditorView; from: number; to: number } | null
@@ -531,7 +534,21 @@ export function CodeEditor({
     const language = new Compartment()
     const lsp = new Compartment()
     const undo = new Y.UndoManager(file.text)
-    const view = new EditorView({
+    let edits = 0
+    const indentSlot = new Compartment()
+    let indent: Indent = indentFor(path, file.text.toString(), null)
+    const announce = (): void =>
+      status?.set(path, {
+        ...caret(view.state),
+        language: languageName(path.split('/').pop() ?? ''),
+        readOnly,
+        goto: () => openGotoLine(view),
+        view,
+        edits,
+        indent,
+        server: serverRef.current,
+      })
+    const view: EditorView = new EditorView({
       parent: el,
       state: EditorState.create({
         doc: file.text.toString(),
@@ -545,19 +562,23 @@ export function CodeEditor({
           blameField,
           blameSlot.current.of([]),
           wrapSlot.current.of(softWraps(path) ? EditorView.lineWrapping : []),
-          indentation(path, file.text.toString()),
+          indentSlot.of(indentation(indent)),
           spelling(path),
           EditorState.readOnly.of(readOnly),
           yCollab(file.text, file.awareness, { undoManager: undo }),
           gitGutter((v, h, e) => setHunk({ view: v, h, x: e.clientX, y: e.clientY })),
           EditorView.updateListener.of((u) => {
-            if (u.selectionSet || u.docChanged) status?.set(path, caret(u.state))
+            if (u.docChanged) edits++
+            if (u.selectionSet || u.docChanged) status?.set(path, { ...caret(u.state), edits })
           }),
           EditorView.domEventHandlers({
             contextmenu: (e, v) => {
               openMenuRef.current(v, e)
               return true
             },
+            // The editor last used is the one the status bar speaks of:
+            // another may be open beside it.
+            focus: () => announce(),
           }),
         ],
       }),
@@ -572,13 +593,15 @@ export function CodeEditor({
       if (!(e.target as HTMLElement).closest('.cm-gutters')) return
       gutterMenuRef.current(view, e)
     })
-    status?.set(path, {
-      ...caret(view.state),
-      language: languageName(path.split('/').pop() ?? ''),
-      readOnly,
-      goto: () => openGotoLine(view),
-    })
+    announce()
     let disposed = false
+    // What .editorconfig says wins over what the file seems to do.
+    editorConfig(client, path).then((ec) => {
+      if (disposed || !ec) return
+      indent = indentFor(path, view.state.doc.toString(), ec)
+      view.dispatch({ effects: indentSlot.reconfigure(indentation(indent)) })
+      status?.set(path, { indent })
+    })
     languageFor(file.path.split('/').pop() ?? '').then((ext) => {
       if (!disposed) view.dispatch({ effects: language.reconfigure(ext) })
     })

@@ -3570,3 +3570,287 @@
 .md-preview pre {
   tab-size: 4;
 }
+
+.code-stripe-count-bad {
+  background: var(--danger);
+}
+
+/* A symbol's kind, as IntelliJ badges it: a letter in its kind's colour. */
+.code-symbol-kind {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  font-family: var(--code-font);
+  font-size: 10px;
+  font-weight: 650;
+  color: #fff;
+}
+
+.code-symbol-type {
+  background: #3d8bd4;
+}
+
+.code-symbol-fn {
+  background: #c27a1d;
+}
+
+.code-symbol-field {
+  background: #8e5bb8;
+}
+
+.code-symbol-var {
+  background: #4f9a5b;
+}
+
+.code-symbol-ns,
+.code-symbol-file {
+  background: #7a8494;
+}
+
+/* The Structure window: the file's symbols, each under what holds it. */
+.code-structure {
+  height: 100%;
+  overflow: auto;
+  padding: 3px 0;
+  font-size: 12.5px;
+}
+
+.code-structure-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding-right: 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.code-structure-row:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-structure-here {
+  background: var(--accent-soft);
+}
+
+.code-structure-twisty {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.code-structure-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-structure-detail {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-family: var(--code-font);
+  font-size: 11.5px;
+}
+
+/* The Problems window: what the language servers found, by file. */
+.code-problems {
+  height: 100%;
+  overflow: auto;
+  padding: 3px 0;
+  font-size: 12.5px;
+}
+
+.code-problems-file,
+.code-problems-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.code-problems-row {
+  padding-left: 30px;
+}
+
+.code-problems-file:hover,
+.code-problems-row:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-problems-message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-problem-error {
+  flex: none;
+  color: var(--danger);
+}
+
+.code-problem-warning {
+  flex: none;
+  color: #c98a00;
+}
+
+.code-problem-info {
+  flex: none;
+  color: var(--accent);
+}
+
+/* Two groups of editors side by side: the one not in use marks its chosen
+   tab in grey, as IntelliJ does, so the accent says where typing goes. */
+.code-editors-split:not(.code-editors-focused) .code-tab-on {
+  border-bottom-color: var(--border-strong);
+}
+
+/* Math and diagrams in the preview. */
+.md-math-block {
+  margin: 0 0 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.md-mermaid {
+  margin: 0 0 14px;
+  text-align: center;
+  color: var(--muted);
+}
+
+.md-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.md-mermaid-error {
+  text-align: left;
+  color: var(--danger);
+  white-space: pre-wrap;
+}
+
+/* A CSV or TSV file as a table. */
+.code-table {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--code-bg);
+  font-size: 12.5px;
+}
+
+.code-table-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.code-table table {
+  border-collapse: separate;
+  border-spacing: 0;
+  min-width: 100%;
+}
+
+.code-table :is(th, td) {
+  max-width: 420px;
+  padding: 3px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+
+.code-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-2);
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+
+.code-table th svg {
+  margin-left: 4px;
+  vertical-align: -1px;
+  color: var(--accent);
+}
+
+.code-table .num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.code-table .code-table-n {
+  position: sticky;
+  left: 0;
+  color: var(--muted);
+  background: var(--surface-2);
+  text-align: right;
+  font-family: var(--code-font);
+  font-size: 11px;
+}
+
+.code-table thead .code-table-n {
+  z-index: 2;
+}
+
+.code-table tbody tr {
+  cursor: pointer;
+}
+
+.code-table tbody tr:hover td {
+  background: var(--sidebar-hover);
+}
+
+.code-table-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+}
+
+/* An HTML file as a browser shows it. */
+.code-html {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--code-bg);
+}
+
+.code-html iframe {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  border: none;
+  background: #fff;
+}
+
+.code-html-url {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.md-split :is(.code-html, .code-table) .code-image-bar {
+  padding-right: 112px;
+}
+
+.phone-code-rendered .md-preview {
+  padding: 16px 16px 30vh;
+}

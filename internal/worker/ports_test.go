@@ -19,9 +19,10 @@ import (
 )
 
 // An environment's own web servers are reached on <anything>-env<short> hosts:
-// plain HTTP at its port 80 and HTTPS at its port 443, as asked. A private
-// environment's send a browser to Hangar to sign in, and refuse other
-// sites; a public one's let anyone through.
+// plain HTTP at its port 80 and HTTPS at its port 443, as asked, or the port
+// a numeric name says. A private environment's send a browser to Hangar to
+// sign in, and refuse other sites; a public one's let anyone through to 80
+// and 443, but not to a numbered port.
 func TestPorts(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -64,6 +65,7 @@ func TestPorts(t *testing.T) {
 		"-env" + env.ShortID + ".hangar.test":     false,
 		"app-env" + env.ShortID + "x.hangar.test": false,
 		"app-env" + env.ID + ".hangar.test":       false,
+		"8000-env" + env.ShortID + ".hangar.test": true,
 	} {
 		if srv.EnvironmentHost(h) != want {
 			t.Errorf("%s: taken for an environment's web servers %v, want %v", h, !want, want)
@@ -154,6 +156,37 @@ func TestPorts(t *testing.T) {
 		}
 	}
 
+	// A numbered host reaches its port, over plain HTTP however it was
+	// asked, and nothing else listening there says so.
+	numbered := func(base, port, path string, header http.Header) *http.Response {
+		t.Helper()
+		req, _ := http.NewRequest(http.MethodGet, base+path, nil)
+		req.Host = port + "-env" + env.ShortID + ".hangar.test"
+		for k, v := range header {
+			req.Header[k] = v
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	signedIn := http.Header{"Cookie": {sent}, "Sec-Fetch-Site": {"same-origin"}}
+	if got := seen(numbered(hs.URL, "8000", "/dev", signedIn)); got.Port != 8000 || got.TLS || got.Path != "/dev" {
+		t.Errorf("port 8000 over HTTP reached %+v", got)
+	}
+	if got := seen(numbered(tlsServer.URL, "8000", "/dev", signedIn)); got.Port != 8000 || got.TLS {
+		t.Errorf("port 8000 over HTTPS reached %+v", got)
+	}
+	if resp := numbered(hs.URL, "5173", "/", signedIn); resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("a port nothing listens on: status %d", resp.StatusCode)
+	}
+	for _, name := range []string{"0", "65536", "08000"} {
+		if got := seen(numbered(hs.URL, name, "/", signedIn)); got.Port != 80 {
+			t.Errorf("%s-env reached port %d, want a name like any other", name, got.Port)
+		}
+	}
+
 	// Public: anyone, over either.
 	call(t, hs.URL, http.MethodPut, "/api/frontend/environments/"+env.ID+"/ports", `{"public":true}`, nil)
 	if got := seen(do(hs.URL, "/", nil)); got.Port != 80 {
@@ -161,5 +194,10 @@ func TestPorts(t *testing.T) {
 	}
 	if got := seen(do(tlsServer.URL, "/secure", nil)); got.Port != 443 || !got.TLS || got.Path != "/secure" {
 		t.Errorf("public, HTTPS reached %+v", got)
+	}
+	resp = numbered(hs.URL, "8000", "/", navigate)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther {
+		t.Errorf("public, a numbered port without signing in: status %d", resp.StatusCode)
 	}
 }

@@ -25,9 +25,15 @@ import (
 // were. Hangar's own certificate is what the browser sees; the
 // environment's, often self-signed, is not checked.
 //
+// A name that is a port number reaches that port instead, over plain HTTP
+// whichever way the request arrived: 5173-env<short> is a development
+// server on 5173.
+//
 // A private environment's are reached by whoever may reach the environment,
 // signed in to Hangar: the host is given a cookie of its own the way an
-// editor's is. A public environment's are reached by anyone.
+// editor's is. A public environment's ports 80 and 443 are reached by
+// anyone; its numbered ports still need signing in, since making a web
+// site public is not making every port public.
 
 // portLabel ends the label of a host an environment's web servers are
 // reached on, followed by the environment's short ID.
@@ -93,10 +99,29 @@ func (g *Gateway) SignInPort(ctx context.Context, sessionToken, environmentID, s
 	return u.Scheme + "://" + u.Host + signInPath + "?" + url.Values{"ticket": {ticket}, "to": {back}}.Encode(), nil
 }
 
+// numberedPort is the port a host of an environment's names, if its name is
+// a port number: 1 to 65535, as written with no leading zero.
+func (g *Gateway) numberedPort(host string) (int, bool) {
+	label, ok := g.public.Label(host)
+	if !ok || len(label) < len(portLabel)+6+2 {
+		return 0, false
+	}
+	name, ok := strings.CutSuffix(label[:len(label)-len(portLabel)-6], "-")
+	if !ok {
+		return 0, false
+	}
+	n, err := strconv.Atoi(name)
+	if err != nil || n < 1 || n > 65535 || strconv.Itoa(n) != name {
+		return 0, false
+	}
+	return n, true
+}
+
 // ServePort serves a request for one of an environment's own web servers;
 // OwnsPort has said it is one.
 func (g *Gateway) ServePort(w http.ResponseWriter, r *http.Request) {
 	short, _ := g.OwnsPort(r.Host)
+	numbered, isNumbered := g.numberedPort(r.Host)
 	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 	e, err := g.sessions.Environment(r.Context(), short)
 	switch {
@@ -109,7 +134,7 @@ func (g *Gateway) ServePort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	env := e.ID
-	if !e.Public {
+	if !e.Public || isNumbered {
 		if !portAllowed(r, secure) {
 			textError(w, http.StatusForbidden, "Cross-site request refused: this environment is private.")
 			return
@@ -154,6 +179,9 @@ func (g *Gateway) ServePort(w http.ResponseWriter, r *http.Request) {
 	port := 80
 	if secure {
 		port = 443
+	}
+	if isNumbered {
+		port = numbered
 	}
 	g.portProxy.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), portTargetKey{},
 		portTarget{env: env, worker: e.WorkerID, port: port, host: r.Host, secure: secure})))

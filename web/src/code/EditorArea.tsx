@@ -1,4 +1,5 @@
-import type { EditorView } from '@codemirror/view'
+import { EditorView } from '@codemirror/view'
+import { Table2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import type { CodeClient, GitStatus, SharedFile } from './client'
@@ -12,7 +13,10 @@ import { DockerLogs } from './DockerView'
 import { EnvironmentView } from './EnvironmentView'
 import { HexView } from './HexView'
 import { ImageView } from './ImageView'
-import { isMarkdown, MarkdownPreview, MarkdownSplit, useYText } from './MarkdownPreview'
+import { isMarkdown, MarkdownPreview } from './MarkdownPreview'
+import { PreviewSplit, useYText } from './PreviewSplit'
+import { isTable, TableView } from './TableView'
+import { HtmlPreview, isHtml } from './HtmlPreview'
 import { MediaView } from './MediaView'
 import type { Jump } from './Search'
 import { TabBar, tabKey, type Tab } from './TabBar'
@@ -39,6 +43,10 @@ export function EditorArea({
   onReveal,
   onShowCommit,
   jump,
+  split,
+  onFocus,
+  onSplit,
+  onUnsplit,
 }: {
   client: CodeClient
   tabs: Tab[]
@@ -57,6 +65,15 @@ export function EditorArea({
   onReopen: () => void
   onReveal: (path: string) => void
   onShowCommit: (hash: string, path: string) => void
+  // split says how many groups of editors there are, and whether this one
+  // is the one in use beside another.
+  split?: { groups: number; focused: boolean }
+  // onFocus says this group was used: clicked in.
+  onFocus?: () => void
+  // onSplit shows a tab in the other group, or moves it there.
+  onSplit?: (tab: Tab, move: boolean) => void
+  // onUnsplit gathers both groups' tabs into one.
+  onUnsplit?: () => void
 }) {
   const env = useEnv()
   const current = tabs.find((t) => tabKey(t) === active) ?? null
@@ -80,9 +97,27 @@ export function EditorArea({
       },
       { label: 'Close All', onSelect: () => onCloseMany(keys) },
     ]
-    if (t.kind !== 'file' && t.kind !== 'diff' && t.kind !== 'compare') return closing
+    const groups = split?.groups ?? 1
+    const splitting: MenuItem[] = onSplit
+      ? [
+          'separator',
+          {
+            label: groups > 1 ? 'Open on the Other Side' : 'Split Right',
+            disabled: t.kind !== 'file' && t.kind !== 'diff' && t.kind !== 'compare',
+            onSelect: () => onSplit(t, false),
+          },
+          {
+            label: groups > 1 ? 'Move to the Other Side' : 'Split and Move Right',
+            disabled: groups === 1 && tabs.length < 2,
+            onSelect: () => onSplit(t, true),
+          },
+          ...(groups > 1 && onUnsplit ? [{ label: 'Unsplit', onSelect: onUnsplit }] : []),
+        ]
+      : []
+    if (t.kind !== 'file' && t.kind !== 'diff' && t.kind !== 'compare') return [...closing, ...splitting]
     return [
       ...closing,
+      ...splitting,
       'separator',
       { label: 'Copy Path', onSelect: () => copyText(`${client.root}/${t.path}`) },
       { label: 'Copy Relative Path', onSelect: () => copyText(t.path) },
@@ -100,7 +135,20 @@ export function EditorArea({
     ]
   }
   return (
-    <div className="code-editors">
+    <div
+      className={[
+        'code-editors',
+        (split?.groups ?? 1) > 1 && 'code-editors-split',
+        split?.focused && 'code-editors-focused',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+      // A press in the group, not in a menu it opened over the page, makes
+      // it the group in use.
+      onPointerDownCapture={(e) => {
+        if (e.currentTarget.contains(e.target as Node)) onFocus?.()
+      }}
+    >
       {tabs.length > 0 && (
         <TabBar
           tabs={tabs}
@@ -283,6 +331,40 @@ function TextTab({
 
   if (error) return <div className="code-empty"><p className="code-note-error">{error}</p></div>
   if (!file) return <div className="code-empty"><p className="muted">Opening {path}…</p></div>
+  if (isHtml(path)) {
+    return (
+      <PreviewSplit
+        kind="html"
+        initial="editor"
+        names={['Editor Only', 'Editor and Preview', 'Preview Only']}
+        editor={
+          <CodeEditor
+            file={file}
+            user={user}
+            client={client}
+            path={path}
+            jump={jump}
+            onReveal={onReveal}
+            onShowCommit={onShowCommit}
+          />
+        }
+        preview={<HtmlPreview client={client} path={path} />}
+      />
+    )
+  }
+  if (isTable(path)) {
+    return (
+      <TableTab
+        client={client}
+        file={file}
+        path={path}
+        user={user}
+        jump={jump}
+        onReveal={onReveal}
+        onShowCommit={onShowCommit}
+      />
+    )
+  }
   if (isMarkdown(path)) {
     return (
       <MarkdownTab
@@ -333,7 +415,9 @@ function MarkdownTab({
   const text = useYText(file.text)
   const [view, setView] = useState<EditorView | null>(null)
   return (
-    <MarkdownSplit
+    <PreviewSplit
+      kind="markdown"
+      names={['Editor Only', 'Editor and Preview', 'Preview Only']}
       editor={
         <CodeEditor
           file={file}
@@ -347,6 +431,55 @@ function MarkdownTab({
         />
       }
       preview={<MarkdownPreview client={client} path={path} text={text} editor={view} onOpen={onOpenFile} />}
+    />
+  )
+}
+
+// TableTab is a CSV or TSV file's text beside it as a table, the table
+// alone to begin with.
+function TableTab({
+  client,
+  file,
+  path,
+  user,
+  jump,
+  onReveal,
+  onShowCommit,
+}: {
+  client: CodeClient
+  file: SharedFile
+  path: string
+  user: { name: string; color: string }
+  jump: (Jump & { n: number }) | null
+  onReveal: (path: string) => void
+  onShowCommit: (hash: string, path: string) => void
+}) {
+  const text = useYText(file.text)
+  const [view, setView] = useState<EditorView | null>(null)
+  const toLine = (n: number) => {
+    if (!view) return
+    const line = view.state.doc.line(Math.min(n, view.state.doc.lines))
+    view.dispatch({ selection: { anchor: line.from }, effects: EditorView.scrollIntoView(line.from, { y: 'center' }) })
+  }
+  return (
+    <PreviewSplit
+      kind="table"
+      initial="preview"
+      names={['Text Only', 'Text and Table', 'Table Only']}
+      previewIcon={<Table2 size={14} />}
+      editor={
+        <CodeEditor
+          file={file}
+          user={user}
+          client={client}
+          path={path}
+          jump={jump}
+          onReveal={onReveal}
+          onShowCommit={onShowCommit}
+          onView={setView}
+        />
+      }
+      preview={<TableView path={path} text={text} onLine={toLine} />}
     />
   )
 }

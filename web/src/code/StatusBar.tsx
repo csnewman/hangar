@@ -14,6 +14,7 @@ import type { CodeClient } from './client'
 import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { useEditorStatus, type EditorStatusStore } from './editorStatus'
 import type { Languages } from './lsp'
+import { indentName } from './indent'
 import { ServerChip } from './LspPanel'
 
 // StatusBar is the foot of an environment's workspace, as an editor's is:
@@ -202,6 +203,20 @@ export function EditorItems({
       >
         {`${s.line}:${s.col}${selection}`}
       </button>
+      {s.indent && (
+        <span
+          className="code-statusbar-info"
+          title={
+            s.indent.from === 'editorconfig'
+              ? 'Indentation, from .editorconfig'
+              : s.indent.from === 'file'
+                ? 'Indentation, as the file has it'
+                : 'Indentation, as files of its kind have it'
+          }
+        >
+          {indentName(s.indent)}
+        </span>
+      )}
       {s.language && <span className="code-statusbar-info">{s.language}</span>}
       <ServerChip server={s.server} readOnly={s.readOnly} client={client} languages={languages} />
     </>

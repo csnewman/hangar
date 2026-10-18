@@ -6,7 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, 
 import type { CodeClient, Match } from './client'
 import { codeHighlight, codeTheme, followScheme, languageFor } from './CodeEditor'
 import { isMac, shortcut } from './ContextMenu'
-import type { Usages } from './lsp'
+import type { Languages, Usages } from './lsp'
+import { kindOf, workspaceSymbols, type FoundSymbol } from './symbols'
 
 // Jump is a place in a file to open it at: a 1-based line (0 for none),
 // and optionally a 1-based column, or text in the line to select. focus
@@ -258,6 +259,135 @@ export function GotoFile({
       </div>
       <div className="code-popup-foot muted small">
         ↑↓ to choose · Enter to open · {shortcut('Mod+Shift+F')} finds text in files
+      </div>
+    </Popup>
+  )
+}
+
+// --- Go to Symbol -------------------------------------------------------
+
+// GotoSymbol finds a class, function or other symbol by name, anywhere in
+// the workspace: IntelliJ's Go to Symbol, asking every language server
+// running.
+export function GotoSymbol({
+  client,
+  languages,
+  onOpen,
+  onClose,
+}: {
+  client: CodeClient
+  languages: Languages
+  onOpen: (j: Jump) => void
+  onClose: () => void
+}) {
+  const [query, setQuery] = useState('')
+  const [found, setFound] = useState<{ query: string; symbols: FoundSymbol[] } | null>(null)
+  const [sel, setSel] = useState(0)
+  const servers = languages.clients()
+  useEffect(() => {
+    const q = query.trim()
+    if (!q) {
+      setFound(null)
+      return
+    }
+    let live = true
+    const timer = setTimeout(() => {
+      workspaceSymbols(languages.clients(), q).then((symbols) => live && setFound({ query: q, symbols }))
+    }, 150)
+    return () => {
+      live = false
+      clearTimeout(timer)
+    }
+  }, [query, languages])
+  const pathOf = (uri: string) => {
+    const abs = decodeURIComponent(new URL(uri).pathname)
+    return abs.startsWith(client.root + '/') ? abs.slice(client.root.length + 1) : abs
+  }
+  const hits = useMemo(() => {
+    if (!found) return []
+    return (
+      found.symbols
+        .map((s) => ({ s, m: fuzzy(found.query, s.name), path: pathOf(s.uri) }))
+        .filter((h) => h.m)
+        // The project's own first, as IntelliJ lists them, then libraries'.
+        .sort(
+          (a, b) =>
+            Number(a.path.startsWith('/')) - Number(b.path.startsWith('/')) ||
+            b.m!.score - a.m!.score ||
+            a.s.name.localeCompare(b.s.name),
+        )
+        .slice(0, 100)
+    )
+    // pathOf reads only the root.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [found])
+  useEffect(() => setSel(0), [found])
+  const list = useScrollIntoView(sel)
+  const choose = (i: number) => {
+    const h = hits[i]
+    if (!h) return
+    onClose()
+    onOpen({ path: h.path, line: h.s.line, col: h.s.col })
+  }
+
+  return (
+    <Popup className="code-goto" onClose={onClose}>
+      <div className="code-popup-head">
+        <span className="strong">Go to Symbol</span>
+        <span className="muted small">
+          {servers.length === 0
+            ? 'No language server is running'
+            : found
+              ? `${hits.length === 100 ? '100+' : hits.length} found`
+              : `${servers.length} language server${servers.length === 1 ? '' : 's'}`}
+        </span>
+      </div>
+      <input
+        className="code-popup-input"
+        autoFocus
+        spellCheck={false}
+        placeholder="Class, function or other symbol"
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={(e) => {
+          if (moveSelection(e, sel, hits.length, setSel)) return
+          if (e.key === 'Enter') {
+            e.preventDefault()
+            choose(sel)
+          }
+        }}
+      />
+      <div className="code-popup-list" ref={list} role="listbox">
+        {hits.map((h, i) => {
+          const k = kindOf(h.s.kind)
+          return (
+            <div
+              key={`${h.s.uri}:${h.s.line}:${h.s.col}:${h.s.name}`}
+              role="option"
+              aria-selected={i === sel}
+              className={i === sel ? 'code-popup-row code-popup-row-on' : 'code-popup-row'}
+              title={`${k.name} ${h.s.name}`}
+              onMouseMove={() => i !== sel && setSel(i)}
+              onClick={() => choose(i)}
+            >
+              <span className={`code-symbol-kind code-symbol-${k.tone}`}>{k.letter}</span>
+              <span className="code-goto-name">
+                <Highlighted text={h.s.name} at={h.m!.at} />
+                {h.s.container && <span className="muted"> {h.s.container}</span>}
+              </span>
+              <span className="code-goto-dir">
+                {h.path}:{h.s.line}
+              </span>
+            </div>
+          )
+        })}
+        {servers.length === 0 && (
+          <div className="code-popup-empty">Open a file to start its language&rsquo;s server, then search here.</div>
+        )}
+        {found && hits.length === 0 && <div className="code-popup-empty">Nothing matches.</div>}
+      </div>
+      <div className="code-popup-foot muted small">
+        ↑↓ to choose · Enter to open · {shortcut('Mod+Shift+O')} goes to a file
       </div>
     </Popup>
   )

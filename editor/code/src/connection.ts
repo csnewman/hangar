@@ -9,6 +9,7 @@ import type { Files } from './files.js'
 import type { Action, Docker } from './docker.js'
 import { Hub } from './hub.js'
 import { find, type Message } from './lsp.js'
+import type { Preview } from './preview.js'
 import type { Git } from './git.js'
 import type { Repos } from './repos.js'
 import type { Search } from './search.js'
@@ -35,6 +36,8 @@ type Services = {
 	docs: Documents
 	settings: SettingsFile
 	docker: Docker
+	// preview serves files over HTTP for an HTML file's preview.
+	preview: Preview
 }
 
 type Request = { id: number; method: string; params?: Record<string, unknown> }
@@ -290,6 +293,8 @@ export class Connection {
 				stop?.()
 				return
 			}
+			case 'preview.start':
+				return this.s.preview.start()
 			case 'settings.get':
 				return this.s.settings.get()
 			case 'settings.set':

@@ -667,6 +667,12 @@ export class CodeClient {
 
   // settings are the Code tab's, kept in the user's home (shared by their
   // profile by default).
+  // previewServer starts the service's server of files for an HTML
+  // file's preview, if it is not running, and says its port and the secret
+  // its paths begin with.
+  previewServer() {
+    return this.request<{ port: number; secret: string }>('preview.start')
+  }
   settings() {
     return this.request<Record<string, unknown>>('settings.get')
   }
