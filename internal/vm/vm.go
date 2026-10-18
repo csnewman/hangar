@@ -179,6 +179,7 @@ type Runtime struct {
 	// backend's environment for it; gpu is nil without a GPU backend.
 	gpu    *api.GPUInfo
 	gpuEnv []string
+
 	// memoryMaxMiB is what a machine's memory can grow to while it runs
 	// (UseCapacity); zero boots each with its own, for as long as it runs.
 	memoryMaxMiB int
@@ -229,7 +230,12 @@ func New(cfg Config) (*Runtime, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Runtime{cfg: cfg, monitor: caps.Monitor, store: st, ctx: ctx, cancel: cancel, envs: map[string]*machine{},
-		changed: make(chan struct{}, 1), gpu: probeGPU(ctx, cfg, gpuEnv), gpuEnv: gpuEnv}
+		changed: make(chan struct{}, 1), gpuEnv: gpuEnv}
+	if caps.Monitor == host.MonitorKrun {
+		r.gpu = krunGPU(ctx, cfg)
+	} else {
+		r.gpu = probeGPU(ctx, cfg, gpuEnv)
+	}
 	go r.watchHugePages()
 
 	entries, err := os.ReadDir(cfg.StateDir)
@@ -250,13 +256,7 @@ func New(cfg Config) (*Runtime, error) {
 // offer: not when it asks for hardware and there is only the CPU, nor when
 // the backend cannot render at all. It is nil without a GPU backend.
 func probeGPU(ctx context.Context, cfg Config, env []string) *api.GPUInfo {
-	caps, err := host.Detect()
-	if err != nil {
-		return nil
-	}
-	if caps.Monitor == host.MonitorKrun {
-		return krunGPU(ctx, cfg)
-	}
+
 	if _, err := ch.FindGpuBackend(); err != nil {
 		return nil
 	}

@@ -66,10 +66,23 @@ type Net struct {
 // dev/krun-build.sh builds, from the repository's root.
 var searchPath = []string{filepath.Join("out", "krun", "bin", "hangar-krun")}
 
-// Features are what hangar-krun's libkrun was built with.
+// Features are what hangar-krun's libkrun was built with, and what it
+// renders with.
 type Features struct {
 	GPU bool `json:"gpu"`
+	// Vulkan is the Vulkan driver a guest's GPU renders with on the Mac:
+	// VulkanKosmicKrisp or VulkanMoltenVK; empty without a GPU.
+	Vulkan string `json:"vulkan,omitempty"`
 }
+
+// The Vulkan drivers hangar-krun renders a guest's GPU with.
+const (
+	// VulkanKosmicKrisp is LunarG's driver in Mesa, on Metal 4 (macOS 26
+	// and later): conformant Vulkan 1.4, robustness2 among it.
+	VulkanKosmicKrisp = "kosmickrisp"
+	// VulkanMoltenVK is Khronos's, on any Metal.
+	VulkanMoltenVK = "moltenvk"
+)
 
 // ReadFeatures asks hangar-krun what its libkrun was built with.
 func ReadFeatures(ctx context.Context) (Features, error) {

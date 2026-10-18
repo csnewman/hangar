@@ -18,13 +18,23 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/csnewman/hangar/internal/krun"
 )
 
 func main() {
+	gpu := C.krun_has_feature(C.KRUN_FEATURE_GPU) == 1
+	var vulkan string
+	if gpu {
+		vulkan = chooseVulkan()
+	}
 	if len(os.Args) == 2 && os.Args[1] == "-features" {
-		json.NewEncoder(os.Stdout).Encode(krun.Features{GPU: C.krun_has_feature(C.KRUN_FEATURE_GPU) == 1})
+		json.NewEncoder(os.Stdout).Encode(krun.Features{GPU: gpu, Vulkan: vulkan})
 		return
 	}
 	if len(os.Args) != 2 {
@@ -135,4 +145,32 @@ func run(path string) error {
 	// Only returns if the machine could not start; once it has, libkrun
 	// exits the process when the guest does.
 	return check("starting", C.krun_start_enter(id))
+}
+
+// chooseVulkan picks the Vulkan driver the guest's GPU renders with from
+// those bundled beside hangar-krun (bin/vulkan): KosmicKrisp on macOS 26
+// and later, which it needs, and MoltenVK otherwise. VK_DRIVER_FILES, set
+// already, names another; the loader reads it when virglrenderer starts.
+func chooseVulkan() string {
+	if f := os.Getenv("VK_DRIVER_FILES"); f != "" {
+		if strings.Contains(strings.ToLower(f), "kosmickrisp") {
+			return krun.VulkanKosmicKrisp
+		}
+		return krun.VulkanMoltenVK
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(filepath.Dir(exe), "vulkan")
+	choice := krun.VulkanMoltenVK
+	if v, err := unix.Sysctl("kern.osproductversion"); err == nil {
+		if major, _ := strconv.Atoi(strings.SplitN(v, ".", 2)[0]); major >= 26 {
+			if _, err := os.Stat(filepath.Join(dir, "kosmickrisp.json")); err == nil {
+				choice = krun.VulkanKosmicKrisp
+			}
+		}
+	}
+	os.Setenv("VK_DRIVER_FILES", filepath.Join(dir, choice+".json"))
+	return choice
 }

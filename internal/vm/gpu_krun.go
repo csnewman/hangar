@@ -8,8 +8,9 @@ import (
 )
 
 // krunGPU is what a machine under libkrun renders with: Vulkan through
-// Venus on the Mac's own GPU (MoltenVK), when hangar-krun's libkrun was
-// built with a GPU, and nothing otherwise. It has no OpenGL of its own.
+// Venus on the Mac's own GPU, by the driver hangar-krun chose, when its
+// libkrun was built with a GPU, and nothing otherwise. It has no OpenGL of
+// its own (virgl).
 func krunGPU(ctx context.Context, cfg Config) *api.GPUInfo {
 	f, err := krun.ReadFeatures(ctx)
 	if err != nil {
@@ -20,5 +21,9 @@ func krunGPU(ctx context.Context, cfg Config) *api.GPUInfo {
 		cfg.Log.Info("hangar-krun's libkrun was built without a GPU: environments are offered none")
 		return nil
 	}
-	return &api.GPUInfo{Renderer: "hardware", Vulkan: []api.GPUDevice{{Name: macGPUName() + " (MoltenVK)"}}}
+	driver := "MoltenVK"
+	if f.Vulkan == krun.VulkanKosmicKrisp {
+		driver = "KosmicKrisp"
+	}
+	return &api.GPUInfo{Renderer: "hardware", Vulkan: []api.GPUDevice{{Name: macGPUName() + " (" + driver + ")"}}}
 }
