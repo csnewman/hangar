@@ -22,6 +22,7 @@ import { Docker } from './docker.js'
 import { Documents } from './docs.js'
 import { Files } from './files.js'
 import { Preview } from './preview.js'
+import { WorkspaceFile } from './workspace.js'
 import { Repos } from './repos.js'
 import { Search } from './search.js'
 import { SettingsFile } from './settings.js'
@@ -56,7 +57,10 @@ if (existsSync(values.socket)) unlinkSync(values.socket)
 const settings = new SettingsFile()
 const docker = new Docker()
 const preview = new Preview()
-const server = createServer((sock: Socket) => new Connection(sock, { root, folder, docs, settings, docker, preview }))
+const workspace = new WorkspaceFile(root)
+const server = createServer(
+	(sock: Socket) => new Connection(sock, { root, folder, docs, settings, docker, preview, workspace }),
+)
 server.listen(values.socket, () => console.log(`hangar-code: serving ${root} on ${values.socket}`))
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {

@@ -8,6 +8,7 @@ import {
   GitBranch,
   GitCompare,
   GitGraph,
+  HardDrive,
   ListTree,
   Monitor,
   ScrollText,
@@ -29,9 +30,10 @@ import { useMe } from '../session'
 import { StartProgress } from '../components/StartProgress'
 import { environmentTab, nameTab, useWorkspaceTab, type WorkspaceShow } from '../workspaceLinks'
 import { ChangesView } from './ChangesView'
+import { ComputerView } from './ComputerView'
 import { CodeClient, type ConnectionState } from './client'
 import { CodeTerminal } from './CodeTerminal'
-import { isMac, shortcut } from './ContextMenu'
+import { isMac, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { containerShell, DockerView } from './DockerView'
 import { EditorArea, tabKey, type Tab } from './EditorArea'
 import { EditorStatusContext, EditorStatusStore } from './editorStatus'
@@ -313,22 +315,29 @@ const withTab = (g: TabGroup, tab: Tab): TabGroup => ({
   active: tabKey(tab),
 })
 
-// A tool window that moves between the sides, and the side it is on.
-type ToolName = 'project' | 'structure' | 'changes' | 'docker' | 'performance'
+// A tool window that moves between the sides, and where it is docked: a
+// side, and the top or the bottom of it. A side shows one window of each
+// half at a time, one over the other when both are open, as IntelliJ's
+// sides do.
+type ToolName = 'project' | 'structure' | 'computer' | 'changes' | 'docker' | 'performance'
 type Bottom = 'terminal' | 'find' | 'problems' | 'log' | 'logs'
 type Side = 'left' | 'right'
-type Sides = Record<ToolName, Side>
-const defaultSides: Sides = {
-  project: 'left',
-  structure: 'left',
-  changes: 'right',
-  docker: 'right',
-  performance: 'right',
+type Slot = 'top' | 'bottom'
+type Dock = { side: Side; slot: Slot }
+type Docks = Record<ToolName, Dock>
+const defaultDocks: Docks = {
+  project: { side: 'left', slot: 'top' },
+  structure: { side: 'left', slot: 'top' },
+  computer: { side: 'left', slot: 'bottom' },
+  changes: { side: 'right', slot: 'top' },
+  docker: { side: 'right', slot: 'top' },
+  performance: { side: 'right', slot: 'top' },
 }
-const toolNames: ToolName[] = ['project', 'structure', 'changes', 'docker', 'performance']
+const toolNames: ToolName[] = ['project', 'structure', 'computer', 'changes', 'docker', 'performance']
 const toolTitles: Record<ToolName, string> = {
-  project: 'Project',
+  project: 'Workspace',
   structure: 'Structure',
+  computer: 'Computer',
   changes: 'Changes',
   docker: 'Docker',
   performance: 'Performance',
@@ -336,20 +345,25 @@ const toolTitles: Record<ToolName, string> = {
 const toolIcons: Record<ToolName, ReactNode> = {
   project: <FolderTree size={16} />,
   structure: <TableOfContents size={16} />,
+  computer: <HardDrive size={16} />,
   changes: <GitCompare size={16} />,
   docker: <Container size={16} />,
   performance: <Activity size={16} />,
 }
 
-function sidesFrom(settings: Record<string, unknown>): Sides {
+// docksFrom reads where each window is docked from the settings: a side,
+// with -bottom for the bottom half.
+function docksFrom(settings: Record<string, unknown>): Docks {
   const tw = settings.toolWindows as Partial<Record<ToolName, unknown>> | undefined
-  const out = { ...defaultSides }
+  const out = { ...defaultDocks }
   for (const n of toolNames) {
-    const v = tw?.[n]
-    if (v === 'left' || v === 'right') out[n] = v
+    const m = typeof tw?.[n] === 'string' ? /^(left|right)(-bottom)?$/.exec(tw[n] as string) : null
+    if (m) out[n] = { side: m[1] as Side, slot: m[2] ? 'bottom' : 'top' }
   }
   return out
 }
+
+const dockName = (d: Dock) => (d.slot === 'bottom' ? `${d.side}-bottom` : d.side)
 
 type Popup = 'goto' | 'everywhere' | 'find' | 'folder' | 'symbol' | null
 
@@ -691,10 +705,22 @@ function CodeView({
     client.settings().then(setSettings, () => {})
     return client.on('settings.changed', setSettings)
   }, [client])
-  const sides = sidesFrom(settings)
-  const moveTool = (name: ToolName, side: Side) => {
-    if (sides[name] === side) return
-    const next = { ...settings, toolWindows: { ...sides, [name]: side } }
+  // The folders the person has pinned to Computer's places.
+  const pinned = Array.isArray(settings.places)
+    ? settings.places.filter((p): p is string => typeof p === 'string')
+    : []
+  const pin = (path: string, on: boolean) => {
+    const places = on ? [...pinned.filter((p) => p !== path), path] : pinned.filter((p) => p !== path)
+    const next = { ...settings, places }
+    setSettings(next)
+    client.saveSettings(next).catch(() => {})
+  }
+  const docks = docksFrom(settings)
+  const sides = Object.fromEntries(toolNames.map((n) => [n, docks[n].side])) as Record<ToolName, Side>
+  const moveTool = (name: ToolName, dock: Dock) => {
+    if (docks[name].side === dock.side && docks[name].slot === dock.slot) return
+    const toolWindows = Object.fromEntries(toolNames.map((n) => [n, dockName(n === name ? dock : docks[n])]))
+    const next = { ...settings, toolWindows }
     setSettings(next)
     client.saveSettings(next).catch(() => {})
   }
@@ -717,25 +743,65 @@ function CodeView({
   const outer = useDefaultLayout({ id: 'hangar.code.v', storage: localStorage })
   const sidePanel = (side: Side) => (side === 'left' ? leftPanel : rightPanel)
 
-  // Which window each side shows: the one last chosen there, else the
-  // first docked there.
-  const [chosen, setChosen] = useState<Record<Side, ToolName | null>>({ left: null, right: null })
-  const showing = (side: Side): ToolName | null => {
-    const c = chosen[side]
-    return c && sides[c] === side ? c : (toolNames.find((n) => sides[n] === side) ?? null)
+  // Which window each half of each side shows: the one last chosen there,
+  // else the first docked there; and which halves are open. A side's panel
+  // is folded away when neither is.
+  const [chosen, setChosen] = useState<Record<string, ToolName | null>>({})
+  const [halves, setHalves] = useState<Record<Side, Record<Slot, boolean>>>(() => {
+    try {
+      const h = JSON.parse(localStorage.getItem('hangar.code.halves') ?? '')
+      if (h?.left && h?.right) return h
+    } catch {
+      // The halves open to begin with.
+    }
+    return { left: { top: true, bottom: false }, right: { top: true, bottom: false } }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('hangar.code.halves', JSON.stringify(halves))
+    } catch {
+      // Which halves are open is a convenience.
+    }
+  }, [halves])
+  const docked = (side: Side, slot: Slot) => toolNames.filter((n) => docks[n].side === side && docks[n].slot === slot)
+  const showing = (side: Side, slot: Slot = 'top'): ToolName | null => {
+    const c = chosen[`${side}-${slot}`]
+    return c && docks[c].side === side && docks[c].slot === slot ? c : (docked(side, slot)[0] ?? null)
   }
+  // halfOpen is whether a half of a side is shown: open, its side not
+  // folded, and something docked there. A side shown with neither half
+  // open shows its top, or its bottom if nothing is docked at the top.
+  const halfOpen = (side: Side, slot: Slot) => {
+    if (!shown[side] || docked(side, slot).length === 0) return false
+    if (halves[side][slot]) return true
+    const any = (['top', 'bottom'] as Slot[]).some((h) => halves[side][h] && docked(side, h).length > 0)
+    return !any && (slot === 'top' || docked(side, 'top').length === 0)
+  }
+  const openOther = (side: Side, slot: Slot) => {
+    const other: Slot = slot === 'top' ? 'bottom' : 'top'
+    return halves[side][other] && docked(side, other).length > 0
+  }
+  const isShown = (name: ToolName) => halfOpen(docks[name].side, docks[name].slot) && showing(docks[name].side, docks[name].slot) === name
+  const setHalf = (side: Side, slot: Slot, on: boolean) =>
+    setHalves((h) => (h[side][slot] === on ? h : { ...h, [side]: { ...h[side], [slot]: on } }))
   const showTool = (name: ToolName) => {
-    const side = sides[name]
-    setChosen((c) => ({ ...c, [side]: name }))
+    const { side, slot } = docks[name]
+    setChosen((c) => ({ ...c, [`${side}-${slot}`]: name }))
+    setHalf(side, slot, true)
     fold(side, true)
   }
-  // A window's button shows it, or hides it if it is what its side shows.
+  // hideTool closes a window's half, folding its side away if the other
+  // half is closed too.
+  const hideTool = (name: ToolName) => {
+    const { side, slot } = docks[name]
+    setHalf(side, slot, false)
+    if (!openOther(side, slot)) fold(side, false)
+  }
+  // A window's button shows it, or hides it if it is what its half shows.
   const toggleTool = (name: ToolName) => {
-    const side = sides[name]
-    if (showing(side) === name && shown[side]) fold(side, false)
+    if (isShown(name)) hideTool(name)
     else showTool(name)
   }
-  const hideTool = (name: ToolName) => fold(sides[name], false)
 
   // The environment's own pages open as tabs.
   const showEnvironment = () => open({ kind: 'environment', path: 'environment', title: 'Environment' })
@@ -750,18 +816,40 @@ function CodeView({
   const showPerformancePage = () => open({ kind: 'performance', path: 'performance', title: 'Performance' })
 
   const dropTool = (name: ToolName, side: Side) => {
-    moveTool(name, side)
-    setChosen((c) => ({ ...c, [side]: name }))
+    const slot = docks[name].slot
+    moveTool(name, { side, slot })
+    setChosen((c) => ({ ...c, [`${side}-${slot}`]: name }))
+  }
+  // A window's button's menu docks it elsewhere.
+  const stripeMenu = useContextMenu()
+  const dockMenu = (name: ToolName): MenuItem[] => {
+    const { side, slot } = docks[name]
+    const other: Side = side === 'left' ? 'right' : 'left'
+    const dockTo = (d: Dock) => () => {
+      moveTool(name, d)
+      setChosen((c) => ({ ...c, [`${d.side}-${d.slot}`]: name }))
+      setHalf(d.side, d.slot, true)
+      fold(d.side, true)
+    }
+    return [
+      { heading: toolTitles[name] },
+      { label: 'Dock at the Top', checked: slot === 'top', onSelect: dockTo({ side, slot: 'top' }) },
+      { label: 'Dock at the Bottom', checked: slot === 'bottom', onSelect: dockTo({ side, slot: 'bottom' }) },
+      { label: other === 'left' ? 'Move to the Left' : 'Move to the Right', onSelect: dockTo({ side: other, slot }) },
+      'separator',
+      { label: isShown(name) ? 'Hide' : 'Show', onSelect: () => toggleTool(name) },
+    ]
   }
 
   const [dragging, setDragging] = useState<Dragging | null>(null)
   const toolButton = (name: ToolName) => (
     <StripeButton
       key={name}
-      on={shown[sides[name]] && showing(sides[name]) === name}
-      title={`${toolTitles[name]} (drag to the other side to move it there)`}
+      on={isShown(name)}
+      title={`${toolTitles[name]} (drag to the other side to move it there; right-click to dock it elsewhere)`}
       onClick={() => toggleTool(name)}
       onPointerDown={(e) => dragTool(name, e, setDragging, dropTool)}
+      onContextMenu={(e) => stripeMenu.open(e, dockMenu(name))}
     >
       {toolIcons[name]}
       {name === 'changes' && !!status?.changes.length && <span className="code-stripe-count">{status.changes.length}</span>}
@@ -792,10 +880,24 @@ function CodeView({
         onMoved={moved}
         onHide={() => hideTool('project')}
       />
+    ) : name === 'computer' ? (
+      <ComputerView
+        client={client}
+        env={scope}
+        projects={[]}
+        pinned={pinned}
+        onPin={pin}
+        onOpenFile={(abs) =>
+          open({ kind: 'file', path: abs.startsWith(client.root + '/') ? abs.slice(client.root.length + 1) : abs })
+        }
+        onTerminal={(dir) => openTerminal(dir)}
+        onOpenAlone={(dir) => onFolder(dir === client.home ? '' : dir)}
+        onHide={() => hideTool('computer')}
+      />
     ) : name === 'structure' ? (
       <StructureView
         store={editorStatus}
-        active={shown[sides.structure] && showing(sides.structure) === 'structure'}
+        active={isShown('structure')}
         onJump={openAt}
         onHide={() => hideTool('structure')}
       />
@@ -812,7 +914,7 @@ function CodeView({
     ) : name === 'performance' ? (
       <PerformanceView
         env={environment}
-        active={shown[sides.performance] && showing(sides.performance) === 'performance'}
+        active={isShown('performance')}
         onMore={showPerformancePage}
         onHide={() => hideTool('performance')}
       />
@@ -827,11 +929,20 @@ function CodeView({
       />
     )
 
-  // A side's panel holds every window docked there, showing one; the
-  // others keep their state, hidden.
+  // A side's panel holds every window docked there, showing one of each
+  // half, one over the other when both are open; the others keep their
+  // state, hidden.
   const toolPanel = (side: Side) => {
-    const names = toolNames.filter((n) => sides[n] === side)
-    const current = showing(side)
+    const top = halfOpen(side, 'top') ? showing(side, 'top') : null
+    const bottom = halfOpen(side, 'bottom') ? showing(side, 'bottom') : null
+    const slot = (names: ToolName[], current: ToolName | null) =>
+      names.map((n) => (
+        <div key={n} className="code-side-slot" hidden={n !== current}>
+          {toolBody(n)}
+        </div>
+      ))
+    const tops = docked(side, 'top')
+    const bottoms = docked(side, 'bottom')
     return (
       <Panel
         key={side}
@@ -843,11 +954,11 @@ function CodeView({
         collapsedSize={0}
         onResize={track(side)}
       >
-        {names.map((n) => (
-          <div key={n} className="code-side-slot" hidden={n !== current}>
-            {toolBody(n)}
-          </div>
-        ))}
+        {top && bottom ? (
+          <SideHalves side={side} top={slot(tops, top)} bottom={slot(bottoms, bottom)} />
+        ) : (
+          slot([...tops, ...bottoms], top ?? bottom)
+        )}
       </Panel>
     )
   }
@@ -905,7 +1016,9 @@ function CodeView({
       <div className="workspace">
         <div className="code-page">
           <Stripe side="left" over={dragging?.over === 'left'}>
-            {left.map(toolButton)}
+            {docked('left', 'top').map(toolButton)}
+            {docked('left', 'bottom').length > 0 && <span className="code-stripe-gap" />}
+            {docked('left', 'bottom').map(toolButton)}
             <span className="code-tool-spacer" />
             {hasDesktop && (
               <StripeButton
@@ -1036,8 +1149,11 @@ function CodeView({
             </Group>
           </div>
           <Stripe side="right" over={dragging?.over === 'right'}>
-            {right.map(toolButton)}
+            {docked('right', 'top').map(toolButton)}
+            {docked('right', 'bottom').length > 0 && <span className="code-stripe-gap" />}
+            {docked('right', 'bottom').map(toolButton)}
           </Stripe>
+          {stripeMenu.menu}
           {dragging && (
             <div className="code-drag-ghost" style={{ left: dragging.x + 12, top: dragging.y + 12 }}>
               {toolIcons[dragging.tool]}
@@ -1130,6 +1246,23 @@ function Latency({ ms }: { ms: number }) {
   )
 }
 
+// SideHalves lays a side's two open halves one over the other, the split
+// between them remembered for each side.
+function SideHalves({ side, top, bottom }: { side: Side; top: ReactNode; bottom: ReactNode }) {
+  const layout = useDefaultLayout({ id: `hangar.code.halves.${side}`, storage: localStorage })
+  return (
+    <Group orientation="vertical" defaultLayout={layout.defaultLayout} onLayoutChanged={layout.onLayoutChanged}>
+      <Panel id="top" minSize="80px">
+        {top}
+      </Panel>
+      <Separator className="code-split code-split-h" />
+      <Panel id="bottom" minSize="80px">
+        {bottom}
+      </Panel>
+    </Group>
+  )
+}
+
 // EditorSplit lays two groups of editors side by side, the split between
 // them remembered.
 function EditorSplit({ children }: { children: ReactNode }) {
@@ -1211,12 +1344,14 @@ function StripeButton({
   title,
   onClick,
   onPointerDown,
+  onContextMenu,
   children,
 }: {
   on: boolean
   title: string
   onClick: () => void
   onPointerDown?: (e: React.PointerEvent) => void
+  onContextMenu?: (e: React.MouseEvent) => void
   children: ReactNode
 }) {
   return (
@@ -1228,6 +1363,13 @@ function StripeButton({
       aria-pressed={on}
       data-movable={onPointerDown ? '' : undefined}
       onPointerDown={onPointerDown}
+      onContextMenu={
+        onContextMenu &&
+        ((e) => {
+          e.preventDefault()
+          onContextMenu(e)
+        })
+      }
       onClick={onClick}
     >
       {children}

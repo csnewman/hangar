@@ -3889,3 +3889,120 @@ body.code-tab-dragging * {
   cursor: grabbing !important;
   user-select: none;
 }
+
+/* A gap on a stripe between the windows docked at the top of its side and
+   those at the bottom. */
+.code-stripe-gap {
+  width: 16px;
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}
+
+.code-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* The Computer window: a path, the places, and the folder there. */
+.code-computer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.code-computer-path {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 8px 2px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--code-bg);
+}
+
+.code-computer-path:focus-within {
+  border-color: var(--accent);
+}
+
+.code-computer-path input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--code-font);
+  font-size: 12px;
+}
+
+.code-computer-places {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px 6px;
+}
+
+.code-computer-place {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  max-width: 100%;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--code-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.code-computer-place:hover {
+  border-color: var(--border-strong);
+}
+
+.code-computer-place-on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.code-computer-tree {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  border-top: 1px solid var(--border);
+  padding: 2px 0;
+  font-size: 12.5px;
+}
+
+.code-computer-note {
+  padding: 3px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.code-computer-lock {
+  flex: none;
+  color: var(--muted);
+}
+
+.code-computer-size {
+  margin-left: auto;
+  padding-left: 8px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}

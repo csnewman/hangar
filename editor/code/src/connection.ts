@@ -10,6 +10,7 @@ import type { Action, Docker } from './docker.js'
 import { Hub } from './hub.js'
 import { find, type Message } from './lsp.js'
 import type { Preview } from './preview.js'
+import type { WorkspaceFile } from './workspace.js'
 import type { Git } from './git.js'
 import type { Repos } from './repos.js'
 import type { Search } from './search.js'
@@ -38,6 +39,8 @@ type Services = {
 	docker: Docker
 	// preview serves files over HTTP for an HTML file's preview.
 	preview: Preview
+	// workspace is the environment's list of projects.
+	workspace: WorkspaceFile
 }
 
 type Request = { id: number; method: string; params?: Record<string, unknown> }
@@ -71,6 +74,8 @@ export class Connection {
 		this.watch()
 		const offSettings = s.settings.onChange((v) => this.event('settings.changed', v))
 		sock.on('close', offSettings)
+		const offWorkspace = s.workspace.onChange((w) => this.event('workspace.changed', w))
+		sock.on('close', offWorkspace)
 	}
 
 	// watch announces every change under the folder, and every change to
@@ -293,6 +298,12 @@ export class Connection {
 				stop?.()
 				return
 			}
+			case 'workspace.get':
+				return this.s.workspace.get()
+			case 'workspace.set':
+				return this.s.workspace.set(p.folders)
+			case 'workspace.repos':
+				return this.s.workspace.repositories()
 			case 'preview.start':
 				return this.s.preview.start()
 			case 'settings.get':

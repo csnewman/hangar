@@ -1104,3 +1104,29 @@ test('previewing files over HTTP, only under the secret path', async () => {
 		a.close()
 	}
 })
+
+test('the workspace: its projects, shared by every tab, and repositories to add', async () => {
+	const a = new Client()
+	const b = new Client()
+	try {
+		await a.call('hello')
+		await b.call('hello')
+		assert.deepEqual(await a.call('workspace.get'), { folders: [root], saved: false })
+		const other = join(dir, 'other')
+		mkdirSync(join(other, '.git'), { recursive: true })
+		assert.deepEqual(await a.call('workspace.set', { folders: [root, other, root] }), {
+			folders: [root, other],
+			saved: true,
+		})
+		assert.deepEqual(await b.call('workspace.get'), { folders: [root, other], saved: true })
+		await until('the change announced', () => b.events.some((e) => e.event === 'workspace.changed'))
+		await assert.rejects(a.call('workspace.set', { folders: ['relative'] }), /absolute/)
+		await assert.rejects(a.call('workspace.set', { folders: [join(dir, 'missing')] }), /does not exist/)
+		assert.ok((await a.call('workspace.repos')).includes(other))
+		// The service's own folder, not left in the list, is gone from it.
+		assert.deepEqual(await a.call('workspace.set', { folders: [other] }), { folders: [other], saved: true })
+	} finally {
+		a.close()
+		b.close()
+	}
+})

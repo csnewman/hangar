@@ -226,7 +226,7 @@ async function submodules(git: Git, dir: string): Promise<string[]> {
 
 // scan finds the repositories in a folder that is in none: each folder
 // with a .git, not looked inside, nor are hidden folders or dependencies'.
-async function scan(root: string): Promise<string[]> {
+export async function scan(root: string): Promise<string[]> {
 	const found: string[] = []
 	let dirs = [root]
 	let read = 0
