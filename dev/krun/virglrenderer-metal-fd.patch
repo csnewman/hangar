@@ -1,0 +1,839 @@
+diff --git a/src/meson.build b/src/meson.build
+index 142b3fb..dd0d7ab 100644
+--- a/src/meson.build
++++ b/src/meson.build
+@@ -253,6 +253,10 @@ libvirgl_dep = declare_dependency(
+    include_directories: libvirgl_inc
+ )
+ 
++if host_machine.system() == 'darwin'
++   virgl_depends += [dependency('appleframeworks', modules : ['CoreFoundation'])]
++endif
++
+ libvirglrenderer = library(
+    'virglrenderer',
+    virglrenderer_sources,
+diff --git a/src/venus/vkr_buffer.c b/src/venus/vkr_buffer.c
+index 9e466f8..87e9300 100644
+--- a/src/venus/vkr_buffer.c
++++ b/src/venus/vkr_buffer.c
+@@ -6,6 +6,7 @@
+ #include "vkr_buffer.h"
+ 
+ #include "vkr_buffer_gen.h"
++#include "vkr_device.h"
+ #include "vkr_physical_device.h"
+ 
+ static void
+@@ -37,6 +38,16 @@ vkr_dispatch_vkCreateBuffer(struct vn_dispatch_context *dispatch,
+     * vkr_physical_device_init_memory_properties as well.
+     */
+ 
++#ifdef __APPLE__
++   struct vkr_device *dev = vkr_device_from_handle(args->device);
++   if (dev->physical_device->metal_fd_memory) {
++      VkExternalMemoryBufferCreateInfo *external_info = vkr_find_struct(
++         args->pCreateInfo->pNext, VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO);
++      if (external_info)
++         vkr_metal_handle_types(&external_info->handleTypes);
++   }
++#endif
++
+    vkr_buffer_create_and_add(dispatch->data, args);
+ }
+ 
+diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
+index c17dcc1..706bb5f 100644
+--- a/src/venus/vkr_context.c
++++ b/src/venus/vkr_context.c
+@@ -24,6 +24,7 @@
+ #include "vkr_device_memory.h"
+ #include "vkr_image.h"
+ #include "vkr_instance.h"
++#include "vkr_metal.h"
+ #include "vkr_physical_device.h"
+ #include "vkr_pipeline.h"
+ #include "vkr_query_pool.h"
+@@ -177,6 +178,9 @@ vkr_context_free_resource(struct hash_entry *entry)
+       munmap(res->u.data, res->size);
+    else if (res->u.fd >= 0)
+       close(res->u.fd);
++#ifdef __APPLE__
++   vkr_metal_release(res->mtl_heap);
++#endif
+    free(res);
+ }
+ 
+@@ -210,7 +214,8 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
+                                      uint64_t blob_size,
+                                      enum virgl_resource_fd_type fd_type,
+                                      int fd,
+-                                     void *mmap_ptr)
++                                     void *mmap_ptr,
++                                     void *mtl_heap)
+ {
+    assert(!vkr_context_get_resource(ctx, res_id));
+ 
+@@ -221,6 +226,11 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
+    res->res_id = res_id;
+    res->fd_type = fd_type;
+    res->size = blob_size;
++#ifdef __APPLE__
++   res->mtl_heap = vkr_metal_retain(mtl_heap);
++#else
++   res->mtl_heap = NULL;
++#endif
+ 
+    /* fd and mmap_ptr cannot be valid at the same time, but allowed to be -1 and NULL */
+    assert(fd < 0 || !mmap_ptr);
+@@ -230,6 +240,9 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
+       res->u.fd = fd;
+ 
+    if (!vkr_context_add_resource(ctx, res)) {
++#ifdef __APPLE__
++      vkr_metal_release(res->mtl_heap);
++#endif
+       free(res);
+       return false;
+    }
+@@ -252,7 +265,7 @@ vkr_context_create_resource_from_shm(struct vkr_context *ctx,
+    }
+ 
+    if (!vkr_context_import_resource_internal(ctx, res_id, blob_size,
+-                                             VIRGL_RESOURCE_FD_SHM, -1, mmap_ptr)) {
++                                             VIRGL_RESOURCE_FD_SHM, -1, mmap_ptr, NULL)) {
+       munmap(mmap_ptr, blob_size);
+       return false;
+    }
+@@ -285,7 +298,7 @@ vkr_context_create_resource_from_shm(struct vkr_context *ctx,
+    }
+ 
+    if (!vkr_context_import_resource_internal(ctx, res_id, blob_size,
+-                                             VIRGL_RESOURCE_FD_SHM, -1, mmap_ptr)) {
++                                             VIRGL_RESOURCE_FD_SHM, -1, mmap_ptr, NULL)) {
+       munmap(mmap_ptr, blob_size);
+       close(fd);
+       return false;
+@@ -324,7 +337,11 @@ vkr_context_create_resource_from_device_memory(struct vkr_context *ctx,
+     * - vkGetMemoryFdPropertiesKHR for dma_buf fd properties query
+     */
+    int res_fd = -1;
+-   if (blob_flags & VIRGL_RENDERER_BLOB_FLAG_USE_CROSS_DEVICE) {
++   void *mtl_heap = NULL;
++#ifdef __APPLE__
++   mtl_heap = blob.mtl_heap;
++#endif
++   if ((blob_flags & VIRGL_RENDERER_BLOB_FLAG_USE_CROSS_DEVICE) && blob.u.fd >= 0) {
+       res_fd = os_dupfd_cloexec(blob.u.fd);
+       if (res_fd < 0) {
+          close(blob.u.fd);
+@@ -333,7 +350,7 @@ vkr_context_create_resource_from_device_memory(struct vkr_context *ctx,
+    }
+ 
+    if (!vkr_context_import_resource_internal(ctx, res_id, blob_size, blob.type, res_fd,
+-                                             NULL)) {
++                                             NULL, mtl_heap)) {
+       if (res_fd >= 0)
+          close(res_fd);
+       close(blob.u.fd);
+@@ -368,9 +385,11 @@ vkr_context_import_resource(struct vkr_context *ctx,
+                             uint32_t res_id,
+                             enum virgl_resource_fd_type fd_type,
+                             int fd,
+-                            uint64_t size)
++                            uint64_t size,
++                            void *mtl_heap)
+ {
+-   return vkr_context_import_resource_internal(ctx, res_id, size, fd_type, fd, NULL);
++   return vkr_context_import_resource_internal(ctx, res_id, size, fd_type, fd, NULL,
++                                               mtl_heap);
+ }
+ 
+ void
+diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
+index 931d103..6e5d9a5 100644
+--- a/src/venus/vkr_context.h
++++ b/src/venus/vkr_context.h
+@@ -30,6 +30,9 @@ struct vkr_resource {
+    } u;
+ 
+    size_t size;
++
++   /* the Metal heap of a resource made of exported memory, retained */
++   void *mtl_heap;
+ };
+ 
+ enum vkr_context_validate_level {
+@@ -130,7 +133,8 @@ vkr_context_import_resource(struct vkr_context *ctx,
+                             uint32_t res_id,
+                             enum virgl_resource_fd_type fd_type,
+                             int fd,
+-                            uint64_t size);
++                            uint64_t size,
++                            void *mtl_heap);
+ 
+ void
+ vkr_context_destroy_resource(struct vkr_context *ctx, uint32_t res_id);
+diff --git a/src/venus/vkr_device.c b/src/venus/vkr_device.c
+index c6a77b7..0e7cc7d 100644
+--- a/src/venus/vkr_device.c
++++ b/src/venus/vkr_device.c
+@@ -90,22 +90,38 @@ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+    ext_count += physical_dev->KHR_external_memory_fd;
+    ext_count += physical_dev->EXT_external_memory_dma_buf;
+    ext_count += physical_dev->KHR_external_fence_fd;
++#ifdef __APPLE__
++   ext_count += physical_dev->metal_fd_memory;
++#endif
+    if (ext_count > args->pCreateInfo->enabledExtensionCount) {
+       exts = malloc(sizeof(*exts) * ext_count);
+       if (!exts) {
+          args->ret = VK_ERROR_OUT_OF_HOST_MEMORY;
+          return;
+       }
+-      for (uint32_t i = 0; i < args->pCreateInfo->enabledExtensionCount; i++)
+-         exts[i] = args->pCreateInfo->ppEnabledExtensionNames[i];
++      ext_count = 0;
++      for (uint32_t i = 0; i < args->pCreateInfo->enabledExtensionCount; i++) {
++         const char *name = args->pCreateInfo->ppEnabledExtensionNames[i];
++#ifdef __APPLE__
++         /* offered to the guest, but Metal heaps on the host */
++         if (physical_dev->metal_fd_memory &&
++             (!strcmp(name, "VK_KHR_external_memory_fd") ||
++              !strcmp(name, "VK_EXT_external_memory_dma_buf")))
++            continue;
++#endif
++         exts[ext_count++] = name;
++      }
+ 
+-      ext_count = args->pCreateInfo->enabledExtensionCount;
+       if (physical_dev->KHR_external_memory_fd)
+          exts[ext_count++] = "VK_KHR_external_memory_fd";
+       if (physical_dev->EXT_external_memory_dma_buf)
+          exts[ext_count++] = "VK_EXT_external_memory_dma_buf";
+       if (physical_dev->KHR_external_fence_fd)
+          exts[ext_count++] = "VK_KHR_external_fence_fd";
++#ifdef __APPLE__
++      if (physical_dev->metal_fd_memory)
++         exts[ext_count++] = "VK_EXT_external_memory_metal";
++#endif
+ 
+       ((VkDeviceCreateInfo *)args->pCreateInfo)->ppEnabledExtensionNames = exts;
+       ((VkDeviceCreateInfo *)args->pCreateInfo)->enabledExtensionCount = ext_count;
+@@ -129,6 +145,11 @@ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+    }
+ 
+    dev->physical_device = physical_dev;
++#ifdef __APPLE__
++   if (physical_dev->metal_fd_memory)
++      dev->GetMemoryMetalHandleEXT = (vkr_get_memory_metal_handle_fn)vkGetDeviceProcAddr(
++         dev->base.handle.device, "vkGetMemoryMetalHandleEXT");
++#endif
+ 
+    vkr_device_init_proc_table(dev, physical_dev->api_version,
+                               args->pCreateInfo->ppEnabledExtensionNames,
+diff --git a/src/venus/vkr_device.h b/src/venus/vkr_device.h
+index c7a2a5c..9828152 100644
+--- a/src/venus/vkr_device.h
++++ b/src/venus/vkr_device.h
+@@ -7,6 +7,7 @@
+ #define VKR_DEVICE_H
+ 
+ #include "vkr_common.h"
++#include "vkr_metal.h"
+ 
+ #include "venus-protocol/vn_protocol_renderer_util.h"
+ 
+@@ -18,6 +19,9 @@ struct vkr_device {
+    struct vkr_physical_device *physical_device;
+ 
+    struct vn_device_proc_table proc_table;
++#ifdef __APPLE__
++   vkr_get_memory_metal_handle_fn GetMemoryMetalHandleEXT;
++#endif
+ 
+    struct list_head queues;
+ 
+diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
+index f8e16ea..a570b53 100644
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -8,6 +8,7 @@
+ #include "venus-protocol/vn_protocol_renderer_transport.h"
+ 
+ #include "vkr_device_memory_gen.h"
++#include "vkr_metal.h"
+ #include "vkr_physical_device.h"
+ 
+ static bool
+@@ -155,6 +156,38 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+       return;
+    }
+ 
++#ifdef __APPLE__
++   /* translate VkImportMemoryResourceInfoMESA into an import of the resource's heap */
++   struct vkr_import_memory_metal_handle_info local_metal_info;
++   if (physical_dev->metal_fd_memory) {
++      VkBaseInStructure *prev_of_res_info = vkr_find_prev_struct(
++         alloc_info, VK_STRUCTURE_TYPE_IMPORT_MEMORY_RESOURCE_INFO_MESA);
++      if (prev_of_res_info) {
++         const VkImportMemoryResourceInfoMESA *res_info =
++            (const VkImportMemoryResourceInfoMESA *)prev_of_res_info->pNext;
++         struct vkr_resource *res = vkr_context_get_resource(ctx, res_info->resourceId);
++         if (!res || !res->mtl_heap) {
++            vkr_log("failed to import resource: no heap for res_id %u",
++                    res_info->resourceId);
++            args->ret = VK_ERROR_INVALID_EXTERNAL_HANDLE;
++            return;
++         }
++         local_metal_info = (struct vkr_import_memory_metal_handle_info){
++            .sType = VKR_STRUCTURE_TYPE_IMPORT_MEMORY_METAL_HANDLE_INFO_EXT,
++            .pNext = res_info->pNext,
++            .handleType = VKR_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT,
++            .handle = res->mtl_heap,
++         };
++         prev_of_res_info->pNext = (const struct VkBaseInStructure *)&local_metal_info;
++      }
++
++      VkExportMemoryAllocateInfo *metal_export_info =
++         vkr_find_struct(alloc_info->pNext, VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO);
++      if (metal_export_info)
++         vkr_metal_handle_types(&metal_export_info->handleTypes);
++   }
++#endif
++
+    /* translate VkImportMemoryResourceInfoMESA into VkImportMemoryFdInfoKHR in place */
+    VkImportMemoryFdInfoKHR local_import_info = { .fd = -1 };
+    VkImportMemoryResourceInfoMESA *res_info = NULL;
+@@ -318,6 +351,20 @@ vkr_dispatch_vkGetMemoryResourcePropertiesMESA(
+       return;
+    }
+ 
++#ifdef __APPLE__
++   if (res->mtl_heap) {
++      const uint32_t type_count = dev->physical_device->memory_properties.memoryTypeCount;
++      args->pMemoryResourceProperties->memoryTypeBits = (1u << type_count) - 1;
++      VkMemoryResourceAllocationSizePropertiesMESA *heap_size_props =
++         vkr_find_struct(args->pMemoryResourceProperties->pNext,
++                         VK_STRUCTURE_TYPE_MEMORY_RESOURCE_ALLOCATION_SIZE_PROPERTIES_MESA);
++      if (heap_size_props)
++         heap_size_props->allocationSize = res->size;
++      args->ret = VK_SUCCESS;
++      return;
++   }
++#endif
++
+    if (res->fd_type != VIRGL_RESOURCE_FD_DMABUF) {
+       args->ret = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+       return;
+@@ -372,6 +419,48 @@ vkr_device_memory_release(struct vkr_device_memory *mem)
+       vkr_gbm_bo_destroy(mem->gbm_bo);
+ }
+ 
++#ifdef __APPLE__
++/* A blob of host-visible memory mapped into the guest, carrying the memory's
++ * heap for whoever imports it.
++ */
++static bool
++vkr_device_memory_export_metal(struct vkr_device_memory *mem,
++                               uint32_t map_info,
++                               struct virgl_context_blob *out_blob)
++{
++   VkDevice device = mem->device->base.handle.device;
++   VkDeviceMemory memory = mem->base.handle.device_memory;
++
++   void *heap = NULL;
++   const struct vkr_memory_get_metal_handle_info info = {
++      .sType = VKR_STRUCTURE_TYPE_MEMORY_GET_METAL_HANDLE_INFO_EXT,
++      .memory = memory,
++      .handleType = VKR_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT,
++   };
++   if (!mem->device->GetMemoryMetalHandleEXT ||
++       mem->device->GetMemoryMetalHandleEXT(device, &info, &heap) != VK_SUCCESS) {
++      vkr_log("mem has no heap");
++      return false;
++   }
++
++   void *ptr;
++   if (vkMapMemory(device, memory, 0, mem->allocation_size, 0, &ptr) != VK_SUCCESS) {
++      vkr_log("vkMapMemory failed");
++      return false;
++   }
++   mem->exported = true;
++
++   *out_blob = (struct virgl_context_blob){
++      .type = VIRGL_RESOURCE_OPAQUE_HANDLE,
++      .u.fd = -1,
++      .map_ptr = (uint64_t)ptr,
++      .map_info = map_info,
++      .mtl_heap = heap,
++   };
++   return true;
++}
++#endif
++
+ bool
+ vkr_device_memory_export_blob(struct vkr_device_memory *mem,
+                               uint64_t blob_size,
+@@ -401,6 +490,11 @@ vkr_device_memory_export_blob(struct vkr_device_memory *mem,
+                                       : VIRGL_RENDERER_MAP_CACHE_WC;
+    }
+ 
++#ifdef __APPLE__
++   if (mem->device->physical_device->metal_fd_memory)
++      return vkr_device_memory_export_metal(mem, map_info, out_blob);
++#endif
++
+    const bool can_export_dma_buf = mem->valid_fd_types & (1 << VIRGL_RESOURCE_FD_DMABUF);
+    const bool can_export_opaque = mem->valid_fd_types & (1 << VIRGL_RESOURCE_FD_OPAQUE);
+    enum virgl_resource_fd_type fd_type;
+diff --git a/src/venus/vkr_image.c b/src/venus/vkr_image.c
+index 080b442..64b3a77 100644
+--- a/src/venus/vkr_image.c
++++ b/src/venus/vkr_image.c
+@@ -6,6 +6,7 @@
+ #include "vkr_image.h"
+ 
+ #include "vkr_image_gen.h"
++#include "vkr_device.h"
+ #include "vkr_physical_device.h"
+ 
+ static void
+@@ -31,6 +32,16 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+     * situation because the app does not consider the memory external.
+     */
+ 
++#ifdef __APPLE__
++   struct vkr_device *dev = vkr_device_from_handle(args->device);
++   if (dev->physical_device->metal_fd_memory) {
++      VkExternalMemoryImageCreateInfo *external_info = vkr_find_struct(
++         args->pCreateInfo->pNext, VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO);
++      if (external_info)
++         vkr_metal_handle_types(&external_info->handleTypes);
++   }
++#endif
++
+    vkr_image_create_and_add(dispatch->data, args);
+ }
+ 
+diff --git a/src/venus/vkr_metal.h b/src/venus/vkr_metal.h
+new file mode 100644
+index 0000000..e1bf7b7
+--- /dev/null
++++ b/src/venus/vkr_metal.h
+@@ -0,0 +1,88 @@
++/*
++ * SPDX-License-Identifier: MIT
++ */
++
++/* Venus over a Metal driver: the host exports memory as Metal heaps, never as
++ * file descriptors, but the guest is offered dma-buf and opaque fd memory all
++ * the same, since that is what its window systems share buffers with. Memory
++ * the guest exports is a blob mapped into it, as any host-visible memory is,
++ * and the resource made of it holds the memory's heap. Another context
++ * importing the resource imports the heap, which is the same memory. Each
++ * holder retains the heap, so it lives as long as the last of them.
++ */
++
++#ifndef VKR_METAL_H
++#define VKR_METAL_H
++
++#include "vkr_common.h"
++
++#ifdef __APPLE__
++
++#include <CoreFoundation/CFBase.h>
++
++/* From VK_EXT_external_memory_metal, which the protocol's headers predate. */
++#define VKR_STRUCTURE_TYPE_IMPORT_MEMORY_METAL_HANDLE_INFO_EXT ((VkStructureType)1000602000)
++#define VKR_STRUCTURE_TYPE_MEMORY_GET_METAL_HANDLE_INFO_EXT ((VkStructureType)1000602002)
++#define VKR_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT                                  \
++   ((VkExternalMemoryHandleTypeFlagBits)0x00040000)
++
++struct vkr_import_memory_metal_handle_info {
++   VkStructureType sType;
++   const void *pNext;
++   VkExternalMemoryHandleTypeFlagBits handleType;
++   void *handle;
++};
++
++struct vkr_memory_get_metal_handle_info {
++   VkStructureType sType;
++   const void *pNext;
++   VkDeviceMemory memory;
++   VkExternalMemoryHandleTypeFlagBits handleType;
++};
++
++typedef VkResult(VKAPI_PTR *vkr_get_memory_metal_handle_fn)(
++   VkDevice device, const struct vkr_memory_get_metal_handle_info *info, void **handle);
++
++#define VKR_FD_HANDLE_TYPES                                                              \
++   (VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |                                      \
++    VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)
++
++/* The guest's fd handle types, as the host's heap. */
++static inline void
++vkr_metal_handle_types(VkExternalMemoryHandleTypeFlags *types)
++{
++   if (*types & VKR_FD_HANDLE_TYPES)
++      *types = (*types & ~VKR_FD_HANDLE_TYPES) | VKR_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT;
++}
++
++/* The host's answer for a heap, as the guest's for its fd handle types. */
++static inline void
++vkr_metal_memory_properties(VkExternalMemoryProperties *props)
++{
++   if (!(props->compatibleHandleTypes & VKR_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT)) {
++      *props = (VkExternalMemoryProperties){ 0 };
++      return;
++   }
++   props->exportFromImportedHandleTypes =
++      (props->exportFromImportedHandleTypes & VKR_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT)
++         ? VKR_FD_HANDLE_TYPES
++         : 0;
++   props->compatibleHandleTypes = VKR_FD_HANDLE_TYPES;
++}
++
++static inline void *
++vkr_metal_retain(void *heap)
++{
++   return heap ? (void *)CFRetain(heap) : NULL;
++}
++
++static inline void
++vkr_metal_release(void *heap)
++{
++   if (heap)
++      CFRelease(heap);
++}
++
++#endif /* __APPLE__ */
++
++#endif /* VKR_METAL_H */
+diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
+index 5792337..bcc67c1 100644
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -10,6 +10,7 @@
+ #include "vkr_context.h"
+ #include "vkr_device.h"
+ #include "vkr_instance.h"
++#include "vkr_metal.h"
+ 
+ #ifdef ENABLE_MINIGBM_ALLOCATION
+ #include <gbm.h>
+@@ -207,7 +208,8 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev,
+    if (result != VK_SUCCESS)
+       return;
+ 
+-   exts = malloc(sizeof(*exts) * count);
++   /* room for the fd memory extensions offered over Metal */
++   exts = malloc(sizeof(*exts) * (count + 2));
+    if (!exts)
+       return;
+ 
+@@ -225,6 +227,8 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev,
+          physical_dev->KHR_external_memory_fd = true;
+       else if (!strcmp(props->extensionName, "VK_EXT_external_memory_dma_buf"))
+          physical_dev->EXT_external_memory_dma_buf = true;
++      else if (!strcmp(props->extensionName, "VK_EXT_external_memory_metal"))
++         physical_dev->EXT_external_memory_metal = true;
+       else if (!strcmp(props->extensionName, "VK_KHR_external_fence_fd"))
+          physical_dev->KHR_external_fence_fd = true;
+ 
+@@ -253,6 +257,26 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev,
+          physical_dev->KHR_external_fence_fd = false;
+    }
+ 
++#ifdef __APPLE__
++   if (physical_dev->EXT_external_memory_metal && !physical_dev->KHR_external_memory_fd &&
++       !physical_dev->EXT_external_memory_dma_buf) {
++      static const char *const fd_exts[] = {
++         "VK_KHR_external_memory_fd",
++         "VK_EXT_external_memory_dma_buf",
++      };
++      for (uint32_t i = 0; i < ARRAY_SIZE(fd_exts); i++) {
++         const uint32_t spec_ver = vkr_extension_get_spec_version(fd_exts[i]);
++         if (!spec_ver)
++            continue;
++         VkExtensionProperties *props = &exts[advertised_count++];
++         memset(props, 0, sizeof(*props));
++         strcpy(props->extensionName, fd_exts[i]);
++         props->specVersion = spec_ver;
++      }
++      physical_dev->metal_fd_memory = true;
++   }
++#endif
++
+    physical_dev->extensions = exts;
+    physical_dev->extension_count = advertised_count;
+ }
+@@ -600,9 +624,34 @@ vkr_dispatch_vkGetPhysicalDeviceImageFormatProperties2(
+    UNUSED struct vn_dispatch_context *dispatch,
+    struct vn_command_vkGetPhysicalDeviceImageFormatProperties2 *args)
+ {
++#ifdef __APPLE__
++   struct vkr_physical_device *physical_dev =
++      vkr_physical_device_from_handle(args->physicalDevice);
++   VkPhysicalDeviceExternalImageFormatInfo *external_info = NULL;
++   if (physical_dev->metal_fd_memory) {
++      external_info =
++         vkr_find_struct(args->pImageFormatInfo->pNext,
++                         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO);
++      if (external_info && (external_info->handleType & VKR_FD_HANDLE_TYPES))
++         external_info->handleType = VKR_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT;
++      else
++         external_info = NULL;
++   }
++#endif
++
+    vn_replace_vkGetPhysicalDeviceImageFormatProperties2_args_handle(args);
+    args->ret = vkGetPhysicalDeviceImageFormatProperties2(
+       args->physicalDevice, args->pImageFormatInfo, args->pImageFormatProperties);
++
++#ifdef __APPLE__
++   if (external_info && args->ret == VK_SUCCESS) {
++      VkExternalImageFormatProperties *props =
++         vkr_find_struct(args->pImageFormatProperties->pNext,
++                         VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES);
++      if (props)
++         vkr_metal_memory_properties(&props->externalMemoryProperties);
++   }
++#endif
+ }
+ 
+ static void
+@@ -620,6 +669,22 @@ vkr_dispatch_vkGetPhysicalDeviceExternalBufferProperties(
+    UNUSED struct vn_dispatch_context *dispatch,
+    struct vn_command_vkGetPhysicalDeviceExternalBufferProperties *args)
+ {
++#ifdef __APPLE__
++   struct vkr_physical_device *physical_dev =
++      vkr_physical_device_from_handle(args->physicalDevice);
++   if (physical_dev->metal_fd_memory &&
++       (args->pExternalBufferInfo->handleType & VKR_FD_HANDLE_TYPES)) {
++      VkPhysicalDeviceExternalBufferInfo info = *args->pExternalBufferInfo;
++      info.handleType = VKR_EXTERNAL_MEMORY_HANDLE_TYPE_MTLHEAP_BIT_EXT;
++      vn_replace_vkGetPhysicalDeviceExternalBufferProperties_args_handle(args);
++      vkGetPhysicalDeviceExternalBufferProperties(args->physicalDevice, &info,
++                                                  args->pExternalBufferProperties);
++      vkr_metal_memory_properties(
++         &args->pExternalBufferProperties->externalMemoryProperties);
++      return;
++   }
++#endif
++
+    vn_replace_vkGetPhysicalDeviceExternalBufferProperties_args_handle(args);
+    vkGetPhysicalDeviceExternalBufferProperties(
+       args->physicalDevice, args->pExternalBufferInfo, args->pExternalBufferProperties);
+diff --git a/src/venus/vkr_physical_device.h b/src/venus/vkr_physical_device.h
+index 142662b..ca3986d 100644
+--- a/src/venus/vkr_physical_device.h
++++ b/src/venus/vkr_physical_device.h
+@@ -23,6 +23,9 @@ struct vkr_physical_device {
+ 
+    bool KHR_external_memory_fd;
+    bool EXT_external_memory_dma_buf;
++   bool EXT_external_memory_metal;
++   /* fd memory offered to the guest is Metal heaps on the host (vkr_metal.h) */
++   bool metal_fd_memory;
+ 
+    bool KHR_external_fence_fd;
+    bool KHR_external_semaphore_fd;
+diff --git a/src/venus/vkr_renderer.c b/src/venus/vkr_renderer.c
+index 939ead8..426f2f8 100644
+--- a/src/venus/vkr_renderer.c
++++ b/src/venus/vkr_renderer.c
+@@ -177,6 +177,7 @@ vkr_renderer_create_resource(uint32_t ctx_id,
+                              int *out_res_fd,
+                              uint32_t *out_map_info,
+                              uint64_t *out_map_ptr,
++                             void **out_mtl_heap,
+                              struct virgl_resource_vulkan_info *out_vulkan_info)
+ {
+    TRACE_FUNC();
+@@ -195,7 +196,9 @@ vkr_renderer_create_resource(uint32_t ctx_id,
+ #ifdef __APPLE__
+    assert(blob.type == VIRGL_RESOURCE_OPAQUE_HANDLE);
+    *out_map_ptr = blob.map_ptr;
++   *out_mtl_heap = blob.mtl_heap;
+ #else
++   *out_mtl_heap = NULL;
+    assert(blob.type == VIRGL_RESOURCE_FD_SHM || blob.type == VIRGL_RESOURCE_FD_DMABUF ||
+           blob.type == VIRGL_RESOURCE_FD_OPAQUE);
+ #endif
+@@ -230,7 +233,23 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+    if (!ctx)
+       return false;
+ 
+-   return vkr_context_import_resource(ctx, res_id, fd_type, fd, size);
++   return vkr_context_import_resource(ctx, res_id, fd_type, fd, size, NULL);
++}
++
++bool
++vkr_renderer_import_metal_resource(uint32_t ctx_id,
++                                   uint32_t res_id,
++                                   void *mtl_heap,
++                                   uint64_t size)
++{
++   TRACE_FUNC();
++
++   struct vkr_context *ctx = vkr_renderer_lookup_context(ctx_id);
++   if (!ctx)
++      return false;
++
++   return vkr_context_import_resource(ctx, res_id, VIRGL_RESOURCE_OPAQUE_HANDLE, -1, size,
++                                      mtl_heap);
+ }
+ 
+ void
+diff --git a/src/venus/vkr_renderer.h b/src/venus/vkr_renderer.h
+index 81c7c5a..84dff19 100644
+--- a/src/venus/vkr_renderer.h
++++ b/src/venus/vkr_renderer.h
+@@ -63,6 +63,7 @@ vkr_renderer_create_resource(uint32_t ctx_id,
+                              int *out_res_fd,
+                              uint32_t *out_map_info,
+                              uint64_t *out_map_ptr,
++                             void **out_mtl_heap,
+                              struct virgl_resource_vulkan_info *out_vulkan_info);
+ 
+ bool
+@@ -72,6 +73,15 @@ vkr_renderer_import_resource(uint32_t ctx_id,
+                              int fd,
+                              uint64_t size);
+ 
++/* Imports into another context a resource made of exported memory, by its
++ * Metal heap (vkr_metal.h).
++ */
++bool
++vkr_renderer_import_metal_resource(uint32_t ctx_id,
++                                   uint32_t res_id,
++                                   void *mtl_heap,
++                                   uint64_t size);
++
+ void
+ vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id);
+ 
+diff --git a/src/venus_context.c b/src/venus_context.c
+index 33559c9..bdf5729 100644
+--- a/src/venus_context.c
++++ b/src/venus_context.c
+@@ -59,6 +59,17 @@ venus_context_attach_resource(struct virgl_context *base, struct virgl_resource
+    if (venus_context_resource_find(ctx, res_id))
+       return;
+ 
++#ifdef __APPLE__
++   /* exported Vulkan memory, imported by its heap */
++   if (res->fd_type == VIRGL_RESOURCE_OPAQUE_HANDLE) {
++      if (res->mtl_heap)
++         vkr_renderer_import_metal_resource(base->ctx_id, res_id, res->mtl_heap,
++                                            res->map_size);
++      venus_context_resource_add(ctx, res_id);
++      return;
++   }
++#endif
++
+    /* The current render protocol only supports importing dma-buf or pipe resource that
+     * can be exported to dma-buf. A protocol change is needed when there exists use case
+     * for importing external Vulkan opaque resource. For shm, we only create with blob_id
+@@ -121,10 +132,12 @@ venus_context_get_blob(struct virgl_context *base,
+    enum virgl_resource_fd_type fd_type;
+    uint32_t map_info;
+    uint64_t map_ptr;
++   void *mtl_heap;
+    struct virgl_resource_vulkan_info vulkan_info;
+ 
+    if (!vkr_renderer_create_resource(base->ctx_id, res_id, blob_id, blob_size, blob_flags,
+-                                     &fd_type, &res_fd, &map_info, &map_ptr, &vulkan_info)) {
++                                     &fd_type, &res_fd, &map_info, &map_ptr, &mtl_heap,
++                                     &vulkan_info)) {
+       //fprintf(stderr, "can't create res %d with blob %llu\n", res_id, blob_id);
+       return -1;
+    }
+@@ -135,6 +148,9 @@ venus_context_get_blob(struct virgl_context *base,
+    blob->u.fd = res_fd;
+    blob->map_info = map_info;
+    blob->map_ptr = map_ptr;
++#ifdef __APPLE__
++   blob->mtl_heap = mtl_heap;
++#endif
+    blob->vulkan_info = vulkan_info;
+ 
+    //fprintf(stderr, "%s: fd=0x%llx\n", __func__, map_ptr);
+diff --git a/src/virgl_context.h b/src/virgl_context.h
+index fb409ae..f31bf12 100644
+--- a/src/virgl_context.h
++++ b/src/virgl_context.h
+@@ -47,6 +47,8 @@ struct virgl_context_blob {
+    uint32_t map_info;
+ #ifdef __APPLE__
+    uint64_t map_ptr;
++   /* the Metal heap of exported Vulkan memory, unretained */
++   void *mtl_heap;
+ #endif
+ 
+    struct virgl_resource_vulkan_info vulkan_info;
+diff --git a/src/virgl_resource.c b/src/virgl_resource.c
+index 70f3d77..f54c641 100644
+--- a/src/virgl_resource.c
++++ b/src/virgl_resource.c
+@@ -36,6 +36,10 @@
+ #include "virgl_util.h"
+ #include "virgl_context.h"
+ 
++#ifdef __APPLE__
++#include <CoreFoundation/CFBase.h>
++#endif
++
+ static struct util_hash_table *virgl_resource_table;
+ static struct virgl_resource_pipe_callbacks pipe_callbacks;
+ 
+@@ -49,6 +53,10 @@ virgl_resource_destroy_func(void *val)
+    if ((res->fd_type != VIRGL_RESOURCE_FD_INVALID) &&
+        (res->fd_type != VIRGL_RESOURCE_OPAQUE_HANDLE))
+       close(res->fd);
++#ifdef __APPLE__
++   if (res->mtl_heap)
++      CFRelease(res->mtl_heap);
++#endif
+ 
+    free(res);
+ }
+diff --git a/src/virgl_resource.h b/src/virgl_resource.h
+index f1297e0..875d4fb 100644
+--- a/src/virgl_resource.h
++++ b/src/virgl_resource.h
+@@ -99,6 +99,10 @@ struct virgl_resource {
+    uint32_t map_info;
+ #ifdef __APPLE__
+    uint64_t map_ptr;
++   /* the Metal heap of exported Vulkan memory, retained, which other
++    * contexts import the resource by
++    */
++   void *mtl_heap;
+ #endif
+ 
+    uint64_t map_size;
+diff --git a/src/virglrenderer.c b/src/virglrenderer.c
+index ee47651..f2659db 100644
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -22,6 +22,9 @@
+  *
+  **************************************************************************/
+ 
++#ifdef __APPLE__
++#include <CoreFoundation/CFBase.h>
++#endif
+ #include <stdio.h>
+ #include <time.h>
+ 
+@@ -1176,6 +1179,7 @@ int virgl_renderer_resource_create_blob(const struct virgl_renderer_resource_cre
+          return -ENOMEM;
+ #ifdef __APPLE__
+       res->map_ptr = blob.map_ptr;
++      res->mtl_heap = blob.mtl_heap ? (void *)CFRetain(blob.mtl_heap) : NULL;
+ #endif
+    } else if (blob.type != VIRGL_RESOURCE_FD_INVALID) {
+       res = virgl_resource_create_from_fd(args->res_handle,

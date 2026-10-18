@@ -63,6 +63,10 @@ type InstanceConfig struct {
 	GPUWindowMiB    int  `json:"gpu_window_mib,omitempty"`
 	// GPUEnv is the GPU backend's environment, which chooses its renderer.
 	GPUEnv []string `json:"gpu_env,omitempty"`
+	// GPUZink draws the guest's OpenGL with Mesa's zink on its Vulkan, under
+	// libkrun, where the GPU has no OpenGL of its own; the guest's CPU draws
+	// it otherwise.
+	GPUZink bool `json:"gpu_zink,omitempty"`
 
 	// ConsoleFile receives the guest's console; empty is the monitor's
 	// stdio.

@@ -107,12 +107,15 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 		kc.GPU = &krun.GPU{WindowMiB: window}
 		// The GPU is Vulkan alone (Venus), with no OpenGL of its own
 		// (virgl): left to choose, Mesa would take virgl for it, and the
-		// desktop would draw nothing. Mesa's OpenGL on Vulkan (zink) shares
-		// its images with the compositor by DRM format modifier, which
-		// Venus offers only where the Mac's driver has them, and Metal's
-		// have none. So OpenGL is drawn on the CPU, for every process, the
-		// agent's sessions too (sysuser.MachineEnv).
-		kc.Cmdline += " systemd.setenv=LIBGL_ALWAYS_SOFTWARE=1"
+		// desktop would draw nothing. So Mesa is told what draws OpenGL,
+		// for every process, the agent's sessions too (sysuser.MachineEnv):
+		// zink, its OpenGL on Vulkan, where the Mac's driver lets it share
+		// images with the compositor, and the CPU where not.
+		if cfg.GPUZink {
+			kc.Cmdline += " systemd.setenv=MESA_LOADER_DRIVER_OVERRIDE=zink"
+		} else {
+			kc.Cmdline += " systemd.setenv=LIBGL_ALWAYS_SOFTWARE=1"
+		}
 	}
 
 	// The agent dials early in the boot, so it is listened for before the

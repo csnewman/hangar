@@ -39,7 +39,7 @@ type Config struct {
 	// (gvproxy in vfkit mode), with the guest's MAC address.
 	Net *Net `json:"net,omitempty"`
 	// GPU, if set, gives the guest a virtio-gpu: Vulkan through Venus,
-	// rendered by the Mac's GPU with MoltenVK, and no OpenGL of its own.
+	// rendered by the Mac's GPU, and no OpenGL of its own.
 	GPU *GPU `json:"gpu,omitempty"`
 }
 
@@ -73,6 +73,10 @@ type Features struct {
 	// Vulkan is the Vulkan driver a guest's GPU renders with on the Mac:
 	// VulkanKosmicKrisp or VulkanMoltenVK; empty without a GPU.
 	Vulkan string `json:"vulkan,omitempty"`
+	// Zink is whether a guest's OpenGL can be drawn on the GPU, by Mesa's
+	// OpenGL on Vulkan (zink): the driver can share images between the
+	// guest's programs, which dev/krun-build.sh's KosmicKrisp can.
+	Zink bool `json:"zink,omitempty"`
 }
 
 // The Vulkan drivers hangar-krun renders a guest's GPU with.

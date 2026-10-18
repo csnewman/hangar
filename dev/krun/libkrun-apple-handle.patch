@@ -1,0 +1,28 @@
+diff --git a/src/rutabaga_gfx/src/rutabaga_utils.rs b/src/rutabaga_gfx/src/rutabaga_utils.rs
+index 1377ddc..cd5ee67 100644
+--- a/src/rutabaga_gfx/src/rutabaga_utils.rs
++++ b/src/rutabaga_gfx/src/rutabaga_utils.rs
+@@ -33,6 +33,7 @@ use vulkano::LoadingError;
+ #[cfg(feature = "vulkano")]
+ use vulkano::VulkanError;
+ 
++use crate::rutabaga_os::FromRawDescriptor;
+ use crate::rutabaga_os::SafeDescriptor;
+ 
+ /// Represents a buffer.  `base` contains the address of a buffer, while `len` contains the length
+@@ -642,6 +643,15 @@ pub struct RutabagaHandle {
+ impl RutabagaHandle {
+     /// Clones an existing rutabaga handle, by using OS specific mechanisms.
+     pub fn try_clone(&self) -> RutabagaResult<RutabagaHandle> {
++        // An Apple handle has no descriptor to duplicate: its memory is the
++        // resource's map_ptr.
++        if self.handle_type == RUTABAGA_MEM_HANDLE_TYPE_APPLE {
++            return Ok(RutabagaHandle {
++                // SAFETY: -1 is no descriptor, and closing it does nothing.
++                os_handle: unsafe { SafeDescriptor::from_raw_descriptor(-1) },
++                handle_type: self.handle_type,
++            });
++        }
+         let clone = self
+             .os_handle
+             .try_clone()

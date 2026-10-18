@@ -34,7 +34,7 @@ func main() {
 		vulkan = chooseVulkan()
 	}
 	if len(os.Args) == 2 && os.Args[1] == "-features" {
-		json.NewEncoder(os.Stdout).Encode(krun.Features{GPU: gpu, Vulkan: vulkan})
+		json.NewEncoder(os.Stdout).Encode(krun.Features{GPU: gpu, Vulkan: vulkan, Zink: gpu && canZink()})
 		return
 	}
 	if len(os.Args) != 2 {

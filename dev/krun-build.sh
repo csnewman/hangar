@@ -11,13 +11,22 @@
 # through the SDK's loader, and the drivers it can use -- KosmicKrisp and
 # MoltenVK -- are bundled with a manifest each in bin/vulkan, which
 # hangar-krun picks between. The libraries are copied beside hangar-krun and
-# loaded from there. libkrun is built without
+# loaded from there.
+#
+# libkrun, virglrenderer and KosmicKrisp are patched (dev/krun/*.patch) so
+# a guest can share GPU buffers between its programs, which OpenGL on Vulkan
+# (zink) needs: virglrenderer offers the guest dma-buf memory, made of Metal
+# heaps on the host, KosmicKrisp images with a linear DRM format modifier,
+# and libkrun maps such shared memory into the guest. KosmicKrisp is built from Mesa when its compilers are installed
+# (brew install llvm libclc spirv-llvm-translator), and the SDK's own copy,
+# without modifiers, is bundled otherwise. libkrun is built without
 # its guest init (Hangar's agent is init); hangar-krun is signed with the
 # hypervisor entitlement, without which macOS refuses it a VM.
 set -eu
 version=v1.19.6
 virgl=0.10.4e-krunkit
 e2fsprogs=1.47.3
+mesa=c823a83e8f373a5c36c2b9ed1d7dc98a4f3360ee
 repo=$(cd "$(dirname "$0")/.." && pwd)
 out=$repo/out/krun
 bin=$out/bin
@@ -29,8 +38,10 @@ features=blk,net
 if [ -n "$sdk" ] && [ -f "$sdk/lib/libvulkan.1.dylib" ]; then
     features=blk,net,gpu
     vdir=$out/virglrenderer-$virgl
-    # Built again whenever the SDK it was built against changes.
-    if [ ! -f "$out/virgl/lib/libvirglrenderer.1.dylib" ] || [ "$(cat "$out/virgl/sdk" 2>/dev/null)" != "$sdk" ]; then
+    vpatch=$repo/dev/krun/virglrenderer-metal-fd.patch
+    # Built again whenever the SDK it was built against, or the patch, changes.
+    stamp="$sdk $(shasum "$vpatch" | cut -d' ' -f1)"
+    if [ ! -f "$out/virgl/lib/libvirglrenderer.1.dylib" ] || [ "$(cat "$out/virgl/stamp" 2>/dev/null)" != "$stamp" ]; then
         rm -rf "$vdir" "$out/virgl"
         curl -fsSL "https://gitlab.freedesktop.org/slp/virglrenderer/-/archive/$virgl/virglrenderer-$virgl.tar.gz" |
             tar xz -C "$out"
@@ -38,10 +49,40 @@ if [ -n "$sdk" ] && [ -f "$sdk/lib/libvulkan.1.dylib" ]; then
         # so the driver is chosen when hangar-krun starts.
         sed -i '' -e "s|'-lMoltenVK'|'-lvulkan'|" \
             -e "s|-I/opt/homebrew/opt/molten-vk/libexec/include|-I$sdk/include|" "$vdir/meson.build"
+        patch -s -d "$vdir" -p1 < "$vpatch"
         (cd "$vdir" && LIBRARY_PATH=$sdk/lib PKG_CONFIG_PATH=$sdk/lib/pkgconfig:/opt/homebrew/lib/pkgconfig \
             meson setup build --prefix="$out/virgl" -Dvenus=true -Drender-server=false --buildtype=release >/dev/null &&
             LIBRARY_PATH=$sdk/lib meson compile -C build >/dev/null && meson install -C build >/dev/null)
-        echo "$sdk" > "$out/virgl/sdk"
+        echo "$stamp" > "$out/virgl/stamp"
+    fi
+
+    # KosmicKrisp, from Mesa, with linear DRM format modifiers.
+    kk=$out/kosmickrisp/libvulkan_kosmickrisp.dylib
+    kpatch=$repo/dev/krun/kosmickrisp-drm-modifier.patch
+    stamp="$mesa $(shasum "$kpatch" | cut -d' ' -f1)"
+    if [ "$(cat "$out/kosmickrisp/stamp" 2>/dev/null)" != "$stamp" ] || [ ! -f "$kk" ]; then
+        if brew --prefix --installed llvm libclc spirv-llvm-translator >/dev/null 2>&1; then
+            mdir=$out/mesa-$mesa
+            rm -rf "$mdir" "$out/kosmickrisp"
+            curl -fsSL "https://gitlab.freedesktop.org/mesa/mesa/-/archive/$mesa/mesa-$mesa.tar.gz" |
+                tar xz -C "$out"
+            patch -s -d "$mdir" -p1 < "$kpatch"
+            # Mesa's generators need mako and PyYAML.
+            [ -x "$out/venv/bin/python3" ] || python3 -m venv "$out/venv"
+            "$out/venv/bin/pip" -q install mako pyyaml packaging
+            # The build runs the tools the setup found, LLVM's among them.
+            (cd "$mdir" && export PATH=$out/venv/bin:$(brew --prefix llvm)/bin:$PATH &&
+                PKG_CONFIG_PATH=$sdk/lib/pkgconfig \
+                meson setup build --buildtype=release -Dplatforms=macos -Dvulkan-drivers=kosmickrisp \
+                    -Dgallium-drivers= -Dopengl=false -Dzstd=disabled --prefer-static >/dev/null &&
+                ninja -C build src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib >/dev/null)
+            mkdir -p "$out/kosmickrisp"
+            cp "$mdir/build/src/kosmickrisp/vulkan/libvulkan_kosmickrisp.dylib" "$kk"
+            echo "$stamp" > "$out/kosmickrisp/stamp"
+        else
+            echo "no llvm, libclc or spirv-llvm-translator: bundling the SDK's KosmicKrisp, whose guests draw their desktop in software" >&2
+            kk=$sdk/lib/libvulkan_kosmickrisp.dylib
+        fi
     fi
 else
     echo "no Vulkan SDK: building libkrun without a GPU" >&2
@@ -52,6 +93,12 @@ if [ ! -d "$src/.git" ] || [ "$(git -C "$src" describe --tags 2>/dev/null)" != "
     # Plain HTTPS whatever the global config rewrites GitHub URLs to.
     GIT_CONFIG_GLOBAL=/dev/null git clone -q --depth 1 --branch "$version" \
         https://github.com/libkrun/libkrun.git "$src"
+fi
+# Applied afresh whenever the tree differs from it.
+lpatch=$repo/dev/krun/libkrun-apple-handle.patch
+if ! git -C "$src" diff | cmp -s - "$lpatch"; then
+    git -C "$src" checkout -q -- .
+    git -C "$src" apply "$lpatch"
 fi
 # bindgen needs libclang, and its build scripts load it at run time.
 clang=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib
@@ -77,8 +124,8 @@ if [ "$features" = blk,net,gpu ]; then
     mkdir -p "$bin/vulkan"
     printf '{"file_format_version": "1.0.0", "ICD": {"library_path": "../libMoltenVK.dylib", "api_version": "1.4.0"}}\n' \
         > "$bin/vulkan/moltenvk.json"
-    if [ -f "$sdk/lib/libvulkan_kosmickrisp.dylib" ]; then
-        install_lib "$sdk/lib/libvulkan_kosmickrisp.dylib" libvulkan_kosmickrisp.dylib
+    if [ -f "$kk" ]; then
+        install_lib "$kk" libvulkan_kosmickrisp.dylib
         install_name_tool -add_rpath @loader_path "$bin/libvulkan_kosmickrisp.dylib" 2>/dev/null || true
         printf '{"file_format_version": "1.0.0", "ICD": {"library_path": "../libvulkan_kosmickrisp.dylib", "api_version": "1.4.0"}}\n' \
             > "$bin/vulkan/kosmickrisp.json"

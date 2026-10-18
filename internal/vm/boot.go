@@ -192,6 +192,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		cfg.GPUVenusRestore = m.rt.cfg.GPUVenus && m.rt.cfg.GPUVenusRestore
 		cfg.GPUWindowMiB = m.rt.cfg.GPUWindowMiB
 		cfg.GPUEnv = m.rt.gpuEnv
+		cfg.GPUZink = m.rt.gpuZink
 	}
 	// An image may have a desktop; the template decides whether it runs. A
 	// headless environment boots to multi-user.target, which leaves out

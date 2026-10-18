@@ -179,6 +179,9 @@ type Runtime struct {
 	// backend's environment for it; gpu is nil without a GPU backend.
 	gpu    *api.GPUInfo
 	gpuEnv []string
+	// gpuZink draws a guest's OpenGL with zink on its GPU, under libkrun
+	// (krunGPU).
+	gpuZink bool
 
 	// memoryMaxMiB is what a machine's memory can grow to while it runs
 	// (UseCapacity); zero boots each with its own, for as long as it runs.
@@ -232,7 +235,7 @@ func New(cfg Config) (*Runtime, error) {
 	r := &Runtime{cfg: cfg, monitor: caps.Monitor, store: st, ctx: ctx, cancel: cancel, envs: map[string]*machine{},
 		changed: make(chan struct{}, 1), gpuEnv: gpuEnv}
 	if caps.Monitor == host.MonitorKrun {
-		r.gpu = krunGPU(ctx, cfg)
+		r.gpu, r.gpuZink = krunGPU(ctx, cfg)
 	} else {
 		r.gpu = probeGPU(ctx, cfg, gpuEnv)
 	}
