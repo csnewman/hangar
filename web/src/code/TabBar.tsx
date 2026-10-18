@@ -14,6 +14,7 @@ import {
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 
 import { useContextMenu } from './ContextMenu'
+import { sameTarget, tabDrag, useTabDrag, type DropTarget } from './tabDrag'
 import { opensAs, viewNames, type FileView } from './views'
 
 // A tab is a file, its changes, a container's logs (path is then the
@@ -68,21 +69,26 @@ function diffWhat(t: Tab): string {
 }
 
 // A drag of a tab along the bar: the tab, and where it would go, as the
-// index among the tabs it would take.
-type Drag = { key: string; to: number }
+// index among the tabs it would take; out when it would go elsewhere.
+type Drag = { key: string; to: number; out: boolean }
 
 // TabBar is the editor's tabs, in one row as IntelliJ keeps them. The row
 // scrolls, with the wheel too, under a thin bar that shows while the
 // pointer is over it; the tabs that do not fit are listed from a button at
-// its end. Tabs are dragged along it to reorder them, and the active one is
-// scrolled into view whenever it is opened or chosen.
+// its end. Tabs are dragged along it to reorder them, or out of it: onto
+// the other group's tabs or editor, to move there, or onto the right of
+// this group's editor while it is the only one, to split it. The active one
+// is scrolled into view whenever it is opened or chosen.
 export function TabBar({
   tabs,
   active,
   opened,
+  group = 0,
+  groups = 1,
   onActivate,
   onClose,
   onMove,
+  onDropOut,
   onMenu,
 }: {
   tabs: Tab[]
@@ -91,8 +97,13 @@ export function TabBar({
   opened: number
   onActivate: (key: string) => void
   onClose: (key: string) => void
+  // group is which group of editors the bar is, of how many.
+  group?: number
+  groups?: number
   // onMove puts a tab at an index among the others.
   onMove: (key: string, to: number) => void
+  // onDropOut puts a tab dragged out of the bar where it was dropped.
+  onDropOut?: (key: string, target: DropTarget) => void
   onMenu: (e: ReactMouseEvent, t: Tab) => void
 }) {
   const bar = useRef<HTMLDivElement>(null)
@@ -153,16 +164,41 @@ export function TabBar({
     if (e.button !== 0 || !b || (e.target as HTMLElement).closest('button')) return
     const x0 = e.clientX
     let to: number | null = null
+    let target: DropTarget | null = null
     let x = x0
+    let y = e.clientY
     let edge: number | undefined
-    const place = () => {
-      const els = [...b.querySelectorAll<HTMLElement>('[role=tab]')].filter((el) => el.dataset.key !== key)
+    // indexIn is where along a row of tabs the pointer would put the tab.
+    const indexIn = (row: HTMLElement) => {
+      const els = [...row.querySelectorAll<HTMLElement>('[role=tab]')].filter((el) => el.dataset.key !== key)
       const i = els.findIndex((el) => {
         const r = el.getBoundingClientRect()
         return x < r.left + r.width / 2
       })
-      to = i < 0 ? els.length : i
-      setDrag({ key, to })
+      return i < 0 ? els.length : i
+    }
+    const place = () => {
+      to = indexIn(b)
+      // Out of the row: the other group's tabs or editor, or the right of
+      // this one's to split it. Anywhere else it stays in this row.
+      const at = document.elementFromPoint(x, y)
+      const row = at?.closest<HTMLElement>('.code-tabs[data-group]')
+      const area = at?.closest<HTMLElement>('[data-editor-group]')
+      let next: DropTarget | null = null
+      if (row && Number(row.dataset.group) !== group) next = { group: Number(row.dataset.group), index: indexIn(row) }
+      else if (!row && area) {
+        const g = Number(area.dataset.editorGroup)
+        const body = area.querySelector('.code-editor-body')?.getBoundingClientRect()
+        if (g !== group) next = { group: g }
+        else if (groups === 1 && tabs.length > 1 && body && y > body.top && x > body.left + body.width * 0.6) {
+          next = { split: true }
+        }
+      }
+      if (!sameTarget(next, target)) {
+        target = next
+        tabDrag.set({ key, from: group, target })
+      }
+      setDrag({ key, to, out: !!target })
     }
     const scroll = () => {
       const box = b.getBoundingClientRect()
@@ -174,17 +210,25 @@ export function TabBar({
     }
     const move = (ev: PointerEvent) => {
       x = ev.clientX
-      if (to === null && Math.abs(x - x0) < 5) return
-      if (to === null) edge = window.setInterval(scroll, 30)
+      y = ev.clientY
+      if (to === null && Math.abs(x - x0) < 5 && Math.abs(y - e.clientY) < 5) return
+      if (to === null) {
+        edge = window.setInterval(scroll, 30)
+        // A frame (an HTML file's preview) would take the pointer's moves.
+        document.body.classList.add('code-tab-dragging')
+      }
       place()
     }
     const up = () => {
       document.removeEventListener('pointermove', move, true)
       document.removeEventListener('pointerup', up, true)
       clearInterval(edge)
+      document.body.classList.remove('code-tab-dragging')
       if (to === null) return
       setDrag(null)
-      onMove(key, to)
+      tabDrag.set(null)
+      if (target) onDropOut?.(key, target)
+      else onMove(key, to)
       // The click that ends a drag is not a click on the tab.
       const swallow = (c: MouseEvent) => {
         c.stopPropagation()
@@ -237,10 +281,19 @@ export function TabBar({
   }
 
   // Where the dragged tab would go, shown as a line before a tab or after
-  // the last.
-  const others = drag ? tabs.filter((t) => tabKey(t) !== drag.key) : []
-  const dropBefore = drag && drag.to < others.length ? tabKey(others[drag.to]) : null
-  const dropAfter = drag && drag.to >= others.length && others.length ? tabKey(others[others.length - 1]) : null
+  // the last: one from this row, or one from the other group's coming
+  // here.
+  const incoming = useTabDrag()
+  const coming =
+    incoming && incoming.from !== group && incoming.target && 'group' in incoming.target
+      ? incoming.target.group === group && incoming.target.index !== undefined
+        ? { key: incoming.key, to: incoming.target.index }
+        : null
+      : null
+  const shown = coming ?? (drag && !drag.out ? drag : null)
+  const others = shown ? tabs.filter((t) => tabKey(t) !== shown.key) : []
+  const dropBefore = shown && shown.to < others.length ? tabKey(others[shown.to]) : null
+  const dropAfter = shown && shown.to >= others.length && others.length ? tabKey(others[others.length - 1]) : null
 
   return (
     <div className={drag ? 'code-tabbar code-tabbar-dragging' : 'code-tabbar'}>
@@ -248,6 +301,7 @@ export function TabBar({
         <div
           className="code-tabs"
           role="tablist"
+          data-group={group}
           ref={bar}
           onScroll={measure}
           onWheel={(e) => {

@@ -20,6 +20,7 @@ import { HtmlPreview, isHtml } from './HtmlPreview'
 import { MediaView } from './MediaView'
 import type { Jump } from './Search'
 import { TabBar, tabKey, type Tab } from './TabBar'
+import { useTabDrag, type DropTarget } from './tabDrag'
 import { openWith, opensAs, type FileView } from './views'
 
 export { tabKey, type Tab } from './TabBar'
@@ -44,9 +45,11 @@ export function EditorArea({
   onShowCommit,
   jump,
   split,
+  group = 0,
   onFocus,
   onSplit,
   onUnsplit,
+  onDropTab,
 }: {
   client: CodeClient
   tabs: Tab[]
@@ -74,9 +77,22 @@ export function EditorArea({
   onSplit?: (tab: Tab, move: boolean) => void
   // onUnsplit gathers both groups' tabs into one.
   onUnsplit?: () => void
+  // group is which group of editors this is.
+  group?: number
+  // onDropTab puts a tab dragged out of this group's row where it was
+  // dropped: another group, or a split.
+  onDropTab?: (key: string, target: DropTarget) => void
 }) {
   const env = useEnv()
   const current = tabs.find((t) => tabKey(t) === active) ?? null
+  // A tab dragged here from another group, or to split this one, shows
+  // where it would land.
+  const dragging = useTabDrag()
+  const zone = !dragging?.target
+    ? null
+    : 'split' in dragging.target
+      ? dragging.from === group && 'right'
+      : dragging.from !== group && dragging.target.group === group && dragging.target.index === undefined && 'all'
   const menu = useContextMenu()
 
   // tabMenu is IntelliJ's and VS Code's tab menu, less what an editor
@@ -148,6 +164,7 @@ export function EditorArea({
       onPointerDownCapture={(e) => {
         if (e.currentTarget.contains(e.target as Node)) onFocus?.()
       }}
+      data-editor-group={group}
     >
       {tabs.length > 0 && (
         <TabBar
@@ -157,10 +174,14 @@ export function EditorArea({
           onActivate={onActivate}
           onClose={onClose}
           onMove={onMove}
+          group={group}
+          groups={split?.groups ?? 1}
+          onDropOut={onDropTab}
           onMenu={(e, t) => menu.open(e, tabMenu(t, e.clientX, e.clientY))}
         />
       )}
       <div className="code-editor-body">
+        {zone && <div className={`code-drop-zone code-drop-zone-${zone}`} />}
         {current?.kind === 'file' && (
           <FileTab
             key={tabKey(current)}

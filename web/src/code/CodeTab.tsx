@@ -452,6 +452,18 @@ function CodeView({
       const next = { groups, focus: to }
       return move ? withGroup(next, from, (g) => without(g, new Set([tabKey(tab)]))) : next
     })
+  // moveTab moves a tab dragged from one group into another, at an index
+  // among its tabs or at its end; to a group past the last, it splits.
+  const moveTab = (from: number, key: string, to: number, index?: number) =>
+    setStore((s) => {
+      const tab = s.groups[from]?.tabs.find((t) => tabKey(t) === key)
+      if (!tab) return s
+      const groups = to < s.groups.length ? [...s.groups] : [...s.groups, noGroup]
+      const rest = groups[to].tabs.filter((t) => tabKey(t) !== key)
+      const at = Math.min(index ?? rest.length, rest.length)
+      groups[to] = { tabs: [...rest.slice(0, at), tab, ...rest.slice(at)], active: key }
+      return withGroup({ groups, focus: to }, from, (g) => without(g, new Set([key])))
+    })
   // unsplit gathers both groups' tabs into one.
   const unsplit = () =>
     setStore((s) => {
@@ -874,6 +886,10 @@ function CodeView({
       onShowCommit={showCommit}
       onSplit={(tab, move) => split(i, tab, move)}
       onUnsplit={unsplit}
+      group={i}
+      onDropTab={(key, target) =>
+        'split' in target ? moveTab(i, key, store.groups.length) : moveTab(i, key, target.group, target.index)
+      }
     />
   )
 
