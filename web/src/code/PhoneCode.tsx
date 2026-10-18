@@ -8,6 +8,8 @@ import {
   ChevronRight,
   ChevronUp,
   Eye,
+  HardDrive,
+  House,
   File,
   Folder,
   FolderGit2,
@@ -561,6 +563,20 @@ function FilesScreen({
 }) {
   const [entries, setEntries] = useState<Entry[] | null>(null)
   const [error, setError] = useState('')
+  // The workspace's projects, offered at the top of the folder's own list,
+  // beside the home folder and the machine's root.
+  const [projects, setProjects] = useState<string[]>([])
+  useEffect(() => {
+    if (dir) return
+    let live = true
+    client.workspace().then(
+      (w) => live && setProjects(w.folders),
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [client, dir])
   useEffect(() => {
     let live = true
     client.list(dir).then(
@@ -579,20 +595,28 @@ function FilesScreen({
   const changes = status?.changes ?? []
   const changed = new Map(changes.map((c) => [c.path, letterOf(c)]))
   const holdsChanges = (path: string) => changes.some((c) => c.path.startsWith(path + '/'))
-  const join = (name: string) => (dir ? `${dir}/${name}` : name)
-  const parts = dir ? dir.split('/') : []
+  const join = (name: string) => (dir === '/' ? `/${name}` : dir ? `${dir}/${name}` : name)
+  // A folder from / is outside the tab's own: its path is shown from /.
+  const absolute = dir.startsWith('/')
+  const parts = absolute ? dir.split('/').slice(1).filter(Boolean) : dir ? dir.split('/') : []
+  const crumb = (i: number) => (absolute ? '/' + parts.slice(0, i + 1).join('/') : parts.slice(0, i + 1).join('/'))
+  const places = [
+    ...projects.map((p) => ({ name: p.slice(p.lastIndexOf('/') + 1), path: p === client.root ? '' : p, sub: p })),
+    { name: 'Home', path: client.home === client.root ? '' : client.home, sub: client.home },
+    { name: 'Computer', path: '/', sub: '/' },
+  ].filter((p, i, all) => all.findIndex((o) => o.sub === p.sub) === i)
 
   return (
     <div className="phone-code">
       <TopHead env={env} title="Files">
         <div className="phone-code-crumbs">
-          <button type="button" className="code-link" onClick={() => onDir('')}>
-            {client.root.split('/').pop() || '/'}
+          <button type="button" className="code-link" onClick={() => onDir(absolute ? '/' : '')}>
+            {absolute ? 'Computer' : client.root.split('/').pop() || '/'}
           </button>
           {parts.map((p, i) => (
             <span key={i}>
               {' / '}
-              <button type="button" className="code-link" onClick={() => onDir(parts.slice(0, i + 1).join('/'))}>
+              <button type="button" className="code-link" onClick={() => onDir(crumb(i))}>
                 {p}
               </button>
             </span>
@@ -600,6 +624,26 @@ function FilesScreen({
         </div>
       </TopHead>
       {error && <div className="notice phone-code-error">{error}</div>}
+      {!dir && (
+        <div className="phone-list">
+          {places.map((p) => (
+            <button key={p.sub} type="button" className="phone-row" onClick={() => onDir(p.path)}>
+              {p.name === 'Computer' ? (
+                <HardDrive size={18} />
+              ) : p.name === 'Home' ? (
+                <House size={18} />
+              ) : (
+                <FolderGit2 size={18} />
+              )}
+              <span className="phone-row-main">
+                <span>{p.name}</span>
+                <Tail text={p.sub} />
+              </span>
+              <ChevronRight size={16} className="phone-row-chev" />
+            </button>
+          ))}
+        </div>
+      )}
       {entries && (
         <div className="phone-list">
           {entries.map((e) => {

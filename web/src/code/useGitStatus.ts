@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { CodeClient, GitStatus } from './client'
 
@@ -27,4 +27,20 @@ export function useGitStatus(client: CodeClient): [GitStatus | null, () => void]
     }
   }, [client, reload])
   return [status, reload]
+}
+
+// ProjectGit follows one project's git status and reports it, drawing
+// nothing: the Code tab holds every project's.
+export function ProjectGit({
+  client,
+  onStatus,
+}: {
+  client: CodeClient
+  onStatus: (status: GitStatus | null, reload: () => void) => void
+}) {
+  const [status, reload] = useGitStatus(client)
+  const report = useRef(onStatus)
+  report.current = onStatus
+  useEffect(() => report.current(status, reload), [status, reload])
+  return null
 }

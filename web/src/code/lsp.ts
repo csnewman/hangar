@@ -81,7 +81,7 @@ export interface FileOpener {
 
 // A usage of a symbol: where it is, in the Code tab's terms (a path from
 // the folder, or absolute outside it), and the line it is on.
-export type Usage = { path: string; line: number; col: number; length: number; text: string }
+export type Usage = { path: string; line: number; col: number; length: number; text: string; root?: string }
 
 // Usages are what the Find window lists: a symbol's usages, or the
 // matches of a Find in Files moved there (kind 'text', symbol being what
@@ -351,6 +351,8 @@ function ideaKeys(c: ReturnType<typeof commands>): Extension {
 // says.
 export type Problem = {
   path: string
+  // root is the folder of the project whose server found it.
+  root: string
   line: number
   col: number
   severity: number
@@ -457,6 +459,7 @@ export class Languages {
         uri,
         diagnostics.map((d) => ({
           path,
+          root: this.code.root,
           line: d.range.start.line + 1,
           col: d.range.start.character + 1,
           severity: d.severity ?? 1,

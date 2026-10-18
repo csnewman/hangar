@@ -3,6 +3,7 @@ import { Table2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
 import type { CodeClient, GitStatus, SharedFile } from './client'
+import { LanguagesContext, type Languages } from './lsp'
 import { CodeEditor } from './CodeEditor'
 import { copyText, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { DesktopTab } from '../desktop/DesktopTab'
@@ -28,12 +29,15 @@ export { tabKey, type Tab } from './TabBar'
 // EditorArea is the Code tab's centre: a strip of tabs and the chosen one, a
 // shared file or a diff.
 export function EditorArea({
-  client,
+  clientFor,
+  languagesFor,
+  statusOf,
+  projectLabel,
+  onOutside,
   tabs,
   active,
   opened,
   user,
-  status,
   canReopen,
   onActivate,
   onMove,
@@ -51,14 +55,22 @@ export function EditorArea({
   onUnsplit,
   onDropTab,
 }: {
-  client: CodeClient
+  // clientFor, languagesFor and statusOf are a tab's project's: its
+  // connection, its language servers, and what git says of it.
+  clientFor: (root?: string) => CodeClient
+  languagesFor: (root?: string) => Languages
+  statusOf: (root?: string) => GitStatus | null
+  // projectLabel names the project a tab's file is in, where there are
+  // several.
+  projectLabel?: (t: Tab) => string | undefined
+  // onOutside offers what to do about a file outside every project.
+  onOutside?: { reveal: (abs: string) => void; add?: (dir: string) => void }
   tabs: Tab[]
   active: string | null
   // Counts the tabs opened, the active one again included.
   opened: number
   jump: (Jump & { n: number }) | null
   user: { name: string; color: string }
-  status: GitStatus | null
   canReopen: boolean
   onActivate: (key: string) => void
   onMove: (key: string, to: number) => void
@@ -66,8 +78,8 @@ export function EditorArea({
   onClose: (key: string) => void
   onCloseMany: (keys: string[]) => void
   onReopen: () => void
-  onReveal: (path: string) => void
-  onShowCommit: (hash: string, path: string) => void
+  onReveal: (path: string, root?: string) => void
+  onShowCommit: (hash: string, path: string, root?: string) => void
   // split says how many groups of editors there are, and whether this one
   // is the one in use beside another.
   split?: { groups: number; focused: boolean }
@@ -101,7 +113,7 @@ export function EditorArea({
     const key = tabKey(t)
     const i = tabs.findIndex((o) => tabKey(o) === key)
     const keys = tabs.map(tabKey)
-    const changed = status?.changes.some((c) => c.path === t.path) ?? false
+    const changed = statusOf(t.root)?.changes.some((c) => c.path === t.path) ?? false
     const closing: MenuItem[] = [
       { label: 'Close', shortcut: shortcut('Alt+W'), onSelect: () => onClose(key) },
       { label: 'Close Others', disabled: tabs.length < 2, onSelect: () => onCloseMany(keys.filter((k) => k !== key)) },
@@ -135,10 +147,13 @@ export function EditorArea({
       ...closing,
       ...splitting,
       'separator',
-      { label: 'Copy Path', onSelect: () => copyText(`${client.root}/${t.path}`) },
+      {
+        label: 'Copy Path',
+        onSelect: () => copyText(t.path.startsWith('/') ? t.path : `${clientFor(t.root).root}/${t.path}`),
+      },
       { label: 'Copy Relative Path', onSelect: () => copyText(t.path) },
       'separator',
-      { label: 'Reveal in Project', onSelect: () => onReveal(t.path) },
+      { label: 'Reveal in Project', onSelect: () => onReveal(t.path, t.root) },
       {
         label: 'Open With…',
         onSelect: () => menu.openAt(x, y, openWith(t.path, (view) => onOpen({ kind: 'file', path: t.path, view }))),
@@ -150,6 +165,22 @@ export function EditorArea({
       { label: 'Reopen Closed Tab', shortcut: shortcut('Alt+Shift+T'), disabled: !canReopen, onSelect: onReopen },
     ]
   }
+  // outside is whether a tab's file is in no project: a path from / that
+  // no project's folder holds.
+  const outside = (t: Tab) => t.path.startsWith('/') && !t.root
+  const fileTab = (t: Tab) => (
+    <FileTab
+      key={tabKey(t)}
+      client={clientFor(t.root)}
+      path={t.path}
+      view={t.view}
+      user={user}
+      jump={jump && (jump.root ?? undefined) === t.root ? jump : null}
+      onReveal={(path) => onReveal(path, t.root)}
+      onShowCommit={(hash, path) => onShowCommit(hash, path, t.root)}
+      onOpenFile={(path) => onOpen({ kind: 'file', path, root: path.startsWith('/') ? undefined : t.root })}
+    />
+  )
   return (
     <div
       className={[
@@ -174,6 +205,7 @@ export function EditorArea({
           onActivate={onActivate}
           onClose={onClose}
           onMove={onMove}
+          projectLabel={projectLabel}
           group={group}
           groups={split?.groups ?? 1}
           onDropOut={onDropTab}
@@ -183,22 +215,40 @@ export function EditorArea({
       <div className="code-editor-body">
         {zone && <div className={`code-drop-zone code-drop-zone-${zone}`} />}
         {current?.kind === 'file' && (
-          <FileTab
-            key={tabKey(current)}
-            client={client}
-            path={current.path}
-            view={current.view}
-            user={user}
-            jump={jump}
-            onReveal={onReveal}
-            onShowCommit={onShowCommit}
-            onOpenFile={(path) => onOpen({ kind: 'file', path })}
-          />
+          <LanguagesContext.Provider value={languagesFor(current.root)}>
+            {outside(current) ? (
+              <div className="code-outside">
+                <div className="code-outside-bar">
+                  <span>
+                    <b>{current.path}</b> is outside the workspace.
+                  </span>
+                  <span className="code-tool-spacer" />
+                  {onOutside && (
+                    <button type="button" className="code-tool-btn" onClick={() => onOutside.reveal(current.path)}>
+                      Reveal on Computer
+                    </button>
+                  )}
+                  {onOutside?.add && (
+                    <button
+                      type="button"
+                      className="code-tool-btn"
+                      onClick={() => onOutside.add?.(current.path.slice(0, current.path.lastIndexOf('/')) || '/')}
+                    >
+                      Add {current.path.slice(0, current.path.lastIndexOf('/')) || '/'} to Workspace
+                    </button>
+                  )}
+                </div>
+                <div className="code-outside-body">{fileTab(current)}</div>
+              </div>
+            ) : (
+              fileTab(current)
+            )}
+          </LanguagesContext.Provider>
         )}
         {current?.kind === 'diff' && (
           <DiffView
             key={tabKey(current)}
-            client={client}
+            client={clientFor(current.root)}
             path={current.path}
             base={current.base}
             baseLabel={current.baseLabel}
@@ -208,7 +258,12 @@ export function EditorArea({
           />
         )}
         {current?.kind === 'compare' && current.other && (
-          <CompareView key={tabKey(current)} client={client} left={current.other} right={current.path} />
+          <CompareView
+            key={tabKey(current)}
+            client={clientFor(current.root)}
+            left={current.other}
+            right={current.path}
+          />
         )}
         {current?.kind === 'desktop' && (
           <div className="code-desktop">
@@ -224,7 +279,12 @@ export function EditorArea({
           </div>
         )}
         {current?.kind === 'logs' && (
-          <DockerLogs key={tabKey(current)} client={client} id={current.path} name={current.title ?? current.path.slice(0, 12)} />
+          <DockerLogs
+            key={tabKey(current)}
+            client={clientFor()}
+            id={current.path}
+            name={current.title ?? current.path.slice(0, 12)}
+          />
         )}
         {!current && (
           <div className="code-empty">

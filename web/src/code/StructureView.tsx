@@ -26,6 +26,7 @@ export function StructureView({
   const status = useEditorStatus(store)
   const view = status?.view ?? null
   const path = status?.path ?? ''
+  const root = status?.root || undefined
   const edits = status?.edits ?? 0
   const serverState = status?.server?.state
   const [read, setRead] = useState<{ path: string; outline: Outline } | null>(null)
@@ -74,7 +75,7 @@ export function StructureView({
           className={s === here ? 'code-structure-row code-structure-here' : 'code-structure-row'}
           style={{ paddingLeft: 6 + depth * 14 }}
           title={`${k.name} ${s.name}${s.detail ? ` ${s.detail}` : ''}, line ${s.line}`}
-          onClick={() => onJump({ path, line: s.line, col: s.col })}
+          onClick={() => onJump({ path, root: path.startsWith('/') ? undefined : root, line: s.line, col: s.col })}
         >
           {s.children.length ? (
             <button

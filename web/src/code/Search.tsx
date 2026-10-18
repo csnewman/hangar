@@ -1,6 +1,6 @@
 import { EditorState, RangeSetBuilder, Compartment, type Extension } from '@codemirror/state'
 import { Decoration, EditorView, lineNumbers } from '@codemirror/view'
-import { CaseSensitive, File, Folder, FolderOpen, Regex, Replace, WholeWord, X } from 'lucide-react'
+import { CaseSensitive, File, Folder, FolderOpen, GitBranch, Regex, Replace, WholeWord, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 
 import type { CodeClient, Match } from './client'
@@ -9,13 +9,20 @@ import { isMac, shortcut } from './ContextMenu'
 import type { Languages, Usages } from './lsp'
 import { kindOf, workspaceSymbols, type FoundSymbol } from './symbols'
 
-// Jump is a place in a file to open it at: a 1-based line (0 for none),
-// and optionally a 1-based column, or text in the line to select. focus
-// false leaves the keyboard where it is, as stepping through a list does.
 // Jump is a place in a file to go to: a line (from 1; 0 is none), the
 // column and text there, whether the editor takes focus, and whether its
 // annotations (git blame) are shown.
-export type Jump = { path: string; line: number; col?: number; find?: string; focus?: boolean; blame?: boolean }
+// root is the project the path is in; none is the tab's own folder, or a
+// path from / outside every project.
+export type Jump = {
+  path: string
+  line: number
+  col?: number
+  find?: string
+  focus?: boolean
+  blame?: boolean
+  root?: string
+}
 
 // Popup is the frame the Code tab's search popups share, as IntelliJ's:
 // centred near the top, over everything, gone on Escape or a click away.
@@ -138,7 +145,7 @@ export function fuzzy(query: string, text: string): { score: number; at: number[
   return { score, at }
 }
 
-type FileHit = { path: string; score: number; name: number[]; dir: number[] }
+type FileHit = { path: string; score: number; name: number[]; dir: number[]; root?: string }
 
 // rank orders the files a query matches: by their names, unless the query
 // names folders too, then by their paths.
@@ -170,43 +177,66 @@ function rank(files: string[], query: string): FileHit[] {
 // also opens at a line.
 export function GotoFile({
   client,
+  projects = [],
   title,
   recent,
   onOpen,
   onClose,
 }: {
   client: CodeClient
+  // projects are the workspace's, each one's files offered.
+  projects?: SearchProject[]
   title: string
-  recent: string[]
+  recent: { path: string; root?: string }[]
   onOpen: (j: Jump) => void
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
-  const [files, setFiles] = useState<string[] | null>(null)
+  const [files, setFiles] = useState<{ root: string; files: string[] }[] | null>(null)
   const [error, setError] = useState('')
   const [sel, setSel] = useState(0)
+  const all: SearchProject[] = projects.length ? projects : [{ root: client.root, name: '', client }]
+  const allKey = all.map((p) => p.root).join('\n')
   useEffect(() => {
-    client.searchFiles().then(
-      (r) => setFiles(r.files),
+    Promise.all(all.map((p) => p.client.searchFiles().then((r) => ({ root: p.root, files: r.files })))).then(
+      setFiles,
       (e: Error) => setError(e.message),
     )
-  }, [client])
+    // The projects are named by allKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allKey])
+  const several = all.length > 1
 
   const m = /^(.*?)(?::(\d+)(?::(\d+))?)?$/.exec(query.trim())!
   const name = m[1]
   const line = m[2] ? Number(m[2]) : undefined
   const col = m[3] ? Number(m[3]) : undefined
   const hits = useMemo(() => {
-    if (!name) return recent.map((path): FileHit => ({ path, score: 0, name: [], dir: [] }))
-    return files ? rank(files, name).slice(0, 80) : []
-  }, [files, name, recent])
+    if (!name) return recent.map((r): FileHit => ({ path: r.path, root: r.root, score: 0, name: [], dir: [] }))
+    // A path from / or ~ is any file on the machine.
+    if (name.startsWith('/') || name.startsWith('~/')) {
+      const abs = name.startsWith('~/') ? client.home + name.slice(1) : name
+      return [{ path: abs, score: 0, name: [], dir: [] }]
+    }
+    if (!files) return []
+    const roots = files.map((f) => f.root)
+    return files
+      .flatMap((f) =>
+        rank(
+          f.files.filter((p) => innermost(roots, f.root, p)),
+          name,
+        ).map((h) => ({ ...h, root: f.root })),
+      )
+      .sort((a, b) => b.score - a.score || a.path.length - b.path.length)
+      .slice(0, 80)
+  }, [files, name, recent, client.home])
   useEffect(() => setSel(0), [name])
   const list = useScrollIntoView(sel)
 
   const choose = (h: FileHit | undefined) => {
     if (!h) return
     onClose()
-    onOpen({ path: h.path, line: line ?? 0, col })
+    onOpen({ path: h.path, root: h.root, line: line ?? 0, col })
   }
 
   return (
@@ -221,7 +251,7 @@ export function GotoFile({
         className="code-popup-input"
         autoFocus
         spellCheck={false}
-        placeholder="File name, or name:line"
+        placeholder="File name, or name:line; a path from / or ~ for any file"
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         onKeyDown={(e) => {
@@ -237,7 +267,7 @@ export function GotoFile({
           const cut = h.path.lastIndexOf('/') + 1
           return (
             <div
-              key={h.path}
+              key={`${h.root ?? ''}:${h.path}`}
               role="option"
               aria-selected={i === sel}
               className={i === sel ? 'code-popup-row code-popup-row-on' : 'code-popup-row'}
@@ -248,6 +278,7 @@ export function GotoFile({
               <span className="code-goto-name">
                 <Highlighted text={h.path.slice(cut)} at={h.name} />
               </span>
+              {several && h.root && <span className="code-tab-project">{nameOfRoot(h.root)}</span>}
               <span className="code-goto-dir">
                 <Highlighted text={h.path.slice(0, cut).replace(/\/$/, '')} at={h.dir} />
               </span>
@@ -270,20 +301,23 @@ export function GotoFile({
 // the workspace: IntelliJ's Go to Symbol, asking every language server
 // running.
 export function GotoSymbol({
-  client,
   languages,
+  place,
   onOpen,
   onClose,
 }: {
-  client: CodeClient
-  languages: Languages
+  // languages are every project's servers.
+  languages: Languages[]
+  // place is where a file from / is: in a project, or not.
+  place: (abs: string) => { path: string; root?: string }
   onOpen: (j: Jump) => void
   onClose: () => void
 }) {
   const [query, setQuery] = useState('')
   const [found, setFound] = useState<{ query: string; symbols: FoundSymbol[] } | null>(null)
   const [sel, setSel] = useState(0)
-  const servers = languages.clients()
+  const clients = () => languages.flatMap((l) => l.clients())
+  const servers = clients()
   useEffect(() => {
     const q = query.trim()
     if (!q) {
@@ -292,22 +326,21 @@ export function GotoSymbol({
     }
     let live = true
     const timer = setTimeout(() => {
-      workspaceSymbols(languages.clients(), q).then((symbols) => live && setFound({ query: q, symbols }))
+      workspaceSymbols(clients(), q).then((symbols) => live && setFound({ query: q, symbols }))
     }, 150)
     return () => {
       live = false
       clearTimeout(timer)
     }
-  }, [query, languages])
-  const pathOf = (uri: string) => {
-    const abs = decodeURIComponent(new URL(uri).pathname)
-    return abs.startsWith(client.root + '/') ? abs.slice(client.root.length + 1) : abs
-  }
+    // The servers are read afresh for each search.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query])
+  const at = (uri: string) => place(decodeURIComponent(new URL(uri).pathname))
   const hits = useMemo(() => {
     if (!found) return []
     return (
       found.symbols
-        .map((s) => ({ s, m: fuzzy(found.query, s.name), path: pathOf(s.uri) }))
+        .map((s) => ({ s, m: fuzzy(found.query, s.name), ...at(s.uri) }))
         .filter((h) => h.m)
         // The project's own first, as IntelliJ lists them, then libraries'.
         .sort(
@@ -327,7 +360,7 @@ export function GotoSymbol({
     const h = hits[i]
     if (!h) return
     onClose()
-    onOpen({ path: h.path, line: h.s.line, col: h.s.col })
+    onOpen({ path: h.path, root: h.root, line: h.s.line, col: h.s.col })
   }
 
   return (
@@ -395,6 +428,22 @@ export function GotoSymbol({
 
 // --- Find in Files ------------------------------------------------------
 
+// SearchProject is a project the search popups look in.
+export type SearchProject = { root: string; name: string; client: CodeClient }
+
+// Found is a match, and the project it was found in.
+type Found = Match & { root: string }
+
+const nameOfRoot = (root: string) => root.slice(root.lastIndexOf('/') + 1)
+
+// innermost says whether a file found in a project is that project's own,
+// not a project's nested inside it (the home folder holding the others),
+// so a file is listed once, under the project nearest it.
+function innermost(roots: string[], root: string, path: string): boolean {
+  const abs = `${root}/${path}`
+  return !roots.some((r) => r !== root && r.startsWith(root + '/') && abs.startsWith(r + '/'))
+}
+
 type FindOptions = {
   query: string
   regex: boolean
@@ -422,6 +471,8 @@ let lastFind: FindOptions = {
 // Replace in Files) it replaces the matches in a file or every file.
 export function FindInFiles({
   client,
+  projects = [],
+  root,
   initial,
   dir,
   replace,
@@ -430,6 +481,10 @@ export function FindInFiles({
   onClose,
 }: {
   client: CodeClient
+  // projects are the workspace's, every one searched unless one is
+  // chosen; root is the one the folder searched (dir) is in.
+  projects?: SearchProject[]
+  root?: string
   // initial is text to search for, such as the editor's selection.
   initial?: string
   // dir is a folder to search, from the root.
@@ -441,11 +496,18 @@ export function FindInFiles({
   onClose: () => void
 }) {
   const [opts, setOpts] = useState<FindOptions>(() => (initial ? { ...lastFind, query: initial } : lastFind))
-  const [result, setResult] = useState<{ matches: Match[]; truncated: boolean } | null>(null)
+  const [result, setResult] = useState<{ matches: Found[]; truncated: boolean } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [sel, setSel] = useState(0)
   const [scope, setScope] = useState(dir ?? '')
+  // where is the project searched, '' for every one.
+  const all: SearchProject[] = projects.length ? projects : [{ root: client.root, name: '', client }]
+  const [where, setWhere] = useState(() =>
+    dir !== undefined || all.length === 1 ? (root ?? all.find((p) => p.client === client)?.root ?? all[0].root) : '',
+  )
+  const targets = where ? all.filter((p) => p.root === where) : all
+  const clientOf = (r: string) => all.find((p) => p.root === r)?.client ?? client
   const [replacing, setReplacing] = useState(!!replace)
   // round counts replacements, after each of which the search runs again.
   const [round, setRound] = useState(0)
@@ -476,19 +538,28 @@ export function FindInFiles({
     let live = true
     const timer = setTimeout(() => {
       setBusy(true)
-      client
-        .searchText({
-          query: opts.query,
-          regex: opts.regex,
-          caseSensitive: opts.caseSensitive,
-          wholeWord: opts.wholeWord,
-          mask: opts.masked ? opts.mask : '',
-          dir: scope,
-        })
+      Promise.all(
+        targets.map((p) =>
+          p.client
+            .searchText({
+              query: opts.query,
+              regex: opts.regex,
+              caseSensitive: opts.caseSensitive,
+              wholeWord: opts.wholeWord,
+              mask: opts.masked ? opts.mask : '',
+              dir: where ? scope : '',
+            })
+            .then((r) => ({ ...r, matches: r.matches.map((m) => ({ ...m, root: p.root })) })),
+        ),
+      )
         .then(
-          (r) => {
+          (rs) => {
             if (!live) return
-            setResult(r)
+            const roots = targets.map((p) => p.root)
+            setResult({
+              matches: rs.flatMap((r) => r.matches).filter((m) => innermost(roots, m.root, m.path)),
+              truncated: rs.some((r) => r.truncated),
+            })
             setError('')
             setSel(0)
           },
@@ -501,16 +572,36 @@ export function FindInFiles({
       clearTimeout(timer)
     }
     // The replacement is not part of what is searched for.
-  }, [client, opts.query, opts.regex, opts.caseSensitive, opts.wholeWord, opts.mask, opts.masked, scope, round])
+    // targets follow where, and the projects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    where,
+    all.length,
+    opts.query,
+    opts.regex,
+    opts.caseSensitive,
+    opts.wholeWord,
+    opts.mask,
+    opts.masked,
+    scope,
+    round,
+  ])
 
-  // replaceIn replaces the matches in the files given, or every file.
-  const replaceIn = async (paths?: string[]) => {
+  // replaceIn replaces the matches in the file given, or every file of
+  // every project searched.
+  const replaceIn = async (only?: Found) => {
     setConfirmAll(false)
     try {
-      const r = await client.replace(query, opts.replacement, paths)
+      const rs = await Promise.all(
+        (only ? targets.filter((p) => p.root === only.root) : targets).map((p) =>
+          p.client.replace({ ...query, dir: where ? scope : '' }, opts.replacement, only ? [only.path] : undefined),
+        ),
+      )
+      const n = rs.reduce((a, r) => a + r.replaced, 0)
+      const files = rs.reduce((a, r) => a + r.files.length, 0)
       setReplaced(
-        r.replaced
-          ? `Replaced ${r.replaced} match${r.replaced === 1 ? '' : 'es'} in ${r.files.length} file${r.files.length === 1 ? '' : 's'}.`
+        n
+          ? `Replaced ${n} match${n === 1 ? '' : 'es'} in ${files} file${files === 1 ? '' : 's'}.`
           : 'Nothing was replaced.',
       )
       setRound((n) => n + 1)
@@ -520,18 +611,18 @@ export function FindInFiles({
   }
 
   const matches = result?.matches ?? []
-  const fileCount = useMemo(() => new Set(matches.map((m) => m.path)).size, [matches])
+  const fileCount = useMemo(() => new Set(matches.map((m) => `${m.root}/${m.path}`)).size, [matches])
   // Each match in a line, which a line's row may hold several of.
   const occurrences = useMemo(() => matches.reduce((n, m) => n + Math.max(1, m.ranges.length), 0), [matches])
   useEffect(() => setConfirmAll(false), [result])
   const list = useScrollIntoView(sel)
   const current = matches[sel]
 
-  const choose = (m: Match | undefined) => {
+  const choose = (m: Found | undefined) => {
     if (!m) return
     onClose()
     const first = m.ranges[0]
-    onOpen({ path: m.path, line: m.line, find: first ? m.text.slice(first[0], first[1]) : undefined })
+    onOpen({ path: m.path, root: m.root, line: m.line, find: first ? m.text.slice(first[0], first[1]) : undefined })
   }
 
   // toFindWindow moves the matches to the Find window, as IntelliJ's Open
@@ -547,6 +638,7 @@ export function FindInFiles({
       usages: matches.flatMap((m) =>
         (m.ranges.length ? m.ranges : [[0, 0] as [number, number]]).map(([s, e]) => ({
           path: m.path,
+          root: m.root,
           line: m.line,
           col: s + 1,
           length: e - s,
@@ -573,7 +665,25 @@ export function FindInFiles({
     <Popup className="code-find" onClose={onClose}>
       <div className="code-popup-head">
         <span className="strong">{replacing ? 'Replace in Files' : 'Find in Files'}</span>
-        {scope && (
+        {all.length > 1 && (
+          <select
+            className="code-project-picker"
+            aria-label="Where"
+            value={where}
+            onChange={(e) => {
+              setWhere(e.target.value)
+              setScope('')
+            }}
+          >
+            <option value="">Every project</option>
+            {all.map((p) => (
+              <option key={p.root} value={p.root}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        )}
+        {scope && where && (
           <span className="code-log-path" title={`Only the files in ${scope}`}>
             <Folder size={12} />
             {scope}
@@ -656,7 +766,7 @@ export function FindInFiles({
             className="btn btn-sm"
             disabled={!current || busy}
             title={current ? `Replace the matches in ${current.path}` : undefined}
-            onClick={() => current && replaceIn([current.path])}
+            onClick={() => current && replaceIn(current)}
           >
             Replace in File
           </button>
@@ -689,6 +799,7 @@ export function FindInFiles({
               <Ranges text={m.text} ranges={m.ranges} />
             </span>
             <span className="code-find-where">
+              {!where && all.length > 1 && <span className="code-tab-project">{nameOfRoot(m.root)} </span>}
               {m.path.split('/').pop()} {m.line}
             </span>
           </div>
@@ -696,7 +807,14 @@ export function FindInFiles({
         {error && <div className="code-popup-empty code-note-error">{error}</div>}
         {!error && result && matches.length === 0 && <div className="code-popup-empty">Nothing found.</div>}
       </div>
-      {current && <Preview client={client} match={current} onOpen={() => choose(current)} />}
+      {current && (
+        <Preview
+          key={`${current.root}:${current.path}`}
+          client={clientOf(current.root)}
+          match={current}
+          onOpen={() => choose(current)}
+        />
+      )}
       <div className="code-popup-foot code-find-foot">
         <span className="muted small">Enter opens the match</span>
         <span className="code-tool-spacer" />
@@ -834,14 +952,36 @@ export function Preview({ client, match, onOpen }: { client: CodeClient; match: 
 export function OpenFolder({
   client,
   onChoose,
+  onAdd,
+  have = [],
   onClose,
 }: {
   client: CodeClient
-  // onChoose is given the folder, or '' for the environment's own.
+  // onChoose is given the folder, or '' for the environment's own, to open
+  // alone in this tab.
   onChoose: (dir: string) => void
+  // onAdd adds the folder to the workspace; without it the popup only
+  // opens folders alone.
+  onAdd?: (dir: string) => void
+  // have are the workspace's folders already, not offered again.
+  have?: string[]
   onClose: () => void
 }) {
   const [path, setPath] = useState(client.root + '/')
+  // The git repositories in the home folder, to add with a click.
+  const [repos, setRepos] = useState<string[]>([])
+  useEffect(() => {
+    if (!onAdd) return
+    let live = true
+    client.repositories().then(
+      (r) => live && setRepos(r),
+      () => {},
+    )
+    return () => {
+      live = false
+    }
+  }, [client, onAdd])
+  const offered = repos.filter((r) => !have.includes(r))
   const [dirs, setDirs] = useState<string[]>([])
   const [error, setError] = useState('')
   const [sel, setSel] = useState(-1)
@@ -879,12 +1019,32 @@ export function OpenFolder({
     onClose()
     onChoose(want === client.home ? '' : want)
   }
+  // add adds a folder to the workspace, once it is known to be one.
+  const add = async (dir: string) => {
+    const want = dir.length > 1 ? dir.replace(/\/+$/, '') : dir
+    if (!want.startsWith('/')) {
+      setError('A folder is an absolute path.')
+      return
+    }
+    if (have.includes(want)) {
+      setError(`${want} is in the workspace already.`)
+      return
+    }
+    try {
+      await client.list(want)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+      return
+    }
+    onClose()
+    onAdd?.(want)
+  }
 
   return (
     <Popup className="code-open-folder" onClose={onClose}>
       <div className="code-popup-head">
-        <span className="strong">Open Folder</span>
-        <span className="muted small">in this browser tab only</span>
+        <span className="strong">{onAdd ? 'Add Folder to Workspace' : 'Open Folder'}</span>
+        <span className="muted small">{onAdd ? 'a project beside the others' : 'in this browser tab only'}</span>
       </div>
       <input
         className="code-popup-input"
@@ -903,7 +1063,8 @@ export function OpenFolder({
             if (d) setPath(parent + d + '/')
           } else if (e.key === 'Enter') {
             e.preventDefault()
-            open(path)
+            if (onAdd) add(path)
+            else open(path)
           }
         }}
       />
@@ -923,19 +1084,45 @@ export function OpenFolder({
           </div>
         ))}
         {shown.length === 0 && <div className="code-popup-empty">No folders here.</div>}
+        {offered.length > 0 && <div className="code-popup-section">Repositories on this machine</div>}
+        {offered.map((r) => (
+          <div
+            key={r}
+            className="code-popup-row"
+            title={`Add ${r}`}
+            onClick={() => setPath(r + '/')}
+            onDoubleClick={() => add(r)}
+          >
+            <GitBranch size={14} className="code-icon-dir" />
+            <span>{r.slice(r.lastIndexOf('/') + 1)}</span>
+            <span className="code-goto-dir">
+              {r.startsWith(client.home + '/') ? '~' + r.slice(client.home.length) : r}
+            </span>
+          </div>
+        ))}
       </div>
       {error && <div className="code-note code-note-error">{error}</div>}
       <div className="code-popup-actions">
-        <span className="muted small">Tab completes · Enter opens</span>
+        <span className="muted small">Tab completes · Enter {onAdd ? 'adds' : 'opens'}</span>
         <span className="code-tool-spacer" />
-        {client.root !== client.home && (
+        {!onAdd && client.root !== client.home && (
           <button type="button" className="btn btn-ghost" onClick={() => (onClose(), onChoose(''))}>
             <FolderOpen size={14} /> Back to {client.home}
           </button>
         )}
-        <button type="button" className="btn btn-primary" onClick={() => open(path)}>
-          Open
+        <button
+          type="button"
+          className={onAdd ? 'btn btn-ghost' : 'btn btn-primary'}
+          title="Show only this folder, in this browser tab"
+          onClick={() => open(path)}
+        >
+          {onAdd ? 'Open Alone in This Tab' : 'Open'}
         </button>
+        {onAdd && (
+          <button type="button" className="btn btn-primary" onClick={() => add(path)}>
+            Add to Workspace
+          </button>
+        )}
       </div>
     </Popup>
   )

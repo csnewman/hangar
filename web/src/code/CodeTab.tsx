@@ -31,7 +31,8 @@ import { StartProgress } from '../components/StartProgress'
 import { environmentTab, nameTab, useWorkspaceTab, type WorkspaceShow } from '../workspaceLinks'
 import { ChangesView } from './ChangesView'
 import { ComputerView } from './ComputerView'
-import { CodeClient, type ConnectionState } from './client'
+import { WorkspaceView } from './WorkspaceView'
+import { CodeClient, type ConnectionState, type GitStatus } from './client'
 import { CodeTerminal } from './CodeTerminal'
 import { isMac, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
 import { containerShell, DockerView } from './DockerView'
@@ -52,7 +53,8 @@ import { FindInFiles, GotoFile, GotoSymbol, OpenFolder, type Jump } from './Sear
 import { EditorItems, StatusBar } from './StatusBar'
 import { StructureView } from './StructureView'
 import { UsagesView } from './UsagesView'
-import { useGitStatus } from './useGitStatus'
+import { ProjectGit } from './useGitStatus'
+import { locate, useProjects, useWorkspace, type Project } from './projects'
 
 // CodeTab is Hangar's own editor for an environment, laid out as IntelliJ
 // lays out its tool windows: Project on the left, Changes on the right,
@@ -394,8 +396,9 @@ function CodeView({
   // What the editor shown says of its file, for the status bar.
   const [editorStatus] = useState(() => new EditorStatusStore())
 
-  // Git status, reloaded whenever files or the repository change.
-  const [status, reloadStatus] = useGitStatus(client)
+  // Each project's git status, reported by its ProjectGit as files or the
+  // repositories change.
+  const [gits, setGits] = useState<Record<string, { status: GitStatus | null; reload: () => void }>>({})
 
   // Tool windows: a panel on each side, showing one of the windows docked
   // there at a time, as IntelliJ's sides do, and the terminal below.
@@ -430,9 +433,19 @@ function CodeView({
   // active one opened again included.
   const [opened, setOpened] = useState(0)
   // open opens a tab in the group in use.
+  // place is where a path is: a path from / is in the project it is in,
+  // if any, and the tab's own folder is named by no root.
+  const place = (path: string, root?: string): { path: string; root?: string } => {
+    let at: { path: string; root?: string } = { path, root }
+    if (path.startsWith('/') && !root) at = locate(projectsRef.current, path)
+    return at.root === client.root ? { path: at.path } : at
+  }
+  // open opens a tab in the group in use.
   const open = (tab: Tab) => {
     restore()
-    setStore((s) => withGroup(s, s.focus, (g) => withTab(g, tab)))
+    const { root: _, ...rest } = tab
+    const t: Tab = tab.kind === 'logs' || tab.kind === 'desktop' ? tab : { ...rest, ...place(tab.path, tab.root) }
+    setStore((s) => withGroup(s, s.focus, (g) => withTab(g, t)))
     setOpened((n) => n + 1)
   }
   // Closed tabs, most recent last, for reopening.
@@ -507,10 +520,21 @@ function CodeView({
   const activeTab = focused.tabs.find((t) => tabKey(t) === focused.active)
 
   // Reveal in Project: the tree opens the folders to a path and selects it.
-  const [reveal, setReveal] = useState<{ path: string; n: number } | null>(null)
-  const revealInProject = (path: string) => {
+  const [reveal, setReveal] = useState<{ path: string; root?: string; n: number } | null>(null)
+  const revealInProject = (path: string, root?: string) => {
+    const at = place(path, root)
+    if (at.path.startsWith('/')) {
+      revealOnComputer(at.path)
+      return
+    }
     showTool('project')
-    setReveal((r) => ({ path, n: (r?.n ?? 0) + 1 }))
+    setReveal((r) => ({ ...at, n: (r?.n ?? 0) + 1 }))
+  }
+  // Reveal on Computer: Computer shows the folder a path is in.
+  const [computerAt, setComputerAt] = useState<{ path: string; n: number } | null>(null)
+  const revealOnComputer = (abs: string) => {
+    showTool('computer')
+    setComputerAt((r) => ({ path: abs, n: (r?.n ?? 0) + 1 }))
   }
 
   // Open in Terminal: a new session in a folder.
@@ -523,16 +547,17 @@ function CodeView({
   // Search: popups, and the place in a file one of them opens.
   const [popup, setPopup] = useState<Popup>(null)
   // Find in Files opened from the Project tree: in a folder, to replace.
-  const [findIn, setFindIn] = useState<{ dir?: string; replace?: boolean }>({})
-  const findInFolder = (dir: string, replace: boolean) => {
-    setFindIn({ dir, replace })
+  const [findIn, setFindIn] = useState<{ dir?: string; replace?: boolean; root?: string }>({})
+  const findInFolder = (dir: string, replace: boolean, root?: string) => {
+    setFindIn({ dir, replace, root })
     setPopup('find')
   }
   // A jump is for the editor of the group in use, not the other.
   const [jump, setJump] = useState<(Jump & { n: number; group: number }) | null>(null)
   const openAt = (j: Jump) => {
-    open({ kind: 'file', path: j.path })
-    if (j.line > 0 || j.blame) setJump((x) => ({ ...j, n: (x?.n ?? 0) + 1, group: store.focus }))
+    const at = place(j.path, j.root)
+    open({ kind: 'file', ...at })
+    if (j.line > 0 || j.blame) setJump((x) => ({ ...j, ...at, root: at.root, n: (x?.n ?? 0) + 1, group: store.focus }))
   }
   // The bottom panel shows the terminal, the Find tool window or the Git
   // Log, keeping the others.
@@ -546,13 +571,19 @@ function CodeView({
   const [logSeen, setLogSeen] = useState(false)
   const [logFocus, setLogFocus] = useState<{ hash: string; repo?: string; n: number } | null>(null)
   const [logHistory, setLogHistory] = useState<{ path: string; n: number } | null>(null)
-  const showHistory = (path: string) => {
+  // The project the Git Log shows, and Changes: chosen there, else the
+  // one being worked in.
+  const [logRoot, setLogRoot] = useState<string | null>(null)
+  const [changesRoot, setChangesRoot] = useState<string | null>(null)
+  const showHistory = (path: string, root?: string) => {
+    setLogRoot(root ?? client.root)
     setLogHistory((h) => ({ path, n: (h?.n ?? 0) + 1 }))
     showBottom('log')
   }
-  // moved has the tabs on paths that moved follow them.
-  const moved = (pairs: { from: string; to: string }[]) =>
+  // moved has the tabs on paths that moved in a project follow them.
+  const moved = (pairs: { from: string; to: string }[], root?: string) =>
     setStore((s) => {
+      const r = root === client.root ? undefined : root
       const follow = (p: string) => {
         for (const { from, to } of pairs) {
           if (p === from) return to
@@ -561,15 +592,19 @@ function CodeView({
         return p
       }
       const groups = s.groups.map((g) => {
-        const tabs = g.tabs.map((t) => ({ ...t, path: follow(t.path), ...(t.other ? { other: follow(t.other) } : {}) }))
+        const tabs = g.tabs.map((t) =>
+          t.root !== r ? t : { ...t, path: follow(t.path), ...(t.other ? { other: follow(t.other) } : {}) },
+        )
         const was = g.tabs.findIndex((t) => tabKey(t) === g.active)
         return { tabs, active: was >= 0 ? tabKey(tabs[was]) : g.active }
       })
       return { ...s, groups }
     })
   // showCommit finds a commit of the repository a file is in.
-  const showCommit = (hash: string, path: string) => {
-    setLogFocus((f) => ({ hash, repo: repoFor(status?.repos ?? [], path)?.path, n: (f?.n ?? 0) + 1 }))
+  const showCommit = (hash: string, path: string, root?: string) => {
+    const r = root ?? client.root
+    setLogRoot(r)
+    setLogFocus((f) => ({ hash, repo: repoFor(gits[r]?.status?.repos ?? [], path)?.path, n: (f?.n ?? 0) + 1 }))
     showBottom('log')
   }
   useEffect(() => {
@@ -614,18 +649,107 @@ function CodeView({
       showBottom('find')
     },
   }
-  const languages = useMemo(
-    () =>
-      new Languages(client, {
-        open: (path) => opener.current?.open({ kind: 'file', path }),
-        jump: (j) => opener.current?.openAt(j),
-        usages: (u) => opener.current?.showUsages(u),
-        run: (command) => opener.current?.run(command),
-      }),
-    [client],
-  )
+  // Each project's language servers open what they point at in their
+  // project, and list usages with it.
+  const languagesFor = (c: CodeClient, root: string) => {
+    const r = root === client.root ? undefined : root
+    const inProject = (path: string) => (path.startsWith('/') ? undefined : r)
+    return new Languages(c, {
+      open: (path) => opener.current?.open({ kind: 'file', path, root: inProject(path) }),
+      jump: (j) => opener.current?.openAt({ ...j, root: inProject(j.path) }),
+      usages: (u) =>
+        opener.current?.showUsages({ ...u, usages: u.usages.map((x) => ({ ...x, root: inProject(x.path) })) }),
+      run: (command) => opener.current?.run(command),
+    })
+  }
+  const languagesForRef = useRef(languagesFor)
+  languagesForRef.current = languagesFor
+  // The tab's own folder's servers, whether or not it is a project, for
+  // files from / that are in none.
+  const languages = useMemo(() => languagesForRef.current(client, client.root), [client])
 
-  const problems = useProblems(languages)
+  // The workspace's projects: the environment's, or this tab's folder
+  // alone. Until the list is set it is the environment's folder and every
+  // repository its template clones.
+  const environmentRepos = environment.spec.repos.map((r) => r.path).filter(Boolean)
+  const workspace = useWorkspace(client, folder !== '', environmentRepos)
+  const projects = useProjects(client, env, workspace.folders, (c, root) =>
+    c === client ? languages : languagesForRef.current(c, root),
+  )
+  const projectsRef = useRef(projects)
+  projectsRef.current = projects
+  const projectOf = (root?: string) => projects.find((p) => p.root === (root ?? client.root))
+  const clientFor = (root?: string) => projectOf(root)?.client ?? client
+  const languagesOf = (root?: string) => projectOf(root)?.languages ?? languages
+  const setFolders = workspace.set
+  const addFolder = setFolders && ((dir: string) => setFolders([...workspace.folders, dir]).catch(() => {}))
+
+  // The project being worked in: the one the active tab's file is in, else
+  // the first.
+  const activeRoot =
+    activeTab && activeTab.kind !== 'logs' && !(activeTab.path.startsWith('/') && !activeTab.root)
+      ? (activeTab.root ?? client.root)
+      : undefined
+  const currentProject = projectOf(activeRoot) ?? projects[0]
+  const statusOf = (root?: string) => gits[root ?? client.root]?.status ?? null
+  const changeCount = projects.reduce((n, p) => n + (gits[p.root]?.status?.changes.length ?? 0), 0)
+  const changesProject = (changesRoot && projectOf(changesRoot)) || currentProject
+  const logProject = (logRoot && projectOf(logRoot)) || currentProject
+  const projectPicker = (value: string | undefined, onPick: (root: string) => void) =>
+    projects.length > 1 && (
+      <select
+        className="code-project-picker"
+        aria-label="Project"
+        value={value}
+        onChange={(e) => onPick(e.target.value)}
+      >
+        {projects.map((p) => (
+          <option key={p.root} value={p.root}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+    )
+  const rootOf = (p: Project) => (p.root === client.root ? undefined : p.root)
+  // projectMenu is a project's own menu, at the top of its row's.
+  const projectMenu = (p: Project, i: number): MenuItem[] => [
+    {
+      label: 'Move Up',
+      disabled: !setFolders || i === 0,
+      onSelect: () => {
+        const f = [...workspace.folders]
+        ;[f[i - 1], f[i]] = [f[i], f[i - 1]]
+        setFolders?.(f).catch(() => {})
+      },
+    },
+    {
+      label: 'Move Down',
+      disabled: !setFolders || i === projects.length - 1,
+      onSelect: () => {
+        const f = [...workspace.folders]
+        ;[f[i + 1], f[i]] = [f[i], f[i + 1]]
+        setFolders?.(f).catch(() => {})
+      },
+    },
+    { label: 'Reveal on Computer', onSelect: () => revealOnComputer(p.root) },
+    'separator',
+    { label: 'Open Alone in This Tab', onSelect: () => onFolder(p.root === client.home ? '' : p.root) },
+    {
+      label: 'Remove from Workspace',
+      detail: 'its files stay where they are',
+      disabled: !setFolders || projects.length < 2,
+      onSelect: () => setFolders?.(workspace.folders.filter((f) => f !== p.root)).catch(() => {}),
+    },
+  ]
+
+  // projectLabel names the project a tab's file is in, where there are
+  // several.
+  const projectLabel = (t: Tab) =>
+    projects.length > 1 && (t.kind === 'file' || t.kind === 'diff' || t.kind === 'compare') && !(t.path.startsWith('/') && !t.root)
+      ? projectOf(t.root)?.name
+      : undefined
+
+  const problems = useProblems(projects.length ? projects.map((p) => p.languages) : [languages])
   const problemCount = counts(problems)
 
   const recent = useMemo(
@@ -635,9 +759,12 @@ function CodeView({
           .flatMap((g) => g.tabs)
           .reverse()
           .filter((t) => t.kind === 'file')
-          .map((t) => t.path),
+          .map((t) => JSON.stringify([t.path, t.root ?? ''])),
       ),
-    ],
+    ].map((k) => {
+      const [path, root] = JSON.parse(k) as [string, string]
+      return { path, root: root || undefined }
+    }),
     [store.groups],
   )
 
@@ -852,45 +979,66 @@ function CodeView({
       onContextMenu={(e) => stripeMenu.open(e, dockMenu(name))}
     >
       {toolIcons[name]}
-      {name === 'changes' && !!status?.changes.length && <span className="code-stripe-count">{status.changes.length}</span>}
+      {name === 'changes' && changeCount > 0 && <span className="code-stripe-count">{changeCount}</span>}
     </StripeButton>
   )
 
   const toolBody = (name: ToolName) =>
     name === 'project' ? (
-      <ProjectView
-        client={client}
+      <WorkspaceView
         env={scope}
-        status={status}
-        selected={activeTab?.path ?? null}
-        reveal={reveal}
-        onOpen={(path, view, stay) => {
-          open({ kind: 'file', path, view })
-          if (stay) setJump((x) => ({ path, line: 0, focus: false, n: (x?.n ?? 0) + 1, group: store.focus }))
+        projects={projects}
+        statuses={Object.fromEntries(projects.map((p) => [p.root, statusOf(p.root)]))}
+        alone={folder !== ''}
+        projectMenu={projectMenu}
+        tree={(p, embedded) => {
+          const r = rootOf(p)
+          const mine = (activeTab?.root ?? undefined) === r && activeTab?.kind === 'file'
+          return (
+            <ProjectView
+              key={p.root}
+              client={p.client}
+              env={r ? `${scope}:${p.root}` : scope}
+              status={statusOf(p.root)}
+              selected={mine ? (activeTab?.path ?? null) : null}
+              reveal={reveal && reveal.root === r ? reveal : null}
+              embedded={embedded}
+              onOpen={(path, view, stay) => {
+                open({ kind: 'file', path, view, root: r })
+                if (stay)
+                  setJump((x) => ({ path, root: r, line: 0, focus: false, n: (x?.n ?? 0) + 1, group: store.focus }))
+              }}
+              onTab={(tab) => open({ ...tab, root: r })}
+              onDiff={(path) => open({ kind: 'diff', path, root: r })}
+              onTerminal={openTerminal}
+              onGotoFile={() => setPopup('goto')}
+              onOpenFolder={() => setPopup('folder')}
+              onFolderHere={(dir) => onFolder(dir === client.home ? '' : dir)}
+              onFind={(dir, replace) => findInFolder(dir, replace, r)}
+              onHistory={(path) => showHistory(path, p.root)}
+              onAnnotate={(path) => openAt({ path, root: r, line: 0, blame: true })}
+              onMoved={(pairs) => moved(pairs, r)}
+              onHide={() => hideTool('project')}
+            />
+          )
         }}
-        onTab={open}
-        onDiff={(path) => open({ kind: 'diff', path })}
-        onTerminal={openTerminal}
+        onAdd={() => setPopup('folder')}
         onGotoFile={() => setPopup('goto')}
-        onOpenFolder={() => setPopup('folder')}
-        onFolderHere={(dir) => onFolder(dir === client.home ? '' : dir)}
-        onFind={findInFolder}
-        onHistory={showHistory}
-        onAnnotate={(path) => openAt({ path, line: 0, blame: true })}
-        onMoved={moved}
+        onLocate={() => activeTab && revealInProject(activeTab.path, activeTab.root)}
+        onBack={() => onFolder('')}
         onHide={() => hideTool('project')}
       />
     ) : name === 'computer' ? (
       <ComputerView
         client={client}
         env={scope}
-        projects={[]}
+        projects={projects}
         pinned={pinned}
         onPin={pin}
-        onOpenFile={(abs) =>
-          open({ kind: 'file', path: abs.startsWith(client.root + '/') ? abs.slice(client.root.length + 1) : abs })
-        }
+        reveal={computerAt}
+        onOpenFile={(abs) => open({ kind: 'file', path: abs })}
         onTerminal={(dir) => openTerminal(dir)}
+        onAddToWorkspace={addFolder ?? undefined}
         onOpenAlone={(dir) => onFolder(dir === client.home ? '' : dir)}
         onHide={() => hideTool('computer')}
       />
@@ -918,16 +1066,18 @@ function CodeView({
         onMore={showPerformancePage}
         onHide={() => hideTool('performance')}
       />
-    ) : (
+    ) : changesProject ? (
       <ChangesView
-        client={client}
-        status={status}
-        reload={reloadStatus}
-        onDiff={(path, against) => open({ kind: 'diff', path, ...against })}
-        onOpen={(path) => open({ kind: 'file', path })}
+        key={changesProject.root}
+        client={changesProject.client}
+        status={statusOf(changesProject.root)}
+        reload={gits[changesProject.root]?.reload ?? (() => {})}
+        projectPicker={projectPicker(changesProject.root, setChangesRoot)}
+        onDiff={(path, against) => open({ kind: 'diff', path, ...against, root: rootOf(changesProject) })}
+        onOpen={(path) => open({ kind: 'file', path, root: rootOf(changesProject) })}
         onHide={() => hideTool('changes')}
       />
-    )
+    ) : null
 
   // A side's panel holds every window docked there, showing one of each
   // half, one over the other when both are open; the others keep their
@@ -967,13 +1117,16 @@ function CodeView({
   // Using either makes it the group in use.
   const editorGroup = (g: TabGroup, i: number) => (
     <EditorArea
-      client={client}
+      clientFor={clientFor}
+      languagesFor={languagesOf}
+      statusOf={statusOf}
+      projectLabel={projectLabel}
+      onOutside={{ reveal: revealOnComputer, add: addFolder ?? undefined }}
       tabs={g.tabs}
       active={g.active}
       opened={i === store.focus ? opened : 0}
       jump={jump?.group === i ? jump : null}
       user={user}
-      status={status}
       canReopen={canReopen}
       split={{ groups: store.groups.length, focused: store.groups.length > 1 && i === store.focus }}
       onFocus={() => focusGroup(i)}
@@ -1007,6 +1160,7 @@ function CodeView({
   const left = toolNames.filter((n) => sides[n] === 'left')
   const right = toolNames.filter((n) => sides[n] === 'right')
   // The branch the folder's repository, or else its first, is on.
+  const status = statusOf(currentProject?.root)
   const branch = status?.repos.find((r) => r.branch)
   // The row's sizes are remembered for each set of sides in use.
   const arrangement = `${left.length > 0 ? 'left' : ''}|${right.length > 0 ? 'right' : ''}`
@@ -1014,6 +1168,13 @@ function CodeView({
   return (
     <LanguagesContext.Provider value={languages}>
       <div className="workspace">
+        {projects.map((p) => (
+          <ProjectGit
+            key={p.root}
+            client={p.client}
+            onStatus={(st, reload) => setGits((g) => ({ ...g, [p.root]: { status: st, reload } }))}
+          />
+        ))}
         <div className="code-page">
           <Stripe side="left" over={dragging?.over === 'left'}>
             {docked('left', 'top').map(toolButton)}
@@ -1118,7 +1279,7 @@ function CodeView({
                   </div>
                   <div className="code-side-slot" hidden={bottom !== 'find'}>
                     <UsagesView
-                      client={client}
+                      clientFor={clientFor}
                       usages={usages}
                       onJump={openAt}
                       onHide={() => fold('terminal', false)}
@@ -1129,14 +1290,18 @@ function CodeView({
                   </div>
                   {logSeen && (
                     <div className="code-side-slot" hidden={bottom !== 'log'}>
-                      <GitLog
-                        client={client}
-                        repos={status?.repos ?? []}
-                        focus={logFocus}
-                        history={logHistory}
-                        onDiff={(path, against) => open({ kind: 'diff', path, ...against })}
-                        onHide={() => fold('terminal', false)}
-                      />
+                      {logProject && (
+                        <GitLog
+                          key={logProject.root}
+                          client={logProject.client}
+                          repos={statusOf(logProject.root)?.repos ?? []}
+                          focus={logFocus}
+                          history={logHistory}
+                          projectPicker={projectPicker(logProject.root, setLogRoot)}
+                          onDiff={(path, against) => open({ kind: 'diff', path, ...against, root: rootOf(logProject) })}
+                          onHide={() => fold('terminal', false)}
+                        />
+                      )}
                     </div>
                   )}
                   {bottom === 'logs' && (
@@ -1163,6 +1328,7 @@ function CodeView({
           {(popup === 'goto' || popup === 'everywhere') && (
             <GotoFile
               client={client}
+              projects={projects}
               title={popup === 'goto' ? 'Go to File' : 'Search Everywhere'}
               recent={recent}
               onOpen={openAt}
@@ -1171,7 +1337,9 @@ function CodeView({
           )}
           {popup === 'find' && (
             <FindInFiles
-              client={client}
+              client={clientFor(findIn.root)}
+              projects={projects}
+              root={findIn.root ?? (findIn.dir !== undefined ? client.root : undefined)}
               dir={findIn.dir}
               replace={findIn.replace}
               onOpen={openAt}
@@ -1186,9 +1354,22 @@ function CodeView({
             />
           )}
           {popup === 'symbol' && (
-            <GotoSymbol client={client} languages={languages} onOpen={openAt} onClose={() => setPopup(null)} />
+            <GotoSymbol
+              languages={projects.length ? projects.map((p) => p.languages) : [languages]}
+              place={(abs) => place(abs)}
+              onOpen={openAt}
+              onClose={() => setPopup(null)}
+            />
           )}
-          {popup === 'folder' && <OpenFolder client={client} onChoose={onFolder} onClose={() => setPopup(null)} />}
+          {popup === 'folder' && (
+            <OpenFolder
+              client={client}
+              onChoose={onFolder}
+              onAdd={addFolder ?? undefined}
+              have={workspace.folders}
+              onClose={() => setPopup(null)}
+            />
+          )}
         </div>
         <StatusBar
           env={environment}

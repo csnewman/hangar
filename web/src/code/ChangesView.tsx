@@ -10,7 +10,7 @@ import {
   RefreshCw,
   Undo2,
 } from 'lucide-react'
-import { useState, type MouseEvent } from 'react'
+import { useState, type MouseEvent, type ReactNode } from 'react'
 
 import { BranchChanges, changeWhere, type DiffAgainst } from './BranchChanges'
 import { BranchPicker, type PickerAction } from './BranchPicker'
@@ -37,6 +37,7 @@ export function ChangesView({
   onDiff,
   onOpen,
   onHide,
+  projectPicker,
 }: {
   client: CodeClient
   status: GitStatus | null
@@ -44,6 +45,9 @@ export function ChangesView({
   onDiff: (path: string, against?: DiffAgainst) => void
   onOpen: (path: string) => void
   onHide: () => void
+  // projectPicker chooses which project's changes are shown, when there
+  // are more.
+  projectPicker?: ReactNode
 }) {
   const [view, setView] = useState<'local' | 'branch'>('local')
   const [branchRepo, setBranchRepo] = useState('')
@@ -328,7 +332,12 @@ export function ChangesView({
   return (
     <ToolWindow
       title="Changes"
-      extra={one && branchButton(one)}
+      extra={
+        <>
+          {projectPicker}
+          {one && branchButton(one)}
+        </>
+      }
       actions={
         status?.repo && (
           <>

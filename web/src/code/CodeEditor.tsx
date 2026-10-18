@@ -546,6 +546,7 @@ export function CodeEditor({
         view,
         edits,
         indent,
+        root: client.root,
         server: serverRef.current,
       })
     const view: EditorView = new EditorView({

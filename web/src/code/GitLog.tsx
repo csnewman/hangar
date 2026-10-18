@@ -1,5 +1,5 @@
 import { ChevronDown, Copy, File, GitBranch, History, RefreshCw, Tag, X } from 'lucide-react'
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react'
 
 import { changeWhere, type DiffAgainst } from './BranchChanges'
 import { BranchPicker, type PickerAction } from './BranchPicker'
@@ -28,9 +28,13 @@ export function GitLog({
   history,
   onDiff,
   onHide,
+  projectPicker,
 }: {
   client: CodeClient
   repos: Repo[]
+  // projectPicker chooses which project's history is shown, when there
+  // are more.
+  projectPicker?: ReactNode
   // focus is a commit to find and choose, each time it changes, in the
   // repository given (a path in it).
   focus?: { hash: string; repo?: string; n: number } | null
@@ -226,6 +230,7 @@ export function GitLog({
       title="Git Log"
       extra={
         <>
+          {projectPicker}
           <RepoPicker
             repos={repos}
             value={repo}

@@ -1,28 +1,36 @@
 import { ChevronDown, ChevronRight, CircleX, File, Info, TriangleAlert } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { Languages, Problem } from './lsp'
 import type { Jump } from './Search'
 import { ToolWindow } from './ToolWindow'
 
-// useProblems is every problem the tab's language servers have found, kept
-// up as they find more.
-export function useProblems(languages: Languages): Problem[] {
-  const [snap, setSnap] = useState(() => languages.allProblems())
+// useProblems is every problem the projects' language servers have found,
+// kept up as they find more.
+export function useProblems(all: Languages[]): Problem[] {
+  const all_ = useRef(all)
+  all_.current = all
+  const key = all.map((_, i) => i).join()
+  const gather = () => all_.current.flatMap((l) => l.allProblems())
+  const [snap, setSnap] = useState(gather)
   useEffect(() => {
-    setSnap(languages.allProblems())
+    setSnap(gather())
     // Servers publish file by file, often many at once: drawn once for each
     // burst.
     let timer: ReturnType<typeof setTimeout> | undefined
-    const off = languages.onProblems(() => {
-      clearTimeout(timer)
-      timer = setTimeout(() => setSnap(languages.allProblems()), 100)
-    })
+    const offs = all_.current.map((l) =>
+      l.onProblems(() => {
+        clearTimeout(timer)
+        timer = setTimeout(() => setSnap(gather()), 100)
+      }),
+    )
     return () => {
       clearTimeout(timer)
-      off()
+      offs.forEach((off) => off())
     }
-  }, [languages])
+    // The servers change with the projects, which the list follows.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, ...all])
   return snap
 }
 
@@ -65,7 +73,8 @@ export function ProblemsView({
     const m = new Map<string, Problem[]>()
     for (const p of problems) {
       if (p.severity > 3 && !hints) continue
-      m.set(p.path, [...(m.get(p.path) ?? []), p])
+      const key = `${p.root}\0${p.path}`
+      m.set(key, [...(m.get(key) ?? []), p])
     }
     const worst = (ps: Problem[]) => Math.min(...ps.map((p) => p.severity))
     return [...m.entries()]
@@ -75,6 +84,7 @@ export function ProblemsView({
       .sort(([a, pa], [b, pb]) => worst(pa) - worst(pb) || a.localeCompare(b))
   }, [problems, hints])
   const { errors, warnings } = counts(problems)
+  const projects = new Set(problems.map((p) => p.root)).size
   const shown = files.reduce((n, [, ps]) => n + ps.length, 0)
 
   return (
@@ -105,18 +115,20 @@ export function ProblemsView({
             language's.
           </p>
         )}
-        {files.map(([path, ps]) => {
-          const open = !closed.has(path)
+        {files.map(([key, ps]) => {
+          const path = ps[0].path
+          const open = !closed.has(key)
           const cut = path.lastIndexOf('/') + 1
+          const project = projects > 1 ? ps[0].root.slice(ps[0].root.lastIndexOf('/') + 1) : ''
           return (
-            <div key={path}>
+            <div key={key}>
               <div
                 className="code-problems-file"
                 onClick={() =>
                   setClosed((c) => {
                     const n = new Set(c)
-                    if (open) n.add(path)
-                    else n.delete(path)
+                    if (open) n.add(key)
+                    else n.delete(key)
                     return n
                   })
                 }
@@ -124,6 +136,7 @@ export function ProblemsView({
                 {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                 <File size={13} className="code-icon-file" />
                 <span className="strong">{path.slice(cut)}</span>
+                {project && <span className="code-tab-project">{project}</span>}
                 <span className="muted">{path.slice(0, cut).replace(/\/$/, '')}</span>
                 <span className="muted small">{ps.length}</span>
               </div>
@@ -133,7 +146,7 @@ export function ProblemsView({
                     key={i}
                     className="code-problems-row"
                     title={`${p.message}${p.source ? ` (${p.source}${p.code ? ` ${p.code}` : ''})` : ''}`}
-                    onClick={() => onJump({ path: p.path, line: p.line, col: p.col })}
+                    onClick={() => onJump({ path: p.path, root: p.root, line: p.line, col: p.col })}
                   >
                     {severityIcon(p.severity)}
                     <span className="code-problems-message">{p.message.split('\n')[0]}</span>

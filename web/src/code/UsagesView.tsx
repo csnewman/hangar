@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight, File } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import type { CodeClient } from './client'
+import { projectName } from './projects'
 import type { Usage, Usages } from './lsp'
 import { Preview, type Jump } from './Search'
 import { ToolWindow } from './ToolWindow'
@@ -12,12 +13,13 @@ import { ToolWindow } from './ToolWindow'
 // click or Enter opens its file there. It stays as files are opened from
 // it.
 export function UsagesView({
-  client,
+  clientFor,
   usages,
   onJump,
   onHide,
 }: {
-  client: CodeClient
+  // clientFor is a usage's project's connection, to preview it.
+  clientFor: (root?: string) => CodeClient
   usages: Usages | null
   onJump: (j: Jump) => void
   onHide: () => void
@@ -32,7 +34,10 @@ export function UsagesView({
 
   const files = useMemo(() => {
     const m = new Map<string, Usage[]>()
-    for (const u of usages?.usages ?? []) m.set(u.path, [...(m.get(u.path) ?? []), u])
+    for (const u of usages?.usages ?? []) {
+      const key = u.root ? `${u.root}/${u.path}` : u.path
+      m.set(key, [...(m.get(key) ?? []), u])
+    }
     return [...m.entries()]
   }, [usages])
   // The usages in the order shown, for the arrow keys.
@@ -42,7 +47,7 @@ export function UsagesView({
     list.current?.querySelector('[aria-selected=true]')?.scrollIntoView({ block: 'nearest' })
   }, [sel])
 
-  const open = (u: Usage) => onJump({ path: u.path, line: u.line, col: u.col, focus: true })
+  const open = (u: Usage) => onJump({ path: u.path, root: u.root, line: u.line, col: u.col, focus: true })
   const count = usages?.usages.length ?? 0
   const text = usages?.kind === 'text'
   const what = text ? `“${usages?.symbol}”` : `usages of ${usages?.symbol}`
@@ -113,8 +118,11 @@ export function UsagesView({
                 >
                   {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                   <File size={13} className="code-icon-file" />
-                  <span>{path.split('/').pop()}</span>
-                  <span className="muted small">{path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : ''}</span>
+                  <span>{us[0].path.split('/').pop()}</span>
+                  {us[0].root && <span className="code-tab-project">{projectName(us[0].root)}</span>}
+                  <span className="muted small">
+                    {us[0].path.includes('/') ? us[0].path.slice(0, us[0].path.lastIndexOf('/')) : ''}
+                  </span>
                   <span className="muted small">{us.length}</span>
                 </div>
                 {isOpen &&
@@ -153,7 +161,8 @@ export function UsagesView({
         </div>
         {chosen && (
           <Preview
-            client={client}
+            key={`${chosen.root ?? ''}:${chosen.path}`}
+            client={clientFor(chosen.root)}
             match={{
               path: chosen.path,
               line: chosen.line,

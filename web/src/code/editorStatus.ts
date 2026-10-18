@@ -9,6 +9,8 @@ import type { ServerState } from './lsp'
 // its code, and whether it may be written.
 export type EditorStatus = {
   path: string
+  // root is the folder of the project the file is in: its connection's.
+  root: string
   line: number
   col: number
   // Characters selected, and over how many lines.
@@ -56,6 +58,7 @@ export class EditorStatusStore {
           ? was
           : {
               path,
+              root: '',
               line: 1,
               col: 1,
               selected: 0,

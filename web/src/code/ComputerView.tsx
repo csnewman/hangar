@@ -43,6 +43,7 @@ export function ComputerView({
   onAddToWorkspace,
   onOpenAlone,
   onHide,
+  reveal,
 }: {
   client: CodeClient
   env: string
@@ -58,6 +59,9 @@ export function ComputerView({
   onAddToWorkspace?: (dir: string) => void
   onOpenAlone: (dir: string) => void
   onHide: () => void
+  // reveal shows the folder a path is in, choosing the path, each time it
+  // changes.
+  reveal?: { path: string; n: number } | null
 }) {
   const atKey = `hangar.code.${env}.computer`
   const [at, setAtState] = useState(() => {
@@ -86,6 +90,19 @@ export function ComputerView({
       // Where Computer was is a convenience.
     }
   }
+
+  useEffect(() => {
+    if (!reveal) return
+    client.list(reveal.path).then(
+      () => setAt(reveal.path),
+      () => {
+        setAt(parentOf(reveal.path))
+        setChosen(reveal.path)
+      },
+    )
+    // setAt only writes state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reveal, client])
 
   // The home folder to begin with, once the connection says where it is.
   useEffect(() => {

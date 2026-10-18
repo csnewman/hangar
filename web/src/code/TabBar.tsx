@@ -30,6 +30,9 @@ import { opensAs, viewNames, type FileView } from './views'
 export type Tab = {
   kind: 'file' | 'diff' | 'compare' | 'logs' | 'desktop' | 'environment' | 'performance'
   path: string
+  // root is the project the path is in, when it is not the tab's own
+  // folder: its path is from that project's folder.
+  root?: string
   // other is what a compare tab shows the file beside: another file, or
   // the clipboard (clipboard:<id>).
   other?: string
@@ -43,11 +46,12 @@ export type Tab = {
 }
 
 export const tabKey = (t: Tab) =>
-  t.kind === 'compare'
+  (t.root ? `${t.root}|` : '') +
+  (t.kind === 'compare'
     ? `compare:${t.other}|${t.path}`
     : t.base
       ? `diff@${t.base}${t.to ? `..${t.to}` : ''}:${t.path}`
-      : `${t.kind}${t.view ? `+${t.view}` : ''}:${t.path}`
+      : `${t.kind}${t.view ? `+${t.view}` : ''}:${t.path}`)
 
 export const tabName = (t: Tab) => t.title ?? t.path.split('/').pop() ?? t.path
 
@@ -125,6 +129,7 @@ export function TabBar({
   opened,
   group = 0,
   groups = 1,
+  projectLabel,
   onActivate,
   onClose,
   onMove,
@@ -137,6 +142,9 @@ export function TabBar({
   opened: number
   onActivate: (key: string) => void
   onClose: (key: string) => void
+  // projectLabel names the project a tab's file is in, where there are
+  // several.
+  projectLabel?: (t: Tab) => string | undefined
   // group is which group of editors the bar is, of how many.
   group?: number
   groups?: number
@@ -360,6 +368,8 @@ export function TabBar({
             if (drag?.key === key) cls.push('code-tab-dragged')
             if (key === dropBefore) cls.push('code-tab-drop-before')
             if (key === dropAfter) cls.push('code-tab-drop-after')
+            if (t.kind === 'file' && t.path.startsWith('/') && !t.root) cls.push('code-tab-outside')
+            const label = projectLabel?.(t)
             return (
               <div
                 key={key}
@@ -385,6 +395,7 @@ export function TabBar({
               >
                 {tabIcon(t)}
                 <span>{name}</span>
+                {label && <span className="code-tab-project">{label}</span>}
                 <button
                   type="button"
                   className="code-tab-close"

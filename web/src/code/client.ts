@@ -270,6 +270,11 @@ export type DockerAction = 'start' | 'stop' | 'restart' | 'pause' | 'unpause' | 
 
 export type ConnectionState = 'connecting' | 'live' | 'reconnecting'
 
+// Workspace is the environment's projects: the folders the Code tab shows,
+// and whether the list has been set, or is still the environment's own
+// folder alone.
+export type Workspace = { folders: string[]; saved: boolean }
+
 type Events = {
   state: (s: ConnectionState, why: string) => void
   'fs.changed': (p: { dirs: string[] }) => void
@@ -279,6 +284,8 @@ type Events = {
   'doc.restored': (p: { path: string }) => void
   // Another tab changed the settings.
   'settings.changed': (s: Record<string, unknown>) => void
+  // The workspace's projects changed, in any tab.
+  'workspace.changed': (w: Workspace) => void
   // A language server this tab started stopped.
   'lsp.exited': (p: { server: number; why: string }) => void
   // Something happened to a container or image.
@@ -382,6 +389,7 @@ export class CodeClient {
     'doc.deleted': new Set(),
     'doc.restored': new Set(),
     'settings.changed': new Set(),
+    'workspace.changed': new Set(),
     'lsp.exited': new Set(),
     'docker.changed': new Set(),
     'docker.log': new Set(),
@@ -514,6 +522,8 @@ export class CodeClient {
         this.emit('doc.restored', m.params)
       } else if (m.event === 'settings.changed') {
         this.emit('settings.changed', m.params)
+      } else if (m.event === 'workspace.changed') {
+        this.emit('workspace.changed', m.params)
       } else if (m.event === 'docker.changed') {
         this.emit('docker.changed')
       } else if (m.event === 'docker.log') {
@@ -667,6 +677,17 @@ export class CodeClient {
 
   // settings are the Code tab's, kept in the user's home (shared by their
   // profile by default).
+  // workspace is the environment's projects.
+  workspace() {
+    return this.request<Workspace>('workspace.get')
+  }
+  setWorkspace(folders: string[]) {
+    return this.request<Workspace>('workspace.set', { folders })
+  }
+  // repositories are the git repositories in the home folder, to add.
+  repositories() {
+    return this.request<string[]>('workspace.repos')
+  }
   // previewServer starts the service's server of files for an HTML
   // file's preview, if it is not running, and says its port and the secret
   // its paths begin with.

@@ -4006,3 +4006,147 @@ body.code-tab-dragging * {
   font-size: 11px;
   white-space: nowrap;
 }
+
+/* Which project a tab's file is in, where there are several. */
+.code-tab-project {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+/* A file outside every project: its tab tinted, and a bar over it. */
+.code-tab-outside {
+  background: var(--warn-bg);
+}
+
+.code-outside {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.code-outside-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  min-height: 30px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--warn-border);
+  background: var(--warn-bg);
+  font-size: 12.5px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.code-outside-bar > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.code-outside-body {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+/* The Workspace window: each project's tree, one under the other. */
+.code-workspace {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 0 12px;
+}
+
+.code-workspace-project + .code-workspace-project {
+  border-top: 1px solid var(--border);
+}
+
+.code-tree.code-tree-embedded {
+  flex: none;
+  overflow: visible;
+  padding: 2px 0 4px;
+}
+
+.code-tree-project {
+  cursor: pointer;
+  gap: 5px;
+}
+
+.code-tree-project:hover {
+  background: var(--sidebar-hover);
+}
+
+.code-icon-project {
+  flex: none;
+  color: var(--accent);
+}
+
+.code-tree-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.code-workspace-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 10px 0 24px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.code-workspace-add:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.code-workspace-alone {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 8px 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  font-size: 12px;
+}
+
+/* Which project a window shows, where there are several. */
+.code-project-picker {
+  height: 22px;
+  max-width: 140px;
+  padding: 0 4px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+
+/* A heading among a popup's rows. */
+.code-popup-section {
+  padding: 8px 12px 3px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}

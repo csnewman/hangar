@@ -1,4 +1,5 @@
 import {
+  ChevronDown,
   ChevronRight,
   File,
   FilePlus,
@@ -7,6 +8,7 @@ import {
   FolderInput,
   FolderOpen,
   FolderPlus,
+  GitBranch,
   ListCollapse,
   LocateFixed,
   RefreshCw,
@@ -66,6 +68,54 @@ function loadOptions(): Options {
   }
 }
 
+// The options are every project's tree's, as one: a change shows in each.
+let treeOptions: Options | null = null
+const optionListeners = new Set<() => void>()
+const treeOptionsStore = {
+  get: () => (treeOptions ??= loadOptions()),
+  subscribe: (fn: () => void) => {
+    optionListeners.add(fn)
+    return () => {
+      optionListeners.delete(fn)
+    }
+  },
+  set(o: Partial<Options>) {
+    treeOptions = { ...treeOptionsStore.get(), ...o }
+    try {
+      localStorage.setItem(optionsKey, JSON.stringify(treeOptions))
+    } catch {
+      // Remembering them is a convenience.
+    }
+    for (const fn of optionListeners) fn()
+  },
+}
+
+// treeOptionsMenu is the trees' options, as a menu.
+export function treeOptionsMenu(): MenuItem[] {
+  const o = treeOptionsStore.get()
+  return [
+    {
+      label: 'Always Select Opened File',
+      checked: o.follow,
+      onSelect: () => treeOptionsStore.set({ follow: !o.follow }),
+    },
+    { label: 'Show Hidden Files', checked: o.hidden, onSelect: () => treeOptionsStore.set({ hidden: !o.hidden }) },
+    { label: 'Show Ignored Files', checked: o.ignored, onSelect: () => treeOptionsStore.set({ ignored: !o.ignored }) },
+  ]
+}
+
+// Embedded is a project's tree shown among others in the Workspace window:
+// its row, which folds it and has the project's own menu, and no toolbar
+// of its own.
+export type Embedded = {
+  branch?: string
+  collapsed: boolean
+  onCollapse: () => void
+  menu: MenuItem[]
+  // collapseAll closes every folder each time it changes.
+  collapseAll: number
+}
+
 // A dialog the tree has open.
 type Dialog =
   | { kind: 'transfer'; op: 'copy' | 'move'; paths: string[]; dir: string }
@@ -100,6 +150,7 @@ export function ProjectView({
   onAnnotate,
   onMoved,
   onHide,
+  embedded,
 }: {
   client: CodeClient
   env: string
@@ -129,6 +180,8 @@ export function ProjectView({
   // onMoved says where paths went, for the tabs open on them to follow.
   onMoved: (moved: Moved) => void
   onHide: () => void
+  // embedded shows the tree among the Workspace window's others.
+  embedded?: Embedded
 }) {
   const storeKey = `hangar.code.${env}.expanded`
   const [root, setRoot] = useState(client.root)
@@ -150,17 +203,7 @@ export function ProjectView({
   const [done, setDone] = useState<string>('')
   const [busy, setBusy] = useState('')
   const [dialog, setDialog] = useState<Dialog>(null)
-  const [options, setOptionsState] = useState(loadOptions)
-  const setOptions = (o: Partial<Options>) =>
-    setOptionsState((x) => {
-      const next = { ...x, ...o }
-      try {
-        localStorage.setItem(optionsKey, JSON.stringify(next))
-      } catch {
-        // Remembering them is a convenience.
-      }
-      return next
-    })
+  const options = useSyncExternalStore(treeOptionsStore.subscribe, treeOptionsStore.get)
   const expandedRef = useRef(expanded)
   expandedRef.current = expanded
   // The rows chosen, and the one a Shift range is from. They are kept in
@@ -982,103 +1025,79 @@ export function ProjectView({
 
   const queryFound = !query || rows().some((r) => match(r.name, query))
 
-  const optionsMenu = (b: DOMRect): void =>
-    menu.openAt(
-      b.right,
-      b.bottom + 2,
-      [
-        {
-          label: 'Always Select Opened File',
-          checked: options.follow,
-          onSelect: () => setOptions({ follow: !options.follow }),
-        },
-        {
-          label: 'Show Hidden Files',
-          checked: options.hidden,
-          onSelect: () => setOptions({ hidden: !options.hidden }),
-        },
-        {
-          label: 'Show Ignored Files',
-          checked: options.ignored,
-          onSelect: () => setOptions({ ignored: !options.ignored }),
-        },
-      ],
-      'right',
-    )
+  const optionsMenu = (b: DOMRect): void => menu.openAt(b.right, b.bottom + 2, treeOptionsMenu(), 'right')
+
+  // Every folder closed when the Workspace window asks.
+  const collapseAll = embedded?.collapseAll ?? 0
+  useEffect(() => {
+    if (collapseAll) setExpanded(new Set())
+  }, [collapseAll])
 
   const rootName = root ? nameOf(root) || root : 'Project'
-  return (
-    <ToolWindow
-      title="Project"
-      onHide={onHide}
-      actions={
-        <>
-          <button
-            type="button"
-            className="code-tool-btn"
-            title={`Go to File (${shortcut('Mod+Shift+O')})`}
-            onClick={onGotoFile}
-          >
-            <FileSearch size={14} />
-          </button>
-          <button
-            type="button"
-            className="code-tool-btn"
-            title="Open another folder in this tab"
-            onClick={onOpenFolder}
-          >
-            <FolderInput size={14} />
-          </button>
-          <button
-            type="button"
-            className="code-tool-btn"
-            title="New file"
-            onClick={() => startNew('file', folderFor(chosen.length === 1 ? chosen[0] : null))}
-          >
-            <FilePlus size={14} />
-          </button>
-          <button
-            type="button"
-            className="code-tool-btn"
-            title="New folder"
-            onClick={() => startNew('dir', folderFor(chosen.length === 1 ? chosen[0] : null))}
-          >
-            <FolderPlus size={14} />
-          </button>
-          <button
-            type="button"
-            className="code-tool-btn"
-            title="Select the opened file"
-            disabled={!selected || selected.startsWith('/')}
-            onClick={() => selected && show(selected)}
-          >
-            <LocateFixed size={13} />
-          </button>
-          <button type="button" className="code-tool-btn" title="Collapse all" onClick={() => setExpanded(new Set())}>
-            <ListCollapse size={14} />
-          </button>
-          <button
-            type="button"
-            className="code-tool-btn"
-            title="Reload from disk"
-            onClick={() => {
-              load('')
-              for (const d of expanded) load(d)
-            }}
-          >
-            <RefreshCw size={13} />
-          </button>
-          <button
-            type="button"
-            className="code-tool-btn"
-            title="Options"
-            onClick={(e) => optionsMenu(e.currentTarget.getBoundingClientRect())}
-          >
-            <Settings2 size={13} />
-          </button>
-        </>
-      }
-    >
+  const toolbar = (
+    <>
+      <button
+        type="button"
+        className="code-tool-btn"
+        title={`Go to File (${shortcut('Mod+Shift+O')})`}
+        onClick={onGotoFile}
+      >
+        <FileSearch size={14} />
+      </button>
+      <button type="button" className="code-tool-btn" title="Open another folder in this tab" onClick={onOpenFolder}>
+        <FolderInput size={14} />
+      </button>
+      <button
+        type="button"
+        className="code-tool-btn"
+        title="New file"
+        onClick={() => startNew('file', folderFor(chosen.length === 1 ? chosen[0] : null))}
+      >
+        <FilePlus size={14} />
+      </button>
+      <button
+        type="button"
+        className="code-tool-btn"
+        title="New folder"
+        onClick={() => startNew('dir', folderFor(chosen.length === 1 ? chosen[0] : null))}
+      >
+        <FolderPlus size={14} />
+      </button>
+      <button
+        type="button"
+        className="code-tool-btn"
+        title="Select the opened file"
+        disabled={!selected || selected.startsWith('/')}
+        onClick={() => selected && show(selected)}
+      >
+        <LocateFixed size={13} />
+      </button>
+      <button type="button" className="code-tool-btn" title="Collapse all" onClick={() => setExpanded(new Set())}>
+        <ListCollapse size={14} />
+      </button>
+      <button
+        type="button"
+        className="code-tool-btn"
+        title="Reload from disk"
+        onClick={() => {
+          load('')
+          for (const d of expanded) load(d)
+        }}
+      >
+        <RefreshCw size={13} />
+      </button>
+      <button
+        type="button"
+        className="code-tool-btn"
+        title="Options"
+        onClick={(e) => optionsMenu(e.currentTarget.getBoundingClientRect())}
+      >
+        <Settings2 size={13} />
+      </button>
+    </>
+  )
+  const body = (
+    <>
       {query && (
         <div className={queryFound ? 'code-speed' : 'code-speed code-speed-none'}>
           <Search size={12} />
@@ -1086,7 +1105,9 @@ export function ProjectView({
         </div>
       )}
       <div
-        className={dropAt === '' ? 'code-tree code-tree-drop' : 'code-tree'}
+        className={['code-tree', dropAt === '' && 'code-tree-drop', embedded && 'code-tree-embedded']
+          .filter(Boolean)
+          .join(' ')}
         ref={tree}
         tabIndex={0}
         onKeyDown={onKey}
@@ -1109,12 +1130,41 @@ export function ProjectView({
           if (ev.target === ev.currentTarget) setChosen([])
         }}
       >
-        <div className="code-tree-root" title={root}>
-          <FolderOpen size={14} className="code-icon-dir" />
-          <span className="strong">{rootName}</span>
-          <span className="muted small code-tree-rootpath">{root}</span>
-        </div>
-        {renderDir('', 1)}
+        {embedded ? (
+          <div
+            className="code-tree-root code-tree-project"
+            title={root}
+            onClick={embedded.onCollapse}
+            onContextMenu={(ev) => {
+              ev.preventDefault()
+              ev.stopPropagation()
+              setChosen([])
+              menu.open(ev, [...embedded.menu, 'separator', ...entryMenu('', true, ev.clientX, ev.clientY)])
+            }}
+          >
+            {embedded.collapsed ? (
+              <ChevronRight size={12} className="code-chev" />
+            ) : (
+              <ChevronDown size={12} className="code-chev" />
+            )}
+            <Folder size={14} className="code-icon-project" />
+            <span className="strong">{rootName}</span>
+            <span className="muted small code-tree-rootpath">{root}</span>
+            {embedded.branch && (
+              <span className="code-tree-branch">
+                <GitBranch size={10} />
+                {embedded.branch}
+              </span>
+            )}
+          </div>
+        ) : (
+          <div className="code-tree-root" title={root}>
+            <FolderOpen size={14} className="code-icon-dir" />
+            <span className="strong">{rootName}</span>
+            <span className="muted small code-tree-rootpath">{root}</span>
+          </div>
+        )}
+        {!embedded?.collapsed && renderDir('', 1)}
       </div>
       {(error || done || busy) && (
         <div className={error ? 'code-tree-status code-note-error' : 'code-tree-status'}>
@@ -1163,6 +1213,12 @@ export function ProjectView({
           }}
         />
       )}
+    </>
+  )
+  if (embedded) return <div className="code-project">{body}</div>
+  return (
+    <ToolWindow title="Project" onHide={onHide} actions={toolbar}>
+      {body}
     </ToolWindow>
   )
 }
