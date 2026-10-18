@@ -388,9 +388,9 @@ function Banners({ env }: { env: Environment }) {
             {!u.checked &&
               (image.stopped
                 ? 'Checking what upgrading would leave hidden…'
-                : 'Stop it to check what upgrading would leave hidden.')}
-            {u.error && <>Its writable disk could not be compared with it: {u.error}</>}
-            {clean && 'Nothing it has changed hides a file the newer build changes.'}
+                : 'Stop the environment to check what upgrading would leave hidden.')}
+            {u.error && <>The environment’s changes could not be compared with the newer build: {u.error}</>}
+            {clean && 'None of the environment’s changes hide a file the newer build changes.'}
             {risky && (
               <>
                 {u.packages && 'Packages have been installed in it, whose database would hide the newer one. '}

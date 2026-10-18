@@ -306,7 +306,7 @@ function LaunchRow({ env, open, owner, phone }: { env: Environment; open: boolea
           </a>
           {owner && <span className="pane-pill pane-pill-grey">{env.owner}</span>}
           {open && (
-            <span className="launch-tab" title="Its workspace is open in another tab">
+            <span className="launch-tab" title="Open in another browser tab">
               <AppWindow size={12} />
               tab open
             </span>

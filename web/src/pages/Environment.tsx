@@ -137,16 +137,16 @@ function PhoneOpen({ env }: { env: Environment }) {
   const running = env.phase === 'running'
   const s = env.stats
   const rows = [
-    { to: 'terminal', label: 'Terminal', sub: 'Its sessions, and new ones', icon: SquareTerminal },
+    { to: 'terminal', label: 'Terminal', sub: 'Open sessions, or start a new one', icon: SquareTerminal },
     { to: 'code', label: 'Code', sub: 'Files and changes', icon: FileCode2 },
-    ...(env.spec.display === 'desktop' ? [{ to: 'desktop', label: 'Desktop', sub: '', icon: Monitor }] : []),
+    ...(env.spec.display === 'desktop' ? [{ to: 'desktop', label: 'Desktop', sub: 'The Linux desktop', icon: Monitor }] : []),
     {
       to: 'performance',
       label: 'Performance',
       sub: running && s ? `CPU ${formatPercent(s.cpu_percent)} · ${formatMemory(s.memory_used_mib)}` : '',
       icon: Activity,
     },
-    { to: 'logs', label: 'Logs', sub: 'Its console, and its worker’s account of it', icon: ScrollText },
+    { to: 'logs', label: 'Logs', sub: 'Console output and worker messages', icon: ScrollText },
   ]
   return (
     <>
