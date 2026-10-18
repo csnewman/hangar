@@ -6,7 +6,7 @@
 #   dev/mac-worker.sh stop     stop it, powering its environments off
 #
 # It needs dev/krun-build.sh's hangar-krun and mkfs.ext4, and
-# dev/kernel-dev.sh's kernel (which has virtio-mmio).
+# `dev/kernel-dev.sh 16k`'s kernel.
 set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
 dir=$repo/out/mac-worker

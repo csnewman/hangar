@@ -59,6 +59,7 @@ func LoginShell(fallback string) Shell {
 			"TERM_PROGRAM=hangar",
 			"LANG=C.UTF-8",
 		}
+		cmd.Env = append(cmd.Env, sysuser.MachineEnv()...)
 
 		if err := sysuser.RunAs(cmd, u); err != nil {
 			return nil, err

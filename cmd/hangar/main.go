@@ -165,6 +165,7 @@ func buildKernel(ctx context.Context, argv []string) error {
 	verbose := fs.Bool("v", false, "show build output")
 	base := fs.String("base", "tinyconfig", "kconfig base target the fragment merges onto")
 	configOnly := fs.Bool("config-only", false, "resolve and verify the config without compiling")
+	pages16k := fs.Bool("16k", false, "16 KiB pages: the arm64 kernel for workers on a Mac")
 	if err := fs.Parse(argv); err != nil {
 		return err
 	}
@@ -182,6 +183,7 @@ func buildKernel(ctx context.Context, argv []string) error {
 		Verbose:    *verbose,
 		Base:       *base,
 		ConfigOnly: *configOnly,
+		Pages16K:   *pages16k,
 	})
 	if err != nil {
 		return err

@@ -172,6 +172,7 @@ func (s *Server) start(ctx context.Context, u *user.User, root string) (*process
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"LANG=C.UTF-8",
 	}
+	cmd.Env = append(cmd.Env, sysuser.MachineEnv()...)
 	cmd.Stdout = logOut
 	cmd.Stderr = logOut
 	if err := sysuser.RunAs(cmd, u); err != nil {

@@ -154,6 +154,9 @@ jobs:
         with:
           go-version: '1.27'
       - run: go run ./cmd/hangar kernel --config-only -o out/kernel -v
+      # The arm64 kernel with 16 KiB pages, for workers on a Mac.
+      - if: matrix.runner == 'ubuntu-26.04-arm'
+        run: go run ./cmd/hangar kernel --config-only -16k -o out/kernel-16k -v
 
   gpu:
     # hangar-gpu links against virglrenderer with the patches in

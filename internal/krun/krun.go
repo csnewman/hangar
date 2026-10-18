@@ -10,6 +10,8 @@
 package krun
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -36,6 +38,15 @@ type Config struct {
 	// Net, if set, is a unix datagram socket carrying the guest's network
 	// (gvproxy in vfkit mode), with the guest's MAC address.
 	Net *Net `json:"net,omitempty"`
+	// GPU, if set, gives the guest a virtio-gpu: Vulkan through Venus,
+	// rendered by the Mac's GPU with MoltenVK, and no OpenGL of its own.
+	GPU *GPU `json:"gpu,omitempty"`
+}
+
+// GPU is the guest's virtual GPU.
+type GPU struct {
+	// WindowMiB sizes the window the guest maps GPU memory through.
+	WindowMiB int `json:"window_mib"`
 }
 
 // Disk is a virtio-blk device.
@@ -54,6 +65,25 @@ type Net struct {
 // searchPath is where hangar-krun is found beside PATH: what
 // dev/krun-build.sh builds, from the repository's root.
 var searchPath = []string{filepath.Join("out", "krun", "bin", "hangar-krun")}
+
+// Features are what hangar-krun's libkrun was built with.
+type Features struct {
+	GPU bool `json:"gpu"`
+}
+
+// ReadFeatures asks hangar-krun what its libkrun was built with.
+func ReadFeatures(ctx context.Context) (Features, error) {
+	var f Features
+	bin, err := Find()
+	if err != nil {
+		return f, err
+	}
+	out, err := exec.CommandContext(ctx, bin, "-features").Output()
+	if err != nil {
+		return f, fmt.Errorf("asking hangar-krun what it offers: %w", err)
+	}
+	return f, json.Unmarshal(out, &f)
+}
 
 // Tool locates a program built beside hangar-krun for a worker on macOS,
 // such as mkfs.ext4.

@@ -100,7 +100,18 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 		kc.Net = &krun.Net{Socket: sock, MAC: guestMAC}
 	}
 	if cfg.GPU {
-		cfg.Log.Warn("libkrun gives this machine no virtual GPU: it renders in software")
+		window := cfg.GPUWindowMiB
+		if window == 0 {
+			window = 512
+		}
+		kc.GPU = &krun.GPU{WindowMiB: window}
+		// The GPU is Vulkan alone (Venus), with no OpenGL of its own (virgl),
+		// and Mesa's OpenGL on Vulkan (zink) needs a feature MoltenVK lacks
+		// (robustness2's nullDescriptor). So OpenGL is drawn on the CPU:
+		// left to choose, Mesa would take virgl for the GPU, and the
+		// desktop would draw nothing. Every process gets this, the agent's
+		// sessions too (sysuser.MachineEnv).
+		kc.Cmdline += " systemd.setenv=LIBGL_ALWAYS_SOFTWARE=1"
 	}
 
 	// The agent dials early in the boot, so it is listened for before the

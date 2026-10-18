@@ -1,20 +1,43 @@
 #!/bin/sh
 # Builds what a worker on macOS needs beside itself, from source: libkrun,
-# hangar-krun against it, and mkfs.ext4 (e2fsprogs) for environments'
-# writable disks. Run on the Mac:
+# with virglrenderer for a Venus GPU on MoltenVK, hangar-krun against it,
+# and mkfs.ext4 (e2fsprogs) for environments' writable disks. Run on the
+# Mac:
 #
-#   dev/krun-build.sh       out/krun/bin/{hangar-krun,libkrun.1.dylib,mkfs.ext4}
+#   dev/krun-build.sh       everything in out/krun/bin
 #
-# libkrun is built without its guest init (Hangar's agent is init) and
-# with block and network devices. hangar-krun is signed with the
+# The GPU needs the Vulkan SDK (for MoltenVK), found at $VULKAN_SDK or the
+# newest under ~/VulkanSDK, and libepoxy and meson (brew install libepoxy
+# meson); without the SDK libkrun is built without a GPU. The libraries are
+# copied beside hangar-krun and loaded from there. libkrun is built without
+# its guest init (Hangar's agent is init); hangar-krun is signed with the
 # hypervisor entitlement, without which macOS refuses it a VM.
 set -eu
 version=v1.19.6
+virgl=0.10.4e-krunkit
 e2fsprogs=1.47.3
 repo=$(cd "$(dirname "$0")/.." && pwd)
 out=$repo/out/krun
+bin=$out/bin
 src=$out/libkrun
-mkdir -p "$out/bin"
+mkdir -p "$bin"
+
+sdk=${VULKAN_SDK:-$(ls -d "$HOME"/VulkanSDK/*/macOS 2>/dev/null | sort -V | tail -1)}
+features=blk,net
+if [ -n "$sdk" ] && [ -f "$sdk/lib/libMoltenVK.dylib" ]; then
+    features=blk,net,gpu
+    vdir=$out/virglrenderer-$virgl
+    if [ ! -f "$out/virgl/lib/libvirglrenderer.1.dylib" ]; then
+        [ -d "$vdir" ] || curl -fsSL "https://gitlab.freedesktop.org/slp/virglrenderer/-/archive/$virgl/virglrenderer-$virgl.tar.gz" |
+            tar xz -C "$out"
+        (cd "$vdir" && PKG_CONFIG_PATH=$sdk/lib/pkgconfig:/opt/homebrew/lib/pkgconfig \
+            meson setup build --prefix="$out/virgl" -Dvenus=true -Drender-server=false --buildtype=release >/dev/null &&
+            meson compile -C build >/dev/null && meson install -C build >/dev/null)
+    fi
+else
+    echo "no Vulkan SDK: building libkrun without a GPU" >&2
+fi
+
 if [ ! -d "$src/.git" ] || [ "$(git -C "$src" describe --tags 2>/dev/null)" != "$version" ]; then
     rm -rf "$src"
     # Plain HTTPS whatever the global config rewrites GitHub URLs to.
@@ -23,30 +46,52 @@ if [ ! -d "$src/.git" ] || [ "$(git -C "$src" describe --tags 2>/dev/null)" != "
 fi
 # bindgen needs libclang, and its build scripts load it at run time.
 clang=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib
-(cd "$src" && LIBCLANG_PATH=$clang DYLD_FALLBACK_LIBRARY_PATH=$clang \
-    cargo build -q --release -p libkrun --no-default-features --features blk,net)
-cp "$src/target/release/libkrun.dylib" "$out/bin/libkrun.1.dylib"
-install_name_tool -id @rpath/libkrun.1.dylib "$out/bin/libkrun.1.dylib"
-codesign -f -s - "$out/bin/libkrun.1.dylib" 2>/dev/null
-ln -sf libkrun.1.dylib "$out/bin/libkrun.dylib"
+(cd "$src" && LIBRARY_PATH=$out/virgl/lib PKG_CONFIG_PATH=$out/virgl/lib/pkgconfig \
+    LIBCLANG_PATH=$clang DYLD_FALLBACK_LIBRARY_PATH=$clang \
+    cargo build -q --release -p libkrun --no-default-features --features "$features")
+
+# Each library beside hangar-krun, found there by @rpath, and what it
+# links to rewritten to match.
+install_lib() { # source, name
+    cp -f "$1" "$bin/$2"
+    chmod u+w "$bin/$2"
+    install_name_tool -id "@rpath/$2" "$bin/$2" 2>/dev/null
+}
+install_lib "$src/target/release/libkrun.dylib" libkrun.1.dylib
+ln -sf libkrun.1.dylib "$bin/libkrun.dylib"
+if [ "$features" = blk,net,gpu ]; then
+    install_lib "$out/virgl/lib/libvirglrenderer.1.dylib" libvirglrenderer.1.dylib
+    install_lib "$sdk/lib/libMoltenVK.dylib" libMoltenVK.dylib
+    epoxy=$(otool -L "$bin/libvirglrenderer.1.dylib" | awk '/libepoxy/ {print $1}')
+    install_lib "$epoxy" libepoxy.0.dylib
+    install_name_tool -change "$out/virgl/lib/libvirglrenderer.1.dylib" @rpath/libvirglrenderer.1.dylib \
+        "$bin/libkrun.1.dylib"
+    install_name_tool -change "$epoxy" @rpath/libepoxy.0.dylib "$bin/libvirglrenderer.1.dylib"
+    for l in libkrun.1.dylib libvirglrenderer.1.dylib; do
+        install_name_tool -add_rpath @loader_path "$bin/$l" 2>/dev/null || true
+    done
+fi
+for l in "$bin"/*.dylib; do
+    [ -L "$l" ] || codesign -f -s - "$l" 2>/dev/null
+done
 
 cd "$repo"
-CGO_CFLAGS="-I$src/include" CGO_LDFLAGS="-L$out/bin -Wl,-rpath,@executable_path" \
-    go build -tags krun -o "$out/bin/hangar-krun" ./cmd/hangar-krun
+CGO_CFLAGS="-I$src/include" CGO_LDFLAGS="-L$bin -Wl,-rpath,@executable_path" \
+    go build -tags krun -o "$bin/hangar-krun" ./cmd/hangar-krun 2>&1 | grep -v 'duplicate -rpath\|^# ' || true
 cat > "$out/entitlements.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>com.apple.security.hypervisor</key><true/></dict></plist>
 PLIST
-codesign -f -s - --entitlements "$out/entitlements.plist" "$out/bin/hangar-krun" 2>/dev/null
+codesign -f -s - --entitlements "$out/entitlements.plist" "$bin/hangar-krun" 2>/dev/null
 
 e2=$out/e2fsprogs-$e2fsprogs
-if [ ! -x "$out/bin/mkfs.ext4" ]; then
+if [ ! -x "$bin/mkfs.ext4" ]; then
     curl -fsSL https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v$e2fsprogs/e2fsprogs-$e2fsprogs.tar.gz |
         tar xz -C "$out"
     (cd "$e2" && ./configure -q --disable-nls --disable-fuse2fs --disable-e2initrd-helper >/dev/null &&
         make -s -j8 libs >/dev/null && make -s -C misc -j8 mke2fs >/dev/null)
     # Named so, mke2fs makes ext4 without being told.
-    cp "$e2/misc/mke2fs" "$out/bin/mkfs.ext4"
+    cp "$e2/misc/mke2fs" "$bin/mkfs.ext4"
 fi
-echo "built $out/bin/hangar-krun and mkfs.ext4"
+echo "built $bin: hangar-krun (libkrun $features) and mkfs.ext4"

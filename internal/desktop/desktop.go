@@ -301,6 +301,7 @@ func (s *Server) start(ctx context.Context) (*process, error) {
 		"WAYLAND_DISPLAY=" + display,
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
+	cmd.Env = append(cmd.Env, sysuser.MachineEnv()...)
 	cmd.Stdout = logOut
 	cmd.Stderr = logOut
 	if err := sysuser.RunAs(cmd, u); err != nil {

@@ -23,8 +23,12 @@ import (
 )
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "-features" {
+		json.NewEncoder(os.Stdout).Encode(krun.Features{GPU: C.krun_has_feature(C.KRUN_FEATURE_GPU) == 1})
+		return
+	}
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: hangar-krun CONFIG.json")
+		fmt.Fprintln(os.Stderr, "usage: hangar-krun CONFIG.json | -features")
 		os.Exit(2)
 	}
 	// The worker holds the other end of standard input: when the worker
@@ -119,6 +123,12 @@ func run(path string) error {
 		cmac := (*C.uint8_t)(C.CBytes(mac))
 		if err := check("the network", C.krun_add_net_unixgram(id, cstr(c.Net.Socket), -1, cmac,
 			0, C.NET_FLAG_VFKIT)); err != nil {
+			return err
+		}
+	}
+	if c.GPU != nil {
+		flags := C.uint32_t(C.VIRGLRENDERER_VENUS | C.VIRGLRENDERER_NO_VIRGL)
+		if err := check("the GPU", C.krun_set_gpu_options2(id, flags, C.uint64_t(c.GPU.WindowMiB)<<20)); err != nil {
 			return err
 		}
 	}

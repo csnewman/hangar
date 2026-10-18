@@ -50,6 +50,11 @@ type Options struct {
 	// for it.
 	Base string
 
+	// Pages16K builds arm64 with 16 KiB pages (hangar-arm64-16k.config): the
+	// kernel for guests on a Mac, where libkrun maps their GPU memory in the
+	// Mac's 16 KiB pages.
+	Pages16K bool
+
 	// ConfigOnly resolves and verifies the config without compiling. Configuring
 	// takes seconds and compiling takes the best part of an hour, so this is
 	// how the config is iterated on.
@@ -129,6 +134,12 @@ func Build(ctx context.Context, o Options) (*Artifacts, error) {
 	}
 	if o.ConfigOnly {
 		args = append(args, "-e", "CONFIG_ONLY=1")
+	}
+	if o.Pages16K {
+		if o.Arch != "arm64" {
+			return nil, fmt.Errorf("16 KiB pages are an arm64 kernel's, not %s's", o.Arch)
+		}
+		args = append(args, "-e", "KEXTRA=hangar-arm64-16k.config")
 	}
 	if o.Jobs > 0 {
 		args = append(args, "-e", fmt.Sprintf("JOBS=%d", o.Jobs))

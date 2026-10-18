@@ -5,6 +5,8 @@
 #          /cfg/tree                    source files added to the kernel tree
 #          /cfg/patches                 patches applied to it
 #          /cfg/hangar-$KARCH.config   its architecture-specific half
+#          /cfg/$KEXTRA                 a variant's fragment over both, if
+#                                       KEXTRA names one (hangar-arm64-16k.config)
 #          /cfg/version                 the kernel version, unless
 #                                       KERNEL_VERSION names another
 #          KARCH JOBS
@@ -26,6 +28,7 @@ apt-get install -y -qq --no-install-recommends \
 
 KERNEL_VERSION="${KERNEL_VERSION:-$(cat /cfg/version)}"
 : "${KARCH:?}"
+extra=${KEXTRA:+/cfg/$KEXTRA}
 JOBS="${JOBS:-$(nproc)}"
 
 series="v$(echo "$KERNEL_VERSION" | cut -d. -f1).x"
@@ -71,7 +74,7 @@ esac
 mkdir -p /tmp/kdef
 make ARCH="$KARCH" O=/tmp/kdef alldefconfig >/dev/null
 ./scripts/kconfig/merge_config.sh -m -O /tmp/kdef /tmp/kdef/.config \
-        /cfg/hangar.config "/cfg/hangar-${KARCH}.config" >/dev/null 2>&1 || true
+        /cfg/hangar.config "/cfg/hangar-${KARCH}.config" $extra >/dev/null 2>&1 || true
 make ARCH="$KARCH" O=/tmp/kdef olddefconfig >/dev/null
 
 echo "kernel: configuring ($KARCH, base=${KBASE:-tinyconfig})" >&2
@@ -81,7 +84,7 @@ make ARCH="$KARCH" "${KBASE:-tinyconfig}" >/dev/null
 # merge_config.sh warns but does not fail when an option cannot be satisfied,
 # so the result is verified below rather than trusted.
 ./scripts/kconfig/merge_config.sh -m -O . .config \
-        /cfg/hangar.config "/cfg/hangar-${KARCH}.config" >/dev/null 2>&1 || true
+        /cfg/hangar.config "/cfg/hangar-${KARCH}.config" $extra >/dev/null 2>&1 || true
 make ARCH="$KARCH" olddefconfig >/dev/null
 
 # Every option the fragments ask for must survive olddefconfig.
@@ -94,7 +97,7 @@ make ARCH="$KARCH" olddefconfig >/dev/null
 #
 # The check compares the fragments against the resolved .config, so it covers
 # every option asked for rather than the subset someone remembered to list.
-cat /cfg/hangar.config "/cfg/hangar-${KARCH}.config" > /tmp/wanted.config
+cat /cfg/hangar.config "/cfg/hangar-${KARCH}.config" $extra > /tmp/wanted.config
 missing=""
 unwanted=""
 while IFS= read -r line; do

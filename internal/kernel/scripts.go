@@ -24,7 +24,7 @@ var configFragment []byte
 // olddefconfig: an arch's options are simply absent on the other arch, which
 // would make that check impossible if both sets shared one file.
 //
-//go:embed hangar-arm64.config hangar-x86_64.config
+//go:embed hangar-arm64.config hangar-x86_64.config hangar-arm64-16k.config
 var archFragments embed.FS
 
 // Fixes carried against the upstream kernel tree, applied in name order by
@@ -69,7 +69,7 @@ func materialiseConfig() (string, error) {
 	}
 	// Both arch fragments go in: the build script picks by KARCH, and shipping
 	// the pair keeps this function independent of the target.
-	for _, name := range []string{"hangar-arm64.config", "hangar-x86_64.config"} {
+	for _, name := range []string{"hangar-arm64.config", "hangar-x86_64.config", "hangar-arm64-16k.config"} {
 		b, err := archFragments.ReadFile(name)
 		if err != nil {
 			os.RemoveAll(dir)

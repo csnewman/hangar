@@ -250,9 +250,12 @@ func New(cfg Config) (*Runtime, error) {
 // offer: not when it asks for hardware and there is only the CPU, nor when
 // the backend cannot render at all. It is nil without a GPU backend.
 func probeGPU(ctx context.Context, cfg Config, env []string) *api.GPUInfo {
-	if caps, err := host.Detect(); err != nil || caps.Monitor != host.MonitorCloudHypervisor {
-		// hangar-gpu is a vhost-user backend for Cloud Hypervisor alone.
+	caps, err := host.Detect()
+	if err != nil {
 		return nil
+	}
+	if caps.Monitor == host.MonitorKrun {
+		return krunGPU(ctx, cfg)
 	}
 	if _, err := ch.FindGpuBackend(); err != nil {
 		return nil

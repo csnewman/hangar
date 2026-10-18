@@ -242,7 +242,7 @@ func (s *Server) command(command string, env []string, term *ptyRequest) (*exec.
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"LANG=C.UTF-8",
 		"SSH_CONNECTION=127.0.0.1 0 127.0.0.1 22",
-	}, env...)
+	}, append(sysuser.MachineEnv(), env...)...)
 	if term != nil {
 		cmd.Env = append(cmd.Env, "TERM="+term.Term)
 	}

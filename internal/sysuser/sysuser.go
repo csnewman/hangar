@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 )
 
@@ -85,4 +86,28 @@ func LoginShell(name string) string {
 		}
 	}
 	return "/bin/sh"
+}
+
+var (
+	machineEnvOnce sync.Once
+	machineEnv     []string
+)
+
+// MachineEnv is the environment the machine's kernel command line gives
+// every process (systemd.setenv=NAME=value), which systemd's services have.
+// A session the agent starts is given it too, so a program behaves the same
+// started from a terminal as from the desktop.
+func MachineEnv() []string {
+	machineEnvOnce.Do(func() {
+		b, err := os.ReadFile("/proc/cmdline")
+		if err != nil {
+			return
+		}
+		for _, f := range strings.Fields(string(b)) {
+			if kv, ok := strings.CutPrefix(f, "systemd.setenv="); ok && strings.Contains(kv, "=") {
+				machineEnv = append(machineEnv, kv)
+			}
+		}
+	})
+	return machineEnv
 }

@@ -26,8 +26,9 @@ reserved:
 runtime: krun
 
 vm:
-  # dev/kernel-dev.sh's build, which has libkrun's virtio-mmio.
-  kernel: /Users/csnewman/Projects/hangar/out/kernel-dev/vmlinuz
+  # `dev/kernel-dev.sh 16k`'s build: 16 KiB pages, which the Mac maps
+  # guests' GPU memory in.
+  kernel: /Users/csnewman/Projects/hangar/out/kernel-dev-16k/vmlinuz
   # Built by dev/mac-worker.sh for the guest: each boot's initramfs, as
   # init, and then the agent.
   agent: /Users/csnewman/Projects/hangar/out/mac-worker/hangar-agent-guest
