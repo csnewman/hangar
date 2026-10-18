@@ -1,7 +1,6 @@
 import './admin.css'
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ScrollText } from 'lucide-react'
 import { useCallback } from 'react'
 import { Link, useParams } from 'react-router'
 
@@ -34,9 +33,6 @@ export function WorkerDetail({ id }: { id: string }) {
   if (worker.isError) return <NoneChosen>No such worker.</NoneChosen>
   const w = worker.data
   const labels = Object.entries(w.labels)
-  const toLog = () => {
-    document.querySelector('[data-section="log"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  }
   return (
     <>
       <DetailHead
@@ -55,15 +51,7 @@ export function WorkerDetail({ id }: { id: string }) {
             <span>last seen {formatAgo(w.last_seen_at)}</span>
           </>
         }
-        actions={
-          <>
-            <button type="button" className="btn btn-ghost btn-sm" onClick={toLog} disabled={!w.online}>
-              <ScrollText size={13} />
-              View Log
-            </button>
-            <WorkerRemoval worker={w} />
-          </>
-        }
+        actions={<WorkerRemoval worker={w} />}
       />
       <DetailPage
         wide
