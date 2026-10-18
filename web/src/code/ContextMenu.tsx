@@ -64,13 +64,33 @@ let opened = 0
 
 // useContextMenu is a menu opened at the pointer: `open` from an
 // onContextMenu handler, and `menu` rendered anywhere.
+//
+// What the menu was opened on -- a row, a tab, a chip -- is marked
+// (data-menu-target) while it is open, as IntelliJ keeps the row it is
+// for lit, the page under the menu being still. Something larger, an
+// editor or a list's empty space, is not.
 export function useContextMenu() {
   const [state, setState] = useState<Open | null>(null)
+  const target = useRef<Element | null>(null)
+  const unmark = () => {
+    target.current?.removeAttribute('data-menu-target')
+    target.current = null
+  }
   const open = useCallback((e: ReactMouseEvent | MouseEvent, items: MenuItem[]) => {
     e.preventDefault()
     e.stopPropagation()
+    unmark()
+    const el = e.currentTarget
+    if (el instanceof Element && el.getBoundingClientRect().height <= 48) {
+      el.setAttribute('data-menu-target', '')
+      target.current = el
+    }
     setState({ x: e.clientX, y: e.clientY, items, n: ++opened })
   }, [])
+  useEffect(() => {
+    if (!state) unmark()
+  }, [state])
+  useEffect(() => unmark, [])
   // openAt opens it at a point, for a menu whose items load first or one
   // under a button, or over one.
   const openAt = useCallback(

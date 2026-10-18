@@ -108,3 +108,10 @@
 .code-menu button.code-menu-open {
   background: var(--sidebar-hover);
 }
+
+/* What a menu was opened on, while it is open. */
+[data-menu-target] {
+  background: var(--sidebar-hover);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  border-radius: 4px;
+}
