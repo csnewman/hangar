@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { createPortal } from 'react-dom'
 
 import { useContextMenu } from './ContextMenu'
 import { sameTarget, tabDrag, useTabDrag, type DropTarget } from './tabDrag'
@@ -68,9 +69,48 @@ function diffWhat(t: Tab): string {
   return t.base ? `changes since ${t.baseLabel ?? t.base}` : 'changes'
 }
 
+// tabIcon is what a tab shows before its name: what kind of tab it is, and
+// for a file, the view it is in.
+function tabIcon(t: Tab) {
+  return t.kind === 'diff' ? (
+    <GitCompare size={13} className="code-icon-diff" />
+  ) : t.kind === 'logs' ? (
+    <FileText size={13} className="code-icon-file" />
+  ) : t.kind === 'desktop' ? (
+    <Monitor size={13} className="code-icon-file" />
+  ) : t.kind === 'environment' ? (
+    <Settings2 size={13} className="code-icon-file" />
+  ) : t.kind === 'performance' ? (
+    <Activity size={13} className="code-icon-file" />
+  ) : t.view === 'hex' ? (
+    <Binary size={13} className="code-icon-file" />
+  ) : (t.view ?? opensAs(t.path)) === 'image' ? (
+    <ImageIcon size={13} className="code-icon-file" />
+  ) : (t.view ?? opensAs(t.path)) === 'pdf' ? (
+    <FileText size={13} className="code-icon-file" />
+  ) : (t.view ?? opensAs(t.path)) === 'media' ? (
+    <FileVideo size={13} className="code-icon-file" />
+  ) : (
+    <File size={13} className="code-icon-file" />
+  )
+}
+
+// DragGhost is the tab being dragged, following the pointer, over
+// everything.
+function DragGhost({ tab, x, y }: { tab?: Tab; x: number; y: number }) {
+  if (!tab) return null
+  return createPortal(
+    <div className="code-drag-ghost" style={{ left: x + 12, top: y + 12 }}>
+      {tabIcon(tab)}
+      {tabName(tab)}
+    </div>,
+    document.body,
+  )
+}
+
 // A drag of a tab along the bar: the tab, and where it would go, as the
 // index among the tabs it would take; out when it would go elsewhere.
-type Drag = { key: string; to: number; out: boolean }
+type Drag = { key: string; to: number; out: boolean; x: number; y: number }
 
 // TabBar is the editor's tabs, in one row as IntelliJ keeps them. The row
 // scrolls, with the wheel too, under a thin bar that shows while the
@@ -158,7 +198,8 @@ export function TabBar({
   }, [active, tabs.length, opened, hidden.length > 0])
 
   // A tab pressed and moved a few pixels is dragged; one that does not
-  // move is left to be a click. Near either end of the row it scrolls.
+  // move is left to be a click. Held over either end of the row, it scrolls
+  // the row.
   const press = (e: React.PointerEvent, key: string) => {
     const b = bar.current
     if (e.button !== 0 || !b || (e.target as HTMLElement).closest('button')) return
@@ -198,11 +239,13 @@ export function TabBar({
         target = next
         tabDrag.set({ key, from: group, target })
       }
-      setDrag({ key, to, out: !!target })
+      setDrag({ key, to, out: !!target, x, y })
     }
     const scroll = () => {
       const box = b.getBoundingClientRect()
-      const by = x < box.left + 30 ? -12 : x > box.right - 30 ? 12 : 0
+      // Only over the row itself: a tab taken elsewhere leaves it be.
+      const over = y >= box.top - 6 && y <= box.bottom + 6 && x >= box.left - 24 && x <= box.right + 24
+      const by = !over ? 0 : x < box.left + 30 ? -12 : x > box.right - 30 ? 12 : 0
       if (by) {
         b.scrollLeft += by
         place()
@@ -297,6 +340,7 @@ export function TabBar({
 
   return (
     <div className={drag ? 'code-tabbar code-tabbar-dragging' : 'code-tabbar'}>
+      {drag && <DragGhost tab={tabs.find((t) => tabKey(t) === drag.key)} x={drag.x} y={drag.y} />}
       <div className="code-tabs-scroll">
         <div
           className="code-tabs"
@@ -339,27 +383,7 @@ export function TabBar({
                   if (e.button === 1) onClose(key)
                 }}
               >
-                {t.kind === 'diff' ? (
-                  <GitCompare size={13} className="code-icon-diff" />
-                ) : t.kind === 'logs' ? (
-                  <FileText size={13} className="code-icon-file" />
-                ) : t.kind === 'desktop' ? (
-                  <Monitor size={13} className="code-icon-file" />
-                ) : t.kind === 'environment' ? (
-                  <Settings2 size={13} className="code-icon-file" />
-                ) : t.kind === 'performance' ? (
-                  <Activity size={13} className="code-icon-file" />
-                ) : t.view === 'hex' ? (
-                  <Binary size={13} className="code-icon-file" />
-                ) : (t.view ?? opensAs(t.path)) === 'image' ? (
-                  <ImageIcon size={13} className="code-icon-file" />
-                ) : (t.view ?? opensAs(t.path)) === 'pdf' ? (
-                  <FileText size={13} className="code-icon-file" />
-                ) : (t.view ?? opensAs(t.path)) === 'media' ? (
-                  <FileVideo size={13} className="code-icon-file" />
-                ) : (
-                  <File size={13} className="code-icon-file" />
-                )}
+                {tabIcon(t)}
                 <span>{name}</span>
                 <button
                   type="button"

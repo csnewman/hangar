@@ -3881,3 +3881,11 @@
 body.code-tab-dragging iframe {
   pointer-events: none;
 }
+
+/* While a tab is dragged the pointer is a closed hand wherever it goes,
+   the editor's text included, and nothing is selected on the way. */
+body.code-tab-dragging,
+body.code-tab-dragging * {
+  cursor: grabbing !important;
+  user-select: none;
+}
