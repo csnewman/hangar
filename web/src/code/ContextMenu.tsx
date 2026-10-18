@@ -151,46 +151,67 @@ export function ContextMenu({
   }
 
   return createPortal(
-    <div
-      ref={ref}
-      className="code-menu"
-      role="menu"
-      style={pos}
-      onKeyDown={move}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      {items.map((item, i) =>
-        item === 'separator' ? (
-          <div key={i} className="code-menu-sep" role="separator" />
-        ) : 'heading' in item ? (
-          <div key={i} className="code-menu-heading">
-            {item.heading}
-          </div>
-        ) : (
-          <button
-            key={i}
-            type="button"
-            role="menuitem"
-            disabled={item.disabled}
-            className={item.danger ? 'code-menu-danger' : undefined}
-            onClick={() => {
-              if (item.confirm && asking !== i) {
-                setAsking(i)
-                return
-              }
-              onClose()
-              item.onSelect()
-            }}
-          >
-            <span className={item.checked ? 'code-menu-checked' : undefined}>
-              {asking === i ? item.confirm : item.label}
-            </span>
-            {item.shortcut && asking !== i && <kbd>{item.shortcut}</kbd>}
-            {item.detail && asking !== i && <span className="code-menu-detail">{item.detail}</span>}
-          </button>
-        ),
-      )}
-    </div>,
+    <>
+      {/* While the menu is open the page under it is still, as IntelliJ's
+          is: nothing it covers lights up as the pointer crosses it, a
+          click away only closes the menu, and a right-click away opens the
+          menu of what was right-clicked. */}
+      <div
+        className="code-menu-shade"
+        onMouseDown={(e) => e.preventDefault()}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          const { clientX, clientY } = e
+          setTimeout(() => {
+            document
+              .elementFromPoint(clientX, clientY)
+              ?.dispatchEvent(
+                new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX, clientY, button: 2 }),
+              )
+          }, 0)
+        }}
+      />
+      <div
+        ref={ref}
+        className="code-menu"
+        role="menu"
+        style={pos}
+        onKeyDown={move}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        {items.map((item, i) =>
+          item === 'separator' ? (
+            <div key={i} className="code-menu-sep" role="separator" />
+          ) : 'heading' in item ? (
+            <div key={i} className="code-menu-heading">
+              {item.heading}
+            </div>
+          ) : (
+            <button
+              key={i}
+              type="button"
+              role="menuitem"
+              disabled={item.disabled}
+              className={item.danger ? 'code-menu-danger' : undefined}
+              onClick={() => {
+                if (item.confirm && asking !== i) {
+                  setAsking(i)
+                  return
+                }
+                onClose()
+                item.onSelect()
+              }}
+            >
+              <span className={item.checked ? 'code-menu-checked' : undefined}>
+                {asking === i ? item.confirm : item.label}
+              </span>
+              {item.shortcut && asking !== i && <kbd>{item.shortcut}</kbd>}
+              {item.detail && asking !== i && <span className="code-menu-detail">{item.detail}</span>}
+            </button>
+          ),
+        )}
+      </div>
+    </>,
     document.body,
   )
 }

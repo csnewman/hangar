@@ -1130,3 +1130,18 @@ test('the workspace: its projects, shared by every tab, and repositories to add'
 		b.close()
 	}
 })
+
+test('a file system error is said in words, with its path', async () => {
+	const a = new Client()
+	try {
+		await a.call('hello')
+		const missing = join(dir, 'nowhere')
+		await assert.rejects(a.call('fs.list', { path: missing }), (e: Error) => e.message === `${missing} does not exist`)
+		await assert.rejects(
+			a.call('fs.list', { path: join(root, 'a.txt') }),
+			(e: Error) => e.message === `${join(root, 'a.txt')} is not a folder`,
+		)
+	} finally {
+		a.close()
+	}
+})

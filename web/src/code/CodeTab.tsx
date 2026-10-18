@@ -673,7 +673,7 @@ function CodeView({
   // repository its template clones.
   const environmentRepos = environment.spec.repos.map((r) => r.path).filter(Boolean)
   const workspace = useWorkspace(client, folder !== '', environmentRepos)
-  const projects = useProjects(client, env, workspace.folders, (c, root) =>
+  const projects = useProjects(client, env, workspace.present, (c, root) =>
     c === client ? languages : languagesForRef.current(c, root),
   )
   const projectsRef = useRef(projects)
@@ -988,6 +988,8 @@ function CodeView({
       <WorkspaceView
         env={scope}
         projects={projects}
+        missing={workspace.missing}
+        onRemove={(root) => setFolders?.(workspace.folders.filter((f) => f !== root)).catch(() => {})}
         statuses={Object.fromEntries(projects.map((p) => [p.root, statusOf(p.root)]))}
         alone={folder !== ''}
         projectMenu={projectMenu}

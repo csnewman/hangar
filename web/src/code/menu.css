@@ -1,6 +1,13 @@
 /* A menu at a point: the editor's context menus, and the menus of
    buttons across Hangar's pages, which load it with the menu itself. */
 
+/* What covers the page while a menu is open, under the menu. */
+.code-menu-shade {
+  position: fixed;
+  inset: 0;
+  z-index: 19;
+}
+
 .code-menu {
   position: fixed;
   z-index: 20;

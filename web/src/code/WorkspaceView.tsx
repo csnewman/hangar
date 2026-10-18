@@ -1,4 +1,4 @@
-import { FileSearch, FolderPlus, ListCollapse, LocateFixed, Settings2 } from 'lucide-react'
+import { FileSearch, FolderPlus, FolderX, ListCollapse, LocateFixed, Settings2 } from 'lucide-react'
 import { useState, type ReactNode } from 'react'
 
 import type { GitStatus } from './client'
@@ -14,6 +14,8 @@ import { ToolWindow } from './ToolWindow'
 export function WorkspaceView({
   env,
   projects,
+  missing,
+  onRemove,
   statuses,
   alone,
   tree,
@@ -26,6 +28,10 @@ export function WorkspaceView({
 }: {
   env: string
   projects: Project[]
+  // missing are folders in the workspace that do not exist, and onRemove
+  // takes one out of it.
+  missing: string[]
+  onRemove: (root: string) => void
   statuses: Record<string, GitStatus | null>
   // alone is whether the tab works in one folder alone.
   alone: boolean
@@ -132,6 +138,18 @@ export function WorkspaceView({
               menu: projectMenu(p, i),
               collapseAll,
             })}
+          </div>
+        ))}
+        {missing.map((root) => (
+          <div key={root} className="code-workspace-project">
+            <div className="code-tree-root code-workspace-missing" title={`${root} does not exist`}>
+              <FolderX size={14} />
+              <span className="strong">{root.slice(root.lastIndexOf('/') + 1) || root}</span>
+              <span className="muted small code-tree-rootpath">{root} does not exist</span>
+              <button type="button" className="code-tool-btn" onClick={() => onRemove(root)}>
+                Remove
+              </button>
+            </div>
           </div>
         ))}
         {!alone && (

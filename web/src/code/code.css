@@ -4150,3 +4150,13 @@ body.code-tab-dragging * {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
+
+/* A project whose folder does not exist. */
+.code-workspace-missing {
+  gap: 6px;
+  color: var(--muted);
+}
+
+.code-workspace-missing .code-tool-btn {
+  margin-left: auto;
+}

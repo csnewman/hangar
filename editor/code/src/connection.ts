@@ -9,6 +9,7 @@ import type { Files } from './files.js'
 import type { Action, Docker } from './docker.js'
 import { Hub } from './hub.js'
 import { find, type Message } from './lsp.js'
+import { describe } from './errors.js'
 import type { Preview } from './preview.js'
 import type { WorkspaceFile } from './workspace.js'
 import type { Git } from './git.js'
@@ -158,7 +159,7 @@ export class Connection {
 			const result = await this.call(req.method, req.params ?? {})
 			this.json({ id: req.id, result: result ?? null })
 		} catch (e) {
-			this.json({ id: req.id, error: e instanceof Error ? e.message : String(e) })
+			this.json({ id: req.id, error: describe(e) })
 		}
 	}
 

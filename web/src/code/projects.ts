@@ -13,12 +13,14 @@ export const projectName = (root: string) => root.slice(root.lastIndexOf('/') + 
 // useWorkspace is the environment's projects as the service keeps them,
 // kept up as any tab changes them. Until they are first set they are the
 // environment's folder and the template's other repositories (seed). A tab
-// working in one folder alone shows that folder only.
+// working in one folder alone shows that folder only. Folders that do not
+// exist are kept apart (missing), to be shown as such and removed; a
+// template's repository not there is left out.
 export function useWorkspace(
   client: CodeClient,
   alone: boolean,
   seed: string[],
-): { folders: string[]; set: ((folders: string[]) => Promise<void>) | null } {
+): { folders: string[]; present: string[]; missing: string[]; set: ((folders: string[]) => Promise<void>) | null } {
   const [w, setW] = useState<Workspace | null>(null)
   useEffect(() => {
     let live = true
@@ -43,6 +45,27 @@ export function useWorkspace(
     return [...new Set([...w.folders, ...seedKey.split('\n').filter(Boolean)])]
     // client.root is read once the workspace is, which follows the connection.
   }, [alone, w, client.root, seedKey])
+  // Whether each folder is there, looked at as the list changes.
+  const [there, setThere] = useState<Record<string, boolean>>({})
+  const listed = folders.join('\n')
+  useEffect(() => {
+    let live = true
+    const all = listed ? listed.split('\n') : []
+    Promise.all(
+      all.map((f) =>
+        client.list(f).then(
+          () => [f, true] as const,
+          () => [f, false] as const,
+        ),
+      ),
+    ).then((r) => live && setThere(Object.fromEntries(r)))
+    return () => {
+      live = false
+    }
+  }, [client, listed])
+  const saved = !!w?.saved
+  const present = useMemo(() => folders.filter((f) => there[f]), [folders, there])
+  const missing = useMemo(() => (saved ? folders.filter((f) => there[f] === false) : []), [folders, there, saved])
   const set = useMemo(
     () =>
       alone
@@ -52,7 +75,7 @@ export function useWorkspace(
           },
     [alone, client],
   )
-  return { folders, set }
+  return { folders, present, missing, set }
 }
 
 // useProjects keeps a connection and language servers for each folder: the

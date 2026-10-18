@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { isAbsolute, join, posix, relative, resolve } from 'node:path'
 
 import { execFile } from './child.js'
+import { describe } from './errors.js'
 
 export type Change = {
 	path: string
@@ -303,7 +304,7 @@ export class Git {
 		try {
 			out = await run(this.root, statusArgs)
 		} catch (e) {
-			return { repo: false, changes: [], error: e instanceof Error ? e.message : String(e) }
+			return { repo: false, changes: [], error: describe(e) }
 		}
 		let status = parseStatus(out, where.prefix)
 		// A file moved without git being told is a deletion and an untracked
