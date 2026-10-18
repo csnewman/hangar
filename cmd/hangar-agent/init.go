@@ -24,7 +24,7 @@ import (
 //
 //	/base  the image, read-only: an EROFS image on the device the kernel
 //	       command line names (hangar.image=), mounted with DAX if
-//	       hangar.image_dax=1, or else over virtiofs (tag hangar-base)
+//	       hangar.image_dax=1
 //	/rw    the environment's writable disk, the first virtio-blk device
 //	/lower overlayfs of the two
 //	/root  hangarfs over /lower, which becomes /
@@ -34,7 +34,6 @@ import (
 // mounted there beside the root.
 
 const (
-	baseTag   = "hangar-base"
 	upperDisk = "/dev/vda"
 	newRoot   = "/root"
 	// lowerDir is where the overlay hangarfs serves is mounted.
@@ -61,11 +60,7 @@ func mountBase() error {
 		}
 	}
 	if device == "" {
-		if err := unix.Mount(baseTag, "/base", "virtiofs", unix.MS_RDONLY, ""); err != nil {
-			return fmt.Errorf("mounting the base over virtiofs (%s): %w", baseTag, err)
-		}
-		fmt.Fprintln(os.Stderr, "INITRAMFS: base over virtiofs")
-		return nil
+		return errors.New("the kernel command line names no image (hangar.image=)")
 	}
 	if err := waitFor(device); err != nil {
 		return err

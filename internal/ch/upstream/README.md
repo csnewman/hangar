@@ -13,10 +13,9 @@ can publish a shared memory window and let its backend place memory in it.
 
 **533 insertions, 20 deletions, across 14 files.**
 
-Two consumers exist the moment it lands, and both are exercised here:
-virtio-fs gets a DAX cache (`../../../fs/`) and a vhost-user virtio-gpu
-backend gets somewhere to put host-visible blob resources
-(`../../../gpu/`).
+Two consumers exist the moment it lands: virtio-fs gets a DAX cache, and a
+vhost-user virtio-gpu backend gets somewhere to put host-visible blob
+resources. Hangar uses it for the second (`../../../gpu/`).
 
 It is deliberately generic and mentions no GPU. The maintainers are on record
 as uninterested in GPU support, and this needs none of it to be worth having.

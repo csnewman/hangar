@@ -38,7 +38,6 @@ vm:
   agent: /var/tmp/hangar-agent-guest
   # VS Code's server, built by `editor/build.sh` in this VM.
   editor: /Users/csnewman/Projects/hangar/out/editor/editor-arm64.ext4
-  dax_mib: 1024
   # Environments with a virtual GPU get Vulkan too: this VM's virglrenderer
   # is built with Venus (AGENTS.md). venus_restore carries a Vulkan program
   # across a suspend, and is experimental.
@@ -46,8 +45,8 @@ vm:
     venus: true
     venus_restore: false
   images:
-    # Each image's root filesystem, served over virtio-fs. Built in this VM,
-    # both tiers of a distribution at once, by
+    # Each image's root filesystem, made into an EROFS image on first boot.
+    # Built in this VM, both tiers of a distribution at once, by
     #   sudo /var/tmp/hangar build -C images/ubuntu-26.04 -o /var/lib/hangar/image-src/ubuntu-26.04
     # They live on the VM's own disk, not the Mac's mount: the trees must keep
     # their root owners.

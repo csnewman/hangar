@@ -2,14 +2,13 @@
 // resulting process.
 //
 // The shape here follows docs/cloud-hypervisor-switch.md: direct kernel boot,
-// the read-only base layer over virtio-fs, virtio-blk for writable storage,
-// and guest memory as a shared memfd on transparent huge pages.
+// virtio-blk for the read-only image and for writable storage, and guest
+// memory as a shared memfd on transparent huge pages.
 //
-// Guest memory is always shared. Cloud Hypervisor's virtio-fs is vhost-user
-// only and it refuses --fs without shared memory, so there is no configuration
-// in which a Hangar guest has private memory, and no reason to offer one.
-// Shared memory takes huge pages only when the host allows it, which is what
-// CheckHugePages exists to verify.
+// Guest memory is always shared: the GPU's backend is vhost-user, which
+// reads the guest's memory itself, and what a guest costs the host is read
+// from the memfd's allocated blocks. Shared memory takes huge pages only when
+// the host allows it, which is what CheckHugePages exists to verify.
 package ch
 
 import (
@@ -36,17 +35,6 @@ const maxDiskQueues = 8
 // QUEUE_SIZE is the depth of each of the GPU's two virtqueues, and has to
 // match what the backend offers.
 const QUEUE_SIZE = 256
-
-// FS_QUEUE_SIZE is the depth of each of virtio-fs's virtqueues. Every read
-// the guest does is a request through one, so it is deeper than the GPU's.
-const FS_QUEUE_SIZE = 1024
-
-// VirtiofsShmID is the identifier the guest looks the DAX window up by.
-// virtio-fs defines 0 for its cache.
-const VirtiofsShmID = 0
-
-// DefaultVirtiofsTag is the mount tag the guest finds its root under.
-const DefaultVirtiofsTag = "hangar-base"
 
 // Disk is a block device attached to the guest.
 type Disk struct {
@@ -87,23 +75,6 @@ type Config struct {
 	// vsock.HybridListener.
 	GuestCID    uint32
 	VsockSocket string
-
-	// VirtiofsSocket is a hangar-fs vhost-user socket. The directory that
-	// backend exports becomes the guest's root. Empty leaves it out.
-	//
-	// The mount tag is the backend's to set, since it is the backend that
-	// answers the guest's config space.
-	VirtiofsSocket string
-
-	// VirtiofsDaxMiB sizes the DAX window the guest maps files into. Zero
-	// leaves the guest reading every file through the backend instead.
-	//
-	// The window costs the guest nothing until it maps something into it: it
-	// is address space, not memory. What it buys is the base being read
-	// through the host's page cache rather than copied into each guest, which
-	// is worth more the more guests share a base. docs/plan.md has the
-	// numbers.
-	VirtiofsDaxMiB int
 
 	// Pmem are files given to the guest as virtio-pmem, read-only: the
 	// guest's writes are discarded, and the host's page cache pages are
@@ -214,18 +185,6 @@ func (c *Config) Args() ([]string, error) {
 		args = append(args, disk...)
 	}
 
-	if c.VirtiofsSocket != "" {
-		// The generic device rather than --fs, because only it can be given
-		// a shared memory window; the tag comes from the backend either way.
-		spec := fmt.Sprintf(
-			"socket=%s,device_type=fs,queue_sizes=[%d,%d]",
-			c.VirtiofsSocket, FS_QUEUE_SIZE, FS_QUEUE_SIZE,
-		)
-		if c.VirtiofsDaxMiB > 0 {
-			spec += fmt.Sprintf(",shm_size=%dM,shm_id=%d", c.VirtiofsDaxMiB, VirtiofsShmID)
-		}
-		args = append(args, "--generic-vhost-user", spec)
-	}
 	for _, f := range c.Pmem {
 		args = append(args, "--pmem", "file="+f+",discard_writes=on")
 	}

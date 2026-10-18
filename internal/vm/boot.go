@@ -62,12 +62,8 @@ func preflight(cfg *Config) error {
 		if _, err := exec.LookPath("mkfs.erofs"); err != nil {
 			return fmt.Errorf("mkfs.erofs not found (apt install erofs-utils): %w", err)
 		}
-	case ImageVirtiofs:
-		if _, err := ch.FindFsBackend(); err != nil {
-			return err
-		}
 	default:
-		return fmt.Errorf("vm.image_device %q is none of %s, %s or %s", cfg.ImageDevice, ImageDisk, ImagePmem, ImageVirtiofs)
+		return fmt.Errorf("vm.image_device %q is neither %s nor %s", cfg.ImageDevice, ImageDisk, ImagePmem)
 	}
 	for ref, img := range cfg.Images {
 		st, err := os.Stat(img.Base)
@@ -131,18 +127,14 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if err := EnsureDisk(ctx, upper, "hangar-upper", m.rt.cfg.UpperGiB+m.rt.cfg.DockerGiB); err != nil {
 		return nil, err
 	}
-	var baseFile, baseDevice string
-	if dev := m.rt.cfg.ImageDevice; dev == ImageDisk || dev == ImagePmem {
-		// Built once per copy of the image, and shared by every machine on
-		// it.
-		m.step(api.StepDisks, "preparing the image")
-		f, err := m.rt.store.EROFS(ctx, img)
-		if err != nil {
-			return nil, fmt.Errorf("image %s: %w", s.Image, err)
-		}
-		baseFile, baseDevice = f, dev
-		m.step(api.StepDisks, "preparing its disks")
+	// Built once per copy of the image, and shared by every machine on it.
+	m.step(api.StepDisks, "preparing the image")
+	baseFile, err := m.rt.store.EROFS(ctx, img)
+	if err != nil {
+		return nil, fmt.Errorf("image %s: %w", s.Image, err)
 	}
+	baseDevice := m.rt.cfg.ImageDevice
+	m.step(api.StepDisks, "preparing its disks")
 	m.makeRoomForHugePages(s.MemoryMiB)
 	// The writable layer is the first disk: the agent, as init, mounts
 	// /dev/vda. The editor disk, shared read-only by every environment, is
@@ -164,7 +156,6 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		Disks:       disks,
 		MemoryMiB:   s.MemoryMiB,
 		CPUs:        s.CPUs,
-		DaxMiB:      daxMiB(m.rt.cfg, s),
 		Net:         true,
 		GPU:         s.GPU == api.GPUVirtual,
 		ConsoleFile: filepath.Join(m.dir, "console.log"),
@@ -620,16 +611,6 @@ func writeEditorTrust(sess *agent.Session, spec api.Spec) error {
 		return fmt.Errorf("exit %d: %s", out.Code, firstLine(out.Stderr, out.Stdout))
 	}
 	return nil
-}
-
-// daxMiB is the virtio-fs DAX window an environment's machine is given: the
-// worker's, if its base is served over virtio-fs and it asks to map its
-// image's files, and none otherwise.
-func daxMiB(worker Config, s api.Spec) int {
-	if !s.DAX || worker.ImageDevice != ImageVirtiofs {
-		return 0
-	}
-	return worker.DaxMiB
 }
 
 // makeRoomForHugePages compacts the host's memory when it has too few free

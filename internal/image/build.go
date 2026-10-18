@@ -1,6 +1,6 @@
 // Package image turns an mkosi configuration into an image: its root
-// filesystem, as a directory, which a worker exports to its environments over
-// virtio-fs.
+// filesystem, as a directory, which a worker makes into an EROFS image its
+// environments mount.
 //
 // An image carries nothing else. The kernel, the initramfs and the agent are
 // the node's; an environment's writable layer and Docker disk are made by the

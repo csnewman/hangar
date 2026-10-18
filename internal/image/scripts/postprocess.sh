@@ -5,13 +5,13 @@
 # Usage:   postprocess.sh <rootfs> <outdir>
 # Outputs: <outdir>/rootfs   the image: its root filesystem, as a directory
 #
-# An image is a root filesystem and nothing else. A worker exports it to its
-# environments over virtio-fs; the kernel, the initramfs and the agent are the
-# node's, so an image carries no kernel, no /lib/modules, no bootloader, no
-# initramfs and no agent.
+# An image is a root filesystem and nothing else. A worker makes it into an
+# EROFS image its environments mount; the kernel, the initramfs and the agent
+# are the node's, so an image carries no kernel, no /lib/modules, no
+# bootloader, no initramfs and no agent.
 #
-# Owners, modes, links and extended attributes are the image, and virtio-fs
-# serves them as they are: the output must be a Linux filesystem, and the tree
+# Owners, modes, links and extended attributes are the image, and the EROFS
+# image keeps them as they are: the output must be a Linux filesystem, and the tree
 # stays root-owned. A bind mount that maps owners -- a macOS host's, say --
 # loses them, and sudo in the guest with them.
 set -eu

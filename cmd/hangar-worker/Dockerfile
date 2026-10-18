@@ -9,7 +9,6 @@
 #
 #   /usr/local/bin/hangar-worker      the worker
 #   /usr/local/bin/cloud-hypervisor   upstream at CH_COMMIT plus internal/ch/upstream
-#   /usr/local/bin/hangar-fs          virtio-fs backend (fs/)
 #   /usr/local/bin/hangar-gpu         virtio-gpu backend (gpu/), with the patched
 #                                     virglrenderer in /usr/local/lib
 #   /usr/share/hangar/vmlinuz         the guest kernel (internal/kernel)
@@ -83,14 +82,6 @@ RUN git init -q /src && cd /src \
  && install -D target/release/cloud-hypervisor /out/cloud-hypervisor \
  && cd / && rm -rf /src /root/.cargo/registry /root/.cargo/git
 
-# ---------------------------------------------------------------- hangar-fs
-FROM rust AS fs
-COPY fs/Cargo.toml fs/Cargo.lock /src/
-COPY fs/src/ /src/src/
-RUN cd /src && cargo build --release --locked \
- && install -D target/release/hangar-fs /out/hangar-fs \
- && rm -rf /src/target /root/.cargo/registry /root/.cargo/git
-
 # ---------------------------------------------------------------- hangar-gpu
 FROM rust AS gpu
 # virglrenderer is built with /usr/local as its prefix, which is where the
@@ -135,7 +126,6 @@ COPY --from=gpu /usr/local/lib/ /usr/local/lib/
 COPY --from=gpu /usr/local/libexec/ /usr/local/libexec/
 RUN ldconfig
 COPY --from=cloud-hypervisor /out/cloud-hypervisor /usr/local/bin/
-COPY --from=fs /out/hangar-fs /usr/local/bin/
 COPY --from=gpu /out/hangar-gpu /usr/local/bin/
 COPY --from=go /out/hangar-worker /usr/local/bin/
 COPY --from=go /out/hangar-agent /usr/share/hangar/hangar-agent

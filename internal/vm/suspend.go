@@ -99,7 +99,7 @@ func (c InstanceConfig) discardSuspend() {
 // a fresh boot's backends would otherwise restore into a guest that never
 // held it.
 func (c InstanceConfig) clearBackendState() {
-	for _, f := range []string{"fs.json", "fs.ready", "gpu.json", "gpu.ready"} {
+	for _, f := range []string{"gpu.json", "gpu.ready"} {
 		os.Remove(filepath.Join(c.Dir, f))
 	}
 }
@@ -118,11 +118,6 @@ func (i *Instance) Suspend(ctx context.Context) error {
 	err := func() error {
 		if err := i.api.Pause(ctx); err != nil {
 			return fmt.Errorf("pausing: %w", err)
-		}
-		if i.fs != nil {
-			if err := i.fs.SaveState(30 * time.Second); err != nil {
-				return fmt.Errorf("saving the file system backend's state: %w", err)
-			}
 		}
 		if i.gpu != nil {
 			if err := i.gpu.SaveState(30 * time.Second); err != nil {

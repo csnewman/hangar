@@ -49,7 +49,7 @@ EOF
 # the trigger for that is literally `ConditionPathExists=|!/usr/lib/udev/hwdb.bin`.
 #
 # Without this the index is compiled from 9 MB of source on every boot of
-# every environment, over virtio-fs. Building it once here costs image size
+# every environment, from the image. Building it once here costs image size
 # that the page cache shares between guests.
 #
 # It must land in /usr, not /etc: a hwdb.bin under /etc is itself one of the

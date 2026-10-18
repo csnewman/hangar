@@ -10,6 +10,5 @@ export const logNames: { name: EnvironmentLogName; label: string; about: string 
   },
   { name: 'worker', label: 'Worker', about: 'What its worker logged about it: each step of starting, and any error.' },
   { name: 'monitor', label: 'Monitor', about: "Cloud Hypervisor's own log, the virtual machine's monitor." },
-  { name: 'fs', label: 'Image', about: 'The backend serving its image to the machine over virtio-fs.' },
   { name: 'gpu', label: 'GPU', about: "The virtual GPU's backend, for an environment with one." },
 ]

@@ -166,8 +166,8 @@ services:
       target: worker
     image: ${HANGAR_REGISTRY:-ghcr.io/csnewman/hangar}/worker:${HANGAR_VERSION:-latest}
     restart: unless-stopped
-    # Not --privileged. The worker needs KVM, and the backends it starts
-    # (passt, hangar-fs) sandbox themselves in namespaces, which needs
+    # Not --privileged. The worker needs KVM, and passt, which it starts for
+    # each environment, sandboxes itself in namespaces, which needs
     # CAP_SYS_ADMIN and Docker's seccomp and AppArmor profiles out of the
     # way. Everything else is ordinary root in a container.
     devices:

@@ -48,7 +48,7 @@ func CheckHugePages() error {
 	default:
 		// "never" and "deny" both leave the madvise with no effect.
 		return fmt.Errorf("shared memory cannot take huge pages: %s is %q.\n"+
-			"Guest memory has to be shared for virtio-fs, so without this a guest "+
+			"Guest memory is always shared, so without this a guest "+
 			"boots three to five times slower with nothing to show why.\n"+
 			"Fix it for this boot with:\n"+
 			"    echo advise | sudo tee %s\n"+

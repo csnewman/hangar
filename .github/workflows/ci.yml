@@ -155,29 +155,6 @@ jobs:
           go-version: '1.27'
       - run: go run ./cmd/hangar kernel --config-only -o out/kernel -v
 
-  fs:
-    # hangar-fs needs nothing from the host at build time; running it needs a
-    # monitor to connect to, which is not done here.
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-26.04-arm, ubuntu-26.04]
-    runs-on: ${{ matrix.runner }}
-    defaults:
-      run:
-        working-directory: fs
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: fs
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
-
   gpu:
     # hangar-gpu links against virglrenderer with the patches in
     # gpu/virglrenderer applied: the snapshot API it calls exists nowhere

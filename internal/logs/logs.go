@@ -21,8 +21,6 @@ const (
 	Console = "console"
 	// Monitor is Cloud Hypervisor's own log.
 	Monitor = "monitor"
-	// Files is the backend serving the image over virtio-fs.
-	Files = "fs"
 	// GPU is the virtual GPU's backend.
 	GPU = "gpu"
 	// Worker is what the worker logged about the environment, or, for the
@@ -31,7 +29,7 @@ const (
 )
 
 // Names are an environment's logs, in the order they are offered.
-var Names = []string{Console, Worker, Monitor, Files, GPU}
+var Names = []string{Console, Worker, Monitor, GPU}
 
 // MaxRead is the most a reply holds.
 const MaxRead = 256 << 10

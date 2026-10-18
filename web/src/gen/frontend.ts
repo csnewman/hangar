@@ -1493,10 +1493,10 @@ export interface components {
          */
         TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "projects" | "access" | "trusted_folders" | "web_names" | "packs" | "placement" | "name";
         /**
-         * @description console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; fs the backend serving the image; gpu the virtual GPU's backend.
+         * @description console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; gpu the virtual GPU's backend.
          * @enum {string}
          */
-        EnvironmentLogName: "console" | "worker" | "monitor" | "fs" | "gpu";
+        EnvironmentLogName: "console" | "worker" | "monitor" | "gpu";
         LogPart: {
             /**
              * Format: int64
@@ -1594,7 +1594,7 @@ export interface components {
             /** @description Folders VS Code trusts without asking, beyond the repositories and the projects, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing. */
             trusted_folders?: string[];
             access?: components["schemas"]["Access"];
-            /** @description Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. A worker with DAX turned off (dax_mib 0) reads them in regardless. */
+            /** @description Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. Only a worker that attaches images as persistent memory (image_device pmem) can map them; others read them in regardless. */
             dax?: boolean;
             /** @description Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<short> after Hangar's host. */
             web_names?: string[];

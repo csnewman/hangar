@@ -365,7 +365,7 @@ No. It needs:
 | | why |
 |---|---|
 | `/dev/kvm` | the virtual machines |
-| `CAP_SYS_ADMIN` | passt (guest networking) and hangar-fs (the virtio-fs backend) sandbox themselves in new namespaces |
+| `CAP_SYS_ADMIN` | passt (guest networking) sandboxes itself in new namespaces |
 | `seccomp=unconfined`, `apparmor=unconfined` | Docker's default profiles refuse those namespace calls even with the capability |
 
 and runs as root inside its container. `/dev/dri` is added for GPU
@@ -400,8 +400,8 @@ The server and worker images are pulled from `HANGAR_REGISTRY` at
 `HANGAR_VERSION`: CI publishes both for arm64 and amd64, as `latest` and as
 each commit on master. `up -d --build` builds them from this checkout
 instead. The worker image holds everything a node supplies, built from
-source -- Cloud Hypervisor with Hangar's patches, the virtio-fs and
-virtio-gpu backends, the guest kernel, the guest agent and VS Code's server
+source -- Cloud Hypervisor with Hangar's patches, the virtio-gpu
+backend, the guest kernel, the guest agent and VS Code's server
 -- so building it takes a while and wants about 8 GiB of memory.
 
 ## Updating

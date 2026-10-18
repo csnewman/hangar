@@ -40,7 +40,6 @@ type InstanceConfig struct {
 	Base string `json:"base"`
 	// BaseFile is an EROFS image of Base, attached as BaseDevice
 	// (ImageDisk or ImagePmem), which the guest mounts with DAX if BaseDAX.
-	// Empty serves Base itself over virtio-fs.
 	BaseFile   string `json:"base_file,omitempty"`
 	BaseDevice string `json:"base_device,omitempty"`
 	BaseDAX    bool   `json:"base_dax,omitempty"`
@@ -53,9 +52,6 @@ type InstanceConfig struct {
 	// to while the machine runs (ch.Config.MemoryMaxMB).
 	MemoryMaxMiB int `json:"memory_max_mib,omitempty"`
 	CPUs         int `json:"cpus"`
-	// DaxMiB sizes the window the base's files are mapped through. Zero
-	// reads every file through the backend instead.
-	DaxMiB int `json:"dax_mib"`
 	// Net gives the guest outbound networking, through passt.
 	Net bool `json:"net"`
 
@@ -107,9 +103,8 @@ type Instance struct {
 	cancel   context.CancelFunc
 	backends []interface{ Close() error }
 	exited   chan struct{}
-	// fs and gpu are the backends that keep guest state a suspend must
-	// save; gpu is nil without a GPU.
-	fs      *ch.FsBackend
+	// gpu is the backend that keeps guest state a suspend must save; nil
+	// without a GPU.
 	gpu     *ch.GpuBackend
 	net     *ch.Passt
 	resumed bool
@@ -150,9 +145,6 @@ func (i *Instance) Exited() <-chan struct{} { return i.exited }
 func (i *Instance) supportPids() (gpu int, others []int) {
 	if i.gpu != nil {
 		gpu = i.gpu.Pid()
-	}
-	if i.fs != nil {
-		others = append(others, i.fs.Pid())
 	}
 	if i.net != nil {
 		others = append(others, i.net.Pid())
@@ -286,8 +278,7 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 	}
 
 	// The guest's initramfs mounts the base as the lower layer: the EROFS
-	// image from the device named on the command line, or, with no image,
-	// the directory over virtio-fs.
+	// image from the device named on the command line.
 	switch cfg.BaseDevice {
 	case ImageDisk:
 		// After the disks the guest already knows by position and label, so
@@ -301,21 +292,7 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 			ccfg.ExtraCmdline += " hangar.image_dax=1"
 		}
 	default:
-		// With a DAX window the base's files are mapped from the host's
-		// page cache, which every machine on the base shares.
-		var minSize uint64
-		if cfg.DaxMiB > 0 {
-			minSize = ch.DefaultDaxMinFileSize
-		}
-		fs, err := ch.StartFsBackend(procCtx, cfg.Base, filepath.Join(run, "fs.sock"), ch.DefaultVirtiofsTag,
-			minSize, filepath.Join(cfg.Dir, "fs.json"), cfg.Verbose)
-		if err != nil {
-			return nil, err
-		}
-		inst.backends = append(inst.backends, fs)
-		inst.fs = fs
-		ccfg.VirtiofsSocket = fs.Socket()
-		ccfg.VirtiofsDaxMiB = cfg.DaxMiB
+		return nil, fmt.Errorf("the image is attached as %q, which is neither %s nor %s", cfg.BaseDevice, ImageDisk, ImagePmem)
 	}
 
 	if cfg.Net {
@@ -509,11 +486,6 @@ func (i *Instance) restore(ctx, monCtx context.Context, ccfg *ch.Config) error {
 	}
 	if err := i.api.Restore(ctx, filepath.Join(i.cfg.Dir, snapshotDir)); err != nil {
 		return fmt.Errorf("restoring the snapshot: %w", err)
-	}
-	if i.fs != nil {
-		if err := i.fs.WaitRestored(ctx, 2*time.Minute); err != nil {
-			return fmt.Errorf("restoring the file system backend: %w", err)
-		}
 	}
 	if i.gpu != nil {
 		if err := i.gpu.WaitRestored(ctx, 2*time.Minute); err != nil {

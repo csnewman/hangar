@@ -51,8 +51,8 @@ import (
 // Image is how a worker finds the base an environment's image names.
 //
 // Base is the image's root filesystem, a directory, which the guest mounts
-// read-only as the lower layer: as an EROFS image of it, or the directory
-// itself over virtio-fs (Config.ImageDevice). Every environment on the worker
+// read-only as the lower layer, as an EROFS image of it (Config.ImageDevice
+// says how it is attached). Every environment on the worker
 // using the image shares it. An image carries nothing else: the kernel and
 // the initramfs are the node's.
 type Image struct {
@@ -93,12 +93,8 @@ type Config struct {
 	UpperGiB  int
 	DockerGiB int
 	// ImageDevice is how the base reaches the guest: ImageDisk (the
-	// default), ImagePmem, or ImageVirtiofs.
+	// default) or ImagePmem.
 	ImageDevice string
-	// DaxMiB sizes the window a virtio-fs base is mapped through, for an
-	// environment that asks for DAX. Zero reads every file through the
-	// backend, whatever an environment asks.
-	DaxMiB int
 	// GPUVenus offers an environment with a virtual GPU Vulkan as well as
 	// OpenGL, and GPUVenusRestore carries its Vulkan state across a suspend.
 	GPUVenus, GPUVenusRestore bool
@@ -125,10 +121,6 @@ const (
 	// every guest on the image. The first touch of each page faults to the
 	// host, which is costly under nested virtualisation.
 	ImagePmem = "pmem"
-	// ImageVirtiofs serves the base directory over virtio-fs (hangar-fs),
-	// with a DAX window for an environment that asks for DAX. Every lookup
-	// is a round trip to the host.
-	ImageVirtiofs = "virtiofs"
 )
 
 func (c *Config) defaults() {
@@ -931,7 +923,7 @@ func (r *Runtime) DialEditor(ctx context.Context, id string) (net.Conn, error) {
 // this runtime holds, and only those logs, so a request names no other file.
 func (r *Runtime) LogFile(id, name string) (string, bool) {
 	switch name {
-	case logs.Console, logs.Monitor, logs.Files, logs.GPU:
+	case logs.Console, logs.Monitor, logs.GPU:
 	default:
 		return "", false
 	}

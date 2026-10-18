@@ -129,7 +129,6 @@ func (e EnvironmentImageChange) Valid() bool {
 // Defines values for EnvironmentLogName.
 const (
 	EnvironmentLogNameConsole EnvironmentLogName = "console"
-	EnvironmentLogNameFs      EnvironmentLogName = "fs"
 	EnvironmentLogNameGPU     EnvironmentLogName = "gpu"
 	EnvironmentLogNameMonitor EnvironmentLogName = "monitor"
 	EnvironmentLogNameWorker  EnvironmentLogName = "worker"
@@ -139,8 +138,6 @@ const (
 func (e EnvironmentLogName) Valid() bool {
 	switch e {
 	case EnvironmentLogNameConsole:
-		return true
-	case EnvironmentLogNameFs:
 		return true
 	case EnvironmentLogNameGPU:
 		return true
@@ -794,7 +791,7 @@ type Environment struct {
 // EnvironmentImageChange What the environment's next start does to its image.
 type EnvironmentImageChange string
 
-// EnvironmentLogName console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; fs the backend serving the image; gpu the virtual GPU's backend.
+// EnvironmentLogName console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; gpu the virtual GPU's backend.
 type EnvironmentLogName string
 
 // EnvironmentSettings defines model for EnvironmentSettings.
@@ -1298,7 +1295,7 @@ type Spec struct {
 	Access *Access `json:"access,omitempty"`
 	CPUs   int     `json:"cpus"`
 
-	// Dax Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. A worker with DAX turned off (dax_mib 0) reads them in regardless.
+	// Dax Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. Only a worker that attaches images as persistent memory (image_device pmem) can map them; others read them in regardless.
 	Dax *bool `json:"dax,omitempty"`
 
 	// Display Whether the environment has a graphical desktop.
