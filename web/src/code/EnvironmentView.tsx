@@ -56,6 +56,7 @@ export function EnvironmentView({
     { id: 'connect', label: 'Connect' },
     { id: 'machine', label: 'Machine' },
     ...(env.spec.repos.length > 0 ? [{ id: 'repositories', label: 'Repositories' }] : []),
+    ...((env.spec.projects?.length ?? 0) > 0 ? [{ id: 'projects', label: 'Projects' }] : []),
     { id: 'files', label: 'Files' },
     { id: 'activity', label: 'Activity' },
     { id: 'delete', label: 'Delete' },
@@ -78,6 +79,11 @@ export function EnvironmentView({
         {env.spec.repos.length > 0 && (
           <Section id="repositories" title="Repositories">
             <Repositories env={env} />
+          </Section>
+        )}
+        {(env.spec.projects?.length ?? 0) > 0 && (
+          <Section id="projects" title="Projects">
+            <Projects env={env} />
           </Section>
         )}
         <Section id="files" title="Files">
@@ -252,7 +258,7 @@ const settingNames: Record<TemplateSetting, string> = {
   gpu: 'GPU',
   dax: 'image mapping',
   repos: 'repositories',
-  editor_path: 'editor folder',
+  projects: 'projects',
   access: 'access',
   trusted_folders: 'trusted folders',
   packs: 'packs',
@@ -836,6 +842,28 @@ function ApplyBar({ env, form: f }: { env: Environment; form: SettingsForm }) {
   )
 }
 
+// Projects are the folders the editors open, as the environment was made;
+// the Code tab's workspace begins with them and can be changed there.
+function Projects({ env }: { env: Environment }) {
+  return (
+    <>
+      <ul className="env-projects">
+        {env.spec.projects?.map((p, i) => (
+          <li key={p}>
+            <span className="mono">{p}</span>
+            {i === 0 && (
+              <span className="pane-pill" title="Where the Code tab and a new terminal start">
+                starts here
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      <p className="muted small">The Code tab opens these side by side to begin with, and VS Code as a workspace.</p>
+    </>
+  )
+}
+
 function Repositories({ env }: { env: Environment }) {
   return (
     <table className="pane-table">
@@ -851,11 +879,6 @@ function Repositories({ env }: { env: Environment }) {
           <tr key={r.path}>
             <td>
               <span className="mono">{r.path}</span>
-              {env.spec.editor_path === r.path && (
-                <span className="pane-pill" title="The folder the editor opens on">
-                  opens
-                </span>
-              )}
             </td>
             <td>
               <span className="mono">{r.url.replace(/^https:\/\//, '').replace(/\.git$/, '')}</span>

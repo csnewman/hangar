@@ -672,10 +672,8 @@ function CodeView({
   const languages = useMemo(() => languagesForRef.current(client, client.root), [client])
 
   // The workspace's projects: the environment's, or this tab's folder
-  // alone. Until the list is set it is the environment's folder and every
-  // repository its template clones.
-  const environmentRepos = environment.spec.repos.map((r) => r.path).filter(Boolean)
-  const workspace = useWorkspace(client, folder !== '', environmentRepos)
+  // alone.
+  const workspace = useWorkspace(client, folder !== '')
   const projects = useProjects(client, env, workspace.present, (c, root) =>
     c === client ? languages : languagesForRef.current(c, root),
   )

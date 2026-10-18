@@ -24,8 +24,8 @@ func TestCreateWithOwnMachineAndRepos(t *testing.T) {
 	}
 	p := users.Principal{UserID: u.ID, Username: u.Username}
 	spec := api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 2, MemoryMiB: 2048, Display: api.DisplayNone,
-		Repos:      []api.Repo{{URL: "https://example.com/a.git", Path: "/workspace/a", Branch: "try/{name}"}},
-		EditorPath: "/workspace/a"}}
+		Repos:    []api.Repo{{URL: "https://example.com/a.git", Path: "/workspace/a", Branch: "try/{name}"}},
+		Projects: []string{"/workspace/a"}}}
 	tpl, err := tm.Create(ctx, p, templates.Input{Name: "t", Spec: spec})
 	if err != nil {
 		t.Fatal(err)
@@ -44,8 +44,8 @@ func TestCreateWithOwnMachineAndRepos(t *testing.T) {
 	if len(env.Spec.Repos) != 1 || env.Spec.Repos[0].URL != repos[0].URL || env.Spec.Repos[0].Branch != "work/e" {
 		t.Errorf("repos: %+v", env.Spec.Repos)
 	}
-	if env.Spec.EditorPath != "/workspace/b" {
-		t.Errorf("editor folder %q, want the repository's", env.Spec.EditorPath)
+	if !slices.Equal(env.Spec.Projects, []string{"/workspace/b"}) || env.Spec.EditorPath != "/workspace/b" {
+		t.Errorf("projects %q, editor %q, want the repository's", env.Spec.Projects, env.Spec.EditorPath)
 	}
 	for _, want := range []string{environments.SettingCPUs, environments.SettingMemory, environments.SettingDisplay,
 		environments.SettingRepos} {
@@ -59,8 +59,8 @@ func TestCreateWithOwnMachineAndRepos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bare.Spec.Repos) != 0 || bare.Spec.EditorPath != "" || bare.CPUs != 2 {
-		t.Errorf("no repositories: repos %+v, editor %q, %d vCPUs", bare.Spec.Repos, bare.Spec.EditorPath, bare.CPUs)
+	if len(bare.Spec.Repos) != 0 || len(bare.Spec.Projects) != 0 || bare.Spec.EditorPath != "" || bare.CPUs != 2 {
+		t.Errorf("no repositories: repos %+v, projects %q, %d vCPUs", bare.Spec.Repos, bare.Spec.Projects, bare.CPUs)
 	}
 
 	for name, m := range map[string]api.Machine{

@@ -432,13 +432,13 @@ const (
 	SettingCPUs           TemplateSetting = "cpus"
 	SettingDAX            TemplateSetting = "dax"
 	SettingDisplay        TemplateSetting = "display"
-	SettingEditorPath     TemplateSetting = "editor_path"
 	SettingGPU            TemplateSetting = "gpu"
 	SettingImage          TemplateSetting = "image"
 	SettingMemory         TemplateSetting = "memory"
 	SettingName           TemplateSetting = "name"
 	SettingPacks          TemplateSetting = "packs"
 	SettingPlacement      TemplateSetting = "placement"
+	SettingProjects       TemplateSetting = "projects"
 	SettingRepos          TemplateSetting = "repos"
 	SettingTrustedFolders TemplateSetting = "trusted_folders"
 	SettingWebNames       TemplateSetting = "web_names"
@@ -455,8 +455,6 @@ func (e TemplateSetting) Valid() bool {
 		return true
 	case SettingDisplay:
 		return true
-	case SettingEditorPath:
-		return true
 	case SettingGPU:
 		return true
 	case SettingImage:
@@ -468,6 +466,8 @@ func (e TemplateSetting) Valid() bool {
 	case SettingPacks:
 		return true
 	case SettingPlacement:
+		return true
+	case SettingProjects:
 		return true
 	case SettingRepos:
 		return true
@@ -1304,9 +1304,6 @@ type Spec struct {
 	// Display Whether the environment has a graphical desktop.
 	Display Display `json:"display"`
 
-	// EditorPath The folder the editor opens on. In a template it may use variables, as a repository's branch does.
-	EditorPath *string `json:"editor_path,omitempty"`
-
 	// GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
 	GPU       GPU    `json:"gpu"`
 	Image     string `json:"image"`
@@ -1317,9 +1314,12 @@ type Spec struct {
 
 	// Placement Worker labels the environment requires: it runs only on a worker with every one of these labels, with these values.
 	Placement map[string]string `json:"placement"`
-	Repos     []Repo            `json:"repos"`
 
-	// TrustedFolders Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing.
+	// Projects The folders the editors open side by side: the Code tab's workspace to begin with, and VS Code's. The first is where the Code tab and a new terminal start. A template that names none has its repositories'. In a template each may use variables, as a repository's branch does.
+	Projects *[]string `json:"projects,omitempty"`
+	Repos    []Repo    `json:"repos"`
+
+	// TrustedFolders Folders VS Code trusts without asking, beyond the repositories and the projects, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing.
 	TrustedFolders *[]string `json:"trusted_folders,omitempty"`
 
 	// WebNames Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<short> after Hangar's host.

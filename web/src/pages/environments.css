@@ -564,3 +564,7 @@
 .newenv-phone .newenv-about {
   display: none;
 }
+
+.newenv-project {
+  display: block;
+}

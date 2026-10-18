@@ -90,17 +90,21 @@ func (g *Gateway) Origin(short string) string {
 }
 
 // SignIn issues a ticket for the Hangar session whose token is given and
-// returns the URL that redeems it and opens the editor on folder, which may
-// be empty. The caller has checked that the session's user may reach the
-// environment, whose ID and short ID are given.
-func (g *Gateway) SignIn(ctx context.Context, sessionToken, environmentID, short, folder string) (string, error) {
+// returns the URL that redeems it and opens the editor on what is named: a
+// folder, a VS Code workspace (a .code-workspace file), or nothing. The
+// caller has checked that the session's user may reach the environment,
+// whose ID and short ID are given.
+func (g *Gateway) SignIn(ctx context.Context, sessionToken, environmentID, short, open string) (string, error) {
 	ticket, err := g.sessions.Ticket(ctx, sessionToken, environmentID)
 	if err != nil {
 		return "", err
 	}
 	to := "/"
-	if folder != "" {
-		to += "?" + url.Values{"folder": {folder}}.Encode()
+	switch {
+	case strings.HasSuffix(open, ".code-workspace"):
+		to += "?" + url.Values{"workspace": {open}}.Encode()
+	case open != "":
+		to += "?" + url.Values{"folder": {open}}.Encode()
 	}
 	return g.Origin(short) + signInPath + "?" + url.Values{"ticket": {ticket}, "to": {to}}.Encode(), nil
 }

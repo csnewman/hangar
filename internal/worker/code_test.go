@@ -44,7 +44,7 @@ func TestCode(t *testing.T) {
 
 	var tmpl struct{ ID string }
 	call(t, hs.URL, http.MethodPost, "/api/frontend/templates", `{"name":"t","visibility":"private","spec":`+
-		`{"image":"img","cpus":1,"memory_mib":512,"display":"none","gpu":"none","repos":[],"placement":{},"editor_path":"/workspace/app"}}`, &tmpl)
+		`{"image":"img","cpus":1,"memory_mib":512,"display":"none","gpu":"none","repos":[],"placement":{},"projects":["/workspace/app"]}}`, &tmpl)
 	var env api.Environment
 	call(t, hs.URL, http.MethodPost, "/api/frontend/environments", `{"template_id":"`+tmpl.ID+`","name":"code"}`, &env)
 	waitFor(t, hs.URL, env.ID, func(e *api.Environment) bool { return e != nil && e.Phase == api.PhaseRunning })

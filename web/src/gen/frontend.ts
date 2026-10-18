@@ -1491,7 +1491,7 @@ export interface components {
          * @description A setting an environment takes from its template.
          * @enum {string}
          */
-        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "editor_path" | "access" | "trusted_folders" | "web_names" | "packs" | "placement" | "name";
+        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "projects" | "access" | "trusted_folders" | "web_names" | "packs" | "placement" | "name";
         /**
          * @description console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; fs the backend serving the image; gpu the virtual GPU's backend.
          * @enum {string}
@@ -1587,11 +1587,11 @@ export interface components {
             display: components["schemas"]["Display"];
             gpu: components["schemas"]["GPU"];
             repos: components["schemas"]["Repo"][];
-            /** @description The folder the editor opens on. In a template it may use variables, as a repository's branch does. */
-            editor_path?: string;
+            /** @description The folders the editors open side by side: the Code tab's workspace to begin with, and VS Code's. The first is where the Code tab and a new terminal start. A template that names none has its repositories'. In a template each may use variables, as a repository's branch does. */
+            projects?: string[];
             /** @description The packs the environment has, in order, before those attaching themselves to it: a path two of them name is the first's. A pack the owner may not use is left out. */
             packs?: components["schemas"]["PackRef"][];
-            /** @description Folders VS Code trusts without asking, beyond the repositories and the editor's folder, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing. */
+            /** @description Folders VS Code trusts without asking, beyond the repositories and the projects, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing. */
             trusted_folders?: string[];
             access?: components["schemas"]["Access"];
             /** @description Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. A worker with DAX turned off (dax_mib 0) reads them in regardless. */

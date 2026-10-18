@@ -219,7 +219,8 @@ class Tree {
     if (lost) tip.appendMarkdown(`Its worker has not reported for a while, so this is not known. It was last ${env.phase}.\n\n`)
     else tip.appendMarkdown(`${env.phase}${env.reason ? `: ${env.reason}` : ''}\n\n`)
     tip.appendMarkdown(`${env.template} · ${env.cpus} vCPU · ${Math.round(env.memory_mib / 1024)} GiB`)
-    if (env.editor_path) tip.appendMarkdown(`\n\nOpens \`${env.editor_path}\``)
+    if (env.workspace_file) tip.appendMarkdown('\n\nOpens its projects as a workspace')
+    else if (env.editor_path) tip.appendMarkdown(`\n\nOpens \`${env.editor_path}\``)
     item.tooltip = tip
     return { item, env }
   }
@@ -679,7 +680,8 @@ async function open(node, newWindow) {
     if (platforms[host] !== 'linux') {
       await remote.update('remotePlatform', { ...platforms, [host]: 'linux' }, vscode.ConfigurationTarget.Global)
     }
-    const folder = env.editor_path || '/home/dev'
+    // Its projects as a workspace when it has several, else its folder.
+    const folder = env.workspace_file || env.editor_path || '/home/dev'
     const uri = vscode.Uri.from({ scheme: 'vscode-remote', authority, path: folder })
     log.appendLine(`opening ${uri.toString()}`)
     await vscode.commands.executeCommand('vscode.openFolder', uri, { forceNewWindow: newWindow })

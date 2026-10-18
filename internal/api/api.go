@@ -8,6 +8,7 @@
 package api
 
 import (
+	"path"
 	"slices"
 	"time"
 )
@@ -104,12 +105,19 @@ type Spec struct {
 	Display   Display `json:"display"`
 	GPU       GPU     `json:"gpu"`
 	Repos     []Repo  `json:"repos"`
-	// EditorPath is the folder the editor opens on.
+	// Projects are the folders the environment's editors open, side by
+	// side: the Code tab's workspace to begin with, and VS Code's
+	// workspace. A template that names none has its repositories'.
+	Projects []string `json:"projects,omitempty"`
+	// EditorPath is the first project: the folder the Code service and a
+	// new terminal start in, and the one an editor opens on when there is
+	// one project. A spec saved before Projects held only this; such a
+	// template's projects are this folder.
 	EditorPath string `json:"editor_path,omitempty"`
 	// Access is what of its owner's the environment is kept from.
 	Access
 	// TrustedFolders are trusted by the editor without asking, beyond the
-	// repositories and the editor's folder, which its editor trusts anyway.
+	// repositories and the projects, which its editor trusts anyway.
 	// Ignored with NoEditorTrust.
 	TrustedFolders []string `json:"trusted_folders,omitempty"`
 	// DAX has the guest map its image's files from the host's page cache,
@@ -154,9 +162,36 @@ type Access struct {
 // but none of their credentials, and an editor that trusts nothing.
 var Untrusted = Access{NoSensitiveFiles: true, NoSSHKeys: true, NoRegistry: true, NoEditorTrust: true}
 
+// WorkspaceFile is where in the guest an environment's projects are kept,
+// as a VS Code workspace: the worker writes its spec's projects there when
+// it is first set up, the Code tab's workspace is the file's folders, which
+// it changes as the person adds and removes them, and VS Code opens it when
+// there is more than one project. It is the person's, in a folder of
+// theirs.
+const WorkspaceFile = "/var/lib/hangar-workspace/projects.code-workspace"
+
+// CodeWorkspace is a VS Code workspace file's content: its folders.
+type CodeWorkspace struct {
+	Folders []CodeWorkspaceFolder `json:"folders"`
+}
+
+// CodeWorkspaceFolder is one of a VS Code workspace's folders.
+type CodeWorkspaceFolder struct {
+	Path string `json:"path"`
+}
+
+// ProjectFolders is the projects, or for a spec saved with only an editor
+// folder, that folder.
+func (s Spec) ProjectFolders() []string {
+	if len(s.Projects) == 0 && s.EditorPath != "" {
+		return []string{s.EditorPath}
+	}
+	return s.Projects
+}
+
 // EditorTrust is the folders an environment's editor trusts without asking:
-// none with NoEditorTrust; otherwise its repositories, its editor's folder,
-// and whatever else its template names.
+// none with NoEditorTrust; otherwise its repositories, its projects, the
+// workspace that lists them, and whatever else its template names.
 func (s Spec) EditorTrust() []string {
 	out := []string{}
 	if s.NoEditorTrust {
@@ -170,7 +205,12 @@ func (s Spec) EditorTrust() []string {
 	for _, r := range s.Repos {
 		add(r.Path)
 	}
+	for _, p := range s.ProjectFolders() {
+		add(p)
+	}
 	add(s.EditorPath)
+	// VS Code trusts a workspace of several folders by its file's folder.
+	add(path.Dir(WorkspaceFile))
 	for _, f := range s.TrustedFolders {
 		add(f)
 	}

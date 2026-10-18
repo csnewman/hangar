@@ -11,15 +11,13 @@ export type Project = { root: string; name: string; client: CodeClient; language
 export const projectName = (root: string) => root.slice(root.lastIndexOf('/') + 1) || root
 
 // useWorkspace is the environment's projects as the service keeps them,
-// kept up as any tab changes them. Until they are first set they are the
-// environment's folder and the template's other repositories (seed). A tab
-// working in one folder alone shows that folder only. Folders that do not
-// exist are kept apart (missing), to be shown as such and removed; a
-// template's repository not there is left out.
+// kept up as any tab changes them: the template's to begin with, as the
+// worker writes them, and until there are any the environment's folder. A
+// tab working in one folder alone shows that folder only. Folders that do
+// not exist are kept apart (missing), to be shown as such and removed.
 export function useWorkspace(
   client: CodeClient,
   alone: boolean,
-  seed: string[],
 ): { folders: string[]; present: string[]; missing: string[]; set: ((folders: string[]) => Promise<void>) | null } {
   const [w, setW] = useState<Workspace | null>(null)
   useEffect(() => {
@@ -38,13 +36,11 @@ export function useWorkspace(
       offChanged()
     }
   }, [client])
-  const seedKey = seed.join('\n')
   const folders = useMemo(() => {
     if (alone || !w) return client.root ? [client.root] : []
-    if (w.saved) return w.folders
-    return [...new Set([...w.folders, ...seedKey.split('\n').filter(Boolean)])]
+    return w.folders
     // client.root is read once the workspace is, which follows the connection.
-  }, [alone, w, client.root, seedKey])
+  }, [alone, w, client.root])
   // Whether each folder is there, looked at as the list changes.
   const [there, setThere] = useState<Record<string, boolean>>({})
   const listed = folders.join('\n')

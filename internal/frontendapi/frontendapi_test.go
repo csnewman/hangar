@@ -492,7 +492,7 @@ func TestNamePatternAndBranch(t *testing.T) {
 	alice, _ := f.user(t, "alice", false)
 	spec := `{"image":"img","cpus":1,"memory_mib":1024,"display":"desktop","gpu":"none",` +
 		`"repos":[{"url":"https://github.com/example/app.git","path":"/workspace/app","branch":"agent/{name}"}],` +
-		`"editor_path":"/workspace/app","placement":{}}`
+		`"projects":["/workspace/app"],"placement":{}}`
 	status, tmpl := alice.do("POST", "/api/frontend/templates",
 		`{"name":"tickets","visibility":"private","spec":`+spec+`,"name_pattern":"proj-[0-9]+","name_hint":"a ticket, like proj-123"}`)
 	if status != 201 {

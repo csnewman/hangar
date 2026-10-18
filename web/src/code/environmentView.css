@@ -160,3 +160,17 @@
   margin: 0;
   line-height: 1.5;
 }
+
+.env-projects {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.env-projects li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

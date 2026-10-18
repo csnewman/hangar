@@ -28,7 +28,7 @@ const (
 	SettingGPU            = "gpu"
 	SettingDAX            = "dax"
 	SettingRepos          = "repos"
-	SettingEditorPath     = "editor_path"
+	SettingProjects       = "projects"
 	SettingAccess         = "access"
 	SettingTrustedFolders = "trusted_folders"
 	SettingWebNames       = "web_names"
@@ -60,7 +60,7 @@ func templateChanges(e api.Environment, t api.TemplateSpec) []string {
 	add(env.GPU != want.GPU, SettingGPU)
 	add(env.DAX != want.DAX, SettingDAX)
 	add(!slices.Equal(env.Repos, want.Repos), SettingRepos)
-	add(env.EditorPath != want.EditorPath, SettingEditorPath)
+	add(!slices.Equal(env.ProjectFolders(), want.ProjectFolders()), SettingProjects)
 	add(env.Access != want.Access, SettingAccess)
 	add(!slices.Equal(env.TrustedFolders, want.TrustedFolders), SettingTrustedFolders)
 	add(!slices.Equal(env.WebNames, want.WebNames), SettingWebNames)

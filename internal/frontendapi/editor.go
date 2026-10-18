@@ -36,10 +36,19 @@ func (h *handler) OpenEditor(ctx context.Context, req OpenEditorRequestObject) (
 	if env.Phase != api.PhaseRunning || env.WorkerID == "" {
 		return OpenEditor409JSONResponse{ConflictJSONResponse{Error: errNotRunning.Error()}}, nil
 	}
-	url, err := h.editors.SignIn(ctx, sessionFrom(ctx).token, env.ID, env.ShortID, env.Spec.EditorPath)
+	url, err := h.editors.SignIn(ctx, sessionFrom(ctx).token, env.ID, env.ShortID, editorOpens(env.Spec))
 	if err != nil {
 		return nil, err
 	}
 	h.access(ctx, env, "environment.open_editor", nil)
 	return OpenEditor200JSONResponse{URL: url}, nil
+}
+
+// editorOpens is what an environment's editor opens: its projects as a
+// workspace when there are several, else its one folder.
+func editorOpens(s api.Spec) string {
+	if len(s.Projects) > 1 {
+		return api.WorkspaceFile
+	}
+	return s.EditorPath
 }

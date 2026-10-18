@@ -333,7 +333,12 @@ function NewEnvironmentForm({
   const branch = fillTemplate(t.spec.repos[0]?.branch, vars)
   const s = t.spec
   const m = machine ?? { cpus: s.cpus, memory_mib: s.memory_mib, display: s.display, gpu: s.gpu, dax: s.dax ?? false }
-  const editor = repo !== null ? (own ? repoPath(own) : '') : fillTemplate(s.editor_path, vars)
+  const projects =
+    repo !== null
+      ? own
+        ? [repoPath(own)]
+        : []
+      : (s.projects?.length ? s.projects : s.repos.map((r) => r.path)).map((p) => fillTemplate(p, vars) ?? p)
 
   return (
     <div className="newenv-form">
@@ -467,9 +472,15 @@ function NewEnvironmentForm({
             </span>
           )}
         </Row>
-        {editor && (
-          <Row label="Editor opens">
-            <span className="mono">{editor}</span>
+        {projects.length > 0 && (
+          <Row label={projects.length === 1 ? 'Project' : 'Projects'}>
+            <span className="mono">
+              {projects.map((p, i) => (
+                <span key={i} className="newenv-project">
+                  {p}
+                </span>
+              ))}
+            </span>
           </Row>
         )}
         {groups.length > 0 && (

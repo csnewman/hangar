@@ -44,7 +44,12 @@ before(async () => {
 		stdio: 'inherit',
 		// The settings file is in the home directory; Docker is the fake
 		// engine the Docker test serves.
-		env: { ...process.env, HOME: dir, DOCKER_HOST: `unix://${dockerSock}` },
+		env: {
+			...process.env,
+			HOME: dir,
+			DOCKER_HOST: `unix://${dockerSock}`,
+			HANGAR_WORKSPACE: join(dir, 'workspace', 'projects.code-workspace'),
+		},
 	})
 	for (let i = 0; i < 100; i++) {
 		try {
@@ -1141,6 +1146,23 @@ test('a file system error is said in words, with its path', async () => {
 			a.call('fs.list', { path: join(root, 'a.txt') }),
 			(e: Error) => e.message === `${join(root, 'a.txt')} is not a folder`,
 		)
+	} finally {
+		a.close()
+	}
+})
+
+test('the workspace is a VS Code workspace file, its other settings kept', async () => {
+	const a = new Client()
+	try {
+		await a.call('hello')
+		const file = join(dir, 'workspace', 'projects.code-workspace')
+		writeFileSync(file, JSON.stringify({ folders: [{ path: root }, { path: '../repo' }], settings: { 'editor.tabSize': 3 } }))
+		assert.deepEqual(await a.call('workspace.get'), { folders: [root, root], saved: true })
+		await a.call('workspace.set', { folders: [root] })
+		assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), {
+			folders: [{ path: root }],
+			settings: { 'editor.tabSize': 3 },
+		})
 	} finally {
 		a.close()
 	}

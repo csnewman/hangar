@@ -55,7 +55,7 @@ func testEditor(t *testing.T, style publichost.Style, public string, name func(l
 
 	var tmpl struct{ ID string }
 	call(t, hs.URL, http.MethodPost, "/api/frontend/templates", `{"name":"t","visibility":"private","spec":`+
-		`{"image":"img","cpus":1,"memory_mib":512,"display":"none","gpu":"none","repos":[],"placement":{},"editor_path":"/workspace/app"}}`, &tmpl)
+		`{"image":"img","cpus":1,"memory_mib":512,"display":"none","gpu":"none","repos":[],"placement":{},"projects":["/workspace/app"]}}`, &tmpl)
 	var env api.Environment
 	call(t, hs.URL, http.MethodPost, "/api/frontend/environments", `{"template_id":"`+tmpl.ID+`","name":"ed"}`, &env)
 	waitFor(t, hs.URL, env.ID, func(e *api.Environment) bool { return e != nil && e.Phase == api.PhaseRunning })
@@ -147,6 +147,32 @@ func testEditor(t *testing.T, style publichost.Style, public string, name func(l
 		if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
 			t.Errorf("%s: %d, want refused", name, resp.StatusCode)
 		}
+	}
+
+	// An environment with several projects opens them as a workspace.
+	var multi struct{ ID string }
+	call(t, hs.URL, http.MethodPost, "/api/frontend/templates", `{"name":"multi","visibility":"private","spec":`+
+		`{"image":"img","cpus":1,"memory_mib":512,"display":"none","gpu":"none","repos":[],"placement":{},"projects":["/workspace/app","/home/dev/notes"]}}`, &multi)
+	var menv api.Environment
+	call(t, hs.URL, http.MethodPost, "/api/frontend/environments", `{"template_id":"`+multi.ID+`","name":"multi"}`, &menv)
+	waitFor(t, hs.URL, menv.ID, func(e *api.Environment) bool { return e != nil && e.Phase == api.PhaseRunning })
+	var mopened struct{ URL string }
+	call(t, hs.URL, http.MethodPost, "/api/frontend/environments/"+menv.ID+"/editor", "", &mopened)
+	mURL, err := url.Parse(mopened.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodGet, hs.URL+mURL.RequestURI(), nil)
+	req.Host = mURL.Host
+	req.Header.Set("Sec-Fetch-Site", "same-site")
+	req.Header.Set("Sec-Fetch-Mode", "navigate")
+	resp, err = client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if want := "/?workspace=" + url.QueryEscape(api.WorkspaceFile); resp.Header.Get("Location") != want {
+		t.Errorf("several projects open %q, want %q", resp.Header.Get("Location"), want)
 	}
 
 	// Signing out of Hangar signs out of its editors.

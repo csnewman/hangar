@@ -284,8 +284,8 @@ func withOwn(t api.TemplateSpec, req api.CreateEnvironment) (api.TemplateSpec, e
 		t.CPUs, t.MemoryMiB, t.Display, t.GPU, t.DAX = m.CPUs, m.MemoryMiB, m.Display, m.GPU, m.DAX
 	}
 	if req.Repos != nil {
-		// An empty editor folder resolves to the first repository's.
-		t.Repos, t.EditorPath = slices.Clone(*req.Repos), ""
+		// Repositories chosen for the environment are its projects.
+		t.Repos, t.Projects, t.EditorPath = slices.Clone(*req.Repos), nil, ""
 	}
 	checked, err := templates.Validate(t)
 	if err != nil {

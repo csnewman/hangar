@@ -36,7 +36,7 @@ type Environment struct {
 	// Display Its display -- none or desktop. More may come.
 	Display *string `json:"display,omitempty"`
 
-	// EditorPath The folder an editor opens in it.
+	// EditorPath The folder an editor opens in it: its first project.
 	EditorPath *string `json:"editor_path,omitempty"`
 	ID         string  `json:"id"`
 	MemoryMiB  *int    `json:"memory_mib,omitempty"`
@@ -67,6 +67,9 @@ type Environment struct {
 
 	// WorkerOnline Whether the worker it is placed on has reported in the last 45 seconds. While it has not, phase is what it last reported, which may no longer be so: a worker that stopped or lost its connection leaves its environments as they were said to be.
 	WorkerOnline *bool `json:"worker_online,omitempty"`
+
+	// WorkspaceFile Where in it a VS Code workspace of its projects is, when it has more than one, for an editor to open in place of editor_path.
+	WorkspaceFile *string `json:"workspace_file,omitempty"`
 }
 
 // Error defines model for Error.

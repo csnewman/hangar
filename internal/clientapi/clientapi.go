@@ -347,6 +347,9 @@ func environment(e api.Environment) Environment {
 	cpus, mem, display := e.CPUs, e.MemoryMiB, string(e.Spec.Display)
 	out.CPUs, out.MemoryMiB, out.Display = &cpus, &mem, optional(display)
 	out.EditorPath = optional(e.Spec.EditorPath)
+	if len(e.Spec.Projects) > 1 {
+		out.WorkspaceFile = optional(api.WorkspaceFile)
+	}
 	if p := e.Progress; p != nil {
 		sp := &StartProgress{Step: string(p.Step)}
 		if p.Total > 0 {

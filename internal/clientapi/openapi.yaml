@@ -307,7 +307,13 @@ components:
             leaves its environments as they were said to be.
         editor_path:
           type: string
-          description: The folder an editor opens in it.
+          description: >-
+            The folder an editor opens in it: its first project.
+        workspace_file:
+          type: string
+          description: >-
+            Where in it a VS Code workspace of its projects is, when it has
+            more than one, for an editor to open in place of editor_path.
         display:
           type: string
           description: Its display -- none or desktop. More may come.

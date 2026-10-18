@@ -18,6 +18,7 @@ const (
 	MinMemoryMiB = 512
 	MaxMemoryMiB = 256 * 1024
 	MaxRepos     = 16
+	MaxProjects  = 16
 	MaxWebNames  = 16
 	MaxPacks     = 16
 	// MaxWebName is the longest name that fits before -env<short ID> in one
@@ -134,12 +135,26 @@ func Validate(s api.TemplateSpec) (api.TemplateSpec, error) {
 		}
 	}
 
-	s.EditorPath = strings.TrimSpace(s.EditorPath)
-	if s.EditorPath != "" {
-		if err := check("the editor folder", s.EditorPath, absPath, "an absolute path"); err != nil {
+	// A spec saved with only the editor's folder has it as its project.
+	s.Projects = s.ProjectFolders()
+	if len(s.Projects) > MaxProjects {
+		return bad("at most %d projects", MaxProjects)
+	}
+	projects := make([]string, 0, len(s.Projects))
+	for i, p := range s.Projects {
+		p = strings.TrimSpace(p)
+		if err := check(fmt.Sprintf("project %d", i+1), p, absPath, "an absolute path"); err != nil {
 			return s, err
 		}
-		s.EditorPath = path.Clean(s.EditorPath)
+		p = path.Clean(p)
+		if !slices.Contains(projects, p) {
+			projects = append(projects, p)
+		}
+	}
+	s.Projects = projects
+	s.EditorPath = ""
+	if len(projects) > 0 {
+		s.EditorPath = projects[0]
 	}
 
 	for i, f := range s.TrustedFolders {
@@ -262,16 +277,26 @@ func Resolve(t api.TemplateSpec, v Vars) (api.Spec, error) {
 		paths[r.Path] = true
 		s.Repos[i] = r
 	}
-	var err error
-	if s.EditorPath, err = fill("the editor folder", s.EditorPath, absPath); err != nil {
-		return api.Spec{}, err
+	// The projects, else what the environment is for: its repositories.
+	from := t.ProjectFolders()
+	s.Projects = []string{}
+	for i, p := range from {
+		x, err := fill(fmt.Sprintf("project %d", i+1), p, absPath)
+		if err != nil {
+			return api.Spec{}, err
+		}
+		if x = path.Clean(x); x != "." && !slices.Contains(s.Projects, x) {
+			s.Projects = append(s.Projects, x)
+		}
 	}
-	if s.EditorPath != "" {
-		s.EditorPath = path.Clean(s.EditorPath)
+	if len(s.Projects) == 0 {
+		for _, r := range s.Repos {
+			s.Projects = append(s.Projects, r.Path)
+		}
 	}
-	if s.EditorPath == "" && len(s.Repos) > 0 {
-		// The editor opens on what the environment is for.
-		s.EditorPath = s.Repos[0].Path
+	s.EditorPath = ""
+	if len(s.Projects) > 0 {
+		s.EditorPath = s.Projects[0]
 	}
 	s.Placement = maps.Clone(t.Placement)
 	if s.Placement == nil {

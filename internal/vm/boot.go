@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -279,6 +280,36 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 	done := func(cmd ...string) bool {
 		out, err := sess.Exec(30*time.Second, cmd...)
 		return err == nil && out.Code == 0
+	}
+	// The projects, as the workspace both editors open: written once, when
+	// there is no workspace yet, the person changing it from then on. Its
+	// folder is theirs, so the Code tab can write the workspace even when
+	// the spec names no projects.
+	wsDir := filepath.Dir(api.WorkspaceFile)
+	if err := run(30*time.Second, "creating "+wsDir, "install", "-d", "-o", owner, "-g", owner, wsDir); err != nil {
+		return err
+	}
+	// An environment made before templates listed projects has its editor
+	// folder and its repositories.
+	projects := spec.Spec.Projects
+	if len(projects) == 0 {
+		for _, p := range append([]string{spec.Spec.EditorPath}, repoPaths(spec.Spec.Repos)...) {
+			if p != "" && !slices.Contains(projects, p) {
+				projects = append(projects, p)
+			}
+		}
+	}
+	if len(projects) > 0 {
+		w := api.CodeWorkspace{Folders: []api.CodeWorkspaceFolder{}}
+		for _, p := range projects {
+			w.Folders = append(w.Folders, api.CodeWorkspaceFolder{Path: p})
+		}
+		body, _ := json.MarshalIndent(w, "", "  ")
+		write := append(append([]string{}, as...), "sh", "-c", `[ -e "$1" ] || printf '%s\n' "$2" > "$1"`,
+			"sh", api.WorkspaceFile, string(body))
+		if err := run(30*time.Second, "writing the workspace's projects", write...); err != nil {
+			return err
+		}
 	}
 	// The keys are listed before the first clone over SSH, for the worker's
 	// log, and named again if the git host refuses them.
@@ -620,4 +651,12 @@ func (m *machine) makeRoomForHugePages(memMiB int) {
 	after, _ := ch.FreeHugeBlocksMiB()
 	m.log.Info("compacted the host's memory for the guest's huge pages", "free_huge_mib_before", free,
 		"free_huge_mib_after", after, "guest_mib", memMiB, "took", time.Since(start).Round(time.Millisecond))
+}
+
+func repoPaths(repos []api.Repo) []string {
+	out := make([]string, len(repos))
+	for i, r := range repos {
+		out[i] = r.Path
+	}
+	return out
 }

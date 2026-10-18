@@ -74,7 +74,10 @@ function toBody(form: TemplateInput, placement: [string, string][]): TemplateInp
     spec: {
       ...spec,
       repos: spec.repos.map((r) => ({ ...r, ref: r.ref || undefined, branch: r.branch || undefined })),
-      editor_path: spec.editor_path || undefined,
+      projects: (() => {
+        const folders = (spec.projects ?? []).map((f) => f.trim()).filter((f) => f !== '')
+        return folders.length > 0 ? folders : undefined
+      })(),
       access: compactAccess(spec.access),
       web_names: (() => {
         const names = (spec.web_names ?? []).map((n) => n.trim()).filter((n) => n !== '')
@@ -130,7 +133,7 @@ const templateFields: {
   { key: 'gpu', label: 'GPU', get: (b) => b.spec.gpu, show: (b) => b.spec.gpu },
   { key: 'dax', label: 'Image files', get: (b) => !!b.spec.dax },
   { key: 'repos', label: 'Repositories', get: (b) => b.spec.repos },
-  { key: 'editor_path', label: 'Editor folder', get: (b) => b.spec.editor_path },
+  { key: 'projects', label: 'Projects', get: (b) => b.spec.projects },
   { key: 'access', label: 'What it is given', get: (b) => b.spec.access },
   { key: 'trusted_folders', label: 'Trusted folders', get: (b) => b.spec.trusted_folders },
   { key: 'packs', label: 'Packs', get: (b) => b.spec.packs },
@@ -499,7 +502,7 @@ function Editor({ existing }: { existing?: Template }) {
                   )}
                   {hint(
                     <>
-                      Paths, refs, new branches and the editor folder may use{' '}
+                      Paths, refs, new branches and projects may use{' '}
                       {variables.map((v, i) => (
                         <span key={v}>
                           <code>{`{${v}}`}</code>
@@ -513,14 +516,18 @@ function Editor({ existing }: { existing?: Template }) {
                   )}
                 </div>
               </Row>
-              <Row label={label('The editor opens', 'tpl-editor')} modified={changed('editor_path')}>
-                <input
-                  id="tpl-editor"
+              <Row label={label('Projects', 'tpl-projects')} modified={changed('projects')}>
+                <textarea
+                  id="tpl-projects"
                   className="mono pane-wide"
-                  value={spec.editor_path ?? ''}
-                  onChange={(e) => setSpec({ editor_path: e.target.value })}
-                  placeholder={spec.repos[0]?.path || '/workspace'}
+                  rows={Math.min(6, Math.max(2, (spec.projects ?? []).length + 1))}
+                  value={(spec.projects ?? []).join('\n')}
+                  onChange={(e) => setSpec({ projects: e.target.value.split('\n') })}
+                  placeholder={spec.repos.map((r) => r.path).join('\n') || '/workspace'}
                 />
+                {hint(
+                  'The folders the Code tab and VS Code open side by side, one per line. The first is where they and a new terminal start. Left empty, they are the repositories’ folders.',
+                )}
               </Row>
               <Row label="Given of its owner's" modified={changed('access')}>
                 <div className="tpl-block">
@@ -538,7 +545,7 @@ function Editor({ existing }: { existing?: Template }) {
                     placeholder="/workspace/shared"
                   />
                   {hint(
-                    'One folder per line. The repositories and the editor’s folder are trusted without being listed.',
+                    'One folder per line. The repositories and projects are trusted without being listed.',
                   )}
                 </Row>
               )}

@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, resolve } from 'node:path'
 
 import { scan } from './repos.js'
 
@@ -8,17 +8,20 @@ import { scan } from './repos.js'
 // Code tab shows side by side, each with its own files, repositories and
 // language servers. It is the environment's, not the person's, so it is
 // kept in the guest outside what the profile shares, and everyone using
-// the environment sees the same list.
-export const workspacePath = join(homedir(), '.local', 'state', 'hangar', 'workspace.json')
+// the environment sees the same list. It is a VS Code workspace file, which
+// VS Code opens too, and the worker writes it first with the projects the
+// environment's template names (api.WorkspaceFile); HANGAR_WORKSPACE names
+// another, as the tests do.
+export const workspacePath = process.env.HANGAR_WORKSPACE || '/var/lib/hangar-workspace/projects.code-workspace'
 
 // The most projects a workspace holds.
 const MAX_FOLDERS = 32
 
 export type WorkspaceState = {
 	folders: string[]
-	// saved is whether the list has been set; until it has, it is the
-	// service's own folder and the browser offers the template's
-	// repositories.
+	// saved is whether the list has been set, by the worker from the
+	// template's projects or by a tab; until it has, it is the service's
+	// own folder.
 	saved: boolean
 }
 
@@ -36,8 +39,13 @@ export class WorkspaceFile {
 		try {
 			const v = JSON.parse(await readFile(this.path, 'utf8'))
 			if (Array.isArray(v?.folders)) {
-				const folders = v.folders.filter((f: unknown): f is string => typeof f === 'string' && isAbsolute(f))
-				return { folders, saved: true }
+				// A folder's path may be relative to the file, as VS Code
+				// allows.
+				const folders = v.folders
+					.map((f: { path?: unknown }) => f?.path)
+					.filter((f: unknown): f is string => typeof f === 'string' && f !== '')
+					.map((f: string) => resolve(dirname(this.path), f))
+				if (folders.length) return { folders, saved: true }
 			}
 		} catch {
 			// None yet, or unreadable: the service's own folder.
@@ -62,9 +70,18 @@ export class WorkspaceFile {
 			if (!out.includes(dir)) out.push(dir)
 		}
 		if (out.length > MAX_FOLDERS) throw new Error(`a workspace holds at most ${MAX_FOLDERS} folders`)
+		// Whatever else VS Code keeps in the file, its settings say, stays.
+		let kept: Record<string, unknown> = {}
+		try {
+			const v = JSON.parse(await readFile(this.path, 'utf8'))
+			if (v && typeof v === 'object' && !Array.isArray(v)) kept = v
+		} catch {
+			// A new file.
+		}
 		await mkdir(dirname(this.path), { recursive: true })
 		const tmp = `${this.path}.${process.pid}.tmp`
-		await writeFile(tmp, JSON.stringify({ folders: out }, null, 2) + '\n', { mode: 0o644 })
+		const body = { ...kept, folders: out.map((path) => ({ path })) }
+		await writeFile(tmp, JSON.stringify(body, null, 2) + '\n', { mode: 0o644 })
 		await rename(tmp, this.path)
 		const state = { folders: out, saved: true }
 		for (const fn of this.listeners) fn(state)
