@@ -57,8 +57,8 @@ import (
 // using the image shares it. An image carries nothing else: the kernel and
 // the initramfs are the node's.
 type Image struct {
-	// Base is the image's root filesystem: empty for a pulled copy where
-	// images are not mounted (macOS), which has only its EROFS image.
+	// Base is the image's root filesystem: empty for a pulled copy, which
+	// has only its EROFS image.
 	Base string `yaml:"base"`
 	// Copy is the store's directory for the copy, where its EROFS image is
 	// kept.

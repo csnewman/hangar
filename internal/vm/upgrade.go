@@ -11,6 +11,9 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/erofs"
+	"github.com/csnewman/hangar/internal/ext4"
+	"github.com/csnewman/hangar/internal/layercheck"
 )
 
 // An environment is pinned to the copy of its image its writable layer was
@@ -129,20 +132,36 @@ func (m *machine) compareImages(ctx context.Context, from, to api.ImageCopy, u *
 	if err != nil {
 		return fmt.Errorf("the newer copy: %w", err)
 	}
-	mnt, err := os.MkdirTemp("", "hangar-upper-")
+	// Each copy is read through its EROFS image, made for one that has not
+	// booted yet, and the writable disk is read as it is, unmounted.
+	older, err := m.openImage(ctx, old)
+	if err != nil {
+		return fmt.Errorf("the copy it is pinned to: %w", err)
+	}
+	defer older.Close()
+	newest, err := m.openImage(ctx, newer)
+	if err != nil {
+		return fmt.Errorf("the newer copy: %w", err)
+	}
+	defer newest.Close()
+	disk, err := os.Open(filepath.Join(m.dir, "upper.ext4"))
+	if err != nil {
+		return fmt.Errorf("its writable disk: %w", err)
+	}
+	defer disk.Close()
+	ext, err := ext4.Open(disk)
+	if err != nil {
+		return fmt.Errorf("its writable disk: %w", err)
+	}
+	layer, err := layercheck.Ext4(ext, "upper")
+	if err != nil {
+		return fmt.Errorf("its writable layer: %w", err)
+	}
+	r, err := layercheck.Compare(layer, older.Image, newest.Image)
 	if err != nil {
 		return err
 	}
-	defer os.Remove(mnt)
-	unmount, err := mountReadOnly(filepath.Join(m.dir, "upper.ext4"), mnt)
-	if err != nil {
-		return fmt.Errorf("mounting its writable disk: %w", err)
-	}
-	defer unmount()
-	conflicts, packages, err := compareLayer(filepath.Join(mnt, "upper"), old.Base, newer.Base)
-	if err != nil {
-		return err
-	}
+	conflicts, packages := r.Conflicts, r.Packages
 	if len(conflicts) > maxConflicts {
 		u.MoreConflicts = len(conflicts) - maxConflicts
 		conflicts = conflicts[:maxConflicts]
@@ -312,4 +331,31 @@ func (m *machine) fetchProgress(p FetchProgress) {
 		m.step(api.StepUnpack, reason)
 		m.measure(p.Done, p.Total, "bytes")
 	}
+}
+
+// openedImage is a copy's EROFS image, open to read.
+type openedImage struct {
+	*erofs.Image
+	f *os.File
+}
+
+func (o openedImage) Close() error { return o.f.Close() }
+
+// openImage opens a copy's EROFS image, making it first if the copy has
+// not booted yet.
+func (m *machine) openImage(ctx context.Context, img Image) (openedImage, error) {
+	path, err := m.rt.store.EROFS(ctx, img)
+	if err != nil {
+		return openedImage{}, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return openedImage{}, err
+	}
+	im, err := erofs.Open(f)
+	if err != nil {
+		f.Close()
+		return openedImage{}, err
+	}
+	return openedImage{Image: im, f: f}, nil
 }

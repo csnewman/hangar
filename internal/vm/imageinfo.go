@@ -33,7 +33,7 @@ func ReadImageInfo(rootfs string) (ImageInfo, bool, error) {
 }
 
 // imageInfo reads what an image offers: from its root filesystem, or from
-// its EROFS image where that is not mounted.
+// its EROFS image for a pulled copy, which has no other.
 func imageInfo(img Image) (ImageInfo, bool, error) {
 	if img.Base != "" {
 		return ReadImageInfo(img.Base)

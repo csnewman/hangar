@@ -35,8 +35,9 @@ import (
 // configuration names a local source for the reference, which is copied.
 //
 // Each copy is a directory holding files naming its reference and digest,
-// and its root filesystem as rootfs/: for a pulled image, its EROFS image
-// mounted there (see copies.go); for a local build, a copy of it. A directory being
+// and its root filesystem: for a pulled image, its EROFS image, read with
+// internal/erofs and never mounted; for a local build, a copy of it as
+// rootfs/. A directory being
 // fetched is named with ".fetching" and renamed into place when complete,
 // so a copy interrupted half made is fetched again rather than booted.
 type ImageStore struct {
@@ -383,9 +384,6 @@ func (s *ImageStore) fetch(ctx context.Context, c api.ImageCopy, dst string, rep
 				return err
 			}
 			if err := os.WriteFile(filepath.Join(tmp, imageMark), nil, 0o644); err != nil {
-				return err
-			}
-			if err := os.Mkdir(rootfs, 0o755); err != nil {
 				return err
 			}
 		}

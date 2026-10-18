@@ -6,31 +6,18 @@ import (
 	"path/filepath"
 )
 
-// base is the root filesystem of a held copy: a pulled copy's EROFS image,
-// mounted read-only, or a local copy's directory. Where images are not
-// mounted a pulled copy has none, only its image.
+// base is the root filesystem of a held copy: a local copy's directory. A
+// pulled copy has none: it is its EROFS image, read where it is needed.
 func (s *ImageStore) base(h heldCopy) (string, error) {
-	if h.image && !mountsImages {
-		return "", nil
-	}
 	if h.image {
-		target := filepath.Join(h.dir, "rootfs")
-		if isEROFS(target) {
-			return target, nil
-		}
-		if err := os.MkdirAll(target, 0o755); err != nil {
-			return "", err
-		}
-		if err := mountEROFS(filepath.Join(h.dir, erofsFile), target); err != nil {
-			return "", fmt.Errorf("mounting the image: %w", err)
-		}
-		return target, nil
+		return "", nil
 	}
 	return filepath.Join(h.dir, "rootfs"), nil
 }
 
-// removeCopy deletes a copy's directory, unmounting its image first. It
-// fails rather than delete through a mount it could not take down.
+// removeCopy deletes a copy's directory, taking down a mount of its image
+// at rootfs/ first, which an older worker made. It fails rather than delete
+// through a mount it could not take down.
 func removeCopy(h heldCopy) error {
 	target := filepath.Join(h.dir, "rootfs")
 	if h.image && isEROFS(target) {

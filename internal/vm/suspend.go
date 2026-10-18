@@ -36,8 +36,12 @@ type suspendRecord struct {
 	ReadOnly []string `json:"read_only,omitempty"`
 }
 
+// equal is whether two records describe the same machine. A pulled copy has
+// no base to fingerprint, its image's fingerprint saying the same, so a
+// base only one of them records is passed over.
 func (r suspendRecord) equal(o suspendRecord) bool {
-	return r.Base == o.Base && r.Image == o.Image && slices.Equal(r.ReadOnly, o.ReadOnly)
+	sameBase := r.Base == o.Base || r.Base == "" || o.Base == ""
+	return sameBase && r.Image == o.Image && slices.Equal(r.ReadOnly, o.ReadOnly)
 }
 
 // fingerprint identifies a file or directory as the one it is: made again
