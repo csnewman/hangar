@@ -112,6 +112,9 @@ func (c InstanceConfig) clearBackendState() {
 // down; each backend then records what the guest is holding, and only then
 // is the snapshot taken, so they all describe the same instant.
 func (i *Instance) Suspend(ctx context.Context) error {
+	if i.api == nil {
+		return errNoKrunSnapshot
+	}
 	c := i.cfg
 	snap := filepath.Join(c.Dir, snapshotDir)
 	partial := snap + ".new"

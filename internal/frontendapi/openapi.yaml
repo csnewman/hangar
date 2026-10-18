@@ -2094,6 +2094,8 @@ components:
         gpu_software:
           type: boolean
           description: Whether that is the worker's CPU.
+        monitor:
+          $ref: "#/components/schemas/Monitor"
         image_digest:
           type: string
           description: >-
@@ -2605,6 +2607,14 @@ components:
         cpus: { type: integer }
         memory_mib: { type: integer }
 
+    Monitor:
+      type: string
+      enum: [cloud-hypervisor, krun]
+      description: >-
+        What runs a worker's environments: cloud-hypervisor on Linux; krun,
+        libkrun on macOS, which cannot suspend a machine or change its
+        memory while it runs. Absent until the worker says.
+
     Worker:
       type: object
       required: [id, name, labels, capacity, allocated, online, revoked, unknown, created_at, images, pending_removals]
@@ -2633,6 +2643,8 @@ components:
           type: array
           items: { $ref: "#/components/schemas/LocalImage" }
         gpu: { $ref: "#/components/schemas/GPUInfo" }
+        monitor:
+          $ref: "#/components/schemas/Monitor"
         pending_removals:
           type: array
           description: Copies of images the worker has been asked to delete and still holds.

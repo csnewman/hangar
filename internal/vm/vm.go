@@ -39,6 +39,7 @@ import (
 	"github.com/csnewman/hangar/internal/code"
 	"github.com/csnewman/hangar/internal/desktop"
 	"github.com/csnewman/hangar/internal/guestport"
+	"github.com/csnewman/hangar/internal/host"
 	"github.com/csnewman/hangar/internal/logs"
 	"github.com/csnewman/hangar/internal/nfs"
 	"github.com/csnewman/hangar/internal/procs"
@@ -56,6 +57,8 @@ import (
 // using the image shares it. An image carries nothing else: the kernel and
 // the initramfs are the node's.
 type Image struct {
+	// Base is the image's root filesystem: empty for a pulled copy where
+	// images are not mounted (macOS), which has only its EROFS image.
 	Base string `yaml:"base"`
 	// Copy is the store's directory for the copy, where its EROFS image is
 	// kept.
@@ -64,6 +67,9 @@ type Image struct {
 
 // Config is what the runtime needs from the worker's configuration.
 type Config struct {
+	// Monitor is the monitor the worker's configuration names
+	// (host.Monitor*), which must be this host's.
+	Monitor string
 	// StateDir holds one directory per environment.
 	StateDir string
 	// ImagesDir is the worker's local store of the images its environments
@@ -152,6 +158,8 @@ const sharedFilesPort = 2049
 // Runtime interface.
 type Runtime struct {
 	cfg Config
+	// monitor is what runs its machines (host.Monitor*).
+	monitor string
 	// filesRoot and filesView serve environments their shared files
 	// (UseSharedFiles).
 	filesRoot string
@@ -215,8 +223,12 @@ func New(cfg Config) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vm.gpu: %w", err)
 	}
+	caps, err := host.Detect()
+	if err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	r := &Runtime{cfg: cfg, store: st, ctx: ctx, cancel: cancel, envs: map[string]*machine{},
+	r := &Runtime{cfg: cfg, monitor: caps.Monitor, store: st, ctx: ctx, cancel: cancel, envs: map[string]*machine{},
 		changed: make(chan struct{}, 1), gpu: probeGPU(ctx, cfg, gpuEnv), gpuEnv: gpuEnv}
 	go r.watchHugePages()
 
@@ -238,6 +250,10 @@ func New(cfg Config) (*Runtime, error) {
 // offer: not when it asks for hardware and there is only the CPU, nor when
 // the backend cannot render at all. It is nil without a GPU backend.
 func probeGPU(ctx context.Context, cfg Config, env []string) *api.GPUInfo {
+	if caps, err := host.Detect(); err != nil || caps.Monitor != host.MonitorCloudHypervisor {
+		// hangar-gpu is a vhost-user backend for Cloud Hypervisor alone.
+		return nil
+	}
 	if _, err := ch.FindGpuBackend(); err != nil {
 		return nil
 	}
@@ -276,6 +292,9 @@ func probeGPU(ctx context.Context, cfg Config, env []string) *api.GPUInfo {
 
 // GPU is what virtual GPUs render with here, nil without a GPU backend.
 func (r *Runtime) GPU() *api.GPUInfo { return r.gpu }
+
+// Monitor is what runs the environments (api.Monitor*).
+func (r *Runtime) Monitor() string { return r.monitor }
 
 func (r *Runtime) Changed() <-chan struct{} { return r.changed }
 
@@ -903,7 +922,7 @@ func (r *Runtime) DialTerminal(ctx context.Context, id string) (net.Conn, error)
 	if err != nil {
 		return nil, err
 	}
-	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), terminal.Port)
+	return m.dialGuest(ctx, terminal.Port)
 }
 
 // DialEditor opens one connection to a running environment's editor, which
@@ -913,7 +932,7 @@ func (r *Runtime) DialEditor(ctx context.Context, id string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), vscode.Port)
+	return m.dialGuest(ctx, vscode.Port)
 }
 
 // DialCode opens one connection to a running environment's Code tab
@@ -943,7 +962,7 @@ func (r *Runtime) DialPorts(ctx context.Context, id string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), guestport.Port)
+	return m.dialGuest(ctx, guestport.Port)
 }
 
 func (r *Runtime) DialSSH(ctx context.Context, id string) (net.Conn, error) {
@@ -951,7 +970,7 @@ func (r *Runtime) DialSSH(ctx context.Context, id string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), sshd.Port)
+	return m.dialGuest(ctx, sshd.Port)
 }
 
 func (r *Runtime) DialProcesses(ctx context.Context, id string) (net.Conn, error) {
@@ -959,7 +978,7 @@ func (r *Runtime) DialProcesses(ctx context.Context, id string) (net.Conn, error
 	if err != nil {
 		return nil, err
 	}
-	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), procs.Port)
+	return m.dialGuest(ctx, procs.Port)
 }
 
 func (r *Runtime) DialProfile(ctx context.Context, id string) (net.Conn, error) {
@@ -967,7 +986,7 @@ func (r *Runtime) DialProfile(ctx context.Context, id string) (net.Conn, error) 
 	if err != nil {
 		return nil, err
 	}
-	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), profile.Port)
+	return m.dialGuest(ctx, profile.Port)
 }
 
 func (r *Runtime) DialCode(ctx context.Context, id string) (net.Conn, error) {
@@ -975,7 +994,7 @@ func (r *Runtime) DialCode(ctx context.Context, id string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), code.Port)
+	return m.dialGuest(ctx, code.Port)
 }
 
 // DialDesktop opens one VNC connection to a running environment's desktop,
@@ -985,7 +1004,7 @@ func (r *Runtime) DialDesktop(ctx context.Context, id string) (net.Conn, error) 
 	if err != nil {
 		return nil, err
 	}
-	return dialGuest(ctx, filepath.Join(m.dir, "run", "vsock.sock"), desktop.Port)
+	return m.dialGuest(ctx, desktop.Port)
 }
 
 // runningMachine is the environment here with this ID, if it is running.
@@ -1003,6 +1022,21 @@ func (r *Runtime) runningMachine(id string) (*machine, error) {
 		return nil, fmt.Errorf("environment %s is not running", id)
 	}
 	return m, nil
+}
+
+// dialGuest opens a connection to a port in the running or starting
+// machine's guest.
+func (m *machine) dialGuest(ctx context.Context, port uint32) (net.Conn, error) {
+	m.mu.Lock()
+	inst := m.running
+	if inst == nil {
+		inst = m.starting
+	}
+	m.mu.Unlock()
+	if inst == nil {
+		return nil, fmt.Errorf("environment %s is not running", m.id)
+	}
+	return inst.DialGuest(ctx, port)
 }
 
 // dialGuest opens a connection to a port in the guest through the monitor's

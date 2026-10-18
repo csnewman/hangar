@@ -304,11 +304,23 @@ type Environment struct {
 	Stats        *EnvironmentStats `json:"stats,omitempty"`
 	// GPURenderer is what its virtual GPU renders with on its worker, and
 	// GPUSoftware whether that is the worker's CPU; empty without one.
-	GPURenderer string    `json:"gpu_renderer,omitempty"`
-	GPUSoftware bool      `json:"gpu_software,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	GPURenderer string `json:"gpu_renderer,omitempty"`
+	GPUSoftware bool   `json:"gpu_software,omitempty"`
+	// Monitor is what runs it on its worker (Monitor*); empty before its
+	// worker has said.
+	Monitor   string    `json:"monitor,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
+
+// The monitors a worker runs environments under.
+const (
+	// MonitorCloudHypervisor runs them on Linux's KVM.
+	MonitorCloudHypervisor = "cloud-hypervisor"
+	// MonitorKrun runs them on macOS, under libkrun, which cannot suspend a
+	// machine or resize its memory while it runs.
+	MonitorKrun = "krun"
+)
 
 // CreateEnvironment is a request to create an environment from a template.
 type CreateEnvironment struct {
@@ -352,6 +364,9 @@ type Worker struct {
 	Images     []LocalImage `json:"images"`
 	// GPU is what its virtual GPUs render with.
 	GPU *GPUInfo `json:"gpu,omitempty"`
+	// Monitor is what runs its environments (Monitor*); empty until it
+	// says.
+	Monitor string `json:"monitor,omitempty"`
 	// PendingRemovals are copies of images the worker has been asked to
 	// delete and still holds.
 	PendingRemovals []ImageCopy `json:"pending_removals"`
@@ -466,6 +481,8 @@ type WorkerStatus struct {
 	// GPU is what environments with a virtual GPU render with here; nil on
 	// a worker that offers none.
 	GPU *GPUInfo `json:"gpu,omitempty"`
+	// Monitor is what runs its environments (Monitor*).
+	Monitor string `json:"monitor,omitempty"`
 }
 
 // GPUInfo is what a worker's virtual GPUs render with, as its GPU backend

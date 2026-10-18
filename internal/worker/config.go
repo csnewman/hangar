@@ -63,12 +63,13 @@ type Config struct {
 	} `yaml:"overcommit"`
 
 	// Runtime is what runs environments on this machine: "cloud-hypervisor"
-	// runs each as a virtual machine; "simulated" runs nothing and walks
-	// each environment through its phases, for developing the control plane
-	// on a machine without KVM.
+	// runs each as a virtual machine on Linux, and "krun" on macOS, under
+	// libkrun; "simulated" runs nothing and walks each environment through
+	// its phases, for developing the control plane on a machine without
+	// either.
 	Runtime string `yaml:"runtime"`
 
-	// VM configures the cloud-hypervisor runtime.
+	// VM configures the cloud-hypervisor and krun runtimes.
 	VM VMConfig `yaml:"vm"`
 }
 
@@ -179,12 +180,12 @@ func LoadConfig(path string) (*Config, error) {
 	switch c.Runtime {
 	case "":
 		return nil, errors.New(path + ": runtime is required")
-	case "cloud-hypervisor":
+	case "cloud-hypervisor", "krun":
 		if c.VM.Kernel == "" {
-			return nil, errors.New(path + ": vm.kernel is required for the cloud-hypervisor runtime")
+			return nil, fmt.Errorf("%s: vm.kernel is required for the %s runtime", path, c.Runtime)
 		}
 		if c.Storage.Environments == "" || c.Storage.Images == "" {
-			return nil, errors.New(path + ": storage.environments and storage.images are required for the cloud-hypervisor runtime")
+			return nil, fmt.Errorf("%s: storage.environments and storage.images are required for the %s runtime", path, c.Runtime)
 		}
 	}
 	return &c, nil

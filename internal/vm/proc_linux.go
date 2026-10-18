@@ -51,3 +51,26 @@ func guestRAM(pid int) int64 {
 	}
 	return total
 }
+
+// processTicks is a process's user and system CPU time, in clock ticks.
+func processTicks(pid int) uint64 {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return 0
+	}
+	// The command name is in parentheses and may contain spaces, so fields
+	// are counted from after its closing one.
+	s := string(b)
+	i := strings.LastIndexByte(s, ')')
+	if i < 0 {
+		return 0
+	}
+	f := strings.Fields(s[i+1:])
+	// After the name: state(0) ... utime(11) stime(12).
+	if len(f) < 13 {
+		return 0
+	}
+	u, _ := strconv.ParseUint(f[11], 10, 64)
+	sys, _ := strconv.ParseUint(f[12], 10, 64)
+	return u + sys
+}

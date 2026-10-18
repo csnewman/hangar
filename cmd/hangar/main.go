@@ -20,6 +20,7 @@ import (
 	"github.com/csnewman/hangar/internal/host"
 	"github.com/csnewman/hangar/internal/image"
 	"github.com/csnewman/hangar/internal/kernel"
+	"github.com/csnewman/hangar/internal/krun"
 )
 
 const usage = `hangar - development environments for coding agents
@@ -76,6 +77,15 @@ func doctor() error {
 	}
 	fmt.Print(caps.Summary())
 
+	if caps.Monitor == host.MonitorKrun {
+		if bin, err := krun.Find(); err != nil {
+			fmt.Printf("hangar-krun not available: %v\n", err)
+		} else {
+			fmt.Printf("hangar-krun %s\n", bin)
+		}
+		return nil
+	}
+
 	// Cloud Hypervisor runs the environments, so its state belongs here.
 	if bin, err := ch.Find(); err != nil {
 		fmt.Printf("cloud-hyp   not available: %v\n", err)
@@ -84,14 +94,12 @@ func doctor() error {
 	}
 	if err := ch.CheckHugePages(); err != nil {
 		fmt.Printf("huge pages  NO\n")
-	} else {
-		fmt.Printf("huge pages  yes, shared memory is eligible\n")
-	}
-
-	// The full explanation is long and only worth printing when it applies.
-	if err := ch.CheckHugePages(); err != nil {
+		// The full explanation is long and only worth printing when it
+		// applies.
 		fmt.Println()
 		fmt.Println(err)
+	} else {
+		fmt.Printf("huge pages  yes, shared memory is eligible\n")
 	}
 	return nil
 }

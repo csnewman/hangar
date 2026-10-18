@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	"github.com/csnewman/hangar/internal/erofs"
 )
 
 // ImageInfoPath is where an image says what it offers, inside its root
@@ -27,8 +29,30 @@ type ImageInfo struct {
 // ReadImageInfo reads what the image whose root filesystem is rootfs offers.
 // It reports false, and no error, for an image that does not say.
 func ReadImageInfo(rootfs string) (ImageInfo, bool, error) {
+	return readImageInfo(os.DirFS(rootfs))
+}
+
+// imageInfo reads what an image offers: from its root filesystem, or from
+// its EROFS image where that is not mounted.
+func imageInfo(img Image) (ImageInfo, bool, error) {
+	if img.Base != "" {
+		return ReadImageInfo(img.Base)
+	}
+	f, err := os.Open(filepath.Join(img.Copy, erofsFile))
+	if err != nil {
+		return ImageInfo{}, false, err
+	}
+	defer f.Close()
+	im, err := erofs.Open(f)
+	if err != nil {
+		return ImageInfo{}, false, err
+	}
+	return readImageInfo(im.FS())
+}
+
+func readImageInfo(root fs.FS) (ImageInfo, bool, error) {
 	var info ImageInfo
-	b, err := os.ReadFile(filepath.Join(rootfs, ImageInfoPath))
+	b, err := fs.ReadFile(root, ImageInfoPath)
 	if errors.Is(err, fs.ErrNotExist) {
 		return info, false, nil
 	}

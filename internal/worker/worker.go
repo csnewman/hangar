@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
@@ -61,6 +62,12 @@ type ImageStore interface {
 // GPUReporter is a runtime that says what its virtual GPUs render with.
 type GPUReporter interface {
 	GPU() *api.GPUInfo
+}
+
+// MonitorReporter is a runtime that says what runs its environments
+// (api.Monitor*).
+type MonitorReporter interface {
+	Monitor() string
 }
 
 // CapacityUser is a runtime that sizes what it runs by what the worker
@@ -236,6 +243,10 @@ func New(cfg *Config, rt Runtime, log *slog.Logger) (*Worker, error) {
 		c.UseCapacity(offered)
 	}
 	if f, ok := rt.(SharedFiles); ok && cfg.Storage.Files != "" {
+		// Made if it is not there: a worker's first start has no files.
+		if err := os.MkdirAll(cfg.Storage.Files, 0o755); err != nil {
+			return nil, fmt.Errorf("the shared files' root: %w", err)
+		}
 		f.UseSharedFiles(cfg.Storage.Files, w.filesView)
 	}
 	return w, nil
@@ -330,6 +341,9 @@ func (w *Worker) reportLoop(ctx context.Context) error {
 			if g, ok := w.rt.(GPUReporter); ok {
 				st.GPU = g.GPU()
 				st.Labels = withRendererLabel(st.Labels, st.GPU)
+			}
+			if m, ok := w.rt.(MonitorReporter); ok {
+				st.Monitor = m.Monitor()
 			}
 			if store, ok := w.rt.(ImageStore); ok {
 				st.Images = store.Images()

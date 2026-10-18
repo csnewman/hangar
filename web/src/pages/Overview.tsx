@@ -11,7 +11,7 @@ import { Meter, PaneBar, PaneRoot, SearchField, Segmented, Tile } from '../compo
 import { StartLine } from '../components/StartProgress'
 import { InstallHint } from '../components/InstallHint'
 import { PhaseDot } from '../components/Status'
-import { useEnvironmentActions, vscodeItems } from '../environmentActions'
+import { canSuspend, useEnvironmentActions, vscodeItems } from '../environmentActions'
 import { splitByOwner, sshCommand, useEnvironments } from '../environments'
 import { usePhone } from '../phone'
 import { useMe } from '../session'
@@ -205,12 +205,14 @@ function LaunchRow({ env, open, owner, phone }: { env: Environment; open: boolea
     })
     out.push('separator')
     if (env.desired === 'running') {
-      out.push({
-        label: 'Suspend',
-        detail: 'keeps its memory',
-        disabled: busy || !running,
-        onSelect: () => actions.suspend.mutate(),
-      })
+      if (canSuspend(env)) {
+        out.push({
+          label: 'Suspend',
+          detail: 'keeps its memory',
+          disabled: busy || !running,
+          onSelect: () => actions.suspend.mutate(),
+        })
+      }
       out.push({ label: 'Stop', disabled: busy, onSelect: () => actions.stop.mutate() })
     } else {
       out.push({

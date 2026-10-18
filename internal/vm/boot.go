@@ -17,6 +17,7 @@ import (
 	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/gitout"
 	"github.com/csnewman/hangar/internal/host"
+	"github.com/csnewman/hangar/internal/krun"
 	"github.com/csnewman/hangar/internal/nfs"
 	"github.com/csnewman/hangar/internal/sysuser"
 )
@@ -33,20 +34,39 @@ const provisionedMark = "provisioned"
 // preflight refuses to start on a host that cannot run environments at all,
 // rather than failing each one as it is asked for.
 func preflight(cfg *Config) error {
-	if _, err := host.Detect(); err != nil {
+	caps, err := host.Detect()
+	if err != nil {
 		return err
 	}
-	if err := ch.CheckHugePages(); err != nil {
-		return err
+	if cfg.Monitor != "" && cfg.Monitor != caps.Monitor {
+		return fmt.Errorf("this host runs environments under %s, not the %s the configuration names", caps.Monitor, cfg.Monitor)
 	}
-	if _, err := ch.Find(); err != nil {
-		return err
-	}
-	if _, err := exec.LookPath("passt"); err != nil {
-		return fmt.Errorf("passt not found (apt install passt): %w", err)
-	}
-	if _, err := exec.LookPath("mkfs.ext4"); err != nil {
-		return fmt.Errorf("mkfs.ext4 not found (apt install e2fsprogs): %w", err)
+	switch caps.Monitor {
+	case host.MonitorKrun:
+		if _, err := krun.Find(); err != nil {
+			return err
+		}
+		if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+			if _, err := krun.Tool("mkfs.ext4"); err != nil {
+				return err
+			}
+		}
+		if cfg.ImageDevice == ImagePmem {
+			return fmt.Errorf("libkrun has no persistent memory: set vm.image_device to %s", ImageDisk)
+		}
+	default:
+		if err := ch.CheckHugePages(); err != nil {
+			return err
+		}
+		if _, err := ch.Find(); err != nil {
+			return err
+		}
+		if _, err := exec.LookPath("passt"); err != nil {
+			return fmt.Errorf("passt not found (apt install passt): %w", err)
+		}
+		if _, err := exec.LookPath("mkfs.ext4"); err != nil {
+			return fmt.Errorf("mkfs.ext4 not found (apt install e2fsprogs): %w", err)
+		}
 	}
 	if _, err := os.Stat(cfg.Kernel); err != nil {
 		return fmt.Errorf("guest kernel: %w", err)
@@ -105,7 +125,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if s.Display == api.DisplayDesktop {
 		// An image that says it has no desktop would boot to one that never
 		// appears; one that does not say is taken at its word.
-		info, known, err := ReadImageInfo(img.Base)
+		info, known, err := imageInfo(img)
 		if err != nil {
 			return nil, fmt.Errorf("image %s: %w", s.Image, err)
 		}
@@ -553,7 +573,15 @@ func EnsureDisk(ctx context.Context, path, label string, gib int) error {
 		os.Remove(tmp)
 		return err
 	}
-	out, err := exec.CommandContext(ctx, "mkfs.ext4", "-q", "-F", "-L", label, tmp).CombinedOutput()
+	mkfs, err := exec.LookPath("mkfs.ext4")
+	if err != nil {
+		// A worker on macOS has its own, beside hangar-krun.
+		if mkfs, err = krun.Tool("mkfs.ext4"); err != nil {
+			os.Remove(tmp)
+			return fmt.Errorf("no mkfs.ext4 to make the %s filesystem with: %w", label, err)
+		}
+	}
+	out, err := exec.CommandContext(ctx, mkfs, "-q", "-F", "-L", label, tmp).CombinedOutput()
 	if err != nil {
 		os.Remove(tmp)
 		return fmt.Errorf("making the %s filesystem: %v: %s", label, err, strings.TrimSpace(string(out)))

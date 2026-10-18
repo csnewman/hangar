@@ -228,6 +228,24 @@ func (e LocalImageState) Valid() bool {
 	}
 }
 
+// Defines values for Monitor.
+const (
+	CloudHypervisor Monitor = "cloud-hypervisor"
+	Krun            Monitor = "krun"
+)
+
+// Valid indicates whether the value is a known member of the Monitor enum.
+func (e Monitor) Valid() bool {
+	switch e {
+	case CloudHypervisor:
+		return true
+	case Krun:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for PackAttach.
 const (
 	PackAttachEveryone PackAttach = "everyone"
@@ -739,6 +757,9 @@ type Environment struct {
 	ImageUpdate *ImageUpdate `json:"image_update,omitempty"`
 	MemoryMiB   int          `json:"memory_mib"`
 
+	// Monitor What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS, which cannot suspend a machine or change its memory while it runs. Absent until the worker says.
+	Monitor *Monitor `json:"monitor,omitempty"`
+
 	// Name Unique among its owner's environments.
 	Name string `json:"name"`
 
@@ -1056,6 +1077,9 @@ type Me struct {
 	Theme    Theme  `json:"theme"`
 	Username string `json:"username"`
 }
+
+// Monitor What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS, which cannot suspend a machine or change its memory while it runs. Absent until the worker says.
+type Monitor string
 
 // NewAccessToken defines model for NewAccessToken.
 type NewAccessToken struct {
@@ -1499,8 +1523,11 @@ type Worker struct {
 	Images     []LocalImage      `json:"images"`
 	Labels     map[string]string `json:"labels"`
 	LastSeenAt *time.Time        `json:"last_seen_at,omitempty"`
-	Name       string            `json:"name"`
-	Online     bool              `json:"online"`
+
+	// Monitor What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS, which cannot suspend a machine or change its memory while it runs. Absent until the worker says.
+	Monitor *Monitor `json:"monitor,omitempty"`
+	Name    string   `json:"name"`
+	Online  bool     `json:"online"`
 
 	// PendingRemovals Copies of images the worker has been asked to delete and still holds.
 	PendingRemovals []ImageCopy `json:"pending_removals"`

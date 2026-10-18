@@ -8,6 +8,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// mountsImages is whether a copy's EROFS image is mounted for its root
+// filesystem.
+const mountsImages = true
+
 func unmount(target string) error {
 	return unix.Unmount(target, unix.MNT_DETACH)
 }

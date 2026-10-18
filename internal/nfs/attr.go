@@ -1,5 +1,3 @@
-//go:build linux
-
 package nfs
 
 import (
@@ -8,6 +6,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/csnewman/hangar/internal/fsuser"
 )
 
 const (
@@ -118,7 +118,7 @@ func (s *Server) encodeAttrs(req bitmap, n *node) (bitmap, []byte) {
 		case attrSupportedAttrs:
 			w.bitmap(supported)
 		case attrType:
-			w.uint32(ftype(st.Mode))
+			w.uint32(ftype(uint32(st.Mode)))
 		case attrFHExpireType:
 			w.uint32(0) // persistent, while the server runs
 		case attrChange:
@@ -158,16 +158,16 @@ func (s *Server) encodeAttrs(req bitmap, n *node) (bitmap, []byte) {
 		case attrMaxRead, attrMaxWrite:
 			w.uint64(maxIO)
 		case attrMode:
-			w.uint32(st.Mode &^ unix.S_IFMT)
+			w.uint32(uint32(st.Mode) &^ unix.S_IFMT)
 		case attrNumLinks:
 			w.uint32(uint32(st.Nlink))
 		case attrOwner:
-			w.string(strconv.FormatUint(uint64(st.Uid), 10))
+			w.string(strconv.FormatUint(uint64(s.owner(st.Uid, st.Gid).UID), 10))
 		case attrOwnerGroup:
-			w.string(strconv.FormatUint(uint64(st.Gid), 10))
+			w.string(strconv.FormatUint(uint64(s.owner(st.Uid, st.Gid).GID), 10))
 		case attrRawDev:
-			w.uint32(unix.Major(st.Rdev))
-			w.uint32(unix.Minor(st.Rdev))
+			w.uint32(unix.Major(uint64(st.Rdev)))
+			w.uint32(unix.Minor(uint64(st.Rdev)))
 		case attrSpaceAvail:
 			w.uint64(fs.Bavail * uint64(fs.Bsize))
 		case attrSpaceFree:
@@ -339,12 +339,12 @@ func (s *Server) apply(p string, a setAttrs) (bitmap, uint32) {
 		set.set(attrMode)
 	}
 	if a.atime != nil || a.mtime != nil {
-		ts := []unix.Timespec{{Nsec: unix.UTIME_OMIT}, {Nsec: unix.UTIME_OMIT}}
+		ts := []unix.Timespec{{Nsec: utimeOmit}, {Nsec: utimeOmit}}
 		for i, t := range []*setTime{a.atime, a.mtime} {
 			switch {
 			case t == nil:
 			case t.server:
-				ts[i] = unix.Timespec{Nsec: unix.UTIME_NOW}
+				ts[i] = unix.Timespec{Nsec: utimeNow}
 			default:
 				ts[i] = t.ts
 			}
@@ -360,4 +360,13 @@ func (s *Server) apply(p string, a setAttrs) (bitmap, uint32) {
 		}
 	}
 	return set, nfsOK
+}
+
+// owner is who a file belongs to, as clients are told: what the server owns
+// when it cannot act as anyone else is the squashed user's.
+func (s *Server) owner(uid, gid uint32) fsuser.User {
+	if s.self != nil && uid == s.self.UID {
+		return fsuser.User{UID: s.uid, GID: s.gid}
+	}
+	return fsuser.User{UID: uid, GID: gid}
 }

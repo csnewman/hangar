@@ -1,5 +1,3 @@
-//go:build linux
-
 // Package nfs is an NFSv4.1 and 4.2 server for one environment's share of
 // files that environments share with others: their file sets, each a
 // directory of a root (View). It serves the operations Linux's client uses,
@@ -49,11 +47,15 @@ type Config struct {
 type Server struct {
 	view     View
 	uid, gid uint32
-	log      *slog.Logger
-	rootFD   int
-	h        *handles
-	started  unix.Timespec
-	verf     [8]byte
+	// self is the server's own identity, when it does not run as root (a
+	// worker on macOS): it cannot act as anyone else, so every caller is
+	// squashed, and what it owns is the squashed user's to its clients.
+	self    *fsuser.User
+	log     *slog.Logger
+	rootFD  int
+	h       *handles
+	started unix.Timespec
+	verf    [8]byte
 
 	mu       sync.Mutex
 	nextID   uint64
@@ -115,7 +117,7 @@ type state struct {
 
 // New starts a server for cfg.View, rooted at cfg.Root.
 func New(cfg Config) (*Server, error) {
-	fd, err := unix.Open(cfg.Root, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	fd, err := openRoot(cfg.Root)
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", cfg.Root, err)
 	}
@@ -129,6 +131,9 @@ func New(cfg Config) (*Server, error) {
 		clients: map[uint64]*client{}, byOwner: map[string]*client{},
 		sessions: map[[16]byte]*session{}, states: map[[12]byte]*state{},
 		excl: map[string][8]byte{}, done: make(chan struct{})}
+	if os.Geteuid() != 0 {
+		s.self = &fsuser.User{UID: uint32(os.Geteuid()), GID: uint32(os.Getegid())}
+	}
 	copy(s.verf[:], s.h.boot[:])
 	go s.expire()
 	return s, nil
@@ -425,7 +430,7 @@ func (s *Server) caller(cs *cstate) fsuser.User {
 
 // squash is how a set the environment is given squashes its callers.
 func (s *Server) squash(set string) Squash {
-	if set == "" || !slices.Contains(s.view.Sets(), set) {
+	if set == "" || s.self != nil || !slices.Contains(s.view.Sets(), set) {
 		return SquashAll
 	}
 	return s.view.Squash(set)

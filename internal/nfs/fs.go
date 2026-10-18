@@ -1,5 +1,3 @@
-//go:build linux
-
 package nfs
 
 import (
@@ -58,15 +56,12 @@ func validName(n string) uint32 {
 
 // openDir opens a directory of the root, beneath it and through no
 // symbolic link: a link made in a set cannot lead a later call out of it.
-// The descriptor is O_PATH, for the *at calls.
+// The descriptor is for the *at calls (openBeneath).
 func (s *Server) openDir(p string) (int, error) {
 	if p == "" {
 		return unix.Dup(s.rootFD)
 	}
-	return unix.Openat2(s.rootFD, p, &unix.OpenHow{
-		Flags:   unix.O_PATH | unix.O_DIRECTORY | unix.O_CLOEXEC,
-		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
-	})
+	return openBeneath(s.rootFD, p, false)
 }
 
 // at opens the directory a path is in, and gives its last component.

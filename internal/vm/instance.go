@@ -108,6 +108,10 @@ type Instance struct {
 	gpu     *ch.GpuBackend
 	net     *ch.Passt
 	resumed bool
+	// monitor is what runs the machine (host.Monitor*), and vsock the base
+	// of the unix sockets its vsock is carried on.
+	monitor string
+	vsock   string
 
 	mu       sync.Mutex
 	err      error
@@ -154,6 +158,9 @@ func (i *Instance) supportPids() (gpu int, others []int) {
 
 // Memory is the machine's memory, as its monitor has it.
 func (i *Instance) Memory(ctx context.Context) (ch.Memory, error) {
+	if i.monitor == host.MonitorKrun {
+		return ch.Memory{}, errNoKrunResize
+	}
 	if i.api == nil {
 		return ch.Memory{}, errors.New("the monitor has no API socket")
 	}
@@ -260,6 +267,42 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 	if err := WriteInitrd(cfg.Agent, initrd); err != nil {
 		return nil, err
 	}
+	inst.monitor = caps.Monitor
+	switch caps.Monitor {
+	case host.MonitorKrun:
+		err = inst.startKrun(ctx, procCtx, monCtx, initrd, caps, resuming, progress)
+	default:
+		err = inst.startCloudHypervisor(ctx, procCtx, monCtx, initrd, caps, resuming, progress)
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	if inst.session, err = inst.awaitAgent(ctx); err != nil {
+		return nil, err
+	}
+	cfg.Log.Info("agent connected", "hostname", inst.session.Hello.Hostname, "kernel", inst.session.Hello.Kernel,
+		"up_seconds", float64(inst.session.Hello.BootMicros)/1e6, "resumed", resuming)
+
+	// The guest's clock is wrong on arrival: a fresh boot starts from the
+	// image's build time and a resume from the moment of the suspend.
+	if err := inst.session.SetClock(time.Now(), 5*time.Second); err != nil {
+		cfg.Log.Warn("could not set the guest clock", "err", err)
+	}
+	if resuming {
+		// Running again, so the snapshot is spent: resuming from it a
+		// second time would roll the guest back under its own disks.
+		cfg.discardSuspend()
+	}
+	return inst, nil
+}
+
+// startCloudHypervisor starts the machine under Cloud Hypervisor, resuming
+// it from its snapshot if resuming, and listens for its agent.
+func (i *Instance) startCloudHypervisor(ctx, procCtx, monCtx context.Context, initrd string, caps *host.Caps,
+	resuming bool, progress func(string)) error {
+	cfg := i.cfg
+	run := cfg.runDir()
 	ccfg := &ch.Config{
 		Name:         cfg.Name,
 		Kernel:       cfg.Kernel,
@@ -292,20 +335,20 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 			ccfg.ExtraCmdline += " hangar.image_dax=1"
 		}
 	default:
-		return nil, fmt.Errorf("the image is attached as %q, which is neither %s nor %s", cfg.BaseDevice, ImageDisk, ImagePmem)
+		return fmt.Errorf("the image is attached as %q, which is neither %s nor %s", cfg.BaseDevice, ImageDisk, ImagePmem)
 	}
 
 	if cfg.Net {
 		pdir, err := passtDir(cfg.ID)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		net, err := ch.StartPasst(procCtx, filepath.Join(pdir, "net.sock"), cfg.Verbose)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		inst.backends = append(inst.backends, net)
-		inst.net = net
+		i.backends = append(i.backends, net)
+		i.net = net
 		ccfg.NetSocket = net.Socket()
 	}
 
@@ -313,10 +356,10 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 		gpu, err := ch.StartGpuBackend(procCtx, filepath.Join(run, "gpu.sock"), cfg.GPUVenus, cfg.GPUVenusRestore,
 			filepath.Join(cfg.Dir, "gpu.json"), cfg.GPUEnv, cfg.Verbose)
 		if err != nil {
-			return nil, err
+			return err
 		}
-		inst.backends = append(inst.backends, gpu)
-		inst.gpu = gpu
+		i.backends = append(i.backends, gpu)
+		i.gpu = gpu
 		ccfg.GpuSocket = gpu.Socket()
 		ccfg.GpuShmMiB = cfg.GPUWindowMiB
 		if ccfg.GpuShmMiB == 0 {
@@ -329,52 +372,37 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 	// by a monitor that was killed would stop it starting.
 	_ = os.Remove(ccfg.VsockSocket)
 	_ = os.Remove(ccfg.APISocket)
-	inst.server, err = agent.ListenHybrid(ccfg.VsockSocket, guestCID)
+	i.vsock = ccfg.VsockSocket
+	var err error
+	i.server, err = agent.ListenHybrid(ccfg.VsockSocket, guestCID)
 	if err != nil {
-		return nil, fmt.Errorf("listening for the agent: %w", err)
+		return fmt.Errorf("listening for the agent: %w", err)
 	}
 	if cfg.SharedFiles != "" && cfg.SharedView != nil {
 		files, err := serveSharedFiles(procCtx, ccfg.VsockSocket, guestCID, cfg)
 		if err != nil {
-			return nil, fmt.Errorf("serving the shared files: %w", err)
+			return fmt.Errorf("serving the shared files: %w", err)
 		}
-		inst.backends = append(inst.backends, files)
+		i.backends = append(i.backends, files)
 	}
 
 	if resuming {
 		progress("resuming")
-		if err := inst.restore(ctx, monCtx, ccfg); err != nil {
-			return nil, err
+		if err := i.restore(ctx, monCtx, ccfg); err != nil {
+			return err
 		}
 	} else {
 		progress("booting")
 		args, err := ccfg.Args()
 		if err != nil {
-			return nil, err
+			return err
 		}
-		if err := inst.launch(monCtx, args); err != nil {
-			return nil, err
+		if err := i.launch(monCtx, args); err != nil {
+			return err
 		}
-		inst.api = ch.NewAPI(ccfg.APISocket)
+		i.api = ch.NewAPI(ccfg.APISocket)
 	}
-
-	if inst.session, err = inst.awaitAgent(ctx); err != nil {
-		return nil, err
-	}
-	cfg.Log.Info("agent connected", "hostname", inst.session.Hello.Hostname, "kernel", inst.session.Hello.Kernel,
-		"up_seconds", float64(inst.session.Hello.BootMicros)/1e6, "resumed", resuming)
-
-	// The guest's clock is wrong on arrival: a fresh boot starts from the
-	// image's build time and a resume from the moment of the suspend.
-	if err := inst.session.SetClock(time.Now(), 5*time.Second); err != nil {
-		cfg.Log.Warn("could not set the guest clock", "err", err)
-	}
-	if resuming {
-		// Running again, so the snapshot is spent: resuming from it a
-		// second time would roll the guest back under its own disks.
-		cfg.discardSuspend()
-	}
-	return inst, nil
+	return nil
 }
 
 // launch starts the monitor and watches for it to exit.
@@ -555,7 +583,7 @@ func (i *Instance) Shutdown(log *slog.Logger) {
 	case <-time.After(90 * time.Second):
 		log.Warn("the guest did not power off; stopping the monitor")
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if err := i.api.Shutdown(ctx); err != nil {
+		if i.api == nil || i.api.Shutdown(ctx) != nil {
 			i.cmd.Process.Signal(syscall.SIGTERM)
 		}
 		cancel()

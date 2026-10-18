@@ -7,8 +7,12 @@ import (
 )
 
 // base is the root filesystem of a held copy: a pulled copy's EROFS image,
-// mounted read-only, or a local copy's directory.
+// mounted read-only, or a local copy's directory. Where images are not
+// mounted a pulled copy has none, only its image.
 func (s *ImageStore) base(h heldCopy) (string, error) {
+	if h.image && !mountsImages {
+		return "", nil
+	}
 	if h.image {
 		target := filepath.Join(h.dir, "rootfs")
 		if isEROFS(target) {

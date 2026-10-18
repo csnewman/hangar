@@ -1452,6 +1452,7 @@ export interface components {
             gpu_renderer?: string;
             /** @description Whether that is the worker's CPU. */
             gpu_software?: boolean;
+            monitor?: components["schemas"]["Monitor"];
             /** @description The digest of the copy of the image the environment boots from, fixed when it first starts. Absent until then. */
             image_digest?: string;
             cpus: number;
@@ -1741,6 +1742,11 @@ export interface components {
             cpus: number;
             memory_mib: number;
         };
+        /**
+         * @description What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS, which cannot suspend a machine or change its memory while it runs. Absent until the worker says.
+         * @enum {string}
+         */
+        Monitor: "cloud-hypervisor" | "krun";
         Worker: {
             id: string;
             name: string;
@@ -1760,6 +1766,7 @@ export interface components {
             stats?: components["schemas"]["WorkerStats"];
             images: components["schemas"]["LocalImage"][];
             gpu?: components["schemas"]["GPUInfo"];
+            monitor?: components["schemas"]["Monitor"];
             /** @description Copies of images the worker has been asked to delete and still holds. */
             pending_removals: components["schemas"]["ImageCopy"][];
         };

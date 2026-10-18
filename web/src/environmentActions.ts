@@ -6,6 +6,10 @@ import type { MenuItem } from './code/ContextMenu'
 import { desktop } from './desktop'
 import { environmentsKey } from './environments'
 
+// canSuspend is whether the environment's worker can suspend it: one under
+// libkrun, on macOS, takes no snapshot of a machine.
+export const canSuspend = (env: Environment) => env.monitor !== 'krun'
+
 // useEnvironmentActions is what can be done to an environment, wherever its
 // controls are shown: started, stopped, suspended or deleted, then the
 // environments read again. A deleted one goes to afterDelete, if given.

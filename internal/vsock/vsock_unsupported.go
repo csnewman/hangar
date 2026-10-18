@@ -8,9 +8,9 @@ import (
 	"time"
 )
 
-// Hangar runs on Linux. These stubs exist so the tree still builds, vets and
-// loads in an editor on another operating system; nothing here can succeed,
-// and host.Detect refuses before anything reaches them.
+// AF_VSOCK is Linux's: a guest uses it, and so does a Linux host. These
+// stubs keep the tree building elsewhere; a macOS host reaches its guests
+// through hybrid sockets (ListenHybrid) instead.
 var errNotLinux = errors.New("vsock requires a Linux host")
 
 // Dial always fails here.

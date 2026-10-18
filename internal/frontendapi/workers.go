@@ -81,6 +81,15 @@ func (h *handler) DeleteWorker(ctx context.Context, req DeleteWorkerRequestObjec
 	return DeleteWorker204Response{}, nil
 }
 
+// monitor is a worker's monitor, if it has said.
+func monitor(m string) *Monitor {
+	if m == "" {
+		return nil
+	}
+	v := Monitor(m)
+	return &v
+}
+
 func worker(w api.Worker) Worker {
 	unknown := w.Unknown
 	if unknown == nil {
@@ -101,6 +110,7 @@ func worker(w api.Worker) Worker {
 		Images:          localImages(w.Images),
 		PendingRemovals: imageCopies(w.PendingRemovals),
 		GPU:             gpuInfo(w.GPU),
+		Monitor:         monitor(w.Monitor),
 	}
 }
 

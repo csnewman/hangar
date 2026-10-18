@@ -1,0 +1,35 @@
+# A worker that runs real environments on the Mac itself, under libkrun
+# (see dev/mac-worker.sh). It dials the control plane in compose.yaml on
+# this Mac through Caddy.
+server:
+  url: http://hangar.localhost:8080
+  token_file: /Users/csnewman/Projects/hangar/dev/bootstrap-token
+  credential_file: /Users/csnewman/Projects/hangar/out/mac-worker/worker-credential
+
+node:
+  name: mac
+  labels:
+    runtime: krun
+
+storage:
+  images: /Users/csnewman/Projects/hangar/out/mac-worker/images
+  environments: /Users/csnewman/Projects/hangar/out/mac-worker/env
+  caches: /Users/csnewman/Projects/hangar/out/mac-worker/caches
+  # The files environments share, served to each over NFS on vsock. This
+  # worker's own: the Lima worker's are in its VM.
+  files: /Users/csnewman/Projects/hangar/out/mac-worker/files
+
+reserved:
+  cpus: 2
+  memory: 8GiB
+
+runtime: krun
+
+vm:
+  # dev/kernel-dev.sh's build, which has libkrun's virtio-mmio.
+  kernel: /Users/csnewman/Projects/hangar/out/kernel-dev/vmlinuz
+  # Built by dev/mac-worker.sh for the guest: each boot's initramfs, as
+  # init, and then the agent.
+  agent: /Users/csnewman/Projects/hangar/out/mac-worker/hangar-agent-guest
+  # VS Code's server, built by `editor/build.sh` in the Lima VM.
+  editor: /Users/csnewman/Projects/hangar/out/editor/editor-arm64.ext4

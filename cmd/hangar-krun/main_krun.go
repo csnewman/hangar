@@ -1,5 +1,8 @@
 //go:build darwin && krun
 
+// Command hangar-krun runs one machine under libkrun, from the JSON
+// description the worker writes (krun.Config). libkrun takes the process
+// over, and it exits when the guest does.
 package main
 
 /*
@@ -12,14 +15,27 @@ import "C"
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"os"
+
+	"github.com/csnewman/hangar/internal/krun"
 )
 
 func main() {
 	if len(os.Args) != 2 {
 		fmt.Fprintln(os.Stderr, "usage: hangar-krun CONFIG.json")
 		os.Exit(2)
+	}
+	// The worker holds the other end of standard input: when the worker
+	// goes, however it goes, so does the machine, rather than running on
+	// with nothing to supervise it. macOS has no parent-death signal.
+	if st, err := os.Stdin.Stat(); err == nil && st.Mode()&os.ModeNamedPipe != 0 {
+		go func() {
+			io.Copy(io.Discard, os.Stdin)
+			fmt.Fprintln(os.Stderr, "hangar-krun: the worker has gone; stopping the machine")
+			os.Exit(1)
+		}()
 	}
 	if err := run(os.Args[1]); err != nil {
 		fmt.Fprintf(os.Stderr, "hangar-krun: %v\n", err)
@@ -44,7 +60,7 @@ func run(path string) error {
 	if err != nil {
 		return err
 	}
-	var c Config
+	var c krun.Config
 	if err := json.Unmarshal(b, &c); err != nil {
 		return fmt.Errorf("%s: %w", path, err)
 	}

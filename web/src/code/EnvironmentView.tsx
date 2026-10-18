@@ -25,7 +25,7 @@ import { CPUField, MemoryField } from '../components/MachineFields'
 import { Banner, CopyField, IndexedPage, Row, Rows, Section } from '../components/Pane'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
-import { openVSCode, openVSCodeTab, useEnvironmentActions, vscodeItems } from '../environmentActions'
+import { canSuspend, openVSCode, openVSCodeTab, useEnvironmentActions, vscodeItems } from '../environmentActions'
 import { changeable, environmentsKey, liveMemory, longestWebName, sshCommand, webURL } from '../environments'
 import { copyName, packPath } from '../pages/Packs'
 import { useMe } from '../session'
@@ -174,7 +174,7 @@ function Head({ env }: { env: Environment }) {
       <div className="pane-head-actions">
         {env.desired === 'running' ? (
           <>
-            {running && (
+            {running && canSuspend(env) && (
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"

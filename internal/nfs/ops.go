@@ -1,5 +1,3 @@
-//go:build linux
-
 package nfs
 
 import (
@@ -121,9 +119,9 @@ func (s *Server) op(cs *cstate, op uint32, r *reader, w *writer) (uint32, []byte
 	case opCommit:
 		return s.commit(cs, r, w), nil
 	case opAllocate:
-		return s.allocate(cs, r, 0), nil
+		return s.allocate(cs, r, false), nil
 	case opDeallocate:
-		return s.allocate(cs, r, unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE), nil
+		return s.allocate(cs, r, true), nil
 	case opLock:
 		return s.lock(cs, r, w), nil
 	case opLockT:
@@ -429,7 +427,7 @@ func (s *Server) lookup(cs *cstate, name string) uint32 {
 		if st != nfsOK {
 			return st
 		}
-		switch ftype(n.st.Mode) {
+		switch ftype(uint32(n.st.Mode)) {
 		case nf4Dir:
 		case nf4Lnk:
 			return errSymlink
@@ -506,7 +504,7 @@ func (s *Server) access(cs *cstate, want uint32, w *writer) uint32 {
 		unix.Close(fd)
 	}
 	var got uint32
-	dir := !n.root && ftype(n.st.Mode) == nf4Dir || n.root
+	dir := !n.root && ftype(uint32(n.st.Mode)) == nf4Dir || n.root
 	if mode&4 != 0 {
 		got |= accessRead
 	}
@@ -594,7 +592,7 @@ func (s *Server) readdir(cs *cstate, r *reader, w *writer) uint32 {
 		if st != nfsOK {
 			return st
 		}
-		if ftype(n.st.Mode) != nf4Dir {
+		if ftype(uint32(n.st.Mode)) != nf4Dir {
 			return errNotDir
 		}
 	}
@@ -730,9 +728,9 @@ func (s *Server) create(cs *cstate, r *reader, w *writer) uint32 {
 	case nf4Lnk:
 		err = unix.Symlinkat(target, fd, name)
 	case nf4FIFO:
-		err = unix.Mknodat(fd, name, unix.S_IFIFO|mode, 0)
+		err = mknodAt(fd, name, unix.S_IFIFO|mode)
 	case nf4Sock:
-		err = unix.Mknodat(fd, name, unix.S_IFSOCK|mode, 0)
+		err = mknodAt(fd, name, unix.S_IFSOCK|mode)
 	case nf4Blk, nf4Chr:
 		_, _ = major, minor
 		return errPerm

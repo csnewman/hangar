@@ -1,5 +1,3 @@
-//go:build linux
-
 package nfs
 
 import (
@@ -12,10 +10,7 @@ import (
 )
 
 func (s *Server) openDirRead(p string) (int, error) {
-	return unix.Openat2(s.rootFD, p, &unix.OpenHow{
-		Flags:   unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC,
-		Resolve: unix.RESOLVE_BENEATH | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
-	})
+	return openBeneath(s.rootFD, p, true)
 }
 
 func fileFromFD(fd int, name string) *os.File { return os.NewFile(uintptr(fd), name) }
@@ -418,10 +413,9 @@ func (s *Server) write(cs *cstate, r *reader, w *writer) uint32 {
 	return nfsOK
 }
 
-// allocate is ALLOCATE (mode 0: space for a range, growing the file to
-// hold it) and DEALLOCATE (a hole punched in it, its size kept), as
-// fallocate does them.
-func (s *Server) allocate(cs *cstate, r *reader, mode uint32) uint32 {
+// allocate is ALLOCATE (space for a range, growing the file to hold it)
+// and, if punch, DEALLOCATE (a hole punched in it, its size kept).
+func (s *Server) allocate(cs *cstate, r *reader, punch bool) uint32 {
 	id := readStateid(r)
 	offset, length := r.uint64(), r.uint64()
 	if r.err != nil {
@@ -437,7 +431,7 @@ func (s *Server) allocate(cs *cstate, r *reader, mode uint32) uint32 {
 	if temp {
 		defer f.Close()
 	}
-	if err := unix.Fallocate(int(f.Fd()), mode, int64(offset), int64(length)); err != nil {
+	if err := allocate(int(f.Fd()), punch, int64(offset), int64(length)); err != nil {
 		return errno(err)
 	}
 	return nfsOK
@@ -481,7 +475,7 @@ func lockType(t uint32) int16 {
 
 // denied writes LOCK4denied for the lock in the way of fl.
 func denied(f *os.File, fl unix.Flock_t, w *writer) {
-	fcntlLock(f, unix.F_OFD_GETLK, &fl)
+	fcntlLock(f, ofdGetLock, &fl)
 	w.uint64(uint64(fl.Start))
 	if fl.Len == 0 {
 		w.uint64(math.MaxUint64)
@@ -567,7 +561,7 @@ func (s *Server) lock(cs *cstate, r *reader, w *writer) uint32 {
 	}
 
 	fl := unix.Flock_t{Type: lockType(typ), Whence: 0, Start: start, Len: n}
-	if err := fcntlLock(ls.file, unix.F_OFD_SETLK, &fl); err != nil {
+	if err := fcntlLock(ls.file, ofdSetLock, &fl); err != nil {
 		if err == unix.EAGAIN || err == unix.EACCES {
 			denied(ls.file, unix.Flock_t{Type: lockType(typ), Start: start, Len: n}, w)
 			return errDenied
@@ -605,7 +599,7 @@ func (s *Server) lockt(cs *cstate, r *reader, w *writer) uint32 {
 	f := fileFromFD(fd, cs.cur)
 	defer f.Close()
 	fl := unix.Flock_t{Type: lockType(typ), Start: start, Len: n}
-	if err := fcntlLock(f, unix.F_OFD_GETLK, &fl); err != nil {
+	if err := fcntlLock(f, ofdGetLock, &fl); err != nil {
 		return errno(err)
 	}
 	if fl.Type == unix.F_UNLCK {
@@ -635,7 +629,7 @@ func (s *Server) locku(cs *cstate, r *reader, w *writer) uint32 {
 		return errBadStateID
 	}
 	fl := unix.Flock_t{Type: unix.F_UNLCK, Start: start, Len: n}
-	if err := fcntlLock(ls.file, unix.F_OFD_SETLK, &fl); err != nil {
+	if err := fcntlLock(ls.file, ofdSetLock, &fl); err != nil {
 		return errno(err)
 	}
 	s.mu.Lock()

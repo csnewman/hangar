@@ -6,7 +6,7 @@ import { formatMemory, formatPercent } from '../components/format'
 import { Logo } from '../components/Logo'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
-import { useEnvironmentActions, vscodeItems } from '../environmentActions'
+import { canSuspend, useEnvironmentActions, vscodeItems } from '../environmentActions'
 import { splitByOwner, sshCommand, useEnvironments } from '../environments'
 import { useMe } from '../session'
 import { environmentTab, homeTab, otherTab } from '../workspaceLinks'
@@ -80,12 +80,14 @@ export function StatusBar({
     out.push('separator')
     const busy = actions.busy || env.desired === 'deleted'
     if (env.desired === 'running') {
-      out.push({
-        label: 'Suspend',
-        detail: 'keeps its memory',
-        disabled: busy || !running,
-        onSelect: () => actions.suspend.mutate(),
-      })
+      if (canSuspend(env)) {
+        out.push({
+          label: 'Suspend',
+          detail: 'keeps its memory',
+          disabled: busy || !running,
+          onSelect: () => actions.suspend.mutate(),
+        })
+      }
       out.push({ label: 'Stop', disabled: busy, onSelect: () => actions.stop.mutate() })
     } else {
       out.push({

@@ -225,7 +225,7 @@ func (c *Config) Args() ([]string, error) {
 		args = append(args, "--api-socket", c.APISocket)
 	}
 
-	args = append(args, "--cmdline", c.cmdline())
+	args = append(args, "--cmdline", c.Cmdline())
 	return args, nil
 }
 
@@ -268,7 +268,8 @@ func plugged(mb, region int) int {
 	return min(max(mb, 0), region)
 }
 
-func (c *Config) cmdline() string {
+// Cmdline is the guest kernel's command line.
+func (c *Config) Cmdline() string {
 	// No root= : the initramfs mounts the base read-only, the upper layer
 	// read-write, stacks overlayfs and switch_roots into the result.
 	cl := "console=" + c.ConsoleTTY

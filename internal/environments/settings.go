@@ -144,6 +144,8 @@ func running(e api.Environment) bool {
 func resizable(ctx context.Context, tx db.Tx, e api.Environment, mib int) error {
 	st := e.Stats
 	switch {
+	case e.Monitor == api.MonitorKrun:
+		return fmt.Errorf("%w: its worker, %s, runs it under libkrun, which cannot change a machine's memory while it runs; stop it to change its memory", ErrConflict, e.Worker)
 	case st == nil || st.MachineMemoryMaxMiB == 0:
 		return fmt.Errorf("%w: it started with no room to resize its memory while it runs; stop it to change its memory, and from its next start it can be resized while it runs", ErrConflict)
 	case mib < st.MachineMemoryMinMiB:

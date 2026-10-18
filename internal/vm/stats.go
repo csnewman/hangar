@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
+	"github.com/csnewman/hangar/internal/host"
 )
 
 // sampleEvery is how often a running machine is measured.
@@ -57,7 +58,10 @@ func (m *machine) sample(inst *Instance, cpus int) {
 			st.HostMemoryMiB = int(guestRAM(pid) >> 20)
 		}
 		mctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if mem, err := inst.Memory(mctx); err == nil {
+		if inst.monitor == host.MonitorKrun {
+			// libkrun's memory is what the machine booted with.
+			st.MachineMemoryMiB = inst.cfg.MemoryMiB
+		} else if mem, err := inst.Memory(mctx); err == nil {
 			st.MachineMemoryMiB = mem.Actual
 			if mem.Resizable() {
 				st.MachineMemoryMinMiB, st.MachineMemoryMaxMiB = mem.Boot, mem.Max
@@ -256,29 +260,6 @@ func statFields(pid int) []string {
 		return nil
 	}
 	return strings.Fields(s[i+1:])
-}
-
-// processTicks is a process's user and system CPU time, in clock ticks.
-func processTicks(pid int) uint64 {
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
-	if err != nil {
-		return 0
-	}
-	// The command name is in parentheses and may contain spaces, so fields
-	// are counted from after its closing one.
-	s := string(b)
-	i := strings.LastIndexByte(s, ')')
-	if i < 0 {
-		return 0
-	}
-	f := strings.Fields(s[i+1:])
-	// After the name: state(0) ... utime(11) stime(12).
-	if len(f) < 13 {
-		return 0
-	}
-	u, _ := strconv.ParseUint(f[11], 10, 64)
-	sys, _ := strconv.ParseUint(f[12], 10, 64)
-	return u + sys
 }
 
 // clockTicks is the kernel's USER_HZ, the unit of /proc's CPU times. It is

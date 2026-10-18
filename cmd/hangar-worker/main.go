@@ -54,7 +54,7 @@ func run(path string, log *slog.Logger, rings *logs.Rings) error {
 	switch cfg.Runtime {
 	case "simulated":
 		rt = worker.NewSimulated(2 * time.Second)
-	case "cloud-hypervisor":
+	case "cloud-hypervisor", "krun":
 		images := map[string]vm.Image{}
 		for ref, img := range cfg.VM.Images {
 			images[ref] = vm.Image{Base: img.Base}
@@ -64,6 +64,7 @@ func run(path string, log *slog.Logger, rings *logs.Rings) error {
 			registries[host] = vm.RegistryAuth{Username: a.Username, PasswordFile: a.PasswordFile}
 		}
 		rt, err = vm.New(vm.Config{
+			Monitor:         cfg.Runtime,
 			StateDir:        cfg.Storage.Environments,
 			ImagesDir:       cfg.Storage.Images,
 			Kernel:          cfg.VM.Kernel,
@@ -85,7 +86,7 @@ func run(path string, log *slog.Logger, rings *logs.Rings) error {
 			return err
 		}
 	default:
-		return fmt.Errorf("unknown runtime %q: want cloud-hypervisor or simulated", cfg.Runtime)
+		return fmt.Errorf("unknown runtime %q: want cloud-hypervisor, krun or simulated", cfg.Runtime)
 	}
 
 	w, err := worker.New(cfg, rt, log)

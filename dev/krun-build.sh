@@ -1,14 +1,16 @@
 #!/bin/sh
-# Builds libkrun from source, and hangar-krun against it, for a worker on
-# macOS. Run on the Mac:
+# Builds what a worker on macOS needs beside itself, from source: libkrun,
+# hangar-krun against it, and mkfs.ext4 (e2fsprogs) for environments'
+# writable disks. Run on the Mac:
 #
-#   dev/krun-build.sh       out/krun/bin/{hangar-krun,libkrun.1.dylib}
+#   dev/krun-build.sh       out/krun/bin/{hangar-krun,libkrun.1.dylib,mkfs.ext4}
 #
 # libkrun is built without its guest init (Hangar's agent is init) and
 # with block and network devices. hangar-krun is signed with the
 # hypervisor entitlement, without which macOS refuses it a VM.
 set -eu
 version=v1.19.6
+e2fsprogs=1.47.3
 repo=$(cd "$(dirname "$0")/.." && pwd)
 out=$repo/out/krun
 src=$out/libkrun
@@ -37,4 +39,14 @@ cat > "$out/entitlements.plist" <<PLIST
 <plist version="1.0"><dict><key>com.apple.security.hypervisor</key><true/></dict></plist>
 PLIST
 codesign -f -s - --entitlements "$out/entitlements.plist" "$out/bin/hangar-krun" 2>/dev/null
-echo "built $out/bin/hangar-krun"
+
+e2=$out/e2fsprogs-$e2fsprogs
+if [ ! -x "$out/bin/mkfs.ext4" ]; then
+    curl -fsSL https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v$e2fsprogs/e2fsprogs-$e2fsprogs.tar.gz |
+        tar xz -C "$out"
+    (cd "$e2" && ./configure -q --disable-nls --disable-fuse2fs --disable-e2initrd-helper >/dev/null &&
+        make -s -j8 libs >/dev/null && make -s -C misc -j8 mke2fs >/dev/null)
+    # Named so, mke2fs makes ext4 without being told.
+    cp "$e2/misc/mke2fs" "$out/bin/mkfs.ext4"
+fi
+echo "built $out/bin/hangar-krun and mkfs.ext4"
