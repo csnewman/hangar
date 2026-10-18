@@ -520,41 +520,36 @@ export function ProjectView({
   ]
 
   // gitMenu is IntelliJ's Git submenu for a path.
-  const gitMenu = (path: string, dir: boolean, x: number, y: number): MenuItem[] => {
+  const gitMenu = (path: string, dir: boolean): MenuItem[] => {
     const change = status?.changes.find((c) => c.path === path)
     const items: MenuItem[] = [{ label: 'Show History', onSelect: () => onHistory(path) }]
     if (!dir) {
       items.push(
         { label: 'Annotate with Git Blame', onSelect: () => onAnnotate(path) },
         {
-          label: 'Compare with Branch…',
-          onSelect: () =>
-            client.branches(path).then((b) =>
-              menu.openAt(x, y, [
-                { heading: 'Compare with' },
-                ...[...b.local.map((l) => l.name), ...b.remote]
-                  .filter((name) => name !== b.current)
-                  .slice(0, 40)
-                  .map((name): MenuItem => ({
+          label: 'Compare with Branch',
+          submenu: () =>
+            client.branches(path).then((b) => {
+              const names = [...b.local.map((l) => l.name), ...b.remote].filter((name) => name !== b.current)
+              return names.length
+                ? names.slice(0, 40).map((name): MenuItem => ({
                     label: name,
                     onSelect: () => onTab({ kind: 'diff', path, base: name, baseLabel: name }),
-                  })),
-              ]),
-            ),
+                  }))
+                : [{ heading: 'No other branches' }]
+            }),
         },
         {
-          label: 'Compare with Revision…',
-          onSelect: () =>
+          label: 'Compare with Revision',
+          submenu: () =>
             client.log(undefined, 0, 30, path).then((l) =>
-              menu.openAt(x, y, [
-                { heading: 'Compare with' },
-                ...l.commits.map((c): MenuItem => ({
-                  label: c.subject || c.hash.slice(0, 8),
-                  detail: `${c.hash.slice(0, 8)} · ${c.author}`,
-                  onSelect: () => onTab({ kind: 'diff', path, base: c.hash, baseLabel: c.hash.slice(0, 8) }),
-                })),
-                ...(l.commits.length ? [] : [{ label: 'No commits changed it', disabled: true, onSelect: () => {} }]),
-              ]),
+              l.commits.length
+                ? l.commits.map((c): MenuItem => ({
+                    label: c.subject || c.hash.slice(0, 8),
+                    detail: `${c.hash.slice(0, 8)} · ${c.author}`,
+                    onSelect: () => onTab({ kind: 'diff', path, base: c.hash, baseLabel: c.hash.slice(0, 8) }),
+                  }))
+                : [{ heading: 'No commits changed it' }],
             ),
         },
       )
@@ -626,7 +621,7 @@ export function ProjectView({
 
   // entryMenu is what a right-click on an entry offers, for the rows
   // chosen; path '' is the root, from a click on the tree's empty space.
-  const entryMenu = (path: string, dir: boolean, x: number, y: number): MenuItem[] => {
+  const entryMenu = (path: string, dir: boolean): MenuItem[] => {
     const paths = path && chosen.includes(path) ? chosen : path ? [path] : []
     const many = paths.length > 1
     const name = nameOf(path) || nameOf(root) || root
@@ -638,20 +633,12 @@ export function ProjectView({
     if (!many && !dir) {
       items.push(
         { label: 'Open', onSelect: () => onOpen(path) },
-        {
-          label: 'Open With…',
-          onSelect: () =>
-            menu.openAt(
-              x,
-              y,
-              openWith(path, (view) => onOpen(path, view)),
-            ),
-        },
+        { label: 'Open With', submenu: openWith(path, (view) => onOpen(path, view)) },
       )
       if (change) items.push({ label: 'Show Changes', onSelect: () => onDiff(path) })
       items.push('separator')
     }
-    items.push({ label: 'New ›', onSelect: () => menu.openAt(x, y, newMenu(folder)) }, 'separator')
+    items.push({ label: 'New', submenu: newMenu(folder) }, 'separator')
     if (paths.length) {
       items.push(
         { label: 'Cut', shortcut: shortcut('Mod+X'), onSelect: () => cut(paths) },
@@ -660,17 +647,16 @@ export function ProjectView({
     }
     items.push(
       {
-        label: 'Copy Path/Reference ›',
-        onSelect: () =>
-          menu.openAt(x, y, [
-            {
-              label: 'Absolute Path',
-              detail: abs,
-              onSelect: () => copyText(paths.length ? paths.map((p) => `${root}/${p}`).join('\n') : abs),
-            },
-            { label: 'Path From Project Root', disabled: !path, onSelect: () => copyText(paths.join('\n')) },
-            { label: 'File Name', onSelect: () => copyText(paths.length ? paths.map(nameOf).join('\n') : name) },
-          ]),
+        label: 'Copy Path/Reference',
+        submenu: [
+          {
+            label: 'Absolute Path',
+            detail: abs,
+            onSelect: () => copyText(paths.length ? paths.map((p) => `${root}/${p}`).join('\n') : abs),
+          },
+          { label: 'Path From Project Root', disabled: !path, onSelect: () => copyText(paths.join('\n')) },
+          { label: 'File Name', onSelect: () => copyText(paths.length ? paths.map(nameOf).join('\n') : name) },
+        ],
       },
       {
         label: clip ? `Paste ${what(clip.paths)}` : 'Paste',
@@ -702,44 +688,39 @@ export function ProjectView({
     const files = paths.filter((p) => !isDir(p))
     if (files.length && files.length === paths.length && files.length <= 2) {
       items.push('separator', {
-        label: 'Compare ›',
-        onSelect: () =>
-          menu.openAt(x, y, [
-            {
-              label: 'Compare Files',
-              disabled: files.length !== 2,
-              onSelect: () => onTab({ kind: 'compare', path: files[1], other: files[0] }),
-            },
-            {
-              label: 'Compare with Editor',
-              disabled: files.length !== 1 || !selected || selected === files[0],
-              detail: selected ? nameOf(selected) : undefined,
-              onSelect: () => selected && onTab({ kind: 'compare', path: selected, other: files[0] }),
-            },
-            {
-              label: 'Compare with Clipboard',
-              disabled: files.length !== 1 || !navigator.clipboard?.readText,
-              onSelect: () =>
-                navigator.clipboard.readText().then(
-                  (text) => onTab({ kind: 'compare', path: files[0], other: keepClipboard(text) }),
-                  () => setError('The browser would not read the clipboard.'),
-                ),
-            },
-          ]),
+        label: 'Compare',
+        submenu: [
+          {
+            label: 'Compare Files',
+            disabled: files.length !== 2,
+            onSelect: () => onTab({ kind: 'compare', path: files[1], other: files[0] }),
+          },
+          {
+            label: 'Compare with Editor',
+            disabled: files.length !== 1 || !selected || selected === files[0],
+            detail: selected ? nameOf(selected) : undefined,
+            onSelect: () => selected && onTab({ kind: 'compare', path: selected, other: files[0] }),
+          },
+          {
+            label: 'Compare with Clipboard',
+            disabled: files.length !== 1 || !navigator.clipboard?.readText,
+            onSelect: () =>
+              navigator.clipboard.readText().then(
+                (text) => onTab({ kind: 'compare', path: files[0], other: keepClipboard(text) }),
+                () => setError('The browser would not read the clipboard.'),
+              ),
+          },
+        ],
       })
     }
     if (!many && status?.repo) {
-      items.push('separator', { label: 'Git ›', onSelect: () => menu.openAt(x, y, gitMenu(path, dir || !path, x, y)) })
+      items.push('separator', { label: 'Git', submenu: gitMenu(path, dir || !path) })
     }
     if (!many && path && !dir) {
       items.push(
         {
-          label: 'File Properties ›',
-          onSelect: () =>
-            client.textProps(path).then(
-              (p) => menu.openAt(x, y, propertiesMenu(path, p)),
-              (e: Error) => setError(e.message),
-            ),
+          label: 'File Properties',
+          submenu: () => client.textProps(path).then((p) => propertiesMenu(path, p)),
         },
         {
           label: entry?.exec ? 'Remove Executable Permission' : 'Make Executable',
@@ -993,7 +974,7 @@ export function ProjectView({
                     anchor.current = path
                   }
                   setCursor(path)
-                  menu.open(ev, entryMenu(path, e.dir, ev.clientX, ev.clientY))
+                  menu.open(ev, entryMenu(path, e.dir))
                 }}
                 title={path}
               >
@@ -1118,7 +1099,7 @@ export function ProjectView({
         onContextMenu={(ev) => {
           if (ev.target === ev.currentTarget || (ev.target as HTMLElement).closest('.code-tree-root')) {
             setChosen([])
-            menu.open(ev, entryMenu('', true, ev.clientX, ev.clientY))
+            menu.open(ev, entryMenu('', true))
           }
         }}
         onDragOver={(ev) => dragOver(ev, null)}
@@ -1139,7 +1120,7 @@ export function ProjectView({
               ev.preventDefault()
               ev.stopPropagation()
               setChosen([])
-              menu.open(ev, [...embedded.menu, 'separator', ...entryMenu('', true, ev.clientX, ev.clientY)])
+              menu.open(ev, [...embedded.menu, 'separator', ...entryMenu('', true)])
             }}
           >
             {embedded.collapsed ? (

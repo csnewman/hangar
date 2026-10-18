@@ -4160,3 +4160,41 @@ body.code-tab-dragging * {
 .code-workspace-missing .code-tool-btn {
   margin-left: auto;
 }
+
+/* A half's buttons on a stripe, which a dragged button is dropped on: room
+   is made in an empty one while a button is dragged, the one under the
+   pointer is lit, and a line marks where the button would go. */
+.code-stripe-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  border-radius: 6px;
+}
+
+.code-stripe-zone-open {
+  min-height: 30px;
+}
+
+.code-stripe-zone-drop {
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.code-stripe-place {
+  display: flex;
+  border-radius: 6px;
+}
+
+.code-stripe-before {
+  box-shadow: 0 -2px 0 var(--accent);
+}
+
+.code-stripe-after {
+  box-shadow: 0 2px 0 var(--accent);
+}
+
+.code-stripe-dragged {
+  opacity: 0.35;
+}

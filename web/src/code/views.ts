@@ -69,13 +69,12 @@ export function opensAsImage(path: string): boolean {
   return !!imageType(path) && ext(path) !== 'svg'
 }
 
-// openWith is the Open With menu: each view that could show the file, the
-// one it opens in first marked.
+// openWith is the Open With submenu: each view that could show the file,
+// the one it opens in first marked.
 export function openWith(path: string, open: (view: FileView) => void): MenuItem[] {
   const first = opensAs(path)
   const views: FileView[] = ['text', 'image', ...(first === 'pdf' || first === 'media' ? [first] : []), 'hex']
   return [
-    { heading: 'Open With' },
     ...views.map((v) => ({
       label: viewNames[v],
       checked: v === first,

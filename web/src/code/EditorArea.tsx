@@ -109,7 +109,7 @@ export function EditorArea({
 
   // tabMenu is IntelliJ's and VS Code's tab menu, less what an editor
   // that saves as it goes has no use for.
-  const tabMenu = (t: Tab, x: number, y: number): MenuItem[] => {
+  const tabMenu = (t: Tab): MenuItem[] => {
     const key = tabKey(t)
     const i = tabs.findIndex((o) => tabKey(o) === key)
     const keys = tabs.map(tabKey)
@@ -155,8 +155,8 @@ export function EditorArea({
       'separator',
       { label: 'Reveal in Project', onSelect: () => onReveal(t.path, t.root) },
       {
-        label: 'Open With…',
-        onSelect: () => menu.openAt(x, y, openWith(t.path, (view) => onOpen({ kind: 'file', path: t.path, view }))),
+        label: 'Open With',
+        submenu: openWith(t.path, (view) => onOpen({ ...t, kind: 'file', view })),
       },
       t.kind === 'file'
         ? { label: 'Show Changes', disabled: !changed, onSelect: () => onOpen({ kind: 'diff', path: t.path }) }
@@ -209,7 +209,7 @@ export function EditorArea({
           group={group}
           groups={split?.groups ?? 1}
           onDropOut={onDropTab}
-          onMenu={(e, t) => menu.open(e, tabMenu(t, e.clientX, e.clientY))}
+          onMenu={(e, t) => menu.open(e, tabMenu(t))}
         />
       )}
       <div className="code-editor-body">

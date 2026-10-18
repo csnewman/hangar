@@ -96,3 +96,15 @@
 .code-menu .code-menu-danger {
   color: var(--danger);
 }
+
+/* An item with a submenu: an arrow at its end, and lit while its submenu
+   is open. */
+.code-menu-arrow {
+  flex: none;
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.code-menu button.code-menu-open {
+  background: var(--sidebar-hover);
+}

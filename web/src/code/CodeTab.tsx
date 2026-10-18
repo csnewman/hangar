@@ -844,10 +844,21 @@ function CodeView({
   }
   const docks = docksFrom(settings)
   const sides = Object.fromEntries(toolNames.map((n) => [n, docks[n].side])) as Record<ToolName, Side>
-  const moveTool = (name: ToolName, dock: Dock) => {
-    if (docks[name].side === dock.side && docks[name].slot === dock.slot) return
+  // The windows in the order their buttons are in, as dragged.
+  const savedOrder = Array.isArray(settings.toolOrder)
+    ? (settings.toolOrder as unknown[]).filter((n): n is ToolName => toolNames.includes(n as ToolName))
+    : []
+  const order = [...savedOrder, ...toolNames.filter((n) => !savedOrder.includes(n))]
+  // moveTool docks a window, and puts its button before the one at index
+  // among those docked there, or last.
+  const moveTool = (name: ToolName, dock: Dock, index?: number) => {
+    const here = order.filter((n) => n !== name && docks[n].side === dock.side && docks[n].slot === dock.slot)
+    const before = index === undefined ? undefined : here[index]
+    const rest = order.filter((n) => n !== name)
+    const at = before ? rest.indexOf(before) : here.length ? rest.indexOf(here[here.length - 1]) + 1 : rest.length
+    const toolOrder = [...rest.slice(0, at), name, ...rest.slice(at)]
     const toolWindows = Object.fromEntries(toolNames.map((n) => [n, dockName(n === name ? dock : docks[n])]))
-    const next = { ...settings, toolWindows }
+    const next = { ...settings, toolWindows, toolOrder }
     setSettings(next)
     client.saveSettings(next).catch(() => {})
   }
@@ -890,7 +901,7 @@ function CodeView({
       // Which halves are open is a convenience.
     }
   }, [halves])
-  const docked = (side: Side, slot: Slot) => toolNames.filter((n) => docks[n].side === side && docks[n].slot === slot)
+  const docked = (side: Side, slot: Slot) => order.filter((n) => docks[n].side === side && docks[n].slot === slot)
   const showing = (side: Side, slot: Slot = 'top'): ToolName | null => {
     const c = chosen[`${side}-${slot}`]
     return c && docks[c].side === side && docks[c].slot === slot ? c : (docked(side, slot)[0] ?? null)
@@ -942,10 +953,16 @@ function CodeView({
   }, [ask])
   const showPerformancePage = () => open({ kind: 'performance', path: 'performance', title: 'Performance' })
 
-  const dropTool = (name: ToolName, side: Side) => {
-    const slot = docks[name].slot
-    moveTool(name, { side, slot })
-    setChosen((c) => ({ ...c, [`${side}-${slot}`]: name }))
+  const dropTool = (name: ToolName, to: Drop) => {
+    const was = docks[name]
+    moveTool(name, to, to.index)
+    if (was.side === to.side && was.slot === to.slot) return
+    // Moved, it is what its new half shows, as it was shown before.
+    setChosen((c) => ({ ...c, [`${to.side}-${to.slot}`]: name }))
+    if (isShown(name)) {
+      setHalf(to.side, to.slot, true)
+      fold(to.side, true)
+    }
   }
   // A window's button's menu docks it elsewhere.
   const stripeMenu = useContextMenu()
@@ -977,11 +994,49 @@ function CodeView({
       onClick={() => toggleTool(name)}
       onPointerDown={(e) => dragTool(name, e, setDragging, dropTool)}
       onContextMenu={(e) => stripeMenu.open(e, dockMenu(name))}
+      tool={name}
     >
       {toolIcons[name]}
       {name === 'changes' && changeCount > 0 && <span className="code-stripe-count">{changeCount}</span>}
     </StripeButton>
   )
+
+  // stripeZone is a half's buttons on its side's stripe: where a button
+  // dragged is dropped to dock its window there, at the place marked.
+  const stripeZone = (side: Side, slot: Slot) => {
+    const over = dragging?.over && dragging.over.side === side && dragging.over.slot === slot ? dragging.over : null
+    const names = docked(side, slot)
+    // The button dragged keeps its place, faded, and the mark of where it
+    // would go is drawn on its neighbour, taking no room: nothing moves
+    // under the pointer as it goes.
+    const others = names.filter((n) => n !== dragging?.tool)
+    const before = over ? (others[over.index] ?? null) : undefined
+    const after = before === null ? others[others.length - 1] : undefined
+    return (
+      <div
+        className={['code-stripe-zone', over && 'code-stripe-zone-drop', dragging && 'code-stripe-zone-open']
+          .filter(Boolean)
+          .join(' ')}
+        data-dock={`${side}:${slot}`}
+      >
+        {names.map((n) => (
+          <span
+            key={n}
+            className={[
+              'code-stripe-place',
+              dragging?.tool === n && 'code-stripe-dragged',
+              before === n && 'code-stripe-before',
+              after === n && 'code-stripe-after',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+          >
+            {toolButton(n)}
+          </span>
+        ))}
+      </div>
+    )
+  }
 
   const toolBody = (name: ToolName) =>
     name === 'project' ? (
@@ -1178,10 +1233,10 @@ function CodeView({
           />
         ))}
         <div className="code-page">
-          <Stripe side="left" over={dragging?.over === 'left'}>
-            {docked('left', 'top').map(toolButton)}
-            {docked('left', 'bottom').length > 0 && <span className="code-stripe-gap" />}
-            {docked('left', 'bottom').map(toolButton)}
+          <Stripe side="left">
+            {stripeZone('left', 'top')}
+            <span className="code-stripe-gap" />
+            {stripeZone('left', 'bottom')}
             <span className="code-tool-spacer" />
             {hasDesktop && (
               <StripeButton
@@ -1315,10 +1370,10 @@ function CodeView({
               </Panel>
             </Group>
           </div>
-          <Stripe side="right" over={dragging?.over === 'right'}>
-            {docked('right', 'top').map(toolButton)}
-            {docked('right', 'bottom').length > 0 && <span className="code-stripe-gap" />}
-            {docked('right', 'bottom').map(toolButton)}
+          <Stripe side="right">
+            {stripeZone('right', 'top')}
+            <span className="code-stripe-gap" />
+            {stripeZone('right', 'bottom')}
           </Stripe>
           {stripeMenu.menu}
           {dragging && (
@@ -1470,46 +1525,70 @@ function ToolRow({ arrangement, children }: { arrangement: string; children: Rea
 
 // Stripe is a column of buttons at the side of the Code tab, which a tool
 // window's button being dragged can be dropped on.
-function Stripe({ side, over, children }: { side: Side; over: boolean; children: ReactNode }) {
+function Stripe({ side, children }: { side: Side; children: ReactNode }) {
   return (
-    <div className={over ? 'code-stripe code-stripe-drop' : 'code-stripe'} data-side={side}>
+    <div className="code-stripe" data-side={side}>
       {children}
     </div>
   )
 }
 
-// Dragging is a tool window's button being dragged to the other side: where
-// the pointer is, and the stripe it is over.
-type Dragging = { tool: ToolName; x: number; y: number; over: Side | null }
+// Drop is where a tool window's button would be dropped: a half of a side,
+// and the place among the buttons docked there.
+type Drop = Dock & { index: number }
+
+// Dragging is a tool window's button being dragged: where the pointer is,
+// and where the button would be dropped.
+type Dragging = { tool: ToolName; x: number; y: number; over: Drop | null }
+
+// dropAt is where on the stripes a point is: the half of the side whose
+// buttons it is among (above the line between them, the top; below, the
+// bottom), and before which of them, other than the one dragged.
+function dropAt(tool: ToolName, x: number, y: number): Drop | null {
+  const stripe = document.elementFromPoint(x, y)?.closest<HTMLElement>('.code-stripe')
+  if (!stripe) return null
+  const zones = [...stripe.querySelectorAll<HTMLElement>('[data-dock]')]
+  const zone =
+    zones.find((z) => {
+      const r = z.getBoundingClientRect()
+      return y >= r.top && y <= r.bottom
+    }) ?? (zones.length > 1 && y > zones[1].getBoundingClientRect().top - 6 ? zones[1] : zones[0])
+  if (!zone) return null
+  const [side, slot] = zone.dataset.dock!.split(':') as [Side, Slot]
+  const buttons = [...zone.querySelectorAll<HTMLElement>('[data-tool]')].filter((b) => b.dataset.tool !== tool)
+  const i = buttons.findIndex((b) => {
+    const r = b.getBoundingClientRect()
+    return y < r.top + r.height / 2
+  })
+  return { side, slot, index: i < 0 ? buttons.length : i }
+}
 
 // dragTool follows the pointer from a press on a tool window's button. Once
 // it has moved a few pixels it is a drag, shown by onMove, and dropped on a
-// stripe by onDrop; a press that does not move is left to be a click.
+// half of a stripe by onDrop; a press that does not move is left to be a
+// click.
 function dragTool(
   tool: ToolName,
   e: React.PointerEvent,
   onMove: (d: Dragging | null) => void,
-  onDrop: (tool: ToolName, side: Side) => void,
+  onDrop: (tool: ToolName, to: Drop) => void,
 ) {
   if (e.button !== 0) return
   const x0 = e.clientX
   const y0 = e.clientY
   let dragging = false
-  const sideAt = (x: number, y: number) =>
-    ((document.elementFromPoint(x, y)?.closest('.code-stripe') as HTMLElement | null)?.dataset.side as Side | undefined) ??
-    null
   const move = (ev: PointerEvent) => {
     if (!dragging && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 5) return
     dragging = true
-    onMove({ tool, x: ev.clientX, y: ev.clientY, over: sideAt(ev.clientX, ev.clientY) })
+    onMove({ tool, x: ev.clientX, y: ev.clientY, over: dropAt(tool, ev.clientX, ev.clientY) })
   }
   const up = (ev: PointerEvent) => {
     document.removeEventListener('pointermove', move, true)
     document.removeEventListener('pointerup', up, true)
     if (!dragging) return
     onMove(null)
-    const side = sideAt(ev.clientX, ev.clientY)
-    if (side) onDrop(tool, side)
+    const to = dropAt(tool, ev.clientX, ev.clientY)
+    if (to) onDrop(tool, to)
     // The click that ends a drag is not a click on the button.
     const swallow = (c: MouseEvent) => {
       c.stopPropagation()
@@ -1528,8 +1607,11 @@ function StripeButton({
   onClick,
   onPointerDown,
   onContextMenu,
+  tool,
   children,
 }: {
+  // tool names the window a button is for, which can be dragged.
+  tool?: ToolName
   on: boolean
   title: string
   onClick: () => void
@@ -1545,6 +1627,7 @@ function StripeButton({
       aria-label={title}
       aria-pressed={on}
       data-movable={onPointerDown ? '' : undefined}
+      data-tool={tool}
       onPointerDown={onPointerDown}
       onContextMenu={
         onContextMenu &&
