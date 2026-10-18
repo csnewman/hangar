@@ -18,21 +18,21 @@ import type { CodeClient, Entry } from './client'
 import { copyText, useContextMenu, type MenuItem } from './ContextMenu'
 import { ToolWindow } from './ToolWindow'
 
-// A place Computer offers to go to: the home folder, the machine's root,
-// each project, and what the person has pinned.
+// A place the Filesystem window offers to go to: the home folder, the
+// root, each project, and what the person has pinned.
 type Place = { name: string; path: string; kind: 'home' | 'root' | 'project' | 'pinned' }
 
 const parentOf = (p: string) => (p.lastIndexOf('/') > 0 ? p.slice(0, p.lastIndexOf('/')) : '/')
 const join = (dir: string, name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`)
 const nameOf = (p: string) => (p === '/' ? '/' : p.slice(p.lastIndexOf('/') + 1))
 
-// ComputerView is the Computer tool window: the whole machine, from any
+// FilesystemView is the Filesystem tool window: the whole machine, from any
 // folder. A path is typed (Tab completes it) or a place chosen, and the
 // folder there is a tree, its folders opened in place. A file opens as a
 // tab, in its project if it is in one; a folder can be opened in a
 // terminal, added to the workspace or pinned. Nothing here is watched: a
 // folder is read again as it is opened, and all of them with Reload.
-export function ComputerView({
+export function FilesystemView({
   client,
   env,
   projects,
@@ -63,7 +63,7 @@ export function ComputerView({
   // changes.
   reveal?: { path: string; n: number } | null
 }) {
-  const atKey = `hangar.code.${env}.computer`
+  const atKey = `hangar.code.${env}.filesystem`
   const [at, setAtState] = useState(() => {
     try {
       return localStorage.getItem(atKey) ?? ''
@@ -87,7 +87,7 @@ export function ComputerView({
     try {
       localStorage.setItem(atKey, dir)
     } catch {
-      // Where Computer was is a convenience.
+      // Where the window was is a convenience.
     }
   }
 
@@ -187,7 +187,7 @@ export function ComputerView({
 
   const places: Place[] = [
     { name: 'Home', path: client.home, kind: 'home' } as Place,
-    { name: 'Computer', path: '/', kind: 'root' } as Place,
+    { name: '/', path: '/', kind: 'root' } as Place,
     ...projects.map((p): Place => ({ name: p.name, path: p.root, kind: 'project' })),
     ...pinned.map((p): Place => ({ name: nameOf(p), path: p, kind: 'pinned' })),
   ].filter((p, i, all) => p.path && all.findIndex((o) => o.path === p.path) === i)
@@ -220,13 +220,13 @@ export function ComputerView({
     const list = children[dir]
     if (list === undefined)
       return (
-        <div className="code-computer-note" style={{ paddingLeft: 8 + depth * 14 }}>
+        <div className="code-filesystem-note" style={{ paddingLeft: 8 + depth * 14 }}>
           Reading…
         </div>
       )
     if (typeof list === 'string') {
       return (
-        <div className="code-computer-note code-note-error" style={{ paddingLeft: 8 + depth * 14 }}>
+        <div className="code-filesystem-note code-note-error" style={{ paddingLeft: 8 + depth * 14 }}>
           {list}
         </div>
       )
@@ -234,7 +234,7 @@ export function ComputerView({
     const shown = list.filter((e) => hidden || !e.name.startsWith('.'))
     if (!shown.length)
       return (
-        <div className="code-computer-note" style={{ paddingLeft: 8 + depth * 14 }}>
+        <div className="code-filesystem-note" style={{ paddingLeft: 8 + depth * 14 }}>
           Empty
         </div>
       )
@@ -277,8 +277,8 @@ export function ComputerView({
               <File size={14} className="code-icon-file" />
             )}
             <span className="code-tree-name">{e.name}</span>
-            {e.readonly && <Lock size={11} className="code-computer-lock" aria-label="Read-only" />}
-            {!e.dir && <span className="code-computer-size">{formatBytes(e.size)}</span>}
+            {e.readonly && <Lock size={11} className="code-filesystem-lock" aria-label="Read-only" />}
+            {!e.dir && <span className="code-filesystem-size">{formatBytes(e.size)}</span>}
           </div>
           {open && rows(path, depth + 1)}
         </div>
@@ -299,7 +299,7 @@ export function ComputerView({
 
   return (
     <ToolWindow
-      title="Computer"
+      title="Filesystem"
       onHide={onHide}
       actions={
         <>
@@ -318,8 +318,8 @@ export function ComputerView({
         </>
       }
     >
-      <div className="code-computer">
-        <label className="code-computer-path">
+      <div className="code-filesystem">
+        <label className="code-filesystem-path">
           <span className="code-sr-only">Folder to show</span>
           <Folder size={13} className="code-icon-dir" />
           <input
@@ -338,13 +338,13 @@ export function ComputerView({
             onBlur={() => setTyped(at)}
           />
         </label>
-        <div className="code-computer-places" role="list" aria-label="Places">
+        <div className="code-filesystem-places" role="list" aria-label="Places">
           {places.map((p) => (
             <button
               key={p.path}
               type="button"
               role="listitem"
-              className={p.path === at ? 'code-computer-place code-computer-place-on' : 'code-computer-place'}
+              className={p.path === at ? 'code-filesystem-place code-filesystem-place-on' : 'code-filesystem-place'}
               title={p.path}
               onClick={() => setAt(p.path)}
               onContextMenu={(ev) => menu.open(ev, folderMenu(p.path))}
@@ -354,7 +354,7 @@ export function ComputerView({
             </button>
           ))}
         </div>
-        <div className="code-computer-tree">
+        <div className="code-filesystem-tree">
           {at && (
             <div
               className="code-tree-root"

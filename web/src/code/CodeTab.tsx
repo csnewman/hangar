@@ -30,7 +30,7 @@ import { useMe } from '../session'
 import { StartProgress } from '../components/StartProgress'
 import { environmentTab, nameTab, useWorkspaceTab, type WorkspaceShow } from '../workspaceLinks'
 import { ChangesView } from './ChangesView'
-import { ComputerView } from './ComputerView'
+import { FilesystemView } from './FilesystemView'
 import { WorkspaceView } from './WorkspaceView'
 import { CodeClient, type ConnectionState, type GitStatus } from './client'
 import { CodeTerminal } from './CodeTerminal'
@@ -321,6 +321,8 @@ const withTab = (g: TabGroup, tab: Tab): TabGroup => ({
 // side, and the top or the bottom of it. A side shows one window of each
 // half at a time, one over the other when both are open, as IntelliJ's
 // sides do.
+// computer is the Filesystem window, by the name its dock is kept under in
+// the settings.
 type ToolName = 'project' | 'structure' | 'computer' | 'changes' | 'docker' | 'performance'
 type Bottom = 'terminal' | 'find' | 'problems' | 'log' | 'logs'
 type Side = 'left' | 'right'
@@ -339,7 +341,7 @@ const toolNames: ToolName[] = ['project', 'structure', 'computer', 'changes', 'd
 const toolTitles: Record<ToolName, string> = {
   project: 'Workspace',
   structure: 'Structure',
-  computer: 'Computer',
+  computer: 'Filesystem',
   changes: 'Changes',
   docker: 'Docker',
   performance: 'Performance',
@@ -524,17 +526,18 @@ function CodeView({
   const revealInProject = (path: string, root?: string) => {
     const at = place(path, root)
     if (at.path.startsWith('/')) {
-      revealOnComputer(at.path)
+      revealInFilesystem(at.path)
       return
     }
     showTool('project')
     setReveal((r) => ({ ...at, n: (r?.n ?? 0) + 1 }))
   }
-  // Reveal on Computer: Computer shows the folder a path is in.
-  const [computerAt, setComputerAt] = useState<{ path: string; n: number } | null>(null)
-  const revealOnComputer = (abs: string) => {
+  // Reveal in Filesystem: the Filesystem window shows the folder a path is
+  // in.
+  const [filesystemAt, setFilesystemAt] = useState<{ path: string; n: number } | null>(null)
+  const revealInFilesystem = (abs: string) => {
     showTool('computer')
-    setComputerAt((r) => ({ path: abs, n: (r?.n ?? 0) + 1 }))
+    setFilesystemAt((r) => ({ path: abs, n: (r?.n ?? 0) + 1 }))
   }
 
   // Open in Terminal: a new session in a folder.
@@ -731,7 +734,7 @@ function CodeView({
         setFolders?.(f).catch(() => {})
       },
     },
-    { label: 'Reveal on Computer', onSelect: () => revealOnComputer(p.root) },
+    { label: 'Reveal in Filesystem', onSelect: () => revealInFilesystem(p.root) },
     'separator',
     { label: 'Open Alone in This Tab', onSelect: () => onFolder(p.root === client.home ? '' : p.root) },
     {
@@ -832,7 +835,7 @@ function CodeView({
     client.settings().then(setSettings, () => {})
     return client.on('settings.changed', setSettings)
   }, [client])
-  // The folders the person has pinned to Computer's places.
+  // The folders the person has pinned to the Filesystem window's places.
   const pinned = Array.isArray(settings.places)
     ? settings.places.filter((p): p is string => typeof p === 'string')
     : []
@@ -990,7 +993,7 @@ function CodeView({
     <StripeButton
       key={name}
       on={isShown(name)}
-      title={`${toolTitles[name]} (drag to the other side to move it there; right-click to dock it elsewhere)`}
+      title={toolTitles[name]}
       onClick={() => toggleTool(name)}
       onPointerDown={(e) => dragTool(name, e, setDragging, dropTool)}
       onContextMenu={(e) => stripeMenu.open(e, dockMenu(name))}
@@ -1086,13 +1089,13 @@ function CodeView({
         onHide={() => hideTool('project')}
       />
     ) : name === 'computer' ? (
-      <ComputerView
+      <FilesystemView
         client={client}
         env={scope}
         projects={projects}
         pinned={pinned}
         onPin={pin}
-        reveal={computerAt}
+        reveal={filesystemAt}
         onOpenFile={(abs) => open({ kind: 'file', path: abs })}
         onTerminal={(dir) => openTerminal(dir)}
         onAddToWorkspace={addFolder ?? undefined}
@@ -1178,7 +1181,7 @@ function CodeView({
       languagesFor={languagesOf}
       statusOf={statusOf}
       projectLabel={projectLabel}
-      onOutside={{ reveal: revealOnComputer, add: addFolder ?? undefined }}
+      onOutside={{ reveal: revealInFilesystem, add: addFolder ?? undefined }}
       tabs={g.tabs}
       active={g.active}
       opened={i === store.focus ? opened : 0}
@@ -1241,7 +1244,7 @@ function CodeView({
             {hasDesktop && (
               <StripeButton
                 on={store.groups.some((g) => g.active === 'desktop:desktop')}
-                title="Desktop (connected while its tab is shown)"
+                title="Desktop"
                 onClick={() => open({ kind: 'desktop', path: 'desktop', title: 'Desktop' })}
               >
                 <Monitor size={16} />
@@ -1259,7 +1262,7 @@ function CodeView({
             </StripeButton>
             <StripeButton
               on={shown.terminal && bottom === 'problems'}
-              title={`Problems: ${problemCount.errors} errors, ${problemCount.warnings} warnings`}
+              title="Problems"
               onClick={() => toggleBottom('problems')}
             >
               <CircleAlert size={16} />

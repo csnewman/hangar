@@ -3908,15 +3908,15 @@ body.code-tab-dragging * {
   white-space: nowrap;
 }
 
-/* The Computer window: a path, the places, and the folder there. */
-.code-computer {
+/* The Filesystem window: a path, the places, and the folder there. */
+.code-filesystem {
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
 }
 
-.code-computer-path {
+.code-filesystem-path {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -3928,11 +3928,11 @@ body.code-tab-dragging * {
   background: var(--code-bg);
 }
 
-.code-computer-path:focus-within {
+.code-filesystem-path:focus-within {
   border-color: var(--accent);
 }
 
-.code-computer-path input {
+.code-filesystem-path input {
   flex: 1;
   min-width: 0;
   border: none;
@@ -3943,14 +3943,14 @@ body.code-tab-dragging * {
   font-size: 12px;
 }
 
-.code-computer-places {
+.code-filesystem-places {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
   padding: 4px 8px 6px;
 }
 
-.code-computer-place {
+.code-filesystem-place {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -3969,17 +3969,17 @@ body.code-tab-dragging * {
   cursor: pointer;
 }
 
-.code-computer-place:hover {
+.code-filesystem-place:hover {
   border-color: var(--border-strong);
 }
 
-.code-computer-place-on {
+.code-filesystem-place-on {
   border-color: var(--accent);
   background: var(--accent-soft);
   color: var(--accent);
 }
 
-.code-computer-tree {
+.code-filesystem-tree {
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -3988,18 +3988,18 @@ body.code-tab-dragging * {
   font-size: 12.5px;
 }
 
-.code-computer-note {
+.code-filesystem-note {
   padding: 3px 8px;
   color: var(--muted);
   font-size: 12px;
 }
 
-.code-computer-lock {
+.code-filesystem-lock {
   flex: none;
   color: var(--muted);
 }
 
-.code-computer-size {
+.code-filesystem-size {
   margin-left: auto;
   padding-left: 8px;
   color: var(--muted);

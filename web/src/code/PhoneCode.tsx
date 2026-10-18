@@ -603,7 +603,7 @@ function FilesScreen({
   const places = [
     ...projects.map((p) => ({ name: p.slice(p.lastIndexOf('/') + 1), path: p === client.root ? '' : p, sub: p })),
     { name: 'Home', path: client.home === client.root ? '' : client.home, sub: client.home },
-    { name: 'Computer', path: '/', sub: '/' },
+    { name: '/', path: '/', sub: 'the whole machine' },
   ].filter((p, i, all) => all.findIndex((o) => o.sub === p.sub) === i)
 
   return (
@@ -611,11 +611,11 @@ function FilesScreen({
       <TopHead env={env} title="Files">
         <div className="phone-code-crumbs">
           <button type="button" className="code-link" onClick={() => onDir(absolute ? '/' : '')}>
-            {absolute ? 'Computer' : client.root.split('/').pop() || '/'}
+            {absolute ? '/' : client.root.split('/').pop() || '/'}
           </button>
           {parts.map((p, i) => (
             <span key={i}>
-              {' / '}
+              {absolute && i === 0 ? '' : ' / '}
               <button type="button" className="code-link" onClick={() => onDir(crumb(i))}>
                 {p}
               </button>
@@ -628,7 +628,7 @@ function FilesScreen({
         <div className="phone-list">
           {places.map((p) => (
             <button key={p.sub} type="button" className="phone-row" onClick={() => onDir(p.path)}>
-              {p.name === 'Computer' ? (
+              {p.path === '/' ? (
                 <HardDrive size={18} />
               ) : p.name === 'Home' ? (
                 <House size={18} />

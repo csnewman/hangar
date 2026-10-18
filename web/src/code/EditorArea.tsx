@@ -225,7 +225,7 @@ export function EditorArea({
                   <span className="code-tool-spacer" />
                   {onOutside && (
                     <button type="button" className="code-tool-btn" onClick={() => onOutside.reveal(current.path)}>
-                      Reveal on Computer
+                      Reveal in Filesystem
                     </button>
                   )}
                   {onOutside?.add && (
