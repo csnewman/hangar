@@ -1,5 +1,5 @@
-// Package blob keeps the server's bulk bytes -- the files of users'
-// profiles, the registry's blobs -- in an S3-compatible object store, while
+// Package blob keeps the server's bulk bytes -- the registry's blobs -- in
+// an S3-compatible object store, while
 // what they are and who has them stays in the database. Every replica of the
 // server sees the same objects.
 package blob
@@ -44,35 +44,9 @@ type Store interface {
 	List(ctx context.Context, prefix string) ([]Object, error)
 }
 
-// Versioned holds objects by key in a bucket that keeps each write as a
-// version of its own, so a reader asks for exactly the version it was told
-// of, and a writer deletes the version it replaced.
-type Versioned interface {
-	// PutVersion writes a new version of an object, returning its ID.
-	PutVersion(ctx context.Context, key string, r io.Reader, size int64) (string, error)
-	// GetVersion opens one version of an object, or returns ErrNotFound.
-	GetVersion(ctx context.Context, key, version string) (Reader, error)
-	// DeleteVersion removes one version of an object; one that is not
-	// there is not an error.
-	DeleteVersion(ctx context.Context, key, version string) error
-	// DeleteAll removes every version of every object whose key starts
-	// with prefix.
-	DeleteAll(ctx context.Context, prefix string) error
-}
-
 // ReadAll returns an object's contents.
 func ReadAll(ctx context.Context, s Store, key string) ([]byte, error) {
 	r, err := s.Get(ctx, key)
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	return io.ReadAll(r)
-}
-
-// ReadVersion returns one version of an object's contents.
-func ReadVersion(ctx context.Context, s Versioned, key, version string) ([]byte, error) {
-	r, err := s.GetVersion(ctx, key, version)
 	if err != nil {
 		return nil, err
 	}

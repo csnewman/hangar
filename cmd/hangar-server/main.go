@@ -112,7 +112,7 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 		slog.Warn("no secret key (HANGAR_SECRET_KEY_FILE); users cannot keep SSH keys")
 	}
 
-	blobs, profileBlobs, err := openBlobs(ctx)
+	blobs, err := openBlobs(ctx)
 	if err != nil {
 		return err
 	}
@@ -127,7 +127,7 @@ func run(listen, dbURL, tokenFile string, migrateOnly bool) error {
 	srv, err := server.New(server.Config{DB: d, BootstrapToken: token, Web: web,
 		PublicURL: os.Getenv("HANGAR_PUBLIC_URL"), HostStyle: style, AutoSignIn: autoSignIn, Sealer: sealer,
 		SSHListen: os.Getenv("HANGAR_SSH_LISTEN"), SSHAddress: os.Getenv("HANGAR_SSH_ADDRESS"),
-		Blobs: blobs, ProfileBlobs: profileBlobs, Registry: registryOn(),
+		Blobs: blobs, Registry: registryOn(),
 		Files: envOr("HANGAR_FILES_DIR", "/var/lib/hangar/files")})
 	if err != nil {
 		return err
@@ -355,21 +355,20 @@ func warnUncovered(leaf *x509.Certificate, names *publichost.Public) {
 }
 
 // openBlobs connects to the object store the server keeps the registry's
-// blobs and profiles' files in: HANGAR_BLOB_URL,
+// blobs in: HANGAR_BLOB_URL,
 // http(s)://[key:secret@]host[:port]/bucket, with the keys there or in
 // HANGAR_BLOB_ACCESS_KEY and HANGAR_BLOB_SECRET_KEY(_FILE); without a secret
 // key, the one derived from the server's own (blobSecret). The registry
-// uses that bucket; profiles a versioned one beside it,
-// HANGAR_BLOB_PROFILE_BUCKET, <bucket>-profiles unless set.
+// uses that bucket.
 // HANGAR_BLOB_ENCRYPT=true has the store encrypt what it keeps (SSE-S3).
-func openBlobs(ctx context.Context) (blob.Store, blob.Versioned, error) {
+func openBlobs(ctx context.Context) (blob.Store, error) {
 	raw := os.Getenv("HANGAR_BLOB_URL")
 	if raw == "" {
-		return nil, nil, errors.New("HANGAR_BLOB_URL is not set: the server keeps files in an S3-compatible object store")
+		return nil, errors.New("HANGAR_BLOB_URL is not set: the server keeps files in an S3-compatible object store")
 	}
 	cfg, err := blob.ParseS3URL(raw)
 	if err != nil {
-		return nil, nil, fmt.Errorf("HANGAR_BLOB_URL: %w", err)
+		return nil, fmt.Errorf("HANGAR_BLOB_URL: %w", err)
 	}
 	if v := os.Getenv("HANGAR_BLOB_ACCESS_KEY"); v != "" {
 		cfg.AccessKey = v
@@ -380,38 +379,23 @@ func openBlobs(ctx context.Context) (blob.Store, blob.Versioned, error) {
 	if f := os.Getenv("HANGAR_BLOB_SECRET_KEY_FILE"); f != "" {
 		b, err := os.ReadFile(f)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		cfg.SecretKey = strings.TrimSpace(string(b))
 	}
 	if cfg.SecretKey == "" {
 		f := os.Getenv("HANGAR_SECRET_KEY_FILE")
 		if f == "" {
-			return nil, nil, errors.New("no secret key for the object store: HANGAR_BLOB_SECRET_KEY, or HANGAR_SECRET_KEY_FILE to derive it from")
+			return nil, errors.New("no secret key for the object store: HANGAR_BLOB_SECRET_KEY, or HANGAR_SECRET_KEY_FILE to derive it from")
 		}
 		if cfg.SecretKey, err = blobSecret(f); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 	cfg.Region = os.Getenv("HANGAR_BLOB_REGION")
 	cfg.Encrypt = os.Getenv("HANGAR_BLOB_ENCRYPT") == "true"
-
-	profiles := cfg
-	bucket := cfg.URL[strings.LastIndex(cfg.URL, "/")+1:]
-	profiles.URL = cfg.URL[:strings.LastIndex(cfg.URL, "/")+1] + envOr("HANGAR_BLOB_PROFILE_BUCKET", bucket+"-profiles")
-	// A version another replaces is kept a day: the store deletes it then
-	// if the server did not, after a write whose clean-up failed.
-	profiles.Versioned, profiles.NoncurrentDays = true, 1
 	cfg.Expire = registry.Expiries
-	reg, err := blob.NewS3(ctx, cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-	prof, err := blob.NewS3(ctx, profiles)
-	if err != nil {
-		return nil, nil, err
-	}
-	return reg, prof, nil
+	return blob.NewS3(ctx, cfg)
 }
 
 // blobSecret is the object store's secret key derived from the server's

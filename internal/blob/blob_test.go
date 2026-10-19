@@ -148,20 +148,18 @@ func TestParseS3URL(t *testing.T) {
 	}
 }
 
-// versioned are the versioned stores to hold to the contract: memory
-// always, and a versioned bucket beside HANGAR_TEST_S3_URL's if set.
-func versioned(t *testing.T) map[string]blob.Versioned {
-	out := map[string]blob.Versioned{"memory": blob.NewMemory()}
+// TestExpiry checks the lifecycle rules a bucket is given, against
+// HANGAR_TEST_S3_URL's store.
+func TestExpiry(t *testing.T) {
 	raw := os.Getenv("HANGAR_TEST_S3_URL")
 	if raw == "" {
-		return out
+		t.Skip("HANGAR_TEST_S3_URL is not set")
 	}
 	cfg, err := blob.ParseS3URL(raw)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg.URL += "-versioned"
-	cfg.Versioned, cfg.NoncurrentDays = true, 3
+	cfg.URL += "-expiry"
 	cfg.Expire = []blob.Expiry{{Prefix: "scratch/", Days: 2}}
 	s, err := blob.NewS3(context.Background(), cfg)
 	if err != nil {
@@ -173,58 +171,9 @@ func versioned(t *testing.T) map[string]blob.Versioned {
 	}
 	var got []string
 	for _, r := range rules {
-		got = append(got, fmt.Sprintf("%s:%d/%d", r.RuleFilter.Prefix, r.NoncurrentVersionExpiration.NoncurrentDays, r.Expiration.Days))
+		got = append(got, fmt.Sprintf("%s:%d", r.RuleFilter.Prefix, r.Expiration.Days))
 	}
-	if strings.Join(got, " ") != ":3/0 scratch/:0/2" {
+	if strings.Join(got, " ") != "scratch/:2" {
 		t.Errorf("the bucket's rules are %v", got)
-	}
-	out["s3"] = s
-	return out
-}
-
-func TestVersionedContract(t *testing.T) {
-	ctx := context.Background()
-	for name, s := range versioned(t) {
-		t.Run(name, func(t *testing.T) {
-			k := "contract-" + rand.Text() + "/dir/file"
-			v1, err := s.PutVersion(ctx, k, strings.NewReader("one"), 3)
-			if err != nil {
-				t.Fatal(err)
-			}
-			v2, err := s.PutVersion(ctx, k, strings.NewReader("two"), -1)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if v1 == v2 || v1 == "" {
-				t.Fatalf("versions %q and %q", v1, v2)
-			}
-			for v, want := range map[string]string{v1: "one", v2: "two"} {
-				if got, err := blob.ReadVersion(ctx, s, k, v); err != nil || string(got) != want {
-					t.Errorf("version %s: %q, %v", v, got, err)
-				}
-			}
-			if err := s.DeleteVersion(ctx, k, v1); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := s.GetVersion(ctx, k, v1); !errors.Is(err, blob.ErrNotFound) {
-				t.Errorf("a deleted version: %v", err)
-			}
-			if got, err := blob.ReadVersion(ctx, s, k, v2); err != nil || string(got) != "two" {
-				t.Errorf("the other version after deleting one: %q, %v", got, err)
-			}
-			if err := s.DeleteVersion(ctx, k, v1); err != nil {
-				t.Errorf("deleting a deleted version: %v", err)
-			}
-			other := strings.TrimSuffix(k, "dir/file") + "other"
-			if _, err := s.PutVersion(ctx, other, strings.NewReader("x"), 1); err != nil {
-				t.Fatal(err)
-			}
-			if err := s.DeleteAll(ctx, strings.TrimSuffix(k, "dir/file")); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := s.GetVersion(ctx, k, v2); !errors.Is(err, blob.ErrNotFound) {
-				t.Errorf("after deleting all: %v", err)
-			}
-		})
 	}
 }

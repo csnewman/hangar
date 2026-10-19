@@ -73,9 +73,6 @@ type Config struct {
 	// Files is the files root: the copies of packs environments share,
 	// each a directory, which every worker serves its environments too.
 	Files string
-	// ProfileBlobs is where profiles' and packs' files were kept before:
-	// what of them the files root lacks is copied there at start.
-	ProfileBlobs blob.Versioned
 	// SSHListen, if set, is where the SSH gateway listens (internal/sshgw).
 	SSHListen string
 	// SSHAddress is where people reach the gateway, as host:port, for the
@@ -137,13 +134,6 @@ func New(cfg Config) (*Server, error) {
 	packStore, err := packs.NewStore(cfg.DB, cfg.Files)
 	if err != nil {
 		return nil, fmt.Errorf("the files root: %w", err)
-	}
-	n, err := packStore.Migrate(context.Background(), cfg.ProfileBlobs)
-	if err != nil {
-		return nil, fmt.Errorf("bringing the files root up to date: %w", err)
-	}
-	if n > 0 {
-		log.Info("brought the files root up to date", "moved_or_copied", n)
 	}
 	auditLog := audit.NewLog(cfg.DB)
 	var public *publichost.Public

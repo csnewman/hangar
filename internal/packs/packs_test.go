@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/csnewman/hangar/internal/api"
-	"github.com/csnewman/hangar/internal/blob"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/packs"
@@ -508,60 +507,6 @@ func TestConflicts(t *testing.T) {
 	}
 	if cs, _ := p.store.Conflicts(ctx, env); len(cs) != 0 {
 		t.Errorf("a done conflict remains: %+v", cs)
-	}
-}
-
-// The files root is brought up to date once: a profile laid out relative
-// to the home directory moves under ~/, the blob store's files are copied
-// in under ~/ and forgotten, and paths move from one copy to another.
-func TestMigrate(t *testing.T) {
-	ctx := context.Background()
-	p := newPlane(t)
-	alice := p.user(t, "alice")
-	mineCopy := "11111111-1111-1111-1111-111111111111"
-	os.MkdirAll(filepath.Join(p.root, alice, ".claude"), 0o755)
-	os.WriteFile(filepath.Join(p.root, alice, ".claude/settings.json"), []byte("{}"), 0o644)
-	os.MkdirAll(filepath.Join(p.root, alice, ".config/nvim"), 0o755)
-	os.WriteFile(filepath.Join(p.root, alice, ".config/nvim/init.lua"), []byte("--"), 0o644)
-	blobs := blob.NewMemory()
-	version, err := blobs.PutVersion(ctx, alice+"/.gitconfig", strings.NewReader("[user]\n"), 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = p.d.Transact(ctx, func(tx db.Tx) error {
-		for _, q := range []string{
-			`INSERT INTO copy_relayout (copy_id) VALUES ($1)`,
-			`INSERT INTO file_sets (id, user_id) VALUES ($1, $1)`,
-			`INSERT INTO set_files (set_id, path, version_id, size, mode, deleted, version)
-				VALUES ($1, '.gitconfig', '` + version + `', 7, 384, false, 1)`,
-			`INSERT INTO copy_moves (from_copy, to_copy, path) VALUES ($1, '` + mineCopy + `', '~/.config/nvim')`,
-		} {
-			if _, err := tx.Exec(ctx, q, alice); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n, err := p.store.Migrate(ctx, blobs); err != nil || n != 4 {
-		t.Fatalf("migrated %d (%v), want 4: two moved under ~/, one copied, one moved", n, err)
-	}
-	for path, want := range map[string]string{
-		alice + "/~/.claude/settings.json":    "{}",
-		alice + "/~/.gitconfig":               "[user]\n",
-		mineCopy + "/~/.config/nvim/init.lua": "--",
-	} {
-		if b, err := os.ReadFile(filepath.Join(p.root, path)); err != nil || string(b) != want {
-			t.Errorf("%s: %q (%v), want %q", path, b, err, want)
-		}
-	}
-	if st, err := os.Stat(filepath.Join(p.root, alice, "~/.gitconfig")); err != nil || st.Mode().Perm() != 0o600 {
-		t.Errorf("copied with mode %v (%v)", st.Mode().Perm(), err)
-	}
-	if n, err := p.store.Migrate(ctx, blobs); err != nil || n != 0 {
-		t.Errorf("migrated %d again (%v)", n, err)
 	}
 }
 

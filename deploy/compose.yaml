@@ -108,7 +108,6 @@ services:
       # http(s)://<access key>@host[:port]/<bucket>, with its secret key in
       # HANGAR_BLOB_SECRET_KEY. ENCRYPT has the store encrypt what it keeps.
       HANGAR_BLOB_URL: ${HANGAR_BLOB_URL:-http://hangar@blobs:9000/hangar}
-      HANGAR_BLOB_PROFILE_BUCKET: ${HANGAR_BLOB_PROFILE_BUCKET:-}
       HANGAR_BLOB_SECRET_KEY: ${HANGAR_BLOB_SECRET_KEY:-}
       HANGAR_BLOB_ENCRYPT: ${HANGAR_BLOB_ENCRYPT:-false}
       # Hangar's own container registry, at registry.<HANGAR_PUBLIC_URL's

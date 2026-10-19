@@ -308,10 +308,6 @@ the same directory. With several, every one mounts the same NFS share
 there -- an NFS server of your own, or EFS -- with root not squashed: the
 control plane and the workers both write it as root.
 
-A server that kept profiles' files in the object store copies those the
-files root lacks there when it starts, and moves its files root to packs
-and copies once, as its database migrates.
-
 ## The object store
 
 The registry's blobs are kept in an S3-compatible

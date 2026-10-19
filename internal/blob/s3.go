@@ -26,11 +26,6 @@ type S3Config struct {
 	// Encrypt asks the store to encrypt every object it writes with its
 	// own keys (SSE-S3).
 	Encrypt bool
-	// Versioned turns on the bucket's versioning, and has the store delete
-	// a version NoncurrentDays after another replaces it, and delete
-	// markers left with no versions behind them.
-	Versioned      bool
-	NoncurrentDays int
 	// Expire has the store delete objects under each prefix some days
 	// after they were written.
 	Expire []Expiry
@@ -123,23 +118,10 @@ func NewS3(ctx context.Context, cfg S3Config) (*S3, error) {
 	return s, nil
 }
 
-// configure sets the bucket's versioning and lifecycle rules as cfg asks,
-// on every start, so a change to them takes effect.
+// configure sets the bucket's lifecycle rules as cfg asks, on every
+// start, so a change to them takes effect.
 func (s *S3) configure(ctx context.Context, cfg S3Config) error {
 	lc := lifecycle.NewConfiguration()
-	if cfg.Versioned {
-		if err := s.client.EnableVersioning(ctx, s.bucket); err != nil {
-			return err
-		}
-		days := cfg.NoncurrentDays
-		if days <= 0 {
-			days = 1
-		}
-		lc.Rules = append(lc.Rules, lifecycle.Rule{ID: "hangar-noncurrent", Status: "Enabled",
-			RuleFilter:                  lifecycle.Filter{Prefix: ""},
-			NoncurrentVersionExpiration: lifecycle.NoncurrentVersionExpiration{NoncurrentDays: lifecycle.ExpirationDays(days)},
-			Expiration:                  lifecycle.Expiration{DeleteMarker: true}})
-	}
 	for i, e := range cfg.Expire {
 		lc.Rules = append(lc.Rules, lifecycle.Rule{ID: fmt.Sprintf("hangar-expire-%d", i), Status: "Enabled",
 			RuleFilter: lifecycle.Filter{Prefix: e.Prefix},
@@ -234,53 +216,4 @@ func (s *S3) List(ctx context.Context, prefix string) ([]Object, error) {
 		out = append(out, Object{Key: o.Key, Size: o.Size, Modified: o.LastModified})
 	}
 	return out, nil
-}
-
-func (s *S3) PutVersion(ctx context.Context, key string, r io.Reader, size int64) (string, error) {
-	opts := minio.PutObjectOptions{ContentType: "application/octet-stream", ServerSideEncryption: s.sse}
-	if size < 0 {
-		opts.PartSize = unknownPartSize
-	}
-	info, err := s.client.PutObject(ctx, s.bucket, key, r, size, opts)
-	if err != nil {
-		return "", err
-	}
-	if info.VersionID == "" {
-		return "", fmt.Errorf("bucket %s keeps no versions", s.bucket)
-	}
-	return info.VersionID, nil
-}
-
-func (s *S3) GetVersion(ctx context.Context, key, version string) (Reader, error) {
-	o, err := s.client.GetObject(ctx, s.bucket, key, minio.GetObjectOptions{VersionID: version})
-	if err != nil {
-		return nil, notFound(err)
-	}
-	st, err := o.Stat()
-	if err != nil {
-		o.Close()
-		return nil, notFound(err)
-	}
-	return s3Reader{Object: o, size: st.Size}, nil
-}
-
-func (s *S3) DeleteVersion(ctx context.Context, key, version string) error {
-	err := s.client.RemoveObject(ctx, s.bucket, key, minio.RemoveObjectOptions{VersionID: version})
-	if errors.Is(notFound(err), ErrNotFound) {
-		return nil
-	}
-	return err
-}
-
-func (s *S3) DeleteAll(ctx context.Context, prefix string) error {
-	var errs []error
-	for o := range s.client.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true, WithVersions: true}) {
-		if o.Err != nil {
-			return o.Err
-		}
-		if err := s.DeleteVersion(ctx, o.Key, o.VersionID); err != nil {
-			errs = append(errs, err)
-		}
-	}
-	return errors.Join(errs...)
 }

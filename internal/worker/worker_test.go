@@ -50,7 +50,7 @@ func TestEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), ProfileBlobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, Log: quiet()})
+	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, Log: quiet()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func TestEndToEnd(t *testing.T) {
 func TestRevokedWorkerStops(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), ProfileBlobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, Log: quiet()})
+	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, Log: quiet()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestWorkerOutlastsItsServersDatabase(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	d := dbtest.Open(t)
-	srv, err := server.New(server.Config{DB: d, Blobs: blob.NewMemory(), ProfileBlobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, Log: quiet()})
+	srv, err := server.New(server.Config{DB: d, Blobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, Log: quiet()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -393,7 +393,7 @@ func TestTerminal(t *testing.T) {
 // on it, and gives a way to open a terminal window on that environment.
 func openTerminals(t *testing.T, ctx context.Context, ping time.Duration) (*server.Server, *httptest.Server, api.Environment, func(query string) (*websocket.Conn, terminal.Reply)) {
 	t.Helper()
-	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), ProfileBlobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, SocketPing: ping, Log: quiet()})
+	srv, err := server.New(server.Config{DB: dbtest.Open(t), Blobs: blob.NewMemory(), Files: t.TempDir(), BootstrapToken: token, SocketPing: ping, Log: quiet()})
 	if err != nil {
 		t.Fatal(err)
 	}
