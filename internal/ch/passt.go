@@ -31,7 +31,7 @@ type Passt struct {
 //
 // One passt serves one VM. vhost-user is a point-to-point conversation about
 // one guest's memory, so this is not a shared service.
-func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error) {
+func StartPasst(ctx context.Context, socket string) (*Passt, error) {
 	bin, err := exec.LookPath("passt")
 	if err != nil {
 		return nil, fmt.Errorf("passt not found (apt install passt): %w", err)
@@ -65,7 +65,7 @@ func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error
 		args = append(args, asRoot...)
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
-	err = launch(cmd, "passt", socket, "", 10*time.Second, verbose)
+	err = launch(cmd, "passt", socket, "", 10*time.Second)
 	if err != nil && !passtAsRoot.Load() && os.Geteuid() == 0 && strings.Contains(err.Error(), "Failed to sandbox") {
 		// Started as root, passt changes to nobody and then sandboxes
 		// itself in new namespaces, a user namespace among them. Ubuntu
@@ -79,7 +79,7 @@ func StartPasst(ctx context.Context, socket string, verbose bool) (*Passt, error
 		_ = os.Remove(socket)
 		_ = os.Remove(socket + ".repair")
 		cmd = exec.CommandContext(ctx, bin, append(args, asRoot...)...)
-		err = launch(cmd, "passt", socket, "", 10*time.Second, verbose)
+		err = launch(cmd, "passt", socket, "", 10*time.Second)
 	}
 	if err != nil {
 		return nil, err

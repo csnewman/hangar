@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -15,15 +14,7 @@ func (s *ImageStore) base(h heldCopy) (string, error) {
 	return filepath.Join(h.dir, "rootfs"), nil
 }
 
-// removeCopy deletes a copy's directory, taking down a mount of its image
-// at rootfs/ first, which an older worker made. It fails rather than delete
-// through a mount it could not take down.
+// removeCopy deletes a copy's directory.
 func removeCopy(h heldCopy) error {
-	target := filepath.Join(h.dir, "rootfs")
-	if h.image && isEROFS(target) {
-		if err := unmount(target); err != nil {
-			return fmt.Errorf("unmounting %s: %w", target, err)
-		}
-	}
 	return os.RemoveAll(h.dir)
 }

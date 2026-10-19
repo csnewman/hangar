@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -22,78 +21,67 @@ import (
 )
 
 // InstanceConfig is one virtual machine: what it boots, what it is given,
-// and where it keeps what it keeps. The worker's environments and `hangar
-// run` both boot through it.
+// and where it keeps what it keeps.
 type InstanceConfig struct {
 	// ID names the machine's sockets. It must be unique on the host.
-	ID string `json:"id"`
+	ID string
 	// Name is the monitor's name for the machine.
-	Name string `json:"name"`
+	Name string
 	// Dir holds what outlives a boot: the backends' saved state, a
 	// suspended machine's snapshot, and the monitor's log.
-	Dir string `json:"dir"`
+	Dir string
 
-	Kernel string `json:"kernel"`
+	Kernel string
 	// Agent is the guest agent, each boot's initramfs and then its init.
-	Agent string `json:"agent"`
+	Agent string
 	// Base is the image's root filesystem.
-	Base string `json:"base"`
+	Base string
 	// BaseFile is an EROFS image of Base, attached as BaseDevice
 	// (ImageDisk or ImagePmem), which the guest mounts with DAX if BaseDAX.
-	BaseFile   string `json:"base_file,omitempty"`
-	BaseDevice string `json:"base_device,omitempty"`
-	BaseDAX    bool   `json:"base_dax,omitempty"`
+	BaseFile   string
+	BaseDevice string
+	BaseDAX    bool
 	// Disks follow: the writable layer first, which the agent mounts as
 	// /dev/vda, then any read-only ones.
-	Disks []ch.Disk `json:"disks"`
+	Disks []ch.Disk
 
-	MemoryMiB int `json:"memory_mib"`
+	MemoryMiB int
 	// MemoryMaxMiB, above MemoryMiB, is what the memory can be resized up
 	// to while the machine runs (ch.Config.MemoryMaxMB).
-	MemoryMaxMiB int `json:"memory_max_mib,omitempty"`
-	CPUs         int `json:"cpus"`
+	MemoryMaxMiB int
+	CPUs         int
 	// Net gives the guest outbound networking, through passt.
-	Net bool `json:"net"`
+	Net bool
 
-	GPU bool `json:"gpu"`
+	GPU bool
 	// GPUVenus offers Vulkan, with GPU.
-	GPUVenus bool `json:"gpu_venus,omitempty"`
+	GPUVenus bool
 	// GPUVenusRestore carries Vulkan state across a suspend.
-	GPUVenusRestore bool `json:"gpu_venus_restore,omitempty"`
-	GPUWindowMiB    int  `json:"gpu_window_mib,omitempty"`
+	GPUVenusRestore bool
+	GPUWindowMiB    int
 	// GPUEnv is the GPU backend's environment, which chooses its renderer.
-	GPUEnv []string `json:"gpu_env,omitempty"`
+	GPUEnv []string
 	// GPUZink draws the guest's OpenGL with Mesa's zink on its Vulkan, under
 	// libkrun, where the GPU has no OpenGL of its own; the guest's CPU draws
 	// it otherwise.
-	GPUZink bool `json:"gpu_zink,omitempty"`
+	GPUZink bool
 
-	// ConsoleFile receives the guest's console; empty is the monitor's
-	// stdio.
-	ConsoleFile  string `json:"console_file,omitempty"`
-	ExtraCmdline string `json:"extra_cmdline,omitempty"`
-	Seccomp      string `json:"seccomp,omitempty"`
-
-	// Monitor receives the monitor's own output, and Stdin feeds its
-	// console when the console is stdio. A nil Monitor writes
-	// <Dir>/monitor.log.
-	Monitor io.Writer `json:"-"`
-	Stdin   io.Reader `json:"-"`
-	// Verbose has the backends log to stderr.
-	Verbose bool `json:"-"`
+	// ConsoleFile receives the guest's console.
+	ConsoleFile  string
+	ExtraCmdline string
 
 	// SharedFiles is the root of the files environments share with others,
 	// which the guest mounts over NFS on vsock (sharedFilesPort), served
 	// as SharedView, kept current until its context ends, says. Empty
 	// serves none.
-	SharedFiles string                             `json:"-"`
-	SharedView  func(ctx context.Context) nfs.View `json:"-"`
+	SharedFiles string
+	SharedView  func(ctx context.Context) nfs.View
 
 	// AgentWait is how long the agent has to dial back.
-	AgentWait time.Duration `json:"-"`
+	AgentWait time.Duration
 	// Progress, if set, is told each step of a boot.
-	Progress func(step string) `json:"-"`
-	Log      *slog.Logger      `json:"-"`
+	Progress func(step string)
+	Log      *slog.Logger
 }
 
 // Instance is a running machine: the monitor, its backends, and the
@@ -318,7 +306,6 @@ func (i *Instance) startCloudHypervisor(ctx, procCtx, monCtx context.Context, in
 		ConsoleFile:  cfg.ConsoleFile,
 		ConsoleTTY:   caps.ConsoleTTY,
 		ExtraCmdline: cfg.ExtraCmdline,
-		Seccomp:      cfg.Seccomp,
 		GuestCID:     guestCID,
 		VsockSocket:  filepath.Join(run, "vsock.sock"),
 		APISocket:    filepath.Join(run, "api.sock"),
@@ -347,7 +334,7 @@ func (i *Instance) startCloudHypervisor(ctx, procCtx, monCtx context.Context, in
 		if err != nil {
 			return err
 		}
-		net, err := ch.StartPasst(procCtx, filepath.Join(pdir, "net.sock"), cfg.Verbose)
+		net, err := ch.StartPasst(procCtx, filepath.Join(pdir, "net.sock"))
 		if err != nil {
 			return err
 		}
@@ -358,7 +345,7 @@ func (i *Instance) startCloudHypervisor(ctx, procCtx, monCtx context.Context, in
 
 	if cfg.GPU {
 		gpu, err := ch.StartGpuBackend(procCtx, filepath.Join(run, "gpu.sock"), cfg.GPUVenus, cfg.GPUVenusRestore,
-			filepath.Join(cfg.Dir, "gpu.json"), cfg.GPUEnv, cfg.Verbose)
+			filepath.Join(cfg.Dir, "gpu.json"), cfg.GPUEnv)
 		if err != nil {
 			return err
 		}
@@ -415,30 +402,22 @@ func (i *Instance) launch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	out := i.cfg.Monitor
-	var logFile *os.File
-	if out == nil {
-		logFile, err = os.OpenFile(filepath.Join(i.cfg.Dir, "monitor.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-		if err != nil {
-			return err
-		}
-		out = logFile
+	logFile, err := os.OpenFile(filepath.Join(i.cfg.Dir, "monitor.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
 	}
 	// A guest that reboots is reset inside the monitor, which loses the
 	// socket the host reaches the guest's vsock on. So the monitor reports
 	// its events, and a reboot ends it: the machine is booted again whole.
 	events, eventsW, err := os.Pipe()
 	if err != nil {
-		if logFile != nil {
-			logFile.Close()
-		}
+		logFile.Close()
 		return err
 	}
 	args = append(args, "--event-monitor", "fd=3")
 	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Stdout = out
-	cmd.Stderr = out
-	cmd.Stdin = i.cfg.Stdin
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	cmd.ExtraFiles = []*os.File{eventsW}
 	cmd.SysProcAttr = sysProcAttr()
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
@@ -447,18 +426,14 @@ func (i *Instance) launch(ctx context.Context, args []string) error {
 	eventsW.Close()
 	if err != nil {
 		events.Close()
-		if logFile != nil {
-			logFile.Close()
-		}
+		logFile.Close()
 		return fmt.Errorf("starting cloud-hypervisor: %w", err)
 	}
 	i.cmd = cmd
 	go i.watchEvents(events)
 	go func() {
 		err := cmd.Wait()
-		if logFile != nil {
-			logFile.Close()
-		}
+		logFile.Close()
 		if err != nil && ctx.Err() == nil && !i.Rebooted() {
 			i.mu.Lock()
 			i.err = fmt.Errorf("cloud-hypervisor exited: %v%s", err, lastLine(filepath.Join(i.cfg.Dir, "monitor.log")))
@@ -506,9 +481,6 @@ func (i *Instance) watchEvents(r *os.File) {
 // which the backends are listening on again.
 func (i *Instance) restore(ctx, monCtx context.Context, ccfg *ch.Config) error {
 	args := []string{"--api-socket", ccfg.APISocket}
-	if ccfg.Seccomp != "" {
-		args = append(args, "--seccomp", ccfg.Seccomp)
-	}
 	if err := i.launch(monCtx, args); err != nil {
 		return err
 	}

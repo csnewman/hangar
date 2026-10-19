@@ -94,10 +94,6 @@ type VMConfig struct {
 	// same image as virtio-pmem, mapped with DAX for an environment that
 	// asks.
 	ImageDevice string `yaml:"image_device"`
-	// DaxMiB is accepted and ignored, so a configuration written for a
-	// virtio-fs image still loads: neither image device has a window to
-	// size.
-	DaxMiB int `yaml:"dax_mib"`
 	// GPU is what an environment with a virtual GPU gets on this machine.
 	GPU VMGPU `yaml:"gpu"`
 	// Images maps an image reference a template may name to a local copy

@@ -22,12 +22,9 @@ import (
 // logPath, if set, also receives everything the backend writes, for the life
 // of the process: a backend's own account of what it saved and restored is
 // often the only one there is.
-func launch(cmd *exec.Cmd, name, socket, logPath string, timeout time.Duration, verbose bool) error {
+func launch(cmd *exec.Cmd, name, socket, logPath string, timeout time.Duration) error {
 	tail := &tailBuffer{max: 4096}
 	var out io.Writer = tail
-	if verbose {
-		out = os.Stderr
-	}
 	var logFile *os.File
 	if logPath != "" {
 		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err == nil {
@@ -36,9 +33,6 @@ func launch(cmd *exec.Cmd, name, socket, logPath string, timeout time.Duration, 
 		}
 	}
 	cmd.Stderr = out
-	if verbose {
-		cmd.Stdout = os.Stderr
-	}
 	if cmd.SysProcAttr == nil {
 		cmd.SysProcAttr = childAttrs()
 	}

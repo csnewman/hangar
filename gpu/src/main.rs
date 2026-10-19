@@ -35,18 +35,10 @@ struct Args {
     #[arg(long)]
     probe: bool,
 
-    /// Offer OpenGL through virgl.
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    virgl: bool,
-
-    /// Offer Vulkan through venus, which needs a shared memory window and
-    /// virglrenderer's render server.
+    /// Offer Vulkan through venus, beside OpenGL through virgl. Venus needs
+    /// a shared memory window and virglrenderer's render server.
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     venus: bool,
-
-    /// The identifier the guest looks the shared memory window up by.
-    #[arg(long, default_value_t = 1)]
-    shm_id: u8,
 
     /// Where to keep the set of objects the guest is holding.
     ///
@@ -122,9 +114,7 @@ fn main() {
     let config = GpuConfig {
         venus_restore: args.venus_restore,
         state: args.state.clone(),
-        virgl: args.virgl,
         venus: args.venus,
-        shm_id: args.shm_id,
     };
 
     let mut built = match GpuBackend::new(config) {

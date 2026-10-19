@@ -53,8 +53,8 @@ func FindGpuBackend() (string, error) {
 // venusRestore has the renderer carry Venus contexts across a suspend. It is
 // off by default: the rebuild is proven on software rendering only, and
 // without it a Venus program is told at once that its device is gone.
-func StartGpuBackend(ctx context.Context, socket string, venus, venusRestore bool, state string, env []string,
-	verbose bool) (*GpuBackend, error) {
+func StartGpuBackend(ctx context.Context, socket string, venus, venusRestore bool, state string,
+	env []string) (*GpuBackend, error) {
 	bin, err := FindGpuBackend()
 	if err != nil {
 		return nil, err
@@ -65,7 +65,7 @@ func StartGpuBackend(ctx context.Context, socket string, venus, venusRestore boo
 		return nil, err
 	}
 
-	args := []string{"--socket", socket, "--virgl", "true"}
+	args := []string{"--socket", socket}
 	if venus {
 		args = append(args, "--venus", "true")
 	}
@@ -77,7 +77,7 @@ func StartGpuBackend(ctx context.Context, socket string, venus, venusRestore boo
 	}
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Env = append(os.Environ(), env...)
-	if err := launch(cmd, "the gpu backend", socket, logPathFor(state), 15*time.Second, verbose); err != nil {
+	if err := launch(cmd, "the gpu backend", socket, logPathFor(state), 15*time.Second); err != nil {
 		return nil, err
 	}
 	return &GpuBackend{cmd: cmd, socket: socket, state: state}, nil

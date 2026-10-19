@@ -56,8 +56,7 @@ type Config struct {
 	// MemoryMB for as long as it runs.
 	MemoryMaxMB int
 
-	// ConsoleFile, when set, writes the guest serial console to this file
-	// instead of attaching it to the terminal. Used for unattended runs.
+	// ConsoleFile receives the guest's serial console.
 	ConsoleFile string
 
 	// ConsoleTTY is the serial device as the guest sees it, for the kernel
@@ -88,21 +87,12 @@ type Config struct {
 	// GpuSocket is a hangar-gpu vhost-user socket. The guest gets a
 	// virtio-gpu device rendered by that process. Empty leaves it out.
 	GpuSocket string
-	// GpuShmMiB sizes the window the guest maps blob resources into, and
-	// GpuShmID is the identifier the guest looks it up by. virtio-gpu
-	// defines 1 for its host-visible window.
+	// GpuShmMiB sizes the window the guest maps blob resources into.
 	GpuShmMiB int
-	GpuShmID  int
 
 	// APISocket, when set, is where the running monitor is driven from
 	// (API): suspended, and its memory resized.
 	APISocket string
-
-	// Seccomp selects the monitor's syscall filtering: "true", "false",
-	// "log" or "errno". Empty leaves the monitor's default. "log" records
-	// refusals in the host's audit log instead of killing the guest, which is
-	// how the renderer's syscall set is extended.
-	Seccomp string
 }
 
 func (c *Config) applyDefaults() {
@@ -126,6 +116,9 @@ func (c *Config) Args() ([]string, error) {
 
 	if c.Kernel == "" {
 		return nil, fmt.Errorf("kernel path is required")
+	}
+	if c.ConsoleFile == "" {
+		return nil, fmt.Errorf("a console file is required")
 	}
 	if len(c.Disks) == 0 {
 		return nil, fmt.Errorf("at least one disk is required")
@@ -160,12 +153,7 @@ func (c *Config) Args() ([]string, error) {
 
 	// The guest console is a serial port, so the emulated console device is
 	// turned off rather than left to compete for the same output.
-	args = append(args, "--console", "off")
-	if c.ConsoleFile != "" {
-		args = append(args, "--serial", "file="+c.ConsoleFile)
-	} else {
-		args = append(args, "--serial", "tty")
-	}
+	args = append(args, "--console", "off", "--serial", "file="+c.ConsoleFile)
 
 	if len(c.Disks) > 0 {
 		disk := []string{"--disk"}
@@ -207,18 +195,11 @@ func (c *Config) Args() ([]string, error) {
 			"socket=%s,device_type=gpu,queue_sizes=[%d,%d]",
 			c.GpuSocket, QUEUE_SIZE, QUEUE_SIZE,
 		)
+		// virtio-gpu defines 1 as its host-visible window's identifier.
 		if c.GpuShmMiB > 0 {
-			id := c.GpuShmID
-			if id == 0 {
-				id = 1
-			}
-			spec += fmt.Sprintf(",shm_size=%dM,shm_id=%d", c.GpuShmMiB, id)
+			spec += fmt.Sprintf(",shm_size=%dM,shm_id=1", c.GpuShmMiB)
 		}
 		args = append(args, "--generic-vhost-user", spec)
-	}
-
-	if c.Seccomp != "" {
-		args = append(args, "--seccomp", c.Seccomp)
 	}
 
 	if c.APISocket != "" {

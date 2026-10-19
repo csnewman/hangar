@@ -36,9 +36,8 @@ use vmm_sys_util::eventfd::EventFd;
 /// How the device was asked to be configured.
 #[derive(Clone, Debug)]
 pub struct GpuConfig {
-    pub virgl: bool,
+    /// Offer Vulkan through Venus, beside OpenGL through virgl.
     pub venus: bool,
-    pub shm_id: u8,
     /// Where the set of live objects is kept, so a backend standing in for
     /// one the guest was already talking to knows which of the identifiers it
     /// holds stand for nothing.
@@ -69,10 +68,7 @@ pub enum Error {
 }
 
 fn capset_mask(config: &GpuConfig) -> u64 {
-    let mut m = 0u64;
-    if config.virgl {
-        m |= (1 << RUTABAGA_CAPSET_VIRGL) | (1 << RUTABAGA_CAPSET_VIRGL2);
-    }
+    let mut m = (1 << RUTABAGA_CAPSET_VIRGL) | (1 << RUTABAGA_CAPSET_VIRGL2);
     if config.venus {
         m |= 1 << RUTABAGA_CAPSET_VENUS;
     }
@@ -80,10 +76,7 @@ fn capset_mask(config: &GpuConfig) -> u64 {
 }
 
 fn capset_count(config: &GpuConfig) -> u32 {
-    let mut n = 0;
-    if config.virgl {
-        n += 2;
-    }
+    let mut n = 2;
     if config.venus {
         n += 1;
     }
@@ -365,7 +358,7 @@ impl GpuBackend {
             .map_err(Error::Renderer)?;
 
         let req = VhostUserMMap {
-            shmid: self.config.shm_id,
+            shmid: VIRTIO_GPU_SHM_ID_HOST_VISIBLE,
             padding: [0; 7],
             fd_offset: 0,
             shm_offset: guest_offset,
@@ -393,7 +386,7 @@ impl GpuBackend {
         };
         let (_, offset, len) = self.placed.remove(pos);
         let req = VhostUserMMap {
-            shmid: self.config.shm_id,
+            shmid: VIRTIO_GPU_SHM_ID_HOST_VISIBLE,
             padding: [0; 7],
             fd_offset: 0,
             shm_offset: offset,

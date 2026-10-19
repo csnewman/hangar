@@ -151,46 +151,35 @@ func (i *Instance) launchKrun(ctx context.Context, conf string) error {
 	if err != nil {
 		return err
 	}
-	out := i.cfg.Monitor
-	var logFile *os.File
-	if out == nil {
-		logFile, err = os.OpenFile(filepath.Join(i.cfg.Dir, "monitor.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-		if err != nil {
-			return err
-		}
-		out = logFile
+	logFile, err := os.OpenFile(filepath.Join(i.cfg.Dir, "monitor.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
 	}
 	// hangar-krun stops the machine when this pipe closes: when the worker
 	// exits, or dies.
 	watch, held, err := os.Pipe()
 	if err != nil {
-		if logFile != nil {
-			logFile.Close()
-		}
+		logFile.Close()
 		return err
 	}
 	cmd := exec.CommandContext(ctx, bin, conf)
 	cmd.Stdin = watch
-	cmd.Stdout = out
-	cmd.Stderr = out
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 15 * time.Second
 	err = cmd.Start()
 	watch.Close()
 	if err != nil {
 		held.Close()
-		if logFile != nil {
-			logFile.Close()
-		}
+		logFile.Close()
 		return fmt.Errorf("starting hangar-krun: %w", err)
 	}
 	i.cmd = cmd
 	go func() {
 		err := cmd.Wait()
 		held.Close()
-		if logFile != nil {
-			logFile.Close()
-		}
+		logFile.Close()
 		if err != nil && ctx.Err() == nil {
 			i.mu.Lock()
 			i.err = fmt.Errorf("hangar-krun exited: %v%s", err, lastLine(filepath.Join(i.cfg.Dir, "monitor.log")))

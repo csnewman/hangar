@@ -16,6 +16,9 @@ pub const VIRTIO_GPU_F_VIRGL: u32 = 0;
 pub const VIRTIO_GPU_F_RESOURCE_BLOB: u32 = 3;
 pub const VIRTIO_GPU_F_CONTEXT_INIT: u32 = 4;
 
+/// The shared memory window virtio-gpu defines for host-visible blobs.
+pub const VIRTIO_GPU_SHM_ID_HOST_VISIBLE: u8 = 1;
+
 // Commands. 2D and capset queries are answered here; the 3D commands arrive
 // once the guest has negotiated VIRGL.
 pub const VIRTIO_GPU_CMD_GET_DISPLAY_INFO: u32 = 0x0100;

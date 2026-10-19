@@ -11,6 +11,7 @@ func memoryArg(t *testing.T, c ch.Config) string {
 	t.Helper()
 	c.Kernel = "vmlinuz"
 	c.Disks = []ch.Disk{{Path: "upper.ext4"}}
+	c.ConsoleFile = "console.log"
 	args, err := c.Args()
 	if err != nil {
 		t.Fatal(err)
