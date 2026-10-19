@@ -29,7 +29,6 @@ limactl shell hangar bash -c "
     fi
     echo '/var/lib/hangar/files *(rw,insecure,no_root_squash,no_subtree_check,fsid=0)' |
         sudo tee /etc/exports.d/hangar-files.exports >/dev/null
-    sudo rm -f /etc/exports.d/hangar-nfstest.exports
     sudo systemctl enable --now nfs-server >/dev/null 2>&1
     sudo exportfs -ra
     /usr/local/go/bin/go build -o /var/tmp/hangar-worker ./cmd/hangar-worker

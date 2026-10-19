@@ -74,23 +74,6 @@ export function PhaseBadge({
   )
 }
 
-export function OnlineBadge({ online, revoked }: { online: boolean; revoked: boolean }) {
-  if (revoked) {
-    return (
-      <span className="badge badge-bad">
-        <span className="dot" />
-        revoked
-      </span>
-    )
-  }
-  return (
-    <span className={`badge ${online ? 'badge-good' : 'badge-idle'}`}>
-      <span className="dot" />
-      {online ? 'online' : 'offline'}
-    </span>
-  )
-}
-
 // RendererBadge says whether a virtual GPU renders on a GPU or the CPU.
 export function RendererBadge({ software }: { software: boolean }) {
   return software ? (

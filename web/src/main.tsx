@@ -12,7 +12,7 @@ import './index.css'
 import { AccountPage, SettingsPage } from './pages/Settings'
 import { ConnectVSCodePage } from './pages/ConnectVSCode'
 import { FilesPage } from './pages/Files'
-import { PackPage, PackRedirect } from './pages/Packs'
+import { PackPage } from './pages/Packs'
 import { AuditPage } from './pages/admin/Audit'
 import { PerformanceTab } from './pages/Performance'
 import { UsersPage } from './pages/admin/Users'
@@ -115,10 +115,6 @@ const router = createBrowserRouter([
           { path: 'more', element: <MorePage /> },
           { path: 'files', element: <FilesPage /> },
           { path: 'files/packs/:id', element: <PackPage /> },
-          // Where the profile and packs were each a page of their own.
-          { path: 'profile', element: <Navigate to="/files" replace /> },
-          { path: 'packs', element: <Navigate to="/files" replace /> },
-          { path: 'packs/:id', element: <PackRedirect /> },
           {
             path: 'admin/audit',
             element: (

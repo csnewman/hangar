@@ -3,7 +3,7 @@ import './files.css'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { FolderSync, Lock, Plus, Undo2, X } from 'lucide-react'
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import { api, type Copy, type Pack, type PackInput, type PackPath, type PackRef } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
@@ -80,13 +80,6 @@ function attachOptions(value: Pack['attach'], team: boolean, builtin: boolean, a
   if (team) options.push(['team', "All its team's members' environments"])
   if (admin || value === 'everyone') options.push(['everyone', "Everyone's environments"])
   return options
-}
-
-// PackRedirect sends a pack's address from before it was under Files to
-// its page.
-export function PackRedirect() {
-  const { id = '' } = useParams()
-  return <Navigate to={packPath(id)} replace />
 }
 
 // PackPage is one pack: the files of one of its copies -- the caller's
