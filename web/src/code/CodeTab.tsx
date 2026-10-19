@@ -114,15 +114,12 @@ function Idle({ env }: { env: Environment }) {
   const logsPanel = usePanelRef()
   const [logsShown, setLogsShown] = useState(true)
   const starting = env.phase === 'starting' || env.phase === 'pending'
-  // A start shows its console; otherwise the worker's account of the last.
-  const [show, setShow] = useState<{ log: EnvironmentLogName; n: number }>({
-    log: starting ? 'console' : 'worker',
-    n: 0,
-  })
+  // A start shows every log combined, whichever was chosen before it.
+  const [show, setShow] = useState<{ log: EnvironmentLogName; n: number }>({ log: 'combined', n: 0 })
   const [wasStarting, setWasStarting] = useState(starting)
   if (starting !== wasStarting) {
     setWasStarting(starting)
-    if (starting) setShow((s) => ({ log: 'console', n: s.n + 1 }))
+    if (starting) setShow((s) => ({ log: 'combined', n: s.n + 1 }))
   }
   const showLogs = () => {
     logsPanel.current?.expand()

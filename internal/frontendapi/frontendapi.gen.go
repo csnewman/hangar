@@ -128,15 +128,18 @@ func (e EnvironmentImageChange) Valid() bool {
 
 // Defines values for EnvironmentLogName.
 const (
-	EnvironmentLogNameConsole EnvironmentLogName = "console"
-	EnvironmentLogNameGPU     EnvironmentLogName = "gpu"
-	EnvironmentLogNameMonitor EnvironmentLogName = "monitor"
-	EnvironmentLogNameWorker  EnvironmentLogName = "worker"
+	EnvironmentLogNameCombined EnvironmentLogName = "combined"
+	EnvironmentLogNameConsole  EnvironmentLogName = "console"
+	EnvironmentLogNameGPU      EnvironmentLogName = "gpu"
+	EnvironmentLogNameMonitor  EnvironmentLogName = "monitor"
+	EnvironmentLogNameWorker   EnvironmentLogName = "worker"
 )
 
 // Valid indicates whether the value is a known member of the EnvironmentLogName enum.
 func (e EnvironmentLogName) Valid() bool {
 	switch e {
+	case EnvironmentLogNameCombined:
+		return true
 	case EnvironmentLogNameConsole:
 		return true
 	case EnvironmentLogNameGPU:
@@ -812,7 +815,7 @@ type Environment struct {
 // EnvironmentImageChange What the environment's next start does to its image.
 type EnvironmentImageChange string
 
-// EnvironmentLogName console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; gpu the virtual GPU's backend.
+// EnvironmentLogName combined is the others as one, each line marked with the log it is from, in the order the worker saw them written; console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor the virtual machine's monitor's; gpu the virtual GPU's backend.
 type EnvironmentLogName string
 
 // EnvironmentSettings defines model for EnvironmentSettings.

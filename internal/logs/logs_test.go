@@ -2,6 +2,7 @@ package logs_test
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -73,5 +74,68 @@ func TestRings(t *testing.T) {
 	r := rings.Read(logs.Request{Environment: "e1", Offset: 0})
 	if r.Start == 0 || !bytes.HasPrefix(r.Data, []byte("time=")) || r.Size-r.Start != int64(len(r.Data)) {
 		t.Errorf("a full ring: start %d of %d, begins %q", r.Start, r.Size, r.Data[:min(20, len(r.Data))])
+	}
+}
+
+// An environment's logs combine as the worker sees them written, each line
+// marked with its log: what the files held before it was followed is left
+// out, a line waits for its end, and a log that starts over, or is put in
+// another file's place, is read again from its start.
+func TestCombined(t *testing.T) {
+	dir := t.TempDir()
+	rings := logs.NewRings()
+	log := slog.New(logs.Tee(slog.NewTextHandler(io.Discard, nil), rings)).With("environment", "e1")
+	file := func(name string) string { return filepath.Join(dir, name+".log") }
+	write := func(name, text string, flag int) {
+		f, err := os.OpenFile(file(name), os.O_CREATE|os.O_WRONLY|flag, 0o644)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.WriteString(text)
+		f.Close()
+	}
+	c := logs.NewCombiner(rings, func(env, name string) (string, bool) { return file(name), env == "e1" })
+	text := func() string { return string(c.Read(logs.Request{Environment: "e1", Offset: 0}).Data) }
+
+	if !c.Read(logs.Request{Environment: "e1"}).Missing {
+		t.Error("an environment never followed has a combined log")
+	}
+	write(logs.Console, "an earlier boot\n", os.O_APPEND)
+	log.Info("starting")
+	c.Poll()
+	write(logs.Console, "Linux version\r\nlogin: ", os.O_APPEND)
+	write(logs.Monitor, "monitor up\n", os.O_APPEND)
+	c.Poll()
+	log.Info("started")
+	write(logs.Console, "dev\n", os.O_APPEND)
+	c.Poll()
+
+	got := text()
+	for _, want := range []string{"worker  │ time=", "msg=starting", "console │ Linux version\n",
+		"monitor │ monitor up\n", "msg=started", "console │ login: dev\n"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("no %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "an earlier boot") {
+		t.Errorf("what the console held before it was followed is there:\n%s", got)
+	}
+	if strings.Index(got, "Linux version") > strings.Index(got, "msg=started") {
+		t.Errorf("out of the order written:\n%s", got)
+	}
+
+	// The machine boots again, its console starting over.
+	write(logs.Console, "booting again\n", os.O_TRUNC)
+	c.Poll()
+	if got := text(); !strings.HasSuffix(got, "console │ booting again\n") {
+		t.Errorf("after the console started over:\n%s", got)
+	}
+
+	// And again, its monitor's log a new file already longer than the last.
+	os.Remove(file(logs.Monitor))
+	write(logs.Monitor, "monitor up again, with more to say\n", os.O_APPEND)
+	c.Poll()
+	if got := text(); !strings.HasSuffix(got, "monitor │ monitor up again, with more to say\n") {
+		t.Errorf("after the monitor's log was made anew:\n%s", got)
 	}
 }

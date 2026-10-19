@@ -259,6 +259,14 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 	if err := WriteInitrd(cfg.Agent, initrd); err != nil {
 		return nil, err
 	}
+	// Each start writes its console and monitor logs anew, as new files: a
+	// reader following one (logs.Combiner) knows it is another log by that,
+	// even once it has grown past where the last ended.
+	for _, f := range []string{cfg.ConsoleFile, filepath.Join(cfg.Dir, "monitor.log")} {
+		if err := os.Remove(f); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
 	inst.monitor = caps.Monitor
 	switch caps.Monitor {
 	case host.MonitorKrun:

@@ -1494,10 +1494,10 @@ export interface components {
          */
         TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "projects" | "access" | "trusted_folders" | "web_names" | "packs" | "placement" | "name";
         /**
-         * @description console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor Cloud Hypervisor's; gpu the virtual GPU's backend.
+         * @description combined is the others as one, each line marked with the log it is from, in the order the worker saw them written; console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor the virtual machine's monitor's; gpu the virtual GPU's backend.
          * @enum {string}
          */
-        EnvironmentLogName: "console" | "worker" | "monitor" | "gpu";
+        EnvironmentLogName: "combined" | "console" | "worker" | "monitor" | "gpu";
         LogPart: {
             /**
              * Format: int64

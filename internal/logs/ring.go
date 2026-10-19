@@ -84,6 +84,17 @@ func (r *Rings) Read(req Request) Reply {
 	return e.read(req)
 }
 
+// environments are the environments the rings have lines of.
+func (r *Rings) environments() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	envs := make([]string, 0, len(r.envs))
+	for env := range r.envs {
+		envs = append(envs, env)
+	}
+	return envs
+}
+
 // Forget drops an environment's lines, once it is gone.
 func (r *Rings) Forget(env string) {
 	r.mu.Lock()

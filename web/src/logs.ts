@@ -4,6 +4,11 @@ import type { EnvironmentLogName } from './api'
 // start, in the order they are offered.
 export const logNames: { name: EnvironmentLogName; label: string; about: string }[] = [
   {
+    name: 'combined',
+    label: 'Combined',
+    about: 'Every log below as one, each line marked with the log it is from, in the order the worker saw them written.',
+  },
+  {
     name: 'console',
     label: 'Console',
     about: "The machine's serial console: the kernel, Hangar's init assembling the root, and systemd.",

@@ -150,8 +150,16 @@ type LogFiler interface {
 }
 
 // UseLogs has the worker answer the control plane's requests for its log
-// from rings, which its logger writes to.
-func (w *Worker) UseLogs(rings *logs.Rings) { w.logs = rings }
+// from rings, which its logger writes to, and combine each environment's
+// logs into one.
+func (w *Worker) UseLogs(rings *logs.Rings) {
+	w.logs = rings
+	files := func(string, string) (string, bool) { return "", false }
+	if f, ok := w.rt.(LogFiler); ok {
+		files = f.LogFile
+	}
+	w.combined = logs.NewCombiner(rings, files)
+}
 
 // serveLogs answers one request for part of a log: the worker's own, whole
 // or an environment's lines of it, or a file an environment's machine
@@ -173,6 +181,12 @@ func (w *Worker) serveLogs(r io.Reader, stream net.Conn) {
 }
 
 func (w *Worker) readLog(req logs.Request) logs.Reply {
+	if req.Log == logs.Combined {
+		if w.combined == nil || req.Environment == "" {
+			return logs.Reply{Missing: true}
+		}
+		return w.combined.Read(req)
+	}
 	if req.Log == logs.Worker {
 		if w.logs == nil {
 			return logs.Reply{Missing: true}
@@ -207,8 +221,10 @@ type PortsDialer interface {
 const reportEvery = 5 * time.Second
 
 type Worker struct {
-	// logs is the worker's own log, kept in memory for the control plane.
+	// logs is the worker's own log, kept in memory for the control plane,
+	// and combined is each environment's logs as one.
 	logs     *logs.Rings
+	combined *logs.Combiner
 	cfg      *Config
 	rt       Runtime
 	client   *client
@@ -267,6 +283,9 @@ func (w *Worker) Run(ctx context.Context) error {
 
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
+	if w.combined != nil {
+		go w.combined.Run(ctx)
+	}
 	go func() {
 		if err := w.reportLoop(ctx); err != nil {
 			cancel(err)

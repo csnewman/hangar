@@ -29,7 +29,7 @@ const (
 )
 
 // Names are an environment's logs, in the order they are offered.
-var Names = []string{Console, Worker, Monitor, GPU}
+var Names = []string{Combined, Console, Worker, Monitor, GPU}
 
 // MaxRead is the most a reply holds.
 const MaxRead = 256 << 10

@@ -18,7 +18,7 @@ export function LogsView({
   show: { log: EnvironmentLogName; n: number } | null
   onHide: () => void
 }) {
-  const [chosen, setChosen] = useState<EnvironmentLogName>(show?.log ?? 'console')
+  const [chosen, setChosen] = useState<EnvironmentLogName>(show?.log ?? 'combined')
   const [asked, setAsked] = useState(show?.n)
   if (show && show.n !== asked) {
     setAsked(show.n)
