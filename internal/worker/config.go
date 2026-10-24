@@ -89,6 +89,11 @@ type VMConfig struct {
 	// for Docker's store: one sparse disk of their sum.
 	UpperGiB  int `yaml:"upper_gib"`
 	DockerGiB int `yaml:"docker_gib"`
+	// Swap is an environment's swap, as a multiple of its memory: a sparse
+	// disk the guest swaps to, through a compressed cache in its own memory,
+	// what its programs leave untouched for a while. Unset is 1; 0 gives
+	// none.
+	Swap *float64 `yaml:"swap"`
 	// ImageDevice is how an environment's image reaches it: "disk" (the
 	// default), an EROFS image as a read-only virtio-blk disk; "pmem", the
 	// same image as virtio-pmem, mapped with DAX for an environment that
@@ -172,6 +177,12 @@ func LoadConfig(path string) (*Config, error) {
 	if c.Overcommit.CPUs < 0 || (c.Overcommit.CPUs > 0 && c.Overcommit.CPUs < 1) ||
 		c.Overcommit.Memory < 0 || (c.Overcommit.Memory > 0 && c.Overcommit.Memory < 1) {
 		return nil, errors.New(path + ": overcommit ratios are 1 or more; Reserved keeps capacity back")
+	}
+	if c.VM.Swap == nil {
+		one := 1.0
+		c.VM.Swap = &one
+	} else if *c.VM.Swap < 0 {
+		return nil, errors.New(path + ": vm.swap is a multiple of an environment's memory, 0 or more")
 	}
 	switch c.Runtime {
 	case "":

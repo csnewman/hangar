@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 
 import { api, type EnvironmentSettings, type Template } from '../api'
-import { CPUField, MemoryField } from '../components/MachineFields'
+import { CPUField, MemoryField, SwapField } from '../components/MachineFields'
 import { Row, Rows, SearchField, Segmented, Tile } from '../components/Pane'
 import { desktop } from '../desktop'
 import { PhoneFoot, PhoneNav } from '../components/Phone'
@@ -332,7 +332,14 @@ function NewEnvironmentForm({
   const own = repo?.trim() ?? ''
   const branch = fillTemplate(t.spec.repos[0]?.branch, vars)
   const s = t.spec
-  const m = machine ?? { cpus: s.cpus, memory_mib: s.memory_mib, display: s.display, gpu: s.gpu, dax: s.dax ?? false }
+  const m = machine ?? {
+    cpus: s.cpus,
+    memory_mib: s.memory_mib,
+    display: s.display,
+    gpu: s.gpu,
+    dax: s.dax ?? false,
+    swap_mib: s.swap_mib,
+  }
   const projects =
     repo !== null
       ? own
@@ -441,6 +448,14 @@ function NewEnvironmentForm({
                   mib={m.memory_mib}
                   cpus={m.cpus}
                   onChange={(memory_mib) => onMachine({ ...m, memory_mib })}
+                />
+              </label>
+              <label>
+                <span>Swap</span>
+                <SwapField
+                  mib={m.swap_mib}
+                  memory={m.memory_mib}
+                  onChange={(swap_mib) => onMachine({ ...m, swap_mib })}
                 />
               </label>
               <span className="newenv-machine-row">

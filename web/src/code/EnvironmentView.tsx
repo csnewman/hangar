@@ -21,12 +21,12 @@ import { api, type Environment, type EnvironmentSettings, type TemplateSetting }
 import { Conflicts, CopyChoice, fromWhat, useEnvironmentPacks } from '../components/EnvironmentPacks'
 import { formatAgo, formatBytes, formatMemory, shortDigest } from '../components/format'
 import { imageBuild, imageRisk, useImageChange } from '../components/imageChange'
-import { CPUField, MemoryField } from '../components/MachineFields'
+import { CPUField, MemoryField, SwapField } from '../components/MachineFields'
 import { Banner, CopyField, IndexedPage, Row, Rows, Section } from '../components/Pane'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
 import { canSuspend, openVSCode, openVSCodeTab, useEnvironmentActions, vscodeItems } from '../environmentActions'
-import { changeable, environmentsKey, liveMemory, longestWebName, sshCommand, webURL } from '../environments'
+import { changeable, environmentsKey, liveMemory, longestWebName, sshCommand, swapWords, webURL } from '../environments'
 import { copyName, packPath } from '../pages/Packs'
 import { useMe } from '../session'
 import { homeTab, otherTab } from '../workspaceLinks'
@@ -257,6 +257,7 @@ const settingNames: Record<TemplateSetting, string> = {
   display: 'display',
   gpu: 'GPU',
   dax: 'image mapping',
+  swap: 'swap',
   repos: 'repositories',
   projects: 'projects',
   access: 'access',
@@ -653,7 +654,14 @@ function Connect({ env, onDesktop }: { env: Environment; onDesktop?: () => void 
 }
 
 function fromSpec(spec: Environment['spec']): EnvironmentSettings {
-  return { cpus: spec.cpus, memory_mib: spec.memory_mib, display: spec.display, gpu: spec.gpu, dax: spec.dax ?? false }
+  return {
+    cpus: spec.cpus,
+    memory_mib: spec.memory_mib,
+    display: spec.display,
+    gpu: spec.gpu,
+    dax: spec.dax ?? false,
+    swap_mib: spec.swap_mib,
+  }
 }
 
 // settingFields are the settings the machine section changes, each with
@@ -664,6 +672,7 @@ const settingFields: { key: keyof EnvironmentSettings; word: string; show: (s: E
   { key: 'display', word: 'display', show: (s) => (s.display === 'desktop' ? 'desktop' : 'headless') },
   { key: 'gpu', word: 'GPU', show: (s) => s.gpu },
   { key: 'dax', word: 'image files', show: (s) => (s.dax ? 'mapped' : 'read in') },
+  { key: 'swap_mib', word: 'swap', show: (s) => swapWords(s.swap_mib) },
 ]
 
 type SettingsForm = ReturnType<typeof useSettingsForm>
@@ -759,6 +768,15 @@ function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
                 <input type="checkbox" checked={f.form.dax} onChange={(e) => f.set({ dax: e.target.checked })} />
                 <span>Map them from the worker's memory (DAX)</span>
               </label>,
+            )}
+          </Row>
+          <Row label="Swap" modified={changed('swap_mib')}>
+            {fixed(
+              <SwapField
+                mib={f.form.swap_mib}
+                memory={f.form.memory_mib}
+                onChange={(swap_mib) => f.set({ swap_mib })}
+              />,
             )}
           </Row>
           {placement.length > 0 && (

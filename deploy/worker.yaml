@@ -50,6 +50,11 @@ vm:
   # takes space.
   upper_gib: 32
   docker_gib: 64
+  # Each environment's swap, as a multiple of its memory: a sparse disk,
+  # behind a compressed cache in the environment's own memory, where what
+  # its programs leave untouched for five minutes goes, handing that
+  # memory back to this machine. 0 gives none.
+  swap: 1
   # How an environment's image reaches it. "disk" (the default): an EROFS
   # image of it, made once per image, attached read-only as a virtio-blk
   # disk; lookups are answered inside the environment. "pmem": the same

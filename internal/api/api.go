@@ -128,6 +128,12 @@ type Spec struct {
 	// Chromium runs tens of times slower from it, so it is asked for, not
 	// assumed.
 	DAX bool `json:"dax,omitempty"`
+	// SwapMiB is the environment's swap: what its programs leave untouched
+	// for a while is swapped out, compressed in its own memory and then to a
+	// disk, and that memory goes back to its worker. Unset is what its
+	// worker gives by default (vm.swap, as much as its memory unless set
+	// otherwise); 0 is none.
+	SwapMiB *int `json:"swap_mib,omitempty"`
 	// Packs are the packs the environment has (internal/packs), in order,
 	// before those that attach themselves to it: a path two of them name is
 	// the first's. One its owner may not use is left out.
@@ -333,14 +339,15 @@ type CreateEnvironment struct {
 	Repos *[]Repo `json:"repos,omitempty"`
 }
 
-// Machine is an environment's size and display, its GPU, and whether its
-// image's files are mapped from the host.
+// Machine is an environment's size and display, its GPU, whether its
+// image's files are mapped from the host, and its swap.
 type Machine struct {
 	CPUs      int     `json:"cpus"`
 	MemoryMiB int     `json:"memory_mib"`
 	Display   Display `json:"display"`
 	GPU       GPU     `json:"gpu"`
 	DAX       bool    `json:"dax"`
+	SwapMiB   *int    `json:"swap_mib,omitempty"`
 }
 
 // Worker is the public view of one worker.
@@ -606,6 +613,19 @@ type EnvironmentStats struct {
 	MachineMemoryMiB    int `json:"machine_memory_mib"`
 	MachineMemoryMinMiB int `json:"machine_memory_min_mib,omitempty"`
 	MachineMemoryMaxMiB int `json:"machine_memory_max_mib,omitempty"`
+	// SwapTotalMiB is the guest's swap, and SwapUsedMiB what it has
+	// swapped out. SwapCompressedMiB of that is in zswap's pool, in the
+	// guest's own memory, compressed into SwapPoolMiB of it; the rest is on
+	// its swap disk, which takes SwapDiskBytes of the worker's disk.
+	// SwapInBps and SwapOutBps are how fast memory is swapped in, from
+	// either, and out, to either.
+	SwapTotalMiB      int     `json:"swap_total_mib"`
+	SwapUsedMiB       int     `json:"swap_used_mib"`
+	SwapCompressedMiB int     `json:"swap_compressed_mib"`
+	SwapPoolMiB       int     `json:"swap_pool_mib"`
+	SwapDiskBytes     int64   `json:"swap_disk_bytes"`
+	SwapInBps         float64 `json:"swap_in_bps"`
+	SwapOutBps        float64 `json:"swap_out_bps"`
 	// DiskUsedBytes is what its writable layer and Docker store take up on
 	// the worker.
 	DiskUsedBytes int64   `json:"disk_used_bytes"`
@@ -628,6 +648,16 @@ type WorkerStats struct {
 	// GuestMemoryMiB is the memory its environments' RAM takes up
 	// (EnvironmentStats.HostMemoryMiB), summed.
 	GuestMemoryMiB int `json:"guest_memory_mib"`
+	// SwapUsedMiB and SwapTotalMiB are the machine's own swap.
+	SwapUsedMiB  int `json:"swap_used_mib"`
+	SwapTotalMiB int `json:"swap_total_mib"`
+	// GuestSwapMiB, GuestSwapPoolMiB and GuestSwapDiskBytes are what its
+	// environments have swapped out, the memory their compressed pools
+	// take, and the disk their swap disks take (EnvironmentStats.SwapUsedMiB,
+	// SwapPoolMiB, SwapDiskBytes), summed.
+	GuestSwapMiB       int   `json:"guest_swap_mib"`
+	GuestSwapPoolMiB   int   `json:"guest_swap_pool_mib"`
+	GuestSwapDiskBytes int64 `json:"guest_swap_disk_bytes"`
 	// DiskUsedBytes and DiskTotalBytes are for the filesystem environments
 	// are kept on.
 	DiskUsedBytes  int64 `json:"disk_used_bytes"`

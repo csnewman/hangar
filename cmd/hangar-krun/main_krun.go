@@ -101,8 +101,10 @@ func run(path string) error {
 		}
 	}
 	for _, d := range c.Disks {
-		if err := check("disk "+d.ID, C.krun_add_disk2(id, cstr(d.ID), cstr(d.Path),
-			C.KRUN_DISK_FORMAT_RAW, C.bool(d.ReadOnly))); err != nil {
+		// Relaxed flushes reach macOS's buffers but do not wait for the
+		// drive, as libkrun's own default on macOS.
+		if err := check("disk "+d.ID, C.krun_add_disk3(id, cstr(d.ID), cstr(d.Path),
+			C.KRUN_DISK_FORMAT_RAW, C.bool(d.ReadOnly), C.bool(d.Direct), C.KRUN_SYNC_RELAXED)); err != nil {
 			return err
 		}
 	}

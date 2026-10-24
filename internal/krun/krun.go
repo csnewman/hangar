@@ -54,6 +54,8 @@ type Disk struct {
 	ID       string `json:"id"`
 	Path     string `json:"path"`
 	ReadOnly bool   `json:"read_only,omitempty"`
+	// Direct bypasses the Mac's own cache (ch.Disk.Direct).
+	Direct bool `json:"direct,omitempty"`
 }
 
 // Net is the guest's network device.

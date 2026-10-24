@@ -197,6 +197,19 @@ function Machine({ worker: w }: { worker: Worker }) {
             max={s.memory_total_mib}
           />
           <StatTile
+            label="Swap"
+            value={s.swap_total_mib > 0 ? formatMemory(s.swap_used_mib) : 'None'}
+            detail={s.swap_total_mib > 0 ? `of ${formatMemory(s.swap_total_mib)}` : 'the machine has no swap'}
+            trend={pick((x) => x.swap_used_mib)}
+            max={s.swap_total_mib || undefined}
+          />
+          <StatTile
+            label="Environments' swap"
+            value={formatMemory(s.guest_swap_mib)}
+            detail={`swapped out, in ${formatMemory(s.guest_swap_pool_mib)} of memory and ${formatBytes(s.guest_swap_disk_bytes)} of disk`}
+            trend={pick((x) => x.guest_swap_mib)}
+          />
+          <StatTile
             label="Disk"
             value={formatBytes(s.disk_used_bytes)}
             detail={s.disk_total_bytes ? `of ${formatBytes(s.disk_total_bytes)}` : undefined}

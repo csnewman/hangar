@@ -41,7 +41,7 @@ func readSystem(path string) (*api.WorkerStats, cpuSample, bool) {
 	}
 
 	if f, err := os.Open("/proc/meminfo"); err == nil {
-		var total, avail int
+		var total, avail, swapTotal, swapFree int
 		sc := bufio.NewScanner(f)
 		for sc.Scan() {
 			k, v, ok := strings.Cut(sc.Text(), ":")
@@ -54,11 +54,17 @@ func readSystem(path string) (*api.WorkerStats, cpuSample, bool) {
 				total = kib
 			case "MemAvailable":
 				avail = kib
+			case "SwapTotal":
+				swapTotal = kib
+			case "SwapFree":
+				swapFree = kib
 			}
 		}
 		f.Close()
 		st.MemoryTotalMiB = total / 1024
 		st.MemoryUsedMiB = (total - avail) / 1024
+		st.SwapTotalMiB = swapTotal / 1024
+		st.SwapUsedMiB = (swapTotal - swapFree) / 1024
 	}
 
 	// The directory may not exist yet, before the first environment; its

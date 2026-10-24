@@ -35,6 +35,11 @@ export function MetricsTab() {
         <span>
           Disk used <span className="strong">{formatBytes(s.disk_used_bytes)}</span> by the writable layer and
           Docker store
+          {s.swap_total_mib > 0 && (
+            <>
+              , <span className="strong">{formatBytes(s.swap_disk_bytes)}</span> by its swap
+            </>
+          )}
         </span>
         <span>Charts show what this page has seen, a sample every five seconds.</span>
       </div>
@@ -70,6 +75,33 @@ export function MetricsTab() {
             { name: 'On its worker', values: pick((x) => x.host_memory_mib) },
           ]}
         />
+        {s.swap_total_mib > 0 && (
+          <LineChart
+            title="Swap"
+            current={`${formatMemory(s.swap_used_mib)} swapped out, of ${formatMemory(s.swap_total_mib)} · ${formatMemory(s.swap_compressed_mib)} compressed into ${formatMemory(s.swap_pool_mib)} of its memory, ${formatMemory(Math.max(s.swap_used_mib - s.swap_compressed_mib, 0))} on disk`}
+            times={times}
+            format={mib}
+            floor={64}
+            series={[
+              { name: 'Swapped out', values: pick((x) => x.swap_used_mib) },
+              { name: 'On disk', values: pick((x) => Math.max(x.swap_used_mib - x.swap_compressed_mib, 0)) },
+              { name: 'Memory it takes', values: pick((x) => x.swap_pool_mib) },
+            ]}
+          />
+        )}
+        {s.swap_total_mib > 0 && (
+          <LineChart
+            title="Swapping"
+            current={`${formatRate(s.swap_in_bps)} in · ${formatRate(s.swap_out_bps)} out`}
+            times={times}
+            format={formatRate}
+            floor={1000}
+            series={[
+              { name: 'In', values: pick((x) => x.swap_in_bps) },
+              { name: 'Out', values: pick((x) => x.swap_out_bps) },
+            ]}
+          />
+        )}
         <LineChart
           title="Disk I/O"
           current={`${formatRate(s.disk_read_bps)} read · ${formatRate(s.disk_write_bps)} write`}

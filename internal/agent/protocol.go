@@ -71,6 +71,9 @@ type Hello struct {
 	// BootMicros is how long the guest took to reach the agent, measured from
 	// the kernel's own clock, so it excludes monitor and host process startup.
 	BootMicros int64 `json:"boot_micros"`
+	// PageSize is the guest kernel's page size, the unit of /proc/vmstat's
+	// counts of pages.
+	PageSize int `json:"page_size,omitempty"`
 }
 
 // Request is a host-to-agent message.

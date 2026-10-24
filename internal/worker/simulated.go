@@ -240,6 +240,18 @@ func (e *simEnv) wander(maxMiB int) {
 	u.DiskWriteBps = burst(u.DiskWriteBps)
 	u.NetRxBps = burst(u.NetRxBps)
 	u.NetTxBps = burst(u.NetTxBps) / 3
+	// Swap as the spec asks, or as much as its memory, filling as its programs sit idle, most of
+	// it held compressed at a third of its size.
+	u.SwapTotalMiB = e.spec.MemoryMiB
+	if e.spec.SwapMiB != nil {
+		u.SwapTotalMiB = *e.spec.SwapMiB
+	}
+	u.SwapUsedMiB = int(step(float64(u.SwapUsedMiB), float64(u.SwapTotalMiB)/40, 0, float64(u.SwapTotalMiB)/2))
+	u.SwapCompressedMiB = u.SwapUsedMiB * 3 / 4
+	u.SwapPoolMiB = u.SwapCompressedMiB / 3
+	u.SwapDiskBytes = int64(u.SwapUsedMiB-u.SwapCompressedMiB) << 20
+	u.SwapInBps = burst(u.SwapInBps) / 4
+	u.SwapOutBps = burst(u.SwapOutBps) / 4
 }
 
 // Images reports the pretend store: every image an environment was started

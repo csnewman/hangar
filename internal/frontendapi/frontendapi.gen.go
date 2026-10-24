@@ -446,25 +446,28 @@ func (e TeamRole) Valid() bool {
 
 // Defines values for TemplateSetting.
 const (
-	SettingAccess         TemplateSetting = "access"
+	Name                  TemplateSetting = "name"
+	SettingAccess         TemplateSetting = "projects"
 	SettingCPUs           TemplateSetting = "cpus"
 	SettingDAX            TemplateSetting = "dax"
 	SettingDisplay        TemplateSetting = "display"
 	SettingGPU            TemplateSetting = "gpu"
 	SettingImage          TemplateSetting = "image"
 	SettingMemory         TemplateSetting = "memory"
-	SettingName           TemplateSetting = "name"
-	SettingPacks          TemplateSetting = "packs"
-	SettingPlacement      TemplateSetting = "placement"
-	SettingProjects       TemplateSetting = "projects"
-	SettingRepos          TemplateSetting = "repos"
-	SettingTrustedFolders TemplateSetting = "trusted_folders"
-	SettingWebNames       TemplateSetting = "web_names"
+	SettingName           TemplateSetting = "placement"
+	SettingPacks          TemplateSetting = "web_names"
+	SettingPlacement      TemplateSetting = "packs"
+	SettingProjects       TemplateSetting = "repos"
+	SettingRepos          TemplateSetting = "swap"
+	SettingTrustedFolders TemplateSetting = "access"
+	SettingWebNames       TemplateSetting = "trusted_folders"
 )
 
 // Valid indicates whether the value is a known member of the TemplateSetting enum.
 func (e TemplateSetting) Valid() bool {
 	switch e {
+	case Name:
+		return true
 	case SettingAccess:
 		return true
 	case SettingCPUs:
@@ -831,6 +834,9 @@ type EnvironmentSettings struct {
 	// GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
 	GPU       GPU `json:"gpu"`
 	MemoryMiB int `json:"memory_mib"`
+
+	// SwapMiB The environment's swap, in MiB: what its programs leave untouched for a while is swapped out, compressed in its own memory and then to a disk, handing that memory back to its worker. Absent is its worker's default (as much as its memory, unless the worker is set otherwise); 0 is none.
+	SwapMiB *int `json:"swap_mib,omitempty"`
 }
 
 // EnvironmentStats What a running environment uses, as its worker last measured it. Rates are per second.
@@ -871,6 +877,27 @@ type EnvironmentStats struct {
 
 	// SupportCPUs Host cores the processes serving it beside its vCPUs use: its GPU backend, file system and network. No vCPU limit holds them.
 	SupportCPUs float32 `json:"support_cpus"`
+
+	// SwapCompressedMiB The part of swap_used_mib held compressed in the guest's own memory (zswap); the rest is on its swap disk.
+	SwapCompressedMiB int `json:"swap_compressed_mib"`
+
+	// SwapDiskBytes What its swap disk takes on the worker.
+	SwapDiskBytes int64 `json:"swap_disk_bytes"`
+
+	// SwapInBps How fast memory is swapped back in, from memory or disk.
+	SwapInBps float32 `json:"swap_in_bps"`
+
+	// SwapOutBps How fast memory is swapped out, to memory or disk.
+	SwapOutBps float32 `json:"swap_out_bps"`
+
+	// SwapPoolMiB The guest memory swap_compressed_mib takes, compressed.
+	SwapPoolMiB int `json:"swap_pool_mib"`
+
+	// SwapTotalMiB The guest's swap; 0 for one without.
+	SwapTotalMiB int `json:"swap_total_mib"`
+
+	// SwapUsedMiB What the guest has swapped out: memory its programs left untouched for a while, or that it needed for others.
+	SwapUsedMiB int `json:"swap_used_mib"`
 }
 
 // Error defines model for Error.
@@ -1343,6 +1370,9 @@ type Spec struct {
 	Projects *[]string `json:"projects,omitempty"`
 	Repos    []Repo    `json:"repos"`
 
+	// SwapMiB The environment's swap, in MiB: what its programs leave untouched for a while is swapped out, compressed in its own memory and then to a disk, handing that memory back to its worker. Absent is its worker's default (as much as its memory, unless the worker is set otherwise); 0 is none.
+	SwapMiB *int `json:"swap_mib,omitempty"`
+
 	// TrustedFolders Folders VS Code trusts without asking, beyond the repositories and the projects, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing.
 	TrustedFolders *[]string `json:"trusted_folders,omitempty"`
 
@@ -1553,13 +1583,28 @@ type WorkerStats struct {
 	GPUCPUs float32 `json:"gpu_cpus"`
 
 	// GuestMemoryMiB The memory its environments' RAM takes up (host_memory_mib), summed.
-	GuestMemoryMiB int     `json:"guest_memory_mib"`
-	Load1          float32 `json:"load1"`
-	MemoryTotalMiB int     `json:"memory_total_mib"`
-	MemoryUsedMiB  int     `json:"memory_used_mib"`
+	GuestMemoryMiB int `json:"guest_memory_mib"`
+
+	// GuestSwapDiskBytes The disk its environments' swap disks take (swap_disk_bytes), summed.
+	GuestSwapDiskBytes int64 `json:"guest_swap_disk_bytes"`
+
+	// GuestSwapMiB What its environments have swapped out (swap_used_mib), summed.
+	GuestSwapMiB int `json:"guest_swap_mib"`
+
+	// GuestSwapPoolMiB The memory its environments' compressed swap takes (swap_pool_mib), summed.
+	GuestSwapPoolMiB int     `json:"guest_swap_pool_mib"`
+	Load1            float32 `json:"load1"`
+	MemoryTotalMiB   int     `json:"memory_total_mib"`
+	MemoryUsedMiB    int     `json:"memory_used_mib"`
 
 	// SupportCPUs Host cores its environments' support processes use -- their GPU backends, file systems and networks -- beside their vCPUs.
 	SupportCPUs float32 `json:"support_cpus"`
+
+	// SwapTotalMiB The machine's own swap.
+	SwapTotalMiB int `json:"swap_total_mib"`
+
+	// SwapUsedMiB The machine's own swap in use.
+	SwapUsedMiB int `json:"swap_used_mib"`
 }
 
 // ID defines model for ID.

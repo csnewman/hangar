@@ -225,3 +225,77 @@ export function MemoryField({
     </span>
   )
 }
+
+const maxSwapMiB = 256 * 1024
+
+// SwapField is a machine's swap: its worker's default (undefined), which
+// is as much as its memory unless the worker is set otherwise, none (0),
+// or a size, typed in GiB as MemoryField takes it. memory is the machine's,
+// which the default is said in terms of.
+export function SwapField({
+  mib,
+  onChange,
+  memory,
+  id,
+}: {
+  mib: number | undefined
+  onChange: (mib: number | undefined) => void
+  memory: number
+  id?: string
+}) {
+  const mode = mib === undefined ? 'default' : mib === 0 ? 'none' : 'size'
+  const [text, setText] = useState(() => show(mib || memory, 'GiB'))
+  const [seen, setSeen] = useState(mib)
+  if (mib !== seen) {
+    setSeen(mib)
+    if (mib) setText(show(mib, 'GiB'))
+  }
+  const parsed = parse(text, 'GiB')
+  let note: { text: string; tone?: 'warn' | 'error' } = {
+    text: mode === 'default' ? formatMemory(memory) : mode === 'none' ? 'Its idle memory stays in memory' : '',
+  }
+  if (mode === 'size' && !parsed) note = { text: 'A number of GiB, such as 4 or 1.5', tone: 'error' }
+  else if (mode === 'size' && parsed && (parsed.mib < 1 || parsed.mib > maxSwapMiB))
+    note = { text: `Up to ${formatMemory(maxSwapMiB)}`, tone: 'error' }
+
+  return (
+    <span className="machine-field">
+      <select
+        id={id}
+        aria-label={id ? undefined : 'Swap'}
+        value={mode}
+        onChange={(e) => {
+          const m = e.target.value
+          const v = m === 'default' ? undefined : m === 'none' ? 0 : (parsed?.mib ?? memory) || memory
+          setSeen(v)
+          onChange(v)
+        }}
+      >
+        <option value="default">The worker's default</option>
+        <option value="none">None</option>
+        <option value="size">A size</option>
+      </select>
+      {mode === 'size' && (
+        <>
+          <input
+            type="text"
+            inputMode="decimal"
+            autoComplete="off"
+            aria-label="Swap in GiB"
+            aria-invalid={note.tone === 'error'}
+            value={text}
+            onChange={(e) => {
+              setText(e.target.value)
+              const p = parse(e.target.value, 'GiB')
+              if (!p || p.mib < 1) return
+              setSeen(p.mib)
+              onChange(p.mib)
+            }}
+          />
+          <span className="muted">GiB</span>
+        </>
+      )}
+      <Note {...note} />
+    </span>
+  )
+}

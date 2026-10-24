@@ -29,7 +29,9 @@ A worker machine needs, before its container starts:
           | sudo tee /etc/sysctl.d/60-hangar-thp.conf && sudo sysctl --system
 
 - **`HANGAR_WORKER_DATA_DIR`** (`/var/lib/hangar` unless set) on a fast local Linux filesystem with room for every
-  environment's disk (sparse, up to `upper_gib + docker_gib`) and
+  environment's disk (sparse, up to `upper_gib + docker_gib`), its swap
+  (sparse, up to `swap` times its memory, written past the host's page
+  cache, so the filesystem must take `O_DIRECT`) and
   the images. Each image is pulled straight into an EROFS image there,
   once, which every environment on it mounts (`image_device` in
   `worker.yaml`); it must keep its owners: not a network or foreign

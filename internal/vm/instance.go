@@ -49,7 +49,10 @@ type InstanceConfig struct {
 	// MemoryMaxMiB, above MemoryMiB, is what the memory can be resized up
 	// to while the machine runs (ch.Config.MemoryMaxMB).
 	MemoryMaxMiB int
-	CPUs         int
+	// SwapMiB sizes the machine's swap disk, swap.img in Dir; 0 gives it
+	// none.
+	SwapMiB int
+	CPUs    int
 	// Net gives the guest outbound networking, through passt.
 	Net bool
 
@@ -232,6 +235,15 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 	}
 	if !resuming {
 		cfg.clearBackendState()
+		if err := cfg.makeSwap(); err != nil {
+			return nil, fmt.Errorf("making the swap disk: %w", err)
+		}
+	}
+	if cfg.SwapMiB > 0 {
+		// After the disks the guest already knows by position and label, so
+		// none of them moves.
+		cfg.ExtraCmdline += " hangar.swap=/dev/vd" + string(rune('a'+len(cfg.Disks)))
+		cfg.Disks = append(slices.Clone(cfg.Disks), ch.Disk{Path: cfg.swapFile(), Direct: true})
 	}
 	caps, err := host.Detect()
 	if err != nil {
@@ -447,6 +459,7 @@ func (i *Instance) launch(ctx context.Context, args []string) error {
 			i.err = fmt.Errorf("cloud-hypervisor exited: %v%s", err, lastLine(filepath.Join(i.cfg.Dir, "monitor.log")))
 			i.mu.Unlock()
 		}
+		i.cfg.dropSwap()
 		close(i.exited)
 	}()
 	return nil

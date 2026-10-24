@@ -1492,7 +1492,7 @@ export interface components {
          * @description A setting an environment takes from its template.
          * @enum {string}
          */
-        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "repos" | "projects" | "access" | "trusted_folders" | "web_names" | "packs" | "placement" | "name";
+        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "swap" | "repos" | "projects" | "access" | "trusted_folders" | "web_names" | "packs" | "placement" | "name";
         /**
          * @description combined is the others as one, each line marked with the log it is from, in the order the worker saw them written; console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor the virtual machine's monitor's; gpu the virtual GPU's backend.
          * @enum {string}
@@ -1548,6 +1548,8 @@ export interface components {
             gpu: components["schemas"]["GPU"];
             /** @description Map the image's files from the host's page cache rather than read them into the environment's memory. */
             dax?: boolean;
+            /** @description The environment's swap, in MiB: what its programs leave untouched for a while is swapped out, compressed in its own memory and then to a disk, handing that memory back to its worker. Absent is its worker's default (as much as its memory, unless the worker is set otherwise); 0 is none. */
+            swap_mib?: number;
         };
         /**
          * @description virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
@@ -1597,6 +1599,8 @@ export interface components {
             access?: components["schemas"]["Access"];
             /** @description Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. Only a worker that attaches images as persistent memory (image_device pmem) can map them; others read them in regardless. */
             dax?: boolean;
+            /** @description The environment's swap, in MiB: what its programs leave untouched for a while is swapped out, compressed in its own memory and then to a disk, handing that memory back to its worker. Absent is its worker's default (as much as its memory, unless the worker is set otherwise); 0 is none. */
+            swap_mib?: number;
             /** @description Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<short> after Hangar's host. */
             web_names?: string[];
             /** @description Worker labels the environment requires: it runs only on a worker with every one of these labels, with these values. */
@@ -1782,6 +1786,19 @@ export interface components {
             memory_total_mib: number;
             /** @description The memory its environments' RAM takes up (host_memory_mib), summed. */
             guest_memory_mib: number;
+            /** @description The machine's own swap in use. */
+            swap_used_mib: number;
+            /** @description The machine's own swap. */
+            swap_total_mib: number;
+            /** @description What its environments have swapped out (swap_used_mib), summed. */
+            guest_swap_mib: number;
+            /** @description The memory its environments' compressed swap takes (swap_pool_mib), summed. */
+            guest_swap_pool_mib: number;
+            /**
+             * Format: int64
+             * @description The disk its environments' swap disks take (swap_disk_bytes), summed.
+             */
+            guest_swap_disk_bytes: number;
             /** Format: int64 */
             disk_used_bytes: number;
             /** Format: int64 */
@@ -1822,6 +1839,23 @@ export interface components {
             machine_memory_min_mib?: number;
             /** @description What its memory can be resized up to while it runs, as far as its worker has room; absent for a machine that cannot be resized while it runs. */
             machine_memory_max_mib?: number;
+            /** @description The guest's swap; 0 for one without. */
+            swap_total_mib: number;
+            /** @description What the guest has swapped out: memory its programs left untouched for a while, or that it needed for others. */
+            swap_used_mib: number;
+            /** @description The part of swap_used_mib held compressed in the guest's own memory (zswap); the rest is on its swap disk. */
+            swap_compressed_mib: number;
+            /** @description The guest memory swap_compressed_mib takes, compressed. */
+            swap_pool_mib: number;
+            /**
+             * Format: int64
+             * @description What its swap disk takes on the worker.
+             */
+            swap_disk_bytes: number;
+            /** @description How fast memory is swapped back in, from memory or disk. */
+            swap_in_bps: number;
+            /** @description How fast memory is swapped out, to memory or disk. */
+            swap_out_bps: number;
             /**
              * Format: int64
              * @description What its writable layer and Docker store take on the worker.

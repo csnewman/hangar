@@ -3,6 +3,7 @@ import { useState } from 'react'
 
 import { api, type AuditEvent } from '../api'
 import { formatAgo, formatMemory, shortDigest } from '../components/format'
+import { swapWords } from '../environments'
 import { useMe } from '../session'
 import { homeTab, otherTab } from '../workspaceLinks'
 
@@ -108,6 +109,7 @@ const settingWords: { key: string; label: string; show: (v: never) => string }[]
   { key: 'display', label: 'display', show: (v: string) => (v === 'none' ? 'headless' : v) },
   { key: 'gpu', label: 'GPU', show: (v: string) => v },
   { key: 'dax', label: 'image mapping', show: (v: boolean) => (v ? 'on' : 'off') },
+  { key: 'swap_mib', label: 'swap', show: (v: number | null) => swapWords(v) },
 ]
 
 // describe says an event in words: what was done, and what it changed.

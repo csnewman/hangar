@@ -247,6 +247,15 @@ function Usage({ env }: { env: Environment }) {
         trend={pick((x) => x.host_memory_mib)}
         max={s.memory_total_mib}
       />
+      {s.swap_total_mib > 0 && (
+        <Meter
+          label="Swap"
+          value={`${formatMemory(s.swap_used_mib)} out`}
+          title={`What it has swapped out, of ${formatMemory(s.swap_total_mib)}: ${formatMemory(s.swap_compressed_mib)} compressed into ${formatMemory(s.swap_pool_mib)} of its memory, the rest on disk`}
+          trend={pick((x) => x.swap_used_mib)}
+          max={s.swap_total_mib}
+        />
+      )}
       <Meter
         label="Disk"
         value={`${formatRate(s.disk_read_bps)} in · ${formatRate(s.disk_write_bps)} out`}

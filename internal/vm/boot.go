@@ -172,6 +172,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		BaseDAX:     baseDevice == ImagePmem && s.DAX,
 		Disks:       disks,
 		MemoryMiB:   s.MemoryMiB,
+		SwapMiB:     m.rt.swapMiB(s),
 		CPUs:        s.CPUs,
 		Net:         true,
 		GPU:         s.GPU == api.GPUVirtual,

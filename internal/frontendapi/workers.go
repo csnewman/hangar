@@ -143,15 +143,20 @@ func workerStats(s *api.WorkerStats) *WorkerStats {
 		return nil
 	}
 	return &WorkerStats{
-		CPUPercent:     float32(s.CPUPercent),
-		SupportCPUs:    float32(s.SupportCPUs),
-		GPUCPUs:        float32(s.GPUCPUs),
-		Load1:          float32(s.Load1),
-		MemoryUsedMiB:  s.MemoryUsedMiB,
-		MemoryTotalMiB: s.MemoryTotalMiB,
-		GuestMemoryMiB: s.GuestMemoryMiB,
-		DiskUsedBytes:  s.DiskUsedBytes,
-		DiskTotalBytes: s.DiskTotalBytes,
+		CPUPercent:         float32(s.CPUPercent),
+		SupportCPUs:        float32(s.SupportCPUs),
+		GPUCPUs:            float32(s.GPUCPUs),
+		Load1:              float32(s.Load1),
+		MemoryUsedMiB:      s.MemoryUsedMiB,
+		MemoryTotalMiB:     s.MemoryTotalMiB,
+		GuestMemoryMiB:     s.GuestMemoryMiB,
+		SwapUsedMiB:        s.SwapUsedMiB,
+		SwapTotalMiB:       s.SwapTotalMiB,
+		GuestSwapMiB:       s.GuestSwapMiB,
+		GuestSwapPoolMiB:   s.GuestSwapPoolMiB,
+		GuestSwapDiskBytes: s.GuestSwapDiskBytes,
+		DiskUsedBytes:      s.DiskUsedBytes,
+		DiskTotalBytes:     s.DiskTotalBytes,
 	}
 }
 

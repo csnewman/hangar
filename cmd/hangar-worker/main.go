@@ -74,6 +74,7 @@ func run(path string, log *slog.Logger, rings *logs.Rings) error {
 			Registries:      registries,
 			UpperGiB:        cfg.VM.UpperGiB,
 			DockerGiB:       cfg.VM.DockerGiB,
+			Swap:            *cfg.VM.Swap,
 			ImageDevice:     cfg.VM.ImageDevice,
 			GPUVenus:        cfg.VM.GPU.Venus,
 			GPUVenusRestore: cfg.VM.GPU.VenusRestore,

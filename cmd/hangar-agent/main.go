@@ -67,6 +67,7 @@ func main() {
 	flag.Parse()
 
 	widenReclaim()
+	go offload()
 	go serveTerminals()
 	go serveEditor()
 	go serveDesktop()
@@ -113,6 +114,7 @@ func sendHello(conn *os.File) error {
 		Hostname:   hostname(),
 		Kernel:     kernelRelease(),
 		BootMicros: uptimeMicros(),
+		PageSize:   os.Getpagesize(),
 	}
 	b, err := json.Marshal(h)
 	if err != nil {

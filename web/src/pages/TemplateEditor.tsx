@@ -6,7 +6,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { api, type Access, type Display, type GPU, type Repo, type Template, type TemplateInput } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { formatMemory } from '../components/format'
-import { CPUField, MemoryField } from '../components/MachineFields'
+import { CPUField, MemoryField, SwapField } from '../components/MachineFields'
 import {
   ApplyBar,
   DetailHead,
@@ -19,6 +19,7 @@ import {
   Tile,
 } from '../components/Pane'
 import { useMe } from '../session'
+import { swapWords } from '../environments'
 import { blankSpec, builtinVariables, hangarImages, patternGroups, templatesKey } from '../templates'
 import { canGive, teamsKey, useTeams } from '../teams'
 import { TemplatesLayout, VisibilityBadge } from './Templates'
@@ -132,6 +133,7 @@ const templateFields: {
   },
   { key: 'gpu', label: 'GPU', get: (b) => b.spec.gpu, show: (b) => b.spec.gpu },
   { key: 'dax', label: 'Image files', get: (b) => !!b.spec.dax },
+  { key: 'swap', label: 'Swap', get: (b) => b.spec.swap_mib, show: (b) => swapWords(b.spec.swap_mib) },
   { key: 'repos', label: 'Repositories', get: (b) => b.spec.repos },
   { key: 'projects', label: 'Projects', get: (b) => b.spec.projects },
   { key: 'access', label: 'What it is given', get: (b) => b.spec.access },
@@ -409,6 +411,17 @@ function Editor({ existing }: { existing?: Template }) {
                 </label>
                 {hint(
                   'Shares the image’s files in memory with other environments rather than each keeping a copy. Programs that run from large files, such as a browser, can be many times slower with it.',
+                )}
+              </Row>
+              <Row label={label('Swap', 'tpl-swap')} modified={changed('swap')}>
+                <SwapField
+                  id="tpl-swap"
+                  mib={spec.swap_mib}
+                  memory={spec.memory_mib}
+                  onChange={(swap_mib) => setSpec({ swap_mib })}
+                />
+                {hint(
+                  'What its programs leave untouched for five minutes is swapped out, compressed in its own memory and then to a disk, and the memory goes back to the worker. Programs that sit idle, such as a search engine in Docker, then cost little until used, but are slow for a moment when they are.',
                 )}
               </Row>
             </Rows>

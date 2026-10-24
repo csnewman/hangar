@@ -28,6 +28,8 @@ type counters struct {
 	gpuTicks, supTicks  uint64
 	diskRead, diskWrite uint64
 	netRx, netTx        uint64
+	// swapIn and swapOut are in pages.
+	swapIn, swapOut uint64
 }
 
 // sample measures a running machine until it exits, keeping the latest
@@ -51,7 +53,10 @@ func (m *machine) sample(inst *Instance, cpus int) {
 	defer t.Stop()
 	for {
 		now := counters{at: time.Now()}
-		st := &api.EnvironmentStats{DiskUsedBytes: allocated(filepath.Join(m.dir, "upper.ext4"))}
+		st := &api.EnvironmentStats{
+			DiskUsedBytes: allocated(filepath.Join(m.dir, "upper.ext4")),
+			SwapDiskBytes: allocated(inst.cfg.swapFile()),
+		}
 
 		if pid := inst.Pid(); pid != 0 {
 			now.cpuTicks = processTicks(pid)
@@ -90,8 +95,14 @@ func (m *machine) sample(inst *Instance, cpus int) {
 		for _, p := range others {
 			now.supTicks += host.treeTicks(p)
 		}
-		if out, err := inst.Session().Exec(10*time.Second, "cat", "/proc/meminfo", "/proc/net/dev", "/proc/diskstats"); err == nil && out.Code == 0 {
+		sess := inst.Session()
+		if out, err := sess.Exec(10*time.Second, "cat", "/proc/meminfo", "/proc/net/dev", "/proc/diskstats",
+			"/proc/vmstat"); err == nil && out.Code == 0 {
 			guest(out.Stdout, st, &now)
+		}
+		page := float64(sess.Hello.PageSize)
+		if page == 0 {
+			page = 4096
 		}
 
 		if prev != nil {
@@ -111,6 +122,8 @@ func (m *machine) sample(inst *Instance, cpus int) {
 			st.DiskWriteBps = rate(prev.diskWrite, now.diskWrite)
 			st.NetRxBps = rate(prev.netRx, now.netRx)
 			st.NetTxBps = rate(prev.netTx, now.netTx)
+			st.SwapInBps = rate(prev.swapIn, now.swapIn) * page
+			st.SwapOutBps = rate(prev.swapOut, now.swapOut) * page
 			m.mu.Lock()
 			m.stats = st
 			m.mu.Unlock()
@@ -128,10 +141,15 @@ func (m *machine) sample(inst *Instance, cpus int) {
 	}
 }
 
-// guest reads the guest's /proc/meminfo, /proc/net/dev and /proc/diskstats,
-// concatenated.
+// guest reads the guest's /proc/meminfo, /proc/net/dev, /proc/diskstats and
+// /proc/vmstat, concatenated.
 func guest(text string, st *api.EnvironmentStats, c *counters) {
 	var total, avail, buffers, cached, shmem int
+	var swapTotal, swapFree, zswap, zswapped int
+	// Pages swapped in and out, by zswap, its pool, and to and from the
+	// disk; pswpout counts too what zswap writes back from its pool, zswpwb,
+	// which had already left memory.
+	var pswpin, pswpout, zswpin, zswpout, zswpwb uint64
 	sc := bufio.NewScanner(strings.NewReader(text))
 	for sc.Scan() {
 		line := sc.Text()
@@ -161,12 +179,37 @@ func guest(text string, st *api.EnvironmentStats, c *counters) {
 					cached = kib
 				case "Shmem":
 					shmem = kib
+				case "SwapTotal":
+					swapTotal = kib
+				case "SwapFree":
+					swapFree = kib
+				case "Zswap":
+					zswap = kib
+				case "Zswapped":
+					zswapped = kib
 				}
 			}
 			continue
 		}
-		// diskstats: major minor name reads merged sectors ms writes merged sectors ...
 		f := strings.Fields(line)
+		// vmstat: "pswpin 1234"
+		if len(f) == 2 {
+			n, _ := strconv.ParseUint(f[1], 10, 64)
+			switch f[0] {
+			case "pswpin":
+				pswpin = n
+			case "pswpout":
+				pswpout = n
+			case "zswpin":
+				zswpin = n
+			case "zswpout":
+				zswpout = n
+			case "zswpwb":
+				zswpwb = n
+			}
+			continue
+		}
+		// diskstats: major minor name reads merged sectors ms writes merged sectors ...
 		if len(f) >= 10 && isWholeDisk(f[2]) {
 			r, _ := strconv.ParseUint(f[5], 10, 64)
 			w, _ := strconv.ParseUint(f[9], 10, 64)
@@ -179,6 +222,12 @@ func guest(text string, st *api.EnvironmentStats, c *counters) {
 	// Shared memory -- tmpfs, mostly -- is counted as cached, but it is
 	// files nothing else holds, and it cannot be given up.
 	st.MemoryCachedMiB = max(buffers+cached-shmem, 0) / 1024
+	st.SwapTotalMiB = swapTotal / 1024
+	st.SwapUsedMiB = max(swapTotal-swapFree, 0) / 1024
+	st.SwapCompressedMiB = zswapped / 1024
+	st.SwapPoolMiB = zswap / 1024
+	c.swapIn = pswpin + zswpin
+	c.swapOut = zswpout + pswpout - min(zswpwb, pswpout)
 }
 
 // isWholeDisk is true for the guest's virtio disks themselves, and false for

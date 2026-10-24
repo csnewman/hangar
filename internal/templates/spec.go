@@ -17,6 +17,7 @@ const (
 	MaxCPUs      = 64
 	MinMemoryMiB = 512
 	MaxMemoryMiB = 256 * 1024
+	MaxSwapMiB   = 256 * 1024
 	MaxRepos     = 16
 	MaxProjects  = 16
 	MaxWebNames  = 16
@@ -56,6 +57,9 @@ func Validate(s api.TemplateSpec) (api.TemplateSpec, error) {
 	}
 	if s.MemoryMiB < MinMemoryMiB || s.MemoryMiB > MaxMemoryMiB {
 		return bad("memory must be between %d and %d MiB", MinMemoryMiB, MaxMemoryMiB)
+	}
+	if s.SwapMiB != nil && (*s.SwapMiB < 0 || *s.SwapMiB > MaxSwapMiB) {
+		return bad("swap must be between 0 and %d MiB", MaxSwapMiB)
 	}
 
 	switch s.Display {

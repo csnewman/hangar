@@ -158,3 +158,22 @@ func TestProjects(t *testing.T) {
 		t.Error("too many projects accepted")
 	}
 }
+
+func TestSwap(t *testing.T) {
+	size := func(mib int) *int { return &mib }
+	for _, c := range []struct {
+		swap *int
+		ok   bool
+	}{
+		{nil, true},
+		{size(0), true},
+		{size(4096), true},
+		{size(-1), false},
+		{size(templates.MaxSwapMiB + 1), false},
+	} {
+		_, err := templates.Validate(api.TemplateSpec{Spec: api.Spec{Image: "img", CPUs: 1, MemoryMiB: 1024, SwapMiB: c.swap}})
+		if (err == nil) != c.ok {
+			t.Errorf("swap %v: err %v, want ok %t", c.swap, err, c.ok)
+		}
+	}
+}

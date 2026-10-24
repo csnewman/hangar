@@ -27,6 +27,7 @@ const (
 	SettingDisplay        = "display"
 	SettingGPU            = "gpu"
 	SettingDAX            = "dax"
+	SettingSwap           = "swap"
 	SettingRepos          = "repos"
 	SettingProjects       = "projects"
 	SettingAccess         = "access"
@@ -59,6 +60,7 @@ func templateChanges(e api.Environment, t api.TemplateSpec) []string {
 	add(env.Display != want.Display, SettingDisplay)
 	add(env.GPU != want.GPU, SettingGPU)
 	add(env.DAX != want.DAX, SettingDAX)
+	add(!sameSwap(env.SwapMiB, want.SwapMiB), SettingSwap)
 	add(!slices.Equal(env.Repos, want.Repos), SettingRepos)
 	add(!slices.Equal(env.ProjectFolders(), want.ProjectFolders()), SettingProjects)
 	add(env.Access != want.Access, SettingAccess)
@@ -69,6 +71,12 @@ func templateChanges(e api.Environment, t api.TemplateSpec) []string {
 	return out
 }
 
+// sameSwap is whether two specs ask for the same swap, unset being its
+// worker's default.
+func sameSwap(a, b *int) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
+}
+
 // varsOf is what an environment's template is filled in with: its name,
 // owner and short ID, and its template's name as it was when it was made.
 func varsOf(e api.Environment) templates.Vars {
@@ -76,8 +84,8 @@ func varsOf(e api.Environment) templates.Vars {
 }
 
 // Settings are what of an environment may change after it is made: its
-// size, whether it has a desktop and a virtual GPU, and whether its image's
-// files are mapped from the host. They are the machine's, so they take
+// size, whether it has a desktop and a virtual GPU, whether its image's
+// files are mapped from the host, and its swap. They are the machine's, so they take
 // effect when it next starts, but for its memory, which a running machine
 // can be resized to.
 type Settings struct {
@@ -86,6 +94,7 @@ type Settings struct {
 	Display   api.Display
 	GPU       api.GPU
 	DAX       bool
+	SwapMiB   *int
 }
 
 // changing reads and locks an environment p may reach for a change to its
@@ -218,17 +227,19 @@ func (m *Manager) UpdateSettings(ctx context.Context, p users.Principal, id stri
 			return err
 		}
 		c := cur.Spec
-		live := running(cur) && s.CPUs == c.CPUs && s.Display == c.Display && s.GPU == c.GPU && s.DAX == c.DAX
+		live := running(cur) && s.CPUs == c.CPUs && s.Display == c.Display && s.GPU == c.GPU && s.DAX == c.DAX &&
+			sameSwap(s.SwapMiB, c.SwapMiB)
 		if !live {
 			if err := stoppedForChange(cur); err != nil {
 				if running(cur) {
-					return fmt.Errorf("%w: stop the environment to change its vCPUs, display or GPU; its memory alone can change while it runs", ErrConflict)
+					return fmt.Errorf("%w: stop the environment to change its vCPUs, display, GPU or swap; its memory alone can change while it runs", ErrConflict)
 				}
 				return err
 			}
 		}
 		spec := cur.Spec
 		spec.CPUs, spec.MemoryMiB, spec.Display, spec.GPU, spec.DAX = s.CPUs, s.MemoryMiB, s.Display, s.GPU, s.DAX
+		spec.SwapMiB = s.SwapMiB
 		if s.GPU == api.GPUPassthrough && cur.Spec.GPU != api.GPUPassthrough {
 			return fmt.Errorf("%w: a GPU passed through is only a template's to ask for", ErrInvalid)
 		}
@@ -265,6 +276,7 @@ func (m *Manager) UpdateSettings(ctx context.Context, p users.Principal, id stri
 				"display":    map[string]api.Display{"from": cur.Spec.Display, "to": spec.Display},
 				"gpu":        map[string]api.GPU{"from": cur.Spec.GPU, "to": spec.GPU},
 				"dax":        map[string]bool{"from": cur.Spec.DAX, "to": spec.DAX},
+				"swap_mib":   map[string]*int{"from": cur.Spec.SwapMiB, "to": spec.SwapMiB},
 				"running":    live,
 			}})
 	})

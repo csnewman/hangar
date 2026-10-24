@@ -24,7 +24,7 @@ func (h *handler) CreateEnvironment(ctx context.Context, req CreateEnvironmentRe
 	in := api.CreateEnvironment{TemplateID: req.Body.TemplateID, Name: req.Body.Name}
 	if m := req.Body.Settings; m != nil {
 		in.Machine = &api.Machine{CPUs: m.CPUs, MemoryMiB: m.MemoryMiB, Display: api.Display(m.Display),
-			GPU: api.GPU(m.GPU), DAX: m.Dax != nil && *m.Dax}
+			GPU: api.GPU(m.GPU), DAX: m.Dax != nil && *m.Dax, SwapMiB: m.SwapMiB}
 	}
 	if rs := req.Body.Repos; rs != nil {
 		repos := make([]api.Repo, len(*rs))
@@ -86,7 +86,7 @@ func (h *handler) UpdateEnvironmentSettings(ctx context.Context, req UpdateEnvir
 	e, err := h.envs.UpdateSettings(ctx, principal(ctx), req.ID, environments.Settings{
 		CPUs: req.Body.CPUs, MemoryMiB: req.Body.MemoryMiB,
 		Display: api.Display(req.Body.Display), GPU: api.GPU(req.Body.GPU),
-		DAX: req.Body.Dax != nil && *req.Body.Dax})
+		DAX: req.Body.Dax != nil && *req.Body.Dax, SwapMiB: req.Body.SwapMiB})
 	switch {
 	case errors.Is(err, environments.ErrNotFound):
 		return UpdateEnvironmentSettings404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
@@ -236,19 +236,26 @@ func environmentStats(s *api.EnvironmentStats) *EnvironmentStats {
 		return nil
 	}
 	out := &EnvironmentStats{
-		CPUPercent:       float32(s.CPUPercent),
-		SupportCPUs:      float32(s.SupportCPUs),
-		GPUCPUs:          float32(s.GPUCPUs),
-		MemoryUsedMiB:    s.MemoryUsedMiB,
-		MemoryTotalMiB:   s.MemoryTotalMiB,
-		MemoryCachedMiB:  s.MemoryCachedMiB,
-		HostMemoryMiB:    s.HostMemoryMiB,
-		MachineMemoryMiB: s.MachineMemoryMiB,
-		DiskUsedBytes:    s.DiskUsedBytes,
-		DiskReadBps:      float32(s.DiskReadBps),
-		DiskWriteBps:     float32(s.DiskWriteBps),
-		NetRxBps:         float32(s.NetRxBps),
-		NetTxBps:         float32(s.NetTxBps),
+		CPUPercent:        float32(s.CPUPercent),
+		SupportCPUs:       float32(s.SupportCPUs),
+		GPUCPUs:           float32(s.GPUCPUs),
+		MemoryUsedMiB:     s.MemoryUsedMiB,
+		MemoryTotalMiB:    s.MemoryTotalMiB,
+		MemoryCachedMiB:   s.MemoryCachedMiB,
+		HostMemoryMiB:     s.HostMemoryMiB,
+		MachineMemoryMiB:  s.MachineMemoryMiB,
+		SwapTotalMiB:      s.SwapTotalMiB,
+		SwapUsedMiB:       s.SwapUsedMiB,
+		SwapCompressedMiB: s.SwapCompressedMiB,
+		SwapPoolMiB:       s.SwapPoolMiB,
+		SwapDiskBytes:     s.SwapDiskBytes,
+		SwapInBps:         float32(s.SwapInBps),
+		SwapOutBps:        float32(s.SwapOutBps),
+		DiskUsedBytes:     s.DiskUsedBytes,
+		DiskReadBps:       float32(s.DiskReadBps),
+		DiskWriteBps:      float32(s.DiskWriteBps),
+		NetRxBps:          float32(s.NetRxBps),
+		NetTxBps:          float32(s.NetTxBps),
 	}
 	if s.MachineMemoryMaxMiB > 0 {
 		lo, hi := s.MachineMemoryMinMiB, s.MachineMemoryMaxMiB

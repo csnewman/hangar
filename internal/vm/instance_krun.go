@@ -73,7 +73,8 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 		HostPorts: map[uint32]string{agent.Port: vsock.HybridPath(i.vsock, agent.Port)},
 	}
 	for n, d := range cfg.Disks {
-		kc.Disks = append(kc.Disks, krun.Disk{ID: fmt.Sprintf("vd%c", 'a'+n), Path: d.Path, ReadOnly: d.ReadOnly})
+		kc.Disks = append(kc.Disks, krun.Disk{ID: fmt.Sprintf("vd%c", 'a'+n), Path: d.Path, ReadOnly: d.ReadOnly,
+			Direct: d.Direct})
 	}
 	extra := cfg.ExtraCmdline
 	switch cfg.BaseDevice {
@@ -185,6 +186,7 @@ func (i *Instance) launchKrun(ctx context.Context, conf string) error {
 			i.err = fmt.Errorf("hangar-krun exited: %v%s", err, lastLine(filepath.Join(i.cfg.Dir, "monitor.log")))
 			i.mu.Unlock()
 		}
+		i.cfg.dropSwap()
 		close(i.exited)
 	}()
 	return nil

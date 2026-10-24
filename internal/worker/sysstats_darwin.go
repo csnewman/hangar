@@ -32,6 +32,12 @@ func readSystem(path string) (*api.WorkerStats, cpuSample, bool) {
 		}
 	}
 
+	// struct xsw_usage: total, available and used, in bytes.
+	if b, err := unix.SysctlRaw("vm.swapusage"); err == nil && len(b) >= 24 {
+		st.SwapTotalMiB = int(binary.LittleEndian.Uint64(b[0:]) >> 20)
+		st.SwapUsedMiB = int(binary.LittleEndian.Uint64(b[16:]) >> 20)
+	}
+
 	for path != "/" && path != "." && path != "" {
 		if _, err := os.Stat(path); err == nil {
 			break

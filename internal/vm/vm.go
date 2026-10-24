@@ -98,6 +98,10 @@ type Config struct {
 	// file is sparse, so this is a ceiling rather than space spent.
 	UpperGiB  int
 	DockerGiB int
+	// Swap sizes each environment's swap disk, as a multiple of its memory;
+	// 0 gives none. The file is sparse, and the guest discards what it
+	// frees.
+	Swap float64
 	// ImageDevice is how the base reaches the guest: ImageDisk (the
 	// default) or ImagePmem.
 	ImageDevice string

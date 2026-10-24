@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { api, type Environment, type Me, type Resources } from './api'
+import { formatMemory } from './components/format'
 
 export const environmentsKey = ['environments'] as const
 
@@ -87,13 +88,19 @@ export function sshCommand(gw: { host: string; port: number }, env: Environment,
   return `ssh ${user}@${gw.host}` + (gw.port === 22 ? '' : ` -p ${gw.port}`)
 }
 
+// swapWords is a spec's swap in words: unset is its worker's default.
+export function swapWords(mib: number | null | undefined): string {
+  return mib === undefined || mib === null ? "the worker's default" : mib === 0 ? 'none' : formatMemory(mib)
+}
+
 // settingsSummary is an environment's settings in a line.
 export function settingsSummary(env: Environment): string {
   const s = env.spec
   return (
     `${s.cpus} vCPU${s.cpus === 1 ? '' : 's'}, ${s.memory_mib} MiB, ` +
     `${s.display === 'desktop' ? 'desktop' : 'headless'}, ${s.gpu === 'none' ? 'no GPU' : `${s.gpu} GPU`}` +
-    (s.dax ? ', image files mapped from the host' : '')
+    (s.dax ? ', image files mapped from the host' : '') +
+    (s.swap_mib === undefined ? '' : s.swap_mib === 0 ? ', no swap' : `, ${formatMemory(s.swap_mib)} swap`)
   )
 }
 

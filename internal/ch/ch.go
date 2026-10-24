@@ -40,6 +40,10 @@ const QUEUE_SIZE = 256
 type Disk struct {
 	Path     string
 	ReadOnly bool
+	// Direct bypasses the host's page cache, for a disk the guest writes
+	// only what it has taken out of its memory: its swap. Cached on the
+	// host, what it swapped out would be in memory still.
+	Direct bool
 }
 
 // Config describes one environment VM.
@@ -168,6 +172,9 @@ func (c *Config) Args() ([]string, error) {
 			if d.ReadOnly {
 				spec += ",readonly=on"
 			}
+			if d.Direct {
+				spec += ",direct=on"
+			}
 			disk = append(disk, spec)
 		}
 		args = append(args, disk...)
@@ -268,8 +275,10 @@ func (c *Config) Cmdline() string {
 	// page reporting, but its file cache is not free and would be kept for
 	// as long as it runs. DAMON reclaims pages untouched for minAge,
 	// whatever memory is free, so the cache of what was read once goes
-	// back too. Anonymous memory is left alone: the guest has no swap. The
-	// agent widens what it watches to the memory virtio-mem plugs in.
+	// back too. A program's memory is left to the agent, which swaps out
+	// what is idle where the guest has swap (cmd/hangar-agent/offload.go):
+	// DAMON samples memory too coarsely to find it. The agent widens what
+	// it watches to the memory virtio-mem plugs in.
 	cl += fmt.Sprintf(" damon_reclaim.enabled=Y damon_reclaim.min_age=%d damon_reclaim.skip_anon=Y"+
 		" damon_reclaim.wmarks_high=1000 damon_reclaim.wmarks_mid=999 damon_reclaim.wmarks_low=0",
 		reclaimMinAge.Microseconds())

@@ -282,6 +282,7 @@ func withOwn(t api.TemplateSpec, req api.CreateEnvironment) (api.TemplateSpec, e
 			return t, fmt.Errorf("%w: a GPU passed through is only a template's to ask for", ErrInvalid)
 		}
 		t.CPUs, t.MemoryMiB, t.Display, t.GPU, t.DAX = m.CPUs, m.MemoryMiB, m.Display, m.GPU, m.DAX
+		t.SwapMiB = m.SwapMiB
 	}
 	if req.Repos != nil {
 		// Repositories chosen for the environment are its projects.
