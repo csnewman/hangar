@@ -1831,6 +1831,8 @@ export interface components {
             memory_total_mib: number;
             /** @description The guest's cache of files, which it counts as free and would give up for its programs, but which its worker holds for it all the same. */
             memory_cached_mib: number;
+            /** @description What its programs have locked in memory (mlock), which cannot be swapped out: a database or search engine set to lock its heap, such as OpenSearch with bootstrap.memory_lock. */
+            memory_locked_mib: number;
             /** @description The worker's memory the guest's RAM takes up: what the guest has touched and not handed back. */
             host_memory_mib: number;
             /** @description The memory the machine has, as its monitor says; after a resize it reaches the new size in the guest's own time. */

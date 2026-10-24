@@ -41,6 +41,12 @@ export function MetricsTab() {
             </>
           )}
         </span>
+        {s.memory_locked_mib > 0 && (
+          <span>
+            <span className="strong">{formatMemory(s.memory_locked_mib)}</span> is locked in memory by its programs
+            and cannot be swapped out
+          </span>
+        )}
         <span>Charts show what this page has seen, a sample every five seconds.</span>
       </div>
       <div className="charts">
@@ -71,6 +77,7 @@ export function MetricsTab() {
           format={mib}
           series={[
             { name: 'Used', values: pick((x) => x.memory_used_mib) },
+            ...(s.memory_locked_mib > 0 ? [{ name: 'Locked', values: pick((x) => x.memory_locked_mib) }] : []),
             { name: 'With cache', values: pick((x) => x.memory_used_mib + x.memory_cached_mib) },
             { name: 'On its worker', values: pick((x) => x.host_memory_mib) },
           ]}

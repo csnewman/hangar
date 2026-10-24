@@ -144,7 +144,7 @@ func (m *machine) sample(inst *Instance, cpus int) {
 // guest reads the guest's /proc/meminfo, /proc/net/dev, /proc/diskstats and
 // /proc/vmstat, concatenated.
 func guest(text string, st *api.EnvironmentStats, c *counters) {
-	var total, avail, buffers, cached, shmem int
+	var total, avail, buffers, cached, shmem, locked int
 	var swapTotal, swapFree, zswap, zswapped int
 	// Pages swapped in and out, by zswap, its pool, and to and from the
 	// disk; pswpout counts too what zswap writes back from its pool, zswpwb,
@@ -179,6 +179,8 @@ func guest(text string, st *api.EnvironmentStats, c *counters) {
 					cached = kib
 				case "Shmem":
 					shmem = kib
+				case "Mlocked":
+					locked = kib
 				case "SwapTotal":
 					swapTotal = kib
 				case "SwapFree":
@@ -222,6 +224,7 @@ func guest(text string, st *api.EnvironmentStats, c *counters) {
 	// Shared memory -- tmpfs, mostly -- is counted as cached, but it is
 	// files nothing else holds, and it cannot be given up.
 	st.MemoryCachedMiB = max(buffers+cached-shmem, 0) / 1024
+	st.MemoryLockedMiB = locked / 1024
 	st.SwapTotalMiB = swapTotal / 1024
 	st.SwapUsedMiB = max(swapTotal-swapFree, 0) / 1024
 	st.SwapCompressedMiB = zswapped / 1024

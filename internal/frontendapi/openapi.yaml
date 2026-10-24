@@ -2739,7 +2739,7 @@ components:
       description: >-
         What a running environment uses, as its worker last measured it.
         Rates are per second.
-      required: [cpu_percent, support_cpus, gpu_cpus, memory_used_mib, memory_total_mib, memory_cached_mib, host_memory_mib, machine_memory_mib, swap_total_mib, swap_used_mib, swap_compressed_mib, swap_pool_mib, swap_disk_bytes, swap_in_bps, swap_out_bps, disk_used_bytes, disk_read_bps, disk_write_bps, net_rx_bps, net_tx_bps]
+      required: [cpu_percent, support_cpus, gpu_cpus, memory_used_mib, memory_total_mib, memory_cached_mib, memory_locked_mib, host_memory_mib, machine_memory_mib, swap_total_mib, swap_used_mib, swap_compressed_mib, swap_pool_mib, swap_disk_bytes, swap_in_bps, swap_out_bps, disk_used_bytes, disk_read_bps, disk_write_bps, net_rx_bps, net_tx_bps]
       properties:
         support_cpus:
           type: number
@@ -2763,6 +2763,12 @@ components:
           description: >-
             The guest's cache of files, which it counts as free and would give
             up for its programs, but which its worker holds for it all the same.
+        memory_locked_mib:
+          type: integer
+          description: >-
+            What its programs have locked in memory (mlock), which cannot be
+            swapped out: a database or search engine set to lock its heap,
+            such as OpenSearch with bootstrap.memory_lock.
         host_memory_mib:
           type: integer
           description: >-

@@ -867,6 +867,9 @@ type EnvironmentStats struct {
 	// MemoryCachedMiB The guest's cache of files, which it counts as free and would give up for its programs, but which its worker holds for it all the same.
 	MemoryCachedMiB int `json:"memory_cached_mib"`
 
+	// MemoryLockedMiB What its programs have locked in memory (mlock), which cannot be swapped out: a database or search engine set to lock its heap, such as OpenSearch with bootstrap.memory_lock.
+	MemoryLockedMiB int `json:"memory_locked_mib"`
+
 	// MemoryTotalMiB All the memory the guest sees.
 	MemoryTotalMiB int `json:"memory_total_mib"`
 

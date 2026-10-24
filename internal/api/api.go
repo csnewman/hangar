@@ -602,6 +602,9 @@ type EnvironmentStats struct {
 	MemoryUsedMiB   int `json:"memory_used_mib"`
 	MemoryTotalMiB  int `json:"memory_total_mib"`
 	MemoryCachedMiB int `json:"memory_cached_mib"`
+	// MemoryLockedMiB is what its programs have locked in memory (mlock),
+	// which cannot be swapped out.
+	MemoryLockedMiB int `json:"memory_locked_mib"`
 	// HostMemoryMiB is the worker's memory the guest's RAM takes up: what the
 	// guest has touched and not handed back.
 	HostMemoryMiB int `json:"host_memory_mib"`

@@ -256,6 +256,15 @@ function Usage({ env }: { env: Environment }) {
           max={s.swap_total_mib}
         />
       )}
+      {s.memory_locked_mib > 0 && (
+        <Meter
+          label="Locked"
+          value={formatMemory(s.memory_locked_mib)}
+          title="Locked in memory by its programs (mlock), which cannot be swapped out: a database or search engine set to lock its heap, such as OpenSearch with bootstrap.memory_lock"
+          trend={pick((x) => x.memory_locked_mib)}
+          max={s.memory_total_mib}
+        />
+      )}
       <Meter
         label="Disk"
         value={`${formatRate(s.disk_read_bps)} in · ${formatRate(s.disk_write_bps)} out`}
