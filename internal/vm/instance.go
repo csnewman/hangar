@@ -27,6 +27,8 @@ type InstanceConfig struct {
 	ID string
 	// Name is the monitor's name for the machine.
 	Name string
+	// Monitor runs the machine (host.Monitor*); empty is the host's own.
+	Monitor string
 	// Dir holds what outlives a boot: the backends' saved state, a
 	// suspended machine's snapshot, and the monitor's log.
 	Dir string
@@ -245,7 +247,7 @@ func Boot(ctx context.Context, cfg InstanceConfig) (_ *Instance, err error) {
 		cfg.ExtraCmdline += " hangar.swap=/dev/vd" + string(rune('a'+len(cfg.Disks)))
 		cfg.Disks = append(slices.Clone(cfg.Disks), ch.Disk{Path: cfg.swapFile(), Direct: true})
 	}
-	caps, err := host.Detect()
+	caps, err := host.Detect(cfg.Monitor)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +356,7 @@ func (i *Instance) startCloudHypervisor(ctx, procCtx, monCtx context.Context, in
 		if err != nil {
 			return err
 		}
-		net, err := ch.StartPasst(procCtx, filepath.Join(pdir, "net.sock"))
+		net, err := ch.StartPasst(procCtx, filepath.Join(pdir, "net.sock"), true)
 		if err != nil {
 			return err
 		}

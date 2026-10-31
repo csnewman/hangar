@@ -99,9 +99,16 @@ static char *hk_device_extensions(void) {
 import "C"
 
 import (
+	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/csnewman/hangar/internal/krun"
 )
 
 // zinkExtensions are what Mesa's OpenGL on Vulkan (zink) needs of the Mac's
@@ -129,4 +136,32 @@ func canZink() bool {
 		}
 	}
 	return true
+}
+
+// chooseVulkan picks the Vulkan driver the guest's GPU renders with from
+// those bundled beside hangar-krun (bin/vulkan): KosmicKrisp on macOS 26
+// and later, which it needs, and MoltenVK otherwise. VK_DRIVER_FILES, set
+// already, names another; the loader reads it when virglrenderer starts.
+func chooseVulkan() string {
+	if f := os.Getenv("VK_DRIVER_FILES"); f != "" {
+		if strings.Contains(strings.ToLower(f), "kosmickrisp") {
+			return krun.VulkanKosmicKrisp
+		}
+		return krun.VulkanMoltenVK
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Join(filepath.Dir(exe), "vulkan")
+	choice := krun.VulkanMoltenVK
+	if v, err := unix.Sysctl("kern.osproductversion"); err == nil {
+		if major, _ := strconv.Atoi(strings.SplitN(v, ".", 2)[0]); major >= 26 {
+			if _, err := os.Stat(filepath.Join(dir, "kosmickrisp.json")); err == nil {
+				choice = krun.VulkanKosmicKrisp
+			}
+		}
+	}
+	os.Setenv("VK_DRIVER_FILES", filepath.Join(dir, choice+".json"))
+	return choice
 }

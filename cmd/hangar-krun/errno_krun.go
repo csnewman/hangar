@@ -1,4 +1,4 @@
-//go:build darwin && krun
+//go:build krun
 
 package main
 

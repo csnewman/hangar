@@ -1,12 +1,12 @@
 // Package krun describes and finds hangar-krun, which runs one
 // environment's machine under libkrun: the monitor on macOS, where Cloud
-// Hypervisor cannot run. The worker starts it with a Config as JSON, as it
-// starts Cloud Hypervisor on Linux; libkrun then takes the process over,
-// and it exits when the guest does.
+// Hypervisor cannot run, and on Linux the other to Cloud Hypervisor. The
+// worker starts it with a Config as JSON, as it starts Cloud Hypervisor;
+// libkrun then takes the process over, and it exits when the guest does.
 //
 // libkrun is built from source with dev/krun-build.sh, which also builds
-// hangar-krun against it and signs it with the hypervisor entitlement macOS
-// requires.
+// hangar-krun against it, and on macOS signs it with the hypervisor
+// entitlement macOS requires.
 package krun
 
 import (
@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 )
 
 // Config is the machine hangar-krun runs.
@@ -35,11 +36,11 @@ type Config struct {
 	// GuestPorts are the vsock ports the guest listens on, each reached by
 	// connecting to the unix socket libkrun listens on.
 	GuestPorts map[uint32]string `json:"guest_ports,omitempty"`
-	// Net, if set, is a unix datagram socket carrying the guest's network
-	// (gvproxy in vfkit mode), with the guest's MAC address.
+	// Net, if set, is the unix socket carrying the guest's network, with
+	// the guest's MAC address.
 	Net *Net `json:"net,omitempty"`
-	// GPU, if set, gives the guest a virtio-gpu: Vulkan through Venus,
-	// rendered by the Mac's GPU, and no OpenGL of its own.
+	// GPU, if set, gives the guest a virtio-gpu: Vulkan through Venus, and
+	// OpenGL through virgl where the host renders it.
 	GPU *GPU `json:"gpu,omitempty"`
 }
 
@@ -47,6 +48,9 @@ type Config struct {
 type GPU struct {
 	// WindowMiB sizes the window the guest maps GPU memory through.
 	WindowMiB int `json:"window_mib"`
+	// Virgl offers OpenGL as well: on Linux, where virglrenderer draws it
+	// with the host's OpenGL. The Mac has none for it to use.
+	Virgl bool `json:"virgl,omitempty"`
 }
 
 // Disk is a virtio-blk device.
@@ -62,11 +66,23 @@ type Disk struct {
 type Net struct {
 	Socket string `json:"socket"`
 	MAC    string `json:"mac"`
+	// Stream is a unix stream socket, passt's on Linux; otherwise the
+	// socket is a datagram one, gvisor-tap-vsock's in vfkit mode, as on
+	// macOS.
+	Stream bool `json:"stream,omitempty"`
 }
 
 // searchPath is where hangar-krun is found beside PATH: what
-// dev/krun-build.sh builds, from the repository's root.
-var searchPath = []string{filepath.Join("out", "krun", "bin", "hangar-krun")}
+// dev/krun-build.sh builds, from the repository's root. Linux's is apart
+// from the Mac's, which a Linux VM sharing the checkout also sees.
+var searchPath = []string{filepath.Join("out", outDir(), "bin", "hangar-krun")}
+
+func outDir() string {
+	if runtime.GOOS == "linux" {
+		return "krun-linux"
+	}
+	return "krun"
+}
 
 // Features are what hangar-krun's libkrun was built with, and what it
 // renders with.

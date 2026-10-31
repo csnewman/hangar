@@ -1,0 +1,39 @@
+diff --git a/src/devices/src/virtio/gpu/virtio_gpu.rs b/src/devices/src/virtio/gpu/virtio_gpu.rs
+index fa09f59b..6c246a0b 100644
+--- a/src/devices/src/virtio/gpu/virtio_gpu.rs
++++ b/src/devices/src/virtio/gpu/virtio_gpu.rs
+@@ -49,6 +49,7 @@ use crate::virtio::{InterruptTransport, VirtioShmRegion};
+ 
+ // These constants match libkrun.h and virglrenderer.
+ const VIRGLRENDERER_USE_EGL: u32 = 1 << 0;
++const VIRGLRENDERER_USE_SURFACELESS: u32 = 1 << 3;
+ const VIRGLRENDERER_USE_GLES: u32 = 1 << 4;
+ const VIRGLRENDERER_VENUS: u32 = 1 << 6;
+ const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
+@@ -306,12 +307,14 @@ impl VirtioGpu {
+ 
+         let use_egl = virgl_flags & VIRGLRENDERER_USE_EGL != 0;
+         let use_gles = virgl_flags & VIRGLRENDERER_USE_GLES != 0;
++        let use_surfaceless = virgl_flags & VIRGLRENDERER_USE_SURFACELESS != 0;
+         let use_render_server = virgl_flags & VIRGLRENDERER_RENDER_SERVER != 0;
+ 
+         let mut builder = RutabagaBuilder::new(capset_mask, fence)
+             .set_default_component(rutabaga_gfx::RutabagaComponentType::VirglRenderer)
+             .set_use_egl(use_egl)
+             .set_use_gles(use_gles)
++            .set_use_surfaceless(use_surfaceless)
+             .set_rutabaga_paths(Some(rutabaga_paths))
+             .set_use_render_server(use_render_server);
+ 
+diff --git a/src/libkrun/src/api/device_builders.rs b/src/libkrun/src/api/device_builders.rs
+index 117cd7cc..25608c84 100644
+--- a/src/libkrun/src/api/device_builders.rs
++++ b/src/libkrun/src/api/device_builders.rs
+@@ -1791,6 +1791,7 @@ export_bitflags! {
+         pub struct VirglRendererFlags: u32 {
+             const USE_EGL            = 0x001;
+             const THREAD_SYNC        = 0x002;
++            const USE_SURFACELESS    = 0x008;
+             const VENUS              = 0x040;
+             const USE_ASYNC_FENCE_CB = 0x100;
+             const RENDER_SERVER      = 0x200;

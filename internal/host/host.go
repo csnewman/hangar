@@ -18,8 +18,8 @@ import (
 const (
 	// MonitorCloudHypervisor runs guests on Linux's KVM.
 	MonitorCloudHypervisor = api.MonitorCloudHypervisor
-	// MonitorKrun runs guests on macOS's Hypervisor.framework, through
-	// libkrun (hangar-krun).
+	// MonitorKrun runs guests through libkrun (hangar-krun): on macOS's
+	// Hypervisor.framework, and on Linux's KVM beside Cloud Hypervisor.
 	MonitorKrun = api.MonitorKrun
 )
 
@@ -31,9 +31,10 @@ type Caps struct {
 	Monitor    string // MonitorCloudHypervisor or MonitorKrun
 }
 
-// Detect inspects the host and returns its capabilities. A non-nil error means
-// Hangar cannot run VMs here.
-func Detect() (*Caps, error) {
+// Detect inspects the host and returns its capabilities under monitor, or
+// the host's own when monitor is empty: Cloud Hypervisor on Linux, libkrun
+// on macOS. A non-nil error means Hangar cannot run VMs here under it.
+func Detect(monitor string) (*Caps, error) {
 	c := &Caps{OS: runtime.GOOS}
 	switch runtime.GOARCH {
 	case "arm64":
@@ -46,23 +47,35 @@ func Detect() (*Caps, error) {
 
 	switch runtime.GOOS {
 	case "linux":
-		c.Monitor = MonitorCloudHypervisor
-		c.ConsoleTTY = "ttyAMA0"
-		if c.Arch == "x86_64" {
-			c.ConsoleTTY = "ttyS0"
+		switch monitor {
+		case "", MonitorCloudHypervisor:
+			c.Monitor = MonitorCloudHypervisor
+			c.ConsoleTTY = "ttyAMA0"
+			if c.Arch == "x86_64" {
+				c.ConsoleTTY = "ttyS0"
+			}
+		case MonitorKrun:
+			// libkrun's console is a virtio one.
+			c.Monitor = MonitorKrun
+			c.ConsoleTTY = "hvc0"
+		default:
+			return nil, fmt.Errorf("unknown monitor %q", monitor)
 		}
-		// Cloud Hypervisor has no emulation mode: without KVM there is no
+		// Neither monitor has an emulation mode: without KVM there is no
 		// way to run a guest at all, fast or slow. So this is a refusal
 		// rather than a warning about performance.
 		if _, err := os.Stat("/dev/kvm"); err != nil {
-			return nil, fmt.Errorf("no /dev/kvm: Cloud Hypervisor runs guests on KVM only, "+
-				"and there is no emulation fallback (%w)", err)
+			return nil, fmt.Errorf("no /dev/kvm: %s runs guests on KVM only, "+
+				"and there is no emulation fallback (%w)", c.Monitor, err)
 		}
 	case "darwin":
 		// libkrun runs guests on Apple silicon alone, its console a virtio
 		// one.
 		if c.Arch != "aarch64" {
 			return nil, fmt.Errorf("environments run on Apple silicon Macs, not %s", runtime.GOARCH)
+		}
+		if monitor != "" && monitor != MonitorKrun {
+			return nil, fmt.Errorf("a Mac runs environments under %s, not %s", MonitorKrun, monitor)
 		}
 		c.Monitor = MonitorKrun
 		c.ConsoleTTY = "hvc0"

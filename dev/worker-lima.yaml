@@ -11,6 +11,9 @@ node:
   labels:
     runtime: cloud-hypervisor
     kvm: "true"
+    # The libkrun worker in the same VM has it too (dev/worker-lima-krun.yaml):
+    # with runtime, a template picks between them.
+    host: lima
 
 storage:
   images: /var/lib/hangar/images

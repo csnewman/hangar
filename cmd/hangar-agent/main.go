@@ -79,6 +79,23 @@ func main() {
 	run(uint32(*port), *retry)
 }
 
+// unreachedAfter is how long the agent fails to reach the host before it
+// says so on the console.
+const unreachedAfter = 10 * time.Second
+
+// console writes a line to the kernel's log, which is the machine's
+// console, falling back to standard error.
+func console(line string) {
+	if f, err := os.OpenFile("/dev/kmsg", os.O_WRONLY, 0); err == nil {
+		_, err = f.WriteString(line + "\n")
+		f.Close()
+		if err == nil {
+			return
+		}
+	}
+	fmt.Fprintln(os.Stderr, line)
+}
+
 // run keeps the agent connected to the host for as long as the guest runs.
 //
 // The host end is not permanent. It goes away when the environment is
@@ -88,15 +105,28 @@ func main() {
 // redials rather than exiting. The monitor resets every connection the guest
 // had open when it restores a snapshot, which is what ends the old one.
 func run(port uint32, retry time.Duration) {
+	var failing time.Time
+	var said time.Time
 	for {
 		conn, err := vsock.Dial(vsock.CIDHost, port)
 		if err != nil {
 			// Expected while the host is not listening: during early boot,
 			// which is when the agent starts, and while an environment is
-			// being restored.
+			// being restored. Longer is worth saying, on the console, the
+			// one log the host has of a guest it cannot reach.
+			now := time.Now()
+			if failing.IsZero() {
+				failing = now
+			}
+			if now.Sub(failing) > unreachedAfter && now.Sub(said) > time.Minute {
+				said = now
+				console(fmt.Sprintf("hangar-agent: cannot reach the host for %s: %v",
+					now.Sub(failing).Round(time.Second), err))
+			}
 			time.Sleep(retry)
 			continue
 		}
+		failing = time.Time{}
 		if err := sendHello(conn); err != nil {
 			fmt.Fprintf(os.Stderr, "hangar-agent: %v\n", err)
 		} else {

@@ -40,6 +40,7 @@ import (
 	"github.com/csnewman/hangar/internal/desktop"
 	"github.com/csnewman/hangar/internal/guestport"
 	"github.com/csnewman/hangar/internal/host"
+	"github.com/csnewman/hangar/internal/krun"
 	"github.com/csnewman/hangar/internal/logs"
 	"github.com/csnewman/hangar/internal/nfs"
 	"github.com/csnewman/hangar/internal/procs"
@@ -231,16 +232,26 @@ func New(cfg Config) (*Runtime, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vm.gpu: %w", err)
 	}
-	caps, err := host.Detect()
+	caps, err := host.Detect(cfg.Monitor)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	r := &Runtime{cfg: cfg, monitor: caps.Monitor, store: st, ctx: ctx, cancel: cancel, envs: map[string]*machine{},
 		changed: make(chan struct{}, 1), gpuEnv: gpuEnv}
-	if caps.Monitor == host.MonitorKrun {
+	switch {
+	case caps.Monitor == host.MonitorKrun && caps.OS == "linux":
+		// libkrun on Linux renders with the virglrenderer, EGL and
+		// environment the GPU backend does, so the backend's probe says
+		// what it renders with.
+		if f, err := krun.ReadFeatures(ctx); err != nil {
+			cfg.Log.Warn("environments are offered no virtual GPU", "err", err)
+		} else if f.GPU {
+			r.gpu = probeGPU(ctx, cfg, gpuEnv)
+		}
+	case caps.Monitor == host.MonitorKrun:
 		r.gpu, r.gpuZink = krunGPU(ctx, cfg)
-	} else {
+	default:
 		r.gpu = probeGPU(ctx, cfg, gpuEnv)
 	}
 	go r.watchHugePages()

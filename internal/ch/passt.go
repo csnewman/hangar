@@ -31,7 +31,10 @@ type Passt struct {
 //
 // One passt serves one VM. vhost-user is a point-to-point conversation about
 // one guest's memory, so this is not a shared service.
-func StartPasst(ctx context.Context, socket string) (*Passt, error) {
+//
+// Without vhostUser passt speaks its stream protocol on the socket instead,
+// frames prefixed with their length, which is how libkrun reaches it.
+func StartPasst(ctx context.Context, socket string, vhostUser bool) (*Passt, error) {
 	bin, err := exec.LookPath("passt")
 	if err != nil {
 		return nil, fmt.Errorf("passt not found (apt install passt): %w", err)
@@ -48,7 +51,6 @@ func StartPasst(ctx context.Context, socket string) (*Passt, error) {
 	passtProbe.Do(func() { probePasst(bin, filepath.Dir(socket)) })
 
 	args := []string{
-		"--vhost-user",
 		"--socket-path", socket,
 		// Stay in the foreground so this process supervises it rather than
 		// losing track of a daemon that forked away.
@@ -60,6 +62,9 @@ func StartPasst(ctx context.Context, socket string) (*Passt, error) {
 		// passt of its own, so one monitor is all it ever serves.
 		"--one-off",
 		"--quiet",
+	}
+	if vhostUser {
+		args = append(args, "--vhost-user")
 	}
 	if passtAsRoot.Load() {
 		args = append(args, asRoot...)

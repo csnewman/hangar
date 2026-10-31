@@ -28,8 +28,38 @@ func diskUsage(fi fs.FileInfo) int64 {
 // guestRAM is the host memory a monitor's guest RAM takes up: the pages
 // held by the memory files the monitor maps it from, each file counted once
 // however many times it is open. A page the guest hands back is punched
-// out of its file, so this falls as it does.
+// out of its file, so this falls as it does. libkrun maps the guest's RAM
+// from no file: its guest memory is the anonymous and shared memory the
+// process holds.
 func guestRAM(pid int) int64 {
+	if n := memfdRAM(pid); n > 0 {
+		return n
+	}
+	return anonRSS(pid)
+}
+
+// anonRSS is the anonymous and shared memory a process holds, leaving out
+// the files it has mapped, its program and libraries.
+func anonRSS(pid int) int64 {
+	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
+	if err != nil {
+		return 0
+	}
+	var total int64
+	for _, line := range strings.Split(string(b), "\n") {
+		k, v, ok := strings.Cut(line, ":")
+		if !ok || (k != "RssAnon" && k != "RssShmem") {
+			continue
+		}
+		if f := strings.Fields(v); len(f) > 0 {
+			kib, _ := strconv.ParseInt(f[0], 10, 64)
+			total += kib << 10
+		}
+	}
+	return total
+}
+
+func memfdRAM(pid int) int64 {
 	dir := filepath.Join("/proc", strconv.Itoa(pid), "fd")
 	entries, err := os.ReadDir(dir)
 	if err != nil {

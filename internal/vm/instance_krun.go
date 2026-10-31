@@ -48,9 +48,9 @@ func guestSocket(base string, port uint32) string {
 	return fmt.Sprintf("%s-g%d", base, port)
 }
 
-// startKrun starts the machine under hangar-krun -- libkrun, on macOS -- and
-// listens for its agent. libkrun takes no snapshots, so a machine is always
-// booted from its disks.
+// startKrun starts the machine under hangar-krun -- libkrun -- and listens
+// for its agent. libkrun takes no snapshots, so a machine is always booted
+// from its disks.
 func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string, caps *host.Caps,
 	resuming bool, progress func(string)) error {
 	cfg := i.cfg
@@ -91,7 +91,16 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 	for _, p := range guestPorts {
 		kc.GuestPorts[p] = guestSocket(i.vsock, p)
 	}
-	if cfg.Net {
+	if cfg.Net && caps.OS == "linux" {
+		// passt, as under Cloud Hypervisor, speaking its stream protocol.
+		sock := filepath.Join(dir, "net")
+		p, err := ch.StartPasst(procCtx, sock, false)
+		if err != nil {
+			return fmt.Errorf("starting the network: %w", err)
+		}
+		i.backends = append(i.backends, p)
+		kc.Net = &krun.Net{Socket: sock, MAC: guestMAC, Stream: true}
+	} else if cfg.Net {
 		sock := filepath.Join(dir, "net")
 		n, err := startNetwork(procCtx, sock)
 		if err != nil {
@@ -105,7 +114,9 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 		if window == 0 {
 			window = 512
 		}
-		kc.GPU = &krun.GPU{WindowMiB: window}
+		kc.GPU = &krun.GPU{WindowMiB: window, Virgl: caps.OS == "linux"}
+	}
+	if cfg.GPU && caps.OS != "linux" {
 		// The GPU is Vulkan alone (Venus), with no OpenGL of its own
 		// (virgl): left to choose, Mesa would take virgl for it, and the
 		// desktop would draw nothing. So Mesa is told what draws OpenGL,
@@ -164,6 +175,9 @@ func (i *Instance) launchKrun(ctx context.Context, conf string) error {
 		return err
 	}
 	cmd := exec.CommandContext(ctx, bin, conf)
+	// The GPU renders as the worker's configuration has it (ch.GPUEnv).
+	cmd.Env = append(os.Environ(), i.cfg.GPUEnv...)
+	cmd.SysProcAttr = sysProcAttr()
 	cmd.Stdin = watch
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

@@ -34,17 +34,19 @@ const provisionedMark = "provisioned"
 // preflight refuses to start on a host that cannot run environments at all,
 // rather than failing each one as it is asked for.
 func preflight(cfg *Config) error {
-	caps, err := host.Detect()
+	caps, err := host.Detect(cfg.Monitor)
 	if err != nil {
 		return err
-	}
-	if cfg.Monitor != "" && cfg.Monitor != caps.Monitor {
-		return fmt.Errorf("this host runs environments under %s, not the %s the configuration names", caps.Monitor, cfg.Monitor)
 	}
 	switch caps.Monitor {
 	case host.MonitorKrun:
 		if _, err := krun.Find(); err != nil {
 			return err
+		}
+		if caps.OS == "linux" {
+			if _, err := exec.LookPath("passt"); err != nil {
+				return fmt.Errorf("passt not found (apt install passt): %w", err)
+			}
 		}
 		if _, err := exec.LookPath("mkfs.ext4"); err != nil {
 			if _, err := krun.Tool("mkfs.ext4"); err != nil {
@@ -164,6 +166,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 		ID:          m.id,
 		Name:        spec.Name,
 		Dir:         m.dir,
+		Monitor:     m.rt.monitor,
 		Kernel:      m.rt.cfg.Kernel,
 		Agent:       m.rt.cfg.Agent,
 		Base:        img.Base,

@@ -70,7 +70,7 @@ func main() {
 }
 
 func doctor() error {
-	caps, err := host.Detect()
+	caps, err := host.Detect("")
 	if err != nil {
 		fmt.Printf("host        %s/%s\n", runtime.GOOS, runtime.GOARCH)
 		return err
