@@ -10,6 +10,8 @@ node:
   name: mac
   labels:
     runtime: krun
+    # The Lima VM's libkrun worker is runtime=krun too.
+    host: mac
 
 storage:
   images: /Users/csnewman/Projects/hangar/out/mac-worker/images

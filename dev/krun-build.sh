@@ -72,6 +72,8 @@ if [ "${1:-}" = in-vm ]; then
     echo "built $bin: hangar-krun (libkrun main $(echo $krunMain | cut -c1-7))"
     exit
 fi
+# Not v1.19.7: it offers the guest VIRTIO_GPU_F_BLOB_ALIGNMENT, and Venus
+# then cannot create an instance (out of host memory) on this setup.
 version=v1.19.6
 virgl=0.10.4e-krunkit
 e2fsprogs=1.47.3
