@@ -91,6 +91,10 @@ echo "=== seqwrite"; fio_run --rw=write --bs=1M --iodepth=16
 echo "=== seqread"; fio_run --rw=read --bs=1M --iodepth=16
 echo "=== randread"; fio_run --rw=randread --bs=4k --iodepth=32 --time_based --runtime=15
 echo "=== randwrite"; fio_run --rw=randwrite --bs=4k --iodepth=32 --time_based --runtime=15
+# From every vCPU at once, which the guest submits on a queue per vCPU
+# where the disk has them.
+echo "=== randreadN"; fio_run --rw=randread --bs=4k --iodepth=32 --time_based --runtime=15 --numjobs=$(nproc) --group_reporting
+echo "=== randwriteN"; fio_run --rw=randwrite --bs=4k --iodepth=32 --time_based --runtime=15 --numjobs=$(nproc) --group_reporting
 echo "=== fsync"; fio --name=fsync --filename=$f.sync --size=64M --rw=write --bs=4k --fsync=1 --ioengine=sync --output-format=json
 rm -f $f $f.sync
 echo "=== find"; drop; { time find /usr -xdev >/dev/null; } 2>&1
@@ -176,6 +180,8 @@ rows = [
     ("disk sequential read", "MiB/s", "higher", lambda s: fio(s["seqread"][0], "read")["bw"] / 1024),
     ("disk random read 4k", "IOPS", "higher", lambda s: fio(s["randread"][0], "read")["iops"]),
     ("disk random write 4k", "IOPS", "higher", lambda s: fio(s["randwrite"][0], "write")["iops"]),
+    ("disk random read 4k, all vCPUs", "IOPS", "higher", lambda s: fio(s["randreadN"][0], "read")["iops"]),
+    ("disk random write 4k, all vCPUs", "IOPS", "higher", lambda s: fio(s["randwriteN"][0], "write")["iops"]),
     ("fsync'd 4k writes", "IOPS", "higher", lambda s: fio(s["fsync"][0], "write")["iops"]),
     ("find /usr, cold", "s", "lower", lambda s: float(s["find"][0].split()[-1])),
     ("copy /usr/share", "s", "lower", lambda s: float(s["copy"][0].split()[-1])),

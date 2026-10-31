@@ -7,12 +7,15 @@
 #                            (e2fsprogs) for environments' writable disks
 #   dev/krun-build.sh linux  the Lima VM's, in out/krun-linux/bin
 #
-# Linux's is libkrun's main branch (krunMain), 2.0 to be, whose API is
+# Linux's is libkrun 2.0 to be, from the hangar branch of Hangar's fork
+# (krunRepo, pinned at krunHangar): libkrun's main with Hangar's changes merged
+# in while upstream reviews them, each on a branch of its own in the fork.
+# They are huge pages for guest RAM, surfaceless EGL, disks served in parallel,
+# on a queue per vCPU and through io_uring for raw images, and virtio-pci on
+# arm64 and x86_64 with queue notifications by ioeventfd and MSI-X. Its API is
 # another (hangar-krun's krun2 tag); the Mac's stays on 1.x until main's GPU
 # builds against a virglrenderer that runs on macOS. On Linux it links the
-# VM's own virglrenderer (gpu/virglrenderer/build.sh), as hangar-gpu does,
-# and is patched (dev/krun/libkrun2-*.patch) to back guest RAM with huge
-# pages.
+# VM's own virglrenderer (gpu/virglrenderer/build.sh), as hangar-gpu does.
 #
 # The GPU needs the Vulkan SDK, found at $VULKAN_SDK or the newest under
 # ~/VulkanSDK, and libepoxy and meson (brew install libepoxy meson); without
@@ -32,7 +35,8 @@
 # its guest init (Hangar's agent is init); hangar-krun is signed with the
 # hypervisor entitlement, without which macOS refuses it a VM.
 set -eu
-krunMain=a1d8616765da03980f3be1bb8714bfdd3842f33c
+krunRepo=https://github.com/csnewman/libkrun.git
+krunHangar=cca5ee8b2a6404efb352ec6ce8085d0e4ff83695
 repo=$(cd "$(dirname "$0")/.." && pwd)
 if [ "${1:-}" = linux ]; then
     exec limactl shell hangar sh "$repo/dev/krun-build.sh" in-vm
@@ -48,28 +52,28 @@ if [ "${1:-}" = in-vm ]; then
     rustup target list --installed | grep -q "$arch-unknown-linux-musl" || rustup target add "$arch-unknown-linux-musl" >/dev/null
     if [ ! -d "$src/.git" ]; then
         mkdir -p "$(dirname "$src")"
-        GIT_CONFIG_GLOBAL=/dev/null git clone -q https://github.com/libkrun/libkrun.git "$src"
+        GIT_CONFIG_GLOBAL=/dev/null git clone -q "$krunRepo" "$src"
     fi
-    if [ "$(git -C "$src" rev-parse HEAD)" != "$krunMain" ]; then
+    if [ "$(git -C "$src" rev-parse HEAD)" != "$krunHangar" ]; then
+        # Files left from another tree go too: the build's own are ignored.
         git -C "$src" checkout -q -- .
-        GIT_CONFIG_GLOBAL=/dev/null git -C "$src" fetch -q origin
-        git -C "$src" checkout -q "$krunMain"
-    fi
-    # Applied afresh whenever the tree differs from them.
-    if [ "$(git -C "$src" diff)" != "$(cat "$repo"/dev/krun/libkrun2-*.patch)" ]; then
-        git -C "$src" checkout -q -- .
-        for p in "$repo"/dev/krun/libkrun2-*.patch; do git -C "$src" apply "$p"; done
+        git -C "$src" clean -fdq
+        GIT_CONFIG_GLOBAL=/dev/null git -C "$src" fetch -q "$krunRepo" hangar
+        git -C "$src" checkout -q "$krunHangar"
     fi
     # Built on the VM's own disk: the Mac's mount is slow for cargo.
     (cd "$src" && PKG_CONFIG_PATH=/usr/local/lib/$arch-linux-gnu/pkgconfig \
         make -s INIT_BLOB=0 BLK=1 NET=1 GPU=1 >/dev/null)
     mkdir -p "$bin"
-    cp -f "$src/target/release/libkrun.so.2.0.0" "$bin/libkrun.so.2"
+    # Renamed into place: a machine running keeps the library it mapped,
+    # which writing over it would crash.
+    cp -f "$src/target/release/libkrun.so.2.0.0" "$bin/libkrun.so.2.new"
+    mv -f "$bin/libkrun.so.2.new" "$bin/libkrun.so.2"
     ln -sf libkrun.so.2 "$bin/libkrun.so"
     cd "$repo"
     CGO_CFLAGS="-I$src/include" CGO_LDFLAGS="-L$bin -Wl,-rpath,\$ORIGIN" \
         /usr/local/go/bin/go build -tags krun,krun2 -o "$bin/hangar-krun" ./cmd/hangar-krun
-    echo "built $bin: hangar-krun (libkrun main $(echo $krunMain | cut -c1-7))"
+    echo "built $bin: hangar-krun (libkrun hangar $(echo $krunHangar | cut -c1-8))"
     exit
 fi
 # Not v1.19.7: it offers the guest VIRTIO_GPU_F_BLOB_ALIGNMENT, and Venus

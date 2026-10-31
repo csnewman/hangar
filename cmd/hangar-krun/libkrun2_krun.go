@@ -107,8 +107,12 @@ import (
 	"github.com/csnewman/hangar/internal/krun"
 )
 
+// maxDiskQueues bounds a disk's queues, as ch's does: past a few the guest
+// gains little, and each is a thread.
+const maxDiskQueues = 8
+
 // virglrenderer's flags (virglrenderer.h), which libkrun passes on;
-// surfaceless with dev/krun/libkrun2-surfaceless.patch.
+// surfaceless with Hangar's libkrun fork (dev/krun-build.sh).
 const (
 	virglUseEGL          = 1 << 0
 	virglThreadSync      = 1 << 1
@@ -161,8 +165,13 @@ func start(c krun.Config) error {
 		return failed("logging", e)
 	}
 
-	devices := C.krun_mmio_device_manager_new()
-	add := func(d unsafe.Pointer) { C.krun_mmio_device_manager_add(devices, C.KrunAttachDevice(d)) }
+	// Every device on virtio-pci, with an MSI-X vector for each queue:
+	// virtio-mmio's interrupt costs two exits to this process each time it
+	// fires, which nested virtualization makes dear. libkrun puts a device
+	// with shared memory, the GPU, on virtio-mmio itself. Devices take PCI
+	// slots in the order they are added, so the disks keep theirs.
+	devices := C.krun_pci_device_manager_new()
+	add := func(d unsafe.Pointer) { C.krun_pci_device_manager_add(devices, C.KrunAttachDevice(d)) }
 
 	// The guest's console, hvc0, to the console file. libkrun makes a port
 	// the console only with a terminal behind it, so it is given a
@@ -219,6 +228,15 @@ func start(c krun.Config) error {
 		// Relaxed flushes reach the host's buffers; on macOS they do not
 		// wait for the drive, as libkrun's own default there.
 		C.krun_block_device_set_sync_mode(blk, C.KRUN_SYNC_MODE_RELAXED)
+		// A queue per vCPU, each with a worker of its own, as Cloud
+		// Hypervisor gives a disk, and on Linux, where every disk here is a
+		// raw image, a ring per queue reading and writing straight between
+		// the image and guest memory. Where there is no ring, reads and
+		// writes are served by one pool of threads the queues share.
+		C.krun_block_device_set_num_queues(blk, C.uint16_t(min(c.CPUs, maxDiskQueues)))
+		C.krun_block_device_set_io_uring(blk, true)
+		C.krun_block_device_set_parallel_reads(blk, true)
+		C.krun_block_device_set_parallel_writes(blk, true)
 		add(unsafe.Pointer(blk))
 	}
 
@@ -306,6 +324,13 @@ func start(c krun.Config) error {
 	}
 	if C.krun_vmm_builder_ram_mib(&b, C.uint32_t(c.MemoryMiB), &e); e != nil {
 		return failed("sizing the machine", e)
+	}
+	// An x86 guest finds its devices, PCI and the GPU's virtio-mmio alike,
+	// in the ACPI tables; the kernel has no command-line virtio-mmio devices.
+	if runtime.GOARCH == "amd64" {
+		if C.krun_vmm_builder_acpi(&b, true, &e); e != nil {
+			return failed("describing the machine", e)
+		}
 	}
 	C.krun_vmm_builder_payload(&b, payload)
 	C.krun_vmm_builder_devices(&b, C.KrunDeviceManager(devices))
