@@ -383,7 +383,7 @@ impl GpuBackend {
     }
 
     /// Take a blob back out of the window.
-    fn unmap_blob(&mut self, rutabaga: &mut Rutabaga, resource_id: u32) -> Result<(), Error> {
+    fn unmap_blob(&mut self, resource_id: u32) -> Result<(), Error> {
         let frontend = self.frontend.as_ref().ok_or(Error::NoWindow)?;
         let Some(pos) = self.placed.iter().position(|(id, ..)| *id == resource_id) else {
             return Ok(());
@@ -398,9 +398,7 @@ impl GpuBackend {
             flags: 0,
         };
         frontend.shmem_unmap(&req).map_err(Error::Map)?;
-        rutabaga
-            .unmap(resource_id)
-            .map_err(|e| Error::Renderer(format!("{e}")))
+        Ok(())
     }
 
     fn iovec(mem: &GuestMemoryMmap, addr: u64, len: u32) -> Option<RutabagaIovec> {
@@ -1216,6 +1214,8 @@ impl GpuBackend {
     fn resource_of(type_: u32, payload: &[u8]) -> Option<u32> {
         const NAMES_A_RESOURCE: &[u32] = &[
             VIRTIO_GPU_CMD_RESOURCE_UNREF,
+            VIRTIO_GPU_CMD_CTX_ATTACH_RESOURCE,
+            VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE,
             VIRTIO_GPU_CMD_RESOURCE_ATTACH_BACKING,
             VIRTIO_GPU_CMD_RESOURCE_DETACH_BACKING,
             VIRTIO_GPU_CMD_TRANSFER_TO_HOST_2D,
@@ -1248,7 +1248,8 @@ impl GpuBackend {
         // Releasing a lost object is the guest agreeing it is gone. It
         // succeeds, and the id stops standing for a lost object: the guest
         // hands freed ids out again, and the next object to get one is new.
-        // Creating a context is likewise never refused.
+        // Detaching one from a context or taking it out of the window
+        // succeeds the same way, and creating a context is never refused.
         match hdr.type_ {
             VIRTIO_GPU_CMD_CTX_DESTROY if self.lost.contexts.remove(&hdr.ctx_id) => {
                 return Self::err(&hdr, VIRTIO_GPU_RESP_OK_NODATA);
@@ -1261,10 +1262,23 @@ impl GpuBackend {
                     }
                 }
             }
+            VIRTIO_GPU_CMD_CTX_DETACH_RESOURCE => {
+                if let Some(id) = Self::resource_of(hdr.type_, payload) {
+                    if self.lost.contexts.contains(&hdr.ctx_id) || self.lost.resources.contains(&id)
+                    {
+                        return Self::err(&hdr, VIRTIO_GPU_RESP_OK_NODATA);
+                    }
+                }
+            }
             // A blank texture standing in for a blob has no place in the
             // window to give or take back.
             VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB | VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB => {
                 if let Some(id) = Self::resource_of(hdr.type_, payload) {
+                    if hdr.type_ == VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB
+                        && self.lost.resources.contains(&id)
+                    {
+                        return Self::err(&hdr, VIRTIO_GPU_RESP_OK_NODATA);
+                    }
                     if self.lost.stand_ins.contains(&id) {
                         let code = if hdr.type_ == VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB {
                             VIRTIO_GPU_RESP_ERR_UNSPEC
@@ -1654,6 +1668,12 @@ impl GpuBackend {
                 else {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
+                // An empty submission only carries a fence, which is created
+                // apart. virglrenderer refuses an unaligned buffer, and an
+                // empty one's is.
+                if req.size == 0 {
+                    return Self::err(&hdr, VIRTIO_GPU_RESP_OK_NODATA);
+                }
                 let start = size_of::<CmdSubmit>();
                 let end = start + req.size as usize;
                 if payload.len() < end {
@@ -1667,10 +1687,17 @@ impl GpuBackend {
                         replay::describe(&payload[start..end])
                     );
                 }
-                let code = Self::ok_or_err(
-                    rutabaga.submit_command(hdr.ctx_id, &mut cmds, &[]),
-                    "submit_3d",
-                );
+                let code = match rutabaga.submit_command(hdr.ctx_id, &mut cmds, &[]) {
+                    Ok(()) => VIRTIO_GPU_RESP_OK_NODATA,
+                    Err(e) => {
+                        let init = self.rec.contexts.get(&hdr.ctx_id).map(|c| c.init);
+                        warn!(
+                            "virtio-gpu submit_3d to context {} (init {init:?}, {} bytes): {e}",
+                            hdr.ctx_id, req.size
+                        );
+                        VIRTIO_GPU_RESP_ERR_UNSPEC
+                    }
+                };
                 if code == VIRTIO_GPU_RESP_OK_NODATA {
                     if let Some(c) = self.rec.contexts.get_mut(&hdr.ctx_id) {
                         if let Some(v) = c.virgl.as_mut() {
@@ -1798,8 +1825,7 @@ impl GpuBackend {
                 ) else {
                     return Self::err(&hdr, VIRTIO_GPU_RESP_ERR_INVALID_PARAMETER);
                 };
-                let code =
-                    Self::ok_or_err(self.unmap_blob(rutabaga, req.resource_id), "unmap_blob");
+                let code = Self::ok_or_err(self.unmap_blob(req.resource_id), "unmap_blob");
                 if let Some(r) = self.rec.resources.get_mut(&req.resource_id) {
                     r.mapped_at = None;
                 }
