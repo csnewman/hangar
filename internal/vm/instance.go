@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -110,10 +109,16 @@ type Instance struct {
 	// of the unix sockets its vsock is carried on.
 	monitor string
 	vsock   string
-	// krun is how the worker asks hangar-krun to suspend the machine: the
-	// requests it writes, and the answers it reads.
-	krun      *os.File
-	krunReply *bufio.Reader
+	// krun is how the worker asks hangar-krun things, one request at a time
+	// (krunMu): the requests it writes, and the answers, a line each.
+	// krunStale counts answers still to come to requests given up on.
+	krun        *os.File
+	krunMu      sync.Mutex
+	krunAnswers chan string
+	krunStale   int
+	// krunBoot is the memory a machine under libkrun booted with, and
+	// krunRegion its virtio-mem region beyond it, zero if it has none.
+	krunBoot, krunRegion int
 
 	mu       sync.Mutex
 	err      error
@@ -161,7 +166,7 @@ func (i *Instance) supportPids() (gpu int, others []int) {
 // Memory is the machine's memory, as its monitor has it.
 func (i *Instance) Memory(ctx context.Context) (ch.Memory, error) {
 	if i.monitor == host.MonitorKrun {
-		return ch.Memory{}, errNoKrunResize
+		return i.krunMemory(ctx)
 	}
 	if i.api == nil {
 		return ch.Memory{}, errors.New("the monitor has no API socket")
@@ -183,6 +188,10 @@ func (i *Instance) ResizeMemory(ctx context.Context, mib int) (int, error) {
 	want := m.Fit(mib)
 	if want == m.Requested {
 		return want, nil
+	}
+	if i.monitor == host.MonitorKrun {
+		_, err := i.askKrun(ctx, fmt.Sprintf("memory %d", want-m.Boot))
+		return want, err
 	}
 	return want, i.api.ResizeMemory(ctx, want)
 }

@@ -69,13 +69,25 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 	i.backends = append(i.backends, closer(func() { os.RemoveAll(dir) }))
 	i.vsock = filepath.Join(dir, "v")
 
+	// A resumed machine is laid out as it was when suspended; one suspended
+	// with no layout recorded had all its memory from boot.
+	boot, region, plugged := cfg.MemoryMiB, 0, 0
+	switch rec := cfg.suspended(); {
+	case resuming && rec != nil && rec.KrunMemory != nil:
+		boot, region = rec.KrunMemory.Boot, rec.KrunMemory.Region
+	case !resuming && caps.OS == "linux":
+		boot, region, plugged = ch.Hotplug(cfg.MemoryMiB, cfg.MemoryMaxMiB)
+	}
+	i.krunBoot, i.krunRegion = boot, region
 	kc := krun.Config{
-		CPUs:      cfg.CPUs,
-		MemoryMiB: cfg.MemoryMiB,
-		Kernel:    cfg.Kernel,
-		Initrd:    initrd,
-		Console:   cfg.ConsoleFile,
-		HostPorts: map[uint32]string{agent.Port: vsock.HybridPath(i.vsock, agent.Port)},
+		CPUs:       cfg.CPUs,
+		MemoryMiB:  boot,
+		HotplugMiB: region,
+		PluggedMiB: plugged,
+		Kernel:     cfg.Kernel,
+		Initrd:     initrd,
+		Console:    cfg.ConsoleFile,
+		HostPorts:  map[uint32]string{agent.Port: vsock.HybridPath(i.vsock, agent.Port)},
 	}
 	for n, d := range cfg.Disks {
 		kc.Disks = append(kc.Disks, krun.Disk{ID: fmt.Sprintf("vd%c", 'a'+n), Path: d.Path, ReadOnly: d.ReadOnly,
@@ -220,7 +232,18 @@ func (i *Instance) launchKrun(ctx context.Context, conf string) error {
 	}
 	i.cmd = cmd
 	i.krun = held
-	i.krunReply = bufio.NewReader(replies)
+	i.krunAnswers = make(chan string)
+	go func() {
+		defer close(i.krunAnswers)
+		r := bufio.NewReader(replies)
+		for {
+			line, err := r.ReadString('\n')
+			if err != nil {
+				return
+			}
+			i.krunAnswers <- strings.TrimSpace(line)
+		}
+	}()
 	go func() {
 		err := cmd.Wait()
 		held.Close()
@@ -248,9 +271,56 @@ func (i *Instance) DialGuest(ctx context.Context, port uint32) (net.Conn, error)
 	return dialGuest(ctx, i.vsock, port)
 }
 
-// errNoKrunResize is what a resize under libkrun meets: its memory is fixed
-// at boot.
-var errNoKrunResize = errors.New("libkrun cannot change a running machine's memory; it takes the new size when it next starts")
+// askKrun sends hangar-krun a request and returns its answer, or the error
+// it answers with.
+func (i *Instance) askKrun(ctx context.Context, req string) (string, error) {
+	i.krunMu.Lock()
+	defer i.krunMu.Unlock()
+	if _, err := fmt.Fprintln(i.krun, req); err != nil {
+		return "", fmt.Errorf("asking hangar-krun: %w", err)
+	}
+	for {
+		select {
+		case got, ok := <-i.krunAnswers:
+			if !ok {
+				return "", errors.New("hangar-krun has stopped")
+			}
+			if i.krunStale > 0 {
+				i.krunStale--
+				continue
+			}
+			if msg, failed := strings.CutPrefix(got, "error: "); failed {
+				return "", errors.New(msg)
+			}
+			return got, nil
+		case <-i.exited:
+			return "", errors.New("the machine has stopped")
+		case <-ctx.Done():
+			i.krunStale++
+			return "", ctx.Err()
+		}
+	}
+}
+
+// krunMemory is the memory of a machine under libkrun: what it booted with
+// and, with a virtio-mem region, what hangar-krun says of the region.
+func (i *Instance) krunMemory(ctx context.Context) (ch.Memory, error) {
+	m := ch.Memory{Boot: i.krunBoot, Max: i.krunBoot + i.krunRegion, Requested: i.krunBoot, Actual: i.krunBoot}
+	if i.krunRegion == 0 {
+		return m, nil
+	}
+	got, err := i.askKrun(ctx, "memory")
+	if err != nil {
+		return ch.Memory{}, err
+	}
+	var have, requested int
+	if _, err := fmt.Sscanf(got, "%d %d", &have, &requested); err != nil {
+		return ch.Memory{}, fmt.Errorf("hangar-krun's memory: %q", got)
+	}
+	m.Actual += have
+	m.Requested += requested
+	return m, nil
+}
 
 // suspendKrun has hangar-krun write the machine to its snapshot, records it,
 // and stops hangar-krun. If it cannot, the guest carries on running.
@@ -262,35 +332,18 @@ func (i *Instance) suspendKrun(ctx context.Context) error {
 	snap := filepath.Join(c.Dir, snapshotDir)
 	partial := snap + ".new"
 	os.RemoveAll(partial)
-	if _, err := fmt.Fprintf(i.krun, "suspend %s\n", partial); err != nil {
-		return fmt.Errorf("asking hangar-krun to suspend: %w", err)
-	}
-	answer := make(chan string, 1)
-	go func() {
-		line, err := i.krunReply.ReadString('\n')
-		if err != nil {
-			line = "error: " + err.Error()
-		}
-		answer <- strings.TrimSpace(line)
-	}()
-	var got string
-	select {
-	case got = <-answer:
-	case <-i.exited:
-		return errors.New("the machine stopped while suspending")
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	if got != "ok" {
+	if _, err := i.askKrun(ctx, "suspend "+partial); err != nil {
 		os.RemoveAll(partial)
-		return errors.New(strings.TrimPrefix(got, "error: "))
+		return fmt.Errorf("suspending: %w", err)
 	}
 	err := func() error {
 		os.RemoveAll(snap)
 		if err := os.Rename(partial, snap); err != nil {
 			return err
 		}
-		b, err := json.Marshal(c.record())
+		rec := c.record()
+		rec.KrunMemory = &krunMemory{Boot: i.krunBoot, Region: i.krunRegion}
+		b, err := json.Marshal(rec)
 		if err != nil {
 			return err
 		}

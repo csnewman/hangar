@@ -36,6 +36,17 @@ type suspendRecord struct {
 	// which a machine attaching it another way does not have.
 	Image    string   `json:"image,omitempty"`
 	ReadOnly []string `json:"read_only,omitempty"`
+	// KrunMemory is how a machine under libkrun laid out its memory, which
+	// it is resumed with whatever its memory has been set to since: its
+	// snapshot holds RAM and a virtio-mem region of these sizes.
+	KrunMemory *krunMemory `json:"krun_memory,omitempty"`
+}
+
+// krunMemory is a machine's RAM from boot and its virtio-mem region beyond,
+// in MiB.
+type krunMemory struct {
+	Boot   int `json:"boot"`
+	Region int `json:"region"`
 }
 
 // equal is whether two records describe the same machine. A pulled copy has

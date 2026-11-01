@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/api"
-	"github.com/csnewman/hangar/internal/host"
 )
 
 // sampleEvery is how often a running machine is measured.
@@ -63,10 +62,7 @@ func (m *machine) sample(inst *Instance, cpus int) {
 			st.HostMemoryMiB = int(guestRAM(pid) >> 20)
 		}
 		mctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		if inst.monitor == host.MonitorKrun {
-			// libkrun's memory is what the machine booted with.
-			st.MachineMemoryMiB = inst.cfg.MemoryMiB
-		} else if mem, err := inst.Memory(mctx); err == nil {
+		if mem, err := inst.Memory(mctx); err == nil {
 			st.MachineMemoryMiB = mem.Actual
 			if mem.Resizable() {
 				st.MachineMemoryMinMiB, st.MachineMemoryMaxMiB = mem.Boot, mem.Max

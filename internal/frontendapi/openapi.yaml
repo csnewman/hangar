@@ -2637,8 +2637,8 @@ components:
       enum: [cloud-hypervisor, krun]
       description: >-
         What runs a worker's environments: cloud-hypervisor on Linux; krun,
-        libkrun on macOS or Linux, which cannot change a machine's memory
-        while it runs, nor on macOS suspend it. Absent until the worker says.
+        libkrun on macOS or Linux, which on macOS cannot change a machine's
+        memory while it runs nor suspend it. Absent until the worker says.
 
     Worker:
       type: object

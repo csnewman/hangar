@@ -39,7 +39,7 @@
 # hypervisor entitlement, without which macOS refuses it a VM.
 set -eu
 krunRepo=https://github.com/csnewman/libkrun.git
-krunHangar=7936906bf0e15bd1e30ebc2e66a7135baff78623
+krunHangar=a03cc2551d5a6ad37efe31c8746ed238ad6cb4a2
 repo=$(cd "$(dirname "$0")/.." && pwd)
 if [ "${1:-}" = linux ]; then
     exec limactl shell hangar sh "$repo/dev/krun-build.sh" in-vm "${2:-}"

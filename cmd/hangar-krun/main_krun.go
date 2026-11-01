@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/csnewman/hangar/internal/krun"
@@ -23,6 +24,15 @@ import (
 // it paused; start sets it once there is a machine, and only where libkrun
 // takes snapshots.
 var suspend = func(string) error { return errors.New("this libkrun takes no snapshots") }
+
+// plug asks the guest to have mib MiB of its virtio-mem region, and plugged
+// says how much it has and was asked to have; start sets them where the
+// machine has a region.
+var (
+	errNoHotplug = errors.New("the machine's memory cannot be resized while it runs")
+	plug         = func(int) error { return errNoHotplug }
+	plugged      = func() (have, requested int, err error) { return 0, 0, errNoHotplug }
+)
 
 func main() {
 	gpu := hasGPU()
@@ -62,6 +72,9 @@ func main() {
 //
 //	suspend DIR   snapshot the machine into DIR; "ok", or "error: ..." with
 //	              the machine running on
+//	memory        "HAVE REQUESTED": MiB of the virtio-mem region the guest
+//	              has plugged in, and was asked to have
+//	memory MIB    ask the guest to have MIB MiB of the region; "ok"
 //	exit          stop, once the worker has recorded the snapshot
 func control(requests *bufio.Scanner, reply *os.File) {
 	for requests.Scan() {
@@ -69,6 +82,25 @@ func control(requests *bufio.Scanner, reply *os.File) {
 		switch verb {
 		case "suspend":
 			if err := suspend(arg); err != nil {
+				fmt.Fprintf(reply, "error: %v\n", err)
+				continue
+			}
+			fmt.Fprintln(reply, "ok")
+		case "memory":
+			if arg == "" {
+				have, requested, err := plugged()
+				if err != nil {
+					fmt.Fprintf(reply, "error: %v\n", err)
+					continue
+				}
+				fmt.Fprintf(reply, "%d %d\n", have, requested)
+				continue
+			}
+			mib, err := strconv.Atoi(arg)
+			if err == nil {
+				err = plug(mib)
+			}
+			if err != nil {
 				fmt.Fprintf(reply, "error: %v\n", err)
 				continue
 			}

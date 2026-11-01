@@ -79,3 +79,22 @@ func TestBootMemory(t *testing.T) {
 		}
 	}
 }
+
+func TestHotplug(t *testing.T) {
+	cases := []struct {
+		mem, max               int
+		boot, region, inRegion int
+	}{
+		{4096, 0, 4096, 0, 0},
+		{4096, 4096, 4096, 0, 0},
+		{8192, 16384, 2048, 14336, 6144},
+		{3001, 8192, 1024, 7168, 1978},
+	}
+	for _, c := range cases {
+		boot, region, inRegion := ch.Hotplug(c.mem, c.max)
+		if boot != c.boot || region != c.region || inRegion != c.inRegion {
+			t.Errorf("Hotplug(%d, %d) = %d, %d, %d, want %d, %d, %d",
+				c.mem, c.max, boot, region, inRegion, c.boot, c.region, c.inRegion)
+		}
+	}
+}

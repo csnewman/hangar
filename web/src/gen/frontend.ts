@@ -1749,7 +1749,7 @@ export interface components {
             memory_mib: number;
         };
         /**
-         * @description What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS or Linux, which cannot change a machine's memory while it runs, nor on macOS suspend it. Absent until the worker says.
+         * @description What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS or Linux, which on macOS cannot change a machine's memory while it runs nor suspend it. Absent until the worker says.
          * @enum {string}
          */
         Monitor: "cloud-hypervisor" | "krun";

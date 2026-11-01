@@ -21,11 +21,16 @@ import (
 
 // Config is the machine hangar-krun runs.
 type Config struct {
-	CPUs      int    `json:"cpus"`
-	MemoryMiB int    `json:"memory_mib"`
-	Kernel    string `json:"kernel"`
-	Initrd    string `json:"initrd"`
-	Cmdline   string `json:"cmdline"`
+	CPUs int `json:"cpus"`
+	// MemoryMiB is the guest's RAM from boot. HotplugMiB, if set, is a
+	// virtio-mem region beyond it that memory is plugged into while the
+	// machine runs, PluggedMiB of it to begin with.
+	MemoryMiB  int    `json:"memory_mib"`
+	HotplugMiB int    `json:"hotplug_mib,omitempty"`
+	PluggedMiB int    `json:"plugged_mib,omitempty"`
+	Kernel     string `json:"kernel"`
+	Initrd     string `json:"initrd"`
+	Cmdline    string `json:"cmdline"`
 	// Console is the file the guest's console is written to.
 	Console string `json:"console"`
 	// Disks are attached in order, as /dev/vda, /dev/vdb and on.

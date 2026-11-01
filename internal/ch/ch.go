@@ -234,17 +234,30 @@ const (
 	virtioMemBlockMB = 2
 )
 
+// Hotplug lays out the memory of a machine of mb MiB that can be resized up
+// to maxMB while it runs: boot MiB there from boot, a virtio-mem region of
+// region MiB beyond it reaching maxMB, and inRegion MiB of the region
+// plugged in, which make up the rest of mb. A machine that cannot be resized has
+// all of mb from boot and no region.
+func Hotplug(mb, maxMB int) (boot, region, inRegion int) {
+	if maxMB <= mb {
+		return mb, 0, 0
+	}
+	boot = BootMemoryMB(mb)
+	region = (maxMB - boot + virtioMemAlignMB - 1) / virtioMemAlignMB * virtioMemAlignMB
+	return boot, region, plugged(mb-boot, region)
+}
+
 // memory is the --memory argument: mb MiB, all of it there from boot, or
 // with MemoryMaxMB, a boot size and the rest of mb plugged into a region
 // that reaches MemoryMaxMB.
 func (c *Config) memory() string {
-	if c.MemoryMaxMB <= c.MemoryMB {
-		return fmt.Sprintf("size=%dM,shared=on", c.MemoryMB)
+	boot, region, plugged := Hotplug(c.MemoryMB, c.MemoryMaxMB)
+	if region == 0 {
+		return fmt.Sprintf("size=%dM,shared=on", boot)
 	}
-	boot := BootMemoryMB(c.MemoryMB)
-	region := (c.MemoryMaxMB - boot + virtioMemAlignMB - 1) / virtioMemAlignMB * virtioMemAlignMB
 	arg := fmt.Sprintf("size=%dM,shared=on,hotplug_method=virtio-mem,hotplug_size=%dM", boot, region)
-	if plugged := plugged(c.MemoryMB-boot, region); plugged > 0 {
+	if plugged > 0 {
 		arg += fmt.Sprintf(",hotplugged_size=%dM", plugged)
 	}
 	return arg

@@ -303,6 +303,30 @@ func start(c krun.Config) error {
 		return failed("the balloon", e)
 	}
 	add(unsafe.Pointer(bal))
+	if c.HotplugMiB > 0 {
+		m := C.krun_mem_device_new(C.uint32_t(c.HotplugMiB), &e)
+		if e != nil {
+			return failed("the hotpluggable memory", e)
+		}
+		mem := C.krun_mem_device_handle(m)
+		// A restored machine's device has what it had when it was suspended.
+		if c.PluggedMiB > 0 && c.Restore == "" {
+			if C.krun_mem_device_handle_set_requested_mib(mem, C.uint32_t(c.PluggedMiB), &e); e != nil {
+				return failed("plugging memory in", e)
+			}
+		}
+		plug = func(mib int) error {
+			var e C.KrunError
+			if C.krun_mem_device_handle_set_requested_mib(mem, C.uint32_t(mib), &e); e != nil {
+				return failed("plugging memory in", e)
+			}
+			return nil
+		}
+		plugged = func() (int, int, error) {
+			return int(C.krun_mem_device_handle_plugged_mib(mem)), int(C.krun_mem_device_handle_requested_mib(mem)), nil
+		}
+		add(unsafe.Pointer(m))
+	}
 	rng := C.krun_rng_device_new(&e)
 	if e != nil {
 		return failed("the random number generator", e)
