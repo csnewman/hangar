@@ -484,11 +484,7 @@ impl GpuBackend {
 
     fn forget_resource(&mut self, id: u32) {
         self.blob_fds.remove(&id);
-        self.rec.resources.remove(&id);
-        for c in self.rec.contexts.values_mut() {
-            c.attached.remove(&id);
-        }
-        self.rec.scanouts.retain(|_, r| *r != id);
+        self.rec.forget(id);
     }
 
     /// Starts rebuilding a restored session once everything it needs is
@@ -1036,37 +1032,50 @@ impl GpuBackend {
             }
         }
 
-        let mut replayed = 0usize;
+        // The renderer finds a resource named in a command only among those
+        // attached to the context, but an object made from one outlives the
+        // attachment: a guest that samples a buffer it imported and then
+        // closed keeps the sampler view, holding the resource, after the
+        // kernel has detached it. Replay recreates that view by id, so every
+        // rebuilt resource is attached for the replay, and those that were
+        // not attached before are detached again afterwards.
+        let mut borrowed = Vec::new();
         for (&ctx_id, c) in &session.contexts {
-            let Some(v) = &c.virgl else { continue };
-            if lost.contexts.contains(&ctx_id) {
+            if c.virgl.is_none() || lost.contexts.contains(&ctx_id) {
                 continue;
             }
-            // The renderer finds a resource named in a command only among
-            // those attached to the context, but an object made from one
-            // outlives the attachment: a guest that samples a buffer it
-            // imported and then closed keeps the sampler view, holding the
-            // resource, after the kernel has detached it. Replay recreates
-            // that view by id, so every rebuilt resource is attached for
-            // the replay, and those that were not attached before are
-            // detached again afterwards.
-            let borrowed: Vec<u32> = built
-                .iter()
-                .copied()
-                .filter(|res| !c.attached.contains(res))
-                .filter(|&res| rutabaga.context_attach_resource(ctx_id, res).is_ok())
-                .collect();
-            let result = Self::submit_words(rutabaga, ctx_id, &v.replay(&built));
-            for res in borrowed {
-                let _ = rutabaga.context_detach_resource(ctx_id, res);
+            for &res in built.iter().filter(|res| !c.attached.contains(res)) {
+                if rutabaga.context_attach_resource(ctx_id, res).is_ok() {
+                    borrowed.push((ctx_id, res));
+                }
             }
-            match result {
+        }
+        let virgl: Vec<(u32, &replay::Virgl)> = session
+            .contexts
+            .iter()
+            .filter(|(id, _)| !lost.contexts.contains(id))
+            .filter_map(|(&id, c)| c.virgl.as_ref().map(|v| (id, v)))
+            .collect();
+        // A resource shared between contexts is typed by the one that made
+        // it, and unknown to the others until then, so every context's types
+        // go first.
+        for &(ctx_id, v) in &virgl {
+            if let Err(e) = Self::submit_words(rutabaga, ctx_id, &v.set_types(&built)) {
+                warn!("context {ctx_id}: typing its resources: {e}");
+            }
+        }
+        let mut replayed = 0usize;
+        for &(ctx_id, v) in &virgl {
+            match Self::submit_words(rutabaga, ctx_id, &v.replay(&built)) {
                 Ok(()) => replayed += 1,
                 Err(e) => {
                     warn!("context {ctx_id}: replaying its state: {e}");
                     lost.contexts.insert(ctx_id);
                 }
             }
+        }
+        for (ctx_id, res) in borrowed {
+            let _ = rutabaga.context_detach_resource(ctx_id, res);
         }
 
         for (&scanout, &res) in &session.scanouts {

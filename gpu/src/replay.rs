@@ -68,6 +68,22 @@ mod ccmd {
 }
 
 const OBJECT_SHADER: u32 = 4;
+const OBJECT_SAMPLER_VIEW: u32 = 6;
+const OBJECT_SURFACE: u32 = 8;
+const OBJECT_QUERY: u32 = 9;
+const OBJECT_STREAMOUT_TARGET: u32 = 10;
+const OBJECT_MSAA_SURFACE: u32 = 11;
+
+/// The resource an object is made from, for the kinds made from one: its
+/// field in the object's create command.
+fn object_resource(o: &Obj) -> Option<u32> {
+    let at = match o.kind {
+        OBJECT_SAMPLER_VIEW | OBJECT_SURFACE | OBJECT_STREAMOUT_TARGET | OBJECT_MSAA_SURFACE => 2,
+        OBJECT_QUERY => 4,
+        _ => return None,
+    };
+    o.cmds.first()?.get(at).copied()
+}
 /// A shader longer than one command continues in further creates for the same
 /// handle, marked by this bit in their offset field.
 const SHADER_OFFSET_CONT: u32 = 1 << 31;
@@ -85,6 +101,24 @@ pub struct Session {
     pub contexts: BTreeMap<u32, Context>,
     /// scanout -> resource shown on it.
     pub scanouts: BTreeMap<u32, u32>,
+}
+
+impl Session {
+    /// Forgets a resource the guest released. An object made from it lives
+    /// on in the renderer, but can't be made again without it, and the
+    /// guest may give its id to another resource.
+    pub fn forget(&mut self, id: u32) {
+        self.resources.remove(&id);
+        for c in self.contexts.values_mut() {
+            c.attached.remove(&id);
+            if let Some(v) = c.virgl.as_mut() {
+                for sub in v.subs.values_mut() {
+                    sub.objects.retain(|_, o| object_resource(o) != Some(id));
+                }
+            }
+        }
+        self.scanouts.retain(|_, r| *r != id);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
@@ -504,7 +538,20 @@ impl Virgl {
             .collect()
     }
 
-    /// Commands that rebuild this context's state in a fresh renderer.
+    /// The commands that gave this context's resources their types. A
+    /// resource another context made can be shared, and has no type, so is
+    /// unknown to every context, until its own context types it: these go to
+    /// the renderer before any context's `replay`.
+    pub fn set_types(&self, live: &BTreeSet<u32>) -> Vec<u32> {
+        self.set_types
+            .iter()
+            .filter(|(res, _)| live.contains(res))
+            .flat_map(|(_, cmd)| cmd.iter().copied())
+            .collect()
+    }
+
+    /// Commands that rebuild this context's state in a fresh renderer, after
+    /// every context's `set_types`.
     ///
     /// `live` is the set of resources that exist again. A binding that names
     /// something which does not -- an object destroyed while still bound, a
@@ -516,28 +563,28 @@ impl Virgl {
         let mut out = Vec::new();
         let res = |id: u32| if id == 0 || live.contains(&id) { id } else { 0 };
 
-        for (&res_id, cmd) in &self.set_types {
-            if live.contains(&res_id) {
-                out.extend_from_slice(cmd);
-            }
-        }
-
         for (&id, sub) in &self.subs {
             if id != 0 {
                 out.extend_from_slice(&[header(CREATE_SUB_CTX, 0, 1), id]);
             }
             out.extend_from_slice(&[header(SET_SUB_CTX, 0, 1), id]);
-            let obj = |h: u32| {
-                if h == 0 || sub.objects.contains_key(&h) {
-                    h
-                } else {
-                    0
-                }
-            };
+            // An object made from a resource that isn't rebuilt can't be made
+            // again. It is left out, and so are the bindings that name it.
+            let rebuilt: BTreeSet<u32> = sub
+                .objects
+                .iter()
+                .filter(|(_, o)| object_resource(o).is_none_or(|r| live.contains(&r)))
+                .map(|(&h, _)| h)
+                .collect();
+            let obj = |h: u32| if h == 0 || rebuilt.contains(&h) { h } else { 0 };
 
-            let mut objects: Vec<&Obj> = sub.objects.values().collect();
-            objects.sort_by_key(|o| o.seq);
-            for o in objects {
+            let mut objects: Vec<(&u32, &Obj)> = sub
+                .objects
+                .iter()
+                .filter(|(h, _)| rebuilt.contains(h))
+                .collect();
+            objects.sort_by_key(|(_, o)| o.seq);
+            for (_, o) in objects {
                 for c in &o.cmds {
                     out.extend_from_slice(c);
                 }
