@@ -27,14 +27,18 @@ git -C "$work/src" -c user.name=build -c user.email=build@localhost \
 # Venus runs in a render server of its own process, and the snapshot API the
 # patches add is an unstable one. GL errors are checked after every command,
 # which is what reports a failed context rather than leaving it drawing
-# nothing.
+# nothing. macOS has no OpenGL for vrend: Venus alone.
+if [ "$(uname)" = Darwin ]; then
+	renderer="-Dvrend=false"
+else
+	renderer="-Dplatforms=egl -Dcheck-gl-errors=true"
+fi
 meson setup "$work/build" "$work/src" \
 	--prefix "$prefix" \
 	--buildtype release \
-	-Dplatforms=egl \
+	$renderer \
 	-Dvenus=true \
 	-Drender-server-mode=process \
-	-Dcheck-gl-errors=true \
 	-Dunstable-apis=true \
 	-Dvideo=false \
 	-Dtests=false

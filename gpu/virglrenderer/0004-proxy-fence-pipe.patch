@@ -1,0 +1,126 @@
+From 479f763d2c16c25bfc224af2a45637044ecc4870 Mon Sep 17 00:00:00 2001
+From: Chandler Newman <chandler2newman@gmail.com>
+Date: Sun, 1 Nov 2026 20:17:15 +0000
+Subject: [PATCH 4/5] proxy: signal fences through a pipe where there is no
+ eventfd
+
+Without an eventfd, as on macOS, thread sync was dropped, and the proxy's
+fences only retired when the VMM polled the renderer. A VMM that waits for
+the async fence callback, as rutabaga does, never saw them signal.
+
+Where there is no eventfd the proxy makes a pipe instead: the server
+writes to one end as it did to the eventfd, and the sync thread polls the
+other. vrend still needs an eventfd for its own thread sync.
+---
+ src/proxy/proxy_context.c | 26 +++++++++++++++++++++++---
+ src/proxy/proxy_context.h |  4 ++++
+ src/virglrenderer.c       |  9 ++++++---
+ 3 files changed, 33 insertions(+), 6 deletions(-)
+
+diff --git a/src/proxy/proxy_context.c b/src/proxy/proxy_context.c
+index dd350efa..f4ef30f0 100644
+--- a/src/proxy/proxy_context.c
++++ b/src/proxy/proxy_context.c
+@@ -559,11 +559,16 @@ proxy_context_destroy(struct virgl_context *base)
+    if (ctx->sync_thread.fence_eventfd >= 0) {
+       if (ctx->sync_thread.created) {
+          ctx->sync_thread.stop = true;
+-         write_eventfd(ctx->sync_thread.fence_eventfd, 1);
++         write_eventfd(ctx->sync_thread.fence_notify_fd >= 0
++                          ? ctx->sync_thread.fence_notify_fd
++                          : ctx->sync_thread.fence_eventfd,
++                       1);
+          thrd_join(ctx->sync_thread.thread, NULL);
+       }
+ 
+       close(ctx->sync_thread.fence_eventfd);
++      if (ctx->sync_thread.fence_notify_fd >= 0)
++         close(ctx->sync_thread.fence_notify_fd);
+    }
+ 
+    if (ctx->shmem.ptr)
+@@ -622,7 +627,19 @@ proxy_context_init_fencing(struct proxy_context *ctx)
+    if (!(proxy_renderer.flags & VIRGL_RENDERER_THREAD_SYNC))
+       return true;
+ 
+-   ctx->sync_thread.fence_eventfd = create_eventfd(0);
++   if (has_eventfd()) {
++      ctx->sync_thread.fence_eventfd = create_eventfd(0);
++   } else {
++      int fds[2];
++      if (!pipe(fds)) {
++         for (int i = 0; i < 2; i++) {
++            fcntl(fds[i], F_SETFD, FD_CLOEXEC);
++            fcntl(fds[i], F_SETFL, O_NONBLOCK);
++         }
++         ctx->sync_thread.fence_eventfd = fds[0];
++         ctx->sync_thread.fence_notify_fd = fds[1];
++      }
++   }
+    if (ctx->sync_thread.fence_eventfd < 0) {
+       proxy_log("failed to create fence eventfd");
+       return false;
+@@ -711,7 +728,9 @@ proxy_context_init(struct proxy_context *ctx, uint32_t ctx_flags)
+       .flags = ctx_flags,
+       .shmem_size = ctx->shmem.size,
+    };
+-   const int req_fds[2] = { ctx->shmem.fd, ctx->sync_thread.fence_eventfd };
++   const int req_fds[2] = { ctx->shmem.fd, ctx->sync_thread.fence_notify_fd >= 0
++                                               ? ctx->sync_thread.fence_notify_fd
++                                               : ctx->sync_thread.fence_eventfd };
+    const int req_fd_count = req_fds[1] >= 0 ? 2 : 1;
+    if (!proxy_socket_send_request_with_fds(&ctx->socket, &req, sizeof(req), req_fds,
+                                            req_fd_count)) {
+@@ -751,6 +770,7 @@ proxy_context_create(uint32_t ctx_id,
+    mtx_init(&ctx->free_fences_mutex, mtx_plain);
+    list_inithead(&ctx->free_fences);
+    ctx->sync_thread.fence_eventfd = -1;
++   ctx->sync_thread.fence_notify_fd = -1;
+ 
+    if (!proxy_context_init(ctx, ctx_flags)) {
+       proxy_context_destroy(&ctx->base);
+diff --git a/src/proxy/proxy_context.h b/src/proxy/proxy_context.h
+index ce29ecae..34b1da7f 100644
+--- a/src/proxy/proxy_context.h
++++ b/src/proxy/proxy_context.h
+@@ -53,6 +53,10 @@ struct proxy_context {
+    struct {
+       /* when VIRGL_RENDERER_THREAD_SYNC is set */
+       int fence_eventfd;
++      /* Where there is no eventfd, fence_eventfd is the read end of a pipe and
++       * this its write end, which the server signals; -1 otherwise.
++       */
++      int fence_notify_fd;
+ 
+       /* when VIRGL_RENDERER_ASYNC_FENCE_CB is also set */
+       thrd_t thread;
+diff --git a/src/virglrenderer.c b/src/virglrenderer.c
+index 080da76e..31d8aed2 100644
+--- a/src/virglrenderer.c
++++ b/src/virglrenderer.c
+@@ -893,8 +893,11 @@ int virgl_renderer_init(void *cookie, int flags, struct virgl_renderer_callbacks
+ 
+    int ret;
+ 
+-   /* VIRGL_RENDERER_THREAD_SYNC is a hint and can be silently ignored */
+-   if (!has_eventfd() || getenv("VIRGL_DISABLE_MT"))
++   /* VIRGL_RENDERER_THREAD_SYNC is a hint and can be silently ignored.  The
++    * proxy signals fences through a pipe where there is no eventfd; vrend
++    * needs an eventfd.
++    */
++   if (getenv("VIRGL_DISABLE_MT"))
+       flags &= ~VIRGL_RENDERER_THREAD_SYNC;
+ 
+    if (state.client_initialized && (state.cookie != cookie ||
+@@ -1002,7 +1005,7 @@ int virgl_renderer_init(void *cookie, int flags, struct virgl_renderer_callbacks
+          goto fail;
+       }
+ 
+-      if (flags & VIRGL_RENDERER_THREAD_SYNC)
++      if ((flags & VIRGL_RENDERER_THREAD_SYNC) && has_eventfd())
+          renderer_flags |= VREND_USE_THREAD_SYNC;
+       if (flags & VIRGL_RENDERER_ASYNC_FENCE_CB)
+          renderer_flags |= VREND_USE_ASYNC_FENCE_CB;
+-- 
+2.54.0 (Apple Git-157)
+

@@ -1,0 +1,30 @@
+From 371e73f7970504111ec61badc6145edd8a4eb22c Mon Sep 17 00:00:00 2001
+From: matthewperiut <matthewperiut@gmail.com>
+Date: Wed, 23 Sep 2026 19:10:49 -0400
+Subject: [PATCH 3/5] venus: fix the vulkan_metal.h include on macOS
+
+The Vulkan headers moved to include/ in b47495fb, but vkr_metal_helpers.m
+still included "venus-protocol/vulkan_metal.h", so Venus no longer built
+on macOS.
+
+Part-of: <https://gitlab.freedesktop.org/virgl/virglrenderer/-/merge_requests/1689>
+---
+ src/venus/vkr_metal_helpers.m | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/venus/vkr_metal_helpers.m b/src/venus/vkr_metal_helpers.m
+index f0373ed1..d40ae70f 100644
+--- a/src/venus/vkr_metal_helpers.m
++++ b/src/venus/vkr_metal_helpers.m
+@@ -13,7 +13,7 @@
+ #include <unistd.h>
+ 
+ #include "util/anon_file.h"
+-#include "venus-protocol/vulkan_metal.h"
++#include "vulkan/vulkan_metal.h"
+ 
+ #include "vkr_metal_helpers.h"
+ 
+-- 
+2.54.0 (Apple Git-157)
+

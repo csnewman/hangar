@@ -1,0 +1,844 @@
+From 1b17bcee472bf4316718e23c8aa3ea878f429db7 Mon Sep 17 00:00:00 2001
+From: Chandler Newman <chandler2newman@gmail.com>
+Date: Sun, 1 Nov 2026 20:17:15 +0000
+Subject: [PATCH 5/5] venus: share memory on macOS with drivers that only
+ import host pointers
+
+KosmicKrisp imports neither Metal buffers nor fds, and has no
+VK_EXT_metal_objects to make a Metal buffer with, but it imports host
+pointers, into which it places buffers and linear images:
+
+- Host-visible memory is shared memory imported by its host pointer where
+  there is no Metal device to wrap it in a buffer.
+- Each memory type is offered again without host access, allocated by the
+  driver, and tiled images can only be bound to those copies.
+- A shared memory resource keeps its fd beside its mapping, so another
+  context can import it: by its Metal buffer or its host pointer.
+- The guest is offered VK_KHR_external_memory_fd and
+  VK_EXT_external_memory_dma_buf, which window systems share buffers
+  with: fd memory is shared memory, exportable and importable for buffers
+  and linear images, and memory exported as fds is shared memory whatever
+  its type. The driver is never asked about the fd handle types.
+
+With these, zink runs on Venus over KosmicKrisp and a compositor imports
+its clients' buffers.
+---
+ src/venus/vkr_buffer.c          |  14 ++++
+ src/venus/vkr_context.c         |  31 ++++++---
+ src/venus/vkr_context.h         |   5 +-
+ src/venus/vkr_device.c          |  13 +++-
+ src/venus/vkr_device_memory.c   | 106 +++++++++++++++++++++++------
+ src/venus/vkr_image.c           |  20 +++++-
+ src/venus/vkr_image.h           |   1 +
+ src/venus/vkr_metal_helpers.h   |  18 ++++-
+ src/venus/vkr_metal_helpers.m   |  69 +++++++++++++------
+ src/venus/vkr_physical_device.c | 114 ++++++++++++++++++++++++++------
+ src/venus/vkr_physical_device.h |  56 ++++++++++++++++
+ 11 files changed, 369 insertions(+), 78 deletions(-)
+
+diff --git a/src/venus/vkr_buffer.c b/src/venus/vkr_buffer.c
+index 0673a8f8..8f365d95 100644
+--- a/src/venus/vkr_buffer.c
++++ b/src/venus/vkr_buffer.c
+@@ -37,6 +37,10 @@ vkr_dispatch_vkCreateBuffer(struct vn_dispatch_context *dispatch,
+     * vkr_physical_device_init_memory_properties as well.
+     */
+ 
++   struct vkr_device *dev = vkr_device_from_handle(args->device);
++   vkr_physical_device_strip_fd_memory(dev->physical_device, args->pCreateInfo->pNext,
++                                       VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO);
++
+    vkr_buffer_create_and_add(dispatch->data, args);
+ }
+ 
+@@ -57,6 +61,8 @@ vkr_dispatch_vkGetBufferMemoryRequirements(
+ 
+    vn_replace_vkGetBufferMemoryRequirements_args_handle(args);
+    vk->GetBufferMemoryRequirements(args->device, args->buffer, args->pMemoryRequirements);
++   args->pMemoryRequirements->memoryTypeBits = vkr_physical_device_guest_memory_type_bits(
++      dev->physical_device, args->pMemoryRequirements->memoryTypeBits, false);
+ }
+ 
+ static void
+@@ -69,6 +75,10 @@ vkr_dispatch_vkGetBufferMemoryRequirements2(
+ 
+    vn_replace_vkGetBufferMemoryRequirements2_args_handle(args);
+    vk->GetBufferMemoryRequirements2(args->device, args->pInfo, args->pMemoryRequirements);
++   args->pMemoryRequirements->memoryRequirements.memoryTypeBits =
++      vkr_physical_device_guest_memory_type_bits(
++         dev->physical_device, args->pMemoryRequirements->memoryRequirements.memoryTypeBits,
++         false);
+ }
+ 
+ static void
+@@ -149,6 +159,10 @@ vkr_dispatch_vkGetDeviceBufferMemoryRequirements(
+    vn_replace_vkGetDeviceBufferMemoryRequirements_args_handle(args);
+    vk->GetDeviceBufferMemoryRequirements(args->device, args->pInfo,
+                                          args->pMemoryRequirements);
++   args->pMemoryRequirements->memoryRequirements.memoryTypeBits =
++      vkr_physical_device_guest_memory_type_bits(
++         dev->physical_device, args->pMemoryRequirements->memoryRequirements.memoryTypeBits,
++         false);
+ }
+ 
+ void
+diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
+index 138a8e4e..3b6a24fc 100644
+--- a/src/venus/vkr_context.c
++++ b/src/venus/vkr_context.c
+@@ -189,10 +189,14 @@ static inline void
+ vkr_context_free_resource(struct hash_entry *entry)
+ {
+    struct vkr_resource *res = entry->data;
+-   if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
+-      munmap(res->u.data, res->size);
+-   else if (res->u.fd >= 0)
++   if (res->fd_type == VIRGL_RESOURCE_FD_SHM) {
++      if (res->u.data)
++         munmap(res->u.data, res->size);
++      if (res->shm_fd >= 0)
++         close(res->shm_fd);
++   } else if (res->u.fd >= 0) {
+       close(res->u.fd);
++   }
+    free(res);
+ }
+ 
+@@ -238,12 +242,15 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
+    res->fd_type = fd_type;
+    res->size = blob_size;
+ 
+-   /* fd and mmap_ptr cannot be valid at the same time, but allowed to be -1 and NULL */
+-   assert(fd < 0 || !mmap_ptr);
+-   if (mmap_ptr)
++   /* shm keeps its mapping and its fd, either of which can be NULL or -1 */
++   res->shm_fd = -1;
++   if (fd_type == VIRGL_RESOURCE_FD_SHM) {
+       res->u.data = mmap_ptr;
+-   else
++      res->shm_fd = fd;
++   } else {
++      assert(!mmap_ptr);
+       res->u.fd = fd;
++   }
+ 
+    if (!vkr_context_add_resource(ctx, res)) {
+       free(res);
+@@ -265,9 +272,12 @@ vkr_context_import_resource_from_shm(struct vkr_context *ctx,
+    if (mmap_ptr == MAP_FAILED)
+       return false;
+ 
++   const int shm_fd = os_dupfd_cloexec(fd);
+    if (!vkr_context_import_resource_internal(ctx, res_id, blob_size,
+-                                             VIRGL_RESOURCE_FD_SHM, -1, mmap_ptr)) {
++                                             VIRGL_RESOURCE_FD_SHM, shm_fd, mmap_ptr)) {
+       munmap(mmap_ptr, blob_size);
++      if (shm_fd >= 0)
++         close(shm_fd);
+       return false;
+    }
+ 
+@@ -298,9 +308,12 @@ vkr_context_create_resource_from_shm(struct vkr_context *ctx,
+       return false;
+    }
+ 
++   const int shm_fd = os_dupfd_cloexec(fd);
+    if (!vkr_context_import_resource_internal(ctx, res_id, alloc_size,
+-                                             VIRGL_RESOURCE_FD_SHM, -1, mmap_ptr)) {
++                                             VIRGL_RESOURCE_FD_SHM, shm_fd, mmap_ptr)) {
+       munmap(mmap_ptr, alloc_size);
++      if (shm_fd >= 0)
++         close(shm_fd);
+       close(fd);
+       return false;
+    }
+diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
+index 4166b523..8d59f713 100644
+--- a/src/venus/vkr_context.h
++++ b/src/venus/vkr_context.h
+@@ -28,10 +28,13 @@ struct vkr_resource {
+    union {
+       /* valid when fd_type is dma_buf or opaque */
+       int fd;
+-      /* valid when fd_type is shm */
++      /* valid when fd_type is shm, NULL when it isn't mapped */
+       uint8_t *data;
+    } u;
+ 
++   /* when fd_type is shm, the shared memory, or -1 */
++   int shm_fd;
++
+    size_t size;
+ };
+ 
+diff --git a/src/venus/vkr_device.c b/src/venus/vkr_device.c
+index 603f45b8..6d5a3dfc 100644
+--- a/src/venus/vkr_device.c
++++ b/src/venus/vkr_device.c
+@@ -132,6 +132,7 @@ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+    const char **exts = NULL;
+    uint32_t ext_count = args->pCreateInfo->enabledExtensionCount;
+    ext_count += physical_dev->EXT_external_memory_metal;
++   ext_count += physical_dev->EXT_external_memory_metal && physical_dev->EXT_external_memory_host;
+    ext_count += physical_dev->EXT_metal_objects;
+    ext_count += physical_dev->KHR_portability_subset;
+    ext_count += physical_dev->KHR_external_memory_fd;
+@@ -145,11 +146,19 @@ vkr_dispatch_vkCreateDevice(struct vn_dispatch_context *dispatch,
+       }
+ 
+       ext_count = 0;
+-      for (uint32_t i = 0; i < args->pCreateInfo->enabledExtensionCount; i++)
+-         exts[ext_count++] = args->pCreateInfo->ppEnabledExtensionNames[i];
++      for (uint32_t i = 0; i < args->pCreateInfo->enabledExtensionCount; i++) {
++         const char *name = args->pCreateInfo->ppEnabledExtensionNames[i];
++         if (vkr_physical_device_emulates_fd_memory(physical_dev) &&
++             (!strcmp(name, VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME) ||
++              !strcmp(name, VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME)))
++            continue;
++         exts[ext_count++] = name;
++      }
+ 
+       if (physical_dev->EXT_external_memory_metal)
+          exts[ext_count++] = "VK_EXT_external_memory_metal";
++      if (physical_dev->EXT_external_memory_metal && physical_dev->EXT_external_memory_host)
++         exts[ext_count++] = "VK_EXT_external_memory_host";
+       if (physical_dev->EXT_metal_objects)
+          exts[ext_count++] = "VK_EXT_metal_objects";
+       if (physical_dev->KHR_portability_subset)
+diff --git a/src/venus/vkr_device_memory.c b/src/venus/vkr_device_memory.c
+index 1abc23a8..72bea28e 100644
+--- a/src/venus/vkr_device_memory.c
++++ b/src/venus/vkr_device_memory.c
+@@ -244,6 +244,35 @@ vkr_gbm_get_fd_info_from_allocation_info(UNUSED struct vkr_physical_device *phys
+ 
+ #endif /* ENABLE_GBM_ALLOCATION */
+ 
++/* Chain the import of shared memory a vkr_mtl_shm holds: as its MTLBuffer, or
++ * by its host pointer where there is no Metal device to make one with.
++ */
++static void
++vkr_mtl_shm_chain_import(const struct vkr_mtl_shm *mtl_shm,
++                         const void *next,
++                         VkImportMemoryMetalHandleInfoEXT *metal_import,
++                         VkImportMemoryHostPointerInfoEXT *host_import,
++                         const void **out)
++{
++   if (mtl_shm->mtl_buffer) {
++      *metal_import = (VkImportMemoryMetalHandleInfoEXT){
++         .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_METAL_HANDLE_INFO_EXT,
++         .pNext = next,
++         .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLBUFFER_BIT_EXT,
++         .handle = mtl_shm->mtl_buffer,
++      };
++      *out = metal_import;
++   } else {
++      *host_import = (VkImportMemoryHostPointerInfoEXT){
++         .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
++         .pNext = next,
++         .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
++         .pHostPointer = mtl_shm->shm_ptr,
++      };
++      *out = host_import;
++   }
++}
++
+ static void
+ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+                               struct vn_command_vkAllocateMemory *args)
+@@ -254,25 +283,57 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+    struct vkr_physical_device *physical_dev = dev->physical_device;
+ 
+    VkMemoryAllocateInfo *alloc_info = (VkMemoryAllocateInfo *)args->pAllocateInfo;
+-   const uint32_t mem_type_index = alloc_info->memoryTypeIndex;
+-   if (unlikely(mem_type_index >= physical_dev->memory_properties.memoryTypeCount)) {
++   if (unlikely(alloc_info->memoryTypeIndex >=
++                physical_dev->guest_memory_properties.memoryTypeCount)) {
+       args->ret = VK_ERROR_UNKNOWN;
+       return;
+    }
+ 
+-   /* translate VkImportMemoryResourceInfoMESA into VkImportMemoryFdInfoKHR in place */
++   /* A device-only copy of a memory type is the driver's own memory. */
++   const bool device_only = physical_dev->device_only_type_base &&
++                            alloc_info->memoryTypeIndex >= physical_dev->device_only_type_base;
++   if (device_only)
++      alloc_info->memoryTypeIndex -= physical_dev->device_only_type_base;
++   const uint32_t mem_type_index = alloc_info->memoryTypeIndex;
++
++   /* translate VkImportMemoryResourceInfoMESA into VkImportMemoryFdInfoKHR in place,
++    * or for shared memory into VkImportMemoryMetalHandleInfoEXT
++    */
+    VkImportMemoryFdInfoKHR local_import_info = { .fd = -1 };
+    VkImportMemoryResourceInfoMESA *res_info = NULL;
++   struct vkr_mtl_shm *mtl_shm = NULL;
++   VkImportMemoryMetalHandleInfoEXT local_metal_import;
++   VkImportMemoryHostPointerInfoEXT local_host_import;
++   const void *shm_import;
++   const bool shm_importable =
++      physical_dev->EXT_external_memory_metal &&
++      (dev->mtl_device || physical_dev->EXT_external_memory_host);
++   uint32_t valid_fd_types = 0;
+    void *prev_of_res_info = vkr_find_prev_struct(
+       alloc_info, VK_STRUCTURE_TYPE_IMPORT_MEMORY_RESOURCE_INFO_MESA);
+    if (prev_of_res_info) {
+       res_info = (VkImportMemoryResourceInfoMESA *)vkr_pnext_get_next(prev_of_res_info);
+-      if (!vkr_get_fd_info_from_resource_info(ctx, res_info, &local_import_info)) {
+-         args->ret = VK_ERROR_INVALID_EXTERNAL_HANDLE;
+-         return;
+-      }
++      struct vkr_resource *res = vkr_context_get_resource(ctx, res_info->resourceId);
++      if (res && res->fd_type == VIRGL_RESOURCE_FD_SHM && res->shm_fd >= 0 &&
++          shm_importable) {
++         mtl_shm = vkr_mtl_shm_import(dev->mtl_device, res->shm_fd);
++         if (!mtl_shm) {
++            args->ret = VK_ERROR_INVALID_EXTERNAL_HANDLE;
++            return;
++         }
++
++         vkr_mtl_shm_chain_import(mtl_shm, res_info->pNext, &local_metal_import,
++                                  &local_host_import, &shm_import);
++         vkr_pnext_set_next(prev_of_res_info, (void *)shm_import);
++         valid_fd_types = 1 << VIRGL_RESOURCE_FD_SHM;
++      } else {
++         if (!vkr_get_fd_info_from_resource_info(ctx, res_info, &local_import_info)) {
++            args->ret = VK_ERROR_INVALID_EXTERNAL_HANDLE;
++            return;
++         }
+ 
+-      vkr_pnext_set_next(prev_of_res_info, &local_import_info);
++         vkr_pnext_set_next(prev_of_res_info, &local_import_info);
++      }
+    }
+ 
+    VkExportMemoryAllocateInfo *export_info =
+@@ -293,15 +354,22 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+     * the mapping will be directly set up from the existing virgl resource.
+     */
+    const uint32_t property_flags =
+-      physical_dev->memory_properties.memoryTypes[mem_type_index].propertyFlags;
+-   uint32_t valid_fd_types = 0;
++      physical_dev->guest_memory_properties
++         .memoryTypes[mem_type_index +
++                      (device_only ? physical_dev->device_only_type_base : 0)]
++         .propertyFlags;
+    int udmabuf_fd = -1;
+    void *gbm_bo = NULL;
+-   struct vkr_mtl_shm *mtl_shm = NULL;
+    VkExportMemoryAllocateInfo local_export_info;
+-   VkImportMemoryMetalHandleInfoEXT local_metal_import;
+ 
+-   if ((property_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) && !res_info) {
++   /* Memory exported as fds that this renderer emulates must be shared memory,
++    * whether or not the guest can map it.
++    */
++   const bool exports_fd_memory = vkr_physical_device_emulates_fd_memory(physical_dev) &&
++                                  export_info &&
++                                  (export_info->handleTypes & VKR_FD_MEMORY_HANDLE_TYPES);
++   if (((property_flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) || exports_fd_memory) &&
++       !res_info) {
+       /* An implementation can support dma_buf import along with opaque fd export/import.
+        * If the client driver is using external memory and requesting dma_buf, without
+        * dma_buf fd export support, we must use gbm bo import path instead of forcing
+@@ -349,7 +417,7 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+                   align(alloc_info->allocationSize, getpagesize());
+             }
+          }
+-      } else if (physical_dev->EXT_external_memory_metal) {
++      } else if (shm_importable) {
+          /* Allocate shm and wrap as a MTLBuffer for import. */
+          mtl_shm = vkr_mtl_shm_alloc(dev->mtl_device, alloc_info->allocationSize);
+          if (!mtl_shm) {
+@@ -357,13 +425,9 @@ vkr_dispatch_vkAllocateMemory(struct vn_dispatch_context *dispatch,
+             return;
+          }
+ 
+-         local_metal_import = (VkImportMemoryMetalHandleInfoEXT){
+-            .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_METAL_HANDLE_INFO_EXT,
+-            .pNext = alloc_info->pNext,
+-            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_MTLBUFFER_BIT_EXT,
+-            .handle = mtl_shm->mtl_buffer,
+-         };
+-         alloc_info->pNext = &local_metal_import;
++         vkr_mtl_shm_chain_import(mtl_shm, alloc_info->pNext, &local_metal_import,
++                                  &local_host_import, &shm_import);
++         alloc_info->pNext = shm_import;
+          alloc_info->allocationSize = mtl_shm->shm_size;
+          valid_fd_types = 1 << VIRGL_RESOURCE_FD_SHM;
+       } else if (physical_dev->EXT_external_memory_dma_buf) {
+diff --git a/src/venus/vkr_image.c b/src/venus/vkr_image.c
+index 7a5148b8..8ea2a7ad 100644
+--- a/src/venus/vkr_image.c
++++ b/src/venus/vkr_image.c
+@@ -31,7 +31,13 @@ vkr_dispatch_vkCreateImage(struct vn_dispatch_context *dispatch,
+     * situation because the app does not consider the memory external.
+     */
+ 
+-   vkr_image_create_and_add(dispatch->data, args);
++   struct vkr_device *dev = vkr_device_from_handle(args->device);
++   vkr_physical_device_strip_fd_memory(dev->physical_device, args->pCreateInfo->pNext,
++                                       VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO);
++
++   struct vkr_image *image = vkr_image_create_and_add(dispatch->data, args);
++   if (image)
++      image->tiled = args->pCreateInfo->tiling == VK_IMAGE_TILING_OPTIMAL;
+ }
+ 
+ static void
+@@ -49,8 +55,11 @@ vkr_dispatch_vkGetImageMemoryRequirements(
+    struct vkr_device *dev = vkr_device_from_handle(args->device);
+    struct vn_device_proc_table *vk = &dev->proc_table;
+ 
++   const bool tiled = vkr_image_from_handle(args->image)->tiled;
+    vn_replace_vkGetImageMemoryRequirements_args_handle(args);
+    vk->GetImageMemoryRequirements(args->device, args->image, args->pMemoryRequirements);
++   args->pMemoryRequirements->memoryTypeBits = vkr_physical_device_guest_memory_type_bits(
++      dev->physical_device, args->pMemoryRequirements->memoryTypeBits, tiled);
+ }
+ 
+ static void
+@@ -61,8 +70,13 @@ vkr_dispatch_vkGetImageMemoryRequirements2(
+    struct vkr_device *dev = vkr_device_from_handle(args->device);
+    struct vn_device_proc_table *vk = &dev->proc_table;
+ 
++   const bool tiled = vkr_image_from_handle(args->pInfo->image)->tiled;
+    vn_replace_vkGetImageMemoryRequirements2_args_handle(args);
+    vk->GetImageMemoryRequirements2(args->device, args->pInfo, args->pMemoryRequirements);
++   args->pMemoryRequirements->memoryRequirements.memoryTypeBits =
++      vkr_physical_device_guest_memory_type_bits(
++         dev->physical_device, args->pMemoryRequirements->memoryRequirements.memoryTypeBits,
++         tiled);
+ }
+ 
+ static void
+@@ -229,6 +243,10 @@ vkr_dispatch_vkGetDeviceImageMemoryRequirements(
+    vn_replace_vkGetDeviceImageMemoryRequirements_args_handle(args);
+    vk->GetDeviceImageMemoryRequirements(args->device, args->pInfo,
+                                         args->pMemoryRequirements);
++   args->pMemoryRequirements->memoryRequirements.memoryTypeBits =
++      vkr_physical_device_guest_memory_type_bits(
++         dev->physical_device, args->pMemoryRequirements->memoryRequirements.memoryTypeBits,
++         args->pInfo->pCreateInfo->tiling == VK_IMAGE_TILING_OPTIMAL);
+ }
+ 
+ static void
+diff --git a/src/venus/vkr_image.h b/src/venus/vkr_image.h
+index 70a98002..42332c2c 100644
+--- a/src/venus/vkr_image.h
++++ b/src/venus/vkr_image.h
+@@ -10,6 +10,7 @@
+ 
+ struct vkr_image {
+    struct vkr_object base;
++   bool tiled;
+ };
+ VKR_DEFINE_OBJECT_CAST(image, VK_OBJECT_TYPE_IMAGE, VkImage)
+ 
+diff --git a/src/venus/vkr_metal_helpers.h b/src/venus/vkr_metal_helpers.h
+index 4f5208bd..0e4ff024 100644
+--- a/src/venus/vkr_metal_helpers.h
++++ b/src/venus/vkr_metal_helpers.h
+@@ -33,12 +33,20 @@ void *
+ vkr_metal_get_device(VkDevice vk_device, PFN_vkGetDeviceProcAddr GetDeviceProcAddr);
+ 
+ /* Allocate Metal shared memory: create anonymous SHM file, mmap it,
+- * wrap as MTLBuffer.  Returns a populated vkr_mtl_shm, or NULL on failure.
++ * wrap as MTLBuffer if there is a Metal device.  Returns a populated vkr_mtl_shm, or NULL on failure.
+  * Caller must free with vkr_mtl_shm_free().
+  */
+ struct vkr_mtl_shm *
+ vkr_mtl_shm_alloc(void *mtl_device, uint64_t size);
+ 
++/* Wrap the shared memory fd refers to as an MTLBuffer if there is a Metal
++ * device, mapping all of it
++ * through a duplicate of fd.  Returns a populated vkr_mtl_shm, or NULL on
++ * failure.  Caller must free with vkr_mtl_shm_free().
++ */
++struct vkr_mtl_shm *
++vkr_mtl_shm_import(void *mtl_device, int fd);
++
+ /* Release all resources held by a vkr_mtl_shm and free the struct. */
+ void
+ vkr_mtl_shm_free(struct vkr_mtl_shm *shm);
+@@ -61,6 +69,14 @@ vkr_mtl_shm_alloc(void *mtl_device, uint64_t size)
+    return NULL;
+ }
+ 
++static inline struct vkr_mtl_shm *
++vkr_mtl_shm_import(void *mtl_device, int fd)
++{
++   (void)mtl_device;
++   (void)fd;
++   return NULL;
++}
++
+ static inline void
+ vkr_mtl_shm_free(struct vkr_mtl_shm *shm)
+ {
+diff --git a/src/venus/vkr_metal_helpers.m b/src/venus/vkr_metal_helpers.m
+index d40ae70f..b79c89d1 100644
+--- a/src/venus/vkr_metal_helpers.m
++++ b/src/venus/vkr_metal_helpers.m
+@@ -10,9 +10,11 @@
+ #import <Metal/Metal.h>
+ #include <stdlib.h>
+ #include <sys/mman.h>
++#include <sys/stat.h>
+ #include <unistd.h>
+ 
+ #include "util/anon_file.h"
++#include "util/os_file.h"
+ #include "vulkan/vulkan_metal.h"
+ 
+ #include "vkr_metal_helpers.h"
+@@ -36,19 +38,9 @@
+    return (void *)device_info.mtlDevice;
+ }
+ 
+-struct vkr_mtl_shm *
+-vkr_mtl_shm_alloc(void *mtl_device, uint64_t size)
++static struct vkr_mtl_shm *
++vkr_mtl_shm_wrap(void *mtl_device, int shm_fd, size_t aligned_size)
+ {
+-   if (!mtl_device)
+-      return NULL;
+-
+-   const size_t page_size = getpagesize();
+-   const size_t aligned_size = (size + page_size - 1) & ~(page_size - 1);
+-
+-   int shm_fd = os_create_anonymous_file(aligned_size, "vkr-metal-mem");
+-   if (shm_fd < 0)
+-      return NULL;
+-
+    void *shm_ptr =
+       mmap(NULL, aligned_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+    if (shm_ptr == MAP_FAILED) {
+@@ -56,20 +48,25 @@
+       return NULL;
+    }
+ 
+-   id<MTLDevice> device = (id<MTLDevice>)mtl_device;
+-   id<MTLBuffer> buffer = [device newBufferWithBytesNoCopy:shm_ptr
+-                                                    length:aligned_size
+-                                                   options:MTLResourceStorageModeShared
+-                                               deallocator:nil];
+-   if (!buffer) {
+-      munmap(shm_ptr, aligned_size);
+-      close(shm_fd);
+-      return NULL;
++   /* Without a Metal device the memory is imported by its host pointer. */
++   id<MTLBuffer> buffer = nil;
++   if (mtl_device) {
++      id<MTLDevice> device = (id<MTLDevice>)mtl_device;
++      buffer = [device newBufferWithBytesNoCopy:shm_ptr
++                                         length:aligned_size
++                                        options:MTLResourceStorageModeShared
++                                    deallocator:nil];
++      if (!buffer) {
++         munmap(shm_ptr, aligned_size);
++         close(shm_fd);
++         return NULL;
++      }
+    }
+ 
+    struct vkr_mtl_shm *shm = calloc(1, sizeof(*shm));
+    if (!shm) {
+-      CFRelease(buffer);
++      if (buffer)
++         CFRelease(buffer);
+       munmap(shm_ptr, aligned_size);
+       close(shm_fd);
+       return NULL;
+@@ -82,6 +79,34 @@
+    return shm;
+ }
+ 
++struct vkr_mtl_shm *
++vkr_mtl_shm_alloc(void *mtl_device, uint64_t size)
++{
++   const size_t page_size = getpagesize();
++   const size_t aligned_size = (size + page_size - 1) & ~(page_size - 1);
++
++   int shm_fd = os_create_anonymous_file(aligned_size, "vkr-metal-mem");
++   if (shm_fd < 0)
++      return NULL;
++
++   return vkr_mtl_shm_wrap(mtl_device, shm_fd, aligned_size);
++}
++
++struct vkr_mtl_shm *
++vkr_mtl_shm_import(void *mtl_device, int fd)
++{
++   struct stat st;
++   if (fstat(fd, &st) || st.st_size <= 0 ||
++       st.st_size % getpagesize())
++      return NULL;
++
++   int shm_fd = os_dupfd_cloexec(fd);
++   if (shm_fd < 0)
++      return NULL;
++
++   return vkr_mtl_shm_wrap(mtl_device, shm_fd, st.st_size);
++}
++
+ void
+ vkr_mtl_shm_free(struct vkr_mtl_shm *shm)
+ {
+diff --git a/src/venus/vkr_physical_device.c b/src/venus/vkr_physical_device.c
+index bc387548..175069e4 100644
+--- a/src/venus/vkr_physical_device.c
++++ b/src/venus/vkr_physical_device.c
+@@ -172,6 +172,31 @@ vkr_physical_device_init_memory_properties(struct vkr_physical_device *physical_
+ 
+    VkPhysicalDevice handle = physical_dev->base.handle.physical_device;
+    vk->GetPhysicalDeviceMemoryProperties(handle, &physical_dev->memory_properties);
++   physical_dev->guest_memory_properties = physical_dev->memory_properties;
++
++   /* Host-visible memory is shared memory, and with neither a Metal device
++    * nor fds to import it with, it is imported by host pointer: a driver can
++    * only place buffers and linear images in that, which is the case for
++    * KosmicKrisp.  Each memory type is then offered again without host access,
++    * allocated by the driver, for tiled images.
++    */
++   const VkPhysicalDeviceMemoryProperties *host = &physical_dev->memory_properties;
++   if (physical_dev->EXT_external_memory_metal && !physical_dev->EXT_metal_objects &&
++       physical_dev->EXT_external_memory_host &&
++       host->memoryTypeCount * 2 <= VK_MAX_MEMORY_TYPES) {
++      const VkMemoryPropertyFlags host_access = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
++                                                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT |
++                                                VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
++      VkPhysicalDeviceMemoryProperties *guest = &physical_dev->guest_memory_properties;
++      for (uint32_t i = 0; i < host->memoryTypeCount; i++) {
++         guest->memoryTypes[host->memoryTypeCount + i] = host->memoryTypes[i];
++         guest->memoryTypes[host->memoryTypeCount + i].propertyFlags &= ~host_access;
++         if (host->memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
++            physical_dev->device_only_type_mask |= 1u << i;
++      }
++      guest->memoryTypeCount = host->memoryTypeCount * 2;
++      physical_dev->device_only_type_base = host->memoryTypeCount;
++   }
+ 
+    /* XXX When a VkMemoryType has VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, we
+     * assume any VkDeviceMemory with the memory type can be made external and
+@@ -284,6 +309,8 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+          physical_dev->KHR_external_fence_fd = true;
+       else if (!strcmp(props->extensionName, "VK_EXT_external_memory_metal"))
+          physical_dev->EXT_external_memory_metal = true;
++      else if (!strcmp(props->extensionName, "VK_EXT_external_memory_host"))
++         physical_dev->EXT_external_memory_host = true;
+       else if (!strcmp(props->extensionName, "VK_EXT_metal_objects"))
+          physical_dev->EXT_metal_objects = true;
+       else if (!strcmp(props->extensionName, "VK_KHR_portability_subset"))
+@@ -311,32 +338,31 @@ vkr_physical_device_init_extensions(struct vkr_physical_device *physical_dev)
+          physical_dev->KHR_external_fence_fd = false;
+    }
+ 
+-   /* On macOS, VK_KHR_external_memory_fd is emulated via Metal shared memory.
+-    * MoltenVK doesn't natively support it, but virglrenderer implements
+-    * fd-based memory export using Metal buffers backed by POSIX SHM.
+-    *
+-    * Inject it into the advertised list so the guest Venus driver accepts
+-    * the physical device (it's a hard requirement in vn_physical_device.c).
+-    * The guest never enables it in vkCreateDevice — Mesa's Venus driver
+-    * uses the advertised flag for capability detection only.
++   /* On macOS, fd memory is this renderer's own: Metal buffers or host
++    * pointers backed by POSIX SHM (vkr_physical_device_emulates_fd_memory).
++    * The guest is offered VK_KHR_external_memory_fd and
++    * VK_EXT_external_memory_dma_buf, which Venus requires and which window
++    * systems share buffers with, and vkr_dispatch_vkCreateDevice keeps them
++    * from the driver, which doesn't know them.
+     *
+     * Do NOT mark physical_dev->KHR_external_memory_fd = true here — that
+-    * flag tracks native MoltenVK support and gates the host-side
+-    * vkCreateDevice extension list (MoltenVK rejects it with -7).
+-    *
+-    * TODO: Remove after mesa!40478 has had sufficient distro uptake.
++    * flag tracks native support and gates the host-side vkCreateDevice
++    * extension list (MoltenVK rejects it with -7).
+     */
+-   if (physical_dev->EXT_external_memory_metal && !physical_dev->KHR_external_memory_fd) {
++   if (vkr_physical_device_emulates_fd_memory(physical_dev)) {
++      const VkExtensionProperties fd_exts[] = {
++         { VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME, VK_KHR_EXTERNAL_MEMORY_FD_SPEC_VERSION },
++         { VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
++           VK_EXT_EXTERNAL_MEMORY_DMA_BUF_SPEC_VERSION },
++      };
+       VkExtensionProperties *new_exts =
+-         realloc(exts, sizeof(*exts) * (advertised_count + 1));
++         realloc(exts, sizeof(*exts) * (advertised_count + ARRAY_SIZE(fd_exts)));
+       if (new_exts) {
+          exts = new_exts;
+-         strcpy(new_exts[advertised_count].extensionName,
+-                VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME);
+-         new_exts[advertised_count].specVersion = 0;
+-         advertised_count++;
++         for (uint32_t i = 0; i < ARRAY_SIZE(fd_exts); i++)
++            exts[advertised_count++] = fd_exts[i];
+       } else {
+-         vkr_log("failed to inject VK_KHR_external_memory_fd");
++         vkr_log("failed to inject fd memory extensions");
+       }
+    }
+ 
+@@ -619,7 +645,7 @@ vkr_dispatch_vkGetPhysicalDeviceMemoryProperties(
+ {
+    struct vkr_physical_device *physical_dev =
+       vkr_physical_device_from_handle(args->physicalDevice);
+-   *args->pMemoryProperties = physical_dev->memory_properties;
++   *args->pMemoryProperties = physical_dev->guest_memory_properties;
+ }
+ 
+ static void
+@@ -720,11 +746,12 @@ vkr_dispatch_vkGetPhysicalDeviceMemoryProperties2(
+       /* The client is querying only VkPhysicalDeviceMemoryProperties, which is
+        * invariant. Return the cached properties.
+        */
+-      args->pMemoryProperties->memoryProperties = physical_dev->memory_properties;
++      args->pMemoryProperties->memoryProperties = physical_dev->guest_memory_properties;
+    } else {
+       vn_replace_vkGetPhysicalDeviceMemoryProperties2_args_handle(args);
+       vk->GetPhysicalDeviceMemoryProperties2(args->physicalDevice,
+                                              args->pMemoryProperties);
++      args->pMemoryProperties->memoryProperties = physical_dev->guest_memory_properties;
+    }
+ }
+ 
+@@ -751,9 +778,43 @@ vkr_dispatch_vkGetPhysicalDeviceImageFormatProperties2(
+       vkr_physical_device_from_handle(args->physicalDevice);
+    struct vn_physical_device_proc_table *vk = &physical_dev->proc_table;
+ 
++   /* Fd memory is shared memory, which holds only linear images: the driver is
++    * asked about the image without it, and the answer is this renderer's.
++    */
++   const VkPhysicalDeviceExternalImageFormatInfo *external_info = vkr_find_struct(
++      args->pImageFormatInfo->pNext, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO);
++   const bool fd_memory = vkr_physical_device_emulates_fd_memory(physical_dev) &&
++                          external_info &&
++                          (external_info->handleType & VKR_FD_MEMORY_HANDLE_TYPES);
++   if (fd_memory && args->pImageFormatInfo->tiling == VK_IMAGE_TILING_OPTIMAL) {
++      args->ret = VK_ERROR_FORMAT_NOT_SUPPORTED;
++      return;
++   }
++
++   void *prev_of_external_info = NULL;
++   if (fd_memory) {
++      prev_of_external_info = vkr_find_prev_struct(
++         args->pImageFormatInfo, VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_IMAGE_FORMAT_INFO);
++      vkr_pnext_set_next(prev_of_external_info, external_info->pNext);
++   }
++
+    vn_replace_vkGetPhysicalDeviceImageFormatProperties2_args_handle(args);
+    args->ret = vk->GetPhysicalDeviceImageFormatProperties2(
+       args->physicalDevice, args->pImageFormatInfo, args->pImageFormatProperties);
++
++   if (fd_memory) {
++      vkr_pnext_set_next(prev_of_external_info, external_info);
++      VkExternalImageFormatProperties *external_props = vkr_find_struct(
++         args->pImageFormatProperties->pNext, VK_STRUCTURE_TYPE_EXTERNAL_IMAGE_FORMAT_PROPERTIES);
++      if (external_props && args->ret == VK_SUCCESS) {
++         external_props->externalMemoryProperties = (VkExternalMemoryProperties){
++            .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT |
++                                      VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT,
++            .exportFromImportedHandleTypes = VKR_FD_MEMORY_HANDLE_TYPES,
++            .compatibleHandleTypes = VKR_FD_MEMORY_HANDLE_TYPES,
++         };
++      }
++   }
+ }
+ 
+ static void
+@@ -779,6 +840,17 @@ vkr_dispatch_vkGetPhysicalDeviceExternalBufferProperties(
+       vkr_physical_device_from_handle(args->physicalDevice);
+    struct vn_physical_device_proc_table *vk = &physical_dev->proc_table;
+ 
++   if (vkr_physical_device_emulates_fd_memory(physical_dev) &&
++       (args->pExternalBufferInfo->handleType & VKR_FD_MEMORY_HANDLE_TYPES)) {
++      args->pExternalBufferProperties->externalMemoryProperties = (VkExternalMemoryProperties){
++         .externalMemoryFeatures = VK_EXTERNAL_MEMORY_FEATURE_EXPORTABLE_BIT |
++                                   VK_EXTERNAL_MEMORY_FEATURE_IMPORTABLE_BIT,
++         .exportFromImportedHandleTypes = VKR_FD_MEMORY_HANDLE_TYPES,
++         .compatibleHandleTypes = VKR_FD_MEMORY_HANDLE_TYPES,
++      };
++      return;
++   }
++
+    vn_replace_vkGetPhysicalDeviceExternalBufferProperties_args_handle(args);
+    vk->GetPhysicalDeviceExternalBufferProperties(
+       args->physicalDevice, args->pExternalBufferInfo, args->pExternalBufferProperties);
+diff --git a/src/venus/vkr_physical_device.h b/src/venus/vkr_physical_device.h
+index 371899b3..eba2ceb0 100644
+--- a/src/venus/vkr_physical_device.h
++++ b/src/venus/vkr_physical_device.h
+@@ -29,9 +29,18 @@ struct vkr_physical_device {
+    bool KHR_external_semaphore_fd;
+ 
+    bool EXT_external_memory_metal;
++   bool EXT_external_memory_host;
+    bool EXT_metal_objects;
+ 
+    VkPhysicalDeviceMemoryProperties memory_properties;
++   /* What the guest is offered: memory_properties, then, past
++    * device_only_type_base, each memory type again without host access, for
++    * the host-visible types in device_only_type_mask.  See
++    * vkr_physical_device_init_memory_properties.
++    */
++   VkPhysicalDeviceMemoryProperties guest_memory_properties;
++   uint32_t device_only_type_base;
++   uint32_t device_only_type_mask;
+    VkPhysicalDeviceIDProperties id_properties;
+    bool is_dma_buf_fd_export_supported;
+    bool is_opaque_fd_export_supported;
+@@ -52,4 +61,51 @@ void
+ vkr_physical_device_destroy(struct vkr_context *ctx,
+                             struct vkr_physical_device *physical_dev);
+ 
++/* The guest's memory type bits for host memory type bits.  A tiled image can
++ * only be bound to memory without host access when host-visible memory is
++ * imported by host pointer.
++ */
++static inline uint32_t
++vkr_physical_device_guest_memory_type_bits(const struct vkr_physical_device *physical_dev,
++                                           uint32_t bits,
++                                           bool tiled)
++{
++   if (!physical_dev->device_only_type_base)
++      return bits;
++
++   const uint32_t mask = physical_dev->device_only_type_mask;
++   const uint32_t device_only = (bits & mask) << physical_dev->device_only_type_base;
++   return (tiled ? bits & ~mask : bits) | device_only;
++}
++
++#define VKR_FD_MEMORY_HANDLE_TYPES                                                       \
++   (VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT |                                      \
++    VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)
++
++/* Whether the guest's fd memory handle types are this renderer's own shared
++ * memory rather than the driver's: a Metal driver knows nothing of fds.
++ */
++static inline bool
++vkr_physical_device_emulates_fd_memory(const struct vkr_physical_device *physical_dev)
++{
++   return physical_dev->EXT_external_memory_metal && !physical_dev->KHR_external_memory_fd;
++}
++
++/* Drop the fd memory handle types the driver doesn't know from an
++ * object's external memory create info.
++ */
++static inline void
++vkr_physical_device_strip_fd_memory(const struct vkr_physical_device *physical_dev,
++                                    const void *create_info,
++                                    VkStructureType external_info_type)
++{
++   if (!vkr_physical_device_emulates_fd_memory(physical_dev))
++      return;
++
++   VkExternalMemoryImageCreateInfo *external_info =
++      (VkExternalMemoryImageCreateInfo *)vkr_find_struct(create_info, external_info_type);
++   if (external_info)
++      external_info->handleTypes &= ~VKR_FD_MEMORY_HANDLE_TYPES;
++}
++
+ #endif /* VKR_PHYSICAL_DEVICE_H */
+-- 
+2.54.0 (Apple Git-157)
+

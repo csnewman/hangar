@@ -5,41 +5,44 @@
 #
 #   dev/krun-build.sh        the Mac's, in out/krun/bin, with mkfs.ext4
 #                            (e2fsprogs) for environments' writable disks
+#   dev/krun-build.sh mac BRANCH
+#                            the same, from a branch of the fork's clone in
+#                            libkrun/ beside this checkout
 #   dev/krun-build.sh linux  the Lima VM's, in out/krun-linux/bin
 #   dev/krun-build.sh linux BRANCH
 #                            the same, from a branch of the fork's clone in
 #                            libkrun/ beside this checkout
 #
-# Linux's is libkrun 2.0 to be, from the hangar branch of Hangar's fork
+# Both are libkrun 2.0 to be, from the hangar branch of Hangar's fork
 # (krunRepo, pinned at krunHangar): libkrun's main with Hangar's changes merged
 # in while upstream reviews them, each on a branch of its own in the fork.
 # They are huge pages for guest RAM, surfaceless EGL, disks served in parallel,
-# on a queue per vCPU and through io_uring for raw images, and virtio-pci on
-# arm64 and x86_64 with queue notifications by ioeventfd and MSI-X. Its API is
-# another (hangar-krun's krun2 tag); the Mac's stays on 1.x until main's GPU
-# builds against a virglrenderer that runs on macOS. On Linux it links the
-# VM's own virglrenderer (gpu/virglrenderer/build.sh), as hangar-gpu does.
+# on a queue per vCPU and through io_uring for raw images, virtio-pci on arm64
+# and x86_64 with queue notifications by ioeventfd and MSI-X, snapshots,
+# virtio-mem, and on the Mac shared memory blobs mapped into the guest. Both
+# link Hangar's virglrenderer (gpu/virglrenderer/build.sh), as hangar-gpu
+# does: the Lima VM's own, and on the Mac one built here, Venus alone.
 #
-# The GPU needs the Vulkan SDK, found at $VULKAN_SDK or the newest under
-# ~/VulkanSDK, and libepoxy and meson (brew install libepoxy meson); without
-# the SDK libkrun is built without a GPU. virglrenderer reaches Vulkan
-# through the SDK's loader, and the drivers it can use -- KosmicKrisp and
-# MoltenVK -- are bundled with a manifest each in bin/vulkan, which
-# hangar-krun picks between. The libraries are copied beside hangar-krun and
-# loaded from there.
+# The Mac's GPU needs the Vulkan SDK, found at $VULKAN_SDK or the newest under
+# ~/VulkanSDK, and meson (brew install meson); without the SDK libkrun is
+# built without a GPU. virglrenderer's render server reaches Vulkan through
+# the SDK's loader, and the drivers it can use -- KosmicKrisp and MoltenVK --
+# are bundled with a manifest each in bin/vulkan, which hangar-krun picks
+# between. The libraries and the render server are copied beside hangar-krun
+# and found there.
 #
-# libkrun, virglrenderer and KosmicKrisp are patched (dev/krun/*.patch) so
-# a guest can share GPU buffers between its programs, which OpenGL on Vulkan
-# (zink) needs: virglrenderer offers the guest dma-buf memory, made of Metal
-# heaps on the host, KosmicKrisp images with a linear DRM format modifier,
-# and libkrun maps such shared memory into the guest. KosmicKrisp is built from Mesa when its compilers are installed
-# (brew install llvm libclc spirv-llvm-translator), and the SDK's own copy,
-# without modifiers, is bundled otherwise. libkrun is built without
-# its guest init (Hangar's agent is init); hangar-krun is signed with the
-# hypervisor entitlement, without which macOS refuses it a VM.
+# KosmicKrisp is patched (dev/krun/kosmickrisp-drm-modifier.patch) so a
+# guest can share GPU buffers between its programs, which OpenGL on Vulkan
+# (zink) needs: images with a linear DRM format modifier, which virglrenderer
+# places in the shared memory it offers the guest as dma-bufs. It is built
+# from Mesa when its compilers are installed (brew install llvm libclc
+# spirv-llvm-translator), and the SDK's own copy, without modifiers, is
+# bundled otherwise. libkrun is built without its guest init (Hangar's agent
+# is init); hangar-krun is signed with the hypervisor entitlement, without
+# which macOS refuses it a VM.
 set -eu
 krunRepo=https://github.com/csnewman/libkrun.git
-krunHangar=54beda781da35938cf5bb6d0177ce6637db2429b
+krunHangar=75713399ac6c965ccc6951a9bf3f2663cfcbe56b
 repo=$(cd "$(dirname "$0")/.." && pwd)
 if [ "${1:-}" = linux ]; then
     exec limactl shell hangar sh "$repo/dev/krun-build.sh" in-vm "${2:-}"
@@ -81,41 +84,34 @@ if [ "${1:-}" = in-vm ]; then
     ln -sf libkrun.so.2 "$bin/libkrun.so"
     cd "$repo"
     CGO_CFLAGS="-I$src/include" CGO_LDFLAGS="-L$bin -Wl,-rpath,\$ORIGIN" \
-        /usr/local/go/bin/go build -tags krun,krun2 -o "$bin/hangar-krun" ./cmd/hangar-krun
+        /usr/local/go/bin/go build -tags krun -o "$bin/hangar-krun" ./cmd/hangar-krun
     echo "built $bin: hangar-krun (libkrun $branch $(echo $want | cut -c1-8))"
     exit
 fi
-# Not v1.19.7: it offers the guest VIRTIO_GPU_F_BLOB_ALIGNMENT, and Venus
-# then cannot create an instance (out of host memory) on this setup.
-version=v1.19.6
-virgl=0.10.4e-krunkit
 e2fsprogs=1.47.3
 mesa=c823a83e8f373a5c36c2b9ed1d7dc98a4f3360ee
 out=$repo/out/krun
 bin=$out/bin
-src=$out/libkrun
+src=$out/libkrun-hangar
 mkdir -p "$bin"
 
+# Mesa's generators and virglrenderer's need mako, and Mesa's PyYAML.
+venv() {
+    [ -x "$out/venv/bin/python3" ] || python3 -m venv "$out/venv"
+    "$out/venv/bin/pip" -q install mako pyyaml packaging
+}
+
 sdk=${VULKAN_SDK:-$(ls -d "$HOME"/VulkanSDK/*/macOS 2>/dev/null | sort -V | tail -1)}
-features=blk,net
+features=ffi,blk,net
 if [ -n "$sdk" ] && [ -f "$sdk/lib/libvulkan.1.dylib" ]; then
-    features=blk,net,gpu
-    vdir=$out/virglrenderer-$virgl
-    vpatch=$repo/dev/krun/virglrenderer-metal-fd.patch
-    # Built again whenever the SDK it was built against, or the patch, changes.
-    stamp="$sdk $(shasum "$vpatch" | cut -d' ' -f1)"
+    features=ffi,blk,net,gpu
+    # Built again whenever the SDK it was built against, or a patch, changes.
+    stamp="$sdk $(cat "$repo"/gpu/virglrenderer/build.sh "$repo"/gpu/virglrenderer/0*.patch | shasum | cut -d' ' -f1)"
     if [ ! -f "$out/virgl/lib/libvirglrenderer.1.dylib" ] || [ "$(cat "$out/virgl/stamp" 2>/dev/null)" != "$stamp" ]; then
-        rm -rf "$vdir" "$out/virgl"
-        curl -fsSL "https://gitlab.freedesktop.org/slp/virglrenderer/-/archive/$virgl/virglrenderer-$virgl.tar.gz" |
-            tar xz -C "$out"
-        # This branch links MoltenVK itself: it is linked to the loader,
-        # so the driver is chosen when hangar-krun starts.
-        sed -i '' -e "s|'-lMoltenVK'|'-lvulkan'|" \
-            -e "s|-I/opt/homebrew/opt/molten-vk/libexec/include|-I$sdk/include|" "$vdir/meson.build"
-        patch -s -d "$vdir" -p1 < "$vpatch"
-        (cd "$vdir" && LIBRARY_PATH=$sdk/lib PKG_CONFIG_PATH=$sdk/lib/pkgconfig:/opt/homebrew/lib/pkgconfig \
-            meson setup build --prefix="$out/virgl" -Dvenus=true -Drender-server=false --buildtype=release >/dev/null &&
-            LIBRARY_PATH=$sdk/lib meson compile -C build >/dev/null && meson install -C build >/dev/null)
+        venv
+        rm -rf "$out/virgl"
+        PATH=$out/venv/bin:$PATH PKG_CONFIG_PATH=$sdk/lib/pkgconfig LIBRARY_PATH=$sdk/lib \
+            sh "$repo/gpu/virglrenderer/build.sh" "$out/virgl" >/dev/null
         echo "$stamp" > "$out/virgl/stamp"
     fi
 
@@ -130,9 +126,7 @@ if [ -n "$sdk" ] && [ -f "$sdk/lib/libvulkan.1.dylib" ]; then
             curl -fsSL "https://gitlab.freedesktop.org/mesa/mesa/-/archive/$mesa/mesa-$mesa.tar.gz" |
                 tar xz -C "$out"
             patch -s -d "$mdir" -p1 < "$kpatch"
-            # Mesa's generators need mako and PyYAML.
-            [ -x "$out/venv/bin/python3" ] || python3 -m venv "$out/venv"
-            "$out/venv/bin/pip" -q install mako pyyaml packaging
+            venv
             # The build runs the tools the setup found, LLVM's among them.
             (cd "$mdir" && export PATH=$out/venv/bin:$(brew --prefix llvm)/bin:$PATH &&
                 PKG_CONFIG_PATH=$sdk/lib/pkgconfig \
@@ -151,17 +145,18 @@ else
     echo "no Vulkan SDK: building libkrun without a GPU" >&2
 fi
 
-if [ ! -d "$src/.git" ] || [ "$(git -C "$src" describe --tags 2>/dev/null)" != "$version" ]; then
-    rm -rf "$src"
-    # Plain HTTPS whatever the global config rewrites GitHub URLs to.
-    GIT_CONFIG_GLOBAL=/dev/null git clone -q --depth 1 --branch "$version" \
-        https://github.com/libkrun/libkrun.git "$src"
+if [ ! -d "$src/.git" ]; then
+    GIT_CONFIG_GLOBAL=/dev/null git clone -q "$krunRepo" "$src"
 fi
-# Applied afresh whenever the tree differs from it.
-lpatch=$repo/dev/krun/libkrun-apple-handle.patch
-if ! git -C "$src" diff | cmp -s - "$lpatch"; then
+from=$krunRepo branch=hangar want=$krunHangar
+if [ "${1:-}" = mac ] && [ -n "${2:-}" ]; then
+    from=$repo/libkrun branch=$2 want=$(git -C "$from" rev-parse "$2")
+fi
+if [ "$(git -C "$src" rev-parse HEAD)" != "$want" ]; then
     git -C "$src" checkout -q -- .
-    git -C "$src" apply "$lpatch"
+    git -C "$src" clean -fdq
+    GIT_CONFIG_GLOBAL=/dev/null git -C "$src" fetch -q "$from" "$branch"
+    git -C "$src" checkout -q "$want"
 fi
 # bindgen needs libclang, and its build scripts load it at run time.
 clang=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib
@@ -170,16 +165,21 @@ clang=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib
     cargo build -q --release -p libkrun --no-default-features --features "$features")
 
 # Each library beside hangar-krun, found there by @rpath, and what it
-# links to rewritten to match.
+# links to rewritten to match. Each is renamed into place: a machine
+# running keeps the library it mapped, which writing over it would crash.
 install_lib() { # source, name
-    cp -f "$1" "$bin/$2"
-    chmod u+w "$bin/$2"
-    install_name_tool -id "@rpath/$2" "$bin/$2" 2>/dev/null
+    cp -f "$1" "$bin/$2.new"
+    chmod u+w "$bin/$2.new"
+    install_name_tool -id "@rpath/$2" "$bin/$2.new" 2>/dev/null
+    mv -f "$bin/$2.new" "$bin/$2"
 }
-install_lib "$src/target/release/libkrun.dylib" libkrun.1.dylib
-ln -sf libkrun.1.dylib "$bin/libkrun.dylib"
-if [ "$features" = blk,net,gpu ]; then
+rm -f "$bin/libkrun.1.dylib" "$bin/libepoxy.0.dylib"
+install_lib "$src/target/release/libkrun.dylib" libkrun.2.dylib
+ln -sf libkrun.2.dylib "$bin/libkrun.dylib"
+if [ "$features" = ffi,blk,net,gpu ]; then
     install_lib "$out/virgl/lib/libvirglrenderer.1.dylib" libvirglrenderer.1.dylib
+    cp -f "$out/virgl/libexec/virgl_render_server" "$bin/virgl_render_server.new"
+    mv -f "$bin/virgl_render_server.new" "$bin/virgl_render_server"
     install_lib "$sdk/lib/libvulkan.1.dylib" libvulkan.1.dylib
     install_lib "$sdk/lib/libMoltenVK.dylib" libMoltenVK.dylib
     # The drivers' manifests, MoltenVK's as an ordinary driver: Venus does
@@ -193,14 +193,10 @@ if [ "$features" = blk,net,gpu ]; then
         printf '{"file_format_version": "1.0.0", "ICD": {"library_path": "../libvulkan_kosmickrisp.dylib", "api_version": "1.4.0"}}\n' \
             > "$bin/vulkan/kosmickrisp.json"
     fi
-    epoxy=$(otool -L "$bin/libvirglrenderer.1.dylib" | awk '/libepoxy/ {print $1}')
-    install_lib "$epoxy" libepoxy.0.dylib
     install_name_tool -change "$out/virgl/lib/libvirglrenderer.1.dylib" @rpath/libvirglrenderer.1.dylib \
-        "$bin/libkrun.1.dylib"
-    install_name_tool -change "$epoxy" @rpath/libepoxy.0.dylib "$bin/libvirglrenderer.1.dylib"
-    for l in libkrun.1.dylib libvirglrenderer.1.dylib; do
-        install_name_tool -add_rpath @loader_path "$bin/$l" 2>/dev/null || true
-    done
+        "$bin/libkrun.2.dylib"
+    install_name_tool -add_rpath @loader_path "$bin/libkrun.2.dylib" 2>/dev/null || true
+    codesign -f -s - "$bin/virgl_render_server" 2>/dev/null
 fi
 for l in "$bin"/*.dylib; do
     [ -L "$l" ] || codesign -f -s - "$l" 2>/dev/null
@@ -225,4 +221,4 @@ if [ ! -x "$bin/mkfs.ext4" ]; then
     # Named so, mke2fs makes ext4 without being told.
     cp "$e2/misc/mke2fs" "$bin/mkfs.ext4"
 fi
-echo "built $bin: hangar-krun (libkrun $features) and mkfs.ext4"
+echo "built $bin: hangar-krun (libkrun $branch $(echo $want | cut -c1-8), $features) and mkfs.ext4"

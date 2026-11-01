@@ -4,8 +4,8 @@
 // description the worker writes (krun.Config). libkrun takes the process
 // over, and it exits when the guest does.
 //
-// libkrun's API changed whole at 2.0: libkrun1_krun.go speaks 1.x's, which
-// the Mac builds against, and libkrun2_krun.go (the krun2 tag) 2.x's.
+// It speaks libkrun's 2.x API (libkrun_krun.go), with what differs between
+// Linux and macOS in libkrun_linux_krun.go and libkrun_darwin_krun.go.
 package main
 
 import (

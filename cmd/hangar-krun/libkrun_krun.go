@@ -1,4 +1,4 @@
-//go:build krun && krun2
+//go:build krun
 
 package main
 
@@ -98,6 +98,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"unsafe"
 
@@ -152,8 +153,8 @@ func failed(what string, e C.KrunError) error {
 	return fmt.Errorf("%s: %s", what, C.GoString(msg))
 }
 
-// start runs the machine c describes under libkrun 2.x until the guest
-// exits, then exits the process.
+// start runs the machine c describes under libkrun until the guest exits,
+// then exits the process.
 func start(c krun.Config) error {
 	var e C.KrunError
 	level := C.uint32_t(C.KRUN_LOG_LEVEL_WARN)
@@ -165,13 +166,7 @@ func start(c krun.Config) error {
 		return failed("logging", e)
 	}
 
-	// Every device on virtio-pci, with an MSI-X vector for each queue:
-	// virtio-mmio's interrupt costs two exits to this process each time it
-	// fires, which nested virtualization makes dear. libkrun puts a device
-	// with shared memory, the GPU, on virtio-mmio itself. Devices take PCI
-	// slots in the order they are added, so the disks keep theirs.
-	devices := C.krun_pci_device_manager_new()
-	add := func(d unsafe.Pointer) { C.krun_pci_device_manager_add(devices, C.KrunAttachDevice(d)) }
+	devices, add := deviceManager()
 
 	// The guest's console, hvc0, to the console file. libkrun makes a port
 	// the console only with a terminal behind it, so it is given a
@@ -186,10 +181,10 @@ func start(c krun.Config) error {
 		return fmt.Errorf("the console: %w", err)
 	}
 	// Raw, so the guest's output reaches the file as it wrote it.
-	if t, err := unix.IoctlGetTermios(int(tty.Fd()), unix.TCGETS); err == nil {
+	if t, err := unix.IoctlGetTermios(int(tty.Fd()), getTermios); err == nil {
 		t.Oflag &^= unix.OPOST
 		t.Lflag &^= unix.ECHO | unix.ICANON
-		unix.IoctlSetTermios(int(tty.Fd()), unix.TCSETS, t)
+		unix.IoctlSetTermios(int(tty.Fd()), setTermios, t)
 	}
 	go io.Copy(console, ptm)
 	// For debugging a guest by hand: what is written to the FIFO named by
@@ -277,7 +272,15 @@ func start(c krun.Config) error {
 	}
 
 	if c.GPU != nil {
-		flags := C.uint32_t(virglVenus | virglNoVirgl)
+		// Vulkan alone, through Venus in virglrenderer's render server,
+		// beside hangar-krun where it is bundled.
+		flags := C.uint32_t(virglVenus | virglNoVirgl | virglRenderServer | virglThreadSync | virglAsyncFenceCB)
+		if exe, err := os.Executable(); err == nil && os.Getenv("RENDER_SERVER_EXEC_PATH") == "" {
+			if server := filepath.Join(filepath.Dir(exe), "virgl_render_server"); fileExists(server) {
+				os.Setenv("RENDER_SERVER_EXEC_PATH", server)
+				renderServerEnv(filepath.Dir(exe))
+			}
+		}
 		if c.GPU.Virgl {
 			// OpenGL and Vulkan, rendered as the Linux GPU backend renders
 			// them: EGL with no display, so a host without one renders on
@@ -294,6 +297,10 @@ func start(c krun.Config) error {
 			return errors.New("the GPU: this libkrun has none")
 		}
 		C.krun_gpu_device_shm_size(&g, C.size_t(c.GPU.WindowMiB)<<20)
+		// The guest's pages are the host's (a 16 KiB kernel on the Mac), so
+		// its blobs need no aligning, and its Mesa (before 26.2) can't create
+		// a Venus instance when asked to align them.
+		C.krun_gpu_device_blob_alignment(&g, false)
 		add(unsafe.Pointer(g))
 	}
 
@@ -303,29 +310,8 @@ func start(c krun.Config) error {
 		return failed("the balloon", e)
 	}
 	add(unsafe.Pointer(bal))
-	if c.HotplugMiB > 0 {
-		m := C.krun_mem_device_new(C.uint32_t(c.HotplugMiB), &e)
-		if e != nil {
-			return failed("the hotpluggable memory", e)
-		}
-		mem := C.krun_mem_device_handle(m)
-		// A restored machine's device has what it had when it was suspended.
-		if c.PluggedMiB > 0 && c.Restore == "" {
-			if C.krun_mem_device_handle_set_requested_mib(mem, C.uint32_t(c.PluggedMiB), &e); e != nil {
-				return failed("plugging memory in", e)
-			}
-		}
-		plug = func(mib int) error {
-			var e C.KrunError
-			if C.krun_mem_device_handle_set_requested_mib(mem, C.uint32_t(mib), &e); e != nil {
-				return failed("plugging memory in", e)
-			}
-			return nil
-		}
-		plugged = func() (int, int, error) {
-			return int(C.krun_mem_device_handle_plugged_mib(mem)), int(C.krun_mem_device_handle_requested_mib(mem)), nil
-		}
-		add(unsafe.Pointer(m))
+	if err := addMemory(c, add); err != nil {
+		return err
 	}
 	rng := C.krun_rng_device_new(&e)
 	if e != nil {
@@ -357,7 +343,7 @@ func start(c krun.Config) error {
 		}
 	}
 	C.krun_vmm_builder_payload(&b, payload)
-	C.krun_vmm_builder_devices(&b, C.KrunDeviceManager(devices))
+	C.krun_vmm_builder_devices(&b, devices)
 	if c.Restore != "" {
 		if C.krun_vmm_builder_restore(&b, cstr(c.Restore), &e); e != nil {
 			return failed("restoring the machine", e)
@@ -387,4 +373,9 @@ func start(c krun.Config) error {
 	C.krun_vmm_run(vmm)
 	os.Exit(0)
 	return nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }

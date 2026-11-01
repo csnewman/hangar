@@ -1,7 +1,8 @@
-From ae0e256c0e7677af20111fc300a17ff7bb0cc5b2 Mon Sep 17 00:00:00 2001
+From f88c43d4cd17ec656216a262edefb5120019d1f3 Mon Sep 17 00:00:00 2001
 From: Chandler Newman <chandler2newman@gmail.com>
 Date: Tue, 22 Sep 2026 22:26:54 +0100
-Subject: [PATCH] venus: snapshot a context and restore it in another process
+Subject: [PATCH 1/5] venus: snapshot a context and restore it in another
+ process
 
 A Vulkan driver's state cannot be read out, but every command that built a
 Venus context passes through the decoder here. So each command whose effect
@@ -48,18 +49,18 @@ virgl_renderer_context_snapshot and virgl_renderer_context_restore.
  src/venus/vkr_renderer.c       |  18 +
  src/venus/vkr_renderer.h       |  10 +
  src/venus/vkr_ring.c           |  20 +-
- src/venus/vkr_snapshot.c       | 796 +++++++++++++++++++++++++++++++++
+ src/venus/vkr_snapshot.c       | 817 +++++++++++++++++++++++++++++++++
  src/venus/vkr_snapshot.h       |  71 +++
  src/venus/vkr_transport.c      |   8 +-
  src/virgl_context.h            |   7 +
  src/virglrenderer.c            |  20 +
  src/virglrenderer.h            |   8 +
- 23 files changed, 1175 insertions(+), 13 deletions(-)
+ 23 files changed, 1196 insertions(+), 13 deletions(-)
  create mode 100644 src/venus/vkr_snapshot.c
  create mode 100644 src/venus/vkr_snapshot.h
 
 diff --git a/server/render_context.c b/server/render_context.c
-index b44b5b5..98baf79 100644
+index b44b5b58..98baf798 100644
 --- a/server/render_context.c
 +++ b/server/render_context.c
 @@ -122,6 +122,36 @@ render_context_dispatch_create_resource(struct render_context *ctx,
@@ -109,7 +110,7 @@ index b44b5b5..98baf79 100644
     };
  
 diff --git a/server/render_protocol.h b/server/render_protocol.h
-index cae94a0..1636869 100644
+index cae94a05..1636869b 100644
 --- a/server/render_protocol.h
 +++ b/server/render_protocol.h
 @@ -39,6 +39,8 @@ enum render_context_op {
@@ -156,7 +157,7 @@ index cae94a0..1636869 100644
  
  #ifdef __APPLE__
 diff --git a/server/render_state.c b/server/render_state.c
-index bc7f8e1..10c7765 100644
+index bc7f8e16..10c77659 100644
 --- a/server/render_state.c
 +++ b/server/render_state.c
 @@ -251,3 +251,17 @@ render_state_destroy_resource(uint32_t ctx_id, uint32_t res_id)
@@ -178,7 +179,7 @@ index bc7f8e1..10c7765 100644
 +   return vkr_renderer_restore_context(ctx_id, fd);
 +}
 diff --git a/server/render_state.h b/server/render_state.h
-index 98de272..87bebf6 100644
+index 98de2722..87bebf6e 100644
 --- a/server/render_state.h
 +++ b/server/render_state.h
 @@ -53,4 +53,10 @@ render_state_import_resource(uint32_t ctx_id,
@@ -193,7 +194,7 @@ index 98de272..87bebf6 100644
 +
  #endif /* RENDER_STATE_H */
 diff --git a/src/meson.build b/src/meson.build
-index 6fc7f7d..da14f84 100644
+index 6fc7f7d9..da14f845 100644
 --- a/src/meson.build
 +++ b/src/meson.build
 @@ -92,6 +92,7 @@ venus_sources = [
@@ -205,7 +206,7 @@ index 6fc7f7d..da14f84 100644
  ]
  
 diff --git a/src/proxy/proxy_context.c b/src/proxy/proxy_context.c
-index 2780a54..dd350ef 100644
+index 2780a540..dd350efa 100644
 --- a/src/proxy/proxy_context.c
 +++ b/src/proxy/proxy_context.c
 @@ -506,6 +506,47 @@ proxy_context_attach_resource(struct virgl_context *base, struct virgl_resource
@@ -266,7 +267,7 @@ index 2780a54..dd350ef 100644
  
  static bool
 diff --git a/src/venus/vkr_buffer.c b/src/venus/vkr_buffer.c
-index 9e466f8..0673a8f 100644
+index 9e466f83..0673a8f8 100644
 --- a/src/venus/vkr_buffer.c
 +++ b/src/venus/vkr_buffer.c
 @@ -84,12 +84,19 @@ vkr_dispatch_vkBindBufferMemory(UNUSED struct vn_dispatch_context *dispatch,
@@ -291,7 +292,7 @@ index 9e466f8..0673a8f 100644
     args->ret = vk->BindBufferMemory2(args->device, args->bindInfoCount, args->pBindInfos);
  }
 diff --git a/src/venus/vkr_command_buffer.c b/src/venus/vkr_command_buffer.c
-index 766c5c7..e6b12dc 100644
+index 766c5c71..e6b12dcb 100644
 --- a/src/venus/vkr_command_buffer.c
 +++ b/src/venus/vkr_command_buffer.c
 @@ -47,12 +47,21 @@ vkr_dispatch_vkDestroyCommandPool(struct vn_dispatch_context *dispatch,
@@ -318,7 +319,7 @@ index 766c5c7..e6b12dc 100644
     args->ret = vk->ResetCommandPool(args->device, args->commandPool, args->flags);
  }
 diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
-index b97e5ea..138a8e4 100644
+index b97e5ea2..138a8e4e 100644
 --- a/src/venus/vkr_context.c
 +++ b/src/venus/vkr_context.c
 @@ -172,7 +172,7 @@ vkr_context_submit_cmd(struct vkr_context *ctx, const void *buffer, size_t size)
@@ -347,7 +348,7 @@ index b97e5ea..138a8e4 100644
     return ctx;
  
 diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
-index 3867f13..4166b52 100644
+index 3867f138..4166b523 100644
 --- a/src/venus/vkr_context.h
 +++ b/src/venus/vkr_context.h
 @@ -14,6 +14,7 @@
@@ -388,7 +389,7 @@ index 3867f13..4166b52 100644
        _mesa_hash_table_remove(ctx->object_table, entry);
     }
 diff --git a/src/venus/vkr_descriptor_set.c b/src/venus/vkr_descriptor_set.c
-index 5ec209f..d015b7e 100644
+index 5ec209f4..d015b7e7 100644
 --- a/src/venus/vkr_descriptor_set.c
 +++ b/src/venus/vkr_descriptor_set.c
 @@ -133,12 +133,28 @@ vkr_dispatch_vkFreeDescriptorSets(struct vn_dispatch_context *dispatch,
@@ -422,7 +423,7 @@ index 5ec209f..d015b7e 100644
     vk->UpdateDescriptorSets(args->device, args->descriptorWriteCount,
                              args->pDescriptorWrites, args->descriptorCopyCount,
 diff --git a/src/venus/vkr_image.c b/src/venus/vkr_image.c
-index 2b627e3..7a5148b 100644
+index 2b627e37..7a5148b8 100644
 --- a/src/venus/vkr_image.c
 +++ b/src/venus/vkr_image.c
 @@ -106,12 +106,19 @@ vkr_dispatch_vkBindImageMemory(UNUSED struct vn_dispatch_context *dispatch,
@@ -447,7 +448,7 @@ index 2b627e3..7a5148b 100644
     args->ret = vk->BindImageMemory2(args->device, args->bindInfoCount, args->pBindInfos);
  }
 diff --git a/src/venus/vkr_queue.c b/src/venus/vkr_queue.c
-index d75a229..ed9af96 100644
+index d75a2294..ed9af966 100644
 --- a/src/venus/vkr_queue.c
 +++ b/src/venus/vkr_queue.c
 @@ -364,6 +364,21 @@ vkr_dispatch_vkGetDeviceQueue(struct vn_dispatch_context *dispatch,
@@ -547,7 +548,7 @@ index d75a229..ed9af96 100644
  
     const VkImportSemaphoreResourceInfoMESA *res_info = args->pImportSemaphoreResourceInfo;
 diff --git a/src/venus/vkr_queue.h b/src/venus/vkr_queue.h
-index 6a3a909..d760dfc 100644
+index 6a3a909e..d760dfc1 100644
 --- a/src/venus/vkr_queue.h
 +++ b/src/venus/vkr_queue.h
 @@ -58,6 +58,11 @@ VKR_DEFINE_OBJECT_CAST(fence, VK_OBJECT_TYPE_FENCE, VkFence)
@@ -563,7 +564,7 @@ index 6a3a909..d760dfc 100644
  VKR_DEFINE_OBJECT_CAST(semaphore, VK_OBJECT_TYPE_SEMAPHORE, VkSemaphore)
  
 diff --git a/src/venus/vkr_renderer.c b/src/venus/vkr_renderer.c
-index 8aae924..4ee91a4 100644
+index 8aae9241..4ee91a45 100644
 --- a/src/venus/vkr_renderer.c
 +++ b/src/venus/vkr_renderer.c
 @@ -240,3 +240,21 @@ vkr_renderer_destroy_resource(uint32_t ctx_id, uint32_t res_id)
@@ -589,7 +590,7 @@ index 8aae924..4ee91a4 100644
 +   return vkr_context_restore(ctx, fd);
 +}
 diff --git a/src/venus/vkr_renderer.h b/src/venus/vkr_renderer.h
-index be3ae04..4e299ff 100644
+index be3ae046..4e299ffd 100644
 --- a/src/venus/vkr_renderer.h
 +++ b/src/venus/vkr_renderer.h
 @@ -74,4 +74,14 @@ vkr_renderer_import_resource(uint32_t ctx_id,
@@ -608,7 +609,7 @@ index be3ae04..4e299ff 100644
 +
  #endif /* VKR_RENDERER_H */
 diff --git a/src/venus/vkr_ring.c b/src/venus/vkr_ring.c
-index 0d4899e..d3331ee 100644
+index 0d4899ef..d3331ee4 100644
 --- a/src/venus/vkr_ring.c
 +++ b/src/venus/vkr_ring.c
 @@ -42,7 +42,9 @@ vkr_ring_init_buffer(struct vkr_ring *ring, const struct vkr_ring_layout *layout
@@ -664,10 +665,10 @@ index 0d4899e..d3331ee 100644
  
 diff --git a/src/venus/vkr_snapshot.c b/src/venus/vkr_snapshot.c
 new file mode 100644
-index 0000000..de5be34
+index 00000000..2baae727
 --- /dev/null
 +++ b/src/venus/vkr_snapshot.c
-@@ -0,0 +1,796 @@
+@@ -0,0 +1,817 @@
 +/*
 + * Copyright 2026 Hangar
 + * SPDX-License-Identifier: MIT
@@ -676,6 +677,7 @@ index 0000000..de5be34
 +#include "vkr_snapshot.h"
 +
 +#include <errno.h>
++#include <fcntl.h>
 +#include <stdlib.h>
 +#include <string.h>
 +#include <sys/mman.h>
@@ -1127,6 +1129,26 @@ index 0000000..de5be34
 +   mtx_unlock(&ctx->object_mutex);
 +}
 +
++
++/* An unlinked file the snapshot is written to and read back from. A macOS
++ * shared memory object can't be written with write(), so it isn't one there.
++ */
++static int
++snapshot_file(void)
++{
++#ifdef __linux__
++   return memfd_create("vkr-snapshot", MFD_CLOEXEC);
++#else
++   char path[] = "/tmp/vkr-snapshot-XXXXXX";
++   int fd = mkstemp(path);
++   if (fd >= 0) {
++      unlink(path);
++      fcntl(fd, F_SETFD, FD_CLOEXEC);
++   }
++   return fd;
++#endif
++}
++
 +bool
 +vkr_context_snapshot(struct vkr_context *ctx, int *out_fd)
 +{
@@ -1186,7 +1208,7 @@ index 0000000..de5be34
 +      return false;
 +   }
 +
-+   int fd = memfd_create("vkr-snapshot", MFD_CLOEXEC);
++   int fd = snapshot_file();
 +   bool ok = fd >= 0;
 +   for (size_t off = 0; ok && off < b.size;) {
 +      ssize_t n = write(fd, b.data + off, b.size - off);
@@ -1466,7 +1488,7 @@ index 0000000..de5be34
 +}
 diff --git a/src/venus/vkr_snapshot.h b/src/venus/vkr_snapshot.h
 new file mode 100644
-index 0000000..54ef80e
+index 00000000..54ef80ec
 --- /dev/null
 +++ b/src/venus/vkr_snapshot.h
 @@ -0,0 +1,71 @@
@@ -1542,7 +1564,7 @@ index 0000000..54ef80e
 +
 +#endif /* VKR_SNAPSHOT_H */
 diff --git a/src/venus/vkr_transport.c b/src/venus/vkr_transport.c
-index a8daba4..d5748e1 100644
+index a8daba46..d5748e1b 100644
 --- a/src/venus/vkr_transport.c
 +++ b/src/venus/vkr_transport.c
 @@ -80,7 +80,7 @@ vkr_dispatch_vkExecuteCommandStreamsMESA(
@@ -1582,7 +1604,7 @@ index a8daba4..d5748e1 100644
  
  static void
 diff --git a/src/virgl_context.h b/src/virgl_context.h
-index 25bc106..0e71b7d 100644
+index 25bc1060..0e71b7dc 100644
 --- a/src/virgl_context.h
 +++ b/src/virgl_context.h
 @@ -132,6 +132,13 @@ struct virgl_context {
@@ -1600,7 +1622,7 @@ index 25bc106..0e71b7d 100644
     void * (*resource_map)(struct virgl_context *ctx,
                            struct virgl_resource *res,
 diff --git a/src/virglrenderer.c b/src/virglrenderer.c
-index ce2b03d..080da76 100644
+index ce2b03d7..080da76e 100644
 --- a/src/virglrenderer.c
 +++ b/src/virglrenderer.c
 @@ -487,6 +487,26 @@ void virgl_renderer_context_poll(uint32_t ctx_id)
@@ -1631,7 +1653,7 @@ index ce2b03d..080da76 100644
  {
     struct virgl_context *ctx = virgl_context_lookup(ctx_id);
 diff --git a/src/virglrenderer.h b/src/virglrenderer.h
-index 0bcafef..a887598 100644
+index 0bcafef4..a8875985 100644
 --- a/src/virglrenderer.h
 +++ b/src/virglrenderer.h
 @@ -458,6 +458,14 @@ VIRGL_EXPORT int virgl_renderer_context_create_fence(uint32_t ctx_id,
@@ -1650,5 +1672,5 @@ index 0bcafef..a887598 100644
  
  /* Map a resource to an specific userspace address. If successful, the
 -- 
-2.53.0
+2.54.0 (Apple Git-157)
 

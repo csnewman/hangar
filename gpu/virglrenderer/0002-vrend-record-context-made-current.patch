@@ -1,7 +1,7 @@
-From 1262c8f10f8f000220682c2e7f217759000e3f76 Mon Sep 17 00:00:00 2001
+From 0247625e20718e696aa98dc78942c33e1964fca2 Mon Sep 17 00:00:00 2001
 From: Chandler Newman <chandler2newman@gmail.com>
 Date: Wed, 23 Sep 2026 13:01:27 +0100
-Subject: [PATCH] vrend: record the context made current by creating one
+Subject: [PATCH 2/5] vrend: record the context made current by creating one
 
 Creating a context creates its first sub-context, which makes that
 sub-context's GL context current, but vrend_state still named the
@@ -19,7 +19,7 @@ shows, because that path checks for GL errors.
  1 file changed, 8 insertions(+)
 
 diff --git a/src/vrend/vrend_renderer.c b/src/vrend/vrend_renderer.c
-index 2eb5bd3..2445fb7 100644
+index 2eb5bd30..2445fb79 100644
 --- a/src/vrend/vrend_renderer.c
 +++ b/src/vrend/vrend_renderer.c
 @@ -8044,6 +8044,14 @@ struct vrend_context *vrend_create_context(int id, uint32_t nlen, const char *de
@@ -38,5 +38,5 @@ index 2eb5bd3..2445fb7 100644
     if (glver < 0) {
        virgl_error("Unable to query GL version\n");
 -- 
-2.53.0
+2.54.0 (Apple Git-157)
 
