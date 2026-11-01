@@ -42,6 +42,9 @@ type Config struct {
 	// GPU, if set, gives the guest a virtio-gpu: Vulkan through Venus, and
 	// OpenGL through virgl where the host renders it.
 	GPU *GPU `json:"gpu,omitempty"`
+	// Restore, if set, is the snapshot the machine resumes from, rather
+	// than booting: one hangar-krun wrote of a machine configured the same.
+	Restore string `json:"restore,omitempty"`
 }
 
 // GPU is the guest's virtual GPU.

@@ -6,6 +6,9 @@
 #   dev/krun-build.sh        the Mac's, in out/krun/bin, with mkfs.ext4
 #                            (e2fsprogs) for environments' writable disks
 #   dev/krun-build.sh linux  the Lima VM's, in out/krun-linux/bin
+#   dev/krun-build.sh linux BRANCH
+#                            the same, from a branch of the fork's clone in
+#                            libkrun/ beside this checkout
 #
 # Linux's is libkrun 2.0 to be, from the hangar branch of Hangar's fork
 # (krunRepo, pinned at krunHangar): libkrun's main with Hangar's changes merged
@@ -36,10 +39,10 @@
 # hypervisor entitlement, without which macOS refuses it a VM.
 set -eu
 krunRepo=https://github.com/csnewman/libkrun.git
-krunHangar=cca5ee8b2a6404efb352ec6ce8085d0e4ff83695
+krunHangar=3377e7b49b7c86fa18f0e4559d048e57ce631485
 repo=$(cd "$(dirname "$0")/.." && pwd)
 if [ "${1:-}" = linux ]; then
-    exec limactl shell hangar sh "$repo/dev/krun-build.sh" in-vm
+    exec limactl shell hangar sh "$repo/dev/krun-build.sh" in-vm "${2:-}"
 fi
 if [ "${1:-}" = in-vm ]; then
     . "$HOME/.cargo/env"
@@ -54,12 +57,18 @@ if [ "${1:-}" = in-vm ]; then
         mkdir -p "$(dirname "$src")"
         GIT_CONFIG_GLOBAL=/dev/null git clone -q "$krunRepo" "$src"
     fi
-    if [ "$(git -C "$src" rev-parse HEAD)" != "$krunHangar" ]; then
+    from=$krunRepo branch=hangar want=$krunHangar
+    if [ -n "${2:-}" ]; then
+        # A branch of the fork's clone beside this checkout (libkrun/), to
+        # try before it is pushed.
+        from=$repo/libkrun branch=$2 want=$(git -C "$from" rev-parse "$2")
+    fi
+    if [ "$(git -C "$src" rev-parse HEAD)" != "$want" ]; then
         # Files left from another tree go too: the build's own are ignored.
         git -C "$src" checkout -q -- .
         git -C "$src" clean -fdq
-        GIT_CONFIG_GLOBAL=/dev/null git -C "$src" fetch -q "$krunRepo" hangar
-        git -C "$src" checkout -q "$krunHangar"
+        GIT_CONFIG_GLOBAL=/dev/null git -C "$src" fetch -q "$from" "$branch"
+        git -C "$src" checkout -q "$want"
     fi
     # Built on the VM's own disk: the Mac's mount is slow for cargo.
     (cd "$src" && PKG_CONFIG_PATH=/usr/local/lib/$arch-linux-gnu/pkgconfig \
@@ -73,7 +82,7 @@ if [ "${1:-}" = in-vm ]; then
     cd "$repo"
     CGO_CFLAGS="-I$src/include" CGO_LDFLAGS="-L$bin -Wl,-rpath,\$ORIGIN" \
         /usr/local/go/bin/go build -tags krun,krun2 -o "$bin/hangar-krun" ./cmd/hangar-krun
-    echo "built $bin: hangar-krun (libkrun hangar $(echo $krunHangar | cut -c1-8))"
+    echo "built $bin: hangar-krun (libkrun $branch $(echo $want | cut -c1-8))"
     exit
 fi
 # Not v1.19.7: it offers the guest VIRTIO_GPU_F_BLOB_ALIGNMENT, and Venus

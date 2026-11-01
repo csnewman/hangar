@@ -1453,6 +1453,8 @@ export interface components {
             /** @description Whether that is the worker's CPU. */
             gpu_software?: boolean;
             monitor?: components["schemas"]["Monitor"];
+            /** @description Whether its worker can suspend it. */
+            suspends?: boolean;
             /** @description The digest of the copy of the image the environment boots from, fixed when it first starts. Absent until then. */
             image_digest?: string;
             cpus: number;
@@ -1747,7 +1749,7 @@ export interface components {
             memory_mib: number;
         };
         /**
-         * @description What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS, which cannot suspend a machine or change its memory while it runs. Absent until the worker says.
+         * @description What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS or Linux, which cannot change a machine's memory while it runs, nor on macOS suspend it. Absent until the worker says.
          * @enum {string}
          */
         Monitor: "cloud-hypervisor" | "krun";

@@ -9,13 +9,20 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"os"
+	"strings"
 
 	"github.com/csnewman/hangar/internal/krun"
 )
+
+// suspend writes the running machine to a snapshot in a directory, leaving
+// it paused; start sets it once there is a machine, and only where libkrun
+// takes snapshots.
+var suspend = func(string) error { return errors.New("this libkrun takes no snapshots") }
 
 func main() {
 	gpu := hasGPU()
@@ -35,11 +42,7 @@ func main() {
 	// goes, however it goes, so does the machine, rather than running on
 	// with nothing to supervise it. macOS has no parent-death signal.
 	if st, err := os.Stdin.Stat(); err == nil && st.Mode()&os.ModeNamedPipe != 0 {
-		go func() {
-			io.Copy(io.Discard, os.Stdin)
-			fmt.Fprintln(os.Stderr, "hangar-krun: the worker has gone; stopping the machine")
-			os.Exit(1)
-		}()
+		go control(bufio.NewScanner(os.Stdin), os.NewFile(3, "reply"))
 	}
 	b, err := os.ReadFile(os.Args[1])
 	if err == nil {
@@ -52,4 +55,30 @@ func main() {
 		fmt.Fprintf(os.Stderr, "hangar-krun: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// control serves the worker's requests, a line each on standard input, and
+// answers each on reply:
+//
+//	suspend DIR   snapshot the machine into DIR; "ok", or "error: ..." with
+//	              the machine running on
+//	exit          stop, once the worker has recorded the snapshot
+func control(requests *bufio.Scanner, reply *os.File) {
+	for requests.Scan() {
+		verb, arg, _ := strings.Cut(requests.Text(), " ")
+		switch verb {
+		case "suspend":
+			if err := suspend(arg); err != nil {
+				fmt.Fprintf(reply, "error: %v\n", err)
+				continue
+			}
+			fmt.Fprintln(reply, "ok")
+		case "exit":
+			os.Exit(0)
+		default:
+			fmt.Fprintf(reply, "error: unknown request %q\n", verb)
+		}
+	}
+	fmt.Fprintln(os.Stderr, "hangar-krun: the worker has gone; stopping the machine")
+	os.Exit(1)
 }

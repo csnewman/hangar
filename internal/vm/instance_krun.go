@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,8 +35,9 @@ import (
 var guestPorts = []uint32{terminal.Port, vscode.Port, guestport.Port, sshd.Port, procs.Port, profile.Port,
 	code.Port, desktop.Port}
 
-// errNoKrunSnapshot is what libkrun cannot do that Cloud Hypervisor can.
-var errNoKrunSnapshot = fmt.Errorf("suspending a machine under libkrun is %w: it takes no snapshot", errUnsupported)
+// errNoKrunSnapshot is what libkrun 1.x, the Mac's, cannot do that Cloud
+// Hypervisor can.
+var errNoKrunSnapshot = fmt.Errorf("suspending a machine under libkrun is %w on macOS: its libkrun takes no snapshot", errUnsupported)
 
 // krunDir is where a machine under libkrun has its vsock sockets: under
 // /tmp, since a unix socket's path is at most 103 bytes on macOS, which a
@@ -48,13 +52,14 @@ func guestSocket(base string, port uint32) string {
 	return fmt.Sprintf("%s-g%d", base, port)
 }
 
-// startKrun starts the machine under hangar-krun -- libkrun -- and listens
-// for its agent. libkrun takes no snapshots, so a machine is always booted
-// from its disks.
+// startKrun starts the machine under hangar-krun -- libkrun -- resuming it
+// from its snapshot if resuming, and listens for its agent. A machine is
+// resumed configured as it was booted: libkrun loads the snapshot into it,
+// with new sockets and backends behind its devices.
 func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string, caps *host.Caps,
 	resuming bool, progress func(string)) error {
 	cfg := i.cfg
-	if resuming {
+	if resuming && caps.OS != "linux" {
 		return errNoKrunSnapshot
 	}
 	dir, err := krunDir(cfg.ID)
@@ -144,6 +149,9 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 		i.backends = append(i.backends, files)
 	}
 
+	if resuming {
+		kc.Restore = filepath.Join(cfg.Dir, snapshotDir)
+	}
 	b, err := json.MarshalIndent(kc, "", "  ")
 	if err != nil {
 		return err
@@ -152,7 +160,11 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 	if err := os.WriteFile(conf, b, 0o600); err != nil {
 		return err
 	}
-	progress("booting")
+	if resuming {
+		progress("resuming")
+	} else {
+		progress("booting")
+	}
 	return i.launchKrun(monCtx, conf)
 }
 
@@ -168,32 +180,51 @@ func (i *Instance) launchKrun(ctx context.Context, conf string) error {
 		return err
 	}
 	// hangar-krun stops the machine when this pipe closes: when the worker
-	// exits, or dies.
+	// exits, or dies. The worker's requests go down it, and hangar-krun
+	// answers on the other.
 	watch, held, err := os.Pipe()
 	if err != nil {
+		logFile.Close()
+		return err
+	}
+	replies, reply, err := os.Pipe()
+	if err != nil {
+		watch.Close()
+		held.Close()
 		logFile.Close()
 		return err
 	}
 	cmd := exec.CommandContext(ctx, bin, conf)
 	// The GPU renders as the worker's configuration has it (ch.GPUEnv).
 	cmd.Env = append(os.Environ(), i.cfg.GPUEnv...)
+	if i.cfg.GPUVenusRestore {
+		// virglrenderer's render server records what rebuilding a Vulkan
+		// program takes, which carries it across a suspend.
+		cmd.Env = append(cmd.Env, "VKR_RECORD=1")
+	}
 	cmd.SysProcAttr = sysProcAttr()
 	cmd.Stdin = watch
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
+	cmd.ExtraFiles = []*os.File{reply}
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 15 * time.Second
 	err = cmd.Start()
 	watch.Close()
+	reply.Close()
 	if err != nil {
 		held.Close()
+		replies.Close()
 		logFile.Close()
 		return fmt.Errorf("starting hangar-krun: %w", err)
 	}
 	i.cmd = cmd
+	i.krun = held
+	i.krunReply = bufio.NewReader(replies)
 	go func() {
 		err := cmd.Wait()
 		held.Close()
+		replies.Close()
 		logFile.Close()
 		if err != nil && ctx.Err() == nil {
 			i.mu.Lock()
@@ -220,3 +251,64 @@ func (i *Instance) DialGuest(ctx context.Context, port uint32) (net.Conn, error)
 // errNoKrunResize is what a resize under libkrun meets: its memory is fixed
 // at boot.
 var errNoKrunResize = errors.New("libkrun cannot change a running machine's memory; it takes the new size when it next starts")
+
+// suspendKrun has hangar-krun write the machine to its snapshot, records it,
+// and stops hangar-krun. If it cannot, the guest carries on running.
+func (i *Instance) suspendKrun(ctx context.Context) error {
+	c := i.cfg
+	if runtime.GOOS != "linux" {
+		return errNoKrunSnapshot
+	}
+	snap := filepath.Join(c.Dir, snapshotDir)
+	partial := snap + ".new"
+	os.RemoveAll(partial)
+	if _, err := fmt.Fprintf(i.krun, "suspend %s\n", partial); err != nil {
+		return fmt.Errorf("asking hangar-krun to suspend: %w", err)
+	}
+	answer := make(chan string, 1)
+	go func() {
+		line, err := i.krunReply.ReadString('\n')
+		if err != nil {
+			line = "error: " + err.Error()
+		}
+		answer <- strings.TrimSpace(line)
+	}()
+	var got string
+	select {
+	case got = <-answer:
+	case <-i.exited:
+		return errors.New("the machine stopped while suspending")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if got != "ok" {
+		os.RemoveAll(partial)
+		return errors.New(strings.TrimPrefix(got, "error: "))
+	}
+	err := func() error {
+		os.RemoveAll(snap)
+		if err := os.Rename(partial, snap); err != nil {
+			return err
+		}
+		b, err := json.Marshal(c.record())
+		if err != nil {
+			return err
+		}
+		return writeFileAtomic(filepath.Join(c.Dir, suspendedMark), b)
+	}()
+	if err != nil {
+		c.discardSuspend()
+		// The machine is paused, written down and of no further use: the
+		// guest boots afresh next time.
+		fmt.Fprintln(i.krun, "exit")
+		return err
+	}
+	// Recorded, so stopping the machine keeps its swap.
+	fmt.Fprintln(i.krun, "exit")
+	select {
+	case <-i.exited:
+	case <-time.After(15 * time.Second):
+	}
+	i.Close()
+	return nil
+}

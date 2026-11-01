@@ -763,7 +763,7 @@ type Environment struct {
 	ImageUpdate *ImageUpdate `json:"image_update,omitempty"`
 	MemoryMiB   int          `json:"memory_mib"`
 
-	// Monitor What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS, which cannot suspend a machine or change its memory while it runs. Absent until the worker says.
+	// Monitor What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS or Linux, which cannot change a machine's memory while it runs, nor on macOS suspend it. Absent until the worker says.
 	Monitor *Monitor `json:"monitor,omitempty"`
 
 	// Name Unique among its owner's environments.
@@ -791,6 +791,9 @@ type Environment struct {
 
 	// Stats What a running environment uses, as its worker last measured it. Rates are per second.
 	Stats *EnvironmentStats `json:"stats,omitempty"`
+
+	// Suspends Whether its worker can suspend it.
+	Suspends *bool `json:"suspends,omitempty"`
 
 	// Template That template's name when the environment was made.
 	Template string `json:"template"`
@@ -1111,7 +1114,7 @@ type Me struct {
 	Username string `json:"username"`
 }
 
-// Monitor What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS, which cannot suspend a machine or change its memory while it runs. Absent until the worker says.
+// Monitor What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS or Linux, which cannot change a machine's memory while it runs, nor on macOS suspend it. Absent until the worker says.
 type Monitor string
 
 // NewAccessToken defines model for NewAccessToken.
@@ -1560,7 +1563,7 @@ type Worker struct {
 	Labels     map[string]string `json:"labels"`
 	LastSeenAt *time.Time        `json:"last_seen_at,omitempty"`
 
-	// Monitor What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS, which cannot suspend a machine or change its memory while it runs. Absent until the worker says.
+	// Monitor What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS or Linux, which cannot change a machine's memory while it runs, nor on macOS suspend it. Absent until the worker says.
 	Monitor *Monitor `json:"monitor,omitempty"`
 	Name    string   `json:"name"`
 	Online  bool     `json:"online"`

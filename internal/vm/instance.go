@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -109,6 +110,10 @@ type Instance struct {
 	// of the unix sockets its vsock is carried on.
 	monitor string
 	vsock   string
+	// krun is how the worker asks hangar-krun to suspend the machine: the
+	// requests it writes, and the answers it reads.
+	krun      *os.File
+	krunReply *bufio.Reader
 
 	mu       sync.Mutex
 	err      error

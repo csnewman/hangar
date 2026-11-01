@@ -10,6 +10,8 @@ import (
 	"slices"
 	"syscall"
 	"time"
+
+	"github.com/csnewman/hangar/internal/host"
 )
 
 // A suspended machine is its disks plus a snapshot of it: its memory and
@@ -116,8 +118,8 @@ func (c InstanceConfig) clearBackendState() {
 // down; each backend then records what the guest is holding, and only then
 // is the snapshot taken, so they all describe the same instant.
 func (i *Instance) Suspend(ctx context.Context) error {
-	if i.api == nil {
-		return errNoKrunSnapshot
+	if i.monitor == host.MonitorKrun {
+		return i.suspendKrun(ctx)
 	}
 	c := i.cfg
 	snap := filepath.Join(c.Dir, snapshotDir)

@@ -48,7 +48,7 @@ func NewManager(d *db.DB) *Manager { return &Manager{db: d} }
 // has room for it to have, what the others there take aside.
 var columns = `e.id, e.short_id, e.owner_id, u.username, e.name, coalesce(e.template_id::text, ''), e.template_name,
 	e.spec, e.image, e.image_digest, e.cpus, e.memory_mib, e.desired, e.phase, e.reason, coalesce(e.worker_id::text, ''),
-	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress, w.gpu, coalesce(w.monitor, ''),
+	coalesce(w.name, ''), e.created_at, e.updated_at, e.stats, e.progress, w.gpu, coalesce(w.monitor, ''), coalesce(w.suspends, false),
 	tm.spec, coalesce(tm.revision, 0), e.template_revision, e.image_pin_want, e.image_update, e.image_rollback, e.ports_public,
 	coalesce(w.last_seen_at > now() - interval '` + strconv.Itoa(int(workers.OnlineWindow.Seconds())) + ` seconds'
 		AND w.revoked_at IS NULL, false),
@@ -72,7 +72,7 @@ func scan(row pgx.Row) (api.Environment, error) {
 	var room int
 	err := row.Scan(&e.ID, &e.ShortID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.ImageDigest, &e.CPUs,
 		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats,
-		&progress, &gpu, &e.Monitor, &tspec, &trev, &erev, &pinWant, &update, &rollback, &e.PortsPublic, &e.WorkerOnline, &room)
+		&progress, &gpu, &e.Monitor, &e.Suspends, &tspec, &trev, &erev, &pinWant, &update, &rollback, &e.PortsPublic, &e.WorkerOnline, &room)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}
@@ -347,12 +347,13 @@ func (m *Manager) SetDesired(ctx context.Context, p users.Principal, id string, 
 			return fmt.Errorf("%w: only a running environment can be suspended", ErrConflict)
 		}
 		if desired == api.DesiredSuspended {
-			var monitor, worker string
-			if err := tx.QueryRow(ctx, `SELECT monitor, name FROM workers WHERE id = $1`, *workerID).Scan(&monitor, &worker); err != nil {
+			var suspends bool
+			var worker string
+			if err := tx.QueryRow(ctx, `SELECT suspends, name FROM workers WHERE id = $1`, *workerID).Scan(&suspends, &worker); err != nil {
 				return err
 			}
-			if monitor == api.MonitorKrun {
-				return fmt.Errorf("%w: its worker, %s, runs it under libkrun, which cannot suspend a machine; stop it instead", ErrConflict, worker)
+			if !suspends {
+				return fmt.Errorf("%w: its worker, %s, cannot suspend a machine; stop it instead", ErrConflict, worker)
 			}
 		}
 

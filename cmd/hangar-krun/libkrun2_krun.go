@@ -334,9 +334,31 @@ func start(c krun.Config) error {
 	}
 	C.krun_vmm_builder_payload(&b, payload)
 	C.krun_vmm_builder_devices(&b, C.KrunDeviceManager(devices))
+	if c.Restore != "" {
+		if C.krun_vmm_builder_restore(&b, cstr(c.Restore), &e); e != nil {
+			return failed("restoring the machine", e)
+		}
+	}
 	vmm := C.krun_vmm_builder_build(&b, &e)
 	if e != nil {
 		return failed("building the machine", e)
+	}
+	handle := C.krun_vmm_handle(vmm, &e)
+	if e != nil {
+		return failed("getting the machine's handle", e)
+	}
+	suspend = func(dir string) error {
+		var e C.KrunError
+		if C.krun_vmm_handle_snapshot(handle, cstr(dir), &e); e != nil {
+			err := failed("taking the snapshot", e)
+			// A snapshot that failed leaves the machine paused.
+			e = nil
+			if C.krun_vmm_handle_resume(handle, &e); e != nil {
+				return fmt.Errorf("%w; and %w", err, failed("resuming", e))
+			}
+			return err
+		}
+		return nil
 	}
 	C.krun_vmm_run(vmm)
 	os.Exit(0)

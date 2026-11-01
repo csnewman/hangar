@@ -314,7 +314,9 @@ type Environment struct {
 	GPUSoftware bool   `json:"gpu_software,omitempty"`
 	// Monitor is what runs it on its worker (Monitor*); empty before its
 	// worker has said.
-	Monitor   string    `json:"monitor,omitempty"`
+	Monitor string `json:"monitor,omitempty"`
+	// Suspends is whether its worker can suspend it.
+	Suspends  bool      `json:"suspends,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -323,8 +325,9 @@ type Environment struct {
 const (
 	// MonitorCloudHypervisor runs them on Linux's KVM.
 	MonitorCloudHypervisor = "cloud-hypervisor"
-	// MonitorKrun runs them on macOS, under libkrun, which cannot suspend a
-	// machine or resize its memory while it runs.
+	// MonitorKrun runs them under libkrun, on macOS or Linux's KVM, which
+	// cannot resize a machine's memory while it runs, nor on macOS suspend
+	// it.
 	MonitorKrun = "krun"
 )
 
@@ -490,6 +493,8 @@ type WorkerStatus struct {
 	GPU *GPUInfo `json:"gpu,omitempty"`
 	// Monitor is what runs its environments (Monitor*).
 	Monitor string `json:"monitor,omitempty"`
+	// Suspends is whether it can suspend its environments.
+	Suspends bool `json:"suspends,omitempty"`
 }
 
 // GPUInfo is what a worker's virtual GPUs render with, as its GPU backend

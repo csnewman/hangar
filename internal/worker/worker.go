@@ -65,9 +65,10 @@ type GPUReporter interface {
 }
 
 // MonitorReporter is a runtime that says what runs its environments
-// (api.Monitor*).
+// (api.Monitor*), and whether it can suspend them.
 type MonitorReporter interface {
 	Monitor() string
+	Suspends() bool
 }
 
 // CapacityUser is a runtime that sizes what it runs by what the worker
@@ -366,6 +367,7 @@ func (w *Worker) reportLoop(ctx context.Context) error {
 			}
 			if m, ok := w.rt.(MonitorReporter); ok {
 				st.Monitor = m.Monitor()
+				st.Suspends = m.Suspends()
 			}
 			if store, ok := w.rt.(ImageStore); ok {
 				st.Images = store.Images()

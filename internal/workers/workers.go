@@ -602,8 +602,9 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 			}
 		}
 		if _, err := tx.Exec(ctx, `UPDATE workers SET cpus = $2, memory_mib = $3, labels = $4, unknown = $5,
-			stats = $6, images = $7, gpu = $8, monitor = $9, last_seen_at = now() WHERE id = $1`,
-			workerID, st.Capacity.CPUs, st.Capacity.MemoryMiB, labels, unknownJSON, stats, imagesJSON, gpu, st.Monitor); err != nil {
+			stats = $6, images = $7, gpu = $8, monitor = $9, suspends = $10, last_seen_at = now() WHERE id = $1`,
+			workerID, st.Capacity.CPUs, st.Capacity.MemoryMiB, labels, unknownJSON, stats, imagesJSON, gpu, st.Monitor,
+			st.Suspends); err != nil {
 			return err
 		}
 

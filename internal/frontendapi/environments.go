@@ -185,6 +185,7 @@ func environment(e api.Environment) Environment {
 		TemplateUpdated: optionalBool(e.TemplateUpdated),
 		GPUSoftware:     optionalBool(e.GPUSoftware),
 		Monitor:         monitor(e.Monitor),
+		Suspends:        optionalBool(e.Suspends),
 		ImageDigest:     optional(e.ImageDigest),
 		ImageUpdate:     imageUpdate(e.ImageUpdate),
 		ImageRollback:   imageRollback(e.ImageRollback),
