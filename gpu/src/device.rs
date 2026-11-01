@@ -204,6 +204,10 @@ const FENCE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 pub struct Live {
     pub resources: std::collections::BTreeSet<u32>,
     pub contexts: std::collections::BTreeSet<u32>,
+    /// Blobs of a lost Venus context that another context still uses, made
+    /// again as blank textures. The guest still takes them for blobs.
+    #[serde(default)]
+    pub stand_ins: std::collections::BTreeSet<u32>,
 }
 
 struct Request {
@@ -991,30 +995,62 @@ impl GpuBackend {
                 continue;
             }
             let Kind::Blob(b) = &r.kind else { continue };
-            if lost.contexts.contains(&b.ctx_id) {
+            if !lost.contexts.contains(&b.ctx_id) {
+                let create = ResourceCreateBlob {
+                    blob_mem: b.blob_mem,
+                    blob_flags: b.blob_flags,
+                    blob_id: b.blob_id,
+                    size: b.size,
+                };
+                match rutabaga.resource_create_blob(b.ctx_id, id, create, None, None) {
+                    Ok(()) => {
+                        self.blob_sizes.retain(|(i, _)| *i != id);
+                        self.blob_sizes.push((id, b.size));
+                        built.insert(id);
+                        continue;
+                    }
+                    Err(e) => warn!("venus blob {id}: {e}"),
+                }
+            }
+            // A compositor's context samples its clients' buffers, and loses
+            // all its state if one it binds is gone. A blank texture of the
+            // type it gave the buffer keeps the rest.
+            let stand_in = session
+                .contexts
+                .values()
+                .find_map(|c| c.virgl.as_ref()?.stand_in(id));
+            let Some(c) = stand_in else {
                 lost.resources.insert(id);
                 continue;
-            }
-            let create = ResourceCreateBlob {
-                blob_mem: b.blob_mem,
-                blob_flags: b.blob_flags,
-                blob_id: b.blob_id,
-                size: b.size,
             };
-            match rutabaga.resource_create_blob(b.ctx_id, id, create, None, None) {
+            let create = ResourceCreate3D {
+                target: c.target,
+                format: c.format,
+                bind: c.bind,
+                width: c.width,
+                height: c.height,
+                depth: c.depth,
+                array_size: c.array_size,
+                last_level: c.last_level,
+                nr_samples: c.nr_samples,
+                flags: c.flags,
+            };
+            match rutabaga.resource_create_3d(id, create) {
                 Ok(()) => {
-                    self.blob_sizes.retain(|(i, _)| *i != id);
-                    self.blob_sizes.push((id, b.size));
                     built.insert(id);
+                    lost.stand_ins.insert(id);
                 }
                 Err(e) => {
-                    warn!("venus blob {id}: {e}");
+                    warn!("venus blob {id}: standing a texture in for it: {e}");
                     lost.resources.insert(id);
                 }
             }
         }
 
         for (&id, r) in &session.resources {
+            if lost.stand_ins.contains(&id) {
+                continue;
+            }
             if let (true, Some(offset)) = (built.contains(&id), r.mapped_at) {
                 if let Err(e) = self.map_blob(rutabaga, id, offset) {
                     warn!("blob {id}: placing it in the window again: {e}");
@@ -1023,6 +1059,9 @@ impl GpuBackend {
         }
 
         for (&ctx_id, c) in &session.contexts {
+            if lost.contexts.contains(&ctx_id) {
+                continue;
+            }
             for &res in &c.attached {
                 if built.contains(&res) {
                     if let Err(e) = rutabaga.context_attach_resource(ctx_id, res) {
@@ -1085,9 +1124,10 @@ impl GpuBackend {
         }
 
         let summary = format!(
-            "{} of {} resources rebuilt ({contents_ok} with contents), {} of {} contexts rebuilt ({replayed} virgl, {venus_ok} venus), {} resources and {} contexts lost",
+            "{} of {} resources rebuilt ({contents_ok} with contents, {} as blank textures), {} of {} contexts rebuilt ({replayed} virgl, {venus_ok} venus), {} resources and {} contexts lost",
             built.len(),
             session.resources.len(),
+            lost.stand_ins.len(),
             replayed + venus_ok,
             session.contexts.len(),
             lost.resources.len(),
@@ -1215,8 +1255,23 @@ impl GpuBackend {
             }
             VIRTIO_GPU_CMD_RESOURCE_UNREF => {
                 if let Some(id) = Self::resource_of(hdr.type_, payload) {
+                    self.lost.stand_ins.remove(&id);
                     if self.lost.resources.remove(&id) {
                         return Self::err(&hdr, VIRTIO_GPU_RESP_OK_NODATA);
+                    }
+                }
+            }
+            // A blank texture standing in for a blob has no place in the
+            // window to give or take back.
+            VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB | VIRTIO_GPU_CMD_RESOURCE_UNMAP_BLOB => {
+                if let Some(id) = Self::resource_of(hdr.type_, payload) {
+                    if self.lost.stand_ins.contains(&id) {
+                        let code = if hdr.type_ == VIRTIO_GPU_CMD_RESOURCE_MAP_BLOB {
+                            VIRTIO_GPU_RESP_ERR_UNSPEC
+                        } else {
+                            VIRTIO_GPU_RESP_OK_NODATA
+                        };
+                        return Self::err(&hdr, code);
                     }
                 }
             }

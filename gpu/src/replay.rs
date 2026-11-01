@@ -74,6 +74,10 @@ const OBJECT_QUERY: u32 = 9;
 const OBJECT_STREAMOUT_TARGET: u32 = 10;
 const OBJECT_MSAA_SURFACE: u32 = 11;
 
+const PIPE_TEXTURE_2D: u32 = 2;
+const BIND_RENDER_TARGET: u32 = 1 << 1;
+const BIND_SAMPLER_VIEW: u32 = 1 << 3;
+
 /// The resource an object is made from, for the kinds made from one: its
 /// field in the object's create command.
 fn object_resource(o: &Obj) -> Option<u32> {
@@ -550,6 +554,26 @@ impl Virgl {
             .collect()
     }
 
+    /// A texture of the type this context gave a resource another context
+    /// made, to stand in for it when it cannot be made again.
+    pub fn stand_in(&self, res: u32) -> Option<Create3D> {
+        let &[_, _, format, bind, width, height, ..] = self.set_types.get(&res)?.as_slice() else {
+            return None;
+        };
+        Some(Create3D {
+            target: PIPE_TEXTURE_2D,
+            format,
+            bind: bind & (BIND_RENDER_TARGET | BIND_SAMPLER_VIEW),
+            width,
+            height,
+            depth: 1,
+            array_size: 1,
+            last_level: 0,
+            nr_samples: 0,
+            flags: 0,
+        })
+    }
+
     /// Commands that rebuild this context's state in a fresh renderer, after
     /// every context's `set_types`.
     ///
@@ -805,4 +829,36 @@ pub fn chunks_for(c: &Create3D) -> Result<Vec<Chunk>, String> {
         });
     }
     Ok(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_shared_resource_has_a_stand_in_of_its_type() {
+        let mut v = Virgl::new();
+        let scanout_shared = (1 << 14) | (1 << 20);
+        let words = [
+            header(ccmd::PIPE_RESOURCE_SET_TYPE, 0, 10),
+            47,
+            67,
+            BIND_SAMPLER_VIEW | scanout_shared,
+            640,
+            480,
+            0,
+            0,
+            0,
+            2560,
+            0,
+        ];
+        let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+        v.observe(&bytes);
+
+        let c = v.stand_in(47).unwrap();
+        assert_eq!((c.target, c.format), (PIPE_TEXTURE_2D, 67));
+        assert_eq!((c.width, c.height, c.depth, c.array_size), (640, 480, 1, 1));
+        assert_eq!(c.bind, BIND_SAMPLER_VIEW);
+        assert!(v.stand_in(48).is_none());
+    }
 }
