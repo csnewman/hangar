@@ -1,4 +1,4 @@
-From 82def7cb3a19e7ff0feffa0bc67cf9ffa8cd5fd7 Mon Sep 17 00:00:00 2001
+From ae0e256c0e7677af20111fc300a17ff7bb0cc5b2 Mon Sep 17 00:00:00 2001
 From: Chandler Newman <chandler2newman@gmail.com>
 Date: Tue, 22 Sep 2026 22:26:54 +0100
 Subject: [PATCH] venus: snapshot a context and restore it in another process
@@ -7,7 +7,9 @@ A Vulkan driver's state cannot be read out, but every command that built a
 Venus context passes through the decoder here. So each command whose effect
 lasts -- object creation, memory binds, descriptor updates, command buffer
 recording -- is kept as the raw bytes it arrived as, against the objects it
-concerns, and dropped when they are destroyed. Replayed in their original
+concerns, and dropped when they are destroyed -- unless a later command
+names them, as a pipeline names the shader modules a program destroys as
+soon as it has one. Replayed in their original
 order through the same decoder, they recreate every object under the id the
 guest already holds, since Venus ids are the guest's own. Submits, waits and
 queries are not kept: their lasting effect is on memory, which is read back.
@@ -18,37 +20,41 @@ objects their command concerns where the arguments do not say it plainly.
 
 A snapshot drains every ring, idles every device, and writes the recorded
 commands, each ring's virtqueue seqno, every host-visible allocation's
-contents and the state of fences and events. A restore replays the commands
-with replies switched off -- nobody is waiting for them -- then writes memory
-back and signals what was signalled. A ring created during a restore resumes
-at the head its shared memory holds rather than refusing a non-zero one.
+contents and the state of fences, events and semaphores. A binary
+semaphore's payload has no query, so the submit and semaphore handlers keep
+it. A restore replays the commands with replies switched off -- nobody is
+waiting for them -- then writes memory back and signals what was signalled.
+A ring created during a restore resumes at the head its shared memory holds
+rather than refusing a non-zero one, and starts only once the rest is back.
 
 It reaches the render server as two context ops, SNAPSHOT and RESTORE, which
 carry the snapshot as a file descriptor, and the embedder as
 virgl_renderer_context_snapshot and virgl_renderer_context_restore.
 ---
  server/render_context.c        |  32 ++
- server/render_protocol.h       |  22 ++
+ server/render_protocol.h       |  22 +
  server/render_state.c          |  14 +
  server/render_state.h          |   6 +
  src/meson.build                |   1 +
- src/proxy/proxy_context.c      |  43 +++
+ src/proxy/proxy_context.c      |  43 ++
  src/venus/vkr_buffer.c         |   9 +-
  src/venus/vkr_command_buffer.c |  11 +-
  src/venus/vkr_context.c        |   4 +-
  src/venus/vkr_context.h        |   9 +
  src/venus/vkr_descriptor_set.c |  18 +-
  src/venus/vkr_image.c          |   9 +-
+ src/venus/vkr_queue.c          |  47 +-
+ src/venus/vkr_queue.h          |   5 +
  src/venus/vkr_renderer.c       |  18 +
  src/venus/vkr_renderer.h       |  10 +
  src/venus/vkr_ring.c           |  20 +-
- src/venus/vkr_snapshot.c       | 685 +++++++++++++++++++++++++++++++++
- src/venus/vkr_snapshot.h       |  68 ++++
- src/venus/vkr_transport.c      |   4 +-
+ src/venus/vkr_snapshot.c       | 796 +++++++++++++++++++++++++++++++++
+ src/venus/vkr_snapshot.h       |  71 +++
+ src/venus/vkr_transport.c      |   8 +-
  src/virgl_context.h            |   7 +
  src/virglrenderer.c            |  20 +
  src/virglrenderer.h            |   8 +
- 21 files changed, 1007 insertions(+), 11 deletions(-)
+ 23 files changed, 1175 insertions(+), 13 deletions(-)
  create mode 100644 src/venus/vkr_snapshot.c
  create mode 100644 src/venus/vkr_snapshot.h
 
@@ -440,6 +446,122 @@ index 2b627e3..7a5148b 100644
     vn_replace_vkBindImageMemory2_args_handle(args);
     args->ret = vk->BindImageMemory2(args->device, args->bindInfoCount, args->pBindInfos);
  }
+diff --git a/src/venus/vkr_queue.c b/src/venus/vkr_queue.c
+index d75a229..ed9af96 100644
+--- a/src/venus/vkr_queue.c
++++ b/src/venus/vkr_queue.c
+@@ -364,6 +364,21 @@ vkr_dispatch_vkGetDeviceQueue(struct vn_dispatch_context *dispatch,
+    return;
+ }
+ 
++static void
++semaphore_set(VkSemaphore handle, bool signaled)
++{
++   struct vkr_semaphore *sem = vkr_semaphore_from_handle(handle);
++   if (sem && !sem->timeline)
++      sem->signaled = signaled;
++}
++
++static void
++semaphores_set(const VkSemaphore *handles, uint32_t count, bool signaled)
++{
++   for (uint32_t i = 0; i < count; i++)
++      semaphore_set(handles[i], signaled);
++}
++
+ static void
+ vkr_dispatch_vkQueueSubmit(UNUSED struct vn_dispatch_context *dispatch,
+                            struct vn_command_vkQueueSubmit *args)
+@@ -372,6 +387,12 @@ vkr_dispatch_vkQueueSubmit(UNUSED struct vn_dispatch_context *dispatch,
+    struct vkr_queue *queue = vkr_queue_from_handle(args->queue);
+    struct vn_device_proc_table *vk = &queue->device->proc_table;
+ 
++   for (uint32_t i = 0; i < args->submitCount; i++) {
++      const VkSubmitInfo *submit = &args->pSubmits[i];
++      semaphores_set(submit->pWaitSemaphores, submit->waitSemaphoreCount, false);
++      semaphores_set(submit->pSignalSemaphores, submit->signalSemaphoreCount, true);
++   }
++
+    vn_replace_vkQueueSubmit_args_handle(args);
+ 
+    mtx_lock(&queue->vk_mutex);
+@@ -388,6 +409,12 @@ vkr_dispatch_vkQueueBindSparse(UNUSED struct vn_dispatch_context *dispatch,
+    struct vkr_queue *queue = vkr_queue_from_handle(args->queue);
+    struct vn_device_proc_table *vk = &queue->device->proc_table;
+ 
++   for (uint32_t i = 0; i < args->bindInfoCount; i++) {
++      const VkBindSparseInfo *bind = &args->pBindInfo[i];
++      semaphores_set(bind->pWaitSemaphores, bind->waitSemaphoreCount, false);
++      semaphores_set(bind->pSignalSemaphores, bind->signalSemaphoreCount, true);
++   }
++
+    vn_replace_vkQueueBindSparse_args_handle(args);
+ 
+    mtx_lock(&queue->vk_mutex);
+@@ -413,6 +440,14 @@ vkr_dispatch_vkQueueSubmit2(UNUSED struct vn_dispatch_context *dispatch,
+    struct vkr_queue *queue = vkr_queue_from_handle(args->queue);
+    struct vn_device_proc_table *vk = &queue->device->proc_table;
+ 
++   for (uint32_t i = 0; i < args->submitCount; i++) {
++      const VkSubmitInfo2 *submit = &args->pSubmits[i];
++      for (uint32_t j = 0; j < submit->waitSemaphoreInfoCount; j++)
++         semaphore_set(submit->pWaitSemaphoreInfos[j].semaphore, false);
++      for (uint32_t j = 0; j < submit->signalSemaphoreInfoCount; j++)
++         semaphore_set(submit->pSignalSemaphoreInfos[j].semaphore, true);
++   }
++
+    vn_replace_vkQueueSubmit2_args_handle(args);
+ 
+    mtx_lock(&queue->vk_mutex);
+@@ -502,7 +537,13 @@ static void
+ vkr_dispatch_vkCreateSemaphore(struct vn_dispatch_context *dispatch,
+                                struct vn_command_vkCreateSemaphore *args)
+ {
+-   vkr_semaphore_create_and_add(dispatch->data, args);
++   const VkSemaphoreTypeCreateInfo *type =
++      vkr_find_struct(args->pCreateInfo->pNext, VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO);
++   const bool timeline = type && type->semaphoreType == VK_SEMAPHORE_TYPE_TIMELINE;
++
++   struct vkr_semaphore *sem = vkr_semaphore_create_and_add(dispatch->data, args);
++   if (sem)
++      sem->timeline = timeline;
+ }
+ 
+ static void
+@@ -558,6 +599,8 @@ vkr_dispatch_vkWaitSemaphoreResourceMESA(
+    struct vn_device_proc_table *vk = &dev->proc_table;
+    int fd = -1;
+ 
++   semaphore_set(args->semaphore, false);
++
+    vn_replace_vkWaitSemaphoreResourceMESA_args_handle(args);
+ 
+    const VkSemaphoreGetFdInfoKHR info = {
+@@ -585,6 +628,8 @@ vkr_dispatch_vkImportSemaphoreResourceMESA(
+    struct vkr_device *dev = vkr_device_from_handle(args->device);
+    struct vn_device_proc_table *vk = &dev->proc_table;
+ 
++   semaphore_set(args->pImportSemaphoreResourceInfo->semaphore, true);
++
+    vn_replace_vkImportSemaphoreResourceMESA_args_handle(args);
+ 
+    const VkImportSemaphoreResourceInfoMESA *res_info = args->pImportSemaphoreResourceInfo;
+diff --git a/src/venus/vkr_queue.h b/src/venus/vkr_queue.h
+index 6a3a909..d760dfc 100644
+--- a/src/venus/vkr_queue.h
++++ b/src/venus/vkr_queue.h
+@@ -58,6 +58,11 @@ VKR_DEFINE_OBJECT_CAST(fence, VK_OBJECT_TYPE_FENCE, VkFence)
+ 
+ struct vkr_semaphore {
+    struct vkr_object base;
++   bool timeline;
++   /* Whether a binary semaphore holds a payload, as the commands seen here
++    * leave it: a snapshot needs it, and the driver has no query for it.
++    */
++   bool signaled;
+ };
+ VKR_DEFINE_OBJECT_CAST(semaphore, VK_OBJECT_TYPE_SEMAPHORE, VkSemaphore)
+ 
 diff --git a/src/venus/vkr_renderer.c b/src/venus/vkr_renderer.c
 index 8aae924..4ee91a4 100644
 --- a/src/venus/vkr_renderer.c
@@ -542,10 +664,10 @@ index 0d4899e..d3331ee 100644
  
 diff --git a/src/venus/vkr_snapshot.c b/src/venus/vkr_snapshot.c
 new file mode 100644
-index 0000000..e0ec0f5
+index 0000000..de5be34
 --- /dev/null
 +++ b/src/venus/vkr_snapshot.c
-@@ -0,0 +1,685 @@
+@@ -0,0 +1,796 @@
 +/*
 + * Copyright 2026 Hangar
 + * SPDX-License-Identifier: MIT
@@ -569,7 +691,7 @@ index 0000000..e0ec0f5
 +#include "vn_protocol_renderer_dispatches.h"
 +
 +#define SNAPSHOT_MAGIC 0x53524b56u /* "VKRS" */
-+#define SNAPSHOT_VERSION 1u
++#define SNAPSHOT_VERSION 2u
 +
 +enum record_kind {
 +   /* creation, binds, descriptor updates: kept while any owner lives */
@@ -587,6 +709,8 @@ index 0000000..e0ec0f5
 +   vkr_object_id *owners;
 +   uint32_t size;
 +   uint8_t *bytes;
++   /* its owner is destroyed, but a later record names it */
++   bool retired;
 +};
 +
 +/* Owners noted by handlers while one command is being dispatched on this
@@ -693,22 +817,60 @@ index 0000000..e0ec0f5
 +   mtx_unlock(&rec->mutex);
 +}
 +
++/* Whether a record after this one names the object. Arguments are not
++ * parsed: any eight bytes equal to the id count, which at worst keeps a
++ * record longer than it is needed.
++ */
++static bool
++named_later(struct vkr_record *rec, struct record_entry *after, vkr_object_id id)
++{
++   for (struct list_head *n = after->head.next; n != &rec->entries; n = n->next) {
++      const struct record_entry *e = LIST_ENTRY(struct record_entry, n, head);
++      if (memmem(e->bytes, e->size, &id, sizeof(id)))
++         return true;
++   }
++   return false;
++}
++
++/* An object a later record names must exist when that record is replayed,
++ * however soon it was destroyed: a pipeline is made from shader modules that
++ * programs destroy as soon as it exists. So the records of a destroyed object
++ * that something later names are kept, retired, and replayed with the rest.
++ */
 +void
 +vkr_record_forget(struct vkr_context *ctx, vkr_object_id id)
 +{
 +   struct vkr_record *rec = &ctx->record;
 +   mtx_lock(&rec->mutex);
 +   list_for_each_entry_safe (struct record_entry, e, &rec->entries, head) {
++      if (e->retired)
++         continue;
 +      uint32_t kept = 0;
 +      for (uint32_t i = 0; i < e->owner_count; i++) {
 +         if (e->owners[i] != id)
 +            e->owners[kept++] = e->owners[i];
 +      }
-+      e->owner_count = kept;
-+      if (!kept)
++      if (kept) {
++         e->owner_count = kept;
++      } else if (e->kind == RECORD_STATE && named_later(rec, e, id)) {
++         e->retired = true;
++      } else {
 +         entry_free(e);
++      }
 +   }
 +   mtx_unlock(&rec->mutex);
++}
++
++/* Drops retired records nothing later names any more. Newest first, so one
++ * kept only for another retired record goes with it.
++ */
++static void
++prune_retired(struct vkr_record *rec)
++{
++   list_for_each_entry_safe_rev (struct record_entry, e, &rec->entries, head) {
++      if (e->retired && !named_later(rec, e, e->owners[0]))
++         entry_free(e);
++   }
 +}
 +
 +static uint64_t
@@ -891,8 +1053,8 @@ index 0000000..e0ec0f5
 +   mtx_unlock(&ctx->object_mutex);
 +}
 +
-+/* Appends every device's memory contents, and the state of its fences and
-+ * events, which live in the driver and not in any recorded command.
++/* Appends every device's memory contents, and the state of its fences, events
++ * and semaphores, which live in the driver and not in any recorded command.
 + */
 +static void
 +put_device_state(struct vkr_context *ctx, struct growbuf *mem, struct growbuf *sync,
@@ -934,14 +1096,28 @@ index 0000000..e0ec0f5
 +            put_u64(sync, child->id);
 +            put_u32(sync, VK_OBJECT_TYPE_FENCE);
 +            put_u32(sync, vk->GetFenceStatus(device, child->handle.fence) == VK_SUCCESS);
++            put_u64(sync, 0);
 +            (*sync_count)++;
 +            break;
 +         case VK_OBJECT_TYPE_EVENT:
 +            put_u64(sync, child->id);
 +            put_u32(sync, VK_OBJECT_TYPE_EVENT);
 +            put_u32(sync, vk->GetEventStatus(device, child->handle.event) == VK_EVENT_SET);
++            put_u64(sync, 0);
 +            (*sync_count)++;
 +            break;
++         case VK_OBJECT_TYPE_SEMAPHORE: {
++            const struct vkr_semaphore *sem = (const struct vkr_semaphore *)child;
++            uint64_t value = 0;
++            if (sem->timeline)
++               vk->GetSemaphoreCounterValue(device, child->handle.semaphore, &value);
++            put_u64(sync, child->id);
++            put_u32(sync, VK_OBJECT_TYPE_SEMAPHORE);
++            put_u32(sync, sem->timeline ? value != 0 : sem->signaled);
++            put_u64(sync, value);
++            (*sync_count)++;
++            break;
++         }
 +         default:
 +            break;
 +         }
@@ -968,6 +1144,7 @@ index 0000000..e0ec0f5
 +
 +   struct vkr_record *rec = &ctx->record;
 +   mtx_lock(&rec->mutex);
++   prune_retired(rec);
 +   uint32_t entry_count = 0;
 +   list_for_each_entry (struct record_entry, e, &rec->entries, head)
 +      entry_count++;
@@ -1113,6 +1290,49 @@ index 0000000..e0ec0f5
 +   return found;
 +}
 +
++/* A semaphore comes back unsignaled. A binary one that held a payload gets
++ * it from an empty submission, which a program that acquired an image and has
++ * yet to submit the work waiting on it relies on; a timeline one is signaled
++ * to its value.
++ */
++static void
++restore_semaphore(struct vkr_context *ctx,
++                  struct vkr_device *dev,
++                  struct vkr_semaphore *sem,
++                  uint64_t value)
++{
++   struct vn_device_proc_table *vk = &dev->proc_table;
++   VkDevice device = dev->base.handle.device;
++   VkSemaphore handle = sem->base.handle.semaphore;
++
++   if (sem->timeline) {
++      uint64_t current = 0;
++      vk->GetSemaphoreCounterValue(device, handle, &current);
++      if (value <= current)
++         return;
++      const VkSemaphoreSignalInfo info = {
++         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO,
++         .semaphore = handle,
++         .value = value,
++      };
++      vk->SignalSemaphore(device, &info);
++      return;
++   }
++
++   struct vkr_queue *q = queue_of(ctx, dev);
++   if (!q)
++      return;
++   const VkSubmitInfo submit = {
++      .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
++      .signalSemaphoreCount = 1,
++      .pSignalSemaphores = &handle,
++   };
++   mtx_lock(&q->vk_mutex);
++   vk->QueueSubmit(q->base.handle.queue, 1, &submit, VK_NULL_HANDLE);
++   mtx_unlock(&q->vk_mutex);
++   sem->signaled = true;
++}
++
 +bool
 +vkr_context_restore(struct vkr_context *ctx, int fd)
 +{
@@ -1203,6 +1423,7 @@ index 0000000..e0ec0f5
 +      const uint64_t id = take_u64(&r);
 +      const uint32_t type = take_u32(&r);
 +      const uint32_t set = take_u32(&r);
++      const uint64_t value = take_u64(&r);
 +      struct vkr_object *obj = vkr_context_get_object(ctx, id);
 +      if (!obj || !set)
 +         continue;
@@ -1222,8 +1443,20 @@ index 0000000..e0ec0f5
 +            vk->WaitForFences(dev->base.handle.device, 1, &obj->handle.fence, VK_TRUE,
 +                              UINT64_MAX);
 +         }
++      } else if (type == VK_OBJECT_TYPE_SEMAPHORE) {
++         restore_semaphore(ctx, dev, (struct vkr_semaphore *)obj, value);
 +      }
 +   }
++
++   /* Only now do the rings run: a ring's commands read device memory, and wait
++    * for the virtqueue seqno the guest last submitted.
++    */
++   mtx_lock(&ctx->ring_mutex);
++   list_for_each_entry (struct vkr_ring, ring, &ctx->rings, head) {
++      if (!ring->started)
++         vkr_ring_start(ring);
++   }
++   mtx_unlock(&ctx->ring_mutex);
 +
 +   const bool ok = !r.failed;
 +   munmap(map, (size_t)st.st_size);
@@ -1233,10 +1466,10 @@ index 0000000..e0ec0f5
 +}
 diff --git a/src/venus/vkr_snapshot.h b/src/venus/vkr_snapshot.h
 new file mode 100644
-index 0000000..e0ac8d6
+index 0000000..54ef80e
 --- /dev/null
 +++ b/src/venus/vkr_snapshot.h
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,71 @@
 +/*
 + * Copyright 2026 Hangar
 + * SPDX-License-Identifier: MIT
@@ -1256,7 +1489,8 @@ index 0000000..e0ac8d6
 + * passes through the decoder here. So the raw bytes of each command whose
 + * effect lasts -- object creation, memory binds, descriptor updates, command
 + * buffer recording -- are kept against the objects they concern, and dropped
-+ * when those objects are destroyed. Replayed in their original order through
++ * when those objects are destroyed, unless a later record names them.
++ * Replayed in their original order through
 + * the same decoder, they recreate every object under the id the guest already
 + * holds. What commands only use -- submits, waits, queries -- leaves its
 + * lasting effect in memory, which is read back directly.
@@ -1290,7 +1524,9 @@ index 0000000..e0ac8d6
 +void
 +vkr_record_note(struct vkr_context *ctx, vkr_object_id id);
 +
-+/* An object is gone: records that belonged only to it go too. */
++/* An object is gone: records that belonged only to it go too, but for those
++ * a later record needs it for.
++ */
 +void
 +vkr_record_forget(struct vkr_context *ctx, vkr_object_id id);
 +
@@ -1306,7 +1542,7 @@ index 0000000..e0ac8d6
 +
 +#endif /* VKR_SNAPSHOT_H */
 diff --git a/src/venus/vkr_transport.c b/src/venus/vkr_transport.c
-index a8daba4..4f4aa7f 100644
+index a8daba4..d5748e1 100644
 --- a/src/venus/vkr_transport.c
 +++ b/src/venus/vkr_transport.c
 @@ -80,7 +80,7 @@ vkr_dispatch_vkExecuteCommandStreamsMESA(
@@ -1326,7 +1562,18 @@ index a8daba4..4f4aa7f 100644
  
     mtx_lock(&ctx->ring_mutex);
     list_addtail(&ring->head, &ctx->rings);
-@@ -284,6 +285,7 @@ vkr_dispatch_vkDestroyRingMESA(struct vn_dispatch_context *dispatch,
+@@ -260,7 +261,9 @@ vkr_dispatch_vkCreateRingMESA(struct vn_dispatch_context *dispatch,
+       ring->prio = priority_info->priority;
+    }
+ 
+-   vkr_ring_start(ring);
++   /* a restored ring starts once the restore has put back what it reads */
++   if (!ctx->restoring)
++      vkr_ring_start(ring);
+ }
+ 
+ static void
+@@ -284,6 +287,7 @@ vkr_dispatch_vkDestroyRingMESA(struct vn_dispatch_context *dispatch,
     mtx_lock(&ctx->ring_mutex);
     vkr_ring_destroy(ring);
     mtx_unlock(&ctx->ring_mutex);

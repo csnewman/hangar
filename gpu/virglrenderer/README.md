@@ -13,15 +13,19 @@ half of GPU suspend that only the renderer can do, because Venus commands
 travel through a ring in shared memory that the renderer reads directly and
 `hangar-gpu` never sees.
 
-**1007 insertions, 11 deletions, across 21 files**, most of it the new
+**1175 insertions, 13 deletions, across 23 files**, most of it the new
 `src/venus/vkr_snapshot.c`.
 
 The renderer keeps the raw bytes of every command whose effect lasts, against
-the objects it concerns, and drops them when those objects are destroyed.
-Replaying the survivors in order through the same decoder recreates every
-object under the id the guest already holds. A snapshot also carries every
-host-visible allocation's contents and the state of fences and events; a ring
-created during a restore resumes at the head its shared memory holds.
+the objects it concerns, and drops them when those objects are destroyed,
+unless a later command names them: a pipeline names the shader modules a
+program destroys as soon as it has one. Replaying the survivors in order
+through the same decoder recreates every object under the id the guest
+already holds. A snapshot also carries every host-visible allocation's
+contents and the state of fences, events and semaphores, a binary
+semaphore's payload as the submit and semaphore commands left it, since the
+driver has no query for it. A ring created during a restore resumes at the
+head its shared memory holds, and starts once the rest is back.
 
 `hangar-gpu` drives it through `virgl_renderer_context_snapshot` and
 `virgl_renderer_context_restore`, and restores the context's shared-memory
@@ -43,6 +47,8 @@ Measured with `hangar-vkcheck` -- command buffers recorded once and resubmitted
 every frame, descriptor sets written once, a uniform buffer kept mapped -- a
 Vulkan program mid-render carries on across a suspend and a host restart:
 86 of 86 commands replayed, 8 of 8 allocations written back, no GPU errors.
+Under libkrun, vkcube on labwc carries on rendering across two suspends in a
+row, beside a second Vulkan program: 152 of 152 commands replayed each time.
 
 ### Not covered
 
@@ -53,9 +59,9 @@ Vulkan program mid-render carries on across a suspend and a host restart:
   rewrites the same set every frame grows the record until the set is freed.
 - Objects created together and freed separately -- descriptor sets from one
   allocation, say -- all come back, including the freed ones.
-- Binary semaphores signalled but not yet waited on, and timeline semaphore
-  values, are not carried.
-- One program, one context, on lavapipe.
+- A destroyed object that a later command names comes back on restore and
+  stays until the program exits: a shader module per pipeline, say.
+- Proven on lavapipe only.
 
 ## 0002-vrend-record-context-made-current.patch
 

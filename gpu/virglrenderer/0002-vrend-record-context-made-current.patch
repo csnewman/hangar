@@ -1,4 +1,4 @@
-From ce72f77cb0ec4e2e74317a5b33340782e152f782 Mon Sep 17 00:00:00 2001
+From 1262c8f10f8f000220682c2e7f217759000e3f76 Mon Sep 17 00:00:00 2001
 From: Chandler Newman <chandler2newman@gmail.com>
 Date: Wed, 23 Sep 2026 13:01:27 +0100
 Subject: [PATCH] vrend: record the context made current by creating one
