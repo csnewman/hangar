@@ -3,7 +3,9 @@ package agent
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -41,24 +43,38 @@ func (s *Server) Close() error { return s.ln.Close() }
 // calling even if the agent lies about its hostname. On AF_VSOCK the kernel
 // stamps it; over a unix socket it is the host's own allocation for the guest
 // that socket belongs to.
+//
+// A connection that ends before its Hello is one the agent gave up on, as it
+// does when a resumed guest's vsock is reset under it, and the agent dials
+// again; Accept waits for that, within the same timeout.
 func (s *Server) Accept(timeout time.Duration) (*Session, error) {
-	f, cid, err := s.ln.Accept(timeout)
-	if err != nil {
-		return nil, err
+	deadline := time.Now().Add(timeout)
+	for {
+		left := timeout
+		if timeout > 0 {
+			left = time.Until(deadline)
+		}
+		f, cid, err := s.ln.Accept(left)
+		if err != nil {
+			return nil, err
+		}
+		sess := &Session{
+			CID:     cid,
+			f:       f,
+			br:      bufio.NewReader(f),
+			next:    1,
+			pending: map[uint64]chan *Response{},
+		}
+		if err := sess.readHello(left); err != nil {
+			f.Close()
+			if errors.Is(err, io.EOF) && (timeout <= 0 || time.Now().Before(deadline)) {
+				continue
+			}
+			return nil, err
+		}
+		go sess.readReplies()
+		return sess, nil
 	}
-	sess := &Session{
-		CID:     cid,
-		f:       f,
-		br:      bufio.NewReader(f),
-		next:    1,
-		pending: map[uint64]chan *Response{},
-	}
-	if err := sess.readHello(timeout); err != nil {
-		f.Close()
-		return nil, err
-	}
-	go sess.readReplies()
-	return sess, nil
 }
 
 // Session is a live connection to one environment's agent.
