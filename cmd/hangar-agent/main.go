@@ -68,6 +68,7 @@ func main() {
 
 	widenReclaim()
 	go offload()
+	go compact()
 	go serveTerminals()
 	go serveEditor()
 	go serveDesktop()

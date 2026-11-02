@@ -22,6 +22,16 @@ import (
 // starts to cost, the guest's processes wait on memory to be brought back,
 // which the kernel's pressure stall information counts, and the agent asks
 // for less, then for nothing until the waiting stops.
+//
+// Pages read back from a fast disk barely stall anything, so the pressure
+// alone lets the agent go on taking a guest's working set, which comes
+// straight back: an idle guest re-reading its files at megabytes a second,
+// its free memory scattered in pieces free page reporting cannot hand to
+// the host. The kernel counts what is read back (its refaults), some of it
+// long after it was taken. Once what was read back over the last minute or
+// so is a share of what was taken over it, what is left is in use, and the
+// agent waits before asking again, twice as long each time it finds the
+// same, and half as long each time it does not.
 const (
 	// offloadEvery is how often the agent asks.
 	offloadEvery = 5 * time.Second
@@ -32,6 +42,14 @@ const (
 	// pressureTarget is the share of the time some process may spend
 	// waiting on memory, at which the agent stops asking.
 	pressureTarget = 0.001
+	// refaultShare is the share of what was taken that may be read back
+	// before the agent stops asking.
+	refaultShare = 0.25
+	// refaultDecay is how much of what was taken and read back carries
+	// over from one round to the next: about a minute's worth counts.
+	refaultDecay = 0.92
+	// maxHold is the longest the agent then waits before asking again.
+	maxHold = 5 * time.Minute
 )
 
 const (
@@ -51,6 +69,14 @@ func offload() {
 		fmt.Fprintf(os.Stderr, "hangar-agent: offload: %v\n", err)
 		return
 	}
+	page := int64(os.Getpagesize())
+	taken, back := reclaimCounts()
+	// tookRecently and backRecently are what was taken and read back over
+	// the last minute or so, in bytes.
+	var tookRecently, backRecently float64
+	// hold is how many rounds the agent last waited, and wait how many it
+	// has still to wait.
+	var hold, wait int
 	t := time.NewTicker(offloadEvery)
 	defer t.Stop()
 	for range t.C {
@@ -60,6 +86,23 @@ func offload() {
 		}
 		pressure := float64(stall-prev) / float64(offloadEvery.Microseconds())
 		prev = stall
+		// What the last round took, and what this one read back.
+		took, readBack := taken, back
+		taken, back = reclaimCounts()
+		took, readBack = (taken-took)*page, (back-readBack)*page
+		tookRecently = tookRecently*refaultDecay + float64(took)
+		backRecently = backRecently*refaultDecay + float64(readBack)
+		switch {
+		case took > 0 && backRecently > tookRecently*refaultShare:
+			hold = min(max(2*hold, 1), int(maxHold/offloadEvery))
+			wait = hold
+		case took > 0:
+			hold /= 2
+		}
+		if wait > 0 {
+			wait--
+			continue
+		}
 		if pressure >= pressureTarget {
 			continue
 		}
@@ -88,6 +131,29 @@ func writeReclaim(bytes int64) error {
 		err = cerr
 	}
 	return err
+}
+
+// reclaimCounts are the pages the agent's reclaim has taken since boot and
+// the pages read back after reclaim took them (/proc/vmstat).
+func reclaimCounts() (taken, back int64) {
+	b, err := os.ReadFile("/proc/vmstat")
+	if err != nil {
+		return 0, 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		key, v, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		n, _ := strconv.ParseInt(v, 10, 64)
+		switch key {
+		case "pgsteal_proactive":
+			taken += n
+		case "workingset_refault_anon", "workingset_refault_file":
+			back += n
+		}
+	}
+	return taken, back
 }
 
 // memoryStall is how long, in microseconds since boot, some process has
