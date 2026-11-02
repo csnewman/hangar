@@ -1,4 +1,4 @@
-From 479f763d2c16c25bfc224af2a45637044ecc4870 Mon Sep 17 00:00:00 2001
+From acfbf26bf8269dcca00a1374272bd509c8893b53 Mon Sep 17 00:00:00 2001
 From: Chandler Newman <chandler2newman@gmail.com>
 Date: Sun, 1 Nov 2026 20:17:15 +0000
 Subject: [PATCH 4/5] proxy: signal fences through a pipe where there is no

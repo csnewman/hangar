@@ -8,13 +8,10 @@ package main
 import "C"
 
 import (
-	"errors"
 	"os"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
-
-	"github.com/csnewman/hangar/internal/krun"
 )
 
 const (
@@ -29,14 +26,6 @@ func deviceManager() (C.KrunDeviceManager, func(unsafe.Pointer)) {
 	return C.KrunDeviceManager(devices), func(d unsafe.Pointer) {
 		C.krun_mmio_device_manager_add(devices, C.KrunAttachDevice(d))
 	}
-}
-
-// addMemory refuses a virtio-mem region: libkrun has none on macOS.
-func addMemory(c krun.Config, _ func(unsafe.Pointer)) error {
-	if c.HotplugMiB > 0 {
-		return errors.New("libkrun has no hotpluggable memory on macOS")
-	}
-	return nil
 }
 
 // renderServerEnv lets the render server find the Vulkan loader bundled in

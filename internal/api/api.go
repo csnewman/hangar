@@ -325,9 +325,7 @@ type Environment struct {
 const (
 	// MonitorCloudHypervisor runs them on Linux's KVM.
 	MonitorCloudHypervisor = "cloud-hypervisor"
-	// MonitorKrun runs them under libkrun, on macOS or Linux's KVM, which
-	// cannot resize a machine's memory while it runs, nor on macOS suspend
-	// it.
+	// MonitorKrun runs them under libkrun, on macOS or Linux's KVM.
 	MonitorKrun = "krun"
 )
 

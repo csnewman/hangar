@@ -31,6 +31,12 @@ vm:
   # `dev/kernel-dev.sh 16k`'s build: 16 KiB pages, which the Mac maps
   # guests' GPU memory in.
   kernel: /Users/csnewman/Projects/hangar/out/kernel-dev-16k/vmlinuz
+  # The Mac's libkrun renders through Venus whatever this says; with
+  # venus_restore the render server records what carries a Vulkan program,
+  # zink's desktop among them, across a suspend.
+  gpu:
+    venus: true
+    venus_restore: true
   # Built by dev/mac-worker.sh for the guest: each boot's initramfs, as
   # init, and then the agent.
   agent: /Users/csnewman/Projects/hangar/out/mac-worker/hangar-agent-guest

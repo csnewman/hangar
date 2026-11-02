@@ -1,4 +1,4 @@
-From 371e73f7970504111ec61badc6145edd8a4eb22c Mon Sep 17 00:00:00 2001
+From 44a3348bf445a51b6b698c878cddab339937226f Mon Sep 17 00:00:00 2001
 From: matthewperiut <matthewperiut@gmail.com>
 Date: Wed, 23 Sep 2026 19:10:49 -0400
 Subject: [PATCH 3/5] venus: fix the vulkan_metal.h include on macOS

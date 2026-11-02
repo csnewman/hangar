@@ -16,7 +16,7 @@ half of GPU suspend that only the renderer can do, because Venus commands
 travel through a ring in shared memory that the renderer reads directly and
 `hangar-gpu` never sees.
 
-**1196 insertions, 13 deletions, across 23 files**, most of it the new
+**1307 insertions, 15 deletions, across 23 files**, most of it the new
 `src/venus/vkr_snapshot.c`.
 
 The renderer keeps the raw bytes of every command whose effect lasts, against
@@ -24,15 +24,21 @@ the objects it concerns, and drops them when those objects are destroyed,
 unless a later command names them: a pipeline names the shader modules a
 program destroys as soon as it has one. Replaying the survivors in order
 through the same decoder recreates every object under the id the guest
-already holds. A snapshot also carries every host-visible allocation's
+already holds. A resource made from one of the context's memories is kept in
+that order too, since the context's own commands import it by its id -- a
+compositor rendering through Venus imports the buffers it allocated -- and the
+replay makes it again there; the embedder, making it afterwards, takes the
+replay's export, as a memory can be exported only once. A snapshot also
+carries every host-visible allocation's
 contents and the state of fences, events and semaphores, a binary
 semaphore's payload as the submit and semaphore commands left it, since the
 driver has no query for it. A ring created during a restore resumes at the
 head its shared memory holds, and starts once the rest is back.
 
-`hangar-gpu` drives it through `virgl_renderer_context_snapshot` and
-`virgl_renderer_context_restore`, and restores the context's shared-memory
-blobs first, since the rings live in them.
+`hangar-gpu` and libkrun drive it through `virgl_renderer_context_snapshot`
+and `virgl_renderer_context_restore`, and restore the context's shared-memory
+blobs first, since the rings live in them. libkrun replays the contexts one at
+a time, each after those whose buffers it imports, with those attached.
 
 ### Off unless asked for
 
@@ -52,6 +58,9 @@ Vulkan program mid-render carries on across a suspend and a host restart:
 86 of 86 commands replayed, 8 of 8 allocations written back, no GPU errors.
 Under libkrun, vkcube on labwc carries on rendering across two suspends in a
 row, beside a second Vulkan program: 152 of 152 commands replayed each time.
+On the Mac (KosmicKrisp), labwc rendering through zink carries on across a
+suspend with vkcube spinning in it: 851 of 855 commands replayed for the
+compositor, 160 of 160 for vkcube.
 
 ### Not covered
 
@@ -64,7 +73,7 @@ row, beside a second Vulkan program: 152 of 152 commands replayed each time.
   allocation, say -- all come back, including the freed ones.
 - A destroyed object that a later command names comes back on restore and
   stays until the program exits: a shader module per pipeline, say.
-- Proven on lavapipe only.
+- Proven on lavapipe and KosmicKrisp only.
 
 ## 0002-vrend-record-context-made-current.patch
 

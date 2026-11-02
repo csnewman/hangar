@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -35,10 +34,6 @@ import (
 var guestPorts = []uint32{terminal.Port, vscode.Port, guestport.Port, sshd.Port, procs.Port, profile.Port,
 	code.Port, desktop.Port}
 
-// errNoKrunSnapshot is what libkrun 1.x, the Mac's, cannot do that Cloud
-// Hypervisor can.
-var errNoKrunSnapshot = fmt.Errorf("suspending a machine under libkrun is %w on macOS: its libkrun takes no snapshot", errUnsupported)
-
 // krunDir is where a machine under libkrun has its vsock sockets: under
 // /tmp, since a unix socket's path is at most 103 bytes on macOS, which a
 // worker's state directory leaves too little of.
@@ -59,9 +54,6 @@ func guestSocket(base string, port uint32) string {
 func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string, caps *host.Caps,
 	resuming bool, progress func(string)) error {
 	cfg := i.cfg
-	if resuming && caps.OS != "linux" {
-		return errNoKrunSnapshot
-	}
 	dir, err := krunDir(cfg.ID)
 	if err != nil {
 		return err
@@ -75,7 +67,7 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 	switch rec := cfg.suspended(); {
 	case resuming && rec != nil && rec.KrunMemory != nil:
 		boot, region = rec.KrunMemory.Boot, rec.KrunMemory.Region
-	case !resuming && caps.OS == "linux":
+	case !resuming:
 		boot, region, plugged = ch.Hotplug(cfg.MemoryMiB, cfg.MemoryMaxMiB)
 	}
 	i.krunBoot, i.krunRegion = boot, region
@@ -326,9 +318,6 @@ func (i *Instance) krunMemory(ctx context.Context) (ch.Memory, error) {
 // and stops hangar-krun. If it cannot, the guest carries on running.
 func (i *Instance) suspendKrun(ctx context.Context) error {
 	c := i.cfg
-	if runtime.GOOS != "linux" {
-		return errNoKrunSnapshot
-	}
 	snap := filepath.Join(c.Dir, snapshotDir)
 	partial := snap + ".new"
 	os.RemoveAll(partial)

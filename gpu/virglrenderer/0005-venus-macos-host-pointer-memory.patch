@@ -1,4 +1,4 @@
-From 1b17bcee472bf4316718e23c8aa3ea878f429db7 Mon Sep 17 00:00:00 2001
+From 6ce0f8593eed04c11752824f250211ab33c241b2 Mon Sep 17 00:00:00 2001
 From: Chandler Newman <chandler2newman@gmail.com>
 Date: Sun, 1 Nov 2026 20:17:15 +0000
 Subject: [PATCH 5/5] venus: share memory on macOS with drivers that only
@@ -83,13 +83,13 @@ index 0673a8f8..8f365d95 100644
  
  void
 diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
-index 138a8e4e..3b6a24fc 100644
+index ef30b634..cd007ac6 100644
 --- a/src/venus/vkr_context.c
 +++ b/src/venus/vkr_context.c
-@@ -189,10 +189,14 @@ static inline void
- vkr_context_free_resource(struct hash_entry *entry)
- {
-    struct vkr_resource *res = entry->data;
+@@ -194,10 +194,14 @@ vkr_context_free_resource(struct hash_entry *entry)
+          close(res->replayed->u.fd);
+       free(res->replayed);
+    }
 -   if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
 -      munmap(res->u.data, res->size);
 -   else if (res->u.fd >= 0)
@@ -104,9 +104,9 @@ index 138a8e4e..3b6a24fc 100644
     free(res);
  }
  
-@@ -238,12 +242,15 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
-    res->fd_type = fd_type;
+@@ -244,12 +248,15 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
     res->size = blob_size;
+    res->replayed = NULL;
  
 -   /* fd and mmap_ptr cannot be valid at the same time, but allowed to be -1 and NULL */
 -   assert(fd < 0 || !mmap_ptr);
@@ -124,7 +124,7 @@ index 138a8e4e..3b6a24fc 100644
  
     if (!vkr_context_add_resource(ctx, res)) {
        free(res);
-@@ -265,9 +272,12 @@ vkr_context_import_resource_from_shm(struct vkr_context *ctx,
+@@ -271,9 +278,12 @@ vkr_context_import_resource_from_shm(struct vkr_context *ctx,
     if (mmap_ptr == MAP_FAILED)
        return false;
  
@@ -138,7 +138,7 @@ index 138a8e4e..3b6a24fc 100644
        return false;
     }
  
-@@ -298,9 +308,12 @@ vkr_context_create_resource_from_shm(struct vkr_context *ctx,
+@@ -304,9 +314,12 @@ vkr_context_create_resource_from_shm(struct vkr_context *ctx,
        return false;
     }
  
@@ -153,7 +153,7 @@ index 138a8e4e..3b6a24fc 100644
        return false;
     }
 diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
-index 4166b523..8d59f713 100644
+index bff0a15e..0c6fda54 100644
 --- a/src/venus/vkr_context.h
 +++ b/src/venus/vkr_context.h
 @@ -28,10 +28,13 @@ struct vkr_resource {
@@ -169,8 +169,8 @@ index 4166b523..8d59f713 100644
 +   int shm_fd;
 +
     size_t size;
- };
  
+    /* when a restore's replay made it, the export of its memory, which the
 diff --git a/src/venus/vkr_device.c b/src/venus/vkr_device.c
 index 603f45b8..6d5a3dfc 100644
 --- a/src/venus/vkr_device.c

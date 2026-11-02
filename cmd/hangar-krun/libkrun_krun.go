@@ -379,3 +379,33 @@ func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
 }
+
+// addMemory gives the guest a virtio-mem region, if c has one.
+func addMemory(c krun.Config, add func(unsafe.Pointer)) error {
+	var e C.KrunError
+	if c.HotplugMiB > 0 {
+		m := C.krun_mem_device_new(C.uint32_t(c.HotplugMiB), &e)
+		if e != nil {
+			return failed("the hotpluggable memory", e)
+		}
+		mem := C.krun_mem_device_handle(m)
+		// A restored machine's device has what it had when it was suspended.
+		if c.PluggedMiB > 0 && c.Restore == "" {
+			if C.krun_mem_device_handle_set_requested_mib(mem, C.uint32_t(c.PluggedMiB), &e); e != nil {
+				return failed("plugging memory in", e)
+			}
+		}
+		plug = func(mib int) error {
+			var e C.KrunError
+			if C.krun_mem_device_handle_set_requested_mib(mem, C.uint32_t(mib), &e); e != nil {
+				return failed("plugging memory in", e)
+			}
+			return nil
+		}
+		plugged = func() (int, int, error) {
+			return int(C.krun_mem_device_handle_plugged_mib(mem)), int(C.krun_mem_device_handle_requested_mib(mem)), nil
+		}
+		add(unsafe.Pointer(m))
+	}
+	return nil
+}

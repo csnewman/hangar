@@ -1,4 +1,4 @@
-From f88c43d4cd17ec656216a262edefb5120019d1f3 Mon Sep 17 00:00:00 2001
+From a2494d2bb2a467d8adfc3eb19e1dc4894d845231 Mon Sep 17 00:00:00 2001
 From: Chandler Newman <chandler2newman@gmail.com>
 Date: Tue, 22 Sep 2026 22:26:54 +0100
 Subject: [PATCH 1/5] venus: snapshot a context and restore it in another
@@ -14,6 +14,13 @@ soon as it has one. Replayed in their original
 order through the same decoder, they recreate every object under the id the
 guest already holds, since Venus ids are the guest's own. Submits, waits and
 queries are not kept: their lasting effect is on memory, which is read back.
+
+A resource made from one of the context's memories is recorded too, where
+it was made: the context's own commands import it by its id -- a compositor
+rendering through Venus imports the buffers it allocated -- so a restore
+makes it again at that point. A memory can be exported only once, so the
+embedder, making the same resource afterwards, takes the export the replay
+made.
 
 vkr_record_dispatch wraps the three places commands are dispatched -- context
 submission, ring threads, and nested command streams -- and handlers note the
@@ -40,8 +47,8 @@ virgl_renderer_context_snapshot and virgl_renderer_context_restore.
  src/proxy/proxy_context.c      |  43 ++
  src/venus/vkr_buffer.c         |   9 +-
  src/venus/vkr_command_buffer.c |  11 +-
- src/venus/vkr_context.c        |   4 +-
- src/venus/vkr_context.h        |   9 +
+ src/venus/vkr_context.c        |  44 +-
+ src/venus/vkr_context.h        |  14 +
  src/venus/vkr_descriptor_set.c |  18 +-
  src/venus/vkr_image.c          |   9 +-
  src/venus/vkr_queue.c          |  47 +-
@@ -49,13 +56,13 @@ virgl_renderer_context_snapshot and virgl_renderer_context_restore.
  src/venus/vkr_renderer.c       |  18 +
  src/venus/vkr_renderer.h       |  10 +
  src/venus/vkr_ring.c           |  20 +-
- src/venus/vkr_snapshot.c       | 817 +++++++++++++++++++++++++++++++++
- src/venus/vkr_snapshot.h       |  71 +++
+ src/venus/vkr_snapshot.c       | 872 +++++++++++++++++++++++++++++++++
+ src/venus/vkr_snapshot.h       |  84 ++++
  src/venus/vkr_transport.c      |   8 +-
  src/virgl_context.h            |   7 +
  src/virglrenderer.c            |  20 +
  src/virglrenderer.h            |   8 +
- 23 files changed, 1196 insertions(+), 13 deletions(-)
+ 23 files changed, 1307 insertions(+), 15 deletions(-)
  create mode 100644 src/venus/vkr_snapshot.c
  create mode 100644 src/venus/vkr_snapshot.h
 
@@ -319,7 +326,7 @@ index 766c5c71..e6b12dcb 100644
     args->ret = vk->ResetCommandPool(args->device, args->commandPool, args->flags);
  }
 diff --git a/src/venus/vkr_context.c b/src/venus/vkr_context.c
-index b97e5ea2..138a8e4e 100644
+index b97e5ea2..ef30b634 100644
 --- a/src/venus/vkr_context.c
 +++ b/src/venus/vkr_context.c
 @@ -172,7 +172,7 @@ vkr_context_submit_cmd(struct vkr_context *ctx, const void *buffer, size_t size)
@@ -331,7 +338,75 @@ index b97e5ea2..138a8e4e 100644
        if (vkr_context_get_fatal(ctx)) {
           vkr_log("submit_cmd: vn_dispatch_command failed");
  
-@@ -623,6 +623,7 @@ vkr_context_destroy(struct vkr_context *ctx)
+@@ -189,6 +189,11 @@ static inline void
+ vkr_context_free_resource(struct hash_entry *entry)
+ {
+    struct vkr_resource *res = entry->data;
++   if (res->replayed) {
++      if (res->replayed->u.fd >= 0)
++         close(res->replayed->u.fd);
++      free(res->replayed);
++   }
+    if (res->fd_type == VIRGL_RESOURCE_FD_SHM)
+       munmap(res->u.data, res->size);
+    else if (res->u.fd >= 0)
+@@ -237,6 +242,7 @@ vkr_context_import_resource_internal(struct vkr_context *ctx,
+    res->res_id = res_id;
+    res->fd_type = fd_type;
+    res->size = blob_size;
++   res->replayed = NULL;
+ 
+    /* fd and mmap_ptr cannot be valid at the same time, but allowed to be -1 and NULL */
+    assert(fd < 0 || !mmap_ptr);
+@@ -372,8 +378,37 @@ vkr_context_create_resource(struct vkr_context *ctx,
+    if (!blob_id && blob_flags == VIRGL_RENDERER_BLOB_FLAG_USE_MAPPABLE)
+       return vkr_context_create_resource_from_shm(ctx, res_id, blob_size, out_blob);
+ 
+-   return vkr_context_create_resource_from_device_memory(ctx, res_id, blob_id, blob_size,
+-                                                         blob_flags, out_blob);
++   /* A restore's replay made it already, for the commands that import it, and
++    * exported its memory, which can be exported only once: the embedder takes
++    * that export. Its record stays where the replay put it, ahead of those
++    * commands.
++    */
++   struct vkr_resource *res = vkr_context_get_resource(ctx, res_id);
++   if (res && res->replayed) {
++      *out_blob = *res->replayed;
++      free(res->replayed);
++      res->replayed = NULL;
++      return true;
++   }
++
++   if (!vkr_context_create_resource_from_device_memory(ctx, res_id, blob_id, blob_size,
++                                                       blob_flags, out_blob))
++      return false;
++
++   if (!ctx->restoring) {
++      vkr_record_resource(ctx, res_id, blob_id, blob_size, blob_flags);
++      return true;
++   }
++   res = vkr_context_get_resource(ctx, res_id);
++   res->replayed = malloc(sizeof(*res->replayed));
++   if (!res->replayed) {
++      vkr_context_remove_resource(ctx, res_id);
++      if (out_blob->u.fd >= 0)
++         close(out_blob->u.fd);
++      return false;
++   }
++   *res->replayed = *out_blob;
++   return true;
+ }
+ 
+ bool
+@@ -416,6 +451,7 @@ vkr_context_destroy_resource(struct vkr_context *ctx, uint32_t res_id)
+    mtx_unlock(&ctx->ring_mutex);
+ 
+    vkr_context_remove_resource(ctx, res_id);
++   vkr_record_forget(ctx, VKR_RECORD_RESOURCE_TAG | res_id);
+ }
+ 
+ void
+@@ -623,6 +659,7 @@ vkr_context_destroy(struct vkr_context *ctx)
        vkr_ring_destroy(ring);
     }
     mtx_destroy(&ctx->ring_mutex);
@@ -339,7 +414,7 @@ index b97e5ea2..138a8e4e 100644
  
     vkr_context_wait_ring_fini(ctx);
  
-@@ -737,6 +738,7 @@ vkr_context_create(uint32_t ctx_id,
+@@ -737,6 +774,7 @@ vkr_context_create(uint32_t ctx_id,
        goto err_ctx_ring_mutex;
  
     list_inithead(&ctx->rings);
@@ -348,7 +423,7 @@ index b97e5ea2..138a8e4e 100644
     return ctx;
  
 diff --git a/src/venus/vkr_context.h b/src/venus/vkr_context.h
-index 3867f138..4166b523 100644
+index 3867f138..bff0a15e 100644
 --- a/src/venus/vkr_context.h
 +++ b/src/venus/vkr_context.h
 @@ -14,6 +14,7 @@
@@ -359,7 +434,19 @@ index 3867f138..4166b523 100644
  
  /*
   * When vkr_context_create_resource or vkr_context_import_resource is called, a
-@@ -103,6 +104,11 @@ struct vkr_context {
+@@ -32,6 +33,11 @@ struct vkr_resource {
+    } u;
+ 
+    size_t size;
++
++   /* when a restore's replay made it, the export of its memory, which the
++    * embedder takes as it makes the resource again; NULL otherwise
++    */
++   struct virgl_context_blob *replayed;
+ };
+ 
+ enum vkr_context_validate_level {
+@@ -103,6 +109,11 @@ struct vkr_context {
  
     struct list_head head;
     struct vulkan_library vulkan_library;
@@ -371,7 +458,7 @@ index 3867f138..4166b523 100644
  };
  
  struct vkr_context *
-@@ -198,6 +204,8 @@ vkr_context_add_object(struct vkr_context *ctx, struct vkr_object *obj)
+@@ -198,6 +209,8 @@ vkr_context_add_object(struct vkr_context *ctx, struct vkr_object *obj)
     if (vkr_context_validate_object_id_locked(ctx, obj->id))
        _mesa_hash_table_insert(ctx->object_table, &obj->id, obj);
     mtx_unlock(&ctx->object_mutex);
@@ -380,7 +467,7 @@ index 3867f138..4166b523 100644
  }
  
  static inline void
-@@ -207,6 +215,7 @@ vkr_context_remove_object_locked(struct vkr_context *ctx, struct vkr_object *obj
+@@ -207,6 +220,7 @@ vkr_context_remove_object_locked(struct vkr_context *ctx, struct vkr_object *obj
  
     struct hash_entry *entry = _mesa_hash_table_search(ctx->object_table, &obj->id);
     if (likely(entry)) {
@@ -665,10 +752,10 @@ index 0d4899ef..d3331ee4 100644
  
 diff --git a/src/venus/vkr_snapshot.c b/src/venus/vkr_snapshot.c
 new file mode 100644
-index 00000000..2baae727
+index 00000000..37620fcc
 --- /dev/null
 +++ b/src/venus/vkr_snapshot.c
-@@ -0,0 +1,817 @@
+@@ -0,0 +1,872 @@
 +/*
 + * Copyright 2026 Hangar
 + * SPDX-License-Identifier: MIT
@@ -693,13 +780,26 @@ index 00000000..2baae727
 +#include "vn_protocol_renderer_dispatches.h"
 +
 +#define SNAPSHOT_MAGIC 0x53524b56u /* "VKRS" */
-+#define SNAPSHOT_VERSION 2u
++#define SNAPSHOT_VERSION 3u
 +
 +enum record_kind {
 +   /* creation, binds, descriptor updates: kept while any owner lives */
 +   RECORD_STATE = 0,
 +   /* a command buffer's recording: dropped when the buffer is reset */
 +   RECORD_COMMAND_BUFFER = 1,
++   /* a resource made from a memory: kept while the resource lives */
++   RECORD_RESOURCE = 2,
++};
++
++/* What a RECORD_RESOURCE entry holds in place of a command. The memory's id
++ * is among its bytes, so the memory's allocation is replayed before it even
++ * once the memory is freed.
++ */
++struct record_resource {
++   uint32_t res_id;
++   uint32_t blob_flags;
++   uint64_t blob_id;
++   uint64_t blob_size;
 +};
 +
 +struct record_entry {
@@ -805,6 +905,28 @@ index 00000000..2baae727
 +   e->seq = rec->next_seq++;
 +   list_addtail(&e->head, &rec->entries);
 +   mtx_unlock(&rec->mutex);
++}
++
++static bool
++record_enabled(void);
++
++void
++vkr_record_resource(struct vkr_context *ctx,
++                    uint32_t res_id,
++                    uint64_t blob_id,
++                    uint64_t blob_size,
++                    uint32_t blob_flags)
++{
++   if (!record_enabled())
++      return;
++   const struct record_resource res = {
++      .res_id = res_id,
++      .blob_flags = blob_flags,
++      .blob_id = blob_id,
++      .blob_size = blob_size,
++   };
++   const vkr_object_id owner = VKR_RECORD_RESOURCE_TAG | res_id;
++   record_add(ctx, RECORD_RESOURCE, 0, (const uint8_t *)&res, sizeof(res), &owner, 1);
 +}
 +
 +void
@@ -1355,6 +1477,19 @@ index 00000000..2baae727
 +   sem->signaled = true;
 +}
 +
++/* Makes a resource again from its memory, which the replay has made by now. The
++ * resource keeps the export for the embedder, which makes it again later.
++ */
++static bool
++replay_resource(struct vkr_context *ctx, const uint8_t *bytes)
++{
++   struct record_resource res;
++   memcpy(&res, bytes, sizeof(res));
++   struct virgl_context_blob blob;
++   return vkr_context_create_resource(ctx, res.res_id, res.blob_id, res.blob_size,
++                                      res.blob_flags, &blob);
++}
++
 +bool
 +vkr_context_restore(struct vkr_context *ctx, int fd)
 +{
@@ -1384,12 +1519,19 @@ index 00000000..2baae727
 +   ctx->restoring = true;
 +   for (uint32_t i = 0; i < entry_count && !r.failed; i++) {
 +      take_u64(&r); /* seq */
-+      take_u32(&r); /* kind */
++      const uint32_t kind = take_u32(&r);
 +      take_u32(&r); /* cmd_type */
 +      const uint32_t owner_count = take_u32(&r);
 +      take(&r, owner_count * sizeof(vkr_object_id));
 +      const uint32_t size = take_u32(&r);
 +      const uint8_t *bytes = take(&r, size);
++      if (kind == RECORD_RESOURCE) {
++         if (bytes && size == sizeof(struct record_resource) && replay_resource(ctx, bytes))
++            replayed++;
++         else
++            failed++;
++         continue;
++      }
 +      if (!bytes || size < 8)
 +         break;
 +      uint8_t *cmd = malloc(size);
@@ -1488,10 +1630,10 @@ index 00000000..2baae727
 +}
 diff --git a/src/venus/vkr_snapshot.h b/src/venus/vkr_snapshot.h
 new file mode 100644
-index 00000000..54ef80ec
+index 00000000..a7d25bad
 --- /dev/null
 +++ b/src/venus/vkr_snapshot.h
-@@ -0,0 +1,71 @@
+@@ -0,0 +1,84 @@
 +/*
 + * Copyright 2026 Hangar
 + * SPDX-License-Identifier: MIT
@@ -1527,6 +1669,7 @@ index 00000000..54ef80ec
 + * cannot collide.
 + */
 +#define VKR_RECORD_RING_TAG (1ull << 63)
++#define VKR_RECORD_RESOURCE_TAG (1ull << 62)
 +
 +void
 +vkr_record_init(struct vkr_record *rec);
@@ -1551,6 +1694,18 @@ index 00000000..54ef80ec
 + */
 +void
 +vkr_record_forget(struct vkr_context *ctx, vkr_object_id id);
++
++/* A resource was made from one of the context's memories. Its commands import
++ * it by its id as soon as it exists, so a restore makes it again where it was
++ * made, ahead of the embedder, which makes it again only once the commands
++ * have been replayed.
++ */
++void
++vkr_record_resource(struct vkr_context *ctx,
++                    uint32_t res_id,
++                    uint64_t blob_id,
++                    uint64_t blob_size,
++                    uint32_t blob_flags);
 +
 +/* A command buffer was reset: its recorded commands go. */
 +void

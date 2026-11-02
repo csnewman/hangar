@@ -29,7 +29,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -318,11 +317,9 @@ func (r *Runtime) GPU() *api.GPUInfo { return r.gpu }
 // Monitor is what runs the environments (api.Monitor*).
 func (r *Runtime) Monitor() string { return r.monitor }
 
-// Suspends is whether the environments can be suspended: under Cloud
-// Hypervisor, and under libkrun on Linux, whose libkrun takes snapshots.
-func (r *Runtime) Suspends() bool {
-	return r.monitor != host.MonitorKrun || runtime.GOOS == "linux"
-}
+// Suspends is whether the environments can be suspended, which they can
+// under either monitor.
+func (r *Runtime) Suspends() bool { return true }
 
 func (r *Runtime) Changed() <-chan struct{} { return r.changed }
 
