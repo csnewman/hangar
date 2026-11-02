@@ -609,8 +609,16 @@ type EnvironmentStats struct {
 	// which cannot be swapped out.
 	MemoryLockedMiB int `json:"memory_locked_mib"`
 	// HostMemoryMiB is the worker's memory the guest's RAM takes up: what the
-	// guest has touched and not handed back.
-	HostMemoryMiB int `json:"host_memory_mib"`
+	// guest has touched and not handed back. MonitorMemoryMiB is the rest of
+	// what its monitor holds, with everything the monitor started: the
+	// devices it emulates and their buffers, libkrun's GPU among them.
+	// SupportMemoryMiB is what the processes serving it beside the monitor
+	// hold (SupportCPUs): Cloud Hypervisor's GPU backend, the network.
+	// Memory two of them share is split between them. On macOS hangar-krun's
+	// memory is one footprint, all of it HostMemoryMiB.
+	HostMemoryMiB    int `json:"host_memory_mib"`
+	MonitorMemoryMiB int `json:"monitor_memory_mib"`
+	SupportMemoryMiB int `json:"support_memory_mib"`
 	// MachineMemoryMiB is the memory the machine has, as its monitor says,
 	// which reaches a new size in the guest's own time. A machine that can
 	// be resized while it runs can be to between MachineMemoryMinMiB and
@@ -651,9 +659,12 @@ type WorkerStats struct {
 	Load1          float64 `json:"load1"`
 	MemoryUsedMiB  int     `json:"memory_used_mib"`
 	MemoryTotalMiB int     `json:"memory_total_mib"`
-	// GuestMemoryMiB is the memory its environments' RAM takes up
-	// (EnvironmentStats.HostMemoryMiB), summed.
-	GuestMemoryMiB int `json:"guest_memory_mib"`
+	// GuestMemoryMiB is the memory its environments' RAM takes up, and
+	// MonitorMemoryMiB and SupportMemoryMiB what their monitors and the
+	// processes serving them hold beside it (EnvironmentStats), summed.
+	GuestMemoryMiB   int `json:"guest_memory_mib"`
+	MonitorMemoryMiB int `json:"monitor_memory_mib"`
+	SupportMemoryMiB int `json:"support_memory_mib"`
 	// SwapUsedMiB and SwapTotalMiB are the machine's own swap.
 	SwapUsedMiB  int `json:"swap_used_mib"`
 	SwapTotalMiB int `json:"swap_total_mib"`

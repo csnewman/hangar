@@ -1788,6 +1788,10 @@ export interface components {
             memory_total_mib: number;
             /** @description The memory its environments' RAM takes up (host_memory_mib), summed. */
             guest_memory_mib: number;
+            /** @description What its environments' monitors hold beside their RAM (monitor_memory_mib), summed. */
+            monitor_memory_mib: number;
+            /** @description What the processes serving its environments hold (support_memory_mib), summed. */
+            support_memory_mib: number;
             /** @description The machine's own swap in use. */
             swap_used_mib: number;
             /** @description The machine's own swap. */
@@ -1835,8 +1839,12 @@ export interface components {
             memory_cached_mib: number;
             /** @description What its programs have locked in memory (mlock), which cannot be swapped out: a database or search engine set to lock its heap, such as OpenSearch with bootstrap.memory_lock. */
             memory_locked_mib: number;
-            /** @description The worker's memory the guest's RAM takes up: what the guest has touched and not handed back. */
+            /** @description The worker's memory the guest's RAM takes up: what the guest has touched and not handed back. On macOS, all of hangar-krun's memory. */
             host_memory_mib: number;
+            /** @description What its monitor holds beside the guest's RAM, with everything it started: the devices it emulates and their buffers, libkrun's GPU among them. Zero on macOS, where it is in host_memory_mib. */
+            monitor_memory_mib: number;
+            /** @description What the processes serving it beside its monitor hold (support_cpus): Cloud Hypervisor's GPU backend, the network. */
+            support_memory_mib: number;
             /** @description The memory the machine has, as its monitor says; after a resize it reaches the new size in the guest's own time. */
             machine_memory_mib: number;
             /** @description What its memory can be resized down to while it runs; absent for a machine that cannot be resized while it runs. */

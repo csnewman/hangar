@@ -150,6 +150,8 @@ func workerStats(s *api.WorkerStats) *WorkerStats {
 		MemoryUsedMiB:      s.MemoryUsedMiB,
 		MemoryTotalMiB:     s.MemoryTotalMiB,
 		GuestMemoryMiB:     s.GuestMemoryMiB,
+		MonitorMemoryMiB:   s.MonitorMemoryMiB,
+		SupportMemoryMiB:   s.SupportMemoryMiB,
 		SwapUsedMiB:        s.SwapUsedMiB,
 		SwapTotalMiB:       s.SwapTotalMiB,
 		GuestSwapMiB:       s.GuestSwapMiB,

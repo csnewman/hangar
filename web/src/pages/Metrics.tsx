@@ -71,7 +71,7 @@ export function MetricsTab() {
         />
         <LineChart
           title="Memory"
-          current={`${formatMemory(s.memory_used_mib)} used, ${formatMemory(s.memory_cached_mib)} cache, of ${formatMemory(s.memory_total_mib)} · ${formatMemory(s.host_memory_mib)} on its worker`}
+          current={`${formatMemory(s.memory_used_mib)} used, ${formatMemory(s.memory_cached_mib)} cache, of ${formatMemory(s.memory_total_mib)} · ${formatMemory(s.host_memory_mib)} of RAM on its worker, ${formatMemory(s.monitor_memory_mib)} in its monitor, ${formatMemory(s.support_memory_mib)} in support processes`}
           times={times}
           max={s.memory_total_mib}
           format={mib}
@@ -80,6 +80,10 @@ export function MetricsTab() {
             ...(s.memory_locked_mib > 0 ? [{ name: 'Locked', values: pick((x) => x.memory_locked_mib) }] : []),
             { name: 'With cache', values: pick((x) => x.memory_used_mib + x.memory_cached_mib) },
             { name: 'On its worker', values: pick((x) => x.host_memory_mib) },
+            {
+              name: 'With its monitor and support',
+              values: pick((x) => x.host_memory_mib + x.monitor_memory_mib + x.support_memory_mib),
+            },
           ]}
         />
         {s.swap_total_mib > 0 && (

@@ -57,7 +57,8 @@ func (m *machine) sample(inst *Instance, cpus int) {
 			SwapDiskBytes: allocated(inst.cfg.swapFile()),
 		}
 
-		if pid := inst.Pid(); pid != 0 {
+		pid := inst.Pid()
+		if pid != 0 {
 			now.cpuTicks = processTicks(pid)
 			st.HostMemoryMiB = int(guestRAM(pid) >> 20)
 		}
@@ -91,6 +92,16 @@ func (m *machine) sample(inst *Instance, cpus int) {
 		for _, p := range others {
 			now.supTicks += host.treeTicks(p)
 		}
+		if pid != 0 {
+			st.MonitorMemoryMiB = int(host.treeMemory(pid) >> 20)
+		}
+		var support int64
+		for _, p := range append(others, gpu) {
+			if p != 0 {
+				support += host.treeMemory(p)
+			}
+		}
+		st.SupportMemoryMiB = int(support >> 20)
 		sess := inst.Session()
 		if out, err := sess.Exec(10*time.Second, "cat", "/proc/meminfo", "/proc/net/dev", "/proc/diskstats",
 			"/proc/vmstat"); err == nil && out.Code == 0 {
@@ -276,23 +287,36 @@ func readProcs() hostProcs {
 // those still running, and those it has waited for. A child that has not
 // been waited for when it exits is lost from the count.
 func (ps hostProcs) treeTicks(root int) uint64 {
-	r, ok := ps[root]
-	if !ok {
+	tree := ps.tree(root)
+	if len(tree) == 0 {
 		return 0
 	}
-	total := r.ticks + r.reaped
+	total := ps[root].reaped
+	for _, pid := range tree {
+		total += ps[pid].ticks
+	}
+	return total
+}
+
+// tree is a process and everything it started that still runs, the
+// process first; none if it is not running.
+func (ps hostProcs) tree(root int) []int {
+	if _, ok := ps[root]; !ok {
+		return nil
+	}
 	children := map[int][]int{}
 	for pid, p := range ps {
 		children[p.ppid] = append(children[p.ppid], pid)
 	}
+	out := []int{root}
 	stack := append([]int(nil), children[root]...)
 	for len(stack) > 0 {
 		pid := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
-		total += ps[pid].ticks
+		out = append(out, pid)
 		stack = append(stack, children[pid]...)
 	}
-	return total
+	return out
 }
 
 // statFields are a process's /proc/<pid>/stat fields after its name, which

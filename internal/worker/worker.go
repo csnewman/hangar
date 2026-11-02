@@ -355,6 +355,8 @@ func (w *Worker) reportLoop(ctx context.Context) error {
 						st.Stats.SupportCPUs += e.Stats.SupportCPUs
 						st.Stats.GPUCPUs += e.Stats.GPUCPUs
 						st.Stats.GuestMemoryMiB += e.Stats.HostMemoryMiB
+						st.Stats.MonitorMemoryMiB += e.Stats.MonitorMemoryMiB
+						st.Stats.SupportMemoryMiB += e.Stats.SupportMemoryMiB
 						st.Stats.GuestSwapMiB += e.Stats.SwapUsedMiB
 						st.Stats.GuestSwapPoolMiB += e.Stats.SwapPoolMiB
 						st.Stats.GuestSwapDiskBytes += e.Stats.SwapDiskBytes

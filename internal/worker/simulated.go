@@ -229,6 +229,8 @@ func (e *simEnv) wander(maxMiB int) {
 		float64(e.spec.MemoryMiB)*0.9))
 	u.MemoryCachedMiB = min(u.MemoryUsedMiB/2, e.spec.MemoryMiB-u.MemoryUsedMiB)
 	u.HostMemoryMiB = min(u.MemoryUsedMiB+u.MemoryCachedMiB+200, e.spec.MemoryMiB)
+	u.MonitorMemoryMiB = int(step(float64(u.MonitorMemoryMiB), 10, 40, 200))
+	u.SupportMemoryMiB = int(step(float64(u.SupportMemoryMiB), 10, 20, 300))
 	u.DiskUsedBytes += int64(rand.IntN(4 << 20))
 	burst := func(v float64) float64 {
 		if rand.IntN(4) == 0 {

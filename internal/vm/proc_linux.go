@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"bufio"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -29,32 +30,110 @@ func diskUsage(fi fs.FileInfo) int64 {
 // held by the memory files the monitor maps it from, each file counted once
 // however many times it is open. A page the guest hands back is punched
 // out of its file, so this falls as it does. libkrun maps the guest's RAM
-// from no file: its guest memory is the anonymous and shared memory the
-// process holds.
+// from no file: its guest memory is the anonymous mapping holding it
+// (processMemory).
 func guestRAM(pid int) int64 {
 	if n := memfdRAM(pid); n > 0 {
 		return n
 	}
-	return anonRSS(pid)
+	guest, _ := processMemory(pid)
+	return guest
 }
 
-// anonRSS is the anonymous and shared memory a process holds, leaving out
-// the files it has mapped, its program and libraries.
-func anonRSS(pid int) int64 {
-	b, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "status"))
+// guestMapping is the least a mapping of guest memory spans. A guest boots
+// with at least 1 GiB, in one mapping under libkrun (its RAM, the region
+// virtio-mem plugs into and the GPU's window beside them), and libkrun's
+// own mappings, its threads' arenas and the GPU's heaps, are smaller.
+const guestMapping = 1 << 30
+
+// processMemory is the memory a process holds, from its smaps: guest, what
+// it maps of a guest's RAM (Cloud Hypervisor's memory files, libkrun's
+// mapping of guest memory), and other, the rest of its anonymous and shared
+// memory, which is what serving the guest costs beside its RAM. Memory it
+// shares with another process (a GPU's buffers, mapped by its backend and
+// the monitor both) is counted in proportion (Pss), so that summing over
+// the processes counts it once. The files it maps, its program and
+// libraries, are the host's page cache and not counted.
+func processMemory(pid int) (guest, other int64) {
+	f, err := os.Open(filepath.Join("/proc", strconv.Itoa(pid), "smaps"))
 	if err != nil {
-		return 0
+		return 0, 0
 	}
-	var total int64
-	for _, line := range strings.Split(string(b), "\n") {
-		k, v, ok := strings.Cut(line, ":")
-		if !ok || (k != "RssAnon" && k != "RssShmem") {
+	defer f.Close()
+	// What the current mapping is: a guest's RAM, memory (anonymous or
+	// shared), or a file.
+	const (
+		file = iota
+		memory
+		ram
+	)
+	kind := file
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
 			continue
 		}
-		if f := strings.Fields(v); len(f) > 0 {
-			kib, _ := strconv.ParseInt(f[0], 10, 64)
-			total += kib << 10
+		if span, ok := mappingSpan(fields[0]); ok {
+			// "start-end perms offset dev inode [name]"
+			name := ""
+			if len(fields) >= 6 {
+				name = strings.Join(fields[5:], " ")
+			}
+			switch {
+			case strings.HasPrefix(name, "/memfd:ch_ram"):
+				kind = ram
+			case name == "" && span >= guestMapping:
+				kind = ram
+			case name == "" || strings.HasPrefix(name, "[") || strings.HasPrefix(name, "/memfd:") ||
+				strings.HasPrefix(name, "/dev/shm/") || strings.HasPrefix(name, "/SYSV") ||
+				strings.HasPrefix(name, "/dev/dri/"):
+				kind = memory
+			default:
+				kind = file
+			}
+			continue
 		}
+		var into *int64
+		switch {
+		case kind == ram && fields[0] == "Rss:":
+			into = &guest
+		case kind == memory && fields[0] == "Pss:":
+			into = &other
+		default:
+			continue
+		}
+		if len(fields) >= 2 {
+			kib, _ := strconv.ParseInt(fields[1], 10, 64)
+			*into += kib << 10
+		}
+	}
+	return guest, other
+}
+
+// mappingSpan is the size of the mapping a smaps header's first field
+// ("start-end", in hex) describes, and whether it is one.
+func mappingSpan(field string) (int64, bool) {
+	a, b, ok := strings.Cut(field, "-")
+	if !ok {
+		return 0, false
+	}
+	start, err1 := strconv.ParseUint(a, 16, 64)
+	end, err2 := strconv.ParseUint(b, 16, 64)
+	if err1 != nil || err2 != nil || end < start {
+		return 0, false
+	}
+	return int64(end - start), true
+}
+
+// treeMemory is what a process and everything it started hold beside a
+// guest's RAM (processMemory's other).
+func (ps hostProcs) treeMemory(root int) int64 {
+	var total int64
+	for _, pid := range ps.tree(root) {
+		_, other := processMemory(pid)
+		total += other
 	}
 	return total
 }

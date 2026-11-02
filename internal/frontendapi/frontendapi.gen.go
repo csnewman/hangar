@@ -855,7 +855,7 @@ type EnvironmentStats struct {
 	// GPUCPUs The GPU backend's part of support_cpus, where software rendering runs.
 	GPUCPUs float32 `json:"gpu_cpus"`
 
-	// HostMemoryMiB The worker's memory the guest's RAM takes up: what the guest has touched and not handed back.
+	// HostMemoryMiB The worker's memory the guest's RAM takes up: what the guest has touched and not handed back. On macOS, all of hangar-krun's memory.
 	HostMemoryMiB int `json:"host_memory_mib"`
 
 	// MachineMemoryMaxMiB What its memory can be resized up to while it runs, as far as its worker has room; absent for a machine that cannot be resized while it runs.
@@ -877,12 +877,18 @@ type EnvironmentStats struct {
 	MemoryTotalMiB int `json:"memory_total_mib"`
 
 	// MemoryUsedMiB What the guest's programs use, as it sees it.
-	MemoryUsedMiB int     `json:"memory_used_mib"`
-	NetRxBps      float32 `json:"net_rx_bps"`
-	NetTxBps      float32 `json:"net_tx_bps"`
+	MemoryUsedMiB int `json:"memory_used_mib"`
+
+	// MonitorMemoryMiB What its monitor holds beside the guest's RAM, with everything it started: the devices it emulates and their buffers, libkrun's GPU among them. Zero on macOS, where it is in host_memory_mib.
+	MonitorMemoryMiB int     `json:"monitor_memory_mib"`
+	NetRxBps         float32 `json:"net_rx_bps"`
+	NetTxBps         float32 `json:"net_tx_bps"`
 
 	// SupportCPUs Host cores the processes serving it beside its vCPUs use: its GPU backend, file system and network. No vCPU limit holds them.
 	SupportCPUs float32 `json:"support_cpus"`
+
+	// SupportMemoryMiB What the processes serving it beside its monitor hold (support_cpus): Cloud Hypervisor's GPU backend, the network.
+	SupportMemoryMiB int `json:"support_memory_mib"`
 
 	// SwapCompressedMiB The part of swap_used_mib held compressed in the guest's own memory (zswap); the rest is on its swap disk.
 	SwapCompressedMiB int `json:"swap_compressed_mib"`
@@ -1603,8 +1609,14 @@ type WorkerStats struct {
 	MemoryTotalMiB   int     `json:"memory_total_mib"`
 	MemoryUsedMiB    int     `json:"memory_used_mib"`
 
+	// MonitorMemoryMiB What its environments' monitors hold beside their RAM (monitor_memory_mib), summed.
+	MonitorMemoryMiB int `json:"monitor_memory_mib"`
+
 	// SupportCPUs Host cores its environments' support processes use -- their GPU backends, file systems and networks -- beside their vCPUs.
 	SupportCPUs float32 `json:"support_cpus"`
+
+	// SupportMemoryMiB What the processes serving its environments hold (support_memory_mib), summed.
+	SupportMemoryMiB int `json:"support_memory_mib"`
 
 	// SwapTotalMiB The machine's own swap.
 	SwapTotalMiB int `json:"swap_total_mib"`

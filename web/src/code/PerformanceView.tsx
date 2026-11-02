@@ -242,9 +242,9 @@ function Usage({ env }: { env: Environment }) {
       />
       <Meter
         label="On worker"
-        value={formatMemory(s.host_memory_mib)}
-        title={`What its worker holds for it: what it uses, its ${formatMemory(s.memory_cached_mib)} cache of files, and memory it has yet to hand back`}
-        trend={pick((x) => x.host_memory_mib)}
+        value={formatMemory(s.host_memory_mib + s.monitor_memory_mib + s.support_memory_mib)}
+        title={`What its worker holds for it: ${formatMemory(s.host_memory_mib)} of RAM (what it uses, its ${formatMemory(s.memory_cached_mib)} cache of files, and memory it has yet to hand back), ${formatMemory(s.monitor_memory_mib)} in its monitor and ${formatMemory(s.support_memory_mib)} in its support processes`}
+        trend={pick((x) => x.host_memory_mib + x.monitor_memory_mib + x.support_memory_mib)}
         max={s.memory_total_mib}
       />
       {s.swap_total_mib > 0 && (

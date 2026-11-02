@@ -245,6 +245,8 @@ func environmentStats(s *api.EnvironmentStats) *EnvironmentStats {
 		MemoryCachedMiB:   s.MemoryCachedMiB,
 		MemoryLockedMiB:   s.MemoryLockedMiB,
 		HostMemoryMiB:     s.HostMemoryMiB,
+		MonitorMemoryMiB:  s.MonitorMemoryMiB,
+		SupportMemoryMiB:  s.SupportMemoryMiB,
 		MachineMemoryMiB:  s.MachineMemoryMiB,
 		SwapTotalMiB:      s.SwapTotalMiB,
 		SwapUsedMiB:       s.SwapUsedMiB,

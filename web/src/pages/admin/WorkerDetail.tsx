@@ -191,9 +191,9 @@ function Machine({ worker: w }: { worker: Worker }) {
           />
           <StatTile
             label="Environments' memory"
-            value={formatMemory(s.guest_memory_mib)}
-            detail={`held, of ${formatMemory(w.allocated.memory_mib)} they reserve`}
-            trend={pick((x) => x.guest_memory_mib)}
+            value={formatMemory(s.guest_memory_mib + s.monitor_memory_mib + s.support_memory_mib)}
+            detail={`held, of ${formatMemory(w.allocated.memory_mib)} they reserve: ${formatMemory(s.guest_memory_mib)} RAM, ${formatMemory(s.monitor_memory_mib)} monitors, ${formatMemory(s.support_memory_mib)} support`}
+            trend={pick((x) => x.guest_memory_mib + x.monitor_memory_mib + x.support_memory_mib)}
             max={s.memory_total_mib}
           />
           <StatTile
@@ -307,7 +307,14 @@ function Environments({ worker: w, className }: { worker: Worker; className: str
             <td className="num nowrap">{e.stats ? formatPercent(e.stats.cpu_percent) : '—'}</td>
             <td className="num nowrap">
               {e.stats ? `${formatMemory(e.stats.memory_used_mib)} of ${formatMemory(e.stats.memory_total_mib)}` : '—'}
-              {e.stats && <div className="muted small">{formatMemory(e.stats.host_memory_mib)} held</div>}
+              {e.stats && (
+                <div
+                  className="muted small"
+                  title={`${formatMemory(e.stats.host_memory_mib)} RAM, ${formatMemory(e.stats.monitor_memory_mib)} monitor, ${formatMemory(e.stats.support_memory_mib)} support`}
+                >
+                  {formatMemory(e.stats.host_memory_mib + e.stats.monitor_memory_mib + e.stats.support_memory_mib)} held
+                </div>
+              )}
             </td>
           </tr>
         ))}

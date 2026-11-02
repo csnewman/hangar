@@ -17,3 +17,8 @@ func diskUsage(fi fs.FileInfo) int64 {
 	}
 	return fi.Size()
 }
+
+// treeMemory is what a process and everything it started hold beside a
+// guest's RAM. On macOS hangar-krun's memory is one footprint, guest RAM
+// and all (guestRAM), and nothing is told apart.
+func (ps hostProcs) treeMemory(int) int64 { return 0 }

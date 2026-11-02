@@ -2678,7 +2678,7 @@ components:
     WorkerStats:
       type: object
       description: The worker's machine as a whole, as last measured.
-      required: [cpu_percent, support_cpus, gpu_cpus, load1, memory_used_mib, memory_total_mib, guest_memory_mib, swap_used_mib, swap_total_mib, guest_swap_mib, guest_swap_pool_mib, guest_swap_disk_bytes, disk_used_bytes, disk_total_bytes]
+      required: [cpu_percent, support_cpus, gpu_cpus, load1, memory_used_mib, memory_total_mib, guest_memory_mib, monitor_memory_mib, support_memory_mib, swap_used_mib, swap_total_mib, guest_swap_mib, guest_swap_pool_mib, guest_swap_disk_bytes, disk_used_bytes, disk_total_bytes]
       properties:
         cpu_percent: { type: number }
         support_cpus:
@@ -2695,6 +2695,12 @@ components:
         guest_memory_mib:
           type: integer
           description: The memory its environments' RAM takes up (host_memory_mib), summed.
+        monitor_memory_mib:
+          type: integer
+          description: What its environments' monitors hold beside their RAM (monitor_memory_mib), summed.
+        support_memory_mib:
+          type: integer
+          description: What the processes serving its environments hold (support_memory_mib), summed.
         swap_used_mib:
           type: integer
           description: The machine's own swap in use.
@@ -2741,7 +2747,7 @@ components:
       description: >-
         What a running environment uses, as its worker last measured it.
         Rates are per second.
-      required: [cpu_percent, support_cpus, gpu_cpus, memory_used_mib, memory_total_mib, memory_cached_mib, memory_locked_mib, host_memory_mib, machine_memory_mib, swap_total_mib, swap_used_mib, swap_compressed_mib, swap_pool_mib, swap_disk_bytes, swap_in_bps, swap_out_bps, disk_used_bytes, disk_read_bps, disk_write_bps, net_rx_bps, net_tx_bps]
+      required: [cpu_percent, support_cpus, gpu_cpus, memory_used_mib, memory_total_mib, memory_cached_mib, memory_locked_mib, host_memory_mib, monitor_memory_mib, support_memory_mib, machine_memory_mib, swap_total_mib, swap_used_mib, swap_compressed_mib, swap_pool_mib, swap_disk_bytes, swap_in_bps, swap_out_bps, disk_used_bytes, disk_read_bps, disk_write_bps, net_rx_bps, net_tx_bps]
       properties:
         support_cpus:
           type: number
@@ -2775,7 +2781,19 @@ components:
           type: integer
           description: >-
             The worker's memory the guest's RAM takes up: what the guest has
-            touched and not handed back.
+            touched and not handed back. On macOS, all of hangar-krun's
+            memory.
+        monitor_memory_mib:
+          type: integer
+          description: >-
+            What its monitor holds beside the guest's RAM, with everything it
+            started: the devices it emulates and their buffers, libkrun's GPU
+            among them. Zero on macOS, where it is in host_memory_mib.
+        support_memory_mib:
+          type: integer
+          description: >-
+            What the processes serving it beside its monitor hold
+            (support_cpus): Cloud Hypervisor's GPU backend, the network.
         machine_memory_mib:
           type: integer
           description: >-
