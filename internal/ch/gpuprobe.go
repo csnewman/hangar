@@ -88,21 +88,30 @@ func deviceSelection(device string) ([]string, error) {
 	return []string{"DRI_PRIME=" + tag, "MESA_VK_DEVICE_SELECT=" + vendor + ":" + id + "!"}, nil
 }
 
-// GPUProbe is what the GPU backend reports it renders with, under the
-// environment it was given.
+// GPUProbe is what the GPU backend, or hangar-krun, reports it renders
+// with, under the environment it was given.
 type GPUProbe struct {
-	GL *struct {
-		Vendor   string `json:"vendor"`
-		Renderer string `json:"renderer"`
-		Version  string `json:"version"`
-		Software bool   `json:"software"`
-	} `json:"gl"`
-	GLError string `json:"gl_error"`
-	Vulkan  []struct {
-		Name     string `json:"name"`
-		Software bool   `json:"software"`
-	} `json:"vulkan"`
-	VulkanError string `json:"vulkan_error"`
+	GL          *ProbedGL      `json:"gl,omitempty"`
+	GLError     string         `json:"gl_error,omitempty"`
+	Vulkan      []ProbedVulkan `json:"vulkan"`
+	VulkanError string         `json:"vulkan_error,omitempty"`
+}
+
+// ProbedGL is the OpenGL renderer a surfaceless EGL context gets.
+type ProbedGL struct {
+	Vendor   string `json:"vendor"`
+	Renderer string `json:"renderer"`
+	Version  string `json:"version"`
+	// Software is whether it renders on the CPU: Mesa's llvmpipe or
+	// softpipe.
+	Software bool `json:"software"`
+}
+
+// ProbedVulkan is a Vulkan device.
+type ProbedVulkan struct {
+	Name string `json:"name"`
+	// Software is whether it is a CPU device, such as lavapipe.
+	Software bool `json:"software"`
 }
 
 // ProbeGPU asks the GPU backend what it renders with, under env.

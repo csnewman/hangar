@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/krun"
 )
 
@@ -24,6 +25,11 @@ import (
 // it paused; start sets it once there is a machine, and only where libkrun
 // takes snapshots.
 var suspend = func(string) error { return errors.New("this libkrun takes no snapshots") }
+
+// probe says what the host renders with, as libkrun's GPU would; it is set
+// only on Linux, where virglrenderer renders on the host's own OpenGL and
+// Vulkan.
+var probe func() ch.GPUProbe
 
 // plug asks the guest to have mib MiB of its virtio-mem region, and plugged
 // says how much it has and was asked to have; start sets them where the
@@ -44,8 +50,12 @@ func main() {
 		json.NewEncoder(os.Stdout).Encode(krun.Features{GPU: gpu, Vulkan: vulkan, Zink: gpu && canZink()})
 		return
 	}
+	if len(os.Args) == 2 && os.Args[1] == "-probe" && probe != nil {
+		json.NewEncoder(os.Stdout).Encode(probe())
+		return
+	}
 	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: hangar-krun CONFIG.json | -features")
+		fmt.Fprintln(os.Stderr, "usage: hangar-krun CONFIG.json | -features | -probe")
 		os.Exit(2)
 	}
 	// The worker holds the other end of standard input: when the worker

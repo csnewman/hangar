@@ -17,6 +17,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"time"
+
+	"github.com/csnewman/hangar/internal/ch"
 )
 
 // Config is the machine hangar-krun runs.
@@ -126,6 +129,28 @@ func ReadFeatures(ctx context.Context) (Features, error) {
 		return f, fmt.Errorf("asking hangar-krun what it offers: %w", err)
 	}
 	return f, json.Unmarshal(out, &f)
+}
+
+// ProbeGPU asks hangar-krun what the host renders with under env, as its
+// libkrun's GPU renders on Linux.
+func ProbeGPU(ctx context.Context, env []string) (ch.GPUProbe, error) {
+	var p ch.GPUProbe
+	bin, err := Find()
+	if err != nil {
+		return p, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "-probe")
+	cmd.Env = append(os.Environ(), env...)
+	out, err := cmd.Output()
+	if err != nil {
+		return p, fmt.Errorf("probing the GPU with hangar-krun: %w", err)
+	}
+	if err := json.Unmarshal(out, &p); err != nil {
+		return p, fmt.Errorf("hangar-krun's GPU probe: %w", err)
+	}
+	return p, nil
 }
 
 // Tool locates a program built beside hangar-krun for a worker on macOS,

@@ -180,8 +180,9 @@ type Runtime struct {
 	applied bool
 	changed chan struct{}
 	wg      sync.WaitGroup
-	// gpu is what virtual GPUs render with here, and gpuEnv the GPU
-	// backend's environment for it; gpu is nil without a GPU backend.
+	// gpu is what virtual GPUs render with here, and gpuEnv the
+	// environment they render under; gpu is nil when nothing here renders
+	// for a guest.
 	gpu    *api.GPUInfo
 	gpuEnv []string
 	// gpuZink draws a guest's OpenGL with zink on its GPU, under libkrun
@@ -241,13 +242,13 @@ func New(cfg Config) (*Runtime, error) {
 		changed: make(chan struct{}, 1), gpuEnv: gpuEnv}
 	switch {
 	case caps.Monitor == host.MonitorKrun && caps.OS == "linux":
-		// libkrun on Linux renders with the virglrenderer, EGL and
-		// environment the GPU backend does, so the backend's probe says
-		// what it renders with.
+		// libkrun on Linux renders on the host's own OpenGL and Vulkan,
+		// which hangar-krun probes under the environment its machines get.
 		if f, err := krun.ReadFeatures(ctx); err != nil {
 			cfg.Log.Warn("environments are offered no virtual GPU", "err", err)
 		} else if f.GPU {
-			r.gpu = probeGPU(ctx, cfg, gpuEnv)
+			p, err := krun.ProbeGPU(ctx, gpuEnv)
+			r.gpu = gpuInfo(cfg, p, err)
 		}
 	case caps.Monitor == host.MonitorKrun:
 		r.gpu, r.gpuZink = krunGPU(ctx, cfg)
@@ -271,21 +272,26 @@ func New(cfg Config) (*Runtime, error) {
 
 // probeGPU asks the GPU backend what it renders with, as the worker's
 // configuration has it render, and decides whether a virtual GPU is on
-// offer: not when it asks for hardware and there is only the CPU, nor when
-// the backend cannot render at all. It is nil without a GPU backend.
+// offer (gpuInfo). It is nil without a GPU backend.
 func probeGPU(ctx context.Context, cfg Config, env []string) *api.GPUInfo {
-
 	if _, err := ch.FindGpuBackend(); err != nil {
 		return nil
 	}
+	p, err := ch.ProbeGPU(ctx, env)
+	return gpuInfo(cfg, p, err)
+}
+
+// gpuInfo decides from a probe, or its failure, whether a virtual GPU is on
+// offer: not when the configuration asks for hardware and there is only
+// the CPU, nor when the host cannot render at all.
+func gpuInfo(cfg Config, p ch.GPUProbe, err error) *api.GPUInfo {
 	info := &api.GPUInfo{Renderer: cfg.GPURenderer, Device: cfg.GPUDevice}
 	if info.Renderer == "" {
 		info.Renderer = ch.RendererAuto
 	}
-	p, err := ch.ProbeGPU(ctx, env)
 	if err != nil {
 		info.Unavailable = err.Error()
-		cfg.Log.Warn("probing the GPU backend: environments are offered no virtual GPU", "err", err)
+		cfg.Log.Warn("probing the GPU: environments are offered no virtual GPU", "err", err)
 		return info
 	}
 	if p.GL != nil {
@@ -298,7 +304,7 @@ func probeGPU(ctx context.Context, cfg Config, env []string) *api.GPUInfo {
 	}
 	switch {
 	case info.GL == nil:
-		info.Unavailable = "the GPU backend has no OpenGL: " + info.GLError
+		info.Unavailable = "the host has no OpenGL to render with: " + info.GLError
 	case info.Renderer == ch.RendererHardware && info.GL.Software:
 		info.Unavailable = "the configuration asks for a GPU to render on, and this host renders on its CPU (" +
 			info.GL.Renderer + ")"
@@ -311,7 +317,8 @@ func probeGPU(ctx context.Context, cfg Config, env []string) *api.GPUInfo {
 	return info
 }
 
-// GPU is what virtual GPUs render with here, nil without a GPU backend.
+// GPU is what virtual GPUs render with here, nil when nothing here renders
+// for a guest.
 func (r *Runtime) GPU() *api.GPUInfo { return r.gpu }
 
 // Monitor is what runs the environments (api.Monitor*).

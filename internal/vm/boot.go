@@ -106,7 +106,7 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if s.GPU == api.GPUVirtual {
 		switch {
 		case m.rt.gpu == nil:
-			return nil, errors.New("this worker has no GPU backend, and the template asks for a virtual GPU")
+			return nil, errors.New("this worker has no virtual GPU, and the template asks for one")
 		case m.rt.gpu.Unavailable != "":
 			return nil, fmt.Errorf("this worker offers no virtual GPU: %s", m.rt.gpu.Unavailable)
 		}
