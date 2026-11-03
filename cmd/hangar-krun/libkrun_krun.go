@@ -335,6 +335,14 @@ func start(c krun.Config) error {
 	if C.krun_vmm_builder_ram_mib(&b, C.uint32_t(c.MemoryMiB), &e); e != nil {
 		return failed("sizing the machine", e)
 	}
+	// Guest memory asks for huge pages: on a host whose THP is madvise, as
+	// Ubuntu's is, it otherwise gets 4 KiB pages, and a nested guest then
+	// takes minutes to boot.
+	if runtime.GOOS == "linux" {
+		if C.krun_vmm_builder_transparent_huge_pages(&b, true, &e); e != nil {
+			return failed("sizing the machine", e)
+		}
+	}
 	// An x86 guest finds its devices, PCI and the GPU's virtio-mmio alike,
 	// in the ACPI tables; the kernel has no command-line virtio-mmio devices.
 	if runtime.GOARCH == "amd64" {
