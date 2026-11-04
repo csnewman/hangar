@@ -42,7 +42,7 @@
 # which macOS refuses it a VM.
 set -eu
 krunRepo=https://github.com/csnewman/libkrun.git
-krunHangar=11a6c0b9e0453ed87c7a69be429a299d36e4fcda
+krunHangar=ecfcff04472d86612f3764ec85a7fd378337144b
 repo=$(cd "$(dirname "$0")/.." && pwd)
 if [ "${1:-}" = linux ]; then
     exec limactl shell hangar sh "$repo/dev/krun-build.sh" in-vm "${2:-}"
