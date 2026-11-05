@@ -52,6 +52,7 @@ func (p *plane) report(t *testing.T, id string, cpus, mem int, envs ...api.Obser
 	if err := p.workers.ReportStatus(ctx, id, api.WorkerStatus{
 		Capacity:     api.Resources{CPUs: cpus, MemoryMiB: mem},
 		Environments: envs,
+		Suspends:     true,
 	}); err != nil {
 		t.Fatal(err)
 	}
