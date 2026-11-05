@@ -56,9 +56,11 @@ type source struct {
 	next    int64
 	partial []byte
 	since   time.Time
-	// file is the file a file's log was last read from: one put in its
-	// place is another log, read from its start.
-	file os.FileInfo
+	// file is the file a file's log was last read from, held open: one put
+	// in its place is another log, read from its start. Held, its inode
+	// cannot be given to the file that replaces it, which would then look
+	// the same.
+	file *os.File
 }
 
 // NewCombiner combines an environment's lines of the worker's log in rings
@@ -84,9 +86,19 @@ func (c *Combiner) Run(ctx context.Context) {
 // Poll reads on once in every environment's logs. An environment seen for
 // the first time takes its worker lines from the oldest kept, and its
 // files from their ends: a machine does not outlive the worker that
-// started it, so what they hold already is from before this one.
+// started it, so what they hold already is from before this one. One the
+// rings have forgotten is gone, and so is its combined log.
 func (c *Combiner) Poll() {
-	for _, env := range c.rings.environments() {
+	envs := c.rings.environments()
+	c.mu.Lock()
+	for env, e := range c.envs {
+		if !slices.Contains(envs, env) {
+			e.close()
+			delete(c.envs, env)
+		}
+	}
+	c.mu.Unlock()
+	for _, env := range envs {
 		c.mu.Lock()
 		e, ok := c.envs[env]
 		if !ok {
@@ -98,8 +110,11 @@ func (c *Combiner) Poll() {
 			for _, name := range sources {
 				s := &source{}
 				if path, ok := c.files(env, name); ok && name != Worker {
-					if st, err := os.Stat(path); err == nil {
-						s.next, s.file = st.Size(), st
+					if f, err := os.Open(path); err == nil {
+						if st, err := f.Stat(); err == nil {
+							s.next = st.Size()
+						}
+						s.file = f
 					}
 				}
 				e.sources[name] = s
@@ -107,6 +122,15 @@ func (c *Combiner) Poll() {
 		}
 		for _, name := range sources {
 			c.follow(env, e, name)
+		}
+	}
+}
+
+// close lets go of the files an environment's combined log follows.
+func (e *combined) close() {
+	for _, s := range e.sources {
+		if s.file != nil {
+			s.file.Close()
 		}
 	}
 }
@@ -122,16 +146,29 @@ func (c *Combiner) read(env string, s *source, name string) (Reply, bool) {
 	if !ok {
 		return Reply{}, false
 	}
-	st, err := os.Stat(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return Reply{}, false
 	}
-	if s.file != nil && !os.SameFile(s.file, st) {
-		req.Offset = 0
+	if s.file != nil {
+		if !sameFile(s.file, f) {
+			req.Offset = 0
+		}
+		s.file.Close()
 	}
-	s.file = st
+	s.file = f
 	r, err := ReadFile(path, req)
 	return r, err == nil && !r.Missing
+}
+
+// sameFile is whether two open files are the one file.
+func sameFile(a, b *os.File) bool {
+	sa, err := a.Stat()
+	if err != nil {
+		return false
+	}
+	sb, err := b.Stat()
+	return err == nil && os.SameFile(sa, sb)
 }
 
 // follow reads on in one source of an environment's combined log.
