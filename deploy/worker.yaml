@@ -13,6 +13,7 @@ node:
   # Unique per machine.
   name: worker-1
   labels:
+    # The same as runtime below, for templates' placement rules.
     runtime: cloud-hypervisor
 
 storage:
@@ -39,9 +40,13 @@ reserved:
 #   cpus: 4
 #   memory: 1.5
 
+# What runs environments: cloud-hypervisor, or krun for libkrun (README.md,
+# "libkrun"). Both are in the worker image.
 runtime: cloud-hypervisor
 
 vm:
+  # Under krun on amd64, /usr/share/hangar/vmlinux: libkrun boots an x86_64
+  # kernel as ELF.
   kernel: /usr/share/hangar/vmlinuz
   agent: /usr/share/hangar/hangar-agent
   editor: /usr/share/hangar/editor.ext4

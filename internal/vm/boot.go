@@ -2,6 +2,7 @@ package vm
 
 import (
 	"context"
+	"debug/elf"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,6 +56,19 @@ func preflight(cfg *Config) error {
 		}
 		if cfg.ImageDevice == ImagePmem {
 			return fmt.Errorf("libkrun has no persistent memory: set vm.image_device to %s", ImageDisk)
+		}
+		// libkrun boots an x86_64 kernel as ELF alone, so a bzImage would
+		// fail every boot.
+		if caps.Arch == "x86_64" {
+			f, err := elf.Open(cfg.Kernel)
+			var format *elf.FormatError
+			switch {
+			case errors.As(err, &format):
+				return fmt.Errorf("guest kernel %s is not ELF, which libkrun needs on x86_64: name the vmlinux beside it", cfg.Kernel)
+			case err != nil:
+				return fmt.Errorf("guest kernel: %w", err)
+			}
+			f.Close()
 		}
 	default:
 		if err := ch.CheckHugePages(); err != nil {

@@ -10,10 +10,11 @@ A worker machine needs, before its container starts:
 
 - **Linux 6.8 or later, with KVM**: `/dev/kvm` present and usable (bare
   metal, or a VM with nested virtualisation). arm64 and x86_64.
-- **Transparent huge pages for shared memory set to `advise`**. Guest memory is
-  a shared memfd; without this, guests run three to five times slower, and the
-  worker refuses to start. The setting belongs to the host kernel, so it is set
-  there, not in the container:
+- **Transparent huge pages for shared memory set to `advise`**. Under Cloud
+  Hypervisor guest memory is a shared memfd; without this, guests run three
+  to five times slower, and the worker refuses to start. (Under libkrun it
+  is not shared: see "libkrun" below.) The setting belongs to the host
+  kernel, so it is set there, not in the container:
 
       echo advise | sudo tee /sys/kernel/mm/transparent_hugepage/shmem_enabled
       echo 'w /sys/kernel/mm/transparent_hugepage/shmem_enabled - - - - advise' \
@@ -398,9 +399,50 @@ The server and worker images are pulled from `HANGAR_REGISTRY` at
 `HANGAR_VERSION`: CI publishes both for arm64 and amd64, as `latest` and as
 each commit on master. `up -d --build` builds them from this checkout
 instead. The worker image holds everything a node supplies, built from
-source -- Cloud Hypervisor with Hangar's patches, the virtio-gpu
+source -- Cloud Hypervisor with Hangar's patches, libkrun, the virtio-gpu
 backend, the guest kernel, the guest agent and VS Code's server
 -- so building it takes a while and wants about 8 GiB of memory.
+
+## libkrun
+
+The worker image holds two virtual machine monitors, and each worker runs
+its environments under one: Cloud Hypervisor (`runtime: cloud-hypervisor`,
+the default in `worker.yaml`) or libkrun (`runtime: krun`). libkrun is built
+from Hangar's fork, its `hangar` branch: upstream libkrun with the changes
+Hangar needs that are not yet upstream (huge pages, virtio-pci and MSI-X,
+parallel and io_uring disks, snapshots, virtio-mem). Environments do
+the same under either: suspend and resume, memory resized while running,
+the virtual GPU.
+
+To run a worker under libkrun, in its `worker.yaml`:
+
+    node:
+      labels:
+        runtime: krun
+    runtime: krun
+    vm:
+      kernel: /usr/share/hangar/vmlinux    # amd64 only; arm64 keeps vmlinuz
+
+libkrun boots an x86_64 kernel only as ELF, so on amd64 the image carries
+the kernel twice, and the worker refuses to start under `krun` with the
+bzImage. Then restart the worker (`docker compose --profile worker up -d
+--force-recreate`), and give templates meant for it the placement rule
+`runtime=krun`.
+
+Its guest memory is the worker's own anonymous memory, advised for huge
+pages, so what matters on the host is
+`/sys/kernel/mm/transparent_hugepage/enabled` at `madvise` (most
+distributions' default) or `always`, not the shared memory setting above.
+At `never` guests get 4 KiB pages, and under nested virtualisation boot
+slowly enough for their agent to time out. A host kernel built without
+transparent huge pages fails every machine's build. The same free 2 MB
+blocks help.
+
+An environment stays on the worker it was placed on, so switching a
+worker's runtime moves its environments with it: they boot from the same
+disks under the other monitor. A suspended one does not resume, since its
+snapshot is the old monitor's: stop environments, rather than suspend them,
+before switching.
 
 ## Updating
 

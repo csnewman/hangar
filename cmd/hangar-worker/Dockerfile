@@ -11,7 +11,12 @@
 #   /usr/local/bin/cloud-hypervisor   upstream at CH_COMMIT plus internal/ch/upstream
 #   /usr/local/bin/hangar-gpu         virtio-gpu backend (gpu/), with the patched
 #                                     virglrenderer in /usr/local/lib
+#   /usr/local/bin/hangar-krun        runs a machine under libkrun (runtime: krun),
+#                                     with libkrun in /usr/local/lib: the fork's
+#                                     hangar branch at krunHangar in dev/krun-build.sh
 #   /usr/share/hangar/vmlinuz         the guest kernel (internal/kernel)
+#   /usr/share/hangar/vmlinux         on amd64, the same kernel as ELF, which
+#                                     libkrun boots there
 #   /usr/share/hangar/hangar-agent    the guest agent, each boot's initramfs
 #                                     (as init) and then the agent
 #   /usr/share/hangar/editor.ext4     VS Code's server (editor/), attached to
@@ -82,18 +87,58 @@ RUN git init -q /src && cd /src \
  && install -D target/release/cloud-hypervisor /out/cloud-hypervisor \
  && cd / && rm -rf /src /root/.cargo/registry /root/.cargo/git
 
-# ---------------------------------------------------------------- hangar-gpu
-FROM rust AS gpu
+# ---------------------------------------------------------------- virglrenderer
+FROM rust AS virgl
 # virglrenderer is built with /usr/local as its prefix, which is where the
 # runtime stage puts it: the Venus render server's path is compiled in.
 COPY gpu/virglrenderer/ /src/virglrenderer/
 RUN sh /src/virglrenderer/build.sh /usr/local
+
+# ---------------------------------------------------------------- hangar-gpu
+FROM virgl AS gpu
 COPY gpu/Cargo.toml gpu/Cargo.lock /src/
 COPY gpu/src/ /src/src/
 RUN cd /src \
  && PKG_CONFIG_PATH=/usr/local/lib/$(gcc -dumpmachine)/pkgconfig cargo build --release --locked \
  && install -D target/release/hangar-gpu /out/hangar-gpu \
  && rm -rf /src/target /root/.cargo/registry /root/.cargo/git
+
+# ---------------------------------------------------------------- libkrun
+# libkrun is pinned where the dev hosts build it from: krunRepo and
+# krunHangar in dev/krun-build.sh. Only those two lines go on to the build,
+# so it runs again when the pin moves and not whenever the script changes.
+FROM ${UBUNTU} AS krun-pin
+COPY dev/krun-build.sh /krun-build.sh
+RUN grep -E '^krun(Repo|Hangar)=' /krun-build.sh > /pin \
+ && grep -qE '^krunHangar=[0-9a-f]{40}$' /pin
+
+FROM virgl AS krun
+COPY --from=krun-pin /pin /pin
+# Built without its guest init (Hangar's agent is init), though the build
+# still makes one, linked against musl. Its C bindings are generated and run
+# through rustfmt.
+RUN . /pin \
+ && rustup target add "$(uname -m)-unknown-linux-musl" \
+ && rustup component add rustfmt \
+ && git init -q /src && cd /src \
+ && git fetch -q --depth 1 "$krunRepo" "$krunHangar" \
+ && git checkout -q FETCH_HEAD \
+ && PKG_CONFIG_PATH=/usr/local/lib/$(gcc -dumpmachine)/pkgconfig make -s INIT_BLOB=0 BLK=1 NET=1 GPU=1 \
+ && install -D target/release/libkrun.so.2.0.0 /out/libkrun.so.2 \
+ && ln -s libkrun.so.2 /out/libkrun.so \
+ && cp -rL include /out/include \
+ && cd / && rm -rf /src /root/.cargo/registry /root/.cargo/git
+# hangar-krun links libkrun with cgo, against this stage's C libraries,
+# which are the worker's.
+COPY --from=golang:1.27 /usr/local/go /usr/local/go
+WORKDIR /hk
+COPY go.mod go.sum ./
+RUN /usr/local/go/bin/go mod download
+COPY cmd/ cmd/
+COPY internal/ internal/
+RUN CGO_CFLAGS=-I/out/include CGO_LDFLAGS=-L/out \
+    /usr/local/go/bin/go build -tags krun -trimpath -ldflags="-s -w" -o /out/hangar-krun ./cmd/hangar-krun \
+ && rm -rf "$(/usr/local/go/bin/go env GOCACHE)" "$(/usr/local/go/bin/go env GOMODCACHE)"
 
 # ---------------------------------------------------------------- editor
 FROM ${UBUNTU} AS editor
@@ -124,12 +169,15 @@ RUN apt-get update -qq \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=gpu /usr/local/lib/ /usr/local/lib/
 COPY --from=gpu /usr/local/libexec/ /usr/local/libexec/
+COPY --from=krun /out/libkrun.so.2 /usr/local/lib/
 RUN ldconfig
 COPY --from=cloud-hypervisor /out/cloud-hypervisor /usr/local/bin/
 COPY --from=gpu /out/hangar-gpu /usr/local/bin/
+COPY --from=krun /out/hangar-krun /usr/local/bin/
 COPY --from=go /out/hangar-worker /usr/local/bin/
 COPY --from=go /out/hangar-agent /usr/share/hangar/hangar-agent
-COPY --from=kernel /out/vmlinuz /usr/share/hangar/vmlinuz
+# vmlinux is amd64's alone; the pattern lets the copy go ahead without it.
+COPY --from=kernel /out/vmlinuz /out/vmlinu[x] /usr/share/hangar/
 COPY --from=editor /out/editor.ext4 /usr/share/hangar/editor.ext4
 ENTRYPOINT ["hangar-worker"]
 CMD ["-config", "/etc/hangar/worker.yaml"]

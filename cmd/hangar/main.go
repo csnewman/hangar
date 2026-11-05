@@ -197,6 +197,11 @@ func buildKernel(ctx context.Context, argv []string) error {
 	if st, err := os.Stat(a.Image); err == nil {
 		fmt.Fprintf(os.Stderr, "  %-16s %s\n", "vmlinuz", humanSize(st.Size()))
 	}
+	if a.ELF != "" {
+		if st, err := os.Stat(a.ELF); err == nil {
+			fmt.Fprintf(os.Stderr, "  %-16s %s\n", "vmlinux", humanSize(st.Size()))
+		}
+	}
 	fmt.Fprintf(os.Stderr, "  %-16s %s\n", "config", a.Config)
 	return nil
 }

@@ -64,6 +64,7 @@ type Options struct {
 // Artifacts are the outputs of a kernel build.
 type Artifacts struct {
 	Image         string // raw Image / bzImage, for a direct kernel boot
+	ELF           string // x86_64's kernel as ELF, which libkrun boots; empty elsewhere
 	Config        string // the resolved .config
 	KernelRelease string // e.g. "7.2.9"
 }
@@ -168,7 +169,12 @@ func Build(ctx context.Context, o Options) (*Artifacts, error) {
 	if b, err := os.ReadFile(filepath.Join(o.OutDir, "kernelrelease")); err == nil {
 		a.KernelRelease = strings.TrimSpace(string(b))
 	}
-	for _, p := range []string{a.Image, a.Config} {
+	want := []string{a.Image, a.Config}
+	if o.Arch == "x86_64" {
+		a.ELF = filepath.Join(o.OutDir, "vmlinux")
+		want = append(want, a.ELF)
+	}
+	for _, p := range want {
 		if _, err := os.Stat(p); err != nil {
 			return nil, fmt.Errorf("expected artefact missing: %s", p)
 		}

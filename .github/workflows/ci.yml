@@ -202,3 +202,68 @@ jobs:
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
+
+  krun:
+    # libkrun at dev/krun-build.sh's pin, built as the worker image builds
+    # it, and hangar-krun against it. A pin that no longer builds, or no
+    # longer matches hangar-krun (code only a -tags krun build compiles),
+    # fails here in minutes, and on pull requests, which never build the
+    # worker image.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-26.04-arm, ubuntu-26.04]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            meson ninja-build pkg-config python3-yaml python3-mako \
+            libepoxy-dev libdrm-dev libgbm-dev libvulkan-dev libegl-dev \
+            clang libclang-dev
+      - id: virgl-cache
+        uses: actions/cache@v4
+        with:
+          path: /opt/virgl
+          key: virgl-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('gpu/virglrenderer/**') }}
+      - name: Build patched virglrenderer
+        if: steps.virgl-cache.outputs.cache-hit != 'true'
+        run: sudo sh gpu/virglrenderer/build.sh /opt/virgl
+      - name: Point the build at it
+        run: |
+          lib=$(dirname "$(dirname "$(find /opt/virgl -name virglrenderer.pc)")")
+          echo "PKG_CONFIG_PATH=$lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$lib:$PWD/out/krun" >> "$GITHUB_ENV"
+      # libkrun's C bindings are generated and run through rustfmt.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      # libkrun's build makes its own guest init, linked against musl,
+      # though Hangar builds without it.
+      - run: rustup target add "$(uname -m)-unknown-linux-musl"
+      - name: Build libkrun at the pin
+        run: |
+          eval "$(grep -E '^krun(Repo|Hangar)=' dev/krun-build.sh)"
+          git init -q "$RUNNER_TEMP/libkrun" && cd "$RUNNER_TEMP/libkrun"
+          git fetch -q --depth 1 "$krunRepo" "$krunHangar"
+          git checkout -q FETCH_HEAD
+          make -s INIT_BLOB=0 BLK=1 NET=1 GPU=1
+          mkdir -p "$GITHUB_WORKSPACE/out/krun"
+          cp target/release/libkrun.so.2.0.0 "$GITHUB_WORKSPACE/out/krun/libkrun.so.2"
+          ln -s libkrun.so.2 "$GITHUB_WORKSPACE/out/krun/libkrun.so"
+          cp -L include/*.h "$GITHUB_WORKSPACE/out/krun/"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+      - name: Build hangar-krun
+        env:
+          CGO_CFLAGS: -I${{ github.workspace }}/out/krun
+          CGO_LDFLAGS: -L${{ github.workspace }}/out/krun
+        run: |
+          go vet -tags krun ./cmd/hangar-krun
+          go build -tags krun -o out/krun/hangar-krun ./cmd/hangar-krun
+      - name: It loads, with a GPU
+        run: |
+          out/krun/hangar-krun -features | tee /dev/stderr | grep -q '"gpu":true'

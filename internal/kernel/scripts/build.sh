@@ -11,6 +11,8 @@
 #                                       KERNEL_VERSION names another
 #          KARCH JOBS
 # Outputs: /out/vmlinuz         raw Image (arm64) or bzImage (x86_64)
+#          /out/vmlinux         x86_64 only: the same kernel as ELF, which
+#                               libkrun boots there, without its debug info
 #          /out/config          the resolved .config, for the record
 #
 # There is no modules directory: the kernel is monolithic (see hangar.config),
@@ -173,6 +175,10 @@ echo "kernel: building with $JOBS jobs" >&2
 make ARCH="$KARCH" -j"$JOBS" "$(basename $image_path)" >/dev/null
 
 cp "$image_path" /out/vmlinuz
+if [ "$KARCH" = x86_64 ]; then
+    # BTF is a section of its own and stays.
+    objcopy --strip-debug vmlinux /out/vmlinux
+fi
 cp .config /out/config
 
 kver=$(make ARCH="$KARCH" -s kernelrelease)

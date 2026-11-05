@@ -5,10 +5,10 @@
 #   ghcr.io/<repository>/worker:<sha> and :latest
 #
 # Both are multi-platform, arm64 and amd64. The server cross-compiles, so one
-# runner builds both platforms. The worker builds Cloud Hypervisor, the
-# backends, the guest kernel and VS Code for the platform it runs on, so each
-# platform is built on a runner of that architecture and the two are then
-# joined into one index.
+# runner builds both platforms. The worker builds Cloud Hypervisor, libkrun,
+# the backends, the guest kernel and VS Code for the platform it runs on, so
+# each platform is built on a runner of that architecture and the two are
+# then joined into one index.
 name: containers
 
 on:
@@ -99,8 +99,8 @@ jobs:
             ${{ steps.ref.outputs.image }}:${{ github.sha }}-${{ matrix.arch }}
             ${{ steps.ref.outputs.image }}:latest-${{ matrix.arch }}
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          # The stages that build from source -- Cloud Hypervisor, the
-          # kernel, VS Code -- change rarely and are what take the time.
+          # The stages that build from source -- Cloud Hypervisor, libkrun,
+          # the kernel, VS Code -- change rarely and are what take the time.
           cache-from: type=gha,scope=worker-${{ matrix.arch }}
           cache-to: type=gha,scope=worker-${{ matrix.arch }},mode=max
 
