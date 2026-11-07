@@ -1,0 +1,19 @@
+[package]
+name = "hangar-agent"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The guest agent's Rust half: the Code tab's service, and the rest of the agent as it moves over"
+
+[[bin]]
+name = "hangar-agent-rs"
+path = "src/main.rs"
+
+[dependencies]
+base64.workspace = true
+hangar-proto = { path = "../proto" }
+libc.workspace = true
+notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true

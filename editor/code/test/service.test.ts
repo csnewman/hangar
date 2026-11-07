@@ -40,7 +40,12 @@ before(async () => {
 	writeFileSync(join(root, 'a.txt'), 'one\r\ntwo\r\n')
 	git('add', '.')
 	git('commit', '-q', '-m', 'first')
-	proc = spawn(process.execPath, [join(import.meta.dirname, '..', 'dist', 'code.mjs'), '--socket', sock, '--root', root], {
+	// HANGAR_CODE_BIN runs the Rust service, hangar-agent-rs, instead.
+	const bin = process.env.HANGAR_CODE_BIN
+	const [file, args] = bin
+		? [bin, ['code', '--socket', sock, '--root', root]]
+		: [process.execPath, [join(import.meta.dirname, '..', 'dist', 'code.mjs'), '--socket', sock, '--root', root]]
+	proc = spawn(file, args, {
 		stdio: 'inherit',
 		// The settings file is in the home directory; Docker is the fake
 		// engine the Docker test serves.

@@ -7,7 +7,8 @@
 	"scripts": {
 		"build": "esbuild src/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/code.mjs",
 		"typecheck": "tsc --noEmit",
-		"test": "npm run build && node --test test/*.test.ts"
+		"test": "npm run build && node --test test/*.test.ts",
+		"test:rust": "node test/rust.mjs"
 	},
 	"dependencies": {
 		"lib0": "^0.2.114",

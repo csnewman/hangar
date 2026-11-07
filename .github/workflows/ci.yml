@@ -120,6 +120,17 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+      # The same tests, those it passes so far (test/rust.txt), against the
+      # service's Rust port in the guest agent.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+      - run: cargo build -p hangar-agent
+        working-directory: crates
+      - run: npm run test:rust
+        env:
+          HANGAR_CODE_BIN: ${{ github.workspace }}/crates/target/debug/hangar-agent-rs
 
   vscode:
     # The desktop extension, packaged as a .vsix to install by hand.

@@ -1,0 +1,4 @@
+settings are shared by every tab, in the home directory
+the workspace: its projects, shared by every tab, and repositories to add
+a file system error is said in words, with its path
+the workspace is a VS Code workspace file, its other settings kept
