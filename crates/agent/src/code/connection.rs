@@ -10,7 +10,10 @@ use tokio::task::JoinHandle;
 use super::error::{Error, Result};
 use super::files::{Listening, Run};
 use super::frame;
+use super::git::Named;
 use super::paths::resolve;
+use super::repos::{At, ReposListening};
+use super::search::TextQuery;
 use super::{Folder, Services};
 
 /// One browser tab's Code view: its requests, and the events it is sent. It
@@ -24,15 +27,19 @@ pub struct Connection {
 
 struct State {
     folder: Arc<Folder>,
-    /// Forwards the folder's file changes to the tab.
-    watching: Option<(JoinHandle<()>, Listening)>,
+    /// Forwards the folder's file and git changes to the tab.
+    watching: Option<Watching>,
 }
 
-impl Drop for State {
+struct Watching {
+    files: (JoinHandle<()>, Listening),
+    git: (JoinHandle<()>, ReposListening),
+}
+
+impl Drop for Watching {
     fn drop(&mut self) {
-        if let Some((task, _)) = self.watching.take() {
-            task.abort();
-        }
+        self.files.0.abort();
+        self.git.0.abort();
     }
 }
 
@@ -58,8 +65,18 @@ pub async fn run(stream: UnixStream, s: Arc<Services>) {
     });
     conn.watch();
     let forwards = [
-        forward(s.settings.subscribe(), out.clone(), "settings.changed"),
-        forward(s.workspace.subscribe(), out.clone(), "workspace.changed"),
+        forward(
+            s.settings.subscribe(),
+            out.clone(),
+            "settings.changed",
+            |v| v,
+        ),
+        forward(
+            s.workspace.subscribe(),
+            out.clone(),
+            "workspace.changed",
+            to_value,
+        ),
     ];
 
     while let Some(f) = frame::read(&mut rd).await {
@@ -90,16 +107,18 @@ struct Request {
 }
 
 /// Sends each broadcast value to the tab as an event, until the tab goes.
-fn forward<T: Serialize + Clone + Send + 'static>(
+fn forward<T: Clone + Send + 'static>(
     mut rx: broadcast::Receiver<T>,
     out: mpsc::UnboundedSender<Vec<u8>>,
     event: &'static str,
+    params: fn(T) -> Value,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(v) => {
-                    if send_json(&out, &json!({ "event": event, "params": v })).is_err() {
+                    let ev = json!({ "event": event, "params": params(v) });
+                    if send_json(&out, &ev).is_err() {
                         return;
                     }
                 }
@@ -127,6 +146,47 @@ impl Params<'_> {
             .ok_or_else(|| Error::msg(format!("{k} is required")))
     }
 
+    /// A string given and not empty.
+    fn opt(&self, k: &str) -> Option<&str> {
+        self.0
+            .get(k)
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())
+    }
+
+    fn flag(&self, k: &str) -> bool {
+        self.0.get(k) == Some(&Value::Bool(true))
+    }
+
+    fn strs(&self, k: &str) -> Result<Vec<String>> {
+        match self.0.get(k) {
+            Some(Value::Array(v)) if v.iter().all(Value::is_string) => Ok(v
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect()),
+            _ => Err(Error::msg(format!("{k} is required"))),
+        }
+    }
+
+    fn text_query(&self) -> Result<TextQuery> {
+        let Some(query) = self.0.get("query").and_then(Value::as_str) else {
+            return Err(Error::msg("query is required"));
+        };
+        Ok(TextQuery {
+            query: query.to_owned(),
+            regex: self.flag("regex"),
+            case_sensitive: self.flag("caseSensitive"),
+            whole_word: self.flag("wholeWord"),
+            mask: self
+                .0
+                .get("mask")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            dir: self.opt("dir").map(str::to_owned),
+        })
+    }
+
     fn num(&self, k: &str) -> Option<f64> {
         self.0.get(k).and_then(Value::as_f64)
     }
@@ -150,22 +210,18 @@ impl Connection {
         self.state.lock().unwrap().folder.clone()
     }
 
-    /// Announces every change under the tab's folder; the browser decides
-    /// what to reload.
+    /// Announces every change under the tab's folder, and every change to
+    /// what git reports; the browser decides what to reload.
     fn watch(&self) {
         let folder = self.folder();
         let (mut rx, listening) = folder.files.listen();
         let out = self.out.clone();
-        let task = tokio::spawn(async move {
+        let files = tokio::spawn(async move {
             loop {
                 match rx.recv().await {
                     Ok(dirs) => {
-                        if send_json(
-                            &out,
-                            &json!({ "event": "fs.changed", "params": { "dirs": dirs } }),
-                        )
-                        .is_err()
-                        {
+                        let ev = json!({ "event": "fs.changed", "params": { "dirs": dirs } });
+                        if send_json(&out, &ev).is_err() {
                             return;
                         }
                     }
@@ -174,10 +230,42 @@ impl Connection {
                 }
             }
         });
-        let mut st = self.state.lock().unwrap();
-        if let Some((old, _)) = st.watching.replace((task, listening)) {
-            old.abort();
+        let (rx, git_listening) = folder.repos.listen();
+        let git = forward(rx, self.out.clone(), "git.changed", |()| json!({}));
+        self.state.lock().unwrap().watching = Some(Watching {
+            files: (files, listening),
+            git: (git, git_listening),
+        });
+    }
+
+    /// The repository a path is in, the path made absolute, and where that
+    /// repository's paths start in the folder.
+    async fn in_repo(&self, path: &str) -> At {
+        self.folder().repos.at(path, false).await
+    }
+
+    /// A whole repository, named by a path in it: the folder's own when none
+    /// is given.
+    async fn of_repo(&self, path: Option<&str>) -> At {
+        self.folder().repos.at(path.unwrap_or(""), true).await
+    }
+
+    /// A folder's entries, with which of them git ignores.
+    async fn list(&self, path: &str) -> Result<Value> {
+        let f = self.folder();
+        let mut entries = f.files.list(path).await?;
+        let dir = f.files.abs(path);
+        let abs: Vec<_> = entries.iter().map(|e| dir.join(&e.name)).collect();
+        let ignored = self
+            .of_repo(Some(&dir.display().to_string()))
+            .await
+            .git
+            .ignored(&abs)
+            .await;
+        for (e, a) in entries.iter_mut().zip(&abs) {
+            e.ignored = ignored.contains(a);
         }
+        Ok(to_value(entries))
     }
 
     /// Starts a connection in a folder: the one asked for, which must be an
@@ -215,7 +303,7 @@ impl Connection {
             "hello" => self.hello(p.get("root")).await?,
             // Answered at once, so the browser can time the way here and back.
             "ping" => Value::Null,
-            "fs.list" => to_value(files.list(p.str("path")?).await?),
+            "fs.list" => self.list(p.str("path")?).await?,
             "fs.read" => json!({ "text": files.read(p.str("path")?).await? }),
             "fs.patch" => {
                 let runs = match p.get("runs") {
@@ -277,6 +365,137 @@ impl Connection {
                     .await?;
                 Value::Null
             }
+            "search.files" => to_value(f.search.files().await),
+            "search.text" => to_value(f.search.text(&p.text_query()?).await?),
+            "search.replace" => {
+                let only = match p.get("paths") {
+                    Some(Value::Array(_)) => Some(p.strs("paths")?),
+                    _ => None,
+                };
+                let q = p.text_query()?;
+                to_value(f.search.replace(&q, p.str("replacement")?, only).await?)
+            }
+            "git.status" => to_value(f.repos.status().await),
+            // These act on a file or folder, in the repository it is in.
+            "git.diff" => {
+                let r = self.in_repo(p.str("path")?).await;
+                let from = p
+                    .opt("from")
+                    .map(|from| files.abs(from).display().to_string());
+                let against = p.opt("against").unwrap_or("HEAD");
+                let d = r
+                    .git
+                    .diff(&abs_str(&r), against, from.as_deref(), p.opt("to"))
+                    .await?;
+                named_value(&r.base, to_value(d))
+            }
+            "git.log" => {
+                let skip = p.num("skip").unwrap_or(0.0);
+                let max = p.num("max").unwrap_or(300.0);
+                match p.opt("path") {
+                    Some(path) => {
+                        let r = self.in_repo(path).await;
+                        to_value(
+                            r.git
+                                .log(p.opt("ref"), skip, max, Some(&abs_str(&r)))
+                                .await?,
+                        )
+                    }
+                    None => {
+                        let r = self.of_repo(p.opt("repo")).await;
+                        to_value(r.git.log(p.opt("ref"), skip, max, None).await?)
+                    }
+                }
+            }
+            "git.ignore" => {
+                let r = self.in_repo(p.str("path")?).await;
+                r.git.ignore(&abs_str(&r), p.flag("dir")).await?;
+                Value::Null
+            }
+            "git.blob" => {
+                let r = self.in_repo(p.str("path")?).await;
+                r.git.blob(p.str("rev")?, &abs_str(&r)).await?
+            }
+            "git.blame" => {
+                let r = self.in_repo(p.str("path")?).await;
+                to_value(r.git.blame(&abs_str(&r)).await?)
+            }
+            "git.stage" => {
+                let r = self.in_repo(p.str("path")?).await;
+                r.git.stage(&abs_str(&r)).await?;
+                Value::Null
+            }
+            "git.unstage" => {
+                let r = self.in_repo(p.str("path")?).await;
+                r.git.unstage(&abs_str(&r)).await?;
+                Value::Null
+            }
+            "git.rollback" => {
+                let r = self.in_repo(p.str("path")?).await;
+                r.git.rollback(&abs_str(&r)).await?;
+                Value::Null
+            }
+            "git.show" => {
+                let r = self.in_repo(p.str("path")?).await;
+                let head = p.get("from") == Some(&Value::String("HEAD".into()));
+                json!({ "text": r.git.show(&abs_str(&r), head).await })
+            }
+            "git.setIndex" => {
+                let r = self.in_repo(p.str("path")?).await;
+                r.git.set_index(&abs_str(&r), p.str("content")?).await?;
+                Value::Null
+            }
+            "git.initSubmodule" => {
+                let r = self.in_repo(p.str("path")?).await;
+                r.git.init_submodule(&abs_str(&r)).await?;
+                Value::Null
+            }
+            // The rest act on a whole repository: repo is a path in it, the
+            // folder's own repository when none is given.
+            "git.commitInfo" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                let mut info = r.git.commit_info(p.str("hash")?).await?;
+                info.files = named_all(&r.base, info.files);
+                to_value(info)
+            }
+            "git.branchChanges" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                let base = p.get("base").and_then(Value::as_str);
+                let mut c = r.git.branch_changes(base).await?;
+                c.changes = named_all(&r.base, c.changes);
+                to_value(c)
+            }
+            "git.commit" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.commit(p.str("message")?, p.flag("amend")).await?;
+                Value::Null
+            }
+            "git.lastMessage" => {
+                Value::String(self.of_repo(p.opt("repo")).await.git.last_message().await)
+            }
+            "git.branches" => to_value(self.of_repo(p.opt("repo")).await.git.branches().await?),
+            "git.checkout" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.checkout(p.str("name")?).await?;
+                Value::Null
+            }
+            "git.createBranch" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.create_branch(p.str("name")?).await?;
+                Value::Null
+            }
+            "git.push" => {
+                self.of_repo(p.opt("repo")).await.git.push().await?;
+                Value::Null
+            }
+            "git.pull" => {
+                self.of_repo(p.opt("repo")).await.git.pull().await?;
+                Value::Null
+            }
+            "git.fetch" => {
+                self.of_repo(p.opt("repo")).await.git.fetch().await?;
+                Value::Null
+            }
             _ => return Err(Error::msg(format!("no such method: {method}"))),
         })
     }
@@ -284,4 +503,33 @@ impl Connection {
 
 fn to_value<T: Serialize>(v: T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
+}
+
+fn abs_str(r: &At) -> String {
+    r.abs.display().to_string()
+}
+
+/// A repository's paths in what it returns, as the folder names them.
+fn named_value(base: &str, mut v: Value) -> Value {
+    if !base.is_empty() {
+        for k in ["path", "from"] {
+            if let Some(Value::String(s)) = v.get_mut(k) {
+                *s = format!("{base}{s}");
+            }
+        }
+    }
+    v
+}
+
+fn named_all(base: &str, files: Vec<Named>) -> Vec<Named> {
+    files
+        .into_iter()
+        .map(|mut f| {
+            if !base.is_empty() {
+                f.path = format!("{base}{}", f.path);
+                f.from = f.from.map(|from| format!("{base}{from}"));
+            }
+            f
+        })
+        .collect()
 }

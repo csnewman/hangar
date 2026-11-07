@@ -320,7 +320,9 @@ impl Files {
         let (tx, mut rx) = mpsc::unbounded_channel::<PathBuf>();
         let root = self.root.clone();
         let mut watcher = notify::recommended_watcher(move |ev: notify::Result<notify::Event>| {
-            if let Ok(ev) = ev {
+            if let Ok(ev) = ev
+                && changes(&ev)
+            {
                 for p in ev.paths {
                     let _ = tx.send(p);
                 }
@@ -346,6 +348,17 @@ impl Files {
             }
         });
         Ok(watcher)
+    }
+}
+
+/// Whether an event is a change: on Linux a file being opened or closed
+/// without writing is reported too, which reading it does.
+pub fn changes(ev: &notify::Event) -> bool {
+    use notify::event::{AccessKind, AccessMode, EventKind};
+    match ev.kind {
+        EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
+        EventKind::Access(_) => false,
+        _ => true,
     }
 }
 
@@ -399,7 +412,7 @@ fn clamp(v: f64, lo: f64, hi: f64) -> f64 {
 /// Names in the order a person expects: letters together whatever their
 /// case, lowercase first when two differ only in case. Node's localeCompare
 /// orders by Unicode collation too, which this approximates.
-fn collate(a: &str, b: &str) -> Ordering {
+pub fn collate(a: &str, b: &str) -> Ordering {
     a.to_lowercase()
         .cmp(&b.to_lowercase())
         .then_with(|| b.cmp(a))

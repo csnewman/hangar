@@ -3,11 +3,15 @@
 //! runs per root folder; a tab may work in another folder, named in its
 //! hello.
 
+mod child;
 mod connection;
 mod error;
 mod files;
 mod frame;
+mod git;
 mod paths;
+mod repos;
+mod search;
 mod settings;
 mod store;
 mod workspace;
@@ -20,13 +24,18 @@ use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
 
 use files::Files;
+use repos::Repos;
+use search::Search;
 use settings::SettingsFile;
 use workspace::WorkspaceFile;
 
-/// What serves one folder, shared by every tab that has it open.
+/// What serves one folder, shared by every tab that has it open: its files,
+/// its git repositories, and searches in it.
 pub struct Folder {
     pub root: PathBuf,
     pub files: Arc<Files>,
+    pub repos: Arc<Repos>,
+    pub search: Search,
 }
 
 /// The service's own: the folder it was started on, the one serving any
@@ -49,6 +58,8 @@ impl Services {
                 Arc::new(Folder {
                     root: dir.to_path_buf(),
                     files: Files::new(dir),
+                    repos: Repos::new(dir),
+                    search: Search::new(dir),
                 })
             })
             .clone()
