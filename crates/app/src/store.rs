@@ -28,6 +28,11 @@ impl Dirs {
         })
     }
 
+    /// Where the panels' sizes are kept.
+    pub fn layout_file(&self) -> PathBuf {
+        self.config.join("layout.json")
+    }
+
     fn places_file(&self) -> PathBuf {
         self.config.join("places.json")
     }

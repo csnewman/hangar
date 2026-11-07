@@ -8,14 +8,15 @@ use std::time::Duration;
 use gpui::Focusable;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, Entity, FontWeight, IntoElement, ParentElement, Pixels,
-    Render, SharedString, Styled, Window, div, prelude::*, px, relative, svg,
+    AnyElement, ClickEvent, Context, DragMoveEvent, Entity, FontWeight, IntoElement, ParentElement,
+    Pixels, Render, SharedString, Styled, Window, div, prelude::*, px, relative, svg,
 };
 use gpui_component::input::{Input, InputState};
 use gpui_component::{TitleBar, h_flex, v_flex};
 
 use crate::assets;
 use crate::envtab::EnvTab;
+use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Action, Card, LineKind};
 use crate::palette::{self, Palette};
 use crate::places::Places;
@@ -24,9 +25,6 @@ use crate::ui::{button, chip, dot, primary, spark};
 /// How often the window is drawn again with nothing changed, so ages
 /// ("3m") keep up.
 const TICK: Duration = Duration::from_secs(30);
-
-/// The sidebar's width.
-const SIDEBAR: Pixels = px(240.);
 
 /// The narrowest a card on Home may be.
 const CARD_MIN: f32 = 230.;
@@ -270,6 +268,12 @@ impl Render for Shell {
 
         v_flex()
             .size_full()
+            .on_drag_move(cx.listener(|_, e: &DragMoveEvent<Edge>, _, cx| {
+                if *e.drag(cx) == Edge::Sidebar {
+                    let size = Sizes::dragged(Edge::Sidebar, e.event.position, e.bounds, 0.);
+                    Layout::update(cx, |s| s.set(Edge::Sidebar, size));
+                }
+            }))
             .bg(p.bg)
             .text_color(p.text)
             .text_size(px(12.5))
@@ -512,12 +516,12 @@ impl Shell {
             .find(|(_, s)| s.connection == crate::place::Connection::Online)
             .map(|(c, _)| c.url.clone());
         v_flex()
-            .w(SIDEBAR)
+            .relative()
+            .w(Layout::sizes(cx).get(Edge::Sidebar))
+            .child(layout::handle("sidebar-edge", Edge::Sidebar))
             .flex_none()
             .h_full()
             .bg(p.sidebar)
-            .border_r_1()
-            .border_color(p.border)
             .px(px(8.))
             .py(px(10.))
             .gap(px(2.))
@@ -607,7 +611,7 @@ impl Shell {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let room = f32::from(width) - f32::from(SIDEBAR) - 32.;
+        let room = f32::from(width) - Layout::sizes(cx).sidebar - 32.;
         let cols = ((room + 10.) / (CARD_MIN + 10.)).floor().clamp(1., 4.) as u16;
         let idle = model::idle(cards).len();
         let seg = |id: &'static str, mode: HomeMode, first: bool| {

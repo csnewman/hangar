@@ -4,6 +4,7 @@
 pub mod api;
 pub mod assets;
 pub mod envtab;
+pub mod layout;
 pub mod model;
 pub mod palette;
 pub mod place;

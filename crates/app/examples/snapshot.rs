@@ -31,6 +31,10 @@ fn main() {
         .run(move |cx| {
             gpui_component::init(cx);
             hangar_app::envtab::bind_keys(cx);
+            hangar_app::layout::Layout::init(
+                hangar_app::store::Dirs::user().map(|d| d.layout_file()),
+                cx,
+            );
             let places = places::from_env(cx);
             let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
             let mut shell = None;

@@ -5,14 +5,16 @@
 use std::collections::HashMap;
 
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, FontWeight, IntoElement, KeyBinding,
-    ParentElement, Render, SharedString, Styled, Window, actions, div, prelude::*, px, svg,
+    App, Context, DragMoveEvent, Entity, FocusHandle, Focusable, FontWeight, IntoElement,
+    KeyBinding, ParentElement, Render, SharedString, Styled, Window, actions, div, prelude::*, px,
+    svg,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{h_flex, v_flex};
 
 use crate::api::{AgentSession, Environment};
 use crate::assets;
+use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Card, Tone};
 use crate::palette::{self, Palette};
 use crate::place::PlaceConfig;
@@ -135,7 +137,9 @@ actions!(
         ToggleTerminal,
         ToggleProblems,
         ToggleGit,
-        ToggleDocker
+        ToggleDocker,
+        HideAllToolWindows,
+        HideActiveToolWindow
     ]
 );
 
@@ -145,11 +149,25 @@ pub fn bind_keys(cx: &mut App) {
     let ctx = Some("EnvTab");
     #[cfg(target_os = "macos")]
     let keys = [
-        "cmd-1", "cmd-0", "cmd-7", "alt-f12", "cmd-6", "cmd-9", "cmd-8",
+        "cmd-1",
+        "cmd-0",
+        "cmd-7",
+        "alt-f12",
+        "cmd-6",
+        "cmd-9",
+        "cmd-8",
+        "cmd-shift-f12",
     ];
     #[cfg(not(target_os = "macos"))]
     let keys = [
-        "alt-1", "alt-0", "alt-7", "alt-f12", "alt-6", "alt-9", "alt-8",
+        "alt-1",
+        "alt-0",
+        "alt-7",
+        "alt-f12",
+        "alt-6",
+        "alt-9",
+        "alt-8",
+        "ctrl-shift-f12",
     ];
     cx.bind_keys([
         KeyBinding::new(keys[0], ToggleProject, ctx),
@@ -159,6 +177,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(keys[4], ToggleProblems, ctx),
         KeyBinding::new(keys[5], ToggleGit, ctx),
         KeyBinding::new(keys[6], ToggleDocker, ctx),
+        KeyBinding::new(keys[7], HideAllToolWindows, ctx),
+        KeyBinding::new("shift-escape", HideActiveToolWindow, ctx),
     ]);
 }
 
@@ -194,6 +214,10 @@ pub struct EnvTab {
     open: HashMap<Slot, Tool>,
     /// The task, while it is being edited.
     task_edit: Option<Entity<InputState>>,
+    /// The tool windows Hide All put away, to bring back.
+    hidden: Option<HashMap<Slot, Tool>>,
+    /// The tool window last opened, which Hide Active hides.
+    last: Option<Tool>,
 }
 
 impl EnvTab {
@@ -211,6 +235,8 @@ impl EnvTab {
             focus: cx.focus_handle(),
             open,
             task_edit: None,
+            hidden: None,
+            last: None,
         }
     }
 
@@ -225,8 +251,33 @@ impl EnvTab {
             self.open.remove(&slot);
         } else {
             self.open.insert(slot, tool);
+            self.last = Some(tool);
+            self.hidden = None;
         }
         cx.notify();
+    }
+
+    /// Puts every tool window away, leaving the editors the room, or brings
+    /// back what it put away.
+    pub fn hide_all(&mut self, cx: &mut Context<Self>) {
+        if self.open.is_empty() {
+            if let Some(h) = self.hidden.take() {
+                self.open = h;
+            }
+        } else {
+            self.hidden = Some(std::mem::take(&mut self.open));
+        }
+        cx.notify();
+    }
+
+    /// Hides the tool window last opened, if it is still open.
+    pub fn hide_active(&mut self, cx: &mut Context<Self>) {
+        if let Some(t) = self.last.take()
+            && self.is_open(t)
+        {
+            self.open.remove(&t.slot());
+            cx.notify();
+        }
     }
 
     fn edit_task(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -288,10 +339,23 @@ impl Render for EnvTab {
         let right_below = self.open.get(&Slot::RightBelow).copied();
         let bottom = self.open.get(&Slot::Bottom).copied();
         let waiting = env.agents.iter().filter(|a| a.needs_you).count();
+        let sizes = Layout::sizes(cx);
 
         v_flex()
             .size_full()
             .key_context("EnvTab")
+            .on_action(cx.listener(|t, _: &HideAllToolWindows, _, cx| t.hide_all(cx)))
+            .on_action(cx.listener(|t, _: &HideActiveToolWindow, _, cx| t.hide_active(cx)))
+            .on_drag_move(cx.listener(|_, e: &DragMoveEvent<Edge>, _, cx| {
+                let edge = *e.drag(cx);
+                let inset = match edge {
+                    Edge::Left | Edge::Right => 38.,
+                    Edge::Bottom => 24.,
+                    Edge::Sidebar => return,
+                };
+                let size = Sizes::dragged(edge, e.event.position, e.bounds, inset);
+                Layout::update(cx, |s| s.set(edge, size));
+            }))
             .track_focus(&self.focus)
             .on_action(cx.listener(|t, _: &ToggleProject, _, cx| t.toggle(Tool::Project, cx)))
             .on_action(cx.listener(|t, _: &ToggleCommit, _, cx| t.toggle(Tool::Commit, cx)))
@@ -321,11 +385,11 @@ impl Render for EnvTab {
                                     .when(left.is_some() || left_below.is_some(), |d| {
                                         d.child(
                                             v_flex()
-                                                .w(px(220.))
+                                                .relative()
+                                                .w(sizes.get(Edge::Left))
                                                 .flex_none()
+                                                .child(layout::handle("left-edge", Edge::Left))
                                                 .bg(p.surface)
-                                                .border_r_1()
-                                                .border_color(p.border)
                                                 .when_some(left, |d, t| {
                                                     d.child(
                                                         self.tool_window(t, &env, &card, &p, cx),
@@ -356,11 +420,11 @@ impl Render for EnvTab {
                                     .when(right.is_some() || right_below.is_some(), |d| {
                                         d.child(
                                             v_flex()
-                                                .w(px(260.))
+                                                .relative()
+                                                .w(sizes.get(Edge::Right))
                                                 .flex_none()
+                                                .child(layout::handle("right-edge", Edge::Right))
                                                 .bg(p.surface)
-                                                .border_l_1()
-                                                .border_color(p.border)
                                                 .when_some(right, |d, t| {
                                                     d.child(
                                                         self.tool_window(t, &env, &card, &p, cx),
@@ -381,7 +445,9 @@ impl Render for EnvTab {
                                         )
                                     }),
                             )
-                            .when_some(bottom, |d, t| d.child(self.bottom(t, &p))),
+                            .when_some(bottom, |d, t| {
+                                d.child(self.bottom(t, sizes.get(Edge::Bottom), &p))
+                            }),
                     )
                     .child(self.stripe(RIGHT, false, waiting, &p, cx)),
             )
@@ -753,14 +819,14 @@ impl EnvTab {
             .child(keys)
     }
 
-    fn bottom(&self, t: Tool, p: &Palette) -> impl IntoElement {
+    fn bottom(&self, t: Tool, height: gpui::Pixels, p: &Palette) -> impl IntoElement {
         let dark = t == Tool::Terminal;
         v_flex()
-            .h(px(190.))
+            .relative()
+            .h(height)
             .flex_none()
-            .border_t_1()
-            .border_color(p.border)
             .bg(if dark { p.term_bg } else { p.surface })
+            .child(layout::handle("bottom-edge", Edge::Bottom))
             .child(
                 h_flex()
                     .gap(px(6.))
