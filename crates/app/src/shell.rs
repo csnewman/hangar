@@ -5,17 +5,21 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use gpui::Focusable;
+
 use gpui::{
-    AnyElement, ClickEvent, Context, Div, Entity, FontWeight, IntoElement, ParentElement, Pixels,
-    Render, SharedString, Stateful, Styled, Window, div, prelude::*, px, relative, svg,
+    AnyElement, ClickEvent, Context, Entity, FontWeight, IntoElement, ParentElement, Pixels,
+    Render, SharedString, Styled, Window, div, prelude::*, px, relative, svg,
 };
 use gpui_component::input::{Input, InputState};
 use gpui_component::{TitleBar, h_flex, v_flex};
 
 use crate::assets;
-use crate::model::{self, Action, Card, LineKind, Tone};
+use crate::envtab::EnvTab;
+use crate::model::{self, Action, Card, LineKind};
 use crate::palette::{self, Palette};
 use crate::places::Places;
+use crate::ui::{button, chip, dot, primary, spark};
 
 /// How often the window is drawn again with nothing changed, so ages
 /// ("3m") keep up.
@@ -46,6 +50,8 @@ pub enum HomeMode {
 pub struct Shell {
     places: Entity<Places>,
     tabs: Vec<Opened>,
+    /// Each tab's view, in the order of tabs.
+    views: Vec<Entity<EnvTab>>,
     /// The tab shown: None is Home.
     active: Option<usize>,
     home_mode: HomeMode,
@@ -89,6 +95,7 @@ impl Shell {
         let mut shell = Shell {
             places,
             tabs: vec![],
+            views: vec![],
             active: None,
             home_mode: HomeMode::Attention,
             collapsed: HashSet::new(),
@@ -115,14 +122,30 @@ impl Shell {
         let i = match self.tabs.iter().position(|t| *t == o) {
             Some(i) => i,
             None => {
+                let places = self.places.clone();
+                self.views
+                    .push(cx.new(|cx| EnvTab::new(places, &o.place, &o.env, cx)));
                 self.tabs.push(o);
                 self.tabs.len() - 1
             }
         };
+        self.show(i, window, cx);
+    }
+
+    /// Shows an open tab, its view taking the keyboard.
+    fn show(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.adding = None;
         self.active = Some(i);
+        if let Some(v) = self.views.get(i) {
+            window.focus(&v.focus_handle(cx), cx);
+        }
         self.tell_seen(window, cx);
         cx.notify();
+    }
+
+    /// The view of the tab shown, if an environment's is.
+    pub fn active_view(&self) -> Option<Entity<EnvTab>> {
+        self.active.and_then(|i| self.views.get(i)).cloned()
     }
 
     pub fn show_home(&mut self, cx: &mut Context<Self>) {
@@ -138,6 +161,7 @@ impl Shell {
 
     fn close(&mut self, i: usize, cx: &mut Context<Self>) {
         self.tabs.remove(i);
+        self.views.remove(i);
         self.active = match self.active {
             Some(a) if a == i => None,
             Some(a) if a > i => Some(a - 1),
@@ -225,95 +249,6 @@ impl Shell {
     }
 }
 
-fn tone(t: Tone, p: &Palette) -> gpui::Hsla {
-    match t {
-        Tone::Wait => p.wait,
-        Tone::Good => p.good,
-        Tone::Bad => p.bad,
-        Tone::Busy => p.busy,
-        Tone::Idle | Tone::Ring => p.idle,
-    }
-}
-
-/// A status dot, hollow for Ring.
-fn dot(t: Tone, p: &Palette) -> Div {
-    let d = div().size(px(8.)).rounded_full().flex_none();
-    match t {
-        Tone::Ring => d.border(px(1.5)).border_color(p.idle),
-        t => d.bg(tone(t, p)),
-    }
-}
-
-/// A button as the design draws one.
-fn button(
-    id: impl Into<SharedString>,
-    label: impl Into<SharedString>,
-    p: &Palette,
-) -> Stateful<Div> {
-    styled_button(id, label, p.surface, p.border_strong, p.text, p.surface_2)
-}
-
-/// The one button that says what to do next.
-fn primary(
-    id: impl Into<SharedString>,
-    label: impl Into<SharedString>,
-    p: &Palette,
-) -> Stateful<Div> {
-    styled_button(
-        id,
-        label,
-        p.accent,
-        p.accent,
-        p.on_accent,
-        p.accent.opacity(0.88),
-    )
-}
-
-fn styled_button(
-    id: impl Into<SharedString>,
-    label: impl Into<SharedString>,
-    bg: gpui::Hsla,
-    border: gpui::Hsla,
-    fg: gpui::Hsla,
-    hover: gpui::Hsla,
-) -> Stateful<Div> {
-    div()
-        .id(id.into())
-        .flex()
-        .items_center()
-        .gap_1p5()
-        .px(px(10.))
-        .py(px(3.))
-        .rounded(px(6.))
-        .border_1()
-        .border_color(border)
-        .bg(bg)
-        .text_color(fg)
-        .text_size(px(12.))
-        .whitespace_nowrap()
-        .cursor_pointer()
-        .hover(move |s| s.bg(hover))
-        .child(label.into())
-}
-
-/// A small outlined label: a card's place.
-fn chip(text: impl Into<SharedString>, p: &Palette) -> Div {
-    div()
-        .flex_none()
-        .px(px(5.))
-        .rounded(px(4.))
-        .border_1()
-        .border_color(p.border)
-        .text_size(px(10.))
-        .text_color(p.muted)
-        .child(text.into())
-}
-
-/// The mark beside a task the agent set.
-fn spark(p: &Palette) -> Div {
-    div().flex_none().text_color(p.accent).child("✦")
-}
-
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
@@ -330,7 +265,7 @@ impl Render for Shell {
             (None, None) => self
                 .home(&cards, by_place, width, &p, cx)
                 .into_any_element(),
-            (None, Some(i)) => self.env_page(i, &cards, &p, cx).into_any_element(),
+            (None, Some(i)) => self.views[i].clone().into_any_element(),
         };
 
         v_flex()
@@ -427,12 +362,7 @@ impl Shell {
                                 this.close(i, cx);
                             })),
                     )
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.adding = None;
-                        this.active = Some(i);
-                        this.tell_seen(window, cx);
-                        cx.notify();
-                    })),
+                    .on_click(cx.listener(move |this, _, window, cx| this.show(i, window, cx))),
             );
         }
         let waiting = cards.iter().filter(|c| c.rank.needs_you()).count();
@@ -882,87 +812,6 @@ impl Shell {
                     }),
             )
             .on_click(cx.listener(move |this, _, window, cx| this.open(&place, &env, window, cx)))
-    }
-
-    fn env_page(
-        &self,
-        i: usize,
-        cards: &[Card],
-        p: &Palette,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let Some(o) = self.tabs.get(i) else {
-            return v_flex();
-        };
-        let places = self.places.read(cx);
-        let card = cards.iter().find(|c| c.place == o.place && c.env == o.env);
-        let env = places
-            .get(&o.place)
-            .and_then(|(_, s)| s.environment(&o.env));
-        let (Some(card), Some(env)) = (card, env) else {
-            return v_flex()
-                .p_4()
-                .text_color(p.muted)
-                .child("This environment has been deleted, or is out of reach.");
-        };
-        let mut agents = v_flex().gap(px(8.));
-        for a in &env.agents {
-            agents = agents.child(
-                v_flex()
-                    .p(px(10.))
-                    .rounded(px(8.))
-                    .bg(p.surface)
-                    .border_1()
-                    .border_color(if a.needs_you { p.wait } else { p.border })
-                    .child(
-                        h_flex()
-                            .gap(px(8.))
-                            .child(
-                                div()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(a.agent.clone()),
-                            )
-                            .child(div().text_color(p.muted).child(a.state.clone()))
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(p.muted)
-                                    .child(model::age(a.since, chrono::Utc::now())),
-                            ),
-                    )
-                    .when_some(a.message.clone(), |d, m| d.child(m))
-                    .when_some(a.step.clone(), |d, s| {
-                        d.child(div().text_color(p.muted).child(s))
-                    }),
-            );
-        }
-        v_flex()
-            .size_full()
-            .px(px(16.))
-            .py(px(14.))
-            .gap(px(10.))
-            .child(
-                h_flex()
-                    .gap(px(8.))
-                    .child(dot(card.tone, p))
-                    .child(
-                        div()
-                            .text_size(px(16.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .child(card.title.clone()),
-                    )
-                    .when(card.agent_task, |d| d.child(spark(p))),
-            )
-            .child(div().text_color(p.muted).child(format!(
-                "{} · {} · {}",
-                env.name, card.place_name, card.status
-            )))
-            .child(div().font_weight(FontWeight::SEMIBOLD).child("Agents"))
-            .child(if env.agents.is_empty() {
-                agents.child(div().text_color(p.muted).child("No agent sessions."))
-            } else {
-                agents
-            })
     }
 
     fn add_page(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {

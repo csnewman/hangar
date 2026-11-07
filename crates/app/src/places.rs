@@ -248,6 +248,32 @@ impl Places {
         self.report(task, cx);
     }
 
+    /// Sets an environment's task, or marks it done for an empty text.
+    pub fn set_task(&mut self, place: &str, env: &str, text: &str, cx: &mut Context<Self>) {
+        let Some(client) = self.client(place) else {
+            return;
+        };
+        let (env, text) = (env.to_string(), text.trim().to_string());
+        let task = cx.background_spawn(async move {
+            if text.is_empty() {
+                client.end_task(&env)
+            } else {
+                client.set_task(&env, &text).map(|_| ())
+            }
+        });
+        self.report(task, cx);
+    }
+
+    /// Asks for an environment to stop, keeping its disks.
+    pub fn stop(&mut self, place: &str, env: &str, cx: &mut Context<Self>) {
+        let Some(client) = self.client(place) else {
+            return;
+        };
+        let env = env.to_string();
+        let task = cx.background_spawn(async move { client.stop(&env).map(|_| ()) });
+        self.report(task, cx);
+    }
+
     /// Says the user has looked at an agent's session.
     pub fn seen(&mut self, place: &str, env: &str, session: &str, cx: &mut Context<Self>) {
         let Some(client) = self.client(place) else {

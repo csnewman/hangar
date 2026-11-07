@@ -227,7 +227,9 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
                 action: Some(Action::Details),
             }
         }
-        ("running", Some(a)) if a.state == "asking" && a.needs_you => {
+        // An agent that asks is asking until it is answered; once the user
+        // has seen it, it is not among what needs them.
+        ("running", Some(a)) if a.state == "asking" => {
             let question = match &a.step {
                 Some(step) => format!("{who} asks: {}?", lower_first(step)),
                 None => a
@@ -246,7 +248,11 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
                 .or(a.message.clone())
                 .unwrap_or_default();
             Look {
-                rank: Rank::Asking,
+                rank: if a.needs_you {
+                    Rank::Asking
+                } else {
+                    Rank::Working
+                },
                 tone: Tone::Wait,
                 status: format!("Asking · {}", age(a.since, now)),
                 summary: format!("{who} is asking: {about}? · {}", age(a.since, now)),

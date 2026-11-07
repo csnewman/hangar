@@ -30,6 +30,7 @@ fn main() {
         .with_assets(hangar_app::assets::Assets)
         .run(move |cx| {
             gpui_component::init(cx);
+            hangar_app::envtab::bind_keys(cx);
             let places = places::from_env(cx);
             let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
             let mut shell = None;
@@ -77,12 +78,12 @@ fn main() {
                     .timer(Duration::from_millis(500))
                     .await;
                 // A window off the screen is not drawn by itself: draw the
-            // frame to be captured.
-            let image = cx.update_window(handle.into(), |_, window, cx| {
-                window.refresh();
-                let _ = window.draw(cx);
-                window.render_to_image()
-            });
+                // frame to be captured.
+                let image = cx.update_window(handle.into(), |_, window, cx| {
+                    window.refresh();
+                    let _ = window.draw(cx);
+                    window.render_to_image()
+                });
                 match image {
                     Ok(Ok(img)) => {
                         img.save(&out).expect("writing the image");

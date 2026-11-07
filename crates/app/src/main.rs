@@ -13,6 +13,7 @@ fn main() {
         .with_assets(hangar_app::assets::Assets)
         .run(|cx| {
             gpui_component::init(cx);
+            hangar_app::envtab::bind_keys(cx);
             let places = places::from_env(cx);
             let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
             cx.open_window(

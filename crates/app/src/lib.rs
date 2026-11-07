@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod assets;
+pub mod envtab;
 pub mod model;
 pub mod palette;
 pub mod place;
@@ -10,3 +11,4 @@ pub mod places;
 pub mod shell;
 pub mod store;
 pub mod terminal;
+pub mod ui;

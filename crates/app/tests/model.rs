@@ -106,6 +106,14 @@ fn each_state_is_a_card() {
     assert_eq!(c.summary, "Claude · edit src/main.go");
     assert_eq!(c.action, None);
 
+    // Seen, an asking session still asks, but does not need the user.
+    let mut seen = env("pay-1", "running");
+    seen.agents = vec![agent("a", "asking", false, 4)];
+    let c = model::card(&place(), &seen, now());
+    assert_eq!((c.rank, c.tone), (Rank::Working, Tone::Wait));
+    assert_eq!(c.status, "Asking · 4m");
+    assert!(!c.rank.needs_you());
+
     // Seen, a finished session is idle: the environment is just running.
     let mut idle = env("docs-1", "running");
     idle.agents = vec![agent("a", "idle", false, 30)];
