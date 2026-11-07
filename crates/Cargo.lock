@@ -3081,6 +3081,7 @@ dependencies = [
  "keyring",
  "libc",
  "lsp-types",
+ "pollster 0.4.0",
  "rustls",
  "rustls-platform-verifier",
  "serde",

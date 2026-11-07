@@ -25,6 +25,7 @@ fn env(name: &str, phase: &str) -> Environment {
         worker_online: Some(true),
         cpus: None,
         memory_mib: None,
+        editor_path: None,
         task: None,
         agents: vec![],
         created_at: now() - Duration::days(3),

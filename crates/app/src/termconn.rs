@@ -2,17 +2,11 @@
 //! API's terminal WebSocket (internal/clientapi/openapi.yaml), on a thread
 //! of its own.
 
-use std::io::ErrorKind;
-use std::net::TcpStream;
-use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread;
-use std::time::Duration;
 
 use serde::Deserialize;
-use tungstenite::client::IntoClientRequest;
-use tungstenite::stream::MaybeTlsStream;
-use tungstenite::{Connector, Message, WebSocket};
+use tungstenite::Message;
 
 use crate::api::Client;
 
@@ -62,10 +56,6 @@ impl Drop for Connection {
     }
 }
 
-/// How long a read waits before the connection looks for something to
-/// send: the most a key waits to go.
-const POLL: Duration = Duration::from_millis(8);
-
 /// Attaches to an environment's terminal session, or starts a new one at
 /// cols by rows, telling events what it says until it ends or events
 /// returns false.
@@ -113,7 +103,7 @@ fn run(
     rx: &Receiver<Command>,
     events: &impl Fn(Event) -> bool,
 ) -> Result<(), String> {
-    let mut ws = connect(url, auth)?;
+    let mut ws = crate::ws::connect(url, auth)?;
     loop {
         // What is to be sent first, then what has come.
         loop {
@@ -135,11 +125,7 @@ fn run(
         let _ = ws.flush();
         let msg = match ws.read() {
             Ok(m) => m,
-            Err(tungstenite::Error::Io(e))
-                if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) =>
-            {
-                continue;
-            }
+            Err(e) if crate::ws::idle(&e) => continue,
             Err(tungstenite::Error::ConnectionClosed) => return Ok(()),
             Err(e) => return Err(e.to_string()),
         };
@@ -187,65 +173,10 @@ fn run(
     }
 }
 
-fn frame(
-    ws: &mut WebSocket<MaybeTlsStream<TcpStream>>,
-    typ: u8,
-    payload: &[u8],
-) -> Result<(), String> {
+fn frame(ws: &mut crate::ws::Socket, typ: u8, payload: &[u8]) -> Result<(), String> {
     let mut b = Vec::with_capacity(payload.len() + 1);
     b.push(typ);
     b.extend_from_slice(payload);
     ws.write(Message::Binary(b.into()))
         .map_err(|e| e.to_string())
-}
-
-/// Opens the WebSocket, through TLS checked as the OS checks it for wss.
-fn connect(url: &str, auth: &str) -> Result<WebSocket<MaybeTlsStream<TcpStream>>, String> {
-    let mut req = url.into_client_request().map_err(|e| e.to_string())?;
-    req.headers_mut().insert(
-        "Authorization",
-        auth.parse().map_err(|_| "a bad token".to_string())?,
-    );
-    let uri = req.uri().clone();
-    let host = uri.host().ok_or("no host")?.to_string();
-    let tls = uri.scheme_str() == Some("wss");
-    let port = uri.port_u16().unwrap_or(if tls { 443 } else { 80 });
-    let tcp = TcpStream::connect((host.as_str(), port)).map_err(|e| e.to_string())?;
-    tcp.set_nodelay(true).map_err(|e| e.to_string())?;
-    let connector = if tls {
-        use rustls_platform_verifier::ConfigVerifierExt;
-        let config = rustls::ClientConfig::with_platform_verifier().map_err(|e| e.to_string())?;
-        Connector::Rustls(Arc::new(config))
-    } else {
-        Connector::Plain
-    };
-    let (ws, resp) = tungstenite::client_tls_with_config(req, tcp, None, Some(connector)).map_err(
-        |e| match e {
-            tungstenite::HandshakeError::Failure(tungstenite::Error::Http(r)) => {
-                let body = r
-                    .body()
-                    .as_ref()
-                    .map(|b| String::from_utf8_lossy(b).to_string())
-                    .unwrap_or_default();
-                #[derive(Deserialize)]
-                struct Body {
-                    error: String,
-                }
-                serde_json::from_str::<Body>(&body)
-                    .map(|b| b.error)
-                    .unwrap_or_else(|_| format!("the server answered {}", r.status()))
-            }
-            e => e.to_string(),
-        },
-    )?;
-    let _ = resp;
-    // Reads wait only briefly, so what is typed goes out between them.
-    let sock = match ws.get_ref() {
-        MaybeTlsStream::Plain(s) => s,
-        MaybeTlsStream::Rustls(s) => s.get_ref(),
-        _ => return Err("an unknown stream".into()),
-    };
-    sock.set_read_timeout(Some(POLL))
-        .map_err(|e| e.to_string())?;
-    Ok(ws)
 }

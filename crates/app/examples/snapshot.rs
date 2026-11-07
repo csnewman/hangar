@@ -10,7 +10,8 @@
 //! SNAPSHOT_SIZE=WxH sets the window's size; SNAPSHOT_WAIT=seconds waits
 //! after opening, SNAPSHOT_TYPE types into its terminal (\\n for Enter), and
 //! SNAPSHOT_ANSWER=AGENT:KEY answers an asking agent session;
-//! SNAPSHOT_TOOLS=structure,ports toggles tool windows.
+//! SNAPSHOT_TOOLS=structure,ports toggles tool windows; SNAPSHOT_EXPAND=ROOT:PATH
+//! opens a project's folders.
 
 use std::time::Duration;
 
@@ -102,6 +103,21 @@ fn main() {
                 cx.background_executor()
                     .timer(Duration::from_secs_f64(wait))
                     .await;
+                if let Some((root, rel)) = std::env::var("SNAPSHOT_EXPAND").ok().and_then(|e| {
+                    e.split_once(':')
+                        .map(|(a, b)| (a.to_string(), b.to_string()))
+                }) {
+                    let _ = handle.update(cx, |_, _, cx| {
+                        let project = shell
+                            .read(cx)
+                            .active_view()
+                            .and_then(|t| t.read(cx).project());
+                        if let Some(p) = project {
+                            p.update(cx, |p, cx| p.expand(&root, &rel, cx));
+                        }
+                    });
+                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                }
                 if let Ok(text) = std::env::var("SNAPSHOT_TYPE") {
                     let text = text.replace("\\n", "\r");
                     let _ = handle.update(cx, |_, _, cx| {

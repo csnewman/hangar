@@ -57,6 +57,9 @@ pub struct Environment {
     pub cpus: Option<i64>,
     #[serde(default)]
     pub memory_mib: Option<i64>,
+    /// The folder an editor opens in it: its first project.
+    #[serde(default)]
+    pub editor_path: Option<String>,
     #[serde(default)]
     pub task: Option<Task>,
     #[serde(default)]
@@ -278,6 +281,19 @@ impl Client {
         (url, self.auth())
     }
 
+    /// Where the environment's Code service's WebSocket is, starting in
+    /// root, and the header that signs it in.
+    pub fn code_socket(&self, id: &str, root: &str) -> (String, String) {
+        let (terminal, auth) = self.terminal_socket(id, None, 0, 0);
+        let base = terminal.split("/environments/").next().unwrap_or_default();
+        let mut url = format!("{base}/environments/{id}/code");
+        if !root.is_empty() {
+            url.push_str("?root=");
+            url.push_str(&encode(root));
+        }
+        (url, auth)
+    }
+
     /// Says the user has looked at an agent's session.
     pub fn seen(&self, id: &str, session: &str) -> Result<(), Error> {
         self.post_empty(&format!("/environments/{id}/agents/{session}/seen"))
@@ -459,4 +475,16 @@ fn parse(name: &str, data: &str) -> Result<Option<Event>, Error> {
         "synced" => Event::Synced,
         _ => return Ok(None),
     }))
+}
+
+/// A query value, percent-encoded.
+fn encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => {
+                (b as char).to_string()
+            }
+            b => format!("%{b:02X}"),
+        })
+        .collect()
 }

@@ -19,6 +19,7 @@ use crate::model::{self, Card, Tone};
 use crate::palette::{self, Palette};
 use crate::place::PlaceConfig;
 use crate::places::Places;
+use crate::project::ProjectView;
 use crate::termview::TerminalView;
 use crate::ui::{button, dot, primary, spark, tone};
 
@@ -240,6 +241,9 @@ pub struct EnvTab {
     last: Option<Tool>,
     /// The Terminal window's sessions.
     terms: Terms,
+    /// The Project window, made when it is first shown on a running
+    /// environment.
+    project: Option<Entity<ProjectView>>,
 }
 
 /// The Terminal tool window's tabs: one per session, attached when first
@@ -303,6 +307,7 @@ impl EnvTab {
             hidden: None,
             last: None,
             terms: Terms::default(),
+            project: None,
         }
     }
 
@@ -476,6 +481,11 @@ impl EnvTab {
         }
     }
 
+    /// The Project window's view, once it has been shown.
+    pub fn project(&self) -> Option<Entity<ProjectView>> {
+        self.project.clone()
+    }
+
     /// Types into the terminal shown, as the user would.
     pub fn type_in_terminal(&mut self, text: &str, cx: &mut Context<Self>) {
         if let Some(v) = self
@@ -603,6 +613,11 @@ impl Render for EnvTab {
         let right_below = self.open.get(&Slot::RightBelow).copied();
         let bottom = self.open.get(&Slot::Bottom).copied();
         let waiting = env.agents.iter().filter(|a| a.needs_you).count();
+        if self.project.is_none() && env.phase == "running" && self.is_open(Tool::Project) {
+            let (places, place, id) = (self.places.clone(), self.place.clone(), self.env.clone());
+            let editor = env.editor_path.clone().unwrap_or_default();
+            self.project = Some(cx.new(|cx| ProjectView::new(places, &place, &id, &editor, cx)));
+        }
         let sizes = Layout::sizes(cx);
 
         v_flex()
@@ -979,6 +994,16 @@ impl EnvTab {
             );
         let body = match t {
             Tool::Agents => self.agents(env, card, p, cx).into_any_element(),
+            Tool::Project if env.phase != "running" => div()
+                .text_size(px(11.5))
+                .text_color(p.muted)
+                .child("The environment is not running.")
+                .into_any_element(),
+            Tool::Project if self.project.is_some() => self
+                .project
+                .clone()
+                .map(|v| v.into_any_element())
+                .unwrap_or_else(|| div().into_any_element()),
             t => div()
                 .text_size(px(11.5))
                 .text_color(p.muted)
@@ -986,11 +1011,12 @@ impl EnvTab {
                 .into_any_element(),
         };
         v_flex()
+            .size_full()
             .p(px(8.))
             .min_h_0()
             .text_size(px(12.))
             .child(head)
-            .child(body)
+            .child(v_flex().flex_1().min_h_0().child(body))
     }
 
     fn agents(
