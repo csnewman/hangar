@@ -100,14 +100,25 @@ fn a_refused_attach_says_why() {
     thread::spawn(move || {
         use std::io::{Read, Write};
         let (mut tcp, _) = ln.accept().unwrap();
-        let mut buf = [0; 2048];
-        let _ = tcp.read(&mut buf);
+        // The whole request, then the answer in one write, held open a
+        // moment: closing a socket with unread input resets it, losing what
+        // was written.
+        let mut req = Vec::new();
+        let mut buf = [0; 1024];
+        while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = tcp.read(&mut buf).unwrap();
+            if n == 0 {
+                return;
+            }
+            req.extend_from_slice(&buf[..n]);
+        }
         let body = r#"{"error":"the environment is not running"}"#;
-        let _ = write!(
-            tcp,
+        let resp = format!(
             "HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
+        tcp.write_all(resp.as_bytes()).unwrap();
+        thread::sleep(Duration::from_millis(500));
     });
     let (tx, rx) = mpsc::channel();
     let _conn = termconn::attach(
