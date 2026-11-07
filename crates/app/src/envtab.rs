@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use gpui::{
     App, Context, DragMoveEvent, Entity, FocusHandle, Focusable, FontWeight, IntoElement,
     KeyBinding, ParentElement, Render, SharedString, Styled, Window, actions, div, prelude::*, px,
-    svg,
+    relative, svg,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{h_flex, v_flex};
@@ -98,6 +98,25 @@ impl Tool {
                 _ => "ports",
             },
         }
+    }
+
+    /// The tool window with a name, ignoring case.
+    pub fn by_name(name: &str) -> Option<Tool> {
+        [
+            Tool::Project,
+            Tool::Commit,
+            Tool::Structure,
+            Tool::Terminal,
+            Tool::Problems,
+            Tool::Git,
+            Tool::Docker,
+            Tool::Find,
+            Tool::Log,
+            Tool::Agents,
+            Tool::Ports,
+        ]
+        .into_iter()
+        .find(|t| t.name().eq_ignore_ascii_case(name))
     }
 
     pub fn slot(self) -> Slot {
@@ -596,7 +615,7 @@ impl Render for EnvTab {
                 let inset = match edge {
                     Edge::Left | Edge::Right => 38.,
                     Edge::Bottom => 24.,
-                    Edge::Sidebar => return,
+                    Edge::Sidebar | Edge::LeftSplit | Edge::RightSplit => return,
                 };
                 let size = Sizes::dragged(edge, e.event.position, e.bounds, inset);
                 Layout::update(cx, |s| s.set(edge, size));
@@ -629,30 +648,7 @@ impl Render for EnvTab {
                                     .items_stretch()
                                     .when(left.is_some() || left_below.is_some(), |d| {
                                         d.child(
-                                            v_flex()
-                                                .relative()
-                                                .w(sizes.get(Edge::Left))
-                                                .flex_none()
-                                                .child(layout::handle("left-edge", Edge::Left))
-                                                .bg(p.surface)
-                                                .when_some(left, |d, t| {
-                                                    d.child(
-                                                        self.tool_window(t, &env, &card, &p, cx),
-                                                    )
-                                                })
-                                                .when_some(left_below, |d, t| {
-                                                    d.child(
-                                                        div()
-                                                            .when(left.is_some(), |d| {
-                                                                d.border_t_1()
-                                                                    .border_color(p.border)
-                                                            })
-                                                            .flex_1()
-                                                            .child(self.tool_window(
-                                                                t, &env, &card, &p, cx,
-                                                            )),
-                                                    )
-                                                }),
+                                            self.side(true, left, left_below, &env, &card, &p, cx),
                                         )
                                     })
                                     .child(
@@ -663,31 +659,15 @@ impl Render for EnvTab {
                                             .child(self.editors(&p)),
                                     )
                                     .when(right.is_some() || right_below.is_some(), |d| {
-                                        d.child(
-                                            v_flex()
-                                                .relative()
-                                                .w(sizes.get(Edge::Right))
-                                                .flex_none()
-                                                .child(layout::handle("right-edge", Edge::Right))
-                                                .bg(p.surface)
-                                                .when_some(right, |d, t| {
-                                                    d.child(
-                                                        self.tool_window(t, &env, &card, &p, cx),
-                                                    )
-                                                })
-                                                .when_some(right_below, |d, t| {
-                                                    d.child(
-                                                        div()
-                                                            .when(right.is_some(), |d| {
-                                                                d.border_t_1()
-                                                                    .border_color(p.border)
-                                                            })
-                                                            .child(self.tool_window(
-                                                                t, &env, &card, &p, cx,
-                                                            )),
-                                                    )
-                                                }),
-                                        )
+                                        d.child(self.side(
+                                            false,
+                                            right,
+                                            right_below,
+                                            &env,
+                                            &card,
+                                            &p,
+                                            cx,
+                                        ))
                                     }),
                             )
                             .when_some(bottom, |d, t| {
@@ -914,6 +894,64 @@ impl EnvTab {
             s = s.child(icon(*t, cx));
         }
         s
+    }
+
+    /// A side's tool windows: the one docked there, and the one below the
+    /// line under it, split by a handle when both are open.
+    #[allow(clippy::too_many_arguments)]
+    fn side(
+        &self,
+        left: bool,
+        top: Option<Tool>,
+        below: Option<Tool>,
+        env: &Environment,
+        card: &Card,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let sizes = Layout::sizes(cx);
+        let (edge, split, edge_id, split_id) = if left {
+            (Edge::Left, Edge::LeftSplit, "left-edge", "left-split")
+        } else {
+            (Edge::Right, Edge::RightSplit, "right-edge", "right-split")
+        };
+        let both = top.is_some() && below.is_some();
+        v_flex()
+            .relative()
+            .w(sizes.get(edge))
+            .flex_none()
+            .h_full()
+            .bg(p.surface)
+            .on_drag_move(cx.listener(move |_, e: &DragMoveEvent<Edge>, _, cx| {
+                if *e.drag(cx) == split {
+                    let f = Sizes::dragged(split, e.event.position, e.bounds, 0.);
+                    Layout::update(cx, |s| s.set(split, f));
+                }
+            }))
+            .child(layout::handle(edge_id, edge))
+            .when_some(top, |d, t| {
+                d.child(
+                    div()
+                        .relative()
+                        .w_full()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .when(both, |d| d.h(relative(sizes.fraction(split))).flex_none())
+                        .when(!both, |d| d.flex_1())
+                        .child(self.tool_window(t, env, card, p, cx))
+                        .when(both, |d| d.child(layout::handle(split_id, split))),
+                )
+            })
+            .when_some(below, |d, t| {
+                d.child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .when(top.is_some(), |d| d.border_t_1().border_color(p.border))
+                        .child(self.tool_window(t, env, card, p, cx)),
+                )
+            })
     }
 
     fn tool_window(

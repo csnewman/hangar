@@ -9,13 +9,15 @@
 //! that environment's tab; SNAPSHOT_HOME=place groups Home by place;
 //! SNAPSHOT_SIZE=WxH sets the window's size; SNAPSHOT_WAIT=seconds waits
 //! after opening, SNAPSHOT_TYPE types into its terminal (\\n for Enter), and
-//! SNAPSHOT_ANSWER=AGENT:KEY answers an asking agent session.
+//! SNAPSHOT_ANSWER=AGENT:KEY answers an asking agent session;
+//! SNAPSHOT_TOOLS=structure,ports toggles tool windows.
 
 use std::time::Duration;
 
 use gpui::{AppContext, Bounds, WindowBounds, WindowOptions, px, size};
 use gpui_component::{Root, ThemeMode, TitleBar};
 use gpui_platform::application;
+use hangar_app::envtab::Tool;
 use hangar_app::places;
 use hangar_app::shell::{HomeMode, Shell};
 
@@ -76,6 +78,19 @@ fn main() {
                         });
                         if let Some((p, e)) = found {
                             shell.update(cx, |s, cx| s.open(&p, &e, window, cx));
+                        }
+                    });
+                }
+                if let Ok(tools) = std::env::var("SNAPSHOT_TOOLS") {
+                    let _ = handle.update(cx, |_, _, cx| {
+                        if let Some(tab) = shell.read(cx).active_view() {
+                            tab.update(cx, |t, cx| {
+                                for name in tools.split(',') {
+                                    if let Some(tool) = Tool::by_name(name.trim()) {
+                                        t.toggle(tool, cx);
+                                    }
+                                }
+                            });
                         }
                     });
                 }

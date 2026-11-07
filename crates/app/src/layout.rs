@@ -19,6 +19,10 @@ pub enum Edge {
     Left,
     Right,
     Bottom,
+    /// Between a side's tool window and the one below the line, as a
+    /// fraction of the side's height.
+    LeftSplit,
+    RightSplit,
 }
 
 impl Edge {
@@ -28,6 +32,7 @@ impl Edge {
             Edge::Left => 220.,
             Edge::Right => 260.,
             Edge::Bottom => 190.,
+            Edge::LeftSplit | Edge::RightSplit => 0.5,
         }
     }
 
@@ -36,6 +41,7 @@ impl Edge {
             Edge::Sidebar => (180., 440.),
             Edge::Left | Edge::Right => (150., 640.),
             Edge::Bottom => (80., 900.),
+            Edge::LeftSplit | Edge::RightSplit => (0.15, 0.85),
         }
     }
 }
@@ -48,6 +54,8 @@ pub struct Sizes {
     pub left: f32,
     pub right: f32,
     pub bottom: f32,
+    pub left_split: f32,
+    pub right_split: f32,
 }
 
 impl Default for Sizes {
@@ -57,6 +65,8 @@ impl Default for Sizes {
             left: Edge::Left.default_size(),
             right: Edge::Right.default_size(),
             bottom: Edge::Bottom.default_size(),
+            left_split: Edge::LeftSplit.default_size(),
+            right_split: Edge::RightSplit.default_size(),
         }
     }
 }
@@ -68,18 +78,31 @@ impl Sizes {
             Edge::Left => self.left,
             Edge::Right => self.right,
             Edge::Bottom => self.bottom,
+            Edge::LeftSplit => self.left_split,
+            Edge::RightSplit => self.right_split,
         })
+    }
+
+    /// A split's fraction: how much of its side the upper window takes.
+    pub fn fraction(&self, e: Edge) -> f32 {
+        match e {
+            Edge::LeftSplit => self.left_split,
+            Edge::RightSplit => self.right_split,
+            _ => 1.,
+        }
     }
 
     /// Sets an edge's panel to size, within what it may be.
     pub fn set(&mut self, e: Edge, size: f32) {
         let (lo, hi) = e.range();
-        let size = size.clamp(lo, hi).round();
+        let size = size.clamp(lo, hi);
         match e {
-            Edge::Sidebar => self.sidebar = size,
-            Edge::Left => self.left = size,
-            Edge::Right => self.right = size,
-            Edge::Bottom => self.bottom = size,
+            Edge::Sidebar => self.sidebar = size.round(),
+            Edge::Left => self.left = size.round(),
+            Edge::Right => self.right = size.round(),
+            Edge::Bottom => self.bottom = size.round(),
+            Edge::LeftSplit => self.left_split = (size * 1000.).round() / 1000.,
+            Edge::RightSplit => self.right_split = (size * 1000.).round() / 1000.,
         }
     }
 
@@ -101,6 +124,9 @@ impl Sizes {
             Edge::Sidebar | Edge::Left => f(position.x) - f(area.left()) - inset,
             Edge::Right => f(area.right()) - f(position.x) - inset,
             Edge::Bottom => f(area.bottom()) - f(position.y) - inset,
+            Edge::LeftSplit | Edge::RightSplit => {
+                (f(position.y) - f(area.top())) / f(area.size.height).max(1.)
+            }
         }
     }
 }
@@ -187,6 +213,7 @@ pub fn handle(id: &'static str, edge: Edge) -> impl IntoElement {
         Edge::Sidebar | Edge::Left => (Axis::Horizontal, HandleEdge::Trailing),
         Edge::Right => (Axis::Horizontal, HandleEdge::Leading),
         Edge::Bottom => (Axis::Vertical, HandleEdge::Leading),
+        Edge::LeftSplit | Edge::RightSplit => (Axis::Vertical, HandleEdge::Trailing),
     };
     resize_handle::<Edge, Ghost>(id, axis)
         .inside(side)

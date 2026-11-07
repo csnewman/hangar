@@ -22,6 +22,13 @@ fn sizes_stay_within_limits() {
     s.reset(Edge::Right);
     assert_eq!(s.right, Sizes::default().right);
 
+    // A split is a fraction of its side, kept off its ends.
+    assert_eq!(s.left_split, 0.5);
+    s.set(Edge::LeftSplit, 0.05);
+    assert_eq!(s.left_split, 0.15);
+    s.set(Edge::RightSplit, 0.6666);
+    assert_eq!(s.right_split, 0.667);
+
     let area = gpui::Bounds::new(point(px(100.), px(50.)), size(px(1000.), px(600.)));
     assert_eq!(
         Sizes::dragged(Edge::Left, point(px(400.), px(0.)), area, 38.),
@@ -34,6 +41,10 @@ fn sizes_stay_within_limits() {
     assert_eq!(
         Sizes::dragged(Edge::Bottom, point(px(0.), px(400.)), area, 24.),
         226.
+    );
+    assert_eq!(
+        Sizes::dragged(Edge::LeftSplit, point(px(0.), px(200.)), area, 0.),
+        0.25
     );
 }
 
