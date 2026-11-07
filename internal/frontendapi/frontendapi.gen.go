@@ -542,7 +542,7 @@ func (e Visibility) Valid() bool {
 
 // Access What of its owner's the environment is kept from, for code they do not trust. Each is false, giving it everything, when left out.
 type Access struct {
-	// NoEditorTrust VS Code trusts no folder without asking.
+	// NoEditorTrust The Code tab trusts no folder to run its code (its language servers) until the person trusts it.
 	NoEditorTrust *bool `json:"no_editor_trust,omitempty"`
 
 	// NoRegistry No credential for Hangar's registry.
@@ -1380,7 +1380,7 @@ type Spec struct {
 	// SwapMiB The environment's swap, in MiB: what its programs leave untouched for a while is swapped out, compressed in its own memory and then to a disk, handing that memory back to its worker. Absent is its worker's default (as much as its memory, unless the worker is set otherwise); 0 is none.
 	SwapMiB *int `json:"swap_mib,omitempty"`
 
-	// TrustedFolders Folders VS Code trusts without asking, beyond the repositories and the projects, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing.
+	// TrustedFolders Folders the Code tab trusts to run their code (its language servers) without asking, beyond the repositories and the projects, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing.
 	TrustedFolders *[]string `json:"trusted_folders,omitempty"`
 
 	// WebNames Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<short> after Hangar's host.

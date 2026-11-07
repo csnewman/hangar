@@ -20,6 +20,7 @@ mod repos;
 mod search;
 mod settings;
 mod store;
+mod trust;
 mod workspace;
 
 use std::collections::HashMap;
@@ -37,6 +38,7 @@ use preview::Preview;
 use repos::Repos;
 use search::Search;
 use settings::SettingsFile;
+use trust::Trust;
 use workspace::WorkspaceFile;
 
 /// What serves one folder, shared by every tab that has it open: its files,
@@ -64,6 +66,8 @@ pub struct Services {
     /// Serves files over HTTP for an HTML file's preview.
     pub preview: Preview,
     pub docker: Arc<Docker>,
+    /// Which folders' code may run: where language servers start.
+    pub trust: Trust,
 }
 
 impl Services {
@@ -85,7 +89,7 @@ impl Services {
     }
 }
 
-pub async fn serve(socket: PathBuf, root: PathBuf) -> std::io::Result<()> {
+pub async fn serve(socket: PathBuf, root: PathBuf, trust: Option<PathBuf>) -> std::io::Result<()> {
     let root = paths::resolve(&std::env::current_dir()?, &root);
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -97,6 +101,7 @@ pub async fn serve(socket: PathBuf, root: PathBuf) -> std::io::Result<()> {
         workspace: WorkspaceFile::new(&root),
         preview: Preview::new(),
         docker: Docker::new(),
+        trust: Trust::new(trust, &home),
         home,
         root,
     });

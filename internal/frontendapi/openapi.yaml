@@ -2301,7 +2301,9 @@ components:
           description: No credential for Hangar's registry.
         no_editor_trust:
           type: boolean
-          description: VS Code trusts no folder without asking.
+          description: >-
+            The Code tab trusts no folder to run its code (its language
+            servers) until the person trusts it.
 
     PackRef:
       type: object
@@ -2350,9 +2352,10 @@ components:
         trusted_folders:
           type: array
           description: >-
-            Folders VS Code trusts without asking, beyond the repositories and
-            the projects, which it trusts anyway. Ignored with
-            no_editor_trust, where it trusts nothing.
+            Folders the Code tab trusts to run their code (its language
+            servers) without asking, beyond the repositories and the projects,
+            which it trusts anyway. Ignored with no_editor_trust, where it
+            trusts nothing.
           items: { type: string }
         access: { $ref: "#/components/schemas/Access" }
         dax:

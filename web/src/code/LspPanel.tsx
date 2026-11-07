@@ -44,6 +44,9 @@ export function ServerChip({
   else if (server?.state === 'ready') {
     text = server.command
     tip = `${server.command} knows this file's code: ${shortcut('Mod+B')} or ${shortcut('Mod')}-click goes to a definition, ${shortcut('Alt+F7')} finds usages, ${shortcut('Shift+F6')} renames. Click for its details.`
+  } else if (server?.state === 'untrusted') {
+    text = 'Restricted'
+    tip = `No language server: ${server.folder} is not trusted to run its code.`
   } else if (server?.state === 'missing') {
     text = server.stopped ? `${server.language} server stopped` : 'No language server'
     tip = `${server.why}. Click for what to do.`

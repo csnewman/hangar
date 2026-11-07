@@ -548,7 +548,7 @@ function Editor({ existing }: { existing?: Template }) {
                 </div>
               </Row>
               {!spec.access?.no_editor_trust && (
-                <Row label={label('VS Code also trusts', 'tpl-trusted')} modified={changed('trusted_folders')}>
+                <Row label={label('The Code tab also trusts', 'tpl-trusted')} modified={changed('trusted_folders')}>
                   <textarea
                     id="tpl-trusted"
                     className="mono pane-wide"
@@ -750,12 +750,12 @@ const accessSettings: { key: keyof Access; label: string; hint: string }[] = [
   {
     key: 'no_editor_trust',
     label: 'Editor trust',
-    hint: 'VS Code trusts the repositories and the folders below; without it, it opens everything in Restricted Mode.',
+    hint: 'The Code tab runs language servers in the repositories and the folders below; without it, in none until the person trusts a folder.',
   },
 ]
 
 // untrusted is the preset for code the owner does not trust: their files,
-// but none of their credentials, and an editor that trusts nothing.
+// but none of their credentials, and a Code tab that trusts nothing.
 const untrusted: Access = { no_sensitive_files: true, no_ssh_keys: true, no_registry: true, no_editor_trust: true }
 
 // AccessChecks are what an environment is given of its owner's, each a
@@ -781,7 +781,7 @@ function AccessChecks({ value, onChange }: { value: Access; onChange: (a: Access
         <button type="button" className="btn btn-ghost" disabled={isUntrusted} onClick={() => onChange(untrusted)}>
           Untrusted code
         </button>
-        <small className="muted"> Their files, but none of their credentials, and an editor that trusts nothing.</small>
+        <small className="muted"> Their files, but none of their credentials, and a Code tab that trusts nothing.</small>
       </div>
     </>
   )

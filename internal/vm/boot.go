@@ -235,8 +235,8 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 			inst.Shutdown(m.log)
 		}
 	}()
-	if err := writeEditorTrust(inst.Session(), s); err != nil {
-		m.log.Warn("could not tell the editor which folders to trust", "err", err)
+	if err := writeCodeTrust(inst.Session(), s); err != nil {
+		m.log.Warn("could not tell the Code tab which folders to trust", "err", err)
 	}
 	if err := m.waitNetwork(ctx, inst.Session()); err != nil {
 		return nil, err
@@ -631,12 +631,12 @@ func lastLine(path string) string {
 	return ": " + line
 }
 
-// writeEditorTrust writes the folders the editor trusts without asking,
-// which VS Code's server reads on every page it serves. It is written at
-// each boot, into /run, so it is always the environment's own and never
-// outlives it.
-func writeEditorTrust(sess *agent.Session, spec api.Spec) error {
-	b, err := json.Marshal(spec.EditorTrust())
+// writeCodeTrust writes the folders the Code tab trusts to run their code
+// (code.TrustFile), which the Code service reads before starting a language
+// server. It is written at each boot, into /run, so it is always the
+// environment's own and never outlives it.
+func writeCodeTrust(sess *agent.Session, spec api.Spec) error {
+	b, err := json.Marshal(spec.CodeTrust())
 	if err != nil {
 		return err
 	}

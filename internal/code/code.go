@@ -46,6 +46,11 @@ type Request struct {
 	Root string `json:"root,omitempty"`
 }
 
+// TrustFile is the folders whose code the service may run, written by the
+// worker at each boot (api.Spec.CodeTrust): a language server starts only
+// in one of them, or in a folder the person trusts from the Code tab.
+const TrustFile = "/run/hangar/trusted-folders.json"
+
 const (
 	socketDir    = "/run/hangar/code"
 	logFile      = "/var/log/hangar-code.log"
@@ -139,7 +144,7 @@ func (s *Server) command(socket, root string) (*exec.Cmd, error) {
 	if _, err := os.Stat(s.Rust); err != nil {
 		return nil, fmt.Errorf("the agent's Rust half, which serves the Code tab, is missing: %w", err)
 	}
-	return exec.Command(s.Rust, "code", "--socket", socket, "--root", root), nil
+	return exec.Command(s.Rust, "code", "--socket", socket, "--root", root, "--trust", TrustFile), nil
 }
 
 func (s *Server) start(ctx context.Context, u *user.User, root string) (*process, error) {

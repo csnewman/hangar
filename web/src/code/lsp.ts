@@ -370,9 +370,11 @@ type Diagnostic = {
 }
 
 // A language's server, as far as this tab knows: starting, ready with its
-// client, or missing, with why.
+// client, missing, with why, or not started since the folder is not trusted
+// to run its code.
 export type ServerState =
   | { state: 'starting'; language: string }
+  | { state: 'untrusted'; language: string; folder: string }
   | { state: 'ready'; language: string; command: string; client: LSPClient }
   | { state: 'missing'; language: string; why: string; install: MissingServer['install']; stopped?: boolean }
 
@@ -400,6 +402,12 @@ export class Languages {
     this.commands = commands(code, opener)
     code.on('state', (s) => {
       if (s === 'reconnecting') this.reset()
+    })
+    // A folder trusted: its servers start.
+    code.on('trust', (trusted) => {
+      if (!trusted) return
+      this.servers.clear()
+      this.changed()
     })
     code.on('lsp.exited', ({ server, why }) => {
       const lang = this.numbers.get(server)
@@ -535,6 +543,7 @@ export class Languages {
       )
       return { state: 'starting', language }
     }
+    if ('untrusted' in res) return { state: 'untrusted', language, folder: res.untrusted }
     if ('missing' in res) return { state: 'missing', language, why: res.missing, install: res.install ?? [] }
     const n = res.server
     this.numbers.set(n, language)

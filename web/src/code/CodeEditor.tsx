@@ -36,6 +36,7 @@ import {
 } from '@codemirror/view'
 import { tags as t } from '@lezer/highlight'
 import { formatDocument, LSPPlugin } from '@codemirror/lsp-client'
+import { ShieldAlert } from 'lucide-react'
 import { useContext, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 
@@ -739,7 +740,8 @@ export function CodeEditor({
 
   return (
     <>
-      <div ref={host} className="code-editor" />
+      {server?.state === 'untrusted' && <TrustBar client={client} folder={server.folder} />}
+      <div ref={host} className={server?.state === 'untrusted' ? 'code-editor code-editor-under-bar' : 'code-editor'} />
       {menu.menu}
       {popup?.kind === 'goto' && <GotoLine view={popup.view} onClose={() => setPopup(null)} />}
       {popup?.kind === 'rename' && (
@@ -754,6 +756,39 @@ export function CodeEditor({
         />
       )}
     </>
+  )
+}
+
+// TrustBar says a folder's language servers are off, since they would run
+// its code, and trusts it on the person's word.
+function TrustBar({ client, folder }: { client: CodeClient; folder: string }) {
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  return (
+    <div className="code-trust">
+      <ShieldAlert size={14} />
+      <span title={folder}>
+        Restricted: no language servers in {folder.split('/').pop() || folder}, since they would run its code.
+      </span>
+      {error && <span className="code-note-error">{error}</span>}
+      <button
+        type="button"
+        className="btn btn-sm"
+        disabled={busy}
+        onClick={() => {
+          setBusy(true)
+          client.trustFolder().then(
+            () => setBusy(false),
+            (e: Error) => {
+              setBusy(false)
+              setError(e.message)
+            },
+          )
+        }}
+      >
+        Trust this folder
+      </button>
+    </div>
   )
 }
 

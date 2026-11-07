@@ -280,6 +280,8 @@ type Events = {
   'settings.changed': (s: Record<string, unknown>) => void
   // The workspace's projects changed, in any tab.
   'workspace.changed': (w: Workspace) => void
+  // Whether this tab's folder is trusted to run its code changed.
+  trust: (trusted: boolean) => void
   // A language server this tab started stopped.
   'lsp.exited': (p: { server: number; why: string }) => void
   // Something happened to a container or image.
@@ -301,6 +303,7 @@ export class CodeClient {
     'doc.restored': new Set(),
     'settings.changed': new Set(),
     'workspace.changed': new Set(),
+    trust: new Set(),
     'lsp.exited': new Set(),
     'docker.changed': new Set(),
     'docker.log': new Set(),
@@ -328,6 +331,9 @@ export class CodeClient {
   home = ''
   // settingsPath is the Code tab's settings file, in the user's home.
   settingsPath = ''
+  // trusted is whether this tab's folder may run its code: whether its
+  // language servers start.
+  trusted = true
   private env: string
   private want: string
 
@@ -371,10 +377,12 @@ export class CodeClient {
           root: string
           home: string
           settings?: string
+          trusted?: boolean
         }
         this.root = hello.root
         this.home = hello.home
         this.settingsPath = hello.settings ?? ''
+        this.setTrusted(hello.trusted !== false)
         this.backoff = 500
         for (const f of this.files.values()) await this.reopen(f)
         this.setState('live')
@@ -441,6 +449,11 @@ export class CodeClient {
         this.emit('settings.changed', m.params)
       } else if (m.event === 'workspace.changed') {
         this.emit('workspace.changed', m.params)
+      } else if (m.event === 'trust.changed') {
+        this.call('trust.get').then(
+          (r) => this.setTrusted((r as { trusted: boolean }).trusted),
+          () => {},
+        )
       } else if (m.event === 'docker.changed') {
         this.emit('docker.changed')
       } else if (m.event === 'docker.log') {
@@ -546,10 +559,22 @@ export class CodeClient {
     return this.request<void>('docker.logsStop', { stream })
   }
 
+  private setTrusted(trusted: boolean) {
+    if (trusted === this.trusted) return
+    this.trusted = trusted
+    this.emit('trust', trusted)
+  }
+
+  // trustFolder trusts this tab's folder to run its code, in every tab.
+  trustFolder() {
+    return this.request<void>('trust.grant')
+  }
+
   // startLanguageServer starts a server for an LSP language ID in this
-  // tab's folder, or says why there is none.
+  // tab's folder, or says why there is none: none installed, or a folder
+  // not trusted to run its code.
   startLanguageServer(language: string) {
-    return this.request<{ server: number; root: string; command: string } | MissingServer>('lsp.start', {
+    return this.request<{ server: number; root: string; command: string } | MissingServer | { untrusted: string }>('lsp.start', {
       language,
     })
   }

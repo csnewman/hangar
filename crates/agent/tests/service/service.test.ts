@@ -119,8 +119,9 @@ class Client {
 	// Language servers' messages, by server.
 	lsp: { server: number; msg: any }[] = []
 
-	constructor() {
-		this.sock = connect(sock)
+	// at is the service's socket: the suite's own, or another's.
+	constructor(at = sock) {
+		this.sock = connect(at)
 		this.sock.on('data', (c) => {
 			this.buf = Buffer.concat([this.buf, c])
 			while (this.buf.length >= 4 && this.buf.length >= 4 + this.buf.readUInt32BE(0)) {
@@ -193,7 +194,8 @@ test('files, git and a shared document', async () => {
 	const b = new Client()
 	try {
 		const settings = join(dir, '.config', 'hangar', 'code.json')
-		assert.deepEqual(await a.call('hello'), { root, home: root, settings })
+		// A service told of no trust list trusts every folder.
+		assert.deepEqual(await a.call('hello'), { root, home: root, settings, trusted: true })
 		const list = await a.call('fs.list', { path: '.' })
 		assert.ok(list.some((e: any) => e.name === 'a.txt' && !e.dir))
 
@@ -385,6 +387,7 @@ test('a tab working in another folder, searching it', async () => {
 			root: join(root, 'sub'),
 			home: root,
 			settings: join(dir, '.config', 'hangar', 'code.json'),
+			trusted: true,
 		})
 		const list = await a.call('fs.list', { path: '.' })
 		assert.deepEqual(list.map((e: any) => e.name), ['deep', 'one.go'])
@@ -468,6 +471,53 @@ test('a file moved without git is a rename', async () => {
 		assert.equal(git('status', '--porcelain', '--', 'moved.txt', 'r.txt').toString(), '')
 	} finally {
 		a.close()
+	}
+})
+
+// A language server runs its folder's code, so the service starts one only
+// in a folder the worker's list trusts, or one the person trusts.
+test('language servers start only in a trusted folder', async () => {
+	const home = mkdtempSync(join(tmpdir(), 'hangar-trust-'))
+	const project = join(home, 'project')
+	const shared = join(home, 'shared')
+	mkdirSync(project)
+	mkdirSync(join(shared, 'sub'), { recursive: true })
+	const list = join(home, 'trusted-folders.json')
+	writeFileSync(list, JSON.stringify(['~/shared']))
+	const at = join(home, 'code.sock')
+	const svc = spawn(process.env.HANGAR_CODE_BIN!, ['code', '--socket', at, '--root', project, '--trust', list], {
+		stdio: 'inherit',
+		env: { ...process.env, HOME: home },
+	})
+	await until('the service to listen', () => existsSync(at))
+	const a = new Client(at)
+	const b = new Client(at)
+	try {
+		assert.equal((await a.call('hello')).trusted, false)
+		await b.call('hello')
+		await a.call('settings.set', {
+			settings: { languageServers: { fake: { command: process.execPath, args: [join(import.meta.dirname, 'fake-lsp.mjs')] } } },
+		})
+		assert.deepEqual(await a.call('lsp.start', { language: 'fake' }), { untrusted: project })
+
+		// A folder in a trusted one is trusted.
+		const inside = new Client(at)
+		try {
+			assert.equal((await inside.call('hello', { root: join(shared, 'sub') })).trusted, true)
+		} finally {
+			inside.close()
+		}
+
+		// Trusted by the person: every tab is told, and the server starts.
+		await a.call('trust.grant')
+		await until('the other tab to be told', () => b.events.some((e) => e.event === 'trust.changed'))
+		assert.deepEqual(await b.call('trust.get'), { trusted: true })
+		assert.equal(typeof (await b.call('lsp.start', { language: 'fake' })).server, 'number')
+		assert.deepEqual(JSON.parse(readFileSync(join(home, '.local/state/hangar/trusted-folders.json'), 'utf8')), [project])
+	} finally {
+		a.close()
+		b.close()
+		svc.kill()
 	}
 })
 

@@ -1558,7 +1558,7 @@ export interface components {
             no_ssh_keys?: boolean;
             /** @description No credential for Hangar's registry. */
             no_registry?: boolean;
-            /** @description VS Code trusts no folder without asking. */
+            /** @description The Code tab trusts no folder to run its code (its language servers) until the person trusts it. */
             no_editor_trust?: boolean;
         };
         PackRef: {
@@ -1577,7 +1577,7 @@ export interface components {
             projects?: string[];
             /** @description The packs the environment has, in order, before those attaching themselves to it: a path two of them name is the first's. A pack the owner may not use is left out. */
             packs?: components["schemas"]["PackRef"][];
-            /** @description Folders VS Code trusts without asking, beyond the repositories and the projects, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing. */
+            /** @description Folders the Code tab trusts to run their code (its language servers) without asking, beyond the repositories and the projects, which it trusts anyway. Ignored with no_editor_trust, where it trusts nothing. */
             trusted_folders?: string[];
             access?: components["schemas"]["Access"];
             /** @description Map the image's files from the host's page cache (DAX) rather than read them into the environment's own memory. Their memory is then shared with other environments on the image, but programs that run from large files, such as a browser, are many times slower on a worker under nested virtualisation. Only a worker that attaches images as persistent memory (image_device pmem) can map them; others read them in regardless. */

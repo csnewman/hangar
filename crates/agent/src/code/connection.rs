@@ -111,6 +111,7 @@ pub async fn run(stream: UnixStream, s: Arc<Services>) {
             "workspace.changed",
             to_value,
         ),
+        forward(s.trust.subscribe(), out.clone(), "trust.changed", |v| v),
     ];
 
     while let Some(f) = frame::read(&mut rd).await {
@@ -296,9 +297,12 @@ impl Connection {
     /// Joins the tab to its folder's language server for a language,
     /// starting it if no tab has, its messages relayed on the LSP channel
     /// under the number returned. A language with no server installed is told
-    /// why.
+    /// why, and so is a folder not trusted to run its code.
     async fn start_server(&self, language: &str) -> Result<Value> {
         let f = self.folder();
+        if !self.s.trust.trusts(&f.root).await {
+            return Ok(json!({ "untrusted": f.root.display().to_string() }));
+        }
         let existing = f.hubs.lock().unwrap().get(language).cloned();
         let hub = match existing {
             Some(h) => h,
@@ -481,10 +485,12 @@ impl Connection {
             // A server knows one folder.
             self.stop_servers();
         }
+        let root = self.folder().root.clone();
         Ok(json!({
-            "root": self.folder().root.display().to_string(),
+            "root": root.display().to_string(),
             "home": self.s.root.display().to_string(),
             "settings": self.s.settings.path().display().to_string(),
+            "trusted": self.s.trust.trusts(&root).await,
         }))
     }
 
@@ -623,6 +629,11 @@ impl Connection {
                         .convert(p.str("path")?, separator, encoding, bom)
                         .await?,
                 )
+            }
+            "trust.get" => json!({ "trusted": self.s.trust.trusts(&f.root).await }),
+            "trust.grant" => {
+                self.s.trust.grant(&f.root).await?;
+                Value::Null
             }
             "lsp.start" => self.start_server(p.str("language")?).await?,
             "lsp.stop" => {

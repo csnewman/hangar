@@ -8,7 +8,6 @@
 package api
 
 import (
-	"path"
 	"slices"
 	"time"
 )
@@ -116,9 +115,9 @@ type Spec struct {
 	EditorPath string `json:"editor_path,omitempty"`
 	// Access is what of its owner's the environment is kept from.
 	Access
-	// TrustedFolders are trusted by the editor without asking, beyond the
-	// repositories and the projects, which its editor trusts anyway.
-	// Ignored with NoEditorTrust.
+	// TrustedFolders are trusted by the Code tab to run their code -- its
+	// language servers -- beyond the repositories and the projects, which it
+	// trusts anyway. Ignored with NoEditorTrust.
 	TrustedFolders []string `json:"trusted_folders,omitempty"`
 	// DAX has the guest map its image's files from the host's page cache,
 	// through the worker's DAX window, rather than read them into its own
@@ -160,12 +159,13 @@ type Access struct {
 	NoSSHKeys bool `json:"no_ssh_keys,omitempty"`
 	// NoRegistry gives it no credential for Hangar's registry.
 	NoRegistry bool `json:"no_registry,omitempty"`
-	// NoEditorTrust has its editor trust no folder without asking.
+	// NoEditorTrust has its Code tab trust no folder to run its code
+	// without the person saying so.
 	NoEditorTrust bool `json:"no_editor_trust,omitempty"`
 }
 
 // Untrusted is the access for code its owner does not trust: their packs,
-// but none of their credentials, and an editor that trusts nothing.
+// but none of their credentials, and a Code tab that trusts nothing.
 var Untrusted = Access{NoSensitiveFiles: true, NoSSHKeys: true, NoRegistry: true, NoEditorTrust: true}
 
 // WorkspaceFile is where in the guest an environment's projects are kept,
@@ -195,10 +195,12 @@ func (s Spec) ProjectFolders() []string {
 	return s.Projects
 }
 
-// EditorTrust is the folders an environment's editor trusts without asking:
-// none with NoEditorTrust; otherwise its repositories, its projects, the
-// workspace that lists them, and whatever else its template names.
-func (s Spec) EditorTrust() []string {
+// CodeTrust is the folders an environment's Code tab trusts to run their
+// code without asking: none with NoEditorTrust; otherwise its
+// repositories, its projects, and whatever else its template names. With
+// no repositories or projects the Code tab opens the home folder, ~, which
+// is then trusted, as the person's own.
+func (s Spec) CodeTrust() []string {
 	out := []string{}
 	if s.NoEditorTrust {
 		return out
@@ -215,8 +217,9 @@ func (s Spec) EditorTrust() []string {
 		add(p)
 	}
 	add(s.EditorPath)
-	// VS Code trusts a workspace of several folders by its file's folder.
-	add(path.Dir(WorkspaceFile))
+	if len(out) == 0 {
+		add("~")
+	}
 	for _, f := range s.TrustedFolders {
 		add(f)
 	}

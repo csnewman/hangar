@@ -4220,3 +4220,36 @@ body.code-tab-dragging * {
 .code-stripe-dragged {
   opacity: 0.35;
 }
+
+/* A folder not trusted to run its code: its language servers are off. */
+.code-trust {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--warn-bg);
+  border-bottom: 1px solid var(--warn-border);
+  z-index: 2;
+}
+
+.code-trust span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-trust .btn {
+  margin-left: auto;
+  flex: none;
+}
+
+.code-editor.code-editor-under-bar {
+  top: 30px;
+}
