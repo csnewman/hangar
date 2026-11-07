@@ -23,6 +23,15 @@ impl Text {
         Text(units)
     }
 
+    /// `s` as it is, line breaks included.
+    pub fn exact(s: &str) -> Self {
+        Text(s.encode_utf16().collect())
+    }
+
+    pub fn from_units(units: Vec<u16>) -> Self {
+        Text(units)
+    }
+
     /// The text split at each `\n`. A line cut through a surrogate pair
     /// has U+FFFD in its place.
     pub fn lines(&self) -> Vec<String> {

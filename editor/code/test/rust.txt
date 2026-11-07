@@ -10,3 +10,5 @@ a branch's changes since it left main
 binary files: told from text, read in parts, compared as bytes
 a file's history, and finding and replacing in a folder
 the repositories in a folder: submodules, clones within it, and a folder of clones
+files, git and a shared document
+a link is the file it leads to, as the editor shows it

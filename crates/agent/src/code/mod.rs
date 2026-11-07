@@ -5,6 +5,7 @@
 
 mod child;
 mod connection;
+mod docs;
 mod error;
 mod files;
 mod frame;
@@ -23,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
 
+use docs::Documents;
 use files::Files;
 use repos::Repos;
 use search::Search;
@@ -44,6 +46,9 @@ pub struct Services {
     pub root: PathBuf,
     pub home: PathBuf,
     folders: Mutex<HashMap<PathBuf, Arc<Folder>>>,
+    /// The shared documents, which are everyone's whatever folder they
+    /// opened them from.
+    pub docs: Arc<Documents>,
     pub settings: SettingsFile,
     pub workspace: WorkspaceFile,
 }
@@ -73,6 +78,7 @@ pub async fn serve(socket: PathBuf, root: PathBuf) -> std::io::Result<()> {
         .unwrap_or_else(|| PathBuf::from("/"));
     let s = Arc::new(Services {
         folders: Mutex::new(HashMap::new()),
+        docs: Documents::new(&root),
         settings: SettingsFile::new(&home),
         workspace: WorkspaceFile::new(&root),
         home,
@@ -97,8 +103,10 @@ pub async fn serve(socket: PathBuf, root: PathBuf) -> std::io::Result<()> {
                 let (stream, _) = accepted?;
                 tokio::spawn(connection::run(stream, s.clone()));
             }
-            _ = term.recv() => return Ok(()),
-            _ = int.recv() => return Ok(()),
+            _ = term.recv() => break,
+            _ = int.recv() => break,
         }
     }
+    s.docs.save_all().await;
+    Ok(())
 }

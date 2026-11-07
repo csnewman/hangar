@@ -10,6 +10,8 @@ import { join } from 'node:path'
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 
+import { collab, getSyncedVersion, receiveUpdates, sendableUpdates } from '@codemirror/collab'
+import { ChangeSet, EditorState } from '@codemirror/state'
 import * as decoding from 'lib0/decoding'
 import * as encoding from 'lib0/encoding'
 import * as syncProtocol from 'y-protocols/sync'
@@ -69,7 +71,50 @@ before(async () => {
 
 after(() => proc.kill())
 
-// Client is one window: framed messages, JSON requests, and Yjs documents.
+// A shared document as the Rust service has them: one authority, which a
+// client sends its changes to and is sent everyone's, through
+// @codemirror/collab as the browser has it, one update at a time. It reads
+// and changes like a Y.Doc's text, as the tests use one.
+class CollabDoc {
+	private state: EditorState
+	private c: Client
+	private n: number
+
+	constructor(c: Client, n: number, version: number, text: string, client: string) {
+		this.c = c
+		this.n = n
+		this.state = EditorState.create({ doc: text, extensions: collab({ startVersion: version, clientID: client }) })
+	}
+
+	getText(_name: string) {
+		return {
+			toString: () => this.state.doc.toString(),
+			insert: (pos: number, text: string) => {
+				this.state = this.state.update({ changes: { from: pos, insert: text } }).state
+				this.push()
+			},
+		}
+	}
+
+	receive(version: number, updates: { changes: unknown; client: string }[]) {
+		const skip = getSyncedVersion(this.state) - version
+		for (const u of updates.slice(Math.max(0, skip))) {
+			this.state = receiveUpdates(this.state, [{ changes: ChangeSet.fromJSON(u.changes), clientID: u.client }]).state
+		}
+		this.push()
+	}
+
+	private push() {
+		const pending = sendableUpdates(this.state)
+		if (pending.length === 0) return
+		this.c
+			.call('doc.push', { doc: this.n, version: getSyncedVersion(this.state), changes: pending.map((u) => u.changes.toJSON()) })
+			.catch(() => {})
+	}
+}
+
+// Client is one window: framed messages, JSON requests, and Yjs documents,
+// or collab ones for the Rust service.
 class Client {
 	private sock: Socket
 	private buf = Buffer.alloc(0)
@@ -77,6 +122,9 @@ class Client {
 	private waiting = new Map<number, (m: any) => void>()
 	events: any[] = []
 	docs = new Map<number, Y.Doc>()
+	// The Rust service's documents are collab ones.
+	collab = !!process.env.HANGAR_CODE_BIN
+	collabDocs = new Map<number, CollabDoc>()
 	// Language servers' messages, by server.
 	lsp: { server: number; msg: any }[] = []
 
@@ -102,7 +150,10 @@ class Client {
 		if (f[0] === 0x72) {
 			const m = JSON.parse(f.subarray(1).toString())
 			if (m.id) this.waiting.get(m.id)?.(m)
-			else this.events.push(m)
+			else {
+				this.events.push(m)
+				if (m.event === 'doc.changes') this.collabDocs.get(m.params.doc)?.receive(m.params.version, m.params.updates)
+			}
 		} else if (f[0] === 0x6c) {
 			this.lsp.push({ server: f.readUInt32BE(1), msg: JSON.parse(f.subarray(5).toString()) })
 		} else if (f[0] === 0x79) {
@@ -129,7 +180,13 @@ class Client {
 		const id = this.next++
 		this.write(Buffer.concat([Buffer.from([0x72]), Buffer.from(JSON.stringify({ id, method, params }))]))
 		return new Promise((res, rej) =>
-			this.waiting.set(id, (m) => (m.error ? rej(new Error(m.error)) : res(m.result))),
+			this.waiting.set(id, (m) => {
+				if (m.error) return rej(new Error(m.error))
+				// How shared documents are edited, which the Rust service says
+				// and these tests already know.
+				if (method === 'hello' && m.result) delete m.result.docs
+				res(m.result)
+			}),
 		)
 	}
 
@@ -141,6 +198,12 @@ class Client {
 	}
 
 	async open(path: string): Promise<Y.Doc> {
+		if (this.collab) {
+			const r = await this.call('doc.open', { path })
+			const doc = new CollabDoc(this, r.doc, r.version, r.text, r.client)
+			this.collabDocs.set(r.doc, doc)
+			return doc as unknown as Y.Doc
+		}
 		const { doc: n } = await this.call('doc.open', { path })
 		const doc = new Y.Doc()
 		this.docs.set(n, doc)

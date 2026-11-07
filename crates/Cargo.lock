@@ -60,6 +60,7 @@ dependencies = [
  "libc",
  "notify",
  "regex",
+ "ropey",
  "serde",
  "serde_json",
  "tokio",

@@ -16,6 +16,8 @@
 		"yjs": "^13.6.33"
 	},
 	"devDependencies": {
+		"@codemirror/collab": "^6.1.1",
+		"@codemirror/state": "^6.7.6",
 		"@types/node": "^24.0.0",
 		"esbuild": "^0.27.0",
 		"typescript": "^5.9.0"

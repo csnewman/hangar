@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -7,8 +9,9 @@ use tokio::net::UnixStream;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
+use super::docs::SharedDoc;
 use super::error::{Error, Result};
-use super::files::{Listening, Run};
+use super::files::{Listening, Run, writable};
 use super::frame;
 use super::git::Named;
 use super::paths::resolve;
@@ -22,11 +25,16 @@ use super::{Folder, Services};
 pub struct Connection {
     s: Arc<Services>,
     out: mpsc::UnboundedSender<Vec<u8>>,
+    /// Which tab this is, among everyone's.
+    id: u64,
     state: Mutex<State>,
 }
 
 struct State {
     folder: Arc<Folder>,
+    /// The shared documents the tab has open, by its number for each.
+    docs: HashMap<u32, Arc<SharedDoc>>,
+    next_doc: u32,
     /// Forwards the folder's file and git changes to the tab.
     watching: Option<Watching>,
 }
@@ -55,11 +63,15 @@ pub async fn run(stream: UnixStream, s: Arc<Services>) {
         }
     });
     let folder = s.folder(&s.root);
+    static NEXT: AtomicU64 = AtomicU64::new(1);
     let conn = Arc::new(Connection {
         s: s.clone(),
         out: out.clone(),
+        id: NEXT.fetch_add(1, Ordering::Relaxed),
         state: Mutex::new(State {
             folder,
+            docs: HashMap::new(),
+            next_doc: 1,
             watching: None,
         }),
     });
@@ -92,7 +104,14 @@ pub async fn run(stream: UnixStream, s: Arc<Services>) {
     for t in forwards {
         t.abort();
     }
-    conn.state.lock().unwrap().watching = None;
+    let open: Vec<_> = {
+        let mut st = conn.state.lock().unwrap();
+        st.watching = None;
+        st.docs.drain().collect()
+    };
+    for (n, doc) in open {
+        doc.leave(conn.id, n);
+    }
     drop(conn);
     drop(out);
     let _ = writer.await;
@@ -238,6 +257,39 @@ impl Connection {
         });
     }
 
+    async fn open_doc(&self, path: &str) -> Result<Value> {
+        let abs = resolve(&self.folder().root, Path::new(path));
+        let doc = self.s.docs.open(&abs.display().to_string()).await?;
+        let n = {
+            let mut st = self.state.lock().unwrap();
+            let n = st.next_doc;
+            st.next_doc += 1;
+            st.docs.insert(n, doc.clone());
+            n
+        };
+        let abs = abs.display().to_string();
+        let joined = doc.join(self.id, n, &abs, self.out.clone());
+        Ok(json!({
+            "doc": n,
+            "path": abs,
+            // A file the user may not write -- a library's, the system's --
+            // is shown, not edited.
+            "writable": writable(&doc.path),
+            "version": joined.version,
+            "text": joined.text,
+            "client": joined.client,
+            "presence": joined.presence,
+        }))
+    }
+
+    /// The open document a request names.
+    fn doc(&self, p: &Params<'_>) -> Result<(u32, Arc<SharedDoc>)> {
+        let n = p.num("doc").unwrap_or(0.0) as u32;
+        let doc = self.state.lock().unwrap().docs.get(&n).cloned();
+        doc.map(|d| (n, d))
+            .ok_or_else(|| Error::msg("the document is not open"))
+    }
+
     /// The repository a path is in, the path made absolute, and where that
     /// repository's paths start in the folder.
     async fn in_repo(&self, path: &str) -> At {
@@ -293,6 +345,9 @@ impl Connection {
             "root": self.folder().root.display().to_string(),
             "home": self.s.root.display().to_string(),
             "settings": self.s.settings.path().display().to_string(),
+            // Shared documents are edited through one authority, as
+            // @codemirror/collab has them, not as Yjs documents.
+            "docs": "collab",
         }))
     }
 
@@ -363,6 +418,35 @@ impl Connection {
                     .settings
                     .set(p.get("settings").unwrap_or(&Value::Null))
                     .await?;
+                Value::Null
+            }
+            "doc.open" => self.open_doc(p.str("path")?).await?,
+            "doc.close" => {
+                let n = p.num("doc").unwrap_or(0.0) as u32;
+                let doc = self.state.lock().unwrap().docs.remove(&n);
+                if let Some(doc) = doc {
+                    doc.leave(self.id, n);
+                }
+                Value::Null
+            }
+            "doc.push" => {
+                let (n, doc) = self.doc(&p)?;
+                let changes = match p.get("changes") {
+                    Some(Value::Array(c)) => c.clone(),
+                    _ => return Err(Error::msg("changes is required")),
+                };
+                doc.push(
+                    self.id,
+                    n,
+                    p.num("version").unwrap_or(-1.0).max(0.0) as u64,
+                    &changes,
+                )?;
+                Value::Null
+            }
+            "doc.presence" => {
+                let (n, doc) = self.doc(&p)?;
+                let state = p.get("state").cloned().unwrap_or(Value::Null);
+                doc.presence(self.id, n, p.num("version").unwrap_or(0.0) as u64, state);
                 Value::Null
             }
             "search.files" => to_value(f.search.files().await),

@@ -15,6 +15,7 @@ hangar-proto = { path = "../proto" }
 libc.workspace = true
 notify.workspace = true
 regex.workspace = true
+ropey.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
