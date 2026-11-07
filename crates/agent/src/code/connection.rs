@@ -10,7 +10,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
 use super::docker::{Action, DockerListening};
-use super::docs::SharedDoc;
+use super::docs::{Resume, SharedDoc};
 use super::error::{Error, Result};
 use super::fileops::{Clash, Encoding, Separator};
 use super::files::{Listening, Run, writable};
@@ -388,7 +388,7 @@ impl Connection {
         }
     }
 
-    async fn open_doc(&self, path: &str) -> Result<Value> {
+    async fn open_doc(&self, path: &str, resume: Option<Resume>) -> Result<Value> {
         let abs = resolve(&self.folder().root, Path::new(path));
         let doc = self.s.docs.open(&abs.display().to_string()).await?;
         let n = {
@@ -399,18 +399,25 @@ impl Connection {
             n
         };
         let abs = abs.display().to_string();
-        let joined = doc.join(self.id, n, &abs, self.out.clone());
-        Ok(json!({
+        let joined = doc.join(self.id, n, &abs, self.out.clone(), resume);
+        let mut v = json!({
             "doc": n,
             "path": abs,
             // A file the user may not write -- a library's, the system's --
             // is shown, not edited.
             "writable": writable(&doc.path),
+            "epoch": joined.epoch,
             "version": joined.version,
-            "text": joined.text,
             "client": joined.client,
             "presence": joined.presence,
-        }))
+        });
+        if let Some(text) = joined.text {
+            v["text"] = text.into();
+        }
+        if let Some(updates) = joined.updates {
+            v["updates"] = updates;
+        }
+        Ok(v)
     }
 
     /// The open document a request names.
@@ -731,7 +738,17 @@ impl Connection {
                     .await?;
                 Value::Null
             }
-            "doc.open" => self.open_doc(p.str("path")?).await?,
+            "doc.open" => {
+                let resume = match (p.opt("epoch"), p.opt("client"), p.num("since")) {
+                    (Some(epoch), Some(client), Some(since)) if since >= 0.0 => Some(Resume {
+                        epoch: epoch.to_owned(),
+                        client: client.to_owned(),
+                        since: since as u64,
+                    }),
+                    _ => None,
+                };
+                self.open_doc(p.str("path")?, resume).await?
+            }
             "doc.close" => {
                 let n = p.num("doc").unwrap_or(0.0) as u32;
                 let doc = self.state.lock().unwrap().docs.remove(&n);

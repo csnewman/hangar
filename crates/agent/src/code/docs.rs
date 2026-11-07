@@ -17,6 +17,7 @@ use serde_json::{Value, json};
 use tokio::sync::{broadcast, mpsc};
 
 use super::error::{Error, Result, at};
+use super::fileops::random_hex;
 use super::frame;
 use super::paths::resolve;
 
@@ -111,18 +112,40 @@ struct Inner {
 /// file's own, with no links in it.
 pub struct SharedDoc {
     pub path: PathBuf,
+    epoch: String,
     docs: Weak<Documents>,
     inner: Mutex<Inner>,
     /// Told of every change accepted, for a language server's hub to follow.
     changed: broadcast::Sender<()>,
 }
 
-/// What a tab is given as it joins a document.
+/// Where a tab that had a document open before its connection dropped left
+/// off: which load of the document it had (`epoch`), its client in it, and
+/// the version it had received.
+pub struct Resume {
+    pub epoch: String,
+    pub client: String,
+    pub since: u64,
+}
+
+/// What a tab is given as it joins a document: the text at `version`, or,
+/// resuming, the updates after the version it had, `version` being that.
 pub struct Joined {
+    pub epoch: String,
     pub version: u64,
-    pub text: String,
+    pub text: Option<String>,
+    pub updates: Option<Value>,
     pub client: String,
     pub presence: Vec<Value>,
+}
+
+/// Names each load of a document, unique across the service's restarts: a
+/// document dropped and loaded again starts its versions over.
+fn epoch() -> String {
+    static PROCESS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    let process = PROCESS.get_or_init(|| random_hex(8));
+    format!("{process}-{}", NEXT.fetch_add(1, Ordering::Relaxed))
 }
 
 impl SharedDoc {
@@ -147,6 +170,7 @@ impl SharedDoc {
         let text = from_disk(&content, crlf);
         let d = Arc::new(SharedDoc {
             path: path.to_path_buf(),
+            epoch: epoch(),
             docs,
             changed: broadcast::channel(16).0,
             inner: Mutex::new(Inner {
@@ -166,17 +190,39 @@ impl SharedDoc {
         Ok(d)
     }
 
-    /// Adds a tab's document `n`, opened by the name `path`.
+    /// Adds a tab's document `n`, opened by the name `path`, carrying on
+    /// from where `resume` left off when this is the same load of the
+    /// document and it still has the updates since.
     pub fn join(
         &self,
         conn: u64,
         n: u32,
         path: &str,
         out: mpsc::UnboundedSender<Vec<u8>>,
+        resume: Option<Resume>,
     ) -> Joined {
         static NEXT: AtomicU64 = AtomicU64::new(1);
-        let client = format!("c{}", NEXT.fetch_add(1, Ordering::Relaxed));
         let mut inner = self.inner.lock().unwrap();
+        let resumed = resume.and_then(|r| {
+            if r.epoch != self.epoch || inner.members.iter().any(|m| m.client == r.client) {
+                return None;
+            }
+            let updates = inner.authority.since(r.since).ok()?;
+            Some((
+                r.client,
+                r.since,
+                serde_json::to_value(updates).unwrap_or(Value::Null),
+            ))
+        });
+        let (client, version, text, updates) = match resumed {
+            Some((client, since, updates)) => (client, since, None, Some(updates)),
+            None => (
+                format!("c{}", NEXT.fetch_add(1, Ordering::Relaxed)),
+                inner.authority.version(),
+                Some(inner.authority.text().to_string()),
+                None,
+            ),
+        };
         inner.drop_gen += 1;
         inner.members.push(Member {
             conn,
@@ -186,8 +232,10 @@ impl SharedDoc {
             out,
         });
         Joined {
-            version: inner.authority.version(),
-            text: inner.authority.text().to_string(),
+            epoch: self.epoch.clone(),
+            version,
+            text,
+            updates,
             client,
             presence: inner
                 .presence

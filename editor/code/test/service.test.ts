@@ -298,6 +298,47 @@ test('files, git and a shared document', async () => {
 	}
 })
 
+// A tab whose connection dropped opens its documents again where it left
+// off, as the same client, so the changes it had pushed are recognised as
+// its own. A collab document's protocol alone.
+test('a document opened again after a dropped connection carries on', { skip: !process.env.HANGAR_CODE_BIN }, async () => {
+	writeFileSync(join(root, 'resume.txt'), 'start\n')
+	const a = new Client()
+	const b = new Client()
+	let again: Client | undefined
+	try {
+		const ra = await a.call('doc.open', { path: 'resume.txt' })
+		const rb = await b.call('doc.open', { path: 'resume.txt' })
+		assert.equal(ra.epoch, rb.epoch)
+		assert.equal(ra.version, 0)
+		await a.call('doc.push', { doc: ra.doc, version: 0, changes: [[6, [0, 'a']]] })
+		a.close()
+		await b.call('doc.push', { doc: rb.doc, version: 1, changes: [[[0, 'b'], 7]] })
+
+		again = new Client()
+		const resumed = await again.call('doc.open', { path: 'resume.txt', epoch: ra.epoch, client: ra.client, since: 1 })
+		assert.equal(resumed.client, ra.client)
+		assert.equal(resumed.version, 1)
+		assert.equal(resumed.text, undefined)
+		assert.deepEqual(resumed.updates, [{ changes: [[0, 'b'], 7], client: rb.client }])
+
+		// Another load of the document, or a client already there, starts
+		// afresh.
+		const other = await again.call('doc.open', { path: 'resume.txt', epoch: 'elsewhere', client: ra.client, since: 1 })
+		assert.notEqual(other.client, ra.client)
+		assert.equal(other.version, 2)
+		assert.equal(other.text, 'bstart\na')
+		const taken = await again.call('doc.open', { path: 'resume.txt', epoch: ra.epoch, client: rb.client, since: 1 })
+		assert.notEqual(taken.client, rb.client)
+		assert.equal(taken.text, 'bstart\na')
+	} finally {
+		a.close()
+		b.close()
+		again?.close()
+		rmSync(join(root, 'resume.txt'))
+	}
+})
+
 test('partial staging, amending, branches, push and pull', async () => {
 	const a = new Client()
 	try {

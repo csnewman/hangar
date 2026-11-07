@@ -408,7 +408,7 @@ impl Uploads {
     }
 }
 
-fn random_hex(n: usize) -> String {
+pub fn random_hex(n: usize) -> String {
     let mut buf = vec![0u8; n];
     if fs::File::open("/dev/urandom")
         .and_then(|mut f| f.read_exact(&mut buf))

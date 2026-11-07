@@ -17,3 +17,4 @@ permissions, line separators, encodings, and git's ignores
 previewing files over HTTP, only under the secret path
 docker: containers, actions, logs and changes
 a language server, shared by tabs and kept across a reload
+a document opened again after a dropped connection carries on
