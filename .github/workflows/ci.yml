@@ -158,6 +158,35 @@ jobs:
       - if: matrix.runner == 'ubuntu-26.04-arm'
         run: go run ./cmd/hangar kernel --config-only -16k -o out/kernel-16k -v
 
+  crates:
+    # The Rust workspace: what the app and the guest agent share. Its change
+    # sets are checked against @codemirror/state itself, from web/'s
+    # dependencies.
+    runs-on: ubuntu-26.04
+    defaults:
+      run:
+        working-directory: crates
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+        env:
+          HANGAR_REQUIRE_CODEMIRROR: 1
+
   gpu:
     # hangar-gpu links against virglrenderer with the patches in
     # gpu/virglrenderer applied: the snapshot API it calls exists nowhere

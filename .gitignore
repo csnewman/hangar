@@ -8,6 +8,7 @@ docs/
 /out/
 /hangar
 /gpu/target/
+/crates/target/
 
 # Reference checkouts of other VMMs, for reading only.
 # Underscore-prefixed so the Go toolchain does not walk into them.
