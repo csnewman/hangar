@@ -162,7 +162,9 @@ func New(cfg Config) (*Server, error) {
 	if public != nil {
 		envHosts = editor.NewGateway(hostSigns, tunnels, public, log)
 	}
+	em := environments.NewManager(cfg.DB)
 	sessions := profile.NewSessions(profiles, packStore, tunnels, log)
+	sessions.UseAgents(em)
 	if reg != nil {
 		sessions.UseRegistry(registryHost)
 	}
@@ -172,7 +174,7 @@ func New(cfg Config) (*Server, error) {
 	}
 	cfgAPI := frontendapi.Config{
 		Tunnels:      tunnels,
-		Environments: environments.NewManager(cfg.DB),
+		Environments: em,
 		Templates:    tm,
 		Teams:        teams.NewManager(cfg.DB),
 		Registry:     reg,
@@ -263,6 +265,8 @@ func (s *Server) Run(ctx context.Context) {
 			s.kickPlacement()
 		case environments.Channel:
 			s.changes.Publish(payload)
+			// Its task may have changed, which its session sends.
+			s.sessions.Changed(payload)
 		case "":
 			// Reconnected: anything sent meanwhile is lost, so assume
 			// everything changed.
@@ -507,6 +511,9 @@ func (r *statusRecorder) WriteHeader(code int) {
 }
 
 func (r *statusRecorder) Unwrap() http.ResponseWriter { return r.ResponseWriter }
+
+// Flush sends what is written so far, which a stream of events needs.
+func (r *statusRecorder) Flush() { http.NewResponseController(r.ResponseWriter).Flush() }
 
 // Hijack hands over the connection, which a WebSocket needs.
 func (r *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {

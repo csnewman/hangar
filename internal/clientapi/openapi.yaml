@@ -229,7 +229,7 @@ paths:
         Server-sent events. The stream starts with an environment event for
         each environment the user can reach, then a synced event; after that
         each change to one is an environment event with all of it, and an
-        environment deleted, or no longer reachable, is a removed event.
+        environment deleted, or out of the user's reach, is a removed event.
         Changes close together may arrive as one. A comment line is sent
         every 30 seconds when nothing else is. A client that loses the
         stream opens it again, and is sent everything again. More event

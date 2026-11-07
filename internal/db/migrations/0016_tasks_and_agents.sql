@@ -25,7 +25,7 @@ CREATE TABLE agent_sessions (
     message        text NOT NULL DEFAULT '',
     since          timestamptz NOT NULL,
     -- When its owner last looked at it. A session that asked or finished
-    -- before then no longer needs them.
+    -- before then does not need them.
     seen_at        timestamptz,
     PRIMARY KEY (environment_id, id)
 );

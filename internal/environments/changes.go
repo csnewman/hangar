@@ -21,7 +21,8 @@ func (c *Changes) Publish(id string) {
 	}
 }
 
-// Watch collects the changes published from now on, until it is closed.
+// Watch collects the changes published after it is called, until it is
+// closed.
 func (c *Changes) Watch() *Watch {
 	w := &Watch{c: c, ready: make(chan struct{}, 1), ids: map[string]bool{}}
 	c.mu.Lock()

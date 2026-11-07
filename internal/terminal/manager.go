@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"github.com/creack/pty"
+
+	"github.com/csnewman/hangar/internal/agentstatus"
 )
 
 // HistoryBytes is how much of a session's recent output is kept to replay
@@ -209,6 +211,12 @@ func (m *Manager) find(req Request) (*session, error) {
 	if err != nil {
 		return nil, err
 	}
+	id := make([]byte, 6)
+	_, _ = rand.Read(id)
+	sid := hex.EncodeToString(id)
+	// What runs in the session can say which it is, as a coding agent's
+	// hooks do.
+	cmd.Env = append(cmd.Env, agentstatus.TerminalEnv+"="+sid)
 	cols, rows := req.Cols, req.Rows
 	if cols == 0 || rows == 0 {
 		cols, rows = 80, 24
@@ -217,10 +225,8 @@ func (m *Manager) find(req Request) (*session, error) {
 	if err != nil {
 		return nil, fmt.Errorf("starting the shell: %w", err)
 	}
-	id := make([]byte, 6)
-	_, _ = rand.Read(id)
 	s := &session{
-		id:      hex.EncodeToString(id),
+		id:      sid,
 		created: time.Now(),
 		cmd:     cmd,
 		ptmx:    ptmx,

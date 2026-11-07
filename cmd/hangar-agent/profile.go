@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/csnewman/hangar/internal/agentstatus"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sysuser"
 	"github.com/csnewman/hangar/internal/vsock"
@@ -57,6 +58,19 @@ func serveProfile() {
 	if err := os.Symlink(filepath.Base(agentInRoot), helper); err != nil && !os.IsExist(err) {
 		log.Warn("profile: installing the docker credential helper", "err", err)
 	}
+	// The coding agents' hooks and their MCP server, which reach the
+	// server through the session.
+	if err := agentstatus.WritePlugin(agentstatus.PluginDir, agentInRoot); err != nil {
+		log.Warn("profile: writing the Claude Code plugin", "err", err)
+	}
+	go func() {
+		for {
+			if err := agentstatus.Serve(agentstatus.Socket, g, agentProcesses); err != nil {
+				fmt.Fprintf(os.Stderr, "hangar-agent: agents: %v\n", err)
+			}
+			time.Sleep(5 * time.Second)
+		}
+	}()
 	go func() {
 		for {
 			if err := g.ServeRegistryCredentials(sysuser.RegistrySock); err != nil {

@@ -33,6 +33,8 @@
 // to the agent's Port. Each line is a Message.
 package profile
 
+import "github.com/csnewman/hangar/internal/api"
+
 // Port is the vsock port the guest agent serves profile sessions on.
 const Port uint32 = 8105
 
@@ -49,6 +51,11 @@ const (
 	// environment's spec does not have NoRegistry.
 	TypeRegistry   = "registry"
 	TypeCredential = "credential" // the answer to a get_credential
+	// The environment's task, sent first and again when it changes; Task
+	// is nil when it has none.
+	TypeTask = "task"
+	// The answer to a set_task: Task as it is now, or Error.
+	TypeTaskSet = "task_set"
 
 	// Agent to server.
 	TypeSign = "sign" // sign with one of the keys
@@ -59,6 +66,12 @@ const (
 	TypeResolved = "resolved"
 	// A credential for Hangar's registry, as the environment's owner.
 	TypeGetCredential = "get_credential"
+	// The coding agents' sessions in the environment, all of them, sent
+	// when they change and at the start of each session.
+	TypeAgents = "agents"
+	// Set the environment's task to Text, as its coding agent; an empty
+	// Text marks it done.
+	TypeSetTask = "set_task"
 )
 
 // Message is one line of a session.
@@ -94,6 +107,12 @@ type Message struct {
 	Host     string `json:"host,omitempty"`
 	Username string `json:"username,omitempty"`
 	Secret   string `json:"secret,omitempty"`
+
+	// The environment's task, and the text of one to set.
+	Task *api.Task `json:"task,omitempty"`
+	Text string    `json:"text,omitempty"`
+	// Agents are the coding agents' sessions.
+	Agents []api.AgentSession `json:"agents,omitempty"`
 }
 
 // How a conflict is resolved.

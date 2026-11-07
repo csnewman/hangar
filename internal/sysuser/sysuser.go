@@ -6,10 +6,13 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/csnewman/hangar/internal/agentstatus"
 )
 
 // SSHAuthSock is the guest's SSH agent, which signs with the environment
@@ -86,6 +89,12 @@ func LoginShell(name string) string {
 		}
 	}
 	return "/bin/sh"
+}
+
+// SessionEnv is the environment of every session the agent starts:
+// MachineEnv, and what loads Hangar's Claude Code plugin.
+func SessionEnv() []string {
+	return append(slices.Clip(MachineEnv()), agentstatus.PluginEnv)
 }
 
 var (

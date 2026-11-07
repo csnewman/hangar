@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/csnewman/hangar/internal/api"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/agent"
 )
@@ -42,6 +43,13 @@ type Guest struct {
 
 	synced     chan struct{} // closed once a session's routes are applied
 	syncedOnce sync.Once
+
+	// agents are the coding agents' sessions as last reported, sent to
+	// each session; agentsSet once there have been any reported.
+	agents    []api.AgentSession
+	agentsSet bool
+	// task is the environment's task, as the server last said.
+	task *api.Task
 }
 
 // Route is a path in the guest served from the shared files: Target, a
@@ -157,6 +165,12 @@ func (g *Guest) Serve(conn io.ReadWriteCloser) {
 
 	g.setCurrent(s, nil)
 	defer g.setCurrent(nil, s)
+	g.mu.Lock()
+	agents, set := g.agents, g.agentsSet
+	g.mu.Unlock()
+	if set {
+		s.send(Message{Type: TypeAgents, Agents: agentList(agents)})
+	}
 
 	if err := s.run(ctx); err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) && !errors.Is(err, os.ErrClosed) {
 		g.log.Warn("profile: session ended", "err", err)
@@ -260,7 +274,7 @@ func (s *guestSession) run(ctx context.Context) error {
 				return
 			}
 			// Answers go straight to what asked.
-			if m.Type == TypeSigned || m.Type == TypeCredential {
+			if m.Type == TypeSigned || m.Type == TypeCredential || m.Type == TypeTaskSet {
 				s.answer(m)
 				continue
 			}
@@ -311,6 +325,10 @@ func (s *guestSession) handle(m Message) {
 		s.send(Message{Type: TypeResolved, Copy: m.Copy, Path: m.Path})
 	case TypeRegistry:
 		s.g.setRegistry(m.Host)
+	case TypeTask:
+		s.g.mu.Lock()
+		s.g.task = m.Task
+		s.g.mu.Unlock()
 	case TypeKeys:
 		var keys []ssh.PublicKey
 		for _, k := range m.Keys {
@@ -530,3 +548,52 @@ func (a sshAgent) Extension(string, []byte) ([]byte, error) {
 
 // User is whom the guest keeps the profile of.
 func (g *Guest) User() *user.User { return g.user }
+
+// ReportAgents tells the server the coding agents' sessions, all of them:
+// at once if there is a session, and at the start of each one after.
+func (g *Guest) ReportAgents(sessions []api.AgentSession) {
+	g.mu.Lock()
+	g.agents, g.agentsSet = sessions, true
+	s := g.current
+	g.mu.Unlock()
+	if s != nil {
+		s.send(Message{Type: TypeAgents, Agents: agentList(sessions)})
+	}
+}
+
+// agentList is never nil, so an empty list is sent as one.
+func agentList(sessions []api.AgentSession) []api.AgentSession {
+	if sessions == nil {
+		return []api.AgentSession{}
+	}
+	return sessions
+}
+
+// taskWait is how long setting the task waits for a session to ask
+// through.
+const taskWait = 10 * time.Second
+
+// SetTask sets the environment's task as its coding agent, or marks it
+// done for an empty text, and returns it as it is after.
+func (g *Guest) SetTask(text string) (*api.Task, error) {
+	s := g.connected(taskWait)
+	if s == nil {
+		return nil, errors.New("not connected to Hangar")
+	}
+	r, err := s.ask(Message{Type: TypeSetTask, Text: text})
+	if err != nil {
+		return nil, err
+	}
+	g.mu.Lock()
+	g.task = r.Task
+	g.mu.Unlock()
+	return r.Task, nil
+}
+
+// Task is the environment's task as the server last said, nil when it has
+// none or has not said.
+func (g *Guest) Task() *api.Task {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.task
+}

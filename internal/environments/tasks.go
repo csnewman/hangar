@@ -17,7 +17,7 @@ import (
 
 // Channel carries an environment's ID whenever something a client shows of
 // it changes, sent by migration 0016's triggers: its row, its task, its
-// agents' sessions. An ID that no longer resolves is an environment gone.
+// agents' sessions. An ID that does not resolve is an environment gone.
 const Channel = "environment_changed"
 
 // taskColumns and agentColumns read an environment's task and its agents'
@@ -228,8 +228,8 @@ func (m *Manager) ReportAgents(ctx context.Context, id string, sessions []api.Ag
 }
 
 // SeenAgent records that p has looked at an agent's session in an
-// environment they may reach: one that asked or finished before now no
-// longer needs them.
+// environment they may reach: one that asked or finished before then does
+// not need them.
 func (m *Manager) SeenAgent(ctx context.Context, p users.Principal, id, session string) error {
 	return m.db.Transact(ctx, func(tx db.Tx) error {
 		if err := reachable(ctx, tx, p, id); err != nil {

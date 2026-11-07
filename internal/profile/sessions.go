@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/ssh"
 
@@ -39,6 +40,8 @@ type Sessions struct {
 	log     *slog.Logger
 	// registry is Hangar's registry's host, when it has one.
 	registry string
+	// agents keeps what environments say of their coding agents.
+	agents Agents
 
 	kick chan struct{}
 
@@ -62,6 +65,18 @@ func NewSessions(store *Store, packStore *packs.Store, tunnels Tunnels, log *slo
 // UseRegistry has sessions offer environments credentials for Hangar's
 // registry, at host.
 func (s *Sessions) UseRegistry(host string) { s.registry = host }
+
+// Agents keeps environments' tasks and their coding agents' sessions
+// (environments.Manager).
+type Agents interface {
+	ReportAgents(ctx context.Context, env string, sessions []api.AgentSession) error
+	AgentSetTask(ctx context.Context, env, text string) (*api.Task, error)
+	Task(ctx context.Context, env string) (*api.Task, error)
+}
+
+// UseAgents has sessions keep environments' tasks and agents' sessions in
+// a.
+func (s *Sessions) UseAgents(a Agents) { s.agents = a }
 
 // target is an environment a session is held with.
 type target struct {
@@ -95,12 +110,13 @@ func (s *Sessions) Kick() {
 }
 
 // Changed tells the sessions something they send may have changed: a
-// user's keys (by the user's ID), a copy (by its ID), or, empty, anything.
+// user's keys (by the user's ID), a copy (by its ID), an environment's
+// task (by its ID), or, empty, anything.
 func (s *Sessions) Changed(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, sess := range s.sessions {
-		if id == "" || sess.owner == id || sess.uses(id) {
+		if id == "" || sess.owner == id || sess.env == id || sess.uses(id) {
 			sess.nudge()
 		}
 	}
@@ -197,6 +213,9 @@ type session struct {
 	// keys are the keys last sent.
 	keys     []string
 	keysSent bool
+	// task is the task last sent, by ID.
+	task     string
+	taskSent bool
 	// tries are the attempts at a session with the environment, this one
 	// included, since it last had one.
 	tries tries
@@ -283,7 +302,7 @@ func (x *session) serve(ctx context.Context) error {
 			}
 			// Each is answered on its own: a clone signing in is not
 			// held up behind another request.
-			if m.Type == TypeSign || m.Type == TypeGetCredential {
+			if m.Type == TypeSign || m.Type == TypeGetCredential || m.Type == TypeSetTask {
 				go func() {
 					if err := x.handle(ctx, m); err != nil {
 						conn.Close()
@@ -315,6 +334,9 @@ func (x *session) serve(ctx context.Context) error {
 	if err := x.sendResolutions(ctx); err != nil {
 		return err
 	}
+	if err := x.sendTask(ctx); err != nil {
+		return err
+	}
 
 	tick := time.NewTicker(5 * time.Second)
 	defer tick.Stop()
@@ -340,7 +362,31 @@ func (x *session) serve(ctx context.Context) error {
 		if err := x.sendResolutions(ctx); err != nil {
 			return err
 		}
+		if err := x.sendTask(ctx); err != nil {
+			return err
+		}
 	}
+}
+
+// sendTask sends the environment's task, when it is not the one last
+// sent.
+func (x *session) sendTask(ctx context.Context) error {
+	if x.s.agents == nil {
+		return nil
+	}
+	t, err := x.s.agents.Task(ctx, x.env)
+	if err != nil {
+		return err
+	}
+	id := ""
+	if t != nil {
+		id = t.ID
+	}
+	if x.taskSent && id == x.task {
+		return nil
+	}
+	x.task, x.taskSent = id, true
+	return x.send(Message{Type: TypeTask, Task: t})
 }
 
 // heard records what the agent says of the shared files: the copies it
@@ -354,6 +400,11 @@ func (x *session) heard(ctx context.Context, m Message) error {
 	case TypeResolved:
 		delete(x.resolving, m.Copy+"\x00"+m.Path)
 		return x.s.packs.ConflictDone(ctx, x.env, m.Copy, m.Path)
+	case TypeAgents:
+		if x.s.agents == nil {
+			return nil
+		}
+		return x.s.agents.ReportAgents(ctx, x.env, validAgents(m.Agents))
 	}
 	return nil
 }
@@ -449,6 +500,18 @@ func (x *session) handle(ctx context.Context, m Message) error {
 			}
 		}
 		return x.send(reply)
+	case TypeSetTask:
+		reply := Message{Type: TypeTaskSet, ID: m.ID}
+		if x.s.agents == nil {
+			reply.Error = "this server keeps no tasks"
+			return x.send(reply)
+		}
+		t, err := x.s.agents.AgentSetTask(ctx, x.env, m.Text)
+		if err != nil {
+			reply.Error = err.Error()
+		}
+		reply.Task = t
+		return x.send(reply)
 	case TypeSign:
 		reply := Message{Type: TypeSigned, ID: m.ID}
 		sig, err := x.sign(ctx, m)
@@ -496,4 +559,50 @@ func (x *session) sign(ctx context.Context, m Message) (*ssh.Signature, error) {
 		return signer.Sign(rand.Reader, m.Data)
 	}
 	return nil, errors.New("no such key")
+}
+
+// Limits on what an environment reports of its coding agents: it is the
+// environment's own account, and is kept only as far as it is sensible.
+const (
+	maxAgentSessions = 64
+	maxAgentText     = 300
+)
+
+// validAgents is a report kept to the limits: the newest sessions, of the
+// states and agents known, their text cut short.
+func validAgents(in []api.AgentSession) []api.AgentSession {
+	out := make([]api.AgentSession, 0, len(in))
+	seen := map[string]bool{}
+	for _, a := range in {
+		switch a.State {
+		case api.AgentAsking, api.AgentFinished, api.AgentWorking, api.AgentIdle, api.AgentEnded:
+		default:
+			continue
+		}
+		if a.ID == "" || len(a.ID) > 128 || seen[a.ID] || (a.Agent != api.AgentClaude && a.Agent != api.AgentCodex) {
+			continue
+		}
+		seen[a.ID] = true
+		a.Terminal = cut(a.Terminal, 64)
+		a.Step = cut(a.Step, maxAgentText)
+		a.Message = cut(a.Message, maxAgentText)
+		a.Seen = false
+		out = append(out, a)
+	}
+	slices.SortFunc(out, func(a, b api.AgentSession) int { return b.Since.Compare(a.Since) })
+	if len(out) > maxAgentSessions {
+		out = out[:maxAgentSessions]
+	}
+	return out
+}
+
+// cut is s at most n bytes long, cut at a character's start.
+func cut(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

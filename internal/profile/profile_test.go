@@ -22,6 +22,7 @@ import (
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/dbtest"
+	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/packs"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/tunnel"
@@ -115,7 +116,9 @@ func newPlane(t *testing.T) *plane {
 	}
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
 	sessions := profile.NewSessions(p.store, ps, p.guests, log)
-	go d.Listen(ctx, func(_, payload string) { sessions.Changed(payload) }, profile.Channel, packs.Channel)
+	sessions.UseAgents(environments.NewManager(d))
+	go d.Listen(ctx, func(_, payload string) { sessions.Changed(payload) }, profile.Channel, packs.Channel,
+		environments.Channel)
 	go sessions.Run(ctx)
 	return p
 }
