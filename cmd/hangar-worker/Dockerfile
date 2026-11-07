@@ -79,6 +79,8 @@ WORKDIR /src
 COPY crates/Cargo.toml crates/Cargo.lock ./
 COPY crates/agent/ agent/
 COPY crates/proto/ proto/
+# Only the agent is built, but cargo reads every member's manifest.
+COPY crates/app/ app/
 RUN target="$(uname -m)-unknown-linux-musl" \
  && rustup target add "$target" \
  && cargo build --release --locked --target "$target" -p hangar-agent \

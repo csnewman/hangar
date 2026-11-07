@@ -9,6 +9,7 @@
 !crates/Cargo.lock
 !crates/agent/
 !crates/proto/
+!crates/app/
 !fs/Cargo.toml
 !fs/Cargo.lock
 !fs/src/
