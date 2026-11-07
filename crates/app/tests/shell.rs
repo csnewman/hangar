@@ -11,7 +11,7 @@ use hangar_app::store::{MemoryTokens, Tokens};
 #[gpui::test]
 fn an_environment_opens_in_one_tab(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
-    let places = cx.new(|cx| Places::new(None, Arc::new(MemoryTokens::default()), vec![], cx));
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
     let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(places.clone(), window, cx));
     cx.update(|window, cx| {
         shell.update(cx, |s, cx| {
@@ -33,11 +33,10 @@ fn an_environment_opens_in_one_tab(cx: &mut TestAppContext) {
 fn a_server_is_added_with_its_token(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let tokens = Arc::new(MemoryTokens::default());
-    let places = cx.new(|cx| Places::new(None, tokens.clone(), vec![], cx));
+    let places = cx.new(|cx| Places::offline(tokens.clone(), cx));
     places.update(cx, |p, cx| {
         assert!(p.add_server("not an address", "hgr_x", cx).is_err());
         assert!(p.add_server("hangar.example.test", " ", cx).is_err());
-        // Nothing listens there: it is added, and tries.
         let id = p.add_server("http://127.0.0.1:9/", " hgr_x ", cx).unwrap();
         assert_eq!(id, "127.0.0.1:9");
         let (config, state) = p.get(&id).unwrap();

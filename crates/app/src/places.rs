@@ -31,6 +31,8 @@ pub struct Places {
     links: Vec<Link>,
     updates: async_channel::Sender<(String, Update)>,
     saving: Option<Task<()>>,
+    /// Whether places connect: not for one made by offline.
+    connects: bool,
     /// A failed action, to be shown.
     pub error: Option<String>,
 }
@@ -67,6 +69,7 @@ impl Places {
             dirs,
             tokens,
             transient: transient_ids,
+            connects: true,
             places: vec![],
             links: vec![],
             updates: tx,
@@ -77,6 +80,14 @@ impl Places {
             this.add_listed(config);
         }
         this
+    }
+
+    /// Places that never connect: what was last known of each, and
+    /// changes to the list, without the network. For tests.
+    pub fn offline(tokens: Arc<dyn Tokens>, cx: &mut Context<Self>) -> Self {
+        let mut p = Places::new(None, tokens, vec![], cx);
+        p.connects = false;
+        p
     }
 
     fn add_listed(&mut self, config: PlaceConfig) {
@@ -107,6 +118,14 @@ impl Places {
             return;
         };
         let client = Client::new(&config.url, &token);
+        if !self.connects {
+            self.links[i] = Link {
+                client: Some(client),
+                _connector: None,
+                dirty: false,
+            };
+            return;
+        }
         let tx = self.updates.clone();
         let id = config.id.clone();
         let connector = place::connect(client.clone(), move |u| {
