@@ -81,7 +81,8 @@ type Config struct {
 	// Agent is the hangar-agent every environment runs, built for the
 	// guest's architecture. It is the node's, not the image's: each boot's
 	// initramfs is the agent, as init, so it always matches the worker that
-	// talks to it.
+	// talks to it. Its Rust half, hangar-agent-rs, is beside it (RustAgent),
+	// and goes in the initramfs too when it is there.
 	Agent string
 	// Editor is the editor disk, attached read-only to every environment;
 	// the agent mounts it and runs VS Code's server from it. Empty leaves

@@ -79,7 +79,9 @@ type Config struct {
 type VMConfig struct {
 	Kernel string `yaml:"kernel"`
 	// Agent is a hangar-agent built for the guest's architecture. It is each
-	// environment's initramfs, as init, and then its agent.
+	// environment's initramfs, as init, and then its agent. Its Rust half,
+	// hangar-agent-rs built for the guest, is the same path with -rs after
+	// it, and goes in the initramfs when it is there.
 	Agent string `yaml:"agent"`
 	// Editor is the editor disk editor/build.sh makes for the guest's
 	// architecture, attached read-only to every environment here. Without

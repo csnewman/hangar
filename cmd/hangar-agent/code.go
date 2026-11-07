@@ -16,6 +16,7 @@ import (
 func serveCode() {
 	srv := code.NewServer("dev", slog.New(slog.NewTextHandler(os.Stderr, nil)))
 	srv.Prepare = ranked(oomscore.Service)
+	srv.Rust = rustAgentInRoot
 	for {
 		ln, err := vsock.Listen(vsock.CIDAny, code.Port)
 		if err != nil {

@@ -261,6 +261,15 @@ func assembleRoot() error {
 	if err := copyFile("/init", filepath.Join(newRoot, agentInRoot), 0o755); err != nil {
 		return fmt.Errorf("installing the agent: %w", err)
 	}
+	// Its Rust half, from a worker that supplied one; without it, the Code
+	// tab's service is the one on the editor disk.
+	if _, err := os.Stat("/hangar-agent-rs"); err == nil {
+		if err := copyFile("/hangar-agent-rs", filepath.Join(newRoot, rustAgentInRoot), 0o755); err != nil {
+			return fmt.Errorf("installing the agent's Rust half: %w", err)
+		}
+	} else {
+		_ = os.Remove(filepath.Join(newRoot, rustAgentInRoot))
+	}
 
 	if err := installOOMDropIn(newRoot); err != nil {
 		return fmt.Errorf("installing the agent's OOM settings: %w", err)
@@ -290,6 +299,7 @@ func assembleRoot() error {
 	// switch_root: the initramfs's own files are freed, the new root is
 	// moved over /, and the image's init replaces this process.
 	_ = os.Remove("/init")
+	_ = os.Remove("/hangar-agent-rs")
 	if err := unix.Chdir(newRoot); err != nil {
 		return err
 	}

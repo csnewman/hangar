@@ -37,6 +37,10 @@ import (
 // and where it runs from once the guest is up.
 const agentInRoot = "/usr/local/bin/hangar-agent"
 
+// rustAgentInRoot is where init installs the agent's Rust half
+// (crates/agent), which serves the Code tab, beside the agent.
+const rustAgentInRoot = "/usr/local/bin/hangar-agent-rs"
+
 func main() {
 	// In the initramfs the kernel starts the agent as init.
 	if os.Getpid() == 1 {
