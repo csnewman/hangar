@@ -14,7 +14,7 @@ use hangar_proto::{Change, ChangeSet, Text};
 use notify::{RecursiveMode, Watcher};
 use ropey::Rope;
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 
 use super::error::{Error, Result, at};
 use super::frame;
@@ -113,6 +113,8 @@ pub struct SharedDoc {
     pub path: PathBuf,
     docs: Weak<Documents>,
     inner: Mutex<Inner>,
+    /// Told of every change accepted, for a language server's hub to follow.
+    changed: broadcast::Sender<()>,
 }
 
 /// What a tab is given as it joins a document.
@@ -146,6 +148,7 @@ impl SharedDoc {
         let d = Arc::new(SharedDoc {
             path: path.to_path_buf(),
             docs,
+            changed: broadcast::channel(16).0,
             inner: Mutex::new(Inner {
                 authority: Authority::new(Rope::from_str(&text)),
                 members: Vec::new(),
@@ -253,6 +256,7 @@ impl SharedDoc {
             .push(version, &client, &changes)
             .map_err(|e| Error::msg(format!("the document moved on without this tab: {e}")))?;
         announce(&mut inner, before);
+        let _ = self.changed.send(());
         inner.save_gen += 1;
         let generation = inner.save_gen;
         drop(inner);
@@ -392,6 +396,7 @@ impl SharedDoc {
         let before = inner.authority.version();
         if inner.authority.push(before, DISK, &[set]).is_ok() {
             announce(&mut inner, before);
+            let _ = self.changed.send(());
         }
     }
 
@@ -407,8 +412,11 @@ impl SharedDoc {
         }
     }
 
+    pub fn subscribe(&self) -> broadcast::Receiver<()> {
+        self.changed.subscribe()
+    }
+
     /// The document's text, as an editor has it.
-    #[allow(dead_code)]
     pub fn text(&self) -> String {
         self.inner.lock().unwrap().authority.text().to_string()
     }

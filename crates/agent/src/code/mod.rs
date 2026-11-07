@@ -12,6 +12,8 @@ mod fileops;
 mod files;
 mod frame;
 mod git;
+mod hub;
+mod lsp;
 mod paths;
 mod preview;
 mod repos;
@@ -30,6 +32,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use docker::Docker;
 use docs::Documents;
 use files::Files;
+use hub::Hub;
 use preview::Preview;
 use repos::Repos;
 use search::Search;
@@ -43,6 +46,8 @@ pub struct Folder {
     pub files: Arc<Files>,
     pub repos: Arc<Repos>,
     pub search: Search,
+    /// Its language servers, by language.
+    pub hubs: Mutex<HashMap<String, Arc<Hub>>>,
 }
 
 /// The service's own: the folder it was started on, the one serving any
@@ -73,6 +78,7 @@ impl Services {
                     files: Files::new(dir),
                     repos: Repos::new(dir),
                     search: Search::new(dir),
+                    hubs: Mutex::new(HashMap::new()),
                 })
             })
             .clone()
@@ -116,6 +122,16 @@ pub async fn serve(socket: PathBuf, root: PathBuf) -> std::io::Result<()> {
             _ = term.recv() => break,
             _ = int.recv() => break,
         }
+    }
+    let hubs: Vec<Arc<Hub>> = s
+        .folders
+        .lock()
+        .unwrap()
+        .values()
+        .flat_map(|f| f.hubs.lock().unwrap().values().cloned().collect::<Vec<_>>())
+        .collect();
+    for h in hubs {
+        h.kill();
     }
     s.docs.save_all().await;
     Ok(())

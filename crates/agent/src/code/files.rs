@@ -81,11 +81,15 @@ pub struct Run {
     pub data: String,
 }
 
+/// The directories whose contents changed, and the paths that did.
+pub type Changed = (Vec<String>, Vec<String>);
+
 /// Files lists and changes the files of one folder. Paths are absolute, or
 /// relative to the folder.
 pub struct Files {
     root: PathBuf,
-    changed: broadcast::Sender<Vec<String>>,
+    /// The directories that changed, and the paths in them.
+    changed: broadcast::Sender<Changed>,
     watch: Mutex<Watch>,
     uploads: Uploads,
 }
@@ -451,7 +455,7 @@ impl Files {
 
     /// The directories whose contents changed, a few at a time, from when
     /// the first listener starts listening until the last stops.
-    pub fn listen(self: &Arc<Self>) -> (broadcast::Receiver<Vec<String>>, Listening) {
+    pub fn listen(self: &Arc<Self>) -> (broadcast::Receiver<Changed>, Listening) {
         let rx = self.changed.subscribe();
         let mut w = self.watch.lock().unwrap();
         w.listeners += 1;
@@ -485,17 +489,17 @@ impl Files {
         tokio::spawn(async move {
             // Ends when the watcher, and its sender with it, is dropped.
             while let Some(first) = rx.recv().await {
-                let mut dirs = BTreeSet::new();
-                note(&root, &first, &mut dirs);
+                let (mut dirs, mut paths) = (BTreeSet::new(), BTreeSet::new());
+                note(&root, &first, &mut dirs, &mut paths);
                 loop {
                     match tokio::time::timeout(SETTLE, rx.recv()).await {
-                        Ok(Some(p)) => note(&root, &p, &mut dirs),
+                        Ok(Some(p)) => note(&root, &p, &mut dirs, &mut paths),
                         Ok(None) => return,
                         Err(_) => break,
                     }
                 }
                 if !dirs.is_empty() {
-                    let _ = changed.send(dirs.into_iter().collect());
+                    let _ = changed.send((dirs.into_iter().collect(), paths.into_iter().collect()));
                 }
             }
         });
@@ -514,8 +518,9 @@ pub fn changes(ev: &notify::Event) -> bool {
     }
 }
 
-/// Adds the directory a changed path is in, unless it is under a quiet one.
-fn note(root: &Path, p: &Path, dirs: &mut BTreeSet<String>) {
+/// Adds a changed path, and the directory it is in, unless it is under a
+/// quiet one.
+fn note(root: &Path, p: &Path, dirs: &mut BTreeSet<String>, paths: &mut BTreeSet<String>) {
     let rel = relative(root, p);
     if rel
         .components()
@@ -525,6 +530,7 @@ fn note(root: &Path, p: &Path, dirs: &mut BTreeSet<String>) {
     }
     if let Some(dir) = p.parent() {
         dirs.insert(dir.display().to_string());
+        paths.insert(p.display().to_string());
     }
 }
 

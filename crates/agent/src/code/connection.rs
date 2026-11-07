@@ -16,10 +16,16 @@ use super::fileops::{Clash, Encoding, Separator};
 use super::files::{Listening, Run, writable};
 use super::frame;
 use super::git::Named;
+use super::hub::{Hub, Tab};
+use super::lsp;
 use super::paths::resolve;
 use super::repos::{At, ReposListening};
 use super::search::TextQuery;
 use super::{Folder, Services};
+
+/// A tab's language servers, by its number for each: the hub, and the
+/// tab's number there.
+type Servers = Arc<Mutex<HashMap<u32, (Arc<Hub>, u32)>>>;
 
 /// One browser tab's Code view: its requests, and the events it is sent. It
 /// works in the service's folder unless its hello names another, for that
@@ -32,6 +38,9 @@ pub struct Connection {
     state: Mutex<State>,
     /// The container logs the tab follows, by its number for each.
     logs: Arc<Mutex<HashMap<u32, JoinHandle<()>>>>,
+    /// The language servers the tab uses, by its number for each: the hub,
+    /// and the tab's number there.
+    servers: Servers,
 }
 
 struct State {
@@ -40,6 +49,7 @@ struct State {
     docs: HashMap<u32, Arc<SharedDoc>>,
     next_doc: u32,
     next_log: u32,
+    next_server: u32,
     /// Docker, watched once the tab asks of it.
     docker: Option<(JoinHandle<()>, DockerListening)>,
     /// Forwards the folder's file and git changes to the tab.
@@ -76,11 +86,13 @@ pub async fn run(stream: UnixStream, s: Arc<Services>) {
         out: out.clone(),
         id: NEXT.fetch_add(1, Ordering::Relaxed),
         logs: Arc::new(Mutex::new(HashMap::new())),
+        servers: Arc::new(Mutex::new(HashMap::new())),
         state: Mutex::new(State {
             folder,
             docs: HashMap::new(),
             next_doc: 1,
             next_log: 1,
+            next_server: 1,
             docker: None,
             watching: None,
         }),
@@ -108,6 +120,13 @@ pub async fn run(stream: UnixStream, s: Arc<Services>) {
             };
             let conn = conn.clone();
             tokio::spawn(async move { conn.handle(req).await });
+        } else if f.first() == Some(&frame::LSP) && f.len() >= 5 {
+            let n = u32::from_be_bytes([f[1], f[2], f[3], f[4]]);
+            let server = conn.servers.lock().unwrap().get(&n).cloned();
+            // Not JSON: nothing to pass on.
+            if let (Some((hub, tab)), Ok(m)) = (server, serde_json::from_slice::<Value>(&f[5..])) {
+                hub.tab_message(tab, m);
+            }
         }
     }
 
@@ -128,6 +147,7 @@ pub async fn run(stream: UnixStream, s: Arc<Services>) {
     for (_, t) in conn.logs.lock().unwrap().drain() {
         t.abort();
     }
+    conn.stop_servers();
     drop(conn);
     drop(out);
     let _ = writer.await;
@@ -254,7 +274,7 @@ impl Connection {
         let files = tokio::spawn(async move {
             loop {
                 match rx.recv().await {
-                    Ok(dirs) => {
+                    Ok((dirs, _)) => {
                         let ev = json!({ "event": "fs.changed", "params": { "dirs": dirs } });
                         if send_json(&out, &ev).is_err() {
                             return;
@@ -271,6 +291,101 @@ impl Connection {
             files: (files, listening),
             git: (git, git_listening),
         });
+    }
+
+    /// Joins the tab to its folder's language server for a language,
+    /// starting it if no tab has, its messages relayed on the LSP channel
+    /// under the number returned. A language with no server installed is told
+    /// why.
+    async fn start_server(&self, language: &str) -> Result<Value> {
+        let f = self.folder();
+        let existing = f.hubs.lock().unwrap().get(language).cloned();
+        let hub = match existing {
+            Some(h) => h,
+            None => {
+                let settings = self.s.settings.get().await;
+                let (folder, lang) = (Arc::downgrade(&f), language.to_owned());
+                let started = Hub::start(
+                    &f.root,
+                    language,
+                    &settings,
+                    self.s.docs.clone(),
+                    &f.files,
+                    move |_| {
+                        if let Some(f) = folder.upgrade() {
+                            let mut hubs = f.hubs.lock().unwrap();
+                            if hubs.get(&lang).is_some_and(|h| h.stopped()) {
+                                hubs.remove(&lang);
+                            }
+                        }
+                    },
+                );
+                let h = match started {
+                    Ok(h) => h,
+                    Err(missing) => return Ok(missing),
+                };
+                // Another request may have started one meanwhile.
+                let raced = {
+                    let mut hubs = f.hubs.lock().unwrap();
+                    match hubs.get(language).cloned() {
+                        Some(r) => Some(r),
+                        None => {
+                            hubs.insert(language.to_owned(), h.clone());
+                            None
+                        }
+                    }
+                };
+                match raced {
+                    Some(r) => {
+                        h.stop("started twice");
+                        r
+                    }
+                    None => h,
+                }
+            }
+        };
+        let n = {
+            let mut st = self.state.lock().unwrap();
+            st.next_server += 1;
+            st.next_server - 1
+        };
+        let (out, out2, servers) = (self.out.clone(), self.out.clone(), self.servers.clone());
+        let tab = hub.attach(Tab {
+            send: Box::new(move |m: Value| {
+                let mut with = Map::new();
+                with.insert("jsonrpc".into(), json!("2.0"));
+                if let Value::Object(o) = m {
+                    with.extend(o);
+                }
+                let body = serde_json::to_vec(&Value::Object(with)).unwrap_or_default();
+                let _ = out.send(frame::encode(frame::LSP, &[&n.to_be_bytes(), &body]));
+            }),
+            gone: Box::new(move |why: String| {
+                if servers.lock().unwrap().remove(&n).is_some() {
+                    let _ = send_json(
+                        &out2,
+                        &json!({ "event": "lsp.exited", "params": { "server": n, "why": why } }),
+                    );
+                }
+            }),
+        });
+        self.servers.lock().unwrap().insert(n, (hub.clone(), tab));
+        Ok(json!({ "server": n, "root": f.root.display().to_string(), "command": hub.command }))
+    }
+
+    /// Leaves the tab's servers, which stay for others, and for a while after
+    /// the last leaves.
+    fn stop_servers(&self) {
+        let servers: Vec<(Arc<Hub>, u32)> = self
+            .servers
+            .lock()
+            .unwrap()
+            .drain()
+            .map(|(_, s)| s)
+            .collect();
+        for (hub, tab) in servers {
+            hub.detach(tab);
+        }
     }
 
     async fn open_doc(&self, path: &str) -> Result<Value> {
@@ -356,6 +471,8 @@ impl Connection {
         if want != self.folder().root {
             self.state.lock().unwrap().folder = self.s.folder(&want);
             self.watch();
+            // A server knows one folder.
+            self.stop_servers();
         }
         Ok(json!({
             "root": self.folder().root.display().to_string(),
@@ -502,6 +619,38 @@ impl Connection {
                         .convert(p.str("path")?, separator, encoding, bom)
                         .await?,
                 )
+            }
+            "lsp.start" => self.start_server(p.str("language")?).await?,
+            "lsp.stop" => {
+                let n = p.num("server").unwrap_or(0.0) as u32;
+                let server = self.servers.lock().unwrap().remove(&n);
+                if let Some((hub, tab)) = server {
+                    hub.detach(tab);
+                }
+                Value::Null
+            }
+            "lsp.info" => {
+                let language = p.str("language")?;
+                let hub = f.hubs.lock().unwrap().get(language).cloned();
+                match hub {
+                    Some(h) => with(json!({ "running": true }), h.info()),
+                    None => match lsp::find(language, &self.s.settings.get().await) {
+                        Err(missing) => with(json!({ "running": false }), missing),
+                        Ok((spec, path)) => json!({
+                            "running": false,
+                            "command": spec.command,
+                            "path": path.display().to_string(),
+                        }),
+                    },
+                }
+            }
+            // Every tab using it is told it stopped, and starts it again.
+            "lsp.restart" => {
+                let hub = f.hubs.lock().unwrap().get(p.str("language")?).cloned();
+                if let Some(h) = hub {
+                    h.stop("restarted");
+                }
+                Value::Null
             }
             "docker.overview" => {
                 let watching = self.state.lock().unwrap().docker.is_some();
@@ -749,6 +898,14 @@ impl Connection {
 
 fn to_value<T: Serialize>(v: T) -> Value {
     serde_json::to_value(v).unwrap_or(Value::Null)
+}
+
+/// `extra`'s fields after `first`'s.
+fn with(mut first: Value, extra: Value) -> Value {
+    if let (Value::Object(a), Value::Object(b)) = (&mut first, extra) {
+        a.extend(b);
+    }
+    first
 }
 
 fn abs_str(r: &At) -> String {

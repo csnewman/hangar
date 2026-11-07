@@ -5,6 +5,9 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 
 /// JSON requests, responses and events.
 pub const JSON: u8 = b'r';
+/// A language server's messages: the server's number (u32, big-endian), then
+/// the JSON-RPC message.
+pub const LSP: u8 = b'l';
 
 /// The largest frame read; a larger one ends the connection.
 const MAX_FRAME: usize = 64 << 20;
