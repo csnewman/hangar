@@ -53,7 +53,8 @@ var columns = `e.id, e.short_id, e.owner_id, u.username, e.name, coalesce(e.temp
 	coalesce(w.last_seen_at > now() - interval '` + strconv.Itoa(int(workers.OnlineWindow.Seconds())) + ` seconds'
 		AND w.revoked_at IS NULL, false),
 	coalesce(w.memory_mib - (SELECT coalesce(sum(o.memory_mib), 0) FROM environments o WHERE o.worker_id = w.id
-		AND o.id <> e.id AND ` + strings.ReplaceAll(workers.Occupying, "e.", "o.") + `), 0)`
+		AND o.id <> e.id AND ` + strings.ReplaceAll(workers.Occupying, "e.", "o.") + `), 0),
+	` + taskColumns + `, ` + agentColumns
 
 const from = `environments e
 	JOIN users u ON u.id = e.owner_id
@@ -66,13 +67,14 @@ const visible = `($1 OR e.owner_id = $2)`
 
 func scan(row pgx.Row) (api.Environment, error) {
 	var e api.Environment
-	var spec, stats, progress, gpu, tspec, update, rollback []byte
+	var spec, stats, progress, gpu, tspec, update, rollback, task, agents []byte
 	var trev, erev int64
 	var pinWant *string
 	var room int
 	err := row.Scan(&e.ID, &e.ShortID, &e.OwnerID, &e.Owner, &e.Name, &e.TemplateID, &e.Template, &spec, &e.Image, &e.ImageDigest, &e.CPUs,
 		&e.MemoryMiB, &e.Desired, &e.Phase, &e.Reason, &e.WorkerID, &e.Worker, &e.CreatedAt, &e.UpdatedAt, &stats,
-		&progress, &gpu, &e.Monitor, &e.Suspends, &tspec, &trev, &erev, &pinWant, &update, &rollback, &e.PortsPublic, &e.WorkerOnline, &room)
+		&progress, &gpu, &e.Monitor, &e.Suspends, &tspec, &trev, &erev, &pinWant, &update, &rollback, &e.PortsPublic, &e.WorkerOnline, &room,
+		&task, &agents)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return e, ErrNotFound
 	}
@@ -98,6 +100,9 @@ func scan(row pgx.Row) (api.Environment, error) {
 		}
 	}
 	if err := json.Unmarshal(spec, &e.Spec); err != nil {
+		return e, err
+	}
+	if err := scanAgents(&e, task, agents); err != nil {
 		return e, err
 	}
 	if tspec != nil {

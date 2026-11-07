@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -25,10 +26,39 @@ type AddLoginKey struct {
 	PublicKey string `json:"public_key"`
 }
 
+// AgentSession A coding agent's session in an environment, as the agent's hooks report it: what it is doing, never prompts, commands or file contents.
+type AgentSession struct {
+	// Agent Which agent -- claude or codex. More may come.
+	Agent string `json:"agent"`
+
+	// ID The agent's own ID for the session.
+	ID string `json:"id"`
+
+	// Message What an asking session asks, in the agent's words.
+	Message *string `json:"message,omitempty"`
+
+	// NeedsYou Whether it asks or has finished, and the user has not looked since.
+	NeedsYou bool `json:"needs_you"`
+
+	// Since When it took its state.
+	Since time.Time `json:"since"`
+
+	// State asking (it wants a decision), finished (its turn ended and the user has not looked since), working, idle, or ended (its program exited). More may come; treat one you do not know as working.
+	State string `json:"state"`
+
+	// Step What a working session is doing, such as "Edit src/main.go".
+	Step *string `json:"step,omitempty"`
+
+	// Terminal The terminal session it runs in, when it runs in one.
+	Terminal *string `json:"terminal,omitempty"`
+}
+
 // Environment defines model for Environment.
 type Environment struct {
-	CPUs      *int      `json:"cpus,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	// Agents The coding agents' sessions in it, oldest first.
+	Agents    *[]AgentSession `json:"agents,omitempty"`
+	CPUs      *int            `json:"cpus,omitempty"`
+	CreatedAt time.Time       `json:"created_at"`
 
 	// Desired What its owner asked for -- running, stopped, suspended or deleted. More may come.
 	Desired string `json:"desired"`
@@ -56,7 +86,10 @@ type Environment struct {
 	Reason *string `json:"reason,omitempty"`
 
 	// ShortID Six characters that name the environment on the whole server: the SSH gateway takes it as the username, as <short_id>@<host>, whoever owns the environment.
-	ShortID  string `json:"short_id"`
+	ShortID string `json:"short_id"`
+
+	// Task What an environment is for: a line its coding agent sets as it works, or its owner does.
+	Task     *Task  `json:"task,omitempty"`
 	Template string `json:"template"`
 
 	// UpdatedAt When its phase last changed.
@@ -107,6 +140,11 @@ type SSHGateway struct {
 	Port    int    `json:"port"`
 }
 
+// SetTask defines model for SetTask.
+type SetTask struct {
+	Text string `json:"text"`
+}
+
 // StartProgress How far a start has got: its step -- download, unpack, disks, boot, network, profile, workspace, in that order, more may come -- and, where the step can be measured, done of total in unit (bytes or objects), at rate a second lately.
 type StartProgress struct {
 	Done  *int64   `json:"done,omitempty"`
@@ -114,6 +152,18 @@ type StartProgress struct {
 	Step  string   `json:"step"`
 	Total *int64   `json:"total,omitempty"`
 	Unit  *string  `json:"unit,omitempty"`
+}
+
+// Task What an environment is for: a line its coding agent sets as it works, or its owner does.
+type Task struct {
+	// DoneAt When it was done, or replaced by another. Absent for the environment's task.
+	DoneAt *time.Time `json:"done_at,omitempty"`
+	ID     string     `json:"id"`
+	SetAt  time.Time  `json:"set_at"`
+
+	// SetBy Who set it -- agent or user. More may come.
+	SetBy string `json:"set_by"`
+	Text  string `json:"text"`
 }
 
 // Version defines model for Version.
@@ -140,6 +190,9 @@ type NotFound = Error
 // Unauthorized defines model for Unauthorized.
 type Unauthorized = Error
 
+// SetTaskJSONRequestBody defines body for SetTask for application/json ContentType.
+type SetTaskJSONRequestBody = SetTask
+
 // AddLoginKeyJSONRequestBody defines body for AddLoginKey for application/json ContentType.
 type AddLoginKeyJSONRequestBody = AddLoginKey
 
@@ -151,6 +204,9 @@ type ServerInterface interface {
 	// GetEnvironment One environment
 	// (GET /environments/{id})
 	GetEnvironment(w http.ResponseWriter, r *http.Request, id ID)
+	// SeeAgent Say the user has looked at an agent's session
+	// (POST /environments/{id}/agents/{session}/seen)
+	SeeAgent(w http.ResponseWriter, r *http.Request, id ID, session string)
 	// StartEnvironment Ask for an environment to run
 	// (POST /environments/{id}/start)
 	StartEnvironment(w http.ResponseWriter, r *http.Request, id ID)
@@ -160,6 +216,18 @@ type ServerInterface interface {
 	// SuspendEnvironment Ask for an environment to suspend, keeping its memory on disk
 	// (POST /environments/{id}/suspend)
 	SuspendEnvironment(w http.ResponseWriter, r *http.Request, id ID)
+	// EndTask Mark an environment's task done, leaving it none
+	// (DELETE /environments/{id}/task)
+	EndTask(w http.ResponseWriter, r *http.Request, id ID)
+	// SetTask Set what an environment is for, ending its task before
+	// (PUT /environments/{id}/task)
+	SetTask(w http.ResponseWriter, r *http.Request, id ID)
+	// ListTasks An environment's tasks, newest first, its task among them
+	// (GET /environments/{id}/tasks)
+	ListTasks(w http.ResponseWriter, r *http.Request, id ID)
+	// StreamEvents Changes to the environments the user can reach, as they happen
+	// (GET /events)
+	StreamEvents(w http.ResponseWriter, r *http.Request)
 	// GetMe The signed-in user, and how to reach their environments over SSH
 	// (GET /me)
 	GetMe(w http.ResponseWriter, r *http.Request)
@@ -214,6 +282,41 @@ func (siw *ServerInterfaceWrapper) GetEnvironment(w http.ResponseWriter, r *http
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetEnvironment(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SeeAgent operation middleware
+func (siw *ServerInterfaceWrapper) SeeAgent(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "session" -------------
+	var session string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "session", r.PathValue("session"), &session, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "session", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SeeAgent(w, r, id, session)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -292,6 +395,98 @@ func (siw *ServerInterfaceWrapper) SuspendEnvironment(w http.ResponseWriter, r *
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SuspendEnvironment(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// EndTask operation middleware
+func (siw *ServerInterfaceWrapper) EndTask(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.EndTask(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetTask operation middleware
+func (siw *ServerInterfaceWrapper) SetTask(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetTask(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTasks operation middleware
+func (siw *ServerInterfaceWrapper) ListTasks(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTasks(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StreamEvents operation middleware
+func (siw *ServerInterfaceWrapper) StreamEvents(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StreamEvents(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -486,6 +681,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/start", wrapper.StartEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/stop", wrapper.StopEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/suspend", wrapper.SuspendEnvironment)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/environments/{id}/task", wrapper.EndTask)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/environments/{id}/task", wrapper.SetTask)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}/tasks", wrapper.ListTasks)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/agents/{session}/seen", wrapper.SeeAgent)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/events", wrapper.StreamEvents)
 
 	return m
 }
@@ -574,6 +774,51 @@ func (response GetEnvironment401JSONResponse) VisitGetEnvironmentResponse(w http
 type GetEnvironment404JSONResponse struct{ NotFoundJSONResponse }
 
 func (response GetEnvironment404JSONResponse) VisitGetEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SeeAgentRequestObject struct {
+	ID      ID     `json:"id"`
+	Session string `json:"session"`
+}
+
+type SeeAgentResponseObject interface {
+	VisitSeeAgentResponse(w http.ResponseWriter) error
+}
+
+type SeeAgent204Response struct {
+}
+
+func (response SeeAgent204Response) VisitSeeAgentResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type SeeAgent401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SeeAgent401JSONResponse) VisitSeeAgentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SeeAgent404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SeeAgent404JSONResponse) VisitSeeAgentResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -777,6 +1022,229 @@ func (response SuspendEnvironment409JSONResponse) VisitSuspendEnvironmentRespons
 	return err
 }
 
+type EndTaskRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type EndTaskResponseObject interface {
+	VisitEndTaskResponse(w http.ResponseWriter) error
+}
+
+type EndTask204Response struct {
+}
+
+func (response EndTask204Response) VisitEndTaskResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type EndTask401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response EndTask401JSONResponse) VisitEndTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type EndTask404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response EndTask404JSONResponse) VisitEndTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetTaskRequestObject struct {
+	ID   ID `json:"id"`
+	Body *SetTaskJSONRequestBody
+}
+
+type SetTaskResponseObject interface {
+	VisitSetTaskResponse(w http.ResponseWriter) error
+}
+
+type SetTask200JSONResponse Task
+
+func (response SetTask200JSONResponse) VisitSetTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetTask400JSONResponse struct{ InvalidJSONResponse }
+
+func (response SetTask400JSONResponse) VisitSetTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetTask401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SetTask401JSONResponse) VisitSetTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetTask404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetTask404JSONResponse) VisitSetTaskResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTasksRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type ListTasksResponseObject interface {
+	VisitListTasksResponse(w http.ResponseWriter) error
+}
+
+type ListTasks200JSONResponse []Task
+
+func (response ListTasks200JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTasks401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListTasks401JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTasks404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListTasks404JSONResponse) VisitListTasksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StreamEventsRequestObject struct {
+}
+
+type StreamEventsResponseObject interface {
+	VisitStreamEventsResponse(w http.ResponseWriter) error
+}
+
+type StreamEvents200TextEventStreamResponse struct {
+	Body          io.Reader
+	ContentLength int64
+}
+
+func (response StreamEvents200TextEventStreamResponse) VisitStreamEventsResponse(w http.ResponseWriter) error {
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	if response.ContentLength != 0 {
+		w.Header().Set("Content-Length", fmt.Sprint(response.ContentLength))
+	}
+	w.WriteHeader(200)
+
+	if closer, ok := response.Body.(io.ReadCloser); ok {
+		defer closer.Close()
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		// If w doesn't support flushing, fall back to io.Copy.
+		_, err := io.Copy(w, response.Body)
+		return err
+	}
+	// text/event-stream messages are typically small; use a
+	// modest buffer and flush after each chunk so clients see
+	// events immediately instead of waiting on OS buffering.
+	buf := make([]byte, 4096)
+	for {
+		n, err := response.Body.Read(buf)
+		if n > 0 {
+			if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+				return writeErr
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
+	}
+}
+
+type StreamEvents401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response StreamEvents401JSONResponse) VisitStreamEventsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetMeRequestObject struct {
 }
 
@@ -926,6 +1394,9 @@ type StrictServerInterface interface {
 	// GetEnvironment One environment
 	// (GET /environments/{id})
 	GetEnvironment(ctx context.Context, request GetEnvironmentRequestObject) (GetEnvironmentResponseObject, error)
+	// SeeAgent Say the user has looked at an agent's session
+	// (POST /environments/{id}/agents/{session}/seen)
+	SeeAgent(ctx context.Context, request SeeAgentRequestObject) (SeeAgentResponseObject, error)
 	// StartEnvironment Ask for an environment to run
 	// (POST /environments/{id}/start)
 	StartEnvironment(ctx context.Context, request StartEnvironmentRequestObject) (StartEnvironmentResponseObject, error)
@@ -935,6 +1406,18 @@ type StrictServerInterface interface {
 	// SuspendEnvironment Ask for an environment to suspend, keeping its memory on disk
 	// (POST /environments/{id}/suspend)
 	SuspendEnvironment(ctx context.Context, request SuspendEnvironmentRequestObject) (SuspendEnvironmentResponseObject, error)
+	// EndTask Mark an environment's task done, leaving it none
+	// (DELETE /environments/{id}/task)
+	EndTask(ctx context.Context, request EndTaskRequestObject) (EndTaskResponseObject, error)
+	// SetTask Set what an environment is for, ending its task before
+	// (PUT /environments/{id}/task)
+	SetTask(ctx context.Context, request SetTaskRequestObject) (SetTaskResponseObject, error)
+	// ListTasks An environment's tasks, newest first, its task among them
+	// (GET /environments/{id}/tasks)
+	ListTasks(ctx context.Context, request ListTasksRequestObject) (ListTasksResponseObject, error)
+	// StreamEvents Changes to the environments the user can reach, as they happen
+	// (GET /events)
+	StreamEvents(ctx context.Context, request StreamEventsRequestObject) (StreamEventsResponseObject, error)
 	// GetMe The signed-in user, and how to reach their environments over SSH
 	// (GET /me)
 	GetMe(ctx context.Context, request GetMeRequestObject) (GetMeResponseObject, error)
@@ -1038,6 +1521,33 @@ func (sh *strictHandler) GetEnvironment(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
+// SeeAgent operation middleware
+func (sh *strictHandler) SeeAgent(w http.ResponseWriter, r *http.Request, id ID, session string) {
+	var request SeeAgentRequestObject
+
+	request.ID = id
+	request.Session = session
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SeeAgent(ctx, request.(SeeAgentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SeeAgent")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SeeAgentResponseObject); ok {
+		if err := validResponse.VisitSeeAgentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // StartEnvironment operation middleware
 func (sh *strictHandler) StartEnvironment(w http.ResponseWriter, r *http.Request, id ID) {
 	var request StartEnvironmentRequestObject
@@ -1109,6 +1619,115 @@ func (sh *strictHandler) SuspendEnvironment(w http.ResponseWriter, r *http.Reque
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SuspendEnvironmentResponseObject); ok {
 		if err := validResponse.VisitSuspendEnvironmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// EndTask operation middleware
+func (sh *strictHandler) EndTask(w http.ResponseWriter, r *http.Request, id ID) {
+	var request EndTaskRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.EndTask(ctx, request.(EndTaskRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "EndTask")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(EndTaskResponseObject); ok {
+		if err := validResponse.VisitEndTaskResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetTask operation middleware
+func (sh *strictHandler) SetTask(w http.ResponseWriter, r *http.Request, id ID) {
+	var request SetTaskRequestObject
+
+	request.ID = id
+
+	var body SetTaskJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetTask(ctx, request.(SetTaskRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetTask")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetTaskResponseObject); ok {
+		if err := validResponse.VisitSetTaskResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListTasks operation middleware
+func (sh *strictHandler) ListTasks(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ListTasksRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTasks(ctx, request.(ListTasksRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTasks")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListTasksResponseObject); ok {
+		if err := validResponse.VisitListTasksResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StreamEvents operation middleware
+func (sh *strictHandler) StreamEvents(w http.ResponseWriter, r *http.Request) {
+	var request StreamEventsRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StreamEvents(ctx, request.(StreamEventsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StreamEvents")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StreamEventsResponseObject); ok {
+		if err := validResponse.VisitStreamEventsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

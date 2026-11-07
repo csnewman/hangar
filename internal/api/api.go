@@ -319,9 +319,13 @@ type Environment struct {
 	// worker has said.
 	Monitor string `json:"monitor,omitempty"`
 	// Suspends is whether its worker can suspend it.
-	Suspends  bool      `json:"suspends,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	Suspends bool `json:"suspends,omitempty"`
+	// Task is what it is for at the moment; nil when nobody has said.
+	Task *Task `json:"task,omitempty"`
+	// Agents are the coding agents' sessions in it, oldest first.
+	Agents    []AgentSession `json:"agents,omitempty"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
 }
 
 // The monitors a worker runs environments under.

@@ -154,6 +154,99 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /environments/{id}/task:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: setTask
+      summary: Set what an environment is for, ending its task before
+      description: >-
+        The text is kept on one line, its spaces collapsed, and has 1 to 200
+        characters. The same text as the environment's task is that task.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetTask" }
+      responses:
+        "200":
+          description: The environment's task.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Task" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: endTask
+      summary: Mark an environment's task done, leaving it none
+      responses:
+        "204": { description: The task is done, or there was none. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /environments/{id}/tasks:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listTasks
+      summary: An environment's tasks, newest first, its task among them
+      responses:
+        "200":
+          description: The tasks.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Task" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /environments/{id}/agents/{session}/seen:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: session
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      operationId: seeAgent
+      summary: Say the user has looked at an agent's session
+      description: >-
+        A client says so when the session is in front of the user: its
+        terminal visible in a focused window. A session that asked or
+        finished before then stops needing them.
+      responses:
+        "204": { description: Recorded. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /events:
+    get:
+      operationId: streamEvents
+      summary: Changes to the environments the user can reach, as they happen
+      description: >-
+        Server-sent events. The stream starts with an environment event for
+        each environment the user can reach, then a synced event; after that
+        each change to one is an environment event with all of it, and an
+        environment deleted, or no longer reachable, is a removed event.
+        Changes close together may arrive as one. A comment line is sent
+        every 30 seconds when nothing else is. A client that loses the
+        stream opens it again, and is sent everything again. More event
+        types may come; ignore one you do not know.
+
+
+        event: environment, data: an Environment.
+        event: removed, data: {"id": "..."}.
+        event: synced, data: {}.
+      responses:
+        "200":
+          description: The stream.
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
 components:
   securitySchemes:
     token:
@@ -320,6 +413,11 @@ components:
           description: Its display -- none or desktop. More may come.
         cpus: { type: integer }
         memory_mib: { type: integer }
+        task: { $ref: "#/components/schemas/Task" }
+        agents:
+          type: array
+          description: The coding agents' sessions in it, oldest first.
+          items: { $ref: "#/components/schemas/AgentSession" }
         created_at: { type: string, format: date-time }
         updated_at:
           type: string
@@ -340,3 +438,64 @@ components:
         total: { type: integer, format: int64 }
         unit: { type: string }
         rate: { type: number }
+
+    Task:
+      type: object
+      description: >-
+        What an environment is for: a line its coding agent sets as it
+        works, or its owner does.
+      required: [id, text, set_by, set_at]
+      properties:
+        id: { type: string }
+        text: { type: string }
+        set_by:
+          type: string
+          description: Who set it -- agent or user. More may come.
+        set_at: { type: string, format: date-time }
+        done_at:
+          type: string
+          format: date-time
+          description: When it was done, or replaced by another. Absent for the environment's task.
+
+    SetTask:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string }
+
+    AgentSession:
+      type: object
+      description: >-
+        A coding agent's session in an environment, as the agent's hooks
+        report it: what it is doing, never prompts, commands or file
+        contents.
+      required: [id, agent, state, since, needs_you]
+      properties:
+        id:
+          type: string
+          description: The agent's own ID for the session.
+        agent:
+          type: string
+          description: Which agent -- claude or codex. More may come.
+        terminal:
+          type: string
+          description: The terminal session it runs in, when it runs in one.
+        state:
+          type: string
+          description: >-
+            asking (it wants a decision), finished (its turn ended and the
+            user has not looked since), working, idle, or ended (its program
+            exited). More may come; treat one you do not know as working.
+        step:
+          type: string
+          description: What a working session is doing, such as "Edit src/main.go".
+        message:
+          type: string
+          description: What an asking session asks, in the agent's words.
+        since:
+          type: string
+          format: date-time
+          description: When it took its state.
+        needs_you:
+          type: boolean
+          description: Whether it asks or has finished, and the user has not looked since.

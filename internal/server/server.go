@@ -93,6 +93,7 @@ type Server struct {
 	db        *db.DB
 	frontend  http.Handler
 	client    http.Handler
+	changes   *environments.Changes
 	envHosts  *editor.Gateway
 	hostSigns *editor.Manager
 	tunnels   *tunnel.Registry
@@ -204,8 +205,10 @@ func New(cfg Config) (*Server, error) {
 	if envHosts != nil {
 		cfgAPI.Hosts = envHosts
 	}
+	changes := environments.NewChanges()
 	client := clientapi.Config{
 		Environments: cfgAPI.Environments,
+		Changes:      changes,
 		Users:        um,
 		Profiles:     profiles,
 		Log:          log,
@@ -221,6 +224,7 @@ func New(cfg Config) (*Server, error) {
 		db:           cfg.DB,
 		frontend:     frontend,
 		client:       clientapi.New(client),
+		changes:      changes,
 		envHosts:     envHosts,
 		hostSigns:    hostSigns,
 		tunnels:      tunnels,
@@ -257,6 +261,8 @@ func (s *Server) Run(ctx context.Context) {
 			s.sessions.Changed(payload)
 		case placement.Channel, workers.CapacityChannel:
 			s.kickPlacement()
+		case environments.Channel:
+			s.changes.Publish(payload)
 		case "":
 			// Reconnected: anything sent meanwhile is lost, so assume
 			// everything changed.
@@ -264,8 +270,9 @@ func (s *Server) Run(ctx context.Context) {
 			s.kickPlacement()
 			s.sessions.Changed("")
 			s.sessions.Kick()
+			s.changes.Publish("")
 		}
-	}, workers.Channel, workers.CapacityChannel, placement.Channel, profile.Channel, packs.Channel)
+	}, workers.Channel, workers.CapacityChannel, placement.Channel, profile.Channel, packs.Channel, environments.Channel)
 	go s.sessions.Run(ctx)
 	if s.sshListen != "" {
 		go s.serveSSH(ctx)

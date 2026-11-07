@@ -40,6 +40,9 @@ type Config struct {
 	Environments *environments.Manager
 	Users        *users.Manager
 	Profiles     *profile.Store
+	// Changes are the environments' changes, for the event stream. Nil
+	// streams only what is there when it opens.
+	Changes *environments.Changes
 	// SSH is where the SSH gateway is reached. Nil when there is none.
 	SSH *SSHGateway
 	Log *slog.Logger
@@ -49,6 +52,7 @@ type handler struct {
 	envs     *environments.Manager
 	users    *users.Manager
 	profiles *profile.Store
+	changes  *environments.Changes
 	ssh      *SSHGateway
 	log      *slog.Logger
 }
@@ -65,7 +69,11 @@ type principalKey struct{}
 // New returns the API, to be mounted at the root of a mux: its routes carry
 // their full /api/v1 paths.
 func New(cfg Config) http.Handler {
-	h := &handler{envs: cfg.Environments, users: cfg.Users, profiles: cfg.Profiles, ssh: cfg.SSH, log: cfg.Log}
+	h := &handler{envs: cfg.Environments, users: cfg.Users, profiles: cfg.Profiles, changes: cfg.Changes, ssh: cfg.SSH,
+		log: cfg.Log}
+	if h.changes == nil {
+		h.changes = environments.NewChanges()
+	}
 	strict := NewStrictHandlerWithOptions(h, []StrictMiddlewareFunc{signedIn}, StrictHTTPServerOptions{
 		RequestErrorHandlerFunc: func(w http.ResponseWriter, r *http.Request, err error) {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -74,7 +82,7 @@ func New(cfg Config) http.Handler {
 			switch {
 			case errors.Is(err, errUnauthorized):
 				writeError(w, http.StatusUnauthorized, err.Error())
-			case errors.Is(err, context.Canceled):
+			case errors.Is(err, context.Canceled) || r.Context().Err() != nil:
 			default:
 				cfg.Log.Error("client API request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 				writeError(w, http.StatusInternalServerError, "internal error")
@@ -350,6 +358,18 @@ func environment(e api.Environment) Environment {
 	if len(e.Spec.Projects) > 1 {
 		out.WorkspaceFile = optional(api.WorkspaceFile)
 	}
+	if t := e.Task; t != nil {
+		task := task(*t)
+		out.Task = &task
+	}
+	if len(e.Agents) > 0 {
+		agents := make([]AgentSession, len(e.Agents))
+		for i, a := range e.Agents {
+			agents[i] = AgentSession{ID: a.ID, Agent: a.Agent, Terminal: optional(a.Terminal), State: string(a.State),
+				Step: optional(a.Step), Message: optional(a.Message), Since: a.Since, NeedsYou: a.NeedsYou()}
+		}
+		out.Agents = &agents
+	}
 	if p := e.Progress; p != nil {
 		sp := &StartProgress{Step: string(p.Step)}
 		if p.Total > 0 {
@@ -363,4 +383,58 @@ func environment(e api.Environment) Environment {
 		out.Progress = sp
 	}
 	return out
+}
+
+func task(t api.Task) Task {
+	return Task{ID: t.ID, Text: t.Text, SetBy: t.SetBy, SetAt: t.SetAt, DoneAt: t.DoneAt}
+}
+
+func (h *handler) SetTask(ctx context.Context, req SetTaskRequestObject) (SetTaskResponseObject, error) {
+	t, err := h.envs.SetTask(ctx, principal(ctx), req.ID, req.Body.Text)
+	switch {
+	case errors.Is(err, environments.ErrNotFound):
+		return SetTask404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
+	case errors.Is(err, environments.ErrInvalid):
+		return SetTask400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return SetTask200JSONResponse(task(t)), nil
+}
+
+func (h *handler) EndTask(ctx context.Context, req EndTaskRequestObject) (EndTaskResponseObject, error) {
+	err := h.envs.EndTask(ctx, principal(ctx), req.ID)
+	switch {
+	case errors.Is(err, environments.ErrNotFound):
+		return EndTask404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return EndTask204Response{}, nil
+}
+
+func (h *handler) ListTasks(ctx context.Context, req ListTasksRequestObject) (ListTasksResponseObject, error) {
+	list, err := h.envs.Tasks(ctx, principal(ctx), req.ID)
+	switch {
+	case errors.Is(err, environments.ErrNotFound):
+		return ListTasks404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	out := make(ListTasks200JSONResponse, len(list))
+	for i, t := range list {
+		out[i] = task(t)
+	}
+	return out, nil
+}
+
+func (h *handler) SeeAgent(ctx context.Context, req SeeAgentRequestObject) (SeeAgentResponseObject, error) {
+	err := h.envs.SeenAgent(ctx, principal(ctx), req.ID, req.Session)
+	switch {
+	case errors.Is(err, environments.ErrNotFound):
+		return SeeAgent404JSONResponse{NotFoundJSONResponse{Error: "no such session"}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return SeeAgent204Response{}, nil
 }

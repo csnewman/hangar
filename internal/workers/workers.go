@@ -554,6 +554,15 @@ func (m *Manager) ReportStatus(ctx context.Context, workerID string, st api.Work
 				update, rollback); err != nil {
 				return err
 			}
+			// The agents' sessions end with the machine; a suspended one's
+			// carry on when it resumes.
+			switch o.Phase {
+			case api.PhaseStarting, api.PhaseRunning, api.PhaseSuspending, api.PhaseSuspended:
+			default:
+				if _, err := tx.Exec(ctx, `DELETE FROM agent_sessions WHERE environment_id = $1`, o.ID); err != nil {
+					return err
+				}
+			}
 		}
 
 		removed := false
