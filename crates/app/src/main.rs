@@ -9,21 +9,24 @@ use gpui_platform::application;
 use hangar_app::{places, shell::Shell};
 
 fn main() {
-    application().run(|cx| {
-        gpui_component::init(cx);
-        let places = places::from_env(cx);
-        let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                ..TitleBar::window_options()
-            },
-            |window, cx| {
-                let shell = cx.new(|cx| Shell::new(places, window, cx));
-                cx.new(|cx| Root::new(shell, window, cx))
-            },
-        )
-        .expect("opening the window");
-        cx.activate(true);
-    });
+    application()
+        .with_assets(hangar_app::assets::Assets)
+        .run(|cx| {
+            gpui_component::init(cx);
+            let places = places::from_env(cx);
+            let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(bounds)),
+                    ..TitleBar::window_options()
+                },
+                |window, cx| {
+                    hangar_app::palette::sync(Some(window), cx);
+                    let shell = cx.new(|cx| Shell::new(places, window, cx));
+                    cx.new(|cx| Root::new(shell, window, cx))
+                },
+            )
+            .expect("opening the window");
+            cx.activate(true);
+        });
 }

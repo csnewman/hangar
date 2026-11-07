@@ -28,17 +28,20 @@ impl Rank {
     }
 }
 
-/// The colour a status is drawn in.
+/// The colour a status is drawn in: the design's status dots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tone {
     /// Wants a decision.
-    Ask,
-    /// Done, to be looked at.
-    Done,
-    Failed,
+    Wait,
+    /// Done, to be looked at; or online.
+    Good,
+    Bad,
     /// Something is running.
     Busy,
-    Quiet,
+    /// Nothing is happening.
+    Idle,
+    /// Kept for later: suspended. Drawn hollow.
+    Ring,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,6 +49,7 @@ pub enum LineKind {
     /// What an agent asks.
     Question,
     Plain,
+    /// Quieter detail.
     Muted,
 }
 
@@ -79,7 +83,7 @@ impl Action {
     }
 }
 
-/// An environment as Home shows it.
+/// An environment as Home and the sidebar show it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Card {
     pub place: String,
@@ -96,11 +100,16 @@ pub struct Card {
     pub lines: Vec<Line>,
     pub rank: Rank,
     pub tone: Tone,
-    /// "Asking · 3m".
+    /// The card's footer: "Asking · 3m".
     pub status: String,
+    /// The sidebar row's second line: "Claude is asking: run the
+    /// migration? · 3m".
+    pub summary: String,
     pub action: Option<Action>,
     /// The agent's session the card is about, if any.
     pub session: Option<String>,
+    /// Whether it is as last known, its place not being online.
+    pub stale: bool,
 }
 
 /// The session that says most about an environment: the most urgent, then
@@ -110,7 +119,6 @@ fn lead(agents: &[AgentSession]) -> Option<&AgentSession> {
         "asking" if a.needs_you => 0,
         "finished" if a.needs_you => 1,
         "asking" => 2,
-        "ended" => 5,
         "idle" | "finished" => 4,
         _ => 3,
     };
@@ -140,6 +148,15 @@ pub fn age(since: DateTime<Utc>, now: DateTime<Utc>) -> String {
     }
 }
 
+/// "2h ago", "yesterday", "just now".
+fn ago(since: DateTime<Utc>, now: DateTime<Utc>) -> String {
+    match age(since, now).as_str() {
+        "now" => "just now".into(),
+        "yesterday" => "yesterday".into(),
+        a => format!("{a} ago"),
+    }
+}
+
 fn start_step(step: &str) -> &str {
     match step {
         "download" => "Downloading the image",
@@ -154,6 +171,19 @@ fn start_step(step: &str) -> &str {
     }
 }
 
+/// A step as the middle of a sentence: "Run the tests" becomes "run the
+/// tests", and "API docs" stays as it is.
+fn lower_first(s: &str) -> String {
+    let mut chars = s.chars();
+    let (Some(first), second) = (chars.next(), s.chars().nth(1)) else {
+        return s.to_string();
+    };
+    if second.is_some_and(char::is_uppercase) {
+        return s.to_string();
+    }
+    first.to_lowercase().chain(chars).collect()
+}
+
 fn line(text: impl Into<String>, kind: LineKind) -> Line {
     Line {
         text: text.into(),
@@ -161,82 +191,107 @@ fn line(text: impl Into<String>, kind: LineKind) -> Line {
     }
 }
 
+fn capitalised(phase: &str) -> String {
+    let mut c = phase.chars();
+    c.next()
+        .map(|f| f.to_uppercase().chain(c).collect())
+        .unwrap_or_default()
+}
+
+/// How an environment looks, apart from its lines.
+struct Look {
+    rank: Rank,
+    tone: Tone,
+    status: String,
+    summary: String,
+    action: Option<Action>,
+}
+
 /// An environment as Home shows it, at now.
 pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
     let mut lines = Vec::new();
     let lead = lead(&e.agents);
-    let (rank, tone, label, since, action) = match (e.phase.as_str(), lead) {
+    let who = lead.map(|a| agent_name(&a.agent)).unwrap_or("The agent");
+    let look = match (e.phase.as_str(), lead) {
         ("failed", _) => {
-            lines.push(line(
-                e.reason
-                    .clone()
-                    .unwrap_or_else(|| "It could not start.".into()),
-                LineKind::Plain,
-            ));
-            (
-                Rank::Failed,
-                Tone::Failed,
-                "Failed".to_string(),
-                e.updated_at,
-                Some(Action::Details),
-            )
+            let reason = e
+                .reason
+                .clone()
+                .unwrap_or_else(|| "It could not start.".into());
+            lines.push(line(reason.clone(), LineKind::Plain));
+            Look {
+                rank: Rank::Failed,
+                tone: Tone::Bad,
+                status: "Failed to start".into(),
+                summary: format!("Failed to start: {}", lower_first(&reason)),
+                action: Some(Action::Details),
+            }
         }
         ("running", Some(a)) if a.state == "asking" && a.needs_you => {
-            lines.push(line(
-                a.message
+            let question = match &a.step {
+                Some(step) => format!("{who} asks: {}?", lower_first(step)),
+                None => a
+                    .message
                     .clone()
-                    .unwrap_or_else(|| format!("{} wants a decision", agent_name(&a.agent))),
-                LineKind::Question,
-            ));
-            if let Some(step) = &a.step {
-                lines.push(line(step.clone(), LineKind::Muted));
+                    .unwrap_or_else(|| format!("{who} wants a decision")),
+            };
+            lines.push(line(question, LineKind::Question));
+            if let (Some(_), Some(m)) = (&a.step, &a.message) {
+                lines.push(line(m.clone(), LineKind::Muted));
             }
-            (
-                Rank::Asking,
-                Tone::Ask,
-                "Asking".into(),
-                a.since,
-                Some(Action::Answer),
-            )
+            let about = a
+                .step
+                .as_deref()
+                .map(lower_first)
+                .or(a.message.clone())
+                .unwrap_or_default();
+            Look {
+                rank: Rank::Asking,
+                tone: Tone::Wait,
+                status: format!("Asking · {}", age(a.since, now)),
+                summary: format!("{who} is asking: {about}? · {}", age(a.since, now)),
+                action: Some(Action::Answer),
+            }
         }
         ("running", Some(a)) if a.state == "finished" && a.needs_you => {
-            lines.push(line(
-                format!("{} finished its turn", agent_name(&a.agent)),
-                LineKind::Plain,
-            ));
-            (
-                Rank::Finished,
-                Tone::Done,
-                "Finished".into(),
-                a.since,
-                Some(Action::Review),
-            )
+            lines.push(line(format!("{who} finished its turn"), LineKind::Plain));
+            Look {
+                rank: Rank::Finished,
+                tone: Tone::Good,
+                status: format!("Finished · {}", age(a.since, now)),
+                summary: format!("{who} finished · {}", age(a.since, now)),
+                action: Some(Action::Review),
+            }
         }
         ("running", Some(a))
             if a.state != "idle" && a.state != "finished" && a.state != "asking" =>
         {
-            lines.push(line(
-                a.step.clone().unwrap_or_else(|| "Thinking".into()),
-                LineKind::Plain,
-            ));
-            let label = format!("{} working", agent_name(&a.agent));
-            (Rank::Working, Tone::Busy, label, a.since, None)
+            let step = a.step.clone().unwrap_or_else(|| "Thinking".into());
+            lines.push(line(step.clone(), LineKind::Plain));
+            Look {
+                rank: Rank::Working,
+                tone: Tone::Busy,
+                status: format!("{who} working · {}", age(a.since, now)),
+                summary: format!("{who} · {}", lower_first(&step)),
+                action: None,
+            }
         }
         ("running", lead) => {
-            lines.push(line(
-                match lead {
-                    Some(a) => format!("{} is waiting for a prompt", agent_name(&a.agent)),
-                    None => "No agent running".into(),
-                },
-                LineKind::Plain,
-            ));
-            (
-                Rank::Running,
-                Tone::Quiet,
-                "Running".into(),
-                e.updated_at,
-                Some(Action::Suspend),
-            )
+            let (text, summary) = match lead {
+                Some(_) => (
+                    format!("{who} is waiting for a prompt"),
+                    format!("{who} waiting"),
+                ),
+                None => ("No agent running".into(), "Running".into()),
+            };
+            lines.push(line(text, LineKind::Plain));
+            Look {
+                rank: Rank::Running,
+                tone: Tone::Idle,
+                status: format!("Running · {}", age(e.updated_at, now)),
+                summary: format!("{summary} · {}", age(e.updated_at, now)),
+                action: Some(Action::Suspend),
+            }
         }
         ("pending" | "starting", _) => {
             let step = e
@@ -245,37 +300,51 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
                 .map(|p| start_step(&p.step))
                 .unwrap_or("Waiting for a worker");
             lines.push(line(step, LineKind::Plain));
-            (
-                Rank::Starting,
-                Tone::Busy,
-                "Starting".into(),
-                e.updated_at,
-                None,
-            )
+            Look {
+                rank: Rank::Starting,
+                tone: Tone::Busy,
+                status: "Starting".into(),
+                summary: format!("Starting: {}", lower_first(step)),
+                action: None,
+            }
         }
         ("suspended", _) => {
+            lines.push(line(
+                format!("Suspended {}", ago(e.updated_at, now)),
+                LineKind::Plain,
+            ));
             lines.push(line("Its memory is kept on disk", LineKind::Muted));
-            (
-                Rank::Suspended,
-                Tone::Quiet,
-                "Suspended".into(),
-                e.updated_at,
-                Some(Action::Resume),
-            )
-        }
-        ("stopped", _) => (
-            Rank::Stopped,
-            Tone::Quiet,
-            "Stopped".into(),
-            e.updated_at,
-            Some(Action::Start),
-        ),
-        (phase, _) => {
-            let mut label = phase.to_string();
-            if let Some(c) = label.get_mut(0..1) {
-                c.make_ascii_uppercase();
+            Look {
+                rank: Rank::Suspended,
+                tone: Tone::Ring,
+                status: "Suspended".into(),
+                summary: format!("Suspended {}", ago(e.updated_at, now)),
+                action: Some(Action::Resume),
             }
-            (Rank::Busy, Tone::Busy, label, e.updated_at, None)
+        }
+        ("stopped", _) => {
+            lines.push(line(
+                format!("Stopped {}", ago(e.updated_at, now)),
+                LineKind::Plain,
+            ));
+            Look {
+                rank: Rank::Stopped,
+                tone: Tone::Idle,
+                status: "Stopped".into(),
+                summary: format!("Stopped {}", ago(e.updated_at, now)),
+                action: Some(Action::Start),
+            }
+        }
+        (phase, _) => {
+            let label = capitalised(phase);
+            lines.push(line(format!("{label}…"), LineKind::Plain));
+            Look {
+                rank: Rank::Busy,
+                tone: Tone::Busy,
+                summary: label.clone(),
+                status: label,
+                action: None,
+            }
         }
     };
     let others = e
@@ -307,54 +376,124 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
             None => e.template.clone(),
         },
         lines,
-        rank,
-        tone,
-        status: format!("{label} · {}", age(since, now)),
-        action,
+        rank: look.rank,
+        tone: look.tone,
+        status: look.status,
+        summary: look.summary,
+        action: look.action,
         session: lead.map(|a| a.id.clone()),
+        stale: false,
     }
+}
+
+/// A place's environments as cards, marked stale when the place cannot be
+/// reached. One still connecting shows what it last had as it is.
+fn cards_of(p: &PlaceConfig, s: &PlaceState, now: DateTime<Utc>) -> Vec<Card> {
+    let stale = !matches!(s.connection, Connection::Online | Connection::Connecting);
+    s.environments
+        .iter()
+        .map(|e| {
+            let mut c = card(p, e, now);
+            if stale {
+                c.stale = true;
+                c.action = None;
+                let when = s
+                    .synced_at
+                    .map(|t| format!(" · {}", ago(t, now)))
+                    .unwrap_or_default();
+                c.summary = format!("Last known: {}{when}", e.phase);
+            }
+            c
+        })
+        .collect()
+}
+
+fn by_attention(cards: &mut [Card]) {
+    cards.sort_by(|a, b| a.rank.cmp(&b.rank).then_with(|| a.name.cmp(&b.name)));
 }
 
 /// Home's cards: every place's environments, what needs the user first.
 pub fn home(places: &[(PlaceConfig, PlaceState)], now: DateTime<Utc>) -> Vec<Card> {
     let mut cards: Vec<Card> = places
         .iter()
-        .flat_map(|(p, s)| s.environments.iter().map(move |e| card(p, e, now)))
+        .flat_map(|(p, s)| cards_of(p, s, now))
         .collect();
-    cards.sort_by(|a, b| a.rank.cmp(&b.rank).then_with(|| a.name.cmp(&b.name)));
+    by_attention(&mut cards);
     cards
 }
 
-/// One place in the sidebar, its environments needing the user first.
+/// What a place is, as the sidebar says beside its name.
+pub fn kind(_: &PlaceConfig) -> &'static str {
+    "server"
+}
+
+/// A place's connection as the sidebar shows it: its dot, a word when it
+/// is not online, and whether that word is a warning.
+pub fn connection(c: &Connection) -> (Tone, Option<&'static str>, bool) {
+    match c {
+        Connection::Online => (Tone::Good, None, false),
+        Connection::Connecting => (Tone::Busy, Some("Connecting…"), false),
+        Connection::Offline { .. } => (Tone::Bad, Some("Offline"), true),
+        Connection::SignIn => (Tone::Busy, Some("Sign in"), true),
+        Connection::Unsupported { .. } => (Tone::Bad, Some("Needs an update"), true),
+    }
+}
+
+/// One place in the sidebar, or on Home grouped by place.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Group {
     pub place: String,
     pub name: String,
+    pub kind: &'static str,
     pub connection: Connection,
     pub rows: Vec<Card>,
 }
 
+/// The sidebar: each place, its environments needing the user first, the
+/// rest by name.
 pub fn sidebar(places: &[(PlaceConfig, PlaceState)], now: DateTime<Utc>) -> Vec<Group> {
     places
         .iter()
         .map(|(p, s)| {
-            let mut rows: Vec<Card> = s.environments.iter().map(|e| card(p, e, now)).collect();
+            let mut rows = cards_of(p, s, now);
             rows.sort_by(|a, b| {
-                b.rank
-                    .needs_you()
-                    .cmp(&a.rank.needs_you())
-                    .then_with(|| match a.rank.needs_you() {
-                        true => a.rank.cmp(&b.rank),
-                        false => std::cmp::Ordering::Equal,
+                let (an, bn) = (a.rank.needs_you(), b.rank.needs_you());
+                bn.cmp(&an)
+                    .then_with(|| {
+                        if an {
+                            a.rank.cmp(&b.rank)
+                        } else {
+                            std::cmp::Ordering::Equal
+                        }
                     })
                     .then_with(|| a.name.cmp(&b.name))
             });
             Group {
                 place: p.id.clone(),
                 name: p.name.clone(),
+                kind: kind(p),
                 connection: s.connection.clone(),
                 rows,
             }
         })
+        .collect()
+}
+
+/// Home grouped by place, each place's cards by attention.
+pub fn home_by_place(places: &[(PlaceConfig, PlaceState)], now: DateTime<Utc>) -> Vec<Group> {
+    let mut groups = sidebar(places, now);
+    for g in &mut groups {
+        by_attention(&mut g.rows);
+    }
+    groups
+}
+
+/// The environments running with nothing to do: no agent working or
+/// waiting on the user. "Suspend idle" suspends them.
+pub fn idle(cards: &[Card]) -> Vec<(String, String)> {
+    cards
+        .iter()
+        .filter(|c| c.rank == Rank::Running && !c.stale)
+        .map(|c| (c.place.clone(), c.env.clone()))
         .collect()
 }

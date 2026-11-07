@@ -2,7 +2,9 @@
 //! docs/native-app.md has its plan.
 
 pub mod api;
+pub mod assets;
 pub mod model;
+pub mod palette;
 pub mod place;
 pub mod places;
 pub mod shell;

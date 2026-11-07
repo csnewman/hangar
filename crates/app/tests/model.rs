@@ -73,10 +73,13 @@ fn each_state_is_a_card() {
     assert!(c.agent_task);
     assert_eq!(
         (c.rank, c.tone, c.action),
-        (Rank::Asking, Tone::Ask, Some(Action::Answer))
+        (Rank::Asking, Tone::Wait, Some(Action::Answer))
     );
     assert_eq!(c.status, "Asking · 3m");
     assert_eq!(c.lines[0].kind, LineKind::Question);
+    assert_eq!(c.lines[0].text, "Claude asks: edit src/main.go?");
+    assert_eq!(c.lines[1].text, "Claude needs your permission to use Bash");
+    assert_eq!(c.summary, "Claude is asking: edit src/main.go? · 3m");
     assert_eq!(c.lines.last().unwrap().text, "1 more session");
     assert_eq!(c.session.as_deref(), Some("a"));
 
@@ -100,6 +103,7 @@ fn each_state_is_a_card() {
         (c.rank, c.status.as_str(), c.lines[0].text.as_str()),
         (Rank::Working, "Claude working · 14m", "Edit src/main.go")
     );
+    assert_eq!(c.summary, "Claude · edit src/main.go");
     assert_eq!(c.action, None);
 
     // Seen, a finished session is idle: the environment is just running.
@@ -118,11 +122,7 @@ fn each_state_is_a_card() {
     let c = model::card(&place(), &failed, now());
     assert_eq!(
         (c.rank, c.tone, c.lines[0].text.as_str()),
-        (
-            Rank::Failed,
-            Tone::Failed,
-            "No worker has room for 16 vCPUs"
-        )
+        (Rank::Failed, Tone::Bad, "No worker has room for 16 vCPUs")
     );
 
     let mut starting = env("search-1", "starting");
@@ -138,16 +138,17 @@ fn each_state_is_a_card() {
     );
     let c = model::card(&place(), &env("mobile-2", "suspended"), now());
     assert_eq!(
-        (c.rank, c.action, c.status.as_str()),
-        (Rank::Suspended, Some(Action::Resume), "Suspended · 2h")
+        (c.rank, c.tone, c.action),
+        (Rank::Suspended, Tone::Ring, Some(Action::Resume))
     );
+    assert_eq!(c.summary, "Suspended 2h ago");
     assert_eq!(
         model::card(&place(), &env("x", "stopped"), now()).action,
         Some(Action::Start)
     );
     assert_eq!(
         model::card(&place(), &env("x", "stopping"), now()).status,
-        "Stopping · 2h"
+        "Stopping"
     );
 }
 
@@ -211,4 +212,29 @@ fn ages() {
     ] {
         assert_eq!(model::age(now() - Duration::seconds(secs), now()), want);
     }
+}
+
+/// A place that is not online shows what was last known of it, offering
+/// nothing to do.
+#[test]
+fn an_offline_place_is_last_known() {
+    let state = PlaceState {
+        connection: Connection::Offline {
+            error: "refused".into(),
+        },
+        environments: vec![env("a", "running")],
+        synced_at: Some(now() - Duration::hours(1)),
+        ..Default::default()
+    };
+    let places = vec![(place(), state)];
+    let cards = model::home(&places, now());
+    assert!(cards[0].stale);
+    assert_eq!(cards[0].action, None);
+    assert_eq!(cards[0].summary, "Last known: running · 1h ago");
+    assert!(
+        model::idle(&cards).is_empty(),
+        "a stale environment is not suspended"
+    );
+    let groups = model::sidebar(&places, now());
+    assert_eq!(model::connection(&groups[0].connection).1, Some("Offline"));
 }

@@ -1,23 +1,31 @@
 //! The window: tabs in the title bar (Home, then each environment opened),
-//! the sidebar of every place's environments, and the tab's page.
+//! the sidebar of every place's environments, and the tab's page. Drawn to
+//! the design's Home mock.
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use gpui::{
-    App, ClickEvent, Context, Entity, Hsla, IntoElement, ParentElement, Render, SharedString,
-    Styled, Window, div, prelude::*, px,
+    AnyElement, ClickEvent, Context, Div, Entity, FontWeight, IntoElement, ParentElement, Pixels,
+    Render, SharedString, Stateful, Styled, Window, div, prelude::*, px, relative, svg,
 };
-use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::input::{Input, InputState};
-use gpui_component::{ActiveTheme, Sizable, TitleBar, h_flex, v_flex};
+use gpui_component::{TitleBar, h_flex, v_flex};
 
+use crate::assets;
 use crate::model::{self, Action, Card, LineKind, Tone};
-use crate::place::Connection;
+use crate::palette::{self, Palette};
 use crate::places::Places;
 
 /// How often the window is drawn again with nothing changed, so ages
 /// ("3m") keep up.
 const TICK: Duration = Duration::from_secs(30);
+
+/// The sidebar's width.
+const SIDEBAR: Pixels = px(240.);
+
+/// The narrowest a card on Home may be.
+const CARD_MIN: f32 = 230.;
 
 /// An environment opened in a tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,11 +34,23 @@ pub struct Opened {
     pub env: String,
 }
 
+/// How Home lays its cards out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeMode {
+    /// One grid, what needs the user first.
+    Attention,
+    /// A grid for each place.
+    Place,
+}
+
 pub struct Shell {
     places: Entity<Places>,
     tabs: Vec<Opened>,
     /// The tab shown: None is Home.
     active: Option<usize>,
+    home_mode: HomeMode,
+    /// The places whose environments the sidebar hides.
+    collapsed: HashSet<String>,
     /// The form adding a server, while it is open.
     adding: Option<AddServer>,
     /// The sessions said to be seen, so each is said once.
@@ -52,6 +72,10 @@ impl Shell {
         .detach();
         cx.observe_window_activation(window, |this, window, cx| this.tell_seen(window, cx))
             .detach();
+        cx.observe_window_appearance(window, |_, window, cx| {
+            palette::sync(Some(window), cx);
+        })
+        .detach();
         cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(TICK).await;
@@ -66,6 +90,8 @@ impl Shell {
             places,
             tabs: vec![],
             active: None,
+            home_mode: HomeMode::Attention,
+            collapsed: HashSet::new(),
             adding: None,
             told_seen: vec![],
         };
@@ -75,7 +101,7 @@ impl Shell {
         shell
     }
 
-    /// The tabs open, for tests.
+    /// The tabs open, and which is shown (None is Home).
     pub fn tabs(&self) -> (&[Opened], Option<usize>) {
         (&self.tabs, self.active)
     }
@@ -93,13 +119,20 @@ impl Shell {
                 self.tabs.len() - 1
             }
         };
+        self.adding = None;
         self.active = Some(i);
         self.tell_seen(window, cx);
         cx.notify();
     }
 
     pub fn show_home(&mut self, cx: &mut Context<Self>) {
+        self.adding = None;
         self.active = None;
+        cx.notify();
+    }
+
+    pub fn set_home_mode(&mut self, mode: HomeMode, cx: &mut Context<Self>) {
+        self.home_mode = mode;
         cx.notify();
     }
 
@@ -142,10 +175,10 @@ impl Shell {
         cx.notify();
     }
 
-    /// Says the sessions in front of the user are seen: the lead session of
-    /// the environment shown, while the window is focused.
+    /// Says the sessions in front of the user are seen: those of the
+    /// environment shown, while the window is focused.
     fn tell_seen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !window.is_window_active() {
+        if !window.is_window_active() || self.adding.is_some() {
             return;
         }
         let Some(o) = self.active.and_then(|i| self.tabs.get(i)).cloned() else {
@@ -182,50 +215,138 @@ impl Shell {
                 .update(cx, |p, cx| p.act(&card.place, &card.env, a, cx)),
         }
     }
-}
 
-fn tone(t: Tone, cx: &App) -> Hsla {
-    let th = cx.theme();
-    match t {
-        Tone::Ask => th.blue,
-        Tone::Done => th.green,
-        Tone::Failed => th.red,
-        Tone::Busy => th.yellow,
-        Tone::Quiet => th.muted_foreground,
+    fn suspend_idle(&mut self, cx: &mut Context<Self>) {
+        let cards = model::home(self.places.read(cx).list(), chrono::Utc::now());
+        for (place, env) in model::idle(&cards) {
+            self.places
+                .update(cx, |p, cx| p.act(&place, &env, Action::Suspend, cx));
+        }
     }
 }
 
-fn dot(color: Hsla) -> impl IntoElement {
-    div().size(px(8.)).rounded_full().bg(color).flex_none()
+fn tone(t: Tone, p: &Palette) -> gpui::Hsla {
+    match t {
+        Tone::Wait => p.wait,
+        Tone::Good => p.good,
+        Tone::Bad => p.bad,
+        Tone::Busy => p.busy,
+        Tone::Idle | Tone::Ring => p.idle,
+    }
+}
+
+/// A status dot, hollow for Ring.
+fn dot(t: Tone, p: &Palette) -> Div {
+    let d = div().size(px(8.)).rounded_full().flex_none();
+    match t {
+        Tone::Ring => d.border(px(1.5)).border_color(p.idle),
+        t => d.bg(tone(t, p)),
+    }
+}
+
+/// A button as the design draws one.
+fn button(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    p: &Palette,
+) -> Stateful<Div> {
+    styled_button(id, label, p.surface, p.border_strong, p.text, p.surface_2)
+}
+
+/// The one button that says what to do next.
+fn primary(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    p: &Palette,
+) -> Stateful<Div> {
+    styled_button(
+        id,
+        label,
+        p.accent,
+        p.accent,
+        p.on_accent,
+        p.accent.opacity(0.88),
+    )
+}
+
+fn styled_button(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    bg: gpui::Hsla,
+    border: gpui::Hsla,
+    fg: gpui::Hsla,
+    hover: gpui::Hsla,
+) -> Stateful<Div> {
+    div()
+        .id(id.into())
+        .flex()
+        .items_center()
+        .gap_1p5()
+        .px(px(10.))
+        .py(px(3.))
+        .rounded(px(6.))
+        .border_1()
+        .border_color(border)
+        .bg(bg)
+        .text_color(fg)
+        .text_size(px(12.))
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .hover(move |s| s.bg(hover))
+        .child(label.into())
+}
+
+/// A small outlined label: a card's place.
+fn chip(text: impl Into<SharedString>, p: &Palette) -> Div {
+    div()
+        .flex_none()
+        .px(px(5.))
+        .rounded(px(4.))
+        .border_1()
+        .border_color(p.border)
+        .text_size(px(10.))
+        .text_color(p.muted)
+        .child(text.into())
+}
+
+/// The mark beside a task the agent set.
+fn spark(p: &Palette) -> Div {
+    div().flex_none().text_color(p.accent).child("✦")
 }
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette::of(cx);
         let now = chrono::Utc::now();
         let places = self.places.read(cx);
         let groups = model::sidebar(places.list(), now);
         let cards = model::home(places.list(), now);
+        let by_place = model::home_by_place(places.list(), now);
         let error = places.error.clone();
-        let theme = cx.theme().clone();
+        let width = window.viewport_size().width;
+
+        let page = match (&self.adding, self.active) {
+            (Some(_), _) => self.add_page(&p, cx).into_any_element(),
+            (None, None) => self
+                .home(&cards, by_place, width, &p, cx)
+                .into_any_element(),
+            (None, Some(i)) => self.env_page(i, &cards, &p, cx).into_any_element(),
+        };
 
         v_flex()
             .size_full()
-            .bg(theme.background)
-            .text_color(theme.foreground)
-            .text_sm()
-            .child(self.title_bar(&cards, cx))
+            .bg(p.bg)
+            .text_color(p.text)
+            .text_size(px(12.5))
+            .line_height(relative(1.45))
+            .child(self.title_bar(&cards, &p, cx))
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
-                    .child(self.sidebar(groups, cx))
-                    .child(div().flex_1().min_w_0().h_full().overflow_hidden().child(
-                        match (&self.adding, self.active) {
-                            (Some(_), _) => self.add_page(window, cx).into_any_element(),
-                            (None, None) => self.home(cards, cx).into_any_element(),
-                            (None, Some(i)) => self.env_page(i, &cards, cx).into_any_element(),
-                        },
-                    )),
+                    .items_stretch()
+                    .child(self.sidebar(groups, &p, cx))
+                    .child(div().flex_1().min_w_0().h_full().child(page)),
             )
             .when_some(error, |this, e| {
                 this.child(
@@ -234,9 +355,11 @@ impl Render for Shell {
                         .px_3()
                         .py_1()
                         .gap_2()
-                        .bg(theme.danger)
-                        .text_color(theme.danger_foreground)
-                        .child(e)
+                        .bg(p.bad)
+                        .text_color(p.on_accent)
+                        .cursor_pointer()
+                        .child(div().flex_1().child(e))
+                        .child("Dismiss")
                         .on_click(cx.listener(|this, _, _, cx| {
                             this.places.update(cx, |p, _| p.error = None);
                             cx.notify();
@@ -247,42 +370,57 @@ impl Render for Shell {
 }
 
 impl Shell {
-    fn title_bar(&self, cards: &[Card], cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let tab = |id: SharedString, active: bool| {
+    fn title_bar(&self, cards: &[Card], p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let tab = |id: SharedString, on: bool| {
+            let hover = p.surface_2;
             h_flex()
                 .id(id)
-                .h(px(26.))
-                .px_3()
-                .gap_2()
-                .rounded_md()
-                .max_w(px(220.))
-                .when(active, |d| {
-                    d.bg(theme.tab_active)
-                        .text_color(theme.tab_active_foreground)
+                .h(px(28.))
+                .px(px(12.))
+                .gap(px(6.))
+                .rounded_t(px(6.))
+                .whitespace_nowrap()
+                .cursor_pointer()
+                .when(on, |d| {
+                    d.bg(p.surface)
+                        .text_color(p.text)
+                        .border_t_1()
+                        .border_l_1()
+                        .border_r_1()
+                        .border_color(p.border)
+                        .mb(px(-1.))
                 })
-                .when(!active, |d| {
-                    d.text_color(theme.muted_foreground)
-                        .hover(|d| d.bg(theme.muted))
-                })
+                .when(!on, |d| d.text_color(p.muted).hover(move |s| s.bg(hover)))
         };
-        let mut bar = h_flex().gap_1().child(
-            tab("tab-home".into(), self.active.is_none())
-                .child("Home")
-                .on_click(cx.listener(|this, _, _, cx| this.show_home(cx))),
+        let mut tabs = h_flex().h_full().items_end().gap(px(2.)).min_w_0().child(
+            tab(
+                "tab-home".into(),
+                self.active.is_none() && self.adding.is_none(),
+            )
+            .child("Home")
+            .on_click(cx.listener(|this, _, _, cx| this.show_home(cx))),
         );
         for (i, o) in self.tabs.iter().enumerate() {
             let card = cards.iter().find(|c| c.place == o.place && c.env == o.env);
             let title = card.map_or_else(|| "Gone".to_string(), |c| c.title.clone());
-            let color = card.map_or(theme.muted_foreground, |c| tone(c.tone, cx));
-            bar = bar.child(
-                tab(format!("tab-{i}").into(), self.active == Some(i))
-                    .child(dot(color))
-                    .child(div().truncate().child(title))
+            let on = self.active == Some(i) && self.adding.is_none();
+            tabs = tabs.child(
+                tab(format!("tab-{i}").into(), on)
+                    .when_some(card, |d, c| d.child(dot(c.tone, p)))
+                    .child(div().max_w(px(170.)).truncate().child(title))
+                    .when_some(card, |d, c| {
+                        d.child(
+                            div()
+                                .text_size(px(10.5))
+                                .text_color(p.muted)
+                                .child(c.place_name.clone()),
+                        )
+                    })
                     .child(
                         div()
                             .id(("close", i))
-                            .text_color(theme.muted_foreground)
+                            .ml_1()
+                            .text_color(p.muted)
                             .child("×")
                             .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                                 cx.stop_propagation();
@@ -290,237 +428,454 @@ impl Shell {
                             })),
                     )
                     .on_click(cx.listener(move |this, _, window, cx| {
+                        this.adding = None;
                         this.active = Some(i);
                         this.tell_seen(window, cx);
                         cx.notify();
                     })),
             );
         }
-        TitleBar::new().child(bar)
+        let waiting = cards.iter().filter(|c| c.rank.needs_you()).count();
+        TitleBar::new().bg(p.sidebar).border_color(p.border).child(
+            h_flex()
+                .size_full()
+                .gap(px(8.))
+                .pr(px(10.))
+                .child(tabs)
+                .child(div().flex_1())
+                .child(
+                    h_flex()
+                        .id("search")
+                        .gap(px(8.))
+                        .min_w(px(220.))
+                        .px(px(10.))
+                        .py(px(3.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(p.border)
+                        .bg(p.surface)
+                        .text_color(p.muted)
+                        .child("⌘K")
+                        .child("Go to environment, file or command"),
+                )
+                .child(
+                    div()
+                        .id("bell")
+                        .relative()
+                        .ml(px(6.))
+                        .text_color(p.muted)
+                        .cursor_pointer()
+                        .child(
+                            svg()
+                                .path(assets::icon("bell"))
+                                .size(px(17.))
+                                .text_color(p.muted),
+                        )
+                        .when(waiting > 0, |d| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .right(px(-7.))
+                                    .top(px(-5.))
+                                    .px(px(4.))
+                                    .rounded(px(7.))
+                                    .bg(p.wait)
+                                    .text_color(gpui::white())
+                                    .text_size(px(9.))
+                                    .line_height(px(14.))
+                                    .child(waiting.to_string()),
+                            )
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.show_home(cx))),
+                ),
+        )
     }
 
-    fn sidebar(&self, groups: Vec<model::Group>, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
+    fn sidebar(
+        &self,
+        groups: Vec<model::Group>,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let active = self.active.and_then(|i| self.tabs.get(i)).cloned();
         let mut list = v_flex()
             .id("sidebar-list")
             .flex_1()
+            .min_h_0()
             .overflow_y_scroll()
-            .gap_3()
-            .py_2();
+            .gap(px(6.));
         for g in groups {
-            let state = match &g.connection {
-                Connection::Online => None,
-                Connection::Connecting => Some("Connecting…".to_string()),
-                Connection::Offline { .. } => Some("Offline".to_string()),
-                Connection::SignIn => Some("Sign in".to_string()),
-                Connection::Unsupported { .. } => Some("Needs an update".to_string()),
-            };
-            let mut group = v_flex().gap_px().child(
+            let (ctone, state, warn) = model::connection(&g.connection);
+            let open = !self.collapsed.contains(&g.place);
+            let id = g.place.clone();
+            let mut group = v_flex().gap(px(1.)).child(
                 h_flex()
-                    .px_3()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
+                    .id(SharedString::from(format!("place-{}", g.place)))
+                    .gap(px(6.))
+                    .px(px(6.))
+                    .pt(px(6.))
+                    .pb(px(3.))
+                    .text_size(px(11.5))
+                    .whitespace_nowrap()
+                    .cursor_pointer()
+                    .child(
+                        svg()
+                            .path(assets::icon(if open {
+                                "chevron-down"
+                            } else {
+                                "chevron-right"
+                            }))
+                            .size(px(10.))
+                            .flex_none()
+                            .text_color(p.muted),
+                    )
+                    .child(dot(ctone, p))
                     .child(
                         div()
-                            .flex_1()
+                            .min_w_0()
                             .truncate()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .font_weight(FontWeight::SEMIBOLD)
                             .child(g.name.clone()),
                     )
-                    .when_some(state, |d, s| d.child(s)),
-            );
-            if g.rows.is_empty() {
-                group = group.child(
-                    div()
-                        .px_3()
-                        .py_1()
-                        .text_color(theme.muted_foreground)
-                        .child("No environments"),
-                );
-            }
-            for c in g.rows {
-                let selected = active
-                    .as_ref()
-                    .is_some_and(|o| o.place == c.place && o.env == c.env);
-                let (place, env) = (c.place.clone(), c.env.clone());
-                group = group.child(
-                    h_flex()
-                        .id(SharedString::from(format!("row-{}-{}", c.place, c.env)))
-                        .mx_1()
-                        .px_2()
-                        .py_1()
-                        .gap_2()
-                        .rounded_md()
-                        .items_start()
-                        .when(selected, |d| d.bg(theme.sidebar_accent))
-                        .hover(|d| d.bg(theme.sidebar_accent))
-                        .child(div().pt(px(5.)).child(dot(tone(c.tone, cx))))
-                        .child(
-                            v_flex()
-                                .min_w_0()
-                                .flex_1()
-                                .child(
-                                    h_flex()
-                                        .gap_1()
-                                        .child(div().truncate().child(c.title.clone()))
-                                        .when(c.agent_task, |d| {
-                                            d.child(div().text_color(theme.blue).child("✦"))
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .truncate()
-                                        .text_xs()
-                                        .text_color(theme.muted_foreground)
-                                        .child(format!("{} · {}", c.subtitle, c.status)),
-                                ),
+                    .child(div().text_size(px(10.)).text_color(p.muted).child(g.kind))
+                    .when_some(state, |d, s| {
+                        d.child(
+                            div()
+                                .ml_auto()
+                                .text_size(px(10.5))
+                                .text_color(if warn { p.busy } else { p.muted })
+                                .child(s),
                         )
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            this.adding = None;
-                            this.open(&place, &env, window, cx)
-                        })),
-                );
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.collapsed.remove(&id) {
+                            this.collapsed.insert(id.clone());
+                        }
+                        cx.notify();
+                    })),
+            );
+            if open {
+                if g.rows.is_empty() {
+                    group = group.child(
+                        div()
+                            .pl(px(18.))
+                            .py(px(3.))
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child("No environments"),
+                    );
+                }
+                for c in g.rows {
+                    let on = active
+                        .as_ref()
+                        .is_some_and(|o| o.place == c.place && o.env == c.env);
+                    group = group.child(self.row(c, on, p, cx));
+                }
             }
             list = list.child(group);
         }
+        let new_url = self
+            .places
+            .read(cx)
+            .list()
+            .iter()
+            .find(|(_, s)| s.connection == crate::place::Connection::Online)
+            .map(|(c, _)| c.url.clone());
         v_flex()
-            .w(px(264.))
-            .h_full()
+            .w(SIDEBAR)
             .flex_none()
-            .bg(theme.sidebar)
+            .h_full()
+            .bg(p.sidebar)
             .border_r_1()
-            .border_color(theme.sidebar_border)
+            .border_color(p.border)
+            .px(px(8.))
+            .py(px(10.))
+            .gap(px(2.))
+            .child(h_flex().px(px(4.)).pt(px(2.)).pb(px(6.)).child(
+                primary("new-env", "+ New environment", p).on_click(cx.listener(
+                    move |_, _, _, cx| {
+                        // Until the app has its own sheet, the server's
+                        // web UI makes environments.
+                        if let Some(url) = &new_url {
+                            cx.open_url(url);
+                        }
+                    },
+                )),
+            ))
             .child(list)
             .child(
                 div()
-                    .p_2()
-                    .border_t_1()
-                    .border_color(theme.sidebar_border)
-                    .child(
-                        Button::new("add-server")
-                            .ghost()
-                            .small()
-                            .label("Add a server…")
-                            .on_click(cx.listener(|this, _, window, cx| this.open_add(window, cx))),
-                    ),
+                    .id("add-place")
+                    .px(px(8.))
+                    .py(px(6.))
+                    .text_size(px(11.5))
+                    .text_color(p.muted)
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(p.text))
+                    .child("+ Add a place")
+                    .on_click(cx.listener(|this, _, window, cx| this.open_add(window, cx))),
             )
     }
 
-    fn home(&self, cards: Vec<Card>, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let mut grid = h_flex().flex_wrap().gap_3().items_stretch();
-        for c in cards {
-            grid = grid.child(self.card(c, cx));
+    fn row(&self, c: Card, on: bool, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let (place, env) = (c.place.clone(), c.env.clone());
+        let need = c.rank.needs_you() && !c.stale;
+        let hover = p.sidebar_active;
+        let sub = if c.title != c.name {
+            format!("{} · {}", c.name, c.summary)
+        } else {
+            c.summary.clone()
+        };
+        h_flex()
+            .id(SharedString::from(format!("row-{}-{}", c.place, c.env)))
+            .items_start()
+            .gap(px(8.))
+            .pl(px(18.))
+            .pr(px(8.))
+            .py(px(5.))
+            .rounded(px(6.))
+            .cursor_pointer()
+            .when(need, |d| d.bg(p.warn_bg))
+            .when(on, |d| d.bg(p.sidebar_active))
+            .when(!on, move |d| d.hover(move |s| s.bg(hover.opacity(0.6))))
+            .when(c.stale, |d| d.opacity(0.55))
+            .child(div().pt(px(5.)).child(dot(c.tone, p)))
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .flex_1()
+                    .child(
+                        h_flex()
+                            .gap_1()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .truncate()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(c.title.clone()),
+                            )
+                            .when(c.agent_task, |d| d.child(spark(p))),
+                    )
+                    .child(
+                        div()
+                            .mt(px(-3.))
+                            .truncate()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child(sub),
+                    ),
+            )
+            .on_click(cx.listener(move |this, _, window, cx| this.open(&place, &env, window, cx)))
+    }
+
+    fn home(
+        &self,
+        cards: &[Card],
+        by_place: Vec<model::Group>,
+        width: Pixels,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let room = f32::from(width) - f32::from(SIDEBAR) - 32.;
+        let cols = ((room + 10.) / (CARD_MIN + 10.)).floor().clamp(1., 4.) as u16;
+        let idle = model::idle(cards).len();
+        let seg = |id: &'static str, mode: HomeMode, first: bool| {
+            let on = self.home_mode == mode;
+            div()
+                .id(id)
+                .px(px(10.))
+                .py(px(2.))
+                .cursor_pointer()
+                .when(!first, |d| d.border_l_1().border_color(p.border))
+                .when(on, |d| {
+                    d.bg(p.accent_soft)
+                        .text_color(p.accent)
+                        .font_weight(FontWeight::SEMIBOLD)
+                })
+                .when(!on, |d| d.text_color(p.muted))
+                .on_click(cx.listener(move |this, _, _, cx| this.set_home_mode(mode, cx)))
+        };
+        let head = h_flex()
+            .gap(px(10.))
+            .mb(px(12.))
+            .child(
+                div()
+                    .text_size(px(16.))
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("All environments"),
+            )
+            .child(
+                h_flex()
+                    .rounded(px(6.))
+                    .border_1()
+                    .border_color(p.border)
+                    .overflow_hidden()
+                    .child(seg("by-attention", HomeMode::Attention, true).child("By attention"))
+                    .child(seg("by-place", HomeMode::Place, false).child("By place")),
+            )
+            .child(div().flex_1())
+            .when(idle > 0, |d| {
+                d.child(
+                    button("suspend-idle", format!("Suspend idle ({idle})"), p)
+                        .on_click(cx.listener(|this, _, _, cx| this.suspend_idle(cx))),
+                )
+            });
+        let grid =
+            |cards: Vec<AnyElement>| div().grid().grid_cols(cols).gap(px(10.)).children(cards);
+        let mut body = v_flex().gap(px(14.));
+        match self.home_mode {
+            HomeMode::Attention => {
+                body = body.child(grid(
+                    cards
+                        .iter()
+                        .map(|c| self.card(c.clone(), p, cx).into_any_element())
+                        .collect(),
+                ));
+            }
+            HomeMode::Place => {
+                for g in by_place {
+                    let (ctone, state, warn) = model::connection(&g.connection);
+                    body = body.child(
+                        v_flex()
+                            .gap(px(8.))
+                            .child(
+                                h_flex()
+                                    .gap(px(7.))
+                                    .child(dot(ctone, p))
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .child(g.name.clone()),
+                                    )
+                                    .child(
+                                        div().text_size(px(11.)).text_color(p.muted).child(g.kind),
+                                    )
+                                    .when_some(state, |d, s| {
+                                        d.child(
+                                            div()
+                                                .text_size(px(11.))
+                                                .text_color(if warn { p.busy } else { p.muted })
+                                                .child(s),
+                                        )
+                                    }),
+                            )
+                            .child(grid(
+                                g.rows
+                                    .into_iter()
+                                    .map(|c| self.card(c, p, cx).into_any_element())
+                                    .collect(),
+                            )),
+                    );
+                }
+            }
+        }
+        if cards.is_empty() {
+            body = body.child(
+                div()
+                    .text_color(p.muted)
+                    .child("No environments yet. Make one with + New environment."),
+            );
         }
         v_flex()
             .id("home")
             .size_full()
             .overflow_y_scroll()
-            .p_4()
-            .gap_3()
-            .child(
-                div()
-                    .text_base()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("All environments"),
-            )
-            .child(grid)
-            .when(
-                self.places
-                    .read(cx)
-                    .list()
-                    .iter()
-                    .all(|(_, s)| s.environments.is_empty()),
-                |d| {
-                    d.child(
-                        div()
-                            .text_color(theme.muted_foreground)
-                            .child("No environments yet."),
-                    )
-                },
-            )
+            .px(px(16.))
+            .py(px(14.))
+            .child(head)
+            .child(body)
     }
 
-    fn card(&self, c: Card, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
-        let color = tone(c.tone, cx);
-        let border = if c.rank.needs_you() {
-            color
-        } else {
-            theme.border
-        };
-        let mut body = v_flex().gap_1().flex_1().pt_1();
+    fn card(&self, c: Card, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let attn = c.rank == model::Rank::Asking && !c.stale;
+        let fail = c.rank == model::Rank::Failed && !c.stale;
+        let mut body = v_flex()
+            .gap(px(2.))
+            .px(px(10.))
+            .pt(px(2.))
+            .pb(px(8.))
+            .min_h(px(52.))
+            .text_size(px(11.5));
         for l in &c.lines {
             body = body.child(match l.kind {
                 LineKind::Question => div()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                    .font_weight(FontWeight::SEMIBOLD)
                     .child(l.text.clone()),
                 LineKind::Plain => div().truncate().child(l.text.clone()),
                 LineKind::Muted => div()
                     .truncate()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
+                    .text_size(px(11.))
+                    .text_color(p.muted)
                     .child(l.text.clone()),
             });
         }
         let (place, env) = (c.place.clone(), c.env.clone());
-        let action = c.action;
         let card_for_action = c.clone();
         v_flex()
             .id(SharedString::from(format!("card-{}-{}", c.place, c.env)))
-            .w(px(272.))
-            .min_h(px(156.))
-            .p_3()
-            .gap_1()
-            .rounded_lg()
+            .min_w_0()
+            .rounded(px(8.))
+            .overflow_hidden()
+            .bg(p.surface)
             .border_1()
-            .border_color(border)
-            .bg(theme.background)
+            .border_color(p.border)
+            .cursor_pointer()
+            .when(attn, |d| d.border_2().border_color(p.wait))
+            .when(fail, |d| d.border_color(p.bad))
+            .when(c.stale, |d| d.opacity(0.6))
             .child(
                 h_flex()
-                    .gap_2()
-                    .child(dot(color))
+                    .gap(px(7.))
+                    .px(px(10.))
+                    .pt(px(8.))
+                    .pb(px(4.))
+                    .child(dot(c.tone, p))
                     .child(
                         div()
-                            .flex_1()
+                            .min_w_0()
                             .truncate()
-                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
                             .child(c.title.clone()),
                     )
-                    .when(c.agent_task, |d| {
-                        d.child(div().text_color(theme.blue).child("✦"))
-                    }),
+                    .when(c.agent_task, |d| d.child(spark(p))),
             )
             .child(
                 h_flex()
-                    .gap_2()
-                    .text_xs()
-                    .text_color(theme.muted_foreground)
-                    .child(div().flex_1().truncate().child(c.subtitle.clone()))
+                    .gap(px(10.))
+                    .px(px(10.))
+                    .pb(px(6.))
+                    .text_size(px(11.))
+                    .text_color(p.muted)
                     .child(
                         div()
-                            .px_1()
-                            .rounded_sm()
-                            .border_1()
-                            .border_color(theme.border)
-                            .child(c.place_name.clone()),
-                    ),
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .child(c.subtitle.clone()),
+                    )
+                    .child(chip(c.place_name.clone(), p)),
             )
             .child(body)
             .child(
                 h_flex()
-                    .gap_2()
-                    .child(dot(color))
-                    .child(div().flex_1().text_xs().child(c.status.clone()))
-                    .when_some(action, |d, a| {
+                    .mt_auto()
+                    .gap(px(6.))
+                    .px(px(10.))
+                    .pt(px(7.))
+                    .pb(px(9.))
+                    .text_size(px(11.5))
+                    .child(dot(c.tone, p))
+                    .child(div().flex_1().truncate().child(c.status.clone()))
+                    .when_some(c.action, |d, a| {
                         d.child(
-                            Button::new(SharedString::from(format!("act-{}-{}", c.place, c.env)))
-                                .small()
-                                .outline()
-                                .label(a.label())
-                                .on_click(cx.listener(move |this, _, window, cx| {
+                            button(format!("act-{}-{}", c.place, c.env), a.label(), p)
+                                .py(px(1.))
+                                .px(px(8.))
+                                .text_size(px(11.))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, window, cx| {
+                                    cx.stop_propagation();
                                     this.action(&card_for_action, a, window, cx)
                                 })),
                         )
@@ -529,8 +884,13 @@ impl Shell {
             .on_click(cx.listener(move |this, _, window, cx| this.open(&place, &env, window, cx)))
     }
 
-    fn env_page(&self, i: usize, cards: &[Card], cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
+    fn env_page(
+        &self,
+        i: usize,
+        cards: &[Card],
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let Some(o) = self.tabs.get(i) else {
             return v_flex();
         };
@@ -542,133 +902,133 @@ impl Shell {
         let (Some(card), Some(env)) = (card, env) else {
             return v_flex()
                 .p_4()
+                .text_color(p.muted)
                 .child("This environment has been deleted, or is out of reach.");
         };
-        let mut agents = v_flex().gap_2();
+        let mut agents = v_flex().gap(px(8.));
         for a in &env.agents {
             agents = agents.child(
                 v_flex()
-                    .p_2()
-                    .rounded_md()
+                    .p(px(10.))
+                    .rounded(px(8.))
+                    .bg(p.surface)
                     .border_1()
-                    .border_color(if a.needs_you {
-                        theme.blue
-                    } else {
-                        theme.border
-                    })
+                    .border_color(if a.needs_you { p.wait } else { p.border })
                     .child(
                         h_flex()
-                            .gap_2()
+                            .gap(px(8.))
                             .child(
                                 div()
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
+                                    .font_weight(FontWeight::SEMIBOLD)
                                     .child(a.agent.clone()),
                             )
+                            .child(div().text_color(p.muted).child(a.state.clone()))
                             .child(
                                 div()
-                                    .text_color(theme.muted_foreground)
-                                    .child(a.state.clone()),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(theme.muted_foreground)
+                                    .text_size(px(11.))
+                                    .text_color(p.muted)
                                     .child(model::age(a.since, chrono::Utc::now())),
                             ),
                     )
                     .when_some(a.message.clone(), |d, m| d.child(m))
                     .when_some(a.step.clone(), |d, s| {
-                        d.child(div().text_color(theme.muted_foreground).child(s))
+                        d.child(div().text_color(p.muted).child(s))
                     }),
             );
         }
         v_flex()
-            .p_4()
-            .gap_3()
+            .size_full()
+            .px(px(16.))
+            .py(px(14.))
+            .gap(px(10.))
             .child(
-                h_flex().gap_2().child(dot(tone(card.tone, cx))).child(
-                    div()
-                        .text_base()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(card.title.clone()),
-                ),
+                h_flex()
+                    .gap(px(8.))
+                    .child(dot(card.tone, p))
+                    .child(
+                        div()
+                            .text_size(px(16.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(card.title.clone()),
+                    )
+                    .when(card.agent_task, |d| d.child(spark(p))),
             )
-            .child(div().text_color(theme.muted_foreground).child(format!(
+            .child(div().text_color(p.muted).child(format!(
                 "{} · {} · {}",
                 env.name, card.place_name, card.status
             )))
-            .child(
-                div()
-                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .child("Agents"),
-            )
+            .child(div().font_weight(FontWeight::SEMIBOLD).child("Agents"))
             .child(if env.agents.is_empty() {
-                agents.child(
-                    div()
-                        .text_color(theme.muted_foreground)
-                        .child("No agent sessions."),
-                )
+                agents.child(div().text_color(p.muted).child("No agent sessions."))
             } else {
                 agents
             })
     }
 
-    fn add_page(&self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme().clone();
+    fn add_page(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(add) = &self.adding else {
             return v_flex();
         };
         let first = self.places.read(cx).list().is_empty();
         v_flex().size_full().items_center().justify_center().child(
             v_flex()
-                .w(px(420.))
-                .gap_3()
-                .p_4()
-                .rounded_lg()
+                .w(px(440.))
+                .gap(px(12.))
+                .p(px(18.))
+                .rounded(px(10.))
+                .bg(p.surface)
                 .border_1()
-                .border_color(theme.border)
+                .border_color(p.border)
                 .child(
                     div()
-                        .text_base()
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_size(px(16.))
+                        .font_weight(FontWeight::SEMIBOLD)
                         .child("Add a Hangar server"),
                 )
                 .child(
                     div()
-                        .text_color(theme.muted_foreground)
+                        .text_color(p.muted)
                         .child("Its address, and an access token made on its Account page."),
                 )
                 .child(
                     v_flex()
-                        .gap_1()
-                        .child("Address")
+                        .gap(px(4.))
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(p.muted)
+                                .child("Address"),
+                        )
                         .child(Input::new(&add.url)),
                 )
                 .child(
                     v_flex()
-                        .gap_1()
-                        .child("Access token")
+                        .gap(px(4.))
+                        .child(
+                            div()
+                                .text_size(px(11.5))
+                                .text_color(p.muted)
+                                .child("Access token"),
+                        )
                         .child(Input::new(&add.token)),
                 )
                 .when_some(add.error.clone(), |d, e| {
-                    d.child(div().text_color(theme.red).child(e))
+                    d.child(div().text_color(p.bad).child(e))
                 })
                 .child(
                     h_flex()
-                        .gap_2()
+                        .gap(px(8.))
                         .justify_end()
                         .when(!first, |d| {
-                            d.child(Button::new("add-cancel").ghost().label("Cancel").on_click(
-                                cx.listener(|this, _, _, cx| {
+                            d.child(button("add-cancel", "Cancel", p).on_click(cx.listener(
+                                |this, _, _, cx| {
                                     this.adding = None;
                                     cx.notify();
-                                }),
-                            ))
+                                },
+                            )))
                         })
                         .child(
-                            Button::new("add-submit")
-                                .primary()
-                                .label("Add")
+                            primary("add-submit", "Add", p)
                                 .on_click(cx.listener(|this, _, _, cx| this.submit_add(cx))),
                         ),
                 ),
