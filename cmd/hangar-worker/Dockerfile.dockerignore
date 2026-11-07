@@ -5,6 +5,10 @@
 !go.sum
 !cmd/
 !internal/
+!crates/Cargo.toml
+!crates/Cargo.lock
+!crates/agent/
+!crates/proto/
 !fs/Cargo.toml
 !fs/Cargo.lock
 !fs/src/

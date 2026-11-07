@@ -29,6 +29,12 @@ limactl shell hangar bash -c "
     /usr/local/go/bin/go build -o /var/tmp/hangar-worker-krun ./cmd/hangar-worker
     CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath -ldflags '-s -w' \
         -o /var/tmp/hangar-agent-guest ./cmd/hangar-agent
+    # Its Rust half, static against musl, beside it: the Code tab's service.
+    # Built on the VM's own disk, the Mac's mount being slow.
+    (. \$HOME/.cargo/env && cd crates && CARGO_TARGET_DIR=/var/tmp/hangar-crates \
+        cargo build -q --release --target \$(uname -m)-unknown-linux-musl -p hangar-agent)
+    install -m 0755 /var/tmp/hangar-crates/\$(uname -m)-unknown-linux-musl/release/hangar-agent-rs \
+        /var/tmp/hangar-agent-guest-rs
     $stop
     sudo mkdir -p /var/lib/hangar-krun
     # hangar-krun is found on PATH, and links the VM's own virglrenderer.

@@ -668,12 +668,13 @@ struct LocalTime {
 }
 
 fn local_time(t: SystemTime) -> LocalTime {
-    let secs = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as libc::time_t;
-    local_of(secs)
+    let secs = t.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    local_of(secs as i64)
 }
 
-fn local_of(secs: libc::time_t) -> LocalTime {
-    // SAFETY: tm is plain data, which localtime_r fills in.
+fn local_of(secs: i64) -> LocalTime {
+    // SAFETY: tm is plain data, which localtime_r fills in. time_t is
+    // 64-bit on every target the agent is built for.
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
     unsafe {
         libc::localtime_r(&secs, &mut tm);
@@ -690,7 +691,7 @@ fn local_of(secs: libc::time_t) -> LocalTime {
 
 /// A time as a zip has it: two-second time, and date from 1980.
 fn dos_time(mtime: i64) -> (u16, u16) {
-    let t = local_of(mtime as libc::time_t);
+    let t = local_of(mtime);
     let y = t.year.max(1980) as u32;
     (
         ((t.hour << 11) | (t.minute << 5) | (t.second >> 1)) as u16,

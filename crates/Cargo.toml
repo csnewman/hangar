@@ -17,3 +17,6 @@ libc = "0.2"
 notify = "8"
 regex = "1"
 tokio = { version = "1", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+
+[profile.release]
+strip = true
