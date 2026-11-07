@@ -12,3 +12,7 @@ a file's history, and finding and replacing in a folder
 the repositories in a folder: submodules, clones within it, and a folder of clones
 files, git and a shared document
 a link is the file it leads to, as the editor shows it
+copying, moving, the trash, uploads and downloads
+permissions, line separators, encodings, and git's ignores
+previewing files over HTTP, only under the secret path
+docker: containers, actions, logs and changes

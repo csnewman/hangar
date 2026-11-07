@@ -9,8 +9,10 @@ use tokio::net::UnixStream;
 use tokio::sync::{broadcast, mpsc};
 use tokio::task::JoinHandle;
 
+use super::docker::{Action, DockerListening};
 use super::docs::SharedDoc;
 use super::error::{Error, Result};
+use super::fileops::{Clash, Encoding, Separator};
 use super::files::{Listening, Run, writable};
 use super::frame;
 use super::git::Named;
@@ -28,6 +30,8 @@ pub struct Connection {
     /// Which tab this is, among everyone's.
     id: u64,
     state: Mutex<State>,
+    /// The container logs the tab follows, by its number for each.
+    logs: Arc<Mutex<HashMap<u32, JoinHandle<()>>>>,
 }
 
 struct State {
@@ -35,6 +39,9 @@ struct State {
     /// The shared documents the tab has open, by its number for each.
     docs: HashMap<u32, Arc<SharedDoc>>,
     next_doc: u32,
+    next_log: u32,
+    /// Docker, watched once the tab asks of it.
+    docker: Option<(JoinHandle<()>, DockerListening)>,
     /// Forwards the folder's file and git changes to the tab.
     watching: Option<Watching>,
 }
@@ -68,10 +75,13 @@ pub async fn run(stream: UnixStream, s: Arc<Services>) {
         s: s.clone(),
         out: out.clone(),
         id: NEXT.fetch_add(1, Ordering::Relaxed),
+        logs: Arc::new(Mutex::new(HashMap::new())),
         state: Mutex::new(State {
             folder,
             docs: HashMap::new(),
             next_doc: 1,
+            next_log: 1,
+            docker: None,
             watching: None,
         }),
     });
@@ -107,10 +117,16 @@ pub async fn run(stream: UnixStream, s: Arc<Services>) {
     let open: Vec<_> = {
         let mut st = conn.state.lock().unwrap();
         st.watching = None;
+        if let Some((t, _)) = st.docker.take() {
+            t.abort();
+        }
         st.docs.drain().collect()
     };
     for (n, doc) in open {
         doc.leave(conn.id, n);
+    }
+    for (_, t) in conn.logs.lock().unwrap().drain() {
+        t.abort();
     }
     drop(conn);
     drop(out);
@@ -403,6 +419,152 @@ impl Connection {
             "fs.delete" => {
                 files.remove(p.str("path")?).await?;
                 Value::Null
+            }
+            "fs.transfer" => {
+                let op = p.str("op")?;
+                let clash_name = p.str("clash")?;
+                let move_ = match op {
+                    "copy" => false,
+                    "move" => true,
+                    _ => return Err(Error::msg(format!("no such operation: {op}"))),
+                };
+                let Some(clash) = Clash::parse(clash_name) else {
+                    return Err(Error::msg(format!("no such choice: {clash_name}")));
+                };
+                let name = p.opt("name").map(str::to_owned);
+                to_value(
+                    files
+                        .transfer(move_, &p.strs("from")?, p.str("to")?, clash, name)
+                        .await?,
+                )
+            }
+            "fs.trash" => to_value(files.trash(&p.strs("paths")?).await?),
+            "fs.restore" => {
+                let items = match p.get("items") {
+                    Some(Value::Array(items)) => items
+                        .iter()
+                        .map(|t| {
+                            let s = |k: &str| match t.get(k) {
+                                Some(Value::String(s)) => s.clone(),
+                                Some(v) => v.to_string(),
+                                None => "undefined".into(),
+                            };
+                            (s("path"), s("id"))
+                        })
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                files.restore(items).await?;
+                Value::Null
+            }
+            "fs.uploadStart" => Value::String(files.upload_start(p.str("path")?)?),
+            "fs.uploadWrite" => {
+                files.upload_write(p.str("token")?, p.str("data")?)?;
+                Value::Null
+            }
+            "fs.uploadEnd" => Value::String(files.upload_end(p.str("token")?, p.flag("replace"))?),
+            "fs.uploadAbort" => {
+                files.upload_abort(p.str("token")?);
+                Value::Null
+            }
+            "fs.zip" => to_value(files.zip(&p.strs("paths")?).await?),
+            "fs.unzip" => {
+                files.unzip(p.str("path")?).await;
+                Value::Null
+            }
+            "fs.setMode" => {
+                let b = |k: &str| p.get(k).and_then(Value::as_bool);
+                json!(
+                    files
+                        .set_mode(p.str("path")?, b("exec"), b("writable"))
+                        .await?
+                )
+            }
+            "fs.textProps" => to_value(files.text_props(p.str("path")?).await?),
+            "fs.convert" => {
+                let separator = match p.opt("separator") {
+                    Some(s) => Some(
+                        Separator::parse(s)
+                            .ok_or_else(|| Error::msg(format!("no such separator: {s}")))?,
+                    ),
+                    None => None,
+                };
+                let encoding = match p.opt("encoding") {
+                    Some(e) => Some(
+                        Encoding::parse(e)
+                            .ok_or_else(|| Error::msg(format!("no such encoding: {e}")))?,
+                    ),
+                    None => None,
+                };
+                let bom = p.get("bom").and_then(Value::as_bool);
+                to_value(
+                    files
+                        .convert(p.str("path")?, separator, encoding, bom)
+                        .await?,
+                )
+            }
+            "docker.overview" => {
+                let watching = self.state.lock().unwrap().docker.is_some();
+                if !watching {
+                    let (rx, listening) = self.s.docker.listen();
+                    let t = forward(rx, self.out.clone(), "docker.changed", |()| json!({}));
+                    self.state.lock().unwrap().docker = Some((t, listening));
+                }
+                to_value(self.s.docker.overview().await)
+            }
+            "docker.act" => {
+                let action = p.str("action")?;
+                let Some(a) = Action::parse(action) else {
+                    return Err(Error::msg(format!("no such action: {action}")));
+                };
+                self.s.docker.act(p.str("id")?, &a).await?;
+                Value::Null
+            }
+            "docker.project" => {
+                let action = p.str("action")?;
+                if !["start", "stop", "restart", "down"].contains(&action) {
+                    return Err(Error::msg(format!("no such action: {action}")));
+                }
+                self.s.docker.project(p.str("project")?, action).await?;
+                Value::Null
+            }
+            "docker.removeImage" => {
+                self.s.docker.remove_image(p.str("id")?).await?;
+                Value::Null
+            }
+            "docker.logs" => {
+                let n = {
+                    let mut st = self.state.lock().unwrap();
+                    st.next_log += 1;
+                    st.next_log - 1
+                };
+                let (out, logs) = (self.out.clone(), self.logs.clone());
+                let out2 = out.clone();
+                let t = self.s.docker.logs(
+                    p.str("id")?.to_owned(),
+                    p.num("tail").unwrap_or(1000.0),
+                    move |text| {
+                        let _ = send_json(&out, &json!({ "event": "docker.log", "params": { "stream": n, "text": text } }));
+                    },
+                    move |why| {
+                        if logs.lock().unwrap().remove(&n).is_some() {
+                            let _ = send_json(&out2, &json!({ "event": "docker.logEnd", "params": { "stream": n, "why": why } }));
+                        }
+                    },
+                );
+                self.logs.lock().unwrap().insert(n, t);
+                json!({ "stream": n })
+            }
+            "docker.logsStop" => {
+                let n = p.num("stream").unwrap_or(0.0) as u32;
+                if let Some(t) = self.logs.lock().unwrap().remove(&n) {
+                    t.abort();
+                }
+                Value::Null
+            }
+            "preview.start" => {
+                let (port, secret) = self.s.preview.start().await?;
+                json!({ "port": port, "secret": secret })
             }
             "workspace.get" => to_value(self.s.workspace.get().await),
             "workspace.set" => to_value(

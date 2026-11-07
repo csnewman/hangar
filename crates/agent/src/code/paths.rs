@@ -43,3 +43,19 @@ pub fn relative(from: &Path, to: &Path) -> PathBuf {
     }
     out
 }
+
+/// Whether `p` is `base` or inside it.
+pub fn within(base: &Path, p: &Path) -> bool {
+    let rel = relative(base, p);
+    !rel.starts_with("..") && !rel.is_absolute()
+}
+
+/// An absolute path as a tab names it: from `root` when inside it.
+pub fn named(root: &Path, abs: &Path) -> String {
+    let rel = relative(root, abs);
+    if !rel.as_os_str().is_empty() && within(root, abs) {
+        rel.display().to_string()
+    } else {
+        abs.display().to_string()
+    }
+}

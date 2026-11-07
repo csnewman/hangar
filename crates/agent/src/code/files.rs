@@ -15,7 +15,8 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::{broadcast, mpsc};
 
 use super::error::{Error, Result, at, between};
-use super::paths::{relative, resolve};
+use super::fileops::{self, Clash, Encoding, Packed, Separator, TextProps, Uploads};
+use super::paths::{named, relative, resolve};
 
 /// The largest file read for a preview.
 const MAX_READ: u64 = 4 << 20;
@@ -86,6 +87,32 @@ pub struct Files {
     root: PathBuf,
     changed: broadcast::Sender<Vec<String>>,
     watch: Mutex<Watch>,
+    uploads: Uploads,
+}
+
+#[derive(Serialize)]
+pub struct Transferred {
+    from: String,
+    to: String,
+}
+
+#[derive(Serialize)]
+pub struct TransferResult {
+    clashes: Vec<String>,
+    done: Vec<Transferred>,
+}
+
+#[derive(Serialize)]
+pub struct Trashed {
+    path: String,
+    id: String,
+}
+
+/// Runs blocking file work on the blocking pool.
+async fn blocking<T: Send + 'static>(f: impl FnOnce() -> Result<T> + Send + 'static) -> Result<T> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| Error::msg(e.to_string()))?
 }
 
 #[derive(Default)]
@@ -115,6 +142,7 @@ impl Files {
             root: root.to_path_buf(),
             changed: broadcast::channel(64).0,
             watch: Mutex::new(Watch::default()),
+            uploads: Uploads::default(),
         })
     }
 
@@ -295,6 +323,130 @@ impl Files {
         } else {
             tokio::fs::remove_file(&p).await.map_err(at(&p))
         }
+    }
+
+    /// A path to change wholesale -- move, copy, trash -- which the root, and
+    /// /, are not.
+    fn guarded(&self, path: &str) -> Result<PathBuf> {
+        let p = self.abs(path);
+        if p == self.root || p == Path::new("/") {
+            return Err(Error::msg("refusing to move the root"));
+        }
+        Ok(p)
+    }
+
+    /// Copies or moves paths into a folder, the paths it made named as the
+    /// browser named the ones it was given.
+    pub async fn transfer(
+        &self,
+        move_: bool,
+        from: &[String],
+        to: &str,
+        clash: Clash,
+        name: Option<String>,
+    ) -> Result<TransferResult> {
+        let srcs = from
+            .iter()
+            .map(|f| self.guarded(f))
+            .collect::<Result<Vec<_>>>()?;
+        let to = self.abs(to);
+        let r =
+            blocking(move || fileops::transfer(move_, &srcs, &to, clash, name.as_deref())).await?;
+        Ok(TransferResult {
+            clashes: r.clashes,
+            done: r
+                .done
+                .iter()
+                .map(|(f, t)| Transferred {
+                    from: named(&self.root, f),
+                    to: named(&self.root, t),
+                })
+                .collect(),
+        })
+    }
+
+    /// Puts paths in the desktop's trash.
+    pub async fn trash(&self, paths: &[String]) -> Result<Vec<Trashed>> {
+        let ps = paths
+            .iter()
+            .map(|p| self.guarded(p))
+            .collect::<Result<Vec<_>>>()?;
+        let out = blocking(move || fileops::trash(&ps)).await?;
+        Ok(out
+            .into_iter()
+            .map(|(p, id)| Trashed {
+                path: named(&self.root, &p),
+                id,
+            })
+            .collect())
+    }
+
+    /// Puts back what trash put there.
+    pub async fn restore(&self, items: Vec<(String, String)>) -> Result<()> {
+        let items: Vec<(PathBuf, String)> = items
+            .into_iter()
+            .map(|(p, id)| (self.abs(&p), id))
+            .collect();
+        blocking(move || fileops::restore(&items)).await
+    }
+
+    pub fn upload_start(&self, path: &str) -> Result<String> {
+        self.uploads.start(&self.abs(path))
+    }
+
+    pub fn upload_write(&self, token: &str, data: &str) -> Result<()> {
+        let bytes = BASE64
+            .decode(data.as_bytes())
+            .map_err(|e| Error::msg(e.to_string()))?;
+        self.uploads.write(token, &bytes)
+    }
+
+    pub fn upload_end(&self, token: &str, replace: bool) -> Result<String> {
+        Ok(named(&self.root, &self.uploads.end(token, replace)?))
+    }
+
+    pub fn upload_abort(&self, token: &str) {
+        self.uploads.abort(token)
+    }
+
+    /// Packs paths for downloading, into a file the browser reads with bytes
+    /// and then removes with unzip.
+    pub async fn zip(&self, paths: &[String]) -> Result<Packed> {
+        let ps: Vec<PathBuf> = paths.iter().map(|p| self.abs(p)).collect();
+        blocking(move || fileops::zip(&ps)).await
+    }
+
+    pub async fn unzip(&self, path: &str) {
+        let p = PathBuf::from(path);
+        if fileops::is_packed(&p) {
+            let _ = tokio::fs::remove_file(p).await;
+        }
+    }
+
+    pub async fn set_mode(
+        &self,
+        path: &str,
+        exec: Option<bool>,
+        writable: Option<bool>,
+    ) -> Result<u32> {
+        let p = self.abs(path);
+        blocking(move || fileops::set_mode(&p, exec, writable)).await
+    }
+
+    pub async fn text_props(&self, path: &str) -> Result<TextProps> {
+        let p = self.abs(path);
+        blocking(move || fileops::text_props(&p)).await
+    }
+
+    pub async fn convert(
+        &self,
+        path: &str,
+        separator: Option<Separator>,
+        encoding: Option<Encoding>,
+        bom: Option<bool>,
+    ) -> Result<TextProps> {
+        let p = self.abs(path);
+        blocking(move || fileops::convert(&p, separator, encoding, bom)).await
     }
 
     /// The directories whose contents changed, a few at a time, from when

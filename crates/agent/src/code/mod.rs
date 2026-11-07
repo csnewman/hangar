@@ -5,12 +5,15 @@
 
 mod child;
 mod connection;
+mod docker;
 mod docs;
 mod error;
+mod fileops;
 mod files;
 mod frame;
 mod git;
 mod paths;
+mod preview;
 mod repos;
 mod search;
 mod settings;
@@ -24,8 +27,10 @@ use std::sync::{Arc, Mutex};
 use tokio::net::UnixListener;
 use tokio::signal::unix::{SignalKind, signal};
 
+use docker::Docker;
 use docs::Documents;
 use files::Files;
+use preview::Preview;
 use repos::Repos;
 use search::Search;
 use settings::SettingsFile;
@@ -51,6 +56,9 @@ pub struct Services {
     pub docs: Arc<Documents>,
     pub settings: SettingsFile,
     pub workspace: WorkspaceFile,
+    /// Serves files over HTTP for an HTML file's preview.
+    pub preview: Preview,
+    pub docker: Arc<Docker>,
 }
 
 impl Services {
@@ -81,6 +89,8 @@ pub async fn serve(socket: PathBuf, root: PathBuf) -> std::io::Result<()> {
         docs: Documents::new(&root),
         settings: SettingsFile::new(&home),
         workspace: WorkspaceFile::new(&root),
+        preview: Preview::new(),
+        docker: Docker::new(),
         home,
         root,
     });
