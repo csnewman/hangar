@@ -8,8 +8,12 @@ license.workspace = true
 gpui = { package = "gpui-pre", version = "=0.3.11" }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
 gpui-component = "=0.9.0"
-alacritty_terminal = "0.25"
+alacritty_terminal = "0.26"
 hangar-proto = { path = "../proto" }
+async-channel = "2"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
 
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
