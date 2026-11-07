@@ -173,10 +173,40 @@ jobs:
         with:
           workspaces: crates
       - run: cargo fmt --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test
+      - run: cargo clippy --workspace --exclude hangar-app --all-targets -- -D warnings
+      - run: cargo test --workspace --exclude hangar-app
         env:
           HANGAR_REQUIRE_CODEMIRROR: 1
+
+  app:
+    # The desktop app (gpui, through gpui-component) on each platform it
+    # ships for, its editor's behaviour checked headless.
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-26.04, macos-latest, windows-latest]
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: crates
+    steps:
+      - uses: actions/checkout@v4
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            clang libfontconfig-dev libwayland-dev libxkbcommon-x11-dev \
+            libx11-xcb-dev libssl-dev libzstd-dev libasound2-dev libvulkan1 \
+            mesa-vulkan-drivers
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+          key: app
+      - run: cargo clippy -p hangar-app --all-targets -- -D warnings
+      - run: cargo test -p hangar-app --release
 
   gpu:
     # hangar-gpu links against virglrenderer with the patches in
