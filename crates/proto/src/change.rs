@@ -2,6 +2,7 @@
 //! others) so that both ends of the protocol, and a CodeMirror editor, compose
 //! and map changes identically: the same inputs give the same sections.
 
+use ropey::Rope;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
@@ -141,6 +142,45 @@ impl ChangeSet {
             pos += len;
         }
         Ok(out)
+    }
+
+    /// Applies the changes to `rope` in place. On an error the rope is as
+    /// it was: the set is for another length, or a change falls inside a
+    /// character outside the BMP, which a rope of chars cannot hold half of.
+    pub fn apply_to_rope(&self, rope: &mut Rope) -> Result<(), Error> {
+        let len = rope.len_utf16_cu();
+        if self.len() != len {
+            return Err(Error::Length {
+                expected: self.len(),
+                got: len,
+            });
+        }
+        let mut edits = vec![];
+        self.iter_changes(false, |from_a, to_a, from_b, _, text| {
+            edits.push((from_b, from_b + (to_a - from_a), text.clone()));
+        });
+        // Cloning a rope shares its nodes, so this costs only what changes.
+        let mut out = rope.clone();
+        for (from, to, text) in edits {
+            let start = char_at(&out, from)?;
+            let end = char_at(&out, to)?;
+            let insert =
+                String::from_utf16(text.units()).map_err(|_| Error::Surrogate { pos: from })?;
+            out.remove(start..end);
+            out.insert(start, &insert);
+        }
+        *rope = out;
+        Ok(())
+    }
+
+    /// Roughly how many bytes the set takes to keep.
+    pub(crate) fn weight(&self) -> usize {
+        self.sections.len() * 8
+            + self
+                .inserted
+                .iter()
+                .map(|t| t.len() * 2 + 24)
+                .sum::<usize>()
     }
 
     /// The changes that undo these, given the text they were applied to.
@@ -359,6 +399,16 @@ impl ChangeSet {
         }
         Ok(ChangeSet { sections, inserted })
     }
+}
+
+// The char index at UTF-16 position `cu`, which must not fall between the
+// halves of a surrogate pair.
+fn char_at(rope: &Rope, cu: usize) -> Result<usize, Error> {
+    let c = rope.utf16_cu_to_char(cu);
+    if rope.char_to_utf16_cu(c) != cu {
+        return Err(Error::Surrogate { pos: cu });
+    }
+    Ok(c)
 }
 
 fn safe(n: u64) -> Result<i64, Error> {

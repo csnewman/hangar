@@ -1,17 +1,23 @@
-//! Shared documents with one authority, as `@codemirror/collab` has them.
+//! Shared documents with one authority, as `@codemirror/collab` 6.1 has them,
+//! but rebasing over one update at a time on both sides.
 //!
 //! The [`Authority`] holds a document's text and the changes made to it, in
-//! order; a document's version is how many there have been. It accepts a
-//! client's changes only when they are based on its current version, so it
-//! never transforms anything. A [`Client`] keeps the changes it has made that
-//! the authority has not yet confirmed, and when others' changes reach it,
-//! rebases its own on them and tells its editor what to apply.
+//! order; a document's version is how many there have been. A client pushes
+//! all its unconfirmed changes with the version they are based on; the
+//! authority drops any it already took and rebases the rest over what came
+//! since ([`rebase`]), so a push is never refused for being behind. A
+//! [`Client`] recognises its own changes among those it receives and rebases
+//! what it still has unconfirmed on the others', telling its editor what to
+//! apply.
+//!
+//! Both sides map with the same tie-break: where a client's change and
+//! another's insert at one position, the other's, accepted first, goes first.
 
+use ropey::Rope;
 use serde::{Deserialize, Serialize};
 
 use crate::change::ChangeSet;
 use crate::error::Error;
-use crate::text::Text;
 
 /// A change as the authority ordered it, and who made it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,25 +26,39 @@ pub struct Update {
     pub client: String,
 }
 
+/// How much of its history an authority keeps by default, roughly in
+/// bytes: a client that has missed more than this opens the document again.
+pub const DEFAULT_BUDGET: usize = 32 << 20;
+
 /// One document's text and the changes that made it.
 #[derive(Clone, Debug)]
 pub struct Authority {
-    text: Text,
+    text: Rope,
     // The version of the first update kept.
     first: u64,
     updates: Vec<Update>,
+    kept: usize,
+    budget: usize,
 }
 
 impl Authority {
-    pub fn new(text: Text) -> Self {
+    pub fn new(text: Rope) -> Self {
+        Self::with_budget(text, DEFAULT_BUDGET)
+    }
+
+    /// An authority that keeps about `budget` bytes of updates, forgetting
+    /// the oldest beyond that.
+    pub fn with_budget(text: Rope, budget: usize) -> Self {
         Authority {
             text,
             first: 0,
             updates: vec![],
+            kept: 0,
+            budget,
         }
     }
 
-    pub fn text(&self) -> &Text {
+    pub fn text(&self) -> &Rope {
         &self.text
     }
 
@@ -46,50 +66,92 @@ impl Authority {
         self.first + self.updates.len() as u64
     }
 
-    /// Takes `changes` from `client`, made one after another starting at
-    /// `version`. False, and nothing taken, when `version` is not the
-    /// current one: the client has changes to receive first. An error,
-    /// and nothing taken, when a change does not fit the text.
-    pub fn push(
-        &mut self,
-        version: u64,
-        client: &str,
-        changes: &[ChangeSet],
-    ) -> Result<bool, Error> {
-        if version != self.version() {
-            return Ok(false);
+    /// Takes `changes` from `client`: all the changes it has not seen
+    /// confirmed, in order, the first based on `version`. Those already
+    /// taken are dropped and the rest rebased onto the current text. On an
+    /// error nothing is taken.
+    pub fn push(&mut self, version: u64, client: &str, changes: &[ChangeSet]) -> Result<(), Error> {
+        let over = self.since(version)?;
+        let changes = rebase(changes, client, over)?;
+        let mut text = self.text.clone();
+        for c in &changes {
+            c.apply_to_rope(&mut text)?;
         }
-        let mut text = None;
+        self.text = text;
         for c in changes {
-            text = Some(c.apply(text.as_ref().unwrap_or(&self.text))?);
+            self.kept += c.weight();
+            self.updates.push(Update {
+                changes: c,
+                client: client.to_owned(),
+            });
         }
-        if let Some(text) = text {
-            self.text = text;
+        let mut n = 0;
+        while self.kept > self.budget && n < self.updates.len() {
+            self.kept -= self.updates[n].changes.weight();
+            n += 1;
         }
-        self.updates.extend(changes.iter().map(|c| Update {
-            changes: c.clone(),
-            client: client.to_owned(),
-        }));
-        Ok(true)
+        self.updates.drain(..n);
+        self.first += n as u64;
+        Ok(())
     }
 
-    /// The updates after `version`, or None when some of them have been
-    /// forgotten: a client that far behind opens the document again.
-    pub fn since(&self, version: u64) -> Option<&[Update]> {
-        if version < self.first || version > self.version() {
-            return None;
+    /// The updates after `version`.
+    pub fn since(&self, version: u64) -> Result<&[Update], Error> {
+        if version > self.version() {
+            return Err(Error::Gap {
+                have: self.version(),
+                got: version,
+            });
         }
-        Some(&self.updates[(version - self.first) as usize..])
+        if version < self.first {
+            return Err(Error::Forgotten {
+                version,
+                first: self.first,
+            });
+        }
+        Ok(&self.updates[(version - self.first) as usize..])
     }
+}
 
-    /// Forgets the updates before `version`.
-    pub fn forget_before(&mut self, version: u64) {
-        let n = version
-            .saturating_sub(self.first)
-            .min(self.updates.len() as u64);
-        self.updates.drain(..n as usize);
-        self.first += n;
+/// `pushed`, all from `client` and based on the version before `over`,
+/// with those `over` already holds dropped and the rest moved to apply
+/// after `over`, one update at a time, exactly as the client moves them
+/// when it receives `over` ([`Client::receive`]).
+pub fn rebase(
+    pushed: &[ChangeSet],
+    client: &str,
+    over: &[Update],
+) -> Result<Vec<ChangeSet>, Error> {
+    let mut pending = pushed.to_vec();
+    for u in over {
+        step(&mut pending, client, u)?;
     }
+    Ok(pending)
+}
+
+// Moves `pending`, the unconfirmed changes of `client`, past one update,
+// returning what of the update applies after them: None when it is the
+// client's own oldest change coming back. Mapping over a composition of
+// changes is not always mapping over each in turn, so this is only ever done
+// over a single update: the authority and the client then rebase alike
+// however the updates were batched on the way.
+fn step(
+    pending: &mut Vec<ChangeSet>,
+    client: &str,
+    u: &Update,
+) -> Result<Option<ChangeSet>, Error> {
+    if u.client == client && !pending.is_empty() {
+        pending.remove(0);
+        return Ok(None);
+    }
+    let mut change = u.changes.clone();
+    let mut mapped = Vec::with_capacity(pending.len());
+    for p in pending.iter() {
+        mapped.push(p.map(&change, false)?);
+        change = change.map(p, true)?;
+    }
+    *pending = mapped;
+    Ok(Some(change))
 }
 
 /// One editor's side of a shared document.
@@ -101,7 +163,8 @@ pub struct Client {
 }
 
 impl Client {
-    /// A client that has the document at `version`, as it opened it.
+    /// A client that has the document at `version`, as it opened it. Its
+    /// `id` must be unique among the document's clients.
     pub fn new(id: impl Into<String>, version: u64) -> Self {
         Client {
             id: id.into(),
@@ -126,14 +189,16 @@ impl Client {
         }
     }
 
-    /// The changes to push, at [`Client::version`].
+    /// The changes to push, at [`Client::version`]: all of them, every time,
+    /// since the authority drops those it already has.
     pub fn pending(&self) -> &[ChangeSet] {
         &self.unconfirmed
     }
 
-    /// Takes the authority's updates from `version` on. Updates the client
-    /// has already had are skipped. Returns the change the editor applies to
-    /// its text, None when every update was its own.
+    /// Takes the authority's updates from `version` on, skipping any the
+    /// client has already had. Returns the change the editor applies to its
+    /// text, None when there is nothing to apply: `receiveUpdates` in
+    /// `@codemirror/collab` given one update at a time.
     pub fn receive(
         &mut self,
         version: u64,
@@ -149,30 +214,18 @@ impl Client {
         let Some(updates) = updates.get(skip..) else {
             return Ok(None);
         };
-        // The authority took the client's push only at its current version,
-        // so the client's own updates come first.
-        let own = updates.iter().take_while(|u| u.client == self.id).count();
-        let others = &updates[own..];
-        if others.iter().any(|u| u.client == self.id) {
-            return Err(Error::Order);
-        }
-        let mut unconfirmed = self.unconfirmed[own.min(self.unconfirmed.len())..].to_vec();
-        let Some((first, rest)) = others.split_first() else {
-            self.version += updates.len() as u64;
-            self.unconfirmed = unconfirmed;
-            return Ok(None);
-        };
-        let mut changes = first.changes.clone();
-        for u in rest {
-            changes = changes.compose(&u.changes)?;
-        }
-        for u in &mut unconfirmed {
-            let mapped = u.map(&changes, false)?;
-            changes = changes.map(u, true)?;
-            *u = mapped;
+        let mut unconfirmed = self.unconfirmed.clone();
+        let mut changes: Option<ChangeSet> = None;
+        for u in updates {
+            if let Some(c) = step(&mut unconfirmed, &self.id, u)? {
+                changes = Some(match changes {
+                    Some(prev) => prev.compose(&c)?,
+                    None => c,
+                });
+            }
         }
         self.version += updates.len() as u64;
         self.unconfirmed = unconfirmed;
-        Ok(Some(changes))
+        Ok(changes)
     }
 }

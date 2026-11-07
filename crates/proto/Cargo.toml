@@ -8,3 +8,4 @@ description = "What Hangar's app and guest agent say to each other: shared docum
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+ropey.workspace = true

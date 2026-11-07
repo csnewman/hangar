@@ -85,6 +85,17 @@ impl From<&str> for Text {
     }
 }
 
+/// The rope's text unit for unit, line breaks as they are.
+impl From<&ropey::Rope> for Text {
+    fn from(rope: &ropey::Rope) -> Self {
+        let mut units = Vec::with_capacity(rope.len_utf16_cu());
+        for chunk in rope.chunks() {
+            units.extend(chunk.encode_utf16());
+        }
+        Text(units)
+    }
+}
+
 impl fmt::Display for Text {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&String::from_utf16_lossy(&self.0))

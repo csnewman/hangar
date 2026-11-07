@@ -8,14 +8,16 @@ pub enum Error {
     Length { expected: usize, got: usize },
     /// A position lies outside the text.
     Range { pos: usize, len: usize },
+    /// A change would cut a character outside the BMP in two, or insert half
+    /// of one.
+    Surrogate { pos: usize },
     /// A change set's JSON is not the shape CodeMirror writes.
     Json(String),
-    /// Updates arrived that do not follow on from the client's version.
+    /// Updates, or a push, from a version after the one they should follow.
     Gap { have: u64, got: u64 },
-    /// A client's own update came after another client's in one batch,
-    /// which an authority accepting pushes only at its current version
-    /// never sends.
-    Order,
+    /// The authority no longer keeps the updates since `version`: the client
+    /// opens the document again.
+    Forgotten { version: u64, first: u64 },
 }
 
 impl fmt::Display for Error {
@@ -27,11 +29,19 @@ impl fmt::Display for Error {
             Error::Range { pos, len } => {
                 write!(f, "position {pos} is outside text of length {len}")
             }
+            Error::Surrogate { pos } => {
+                write!(f, "change at {pos} splits a surrogate pair")
+            }
             Error::Json(msg) => write!(f, "change set JSON: {msg}"),
             Error::Gap { have, got } => {
-                write!(f, "updates start at version {got}, after {have}")
+                write!(f, "version {got} is after {have}")
             }
-            Error::Order => write!(f, "own update after another client's"),
+            Error::Forgotten { version, first } => {
+                write!(
+                    f,
+                    "updates since {version} are gone; the first kept is {first}"
+                )
+            }
         }
     }
 }
