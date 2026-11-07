@@ -485,9 +485,6 @@ impl Connection {
             "root": self.folder().root.display().to_string(),
             "home": self.s.root.display().to_string(),
             "settings": self.s.settings.path().display().to_string(),
-            // Shared documents are edited through one authority, as
-            // @codemirror/collab has them, not as Yjs documents.
-            "docs": "collab",
         }))
     }
 

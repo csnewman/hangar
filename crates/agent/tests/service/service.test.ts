@@ -156,9 +156,6 @@ class Client {
 		return new Promise((res, rej) =>
 			this.waiting.set(id, (m) => {
 				if (m.error) return rej(new Error(m.error))
-				// hello also says how shared documents are edited, which
-				// these tests know.
-				if (method === 'hello' && m.result) delete m.result.docs
 				res(m.result)
 			}),
 		)

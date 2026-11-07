@@ -1,8 +1,4 @@
-// What every kind of shared document is to the editors that show it. The
-// Code service says which kind it holds files as (hello's docs): collab
-// documents (collab.ts) from the agent's Rust half, Yjs ones (yjs.ts) from
-// the Node service an environment started by an older worker runs until it
-// restarts.
+// What a shared document (collab.ts) is to the editors that show it.
 
 import type { Extension } from '@codemirror/state'
 import type { Command } from '@codemirror/view'
@@ -10,11 +6,9 @@ import { useEffect, useState } from 'react'
 
 export type FileUser = { name: string; color: string }
 
-// DocTransport is how a document reaches the service: requests, and the
-// Yjs channel's messages.
+// DocTransport is how a document reaches the service: its requests.
 export interface DocTransport {
   call(method: string, params: Record<string, unknown>): Promise<unknown>
-  sendYjs(n: number, msg: Uint8Array): void
 }
 
 // SharedFile is one file open for editing, shared with everyone who has it

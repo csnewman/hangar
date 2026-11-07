@@ -86,7 +86,7 @@ const router = createBrowserRouter([
               },
               {
                 path: 'code',
-                // CodeMirror and Yjs are fetched when the Code tab is first opened.
+                // CodeMirror is fetched when the Code tab is first opened.
                 lazy: async () => ({ Component: (await import('./code/CodeTab')).CodeTab }),
               },
               { path: 'logs', element: <LogsTab /> },

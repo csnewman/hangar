@@ -1040,14 +1040,6 @@
   opacity: 1;
 }
 
-/* A shared caret's name, as y-codemirror.next draws it. */
-.code-editor .cm-ySelectionInfo {
-  font-family: var(--font);
-  font-size: 10.5px;
-  padding: 1px 4px;
-  border-radius: 3px 3px 3px 0;
-  opacity: 1;
-}
 
 .code-empty {
   position: absolute;

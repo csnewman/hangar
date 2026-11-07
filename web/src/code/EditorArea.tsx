@@ -388,12 +388,6 @@ function TextTab({
     }
   }, [client, path])
 
-  // A service that holds documents as another kind took over (the
-  // environment started again under a newer worker): the file is opened
-  // again from it.
-  const [generation, setGeneration] = useState(0)
-  useEffect(() => client.on('docs.reset', () => setGeneration((g) => g + 1)), [client])
-
   useEffect(() => {
     let f: SharedFile | null = null
     let live = true
@@ -415,7 +409,7 @@ function TextTab({
       live = false
       if (f) client.release(f)
     }
-  }, [client, path, generation])
+  }, [client, path])
 
   if (error) return <div className="code-empty"><p className="code-note-error">{error}</p></div>
   if (!file) return <div className="code-empty"><p className="muted">Opening {path}…</p></div>
