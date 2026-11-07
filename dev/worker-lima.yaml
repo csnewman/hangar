@@ -39,8 +39,6 @@ vm:
   # Built by dev/lima-worker.sh for the guest: each boot's initramfs, as
   # init, and then the agent.
   agent: /var/tmp/hangar-agent-guest
-  # VS Code's server, built by `editor/build.sh` in this VM.
-  editor: /Users/csnewman/Projects/hangar/out/editor/editor-arm64.ext4
   # Environments with a virtual GPU get Vulkan too: this VM's virglrenderer
   # is built with Venus (AGENTS.md). venus_restore carries a Vulkan program
   # across a suspend, and is experimental.

@@ -21,7 +21,7 @@ import (
 // suspendedMark is written last, once all of that is complete, so a
 // machine with it is resumable and one without it boots afresh. It records
 // what the guest had open that lives outside its writable disks -- the
-// base, and any read-only disk such as the editor's -- because a guest
+// base, and any read-only disk beside it -- because a guest
 // resumed against a different one would find files it holds changed
 // underneath it.
 const (

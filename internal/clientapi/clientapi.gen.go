@@ -68,7 +68,7 @@ type Environment struct {
 	// WorkerOnline Whether the worker it is placed on has reported in the last 45 seconds. While it has not, phase is what it last reported, which may no longer be so: a worker that stopped or lost its connection leaves its environments as they were said to be.
 	WorkerOnline *bool `json:"worker_online,omitempty"`
 
-	// WorkspaceFile Where in it a VS Code workspace of its projects is, when it has more than one, for an editor to open in place of editor_path.
+	// WorkspaceFile Where in it a workspace file (.code-workspace) of its projects is, when it has more than one, for an editor to open in place of editor_path.
 	WorkspaceFile *string `json:"workspace_file,omitempty"`
 }
 

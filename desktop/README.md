@@ -11,7 +11,7 @@ The app is two things:
 - **Its own parts**, built into the app: the tab bar, the server picker
   (⌘N), the environment switcher (⌘T, ⌘L), the menu bar icon, notifications
   when an environment is ready or fails, and opening an environment in
-  desktop VS Code or a terminal. These call each server's **client API**,
+  a terminal. These call each server's **client API**,
   `/api/v1`, which is versioned: the app checks `/api/v1/version` first and
   says whether the server or the app needs updating when they do not agree.
 - **Each server's own control panel**, its web UI, shown in the tabs. It
@@ -26,7 +26,7 @@ tab, templates, profile and administration to the control panel -- so a
 link in either lands in the right tab.
 
 Right-click a tab for its menu: duplicate it, move it to a new window,
-open its environment in VS Code, a terminal or the browser, copy its link,
+open its environment in a terminal or the browser, copy its link,
 reload it, or close it, the others, or those to its left or right. Drag a
 tab to reorder it, onto another window of the same server to move it
 there, or out of the window to give it a window of its own. A server can
@@ -39,11 +39,11 @@ File → New Window opens another window of the server in front.
 
 The Environments menu is the server in front's: Go to Environment… (⌘L),
 New Environment…, and each of your environments there with its phase,
-to open in its tab, VS Code or a terminal, or to start, suspend or stop.
+to open in its tab or a terminal, or to start, suspend or stop.
 The menu bar icon has the same for every server.
 
-Every tab is a view of its own and stays alive while another is shown: VS
-Code, terminals and desktops keep everything when you move between tabs,
+Every tab is a view of its own and stays alive while another is shown: the
+Code tab, terminals and desktops keep everything when you move between tabs,
 when a tab is dragged to another window, and when it is moved to another
 of its environment's pages. A
 server's tabs share its session, so signing in once, on its own login
@@ -53,7 +53,7 @@ their tabs are restored when the app starts.
 | Keys | |
 | --- | --- |
 | ⌘N | Connect to a server: open another's window, or add one |
-| ⌘T, ⌘L | Go to an environment (↵ open, ⌘↵ VS Code, ⌥↵ terminal) |
+| ⌘T, ⌘L | Go to an environment (↵ open, ⌥↵ terminal) |
 | ⌘W | Close the tab; on the control panel, the window |
 | ⌘⇧T | Reopen the last closed tab |
 | ⌃Tab / ⌃⇧Tab, ⌘1…9 | Move between tabs |
@@ -61,14 +61,11 @@ their tabs are restored when the app starts.
 Links of the form `hangar://open?server=https://hangar.example.com&path=/environments/<id>`
 open in the app.
 
-## Opening in VS Code and a terminal
+## Opening a terminal
 
-- **VS Code** opens through the Hangar VS Code extension (`vscode/`), which
-  must be installed: the app hands it a
-  `vscode://hangar.hangar-remote/open?server=…&env=…` link.
-- **Terminal** runs `ssh` to the server's SSH gateway, with the gateway's
-  host key taken from the server, so there is nothing to confirm. It needs
-  one of your public keys under Account → Sign-in keys.
+A terminal runs `ssh` to the server's SSH gateway, with the gateway's host
+key taken from the server, so there is nothing to confirm. It needs one of
+your public keys under Account → Sign-in keys.
 
 ## Building
 

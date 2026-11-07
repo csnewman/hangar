@@ -105,9 +105,9 @@ type Spec struct {
 	Display   Display `json:"display"`
 	GPU       GPU     `json:"gpu"`
 	Repos     []Repo  `json:"repos"`
-	// Projects are the folders the environment's editors open, side by
-	// side: the Code tab's workspace to begin with, and VS Code's
-	// workspace. A template that names none has its repositories'.
+	// Projects are the folders the Code tab opens side by side, its
+	// workspace to begin with. A template that names none has its
+	// repositories'.
 	Projects []string `json:"projects,omitempty"`
 	// EditorPath is the first project: the folder the Code service and a
 	// new terminal start in, and the one an editor opens on when there is
@@ -169,11 +169,11 @@ type Access struct {
 var Untrusted = Access{NoSensitiveFiles: true, NoSSHKeys: true, NoRegistry: true, NoEditorTrust: true}
 
 // WorkspaceFile is where in the guest an environment's projects are kept,
-// as a VS Code workspace: the worker writes its spec's projects there when
-// it is first set up, the Code tab's workspace is the file's folders, which
-// it changes as the person adds and removes them, and VS Code opens it when
-// there is more than one project. It is the person's, in a folder of
-// theirs.
+// as a VS Code workspace file: the worker writes its spec's projects there
+// when it is first set up, and the Code tab's workspace is the file's
+// folders, which it changes as the person adds and removes them. An editor
+// reaching the environment over SSH can open it too. It is the person's, in
+// a folder of theirs.
 const WorkspaceFile = "/var/lib/hangar-workspace/projects.code-workspace"
 
 // CodeWorkspace is a VS Code workspace file's content: its folders.
@@ -264,8 +264,8 @@ type TemplateSpec struct {
 // Environment is the public view of one environment.
 type Environment struct {
 	ID string `json:"id"`
-	// ShortID names the environment's hosts: code<short> for its editor,
-	// <name>-env<short> for its web servers.
+	// ShortID names the environment on the whole server: its web servers'
+	// hosts, <name>-env<short>, and its user at the SSH gateway.
 	ShortID string `json:"short_id"`
 	OwnerID string `json:"owner_id"`
 	Owner   string `json:"owner"`

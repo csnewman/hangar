@@ -175,7 +175,6 @@ export const api = {
     unwrap(
       client.PUT('/api/frontend/environments/{id}/desktop/size', { params: { path: { id } }, body: { width, height } }),
     ),
-  openEditor: (id: string) => unwrap(client.POST('/api/frontend/environments/{id}/editor', byID(id))),
   environmentLog: (id: string, log: EnvironmentLogName, offset?: number) =>
     unwrap(
       client.GET('/api/frontend/environments/{id}/logs/{log}', {

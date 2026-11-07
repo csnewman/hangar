@@ -40,5 +40,3 @@ vm:
   # Built by dev/mac-worker.sh for the guest: each boot's initramfs, as
   # init, and then the agent.
   agent: /Users/csnewman/Projects/hangar/out/mac-worker/hangar-agent-guest
-  # VS Code's server, built by `editor/build.sh` in the Lima VM.
-  editor: /Users/csnewman/Projects/hangar/out/editor/editor-arm64.ext4

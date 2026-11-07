@@ -24,7 +24,7 @@ func (h *handler) SetEnvironmentPorts(ctx context.Context, req SetEnvironmentPor
 // web server is sent. It needs Hangar's session cookie, which a top-level
 // navigation carries, so it is a page load rather than a call from the UI.
 func (h *handler) SignInEnvironmentPorts(ctx context.Context, req SignInEnvironmentPortsRequestObject) (SignInEnvironmentPortsResponseObject, error) {
-	if h.editors == nil {
+	if h.hosts == nil {
 		return SignInEnvironmentPorts503JSONResponse{UnavailableJSONResponse{Error: "this Hangar has no public URL set, which environments' hosts are named after"}}, nil
 	}
 	s := sessionFrom(ctx)
@@ -40,7 +40,7 @@ func (h *handler) SignInEnvironmentPorts(ctx context.Context, req SignInEnvironm
 	case err != nil:
 		return nil, err
 	}
-	loc, err := h.editors.SignInPort(ctx, s.token, env.ID, env.ShortID, req.Params.To)
+	loc, err := h.hosts.SignInPort(ctx, s.token, env.ID, env.ShortID, req.Params.To)
 	if err != nil {
 		return SignInEnvironmentPorts400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
 	}

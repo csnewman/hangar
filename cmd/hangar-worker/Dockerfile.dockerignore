@@ -16,9 +16,7 @@
 !gpu/Cargo.lock
 !gpu/src/
 !gpu/virglrenderer/
-!editor/
 !images/
 !dev/krun-build.sh
 internal/webui/dist/app
-editor/code/node_modules
-editor/code/dist
+crates/agent/tests/service/node_modules

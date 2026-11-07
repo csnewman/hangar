@@ -57,9 +57,9 @@ type Config struct {
 	// Tunnels reaches workers, for terminals. Nil leaves terminals
 	// unavailable.
 	Tunnels Tunnels
-	// Editors signs users in to environments' editors. Nil leaves
-	// environments without an editor.
-	Editors Editors
+	// Hosts signs users in to environments' own web servers. Nil leaves
+	// environments without them.
+	Hosts Hosts
 	// AutoSignIn, for development only, signs every request that has no
 	// session in as this user. Empty requires signing in.
 	AutoSignIn string
@@ -83,7 +83,7 @@ type handler struct {
 	packs        *packs.Store
 	audit        *audit.Log
 	tunnels      Tunnels
-	editors      Editors
+	hosts        Hosts
 	// autoSignIn is Config.AutoSignIn.
 	autoSignIn string
 	ssh        *SSHGateway
@@ -110,7 +110,7 @@ func New(cfg Config) (http.Handler, error) {
 
 	h := &handler{envs: cfg.Environments, templates: cfg.Templates, teams: cfg.Teams,
 		registry: cfg.Registry, registryHost: cfg.RegistryHost, workers: cfg.Workers, users: cfg.Users,
-		profiles: cfg.Profiles, packs: cfg.Packs, audit: cfg.Audit, tunnels: cfg.Tunnels, editors: cfg.Editors, autoSignIn: cfg.AutoSignIn, ssh: cfg.SSH, socketPing: cfg.SocketPing, log: cfg.Log}
+		profiles: cfg.Profiles, packs: cfg.Packs, audit: cfg.Audit, tunnels: cfg.Tunnels, hosts: cfg.Hosts, autoSignIn: cfg.AutoSignIn, ssh: cfg.SSH, socketPing: cfg.SocketPing, log: cfg.Log}
 	if h.socketPing == 0 {
 		h.socketPing = 20 * time.Second
 	}

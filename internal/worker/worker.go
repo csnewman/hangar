@@ -136,12 +136,6 @@ type DesktopDialer interface {
 	DialDesktop(ctx context.Context, environment string) (net.Conn, error)
 }
 
-// EditorDialer is a runtime whose environments have an editor. Each
-// connection it opens carries one HTTP connection to it.
-type EditorDialer interface {
-	DialEditor(ctx context.Context, environment string) (net.Conn, error)
-}
-
 // LogFiler is a runtime whose environments' machines write logs of their
 // own: logs.Console, logs.Monitor and so on.
 type LogFiler interface {
@@ -435,16 +429,6 @@ func (w *Worker) stream(h tunnel.Header, r io.Reader, stream net.Conn) {
 			return
 		}
 		guest, err = dialer.DialTerminal(ctx, h.Environment)
-	case tunnel.KindEditor:
-		dialer, ok := w.rt.(EditorDialer)
-		if !ok {
-			cancel()
-			// The stream carries HTTP, so the refusal is an HTTP response
-			// the browser can show.
-			io.WriteString(stream, "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\nThis worker's environments have no editor.\n")
-			return
-		}
-		guest, err = dialer.DialEditor(ctx, h.Environment)
 	case tunnel.KindCode:
 		dialer, ok := w.rt.(CodeDialer)
 		if !ok {

@@ -32,7 +32,7 @@ import {
 import { join } from 'node:path'
 
 import * as api from './api'
-import { openInVSCode, openTerminal } from './launch'
+import { openTerminal } from './launch'
 import * as store from './store'
 import type { Server } from './store'
 import { watch, type ServerState } from './watch'
@@ -299,11 +299,6 @@ ipcMain.handle('env:act', async (e, serverId: string, envId: string, action: 'st
   await api.act(st.server, envId, action)
   await watch.refresh()
 })
-ipcMain.handle('env:vscode', (e, serverId: string, envId: string) => {
-  own(e)
-  const { st, e: x } = env(serverId, envId)
-  return openInVSCode(st.server, x)
-})
 ipcMain.handle('env:terminal', (e, serverId: string, envId: string) => {
   own(e)
   const { st, e: x } = env(serverId, envId)
@@ -329,10 +324,6 @@ function pageEnv(e: IpcMainInvokeEvent, envId: string) {
   return env(w.server.id, envId)
 }
 
-ipcMain.handle('page:vscode', async (e, envId: string) => {
-  const { st, e: x } = pageEnv(e, envId)
-  await openInVSCode(st.server, x)
-})
 ipcMain.handle('page:terminal', (e, envId: string) => {
   const { st, e: x } = pageEnv(e, envId)
   return st.me ? openTerminal(st.me, x) : 'not signed in'
@@ -371,7 +362,6 @@ function tabMenu(w: ServerWindow, tab: Tab): Electron.MenuItemConstructorOptions
     { label: 'Duplicate Tab', click: () => w.duplicate(tab) },
     { label: 'Move Tab to New Window', click: () => detach(w, tab) },
     { type: 'separator' },
-    { label: 'Open in VS Code', enabled: !!env && running, click: () => env && openInVSCode(w.server, env) },
     {
       label: 'Open Terminal',
       enabled: !!env && running && !!st?.me?.ssh,
@@ -413,14 +403,12 @@ watch.on('change', () => {
 // ---- Environments ----
 
 // envItems is what can be done with one of a server's environments, from a
-// menu: open it, in its tab, VS Code or a terminal, and start, suspend or
-// stop it.
+// menu: open it, in its tab or a terminal, and start, suspend or stop it.
 function envItems(st: ServerState, e: api.Environment): Electron.MenuItemConstructorOptions[] {
   const running = e.phase === 'running'
   const busy = !['running', 'stopped', 'suspended', 'failed'].includes(e.phase)
   return [
     { label: 'Open', click: () => openServer(st.server).openEnvironment(e.id) },
-    { label: 'Open in VS Code', enabled: running, click: () => openInVSCode(st.server, e) },
     { label: 'Open Terminal', enabled: running && !!st.me?.ssh, click: () => openTerminal(st.me!, e) },
     { type: 'separator' },
     {

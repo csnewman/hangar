@@ -1,7 +1,8 @@
-// A file open for editing as a Yjs document: the Node Code service's
-// (editor/code), synced over the WebSocket's 'y' channel with y-protocols'
-// sync and awareness messages. A dropped connection keeps the Y.Doc, and
-// Yjs merges what was typed meanwhile when the document syncs again.
+// A file open for editing as a Yjs document: the Node Code service's, which
+// an environment started by an older worker runs until it restarts, synced
+// over the WebSocket's 'y' channel with y-protocols' sync and awareness
+// messages. A dropped connection keeps the Y.Doc, and Yjs merges what was
+// typed meanwhile when the document syncs again.
 
 import type { Extension } from '@codemirror/state'
 import { keymap, ViewPlugin } from '@codemirror/view'

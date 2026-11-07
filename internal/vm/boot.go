@@ -170,12 +170,8 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	m.step(api.StepDisks, "preparing its disks")
 	m.makeRoomForHugePages(s.MemoryMiB)
 	// The writable layer is the first disk: the agent, as init, mounts
-	// /dev/vda. The editor disk, shared read-only by every environment, is
-	// mounted by label.
+	// /dev/vda.
 	disks := []ch.Disk{{Path: upper}}
-	if m.rt.cfg.Editor != "" {
-		disks = append(disks, ch.Disk{Path: m.rt.cfg.Editor, ReadOnly: true})
-	}
 	cfg := InstanceConfig{
 		ID:          m.id,
 		Name:        spec.Name,
@@ -308,7 +304,7 @@ func (m *machine) provision(ctx context.Context, sess *agent.Session, spec api.E
 		out, err := sess.Exec(30*time.Second, cmd...)
 		return err == nil && out.Code == 0
 	}
-	// The projects, as the workspace both editors open: written once, when
+	// The projects, as the Code tab's workspace: written once, when
 	// there is no workspace yet, the person changing it from then on. Its
 	// folder is theirs, so the Code tab can write the workspace even when
 	// the spec names no projects.

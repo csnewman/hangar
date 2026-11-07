@@ -199,10 +199,9 @@ function closeSwitcher() {
   h.overlay(false)
 }
 
-async function choose(hit: Hit, how: 'open' | 'vscode' | 'terminal') {
+async function choose(hit: Hit, how: 'open' | 'terminal') {
   closeSwitcher()
   if (how === 'open') await h.openEnv(hit.server.id, hit.env.id)
-  else if (how === 'vscode') await h.vscode(hit.server.id, hit.env.id)
   else await h.terminal(hit.server.id, hit.env.id)
 }
 
@@ -221,7 +220,7 @@ query.addEventListener('keydown', (e) => {
     renderResults()
     e.preventDefault()
   } else if (e.key === 'Enter' && hits[sel]) {
-    choose(hits[sel], e.metaKey || e.ctrlKey ? 'vscode' : e.altKey ? 'terminal' : 'open')
+    choose(hits[sel], e.altKey ? 'terminal' : 'open')
   }
 })
 overlay.addEventListener('mousedown', (e) => {

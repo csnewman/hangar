@@ -6,7 +6,7 @@ import { formatMemory, formatPercent } from '../components/format'
 import { Logo } from '../components/Logo'
 import { PhaseDot } from '../components/Status'
 import { desktop } from '../desktop'
-import { canSuspend, useEnvironmentActions, vscodeItems } from '../environmentActions'
+import { canSuspend, useEnvironmentActions } from '../environmentActions'
 import { splitByOwner, sshCommand, useEnvironments } from '../environments'
 import { useMe } from '../session'
 import { environmentTab, homeTab, otherTab } from '../workspaceLinks'
@@ -64,7 +64,6 @@ export function StatusBar({
     out.push({ label: 'Hangar Home', onSelect: () => window.open('/environments', otherTab(homeTab)) })
     out.push('separator')
     if (onEnvironment) out.push({ label: 'Environment', detail: 'details and settings', onSelect: onEnvironment })
-    out.push(...vscodeItems(env.id, running, setError))
     if (desktop) {
       out.push({
         label: 'Open a Terminal Here',
@@ -130,7 +129,7 @@ export function StatusBar({
       <button
         type="button"
         className="code-statusbar-item code-statusbar-env"
-        title={`${env.name}: Suspend, Stop, VS Code and more`}
+        title={`${env.name}: Suspend, Stop and more`}
         aria-haspopup="menu"
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect()

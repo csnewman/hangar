@@ -6,7 +6,7 @@
 #
 # Both are multi-platform, arm64 and amd64. The server cross-compiles, so one
 # runner builds both platforms. The worker builds Cloud Hypervisor, libkrun,
-# the backends, the guest kernel and VS Code for the platform it runs on, so
+# the backends and the guest kernel for the platform it runs on, so
 # each platform is built on a runner of that architecture and the two are
 # then joined into one index.
 name: containers
@@ -100,7 +100,7 @@ jobs:
             ${{ steps.ref.outputs.image }}:latest-${{ matrix.arch }}
           labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           # The stages that build from source -- Cloud Hypervisor, libkrun,
-          # the kernel, VS Code -- change rarely and are what take the time.
+          # the kernel -- change rarely and are what take the time.
           cache-from: type=gha,scope=worker-${{ matrix.arch }}
           cache-to: type=gha,scope=worker-${{ matrix.arch }},mode=max
 

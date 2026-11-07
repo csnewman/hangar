@@ -37,8 +37,6 @@ import (
 // Kinds of stream.
 const (
 	KindTerminal = "terminal"
-	// KindEditor carries one HTTP connection to the environment's editor.
-	KindEditor = "editor"
 	// KindDesktop carries one VNC (RFB) connection to the environment's
 	// desktop.
 	KindDesktop = "desktop"

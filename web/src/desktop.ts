@@ -1,13 +1,12 @@
 // The Hangar desktop app shows this UI in its tabs and adds a bridge for
-// what a browser cannot do: open an environment in desktop VS Code or in a
-// terminal. In a browser there is no bridge and none of it shows.
+// what a browser cannot do: open an environment in a terminal. In a browser
+// there is no bridge and none of it shows.
 
 interface DesktopBridge {
   version: number
   // tab is what the page's tab is for, where the app says: the server's
   // control panel, or one environment.
   tab?: 'panel' | 'environment'
-  openInVSCode(env: string): Promise<void>
   openTerminal(env: string): Promise<string | null>
 }
 

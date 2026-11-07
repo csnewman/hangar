@@ -37,8 +37,6 @@ vm:
   # Built for the guest by dev/lima-worker.sh and dev/lima-krun-worker.sh:
   # each boot's initramfs, as init, and then the agent.
   agent: /var/tmp/hangar-agent-guest
-  # VS Code's server, built by `editor/build.sh` in this VM.
-  editor: /Users/csnewman/Projects/hangar/out/editor/editor-arm64.ext4
   # Environments with a virtual GPU get OpenGL (virgl) and Vulkan (Venus)
   # from this VM's virglrenderer, as under Cloud Hypervisor.
   gpu:

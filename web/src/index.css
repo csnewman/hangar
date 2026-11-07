@@ -641,8 +641,8 @@ h1 {
   border-bottom-color: var(--accent);
 }
 
-/* A tab that reads as a page is padded like one; a console -- VS Code, a
-   terminal, the desktop, the Code tab -- fills the tab edge to edge. */
+/* A tab that reads as a page is padded like one; a console -- a terminal,
+   the desktop, the Code tab -- fills the tab edge to edge. */
 .tab-body {
   flex: 1;
   min-height: 0;
@@ -1726,19 +1726,6 @@ code {
 .desktop-host > div {
   position: absolute;
   inset: 0;
-}
-
-.editor-page {
-  flex: 1;
-  display: flex;
-  min-height: 420px;
-}
-
-.editor-frame {
-  flex: 1;
-  width: 100%;
-  border: none;
-  background: var(--surface-2);
 }
 
 .term-page {

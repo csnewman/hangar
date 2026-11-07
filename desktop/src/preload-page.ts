@@ -7,7 +7,7 @@
 // pages is left to the web UI.
 //
 // And it offers the web UI a bridge: opening one of this server's
-// environments in desktop VS Code or a terminal. The app decides which
+// environments in a terminal. The app decides which
 // server by the tab, never by what the page says.
 import { contextBridge, ipcRenderer } from 'electron'
 
@@ -45,6 +45,5 @@ contextBridge.exposeInMainWorld('hangarDesktop', {
   // tab is what the page's tab is for: the server's control panel, or one
   // environment, whose tab has no use for the control panel's navigation.
   tab: role?.kind === 'env' ? 'environment' : 'panel',
-  openInVSCode: (env: string) => ipcRenderer.invoke('page:vscode', env),
   openTerminal: (env: string) => ipcRenderer.invoke('page:terminal', env) as Promise<string | null>,
 })

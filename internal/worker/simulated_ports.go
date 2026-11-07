@@ -72,6 +72,15 @@ func (s *Simulated) DialPorts(_ context.Context, id string) (net.Conn, error) {
 	return a, nil
 }
 
+// SimulatedRequest is what a simulated environment's web server reports
+// about a request.
+type SimulatedRequest struct {
+	Environment string      `json:"environment"`
+	Host        string      `json:"host"`
+	Path        string      `json:"path"`
+	Header      http.Header `json:"header"`
+}
+
 // SimulatedPortRequest is what the simulated environment's web server
 // reports about a request.
 type SimulatedPortRequest struct {
@@ -116,4 +125,36 @@ func simulatedCert() (tls.Certificate, error) {
 		simulatedCertPair = tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 	})
 	return simulatedCertPair, simulatedCertErr
+}
+
+// oneConn is a listener that yields one connection, and then nothing until
+// that connection closes.
+type oneConn struct {
+	conn net.Conn
+	once sync.Once
+	done chan struct{}
+}
+
+func (l *oneConn) Accept() (net.Conn, error) {
+	var c net.Conn
+	l.once.Do(func() { c = &closeNotify{Conn: l.conn, done: l.done} })
+	if c != nil {
+		return c, nil
+	}
+	<-l.done
+	return nil, net.ErrClosed
+}
+
+func (l *oneConn) Close() error   { return nil }
+func (l *oneConn) Addr() net.Addr { return l.conn.LocalAddr() }
+
+type closeNotify struct {
+	net.Conn
+	once sync.Once
+	done chan struct{}
+}
+
+func (c *closeNotify) Close() error {
+	c.once.Do(func() { close(c.done) })
+	return c.Conn.Close()
 }

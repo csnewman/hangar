@@ -95,7 +95,7 @@ export interface paths {
         };
         get: operations["listTokens"];
         put?: never;
-        /** @description Make an access token, for tools outside the browser such as the VS Code extension. The token is in this reply and nowhere else, ever. */
+        /** @description Make an access token, for tools outside the browser such as scripts on the client API. The token is in this reply and nowhere else, ever. */
         post: operations["createToken"];
         delete?: never;
         options?: never;
@@ -267,7 +267,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Add a public key to sign in to one's environments with over SSH: through the VS Code extension, or hangar-connect. */
+        /** @description Add a public key to sign in to one's environments with over SSH, through the SSH gateway. */
         post: operations["addLoginKey"];
         delete?: never;
         options?: never;
@@ -966,25 +966,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/frontend/environments/{id}/editor": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["ID"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** @description Signs the caller in to the environment's editor, which is served on an origin of its own, and returns the URL to open it at. The URL carries a ticket that works once, within a minute. */
-        post: operations["openEditor"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/api/frontend/environments/{id}/desktop/size": {
         parameters: {
             query?: never;
@@ -1422,7 +1403,7 @@ export interface components {
         Phase: "pending" | "starting" | "running" | "stopping" | "stopped" | "suspending" | "suspended" | "failed" | "deleting";
         Environment: {
             id: string;
-            /** @description Names the environment's hosts: code<short_id> for its editor, and <name>-env<short_id> for its web servers. */
+            /** @description Names the environment on the whole server: its web servers' hosts, <name>-env<short_id>, and its user at the SSH gateway. */
             short_id: string;
             owner_id: string;
             /** @description The owner's username. */
@@ -1482,7 +1463,7 @@ export interface components {
             /** @description A DNS label in either case, since it becomes the hostname in lower case, and whatever else the template's name pattern demands. Branch names made from it keep its case. */
             name: string;
             settings?: components["schemas"]["EnvironmentSettings"];
-            /** @description The repositories to clone, in place of the template's, which may use the template's variables as its own do. The editor then opens on the first of them, or the home folder with none. */
+            /** @description The repositories to clone, in place of the template's, which may use the template's variables as its own do. The Code tab then opens on the first of them, or the home folder with none. */
             repos?: components["schemas"]["Repo"][];
         };
         /**
@@ -1592,7 +1573,7 @@ export interface components {
             display: components["schemas"]["Display"];
             gpu: components["schemas"]["GPU"];
             repos: components["schemas"]["Repo"][];
-            /** @description The folders the editors open side by side: the Code tab's workspace to begin with, and VS Code's. The first is where the Code tab and a new terminal start. A template that names none has its repositories'. In a template each may use variables, as a repository's branch does. */
+            /** @description The folders the Code tab opens side by side, its workspace to begin with. The first is where the Code tab and a new terminal start. A template that names none has its repositories'. In a template each may use variables, as a repository's branch does. */
             projects?: string[];
             /** @description The packs the environment has, in order, before those attaching themselves to it: a path two of them name is the first's. A pack the owner may not use is left out. */
             packs?: components["schemas"]["PackRef"][];
@@ -1931,9 +1912,6 @@ export interface components {
         DesktopSize: {
             width: number;
             height: number;
-        };
-        EditorURL: {
-            url: string;
         };
         /** @description One copy of an image in a worker's store. */
         ImageCopy: {
@@ -4026,32 +4004,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["TerminalSession"][];
-                };
-            };
-            401: components["responses"]["Unauthorized"];
-            404: components["responses"]["NotFound"];
-            409: components["responses"]["Conflict"];
-            503: components["responses"]["Unavailable"];
-        };
-    };
-    openEditor: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: components["parameters"]["ID"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Where to open the editor. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EditorURL"];
                 };
             };
             401: components["responses"]["Unauthorized"];

@@ -113,8 +113,8 @@ paths:
     post:
       operationId: createToken
       description: >-
-        Make an access token, for tools outside the browser such as the VS
-        Code extension. The token is in this reply and nowhere else, ever.
+        Make an access token, for tools outside the browser such as scripts
+        on the client API. The token is in this reply and nowhere else, ever.
       requestBody:
         required: true
         content:
@@ -408,8 +408,8 @@ paths:
     post:
       operationId: addLoginKey
       description: >-
-        Add a public key to sign in to one's environments with over SSH:
-        through the VS Code extension, or hangar-connect.
+        Add a public key to sign in to one's environments with over SSH,
+        through the SSH gateway.
       requestBody:
         required: true
         content:
@@ -1364,26 +1364,6 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
-  /api/frontend/environments/{id}/editor:
-    parameters:
-      - $ref: "#/components/parameters/ID"
-    post:
-      operationId: openEditor
-      description: >-
-        Signs the caller in to the environment's editor, which is served on an
-        origin of its own, and returns the URL to open it at. The URL carries
-        a ticket that works once, within a minute.
-      responses:
-        "200":
-          description: Where to open the editor.
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/EditorURL" }
-        "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { $ref: "#/components/responses/NotFound" }
-        "409": { $ref: "#/components/responses/Conflict" }
-        "503": { $ref: "#/components/responses/Unavailable" }
-
   /api/frontend/environments/{id}/desktop/size:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -2048,8 +2028,8 @@ components:
         short_id:
           type: string
           description: >-
-            Names the environment's hosts: code<short_id> for its editor, and
-            <name>-env<short_id> for its web servers.
+            Names the environment on the whole server: its web servers'
+            hosts, <name>-env<short_id>, and its user at the SSH gateway.
         owner_id: { type: string }
         owner:
           type: string
@@ -2155,8 +2135,8 @@ components:
           items: { $ref: "#/components/schemas/Repo" }
           description: >-
             The repositories to clone, in place of the template's, which may
-            use the template's variables as its own do. The editor then opens
-            on the first of them, or the home folder with none.
+            use the template's variables as its own do. The Code tab then
+            opens on the first of them, or the home folder with none.
 
     Display:
       type: string
@@ -2353,9 +2333,9 @@ components:
           type: array
           maxItems: 16
           description: >-
-            The folders the editors open side by side: the Code tab's
-            workspace to begin with, and VS Code's. The first is where the
-            Code tab and a new terminal start. A template that names none
+            The folders the Code tab opens side by side, its workspace to
+            begin with. The first is where the Code tab and a new terminal
+            start. A template that names none
             has its repositories'. In a template each may use variables, as
             a repository's branch does.
           items: { type: string }
@@ -2931,12 +2911,6 @@ components:
       properties:
         width: { type: integer, minimum: 1, maximum: 100000 }
         height: { type: integer, minimum: 1, maximum: 100000 }
-
-    EditorURL:
-      type: object
-      required: [url]
-      properties:
-        url: { type: string }
 
     ImageCopy:
       type: object

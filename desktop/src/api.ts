@@ -1,6 +1,6 @@
 // The app's side of Hangar's client API (/api/v1). Only the app's own parts
-// -- the menu bar, notifications, the switcher, opening VS Code or a
-// terminal -- call it; each server's control panel is the server's own web
+// -- the menu bar, notifications, the switcher, opening a terminal -- call
+// it; each server's control panel is the server's own web
 // UI, shown in a tab, and moves with the server.
 //
 // Calls go through the server's session, the same one its tabs use, so

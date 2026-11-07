@@ -47,7 +47,6 @@ import (
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sshd"
 	"github.com/csnewman/hangar/internal/terminal"
-	"github.com/csnewman/hangar/internal/vscode"
 )
 
 // Image is how a worker finds the base an environment's image names.
@@ -84,10 +83,6 @@ type Config struct {
 	// talks to it. Its Rust half, hangar-agent-rs, is beside it (RustAgent),
 	// and goes in the initramfs too when it is there.
 	Agent string
-	// Editor is the editor disk, attached read-only to every environment;
-	// the agent mounts it and runs VS Code's server from it. Empty leaves
-	// environments without an editor.
-	Editor string
 	// Images maps an image reference, as a template names it, to a local
 	// source the worker copies it from into its store. Any other reference
 	// is pulled from its registry.
@@ -956,16 +951,6 @@ func (r *Runtime) DialTerminal(ctx context.Context, id string) (net.Conn, error)
 		return nil, err
 	}
 	return m.dialGuest(ctx, terminal.Port)
-}
-
-// DialEditor opens one connection to a running environment's editor, which
-// its agent runs in the guest.
-func (r *Runtime) DialEditor(ctx context.Context, id string) (net.Conn, error) {
-	m, err := r.runningMachine(id)
-	if err != nil {
-		return nil, err
-	}
-	return m.dialGuest(ctx, vscode.Port)
 }
 
 // DialCode opens one connection to a running environment's Code tab

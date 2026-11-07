@@ -94,8 +94,8 @@ services:
       # A certificate of your own, in ./tls, served instead of ACME's.
       HANGAR_TLS_CERT_FILE: ${HANGAR_TLS_CERT_FILE:-}
       HANGAR_TLS_KEY_FILE: ${HANGAR_TLS_KEY_FILE:-}
-      # How editors' and the registry's hosts are named after the public
-      # one: subdomain (code<short>.<host>) or prefix (code<short>-<host>). See
+      # How environments' and the registry's hosts are named after the public
+      # one: subdomain (env<short>.<host>) or prefix (env<short>-<host>). See
       # README.md.
       HANGAR_HOST_STYLE: ${HANGAR_HOST_STYLE:-subdomain}
       # The SSH gateway, in front of every environment: ssh

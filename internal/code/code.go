@@ -3,11 +3,9 @@
 //
 // The service lists and watches files, answers git, and holds the files
 // open for editing as shared documents. It is the agent's Rust half
-// (crates/agent, `hangar-agent-rs code`) where the worker supplied one, and
-// otherwise hangar-code (editor/code), a Node program shipped on the node's
-// editor disk beside VS Code's server and run with the Node that ships
-// there. One runs per root folder, as the environment's user, on a unix
-// socket.
+// (crates/agent, `hangar-agent-rs code`), which the worker puts in each
+// initramfs beside the agent. One runs per root folder, as the environment's
+// user, on a unix socket.
 //
 // # Protocol
 //
@@ -37,7 +35,6 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/sysuser"
-	"github.com/csnewman/hangar/internal/vscode"
 )
 
 // Port is the vsock port the guest agent serves the Code tab on.
@@ -50,10 +47,8 @@ type Request struct {
 }
 
 const (
-	socketDir = "/run/hangar/code"
-	logFile   = "/var/log/hangar-code.log"
-	// script is the service, relative to the editor disk.
-	script       = "hangar/code.mjs"
+	socketDir    = "/run/hangar/code"
+	logFile      = "/var/log/hangar-code.log"
 	startTimeout = 30 * time.Second
 )
 
@@ -62,8 +57,7 @@ type Server struct {
 	// Prepare, if set, is given each process the server starts before it
 	// starts: the agent ranks it for the OOM killer (internal/oomscore).
 	Prepare func(*exec.Cmd)
-	// Rust, if set, is the agent's Rust half, which serves the Code tab in
-	// place of the Node service when it is there.
+	// Rust is the agent's Rust half, which is the service.
 	Rust string
 
 	user string
@@ -142,19 +136,10 @@ func (s *Server) ensure(ctx context.Context, root string) (string, error) {
 
 // command is how the service is started for a root on a socket.
 func (s *Server) command(socket, root string) (*exec.Cmd, error) {
-	if s.Rust != "" {
-		if _, err := os.Stat(s.Rust); err == nil {
-			return exec.Command(s.Rust, "code", "--socket", socket, "--root", root), nil
-		}
+	if _, err := os.Stat(s.Rust); err != nil {
+		return nil, fmt.Errorf("the agent's Rust half, which serves the Code tab, is missing: %w", err)
 	}
-	if err := vscode.MountEditor(); err != nil {
-		return nil, err
-	}
-	svc := filepath.Join(vscode.MountPoint, script)
-	if _, err := os.Stat(svc); err != nil {
-		return nil, fmt.Errorf("the editor disk has no Code service (%s)", script)
-	}
-	return exec.Command(filepath.Join(vscode.MountPoint, "node"), svc, "--socket", socket, "--root", root), nil
+	return exec.Command(s.Rust, "code", "--socket", socket, "--root", root), nil
 }
 
 func (s *Server) start(ctx context.Context, u *user.User, root string) (*process, error) {

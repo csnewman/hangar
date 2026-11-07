@@ -261,8 +261,9 @@ func assembleRoot() error {
 	if err := copyFile("/init", filepath.Join(newRoot, agentInRoot), 0o755); err != nil {
 		return fmt.Errorf("installing the agent: %w", err)
 	}
-	// Its Rust half, from a worker that supplied one; without it, the Code
-	// tab's service is the one on the editor disk.
+	// Its Rust half, which serves the Code tab, beside it. A copy from an
+	// earlier boot is removed when the worker supplied none, since it would
+	// not match this agent.
 	if _, err := os.Stat("/hangar-agent-rs"); err == nil {
 		if err := copyFile("/hangar-agent-rs", filepath.Join(newRoot, rustAgentInRoot), 0o755); err != nil {
 			return fmt.Errorf("installing the agent's Rust half: %w", err)

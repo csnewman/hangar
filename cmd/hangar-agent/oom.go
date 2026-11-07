@@ -18,7 +18,7 @@ import (
 // OOMPolicy=continue keeps the unit running when the kernel kills one of
 // its processes. Everything the agent starts is in its unit, and systemd's
 // default for a service, stop, would end the lot -- every terminal, the
-// Code service, the editors -- for one build that ran out of memory.
+// Code service, the desktop -- for one build that ran out of memory.
 const oomDropIn = `[Service]
 OOMScoreAdjust=-1000
 OOMPolicy=continue

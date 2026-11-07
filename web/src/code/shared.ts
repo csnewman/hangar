@@ -1,7 +1,8 @@
 // What every kind of shared document is to the editors that show it. The
 // Code service says which kind it holds files as (hello's docs): collab
-// documents (collab.ts) from the Rust service, Yjs ones (yjs.ts) from the
-// Node service on the editor disk.
+// documents (collab.ts) from the agent's Rust half, Yjs ones (yjs.ts) from
+// the Node service an environment started by an older worker runs until it
+// restarts.
 
 import type { Extension } from '@codemirror/state'
 import type { Command } from '@codemirror/view'

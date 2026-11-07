@@ -74,7 +74,6 @@ func main() {
 	go offload()
 	go compact()
 	go serveTerminals()
-	go serveEditor()
 	go serveDesktop()
 	go serveCode()
 	go serveProfile()

@@ -1,6 +1,7 @@
-// Runs the built service as the agent does and talks to it as two browser
-// windows would: files, git, and one shared document edited from both sides
-// and from the disk.
+// Runs the Code tab's service, hangar-agent-rs (crates/agent), as the agent
+// does and talks to it as two browser windows would: files, git, and one
+// shared document edited from both sides and from the disk. HANGAR_CODE_BIN
+// names the binary.
 import { execFileSync, spawn } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -12,10 +13,6 @@ import assert from 'node:assert/strict'
 
 import { collab, getSyncedVersion, receiveUpdates, sendableUpdates } from '@codemirror/collab'
 import { ChangeSet, EditorState } from '@codemirror/state'
-import * as decoding from 'lib0/decoding'
-import * as encoding from 'lib0/encoding'
-import * as syncProtocol from 'y-protocols/sync'
-import * as Y from 'yjs'
 
 // Git here, and in the service the test starts, sees none of the machine's
 // own configuration.
@@ -42,12 +39,9 @@ before(async () => {
 	writeFileSync(join(root, 'a.txt'), 'one\r\ntwo\r\n')
 	git('add', '.')
 	git('commit', '-q', '-m', 'first')
-	// HANGAR_CODE_BIN runs the Rust service, hangar-agent-rs, instead.
 	const bin = process.env.HANGAR_CODE_BIN
-	const [file, args] = bin
-		? [bin, ['code', '--socket', sock, '--root', root]]
-		: [process.execPath, [join(import.meta.dirname, '..', 'dist', 'code.mjs'), '--socket', sock, '--root', root]]
-	proc = spawn(file, args, {
+	if (!bin) throw new Error('HANGAR_CODE_BIN names hangar-agent-rs, the service under test')
+	proc = spawn(bin, ['code', '--socket', sock, '--root', root], {
 		stdio: 'inherit',
 		// The settings file is in the home directory; Docker is the fake
 		// engine the Docker test serves.
@@ -71,10 +65,10 @@ before(async () => {
 
 after(() => proc.kill())
 
-// A shared document as the Rust service has them: one authority, which a
+// A shared document as the service has them: one authority, which a
 // client sends its changes to and is sent everyone's, through
-// @codemirror/collab as the browser has it, one update at a time. It reads
-// and changes like a Y.Doc's text, as the tests use one.
+// @codemirror/collab as the browser has it, one update at a time. Its text
+// is getText's, which reads it and inserts into it.
 class CollabDoc {
 	private state: EditorState
 	private c: Client
@@ -113,17 +107,14 @@ class CollabDoc {
 	}
 }
 
-// Client is one window: framed messages, JSON requests, and Yjs documents,
-// or collab ones for the Rust service.
+// Client is one window: framed messages, JSON requests, and shared
+// documents.
 class Client {
 	private sock: Socket
 	private buf = Buffer.alloc(0)
 	private next = 1
 	private waiting = new Map<number, (m: any) => void>()
 	events: any[] = []
-	docs = new Map<number, Y.Doc>()
-	// The Rust service's documents are collab ones.
-	collab = !!process.env.HANGAR_CODE_BIN
 	collabDocs = new Map<number, CollabDoc>()
 	// Language servers' messages, by server.
 	lsp: { server: number; msg: any }[] = []
@@ -156,24 +147,7 @@ class Client {
 			}
 		} else if (f[0] === 0x6c) {
 			this.lsp.push({ server: f.readUInt32BE(1), msg: JSON.parse(f.subarray(5).toString()) })
-		} else if (f[0] === 0x79) {
-			const n = f.readUInt32BE(1)
-			const doc = this.docs.get(n)
-			if (!doc) return
-			const dec = decoding.createDecoder(f.subarray(5))
-			if (decoding.readVarUint(dec) !== 0) return
-			const enc = encoding.createEncoder()
-			encoding.writeVarUint(enc, 0)
-			syncProtocol.readSyncMessage(dec, enc, doc, 'server')
-			if (encoding.length(enc) > 1) this.sendYjs(n, encoding.toUint8Array(enc))
 		}
-	}
-
-	private sendYjs(n: number, msg: Uint8Array) {
-		const hdr = Buffer.alloc(5)
-		hdr[0] = 0x79
-		hdr.writeUInt32BE(n, 1)
-		this.write(Buffer.concat([hdr, msg]))
 	}
 
 	call(method: string, params: Record<string, unknown> = {}): Promise<any> {
@@ -182,8 +156,8 @@ class Client {
 		return new Promise((res, rej) =>
 			this.waiting.set(id, (m) => {
 				if (m.error) return rej(new Error(m.error))
-				// How shared documents are edited, which the Rust service says
-				// and these tests already know.
+				// hello also says how shared documents are edited, which
+				// these tests know.
 				if (method === 'hello' && m.result) delete m.result.docs
 				res(m.result)
 			}),
@@ -197,27 +171,10 @@ class Client {
 		this.write(Buffer.concat([hdr, Buffer.from(JSON.stringify(msg))]))
 	}
 
-	async open(path: string): Promise<Y.Doc> {
-		if (this.collab) {
-			const r = await this.call('doc.open', { path })
-			const doc = new CollabDoc(this, r.doc, r.version, r.text, r.client)
-			this.collabDocs.set(r.doc, doc)
-			return doc as unknown as Y.Doc
-		}
-		const { doc: n } = await this.call('doc.open', { path })
-		const doc = new Y.Doc()
-		this.docs.set(n, doc)
-		doc.on('update', (u: Uint8Array, origin: unknown) => {
-			if (origin === 'server') return
-			const enc = encoding.createEncoder()
-			encoding.writeVarUint(enc, 0)
-			syncProtocol.writeUpdate(enc, u)
-			this.sendYjs(n, encoding.toUint8Array(enc))
-		})
-		const enc = encoding.createEncoder()
-		encoding.writeVarUint(enc, 0)
-		syncProtocol.writeSyncStep1(enc, doc)
-		this.sendYjs(n, encoding.toUint8Array(enc))
+	async open(path: string): Promise<CollabDoc> {
+		const r = await this.call('doc.open', { path })
+		const doc = new CollabDoc(this, r.doc, r.version, r.text, r.client)
+		this.collabDocs.set(r.doc, doc)
 		return doc
 	}
 
@@ -300,8 +257,8 @@ test('files, git and a shared document', async () => {
 
 // A tab whose connection dropped opens its documents again where it left
 // off, as the same client, so the changes it had pushed are recognised as
-// its own. A collab document's protocol alone.
-test('a document opened again after a dropped connection carries on', { skip: !process.env.HANGAR_CODE_BIN }, async () => {
+// its own.
+test('a document opened again after a dropped connection carries on', async () => {
 	writeFileSync(join(root, 'resume.txt'), 'start\n')
 	const a = new Client()
 	const b = new Client()

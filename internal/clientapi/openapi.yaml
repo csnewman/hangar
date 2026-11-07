@@ -4,7 +4,7 @@ info:
   version: "1"
   description: >-
     The API for clients that ship apart from the server: the desktop app,
-    the VS Code extension, scripts. It is small on purpose, and stable.
+    scripts. It is small on purpose, and stable.
 
 
     Compatibility. Within v1 a change only adds: a new endpoint, a new
@@ -312,8 +312,9 @@ components:
         workspace_file:
           type: string
           description: >-
-            Where in it a VS Code workspace of its projects is, when it has
-            more than one, for an editor to open in place of editor_path.
+            Where in it a workspace file (.code-workspace) of its projects is,
+            when it has more than one, for an editor to open in place of
+            editor_path.
         display:
           type: string
           description: Its display -- none or desktop. More may come.

@@ -30,8 +30,7 @@ import (
 // server on 5173.
 //
 // A private environment's are reached by whoever may reach the environment,
-// signed in to Hangar: the host is given a cookie of its own the way an
-// editor's is. A public environment's ports 80 and 443 are reached by
+// signed in to Hangar: the host is given a cookie of its own (sessions.go). A public environment's ports 80 and 443 are reached by
 // anyone; its numbered ports still need signing in, since making a web
 // site public is not making every port public.
 

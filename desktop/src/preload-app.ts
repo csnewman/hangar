@@ -20,6 +20,5 @@ contextBridge.exposeInMainWorld('hangar', {
   openServer: (id: string) => ipcRenderer.invoke('server:open', id),
   openEnv: (server: string, env: string) => ipcRenderer.invoke('env:open', server, env),
   act: (server: string, env: string, action: string) => ipcRenderer.invoke('env:act', server, env, action),
-  vscode: (server: string, env: string) => ipcRenderer.invoke('env:vscode', server, env),
   terminal: (server: string, env: string) => ipcRenderer.invoke('env:terminal', server, env),
 })

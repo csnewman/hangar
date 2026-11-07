@@ -25,13 +25,12 @@ import (
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sshd"
 	"github.com/csnewman/hangar/internal/terminal"
-	"github.com/csnewman/hangar/internal/vscode"
 	"github.com/csnewman/hangar/internal/vsock"
 )
 
 // guestPorts are the vsock ports the worker reaches a guest's services on.
 // libkrun carries each on a unix socket of its own, which it listens on.
-var guestPorts = []uint32{terminal.Port, vscode.Port, guestport.Port, sshd.Port, procs.Port, profile.Port,
+var guestPorts = []uint32{terminal.Port, guestport.Port, sshd.Port, procs.Port, profile.Port,
 	code.Port, desktop.Port}
 
 // krunDir is where a machine under libkrun has its vsock sockets: under

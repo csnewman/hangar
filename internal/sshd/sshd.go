@@ -1,6 +1,6 @@
 // Package sshd is the SSH server inside an environment, which Hangar's SSH
-// gateway reaches it through: `ssh <environment>@<hangar> -p 2222`, and VS
-// Code's Remote-SSH over the same.
+// gateway reaches it through: `ssh <environment>@<hangar> -p 2222`, and an
+// editor's remote SSH over the same.
 //
 // It is the guest agent's, on a vsock port only the host can reach, and the
 // host reaches it only for the gateway, which has already signed the person

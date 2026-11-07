@@ -10,7 +10,6 @@ import { meKey, onSessionChange } from './session'
 import { Shell } from './components/Shell'
 import './index.css'
 import { AccountPage, SettingsPage } from './pages/Settings'
-import { ConnectVSCodePage } from './pages/ConnectVSCode'
 import { FilesPage } from './pages/Files'
 import { PackPage } from './pages/Packs'
 import { AuditPage } from './pages/admin/Audit'
@@ -23,7 +22,6 @@ import { MorePage } from './pages/More'
 import { LogsTab } from './pages/LogsTab'
 import { WorkerDetailPage } from './pages/admin/WorkerDetail'
 import { NewEnvironmentRoute, OverviewPage } from './pages/Overview'
-import { EditorTab } from './pages/EditorTab'
 import { TemplateEditorPage } from './pages/TemplateEditor'
 import { TemplatesPage } from './pages/Templates'
 import { TeamPage, TeamsPage } from './pages/Teams'
@@ -68,7 +66,6 @@ const router = createBrowserRouter([
   {
     element: <RequireAuth />,
     children: [
-      { path: '/connect/vscode', element: <ConnectVSCodePage /> },
       {
         element: <Shell />,
         children: [
@@ -92,7 +89,6 @@ const router = createBrowserRouter([
                 // CodeMirror and Yjs are fetched when the Code tab is first opened.
                 lazy: async () => ({ Component: (await import('./code/CodeTab')).CodeTab }),
               },
-              { path: 'editor', element: <EditorTab /> },
               { path: 'logs', element: <LogsTab /> },
               {
                 path: 'desktop',

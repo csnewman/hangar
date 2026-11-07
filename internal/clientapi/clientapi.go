@@ -1,5 +1,5 @@
 // Package clientapi is Hangar's API for clients that ship apart from the
-// server -- the desktop app, the VS Code extension, scripts -- at /api/v1.
+// server -- the desktop app, scripts -- at /api/v1.
 //
 // It is the stable counterpart of the web UI's API (internal/frontendapi),
 // which ships inside the server with the UI that calls it and so may change

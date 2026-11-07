@@ -2,7 +2,6 @@ import './environmentView.css'
 
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import {
-  Code2,
   Copy,
   ExternalLink,
   GitBranch,
@@ -24,8 +23,7 @@ import { imageBuild, imageRisk, useImageChange } from '../components/imageChange
 import { CPUField, MemoryField, SwapField } from '../components/MachineFields'
 import { Banner, CopyField, IndexedPage, Row, Rows, Section } from '../components/Pane'
 import { PhaseDot } from '../components/Status'
-import { desktop } from '../desktop'
-import { canSuspend, openVSCode, openVSCodeTab, useEnvironmentActions, vscodeItems } from '../environmentActions'
+import { canSuspend, useEnvironmentActions } from '../environmentActions'
 import { changeable, environmentsKey, liveMemory, longestWebName, sshCommand, swapWords, webURL } from '../environments'
 import { copyName, packPath } from '../pages/Packs'
 import { useMe } from '../session'
@@ -120,14 +118,13 @@ function Head({ env }: { env: Environment }) {
   const actions = useEnvironmentActions(env, '/environments')
   const menu = useContextMenu()
   const reset = useResetToTemplate(env)
-  const [error, setError] = useState('')
   const state = stateLine(env)
   const busy = actions.busy || env.desired === 'deleted'
   const running = env.phase === 'running'
   const s = env.spec
 
   const more = (): MenuItem[] => {
-    const out: MenuItem[] = vscodeItems(env.id, running, setError)
+    const out: MenuItem[] = []
     if (me.ssh) {
       const ssh = me.ssh
       out.push({ label: 'Copy SSH Command', onSelect: () => copyText(sshCommand(ssh, env, env.owner_id === me.id)) })
@@ -152,7 +149,7 @@ function Head({ env }: { env: Environment }) {
     return out
   }
 
-  const problem = error || actions.error?.message || reset.error?.message
+  const problem = actions.error?.message || reset.error?.message
   return (
     <header className="pane-head">
       <div className="pane-head-main">
@@ -227,7 +224,7 @@ function Head({ env }: { env: Environment }) {
           type="button"
           className="code-tool-btn"
           aria-label="More"
-          title="VS Code, SSH, Reset to Template, Delete"
+          title="SSH, Reset to Template, Delete"
           aria-haspopup="menu"
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect()
@@ -509,7 +506,6 @@ function Overview({ env }: { env: Environment }) {
 function Connect({ env, onDesktop }: { env: Environment; onDesktop?: () => void }) {
   const me = useMe()
   const qc = useQueryClient()
-  const [error, setError] = useState('')
   const ports = useMutation({
     mutationFn: (pub: boolean) => api.setEnvironmentPorts(env.id, pub),
     onSettled: () => qc.invalidateQueries({ queryKey: environmentsKey }),
@@ -532,36 +528,8 @@ function Connect({ env, onDesktop }: { env: Environment; onDesktop?: () => void 
           </span>
         </Row>
       )}
-      <Row label="Open">
-        <button
-          type="button"
-          className="btn btn-ghost btn-sm"
-          disabled={!running}
-          title={notRunning ?? (desktop ? 'The VS Code installed beside the app' : 'In a new tab')}
-          onClick={() => {
-            setError('')
-            openVSCode(env.id).then(setError)
-          }}
-        >
-          <Code2 size={13} />
-          VS Code
-        </button>
-        {desktop && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            disabled={!running}
-            title={notRunning ?? 'VS Code in the browser, in a tab of this window'}
-            onClick={() => {
-              setError('')
-              openVSCodeTab(env.id).then(setError)
-            }}
-          >
-            <Code2 size={13} />
-            VS Code in a Tab
-          </button>
-        )}
-        {onDesktop && env.spec.display === 'desktop' && (
+      {onDesktop && env.spec.display === 'desktop' && (
+        <Row label="Open">
           <button
             type="button"
             className="btn btn-ghost btn-sm"
@@ -572,9 +540,8 @@ function Connect({ env, onDesktop }: { env: Environment; onDesktop?: () => void 
             <Monitor size={13} />
             Desktop
           </button>
-        )}
-        {error && <span className="action-error">{error}</span>}
-      </Row>
+        </Row>
+      )}
       {suffix !== undefined && (
         <>
           <Row label="Web servers">
@@ -877,7 +844,7 @@ function Projects({ env }: { env: Environment }) {
           </li>
         ))}
       </ul>
-      <p className="muted small">The Code tab opens these side by side to begin with, and VS Code as a workspace.</p>
+      <p className="muted small">The Code tab opens these side by side to begin with.</p>
     </>
   )
 }

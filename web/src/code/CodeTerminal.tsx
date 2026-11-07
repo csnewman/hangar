@@ -7,7 +7,7 @@ import { TerminalPane } from '../terminal/TerminalPane'
 import { ToolWindow } from './ToolWindow'
 
 // CodeTerminal is the Terminal tool window: the environment's terminal
-// sessions, the same ones the Terminal tab and VS Code show.
+// sessions, the same ones the Terminal tab shows.
 export function CodeTerminal({
   env,
   openIn,

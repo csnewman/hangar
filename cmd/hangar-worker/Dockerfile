@@ -22,14 +22,10 @@
 #   /usr/share/hangar/hangar-agent-rs the agent's Rust half (crates/), static,
 #                                     in the initramfs beside it: the Code
 #                                     tab's service
-#   /usr/share/hangar/editor.ext4     VS Code's server (editor/), attached to
-#                                     every environment
 #
 # Environment images are not in it: an image is a root filesystem, built by the
 # imagebuilder target (see deploy/compose.yaml), which needs mount and
 # namespace permissions that `docker build` does not have.
-#
-# The editor stage builds VS Code and wants 8 GiB of memory and some time.
 #
 # Every stage that builds removes what it built from in the same step, and
 # keeps only /out (or what it installed): the build cache stores each
@@ -156,22 +152,6 @@ RUN CGO_CFLAGS=-I/out/include CGO_LDFLAGS=-L/out \
     /usr/local/go/bin/go build -tags krun -trimpath -ldflags="-s -w" -o /out/hangar-krun ./cmd/hangar-krun \
  && rm -rf "$(/usr/local/go/bin/go env GOCACHE)" "$(/usr/local/go/bin/go env GOMODCACHE)"
 
-# ---------------------------------------------------------------- editor
-FROM ${UBUNTU} AS editor
-ARG NODE_VERSION=24.18.0
-RUN apt-get update -qq \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-      build-essential ca-certificates curl git python3 pkg-config xz-utils e2fsprogs \
-      libx11-dev libxkbfile-dev libsecret-1-dev libkrb5-dev >/dev/null \
- && case "$(uname -m)" in aarch64) a=arm64 ;; *) a=x64 ;; esac \
- && curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-$a.tar.xz" \
-    | tar -xJ -C /usr/local --strip-components=1
-COPY editor/ /src/editor/
-RUN HANGAR_EDITOR_WORK=/work /src/editor/build.sh /out \
- && mv /out/editor-*.ext4 /out/editor.ext4 \
- && find /out -mindepth 1 -maxdepth 1 ! -name editor.ext4 -exec rm -rf {} + \
- && rm -rf /work /root/.npm /root/.cache
-
 # ---------------------------------------------------------------- worker
 FROM ${UBUNTU} AS worker
 # libopengl0 is desktop OpenGL through EGL, which libepoxy loads for
@@ -195,7 +175,6 @@ COPY --from=go /out/hangar-agent /usr/share/hangar/hangar-agent
 COPY --from=agent-rs /out/hangar-agent-rs /usr/share/hangar/hangar-agent-rs
 # vmlinux is amd64's alone; the pattern lets the copy go ahead without it.
 COPY --from=kernel /out/vmlinuz /out/vmlinu[x] /usr/share/hangar/
-COPY --from=editor /out/editor.ext4 /usr/share/hangar/editor.ext4
 ENTRYPOINT ["hangar-worker"]
 CMD ["-config", "/etc/hangar/worker.yaml"]
 

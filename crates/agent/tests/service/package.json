@@ -1,0 +1,17 @@
+{
+	"name": "hangar-code-service-tests",
+	"private": true,
+	"description": "Black-box tests of the Code tab's service, hangar-agent-rs, run against the binary HANGAR_CODE_BIN names.",
+	"license": "MIT",
+	"type": "module",
+	"scripts": {
+		"typecheck": "tsc --noEmit",
+		"test": "node --test service.test.ts"
+	},
+	"devDependencies": {
+		"@codemirror/collab": "^6.1.1",
+		"@codemirror/state": "^6.7.6",
+		"@types/node": "^24.0.0",
+		"typescript": "^5.9.0"
+	}
+}

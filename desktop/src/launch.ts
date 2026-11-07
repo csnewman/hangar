@@ -1,20 +1,12 @@
-// Opening an environment outside the app: in desktop VS Code, through the
-// Hangar extension, or in a terminal over the server's SSH gateway.
+// Opening an environment outside the app: in a terminal over the server's
+// SSH gateway.
 
-import { app, shell } from 'electron'
+import { app } from 'electron'
 import { spawn } from 'node:child_process'
 import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { Environment, Me } from './api'
-import type { Server } from './store'
-
-// openInVSCode hands the environment to the Hangar extension, which signs
-// in to the server if it must and opens it over Remote-SSH.
-export function openInVSCode(server: Server, env: Environment) {
-  const q = new URLSearchParams({ server: server.url, env: env.id })
-  return shell.openExternal(`vscode://hangar.hangar-remote/open?${q}`)
-}
 
 // sshArgs is the ssh command for an environment. The gateway's host key
 // comes from the server over HTTPS and is kept in the app's own

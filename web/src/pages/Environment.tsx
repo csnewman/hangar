@@ -1,7 +1,6 @@
 import {
   Activity,
   ChevronRight,
-  Code2,
   FileCode2,
   LayoutDashboard,
   Monitor,
@@ -28,7 +27,6 @@ const tabs: { to: string; label: string; icon: LucideIcon; end?: boolean }[] = [
   { to: 'performance', label: 'Performance', icon: Activity },
   { to: 'terminal', label: 'Terminal', icon: SquareTerminal },
   { to: 'code', label: 'Code', icon: FileCode2 },
-  { to: 'editor', label: 'VS Code', icon: Code2 },
   { to: 'desktop', label: 'Desktop', icon: Monitor },
   { to: 'logs', label: 'Logs', icon: ScrollText },
 ]

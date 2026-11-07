@@ -11,7 +11,7 @@ import { Meter, PaneBar, PaneRoot, SearchField, Segmented, Tile } from '../compo
 import { StartLine } from '../components/StartProgress'
 import { InstallHint } from '../components/InstallHint'
 import { PhaseDot } from '../components/Status'
-import { canSuspend, useEnvironmentActions, vscodeItems } from '../environmentActions'
+import { canSuspend, useEnvironmentActions } from '../environmentActions'
 import { splitByOwner, sshCommand, useEnvironments } from '../environments'
 import { usePhone } from '../phone'
 import { useMe } from '../session'
@@ -169,7 +169,6 @@ function LaunchRow({ env, open, owner, phone }: { env: Environment; open: boolea
   const navigate = useNavigate()
   const actions = useEnvironmentActions(env)
   const menu = useContextMenu()
-  const [error, setError] = useState('')
   const running = env.phase === 'running'
   const busy = actions.busy || env.desired === 'deleted'
   const repo = env.spec.repos[0]
@@ -193,7 +192,7 @@ function LaunchRow({ env, open, owner, phone }: { env: Environment; open: boolea
         : 'Start and Open'
 
   const items = (): MenuItem[] => {
-    const out: MenuItem[] = vscodeItems(env.id, running, setError)
+    const out: MenuItem[] = []
     if (me.ssh) {
       const ssh = me.ssh
       out.push({ label: 'Copy SSH Command', onSelect: () => copyText(sshCommand(ssh, env, env.owner_id === me.id)) })
@@ -241,7 +240,7 @@ function LaunchRow({ env, open, owner, phone }: { env: Environment; open: boolea
     return out
   }
 
-  const problem = error || actions.error?.message
+  const problem = actions.error?.message
   if (phone) {
     return (
       <div className="launch-row launch-row-phone">
@@ -374,7 +373,7 @@ function LaunchRow({ env, open, owner, phone }: { env: Environment; open: boolea
           type="button"
           className="pane-icon-btn"
           aria-label={`More for ${env.name}`}
-          title="VS Code, SSH, Settings, Suspend, Stop, Delete"
+          title="SSH, Settings, Suspend, Stop, Delete"
           aria-haspopup="menu"
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect()

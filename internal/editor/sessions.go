@@ -1,18 +1,16 @@
-// Package editor serves each environment's editor -- VS Code's server,
-// running in the guest -- to the browser, on an origin of the environment's
-// own.
+// Package editor serves each environment's own web servers to the browser,
+// on hosts of the environment's own (ports.go).
 //
-// The editor runs code the environment controls: extensions, and a
-// workbench that renders the repository. Served from Hangar's origin it
-// could call Hangar's API as the signed-in user. On its own origin, a sibling
-// of Hangar's (code<short>.<hangar host>), it cannot read Hangar's cookie or its
-// responses, and Hangar's API refuses its state-changing requests as
-// cross-origin.
+// What those servers send is the environment's to decide. Served from
+// Hangar's origin it could call Hangar's API as the signed-in user. On hosts
+// of their own, siblings of Hangar's (<name>-env<short>.<hangar host>), they
+// cannot read Hangar's cookie or its responses, and Hangar's API refuses
+// their state-changing requests as cross-origin.
 //
-// That origin cannot see the Hangar session, so it has sessions of its own:
-// Hangar hands the browser a one-time ticket, the editor origin redeems it
-// for a cookie of its own, and that cookie lasts only as long as the Hangar
-// session it came from.
+// Those hosts cannot see the Hangar session, so they have sessions of their
+// own: Hangar hands the browser a one-time ticket, the host redeems it for a
+// cookie of its own, and that cookie lasts only as long as the Hangar session
+// it came from.
 package editor
 
 import (
@@ -29,15 +27,15 @@ import (
 	"github.com/csnewman/hangar/internal/db"
 )
 
-// ErrNoSession means an editor ticket or cookie is missing, unknown, expired,
+// ErrNoSession means a host's ticket or cookie is missing, unknown, expired,
 // or for another environment.
-var ErrNoSession = errors.New("not signed in to this editor")
+var ErrNoSession = errors.New("not signed in to this environment's host")
 
 const (
 	// ticketLifetime is how long the browser has to redeem a ticket. It is
 	// redeemed by the iframe Hangar opens straight after asking for it.
 	ticketLifetime = time.Minute
-	// cookieLifetime is how long an editor cookie lasts unused. Each use
+	// cookieLifetime is how long a host's cookie lasts unused. Each use
 	// extends it, and it never outlives the Hangar session behind it.
 	cookieLifetime = 24 * time.Hour
 	// cookieRefresh is how stale an expiry may be before a request extends
@@ -45,7 +43,7 @@ const (
 	cookieRefresh = time.Hour
 )
 
-// Target is the running environment an editor request goes to.
+// Target is the running environment a request to one of its hosts goes to.
 type Target struct {
 	WorkerID string
 	Running  bool
@@ -67,7 +65,7 @@ func newToken() (string, []byte, error) {
 	return token, sum[:], nil
 }
 
-// Ticket issues a ticket to one environment's editor for the Hangar session
+// Ticket issues a ticket to one environment's hosts for the Hangar session
 // whose token is given. Whether the session's user may reach the environment
 // is the caller's to have checked.
 func (m *Manager) Ticket(ctx context.Context, sessionToken, environmentID string) (string, error) {
@@ -84,7 +82,7 @@ func (m *Manager) Ticket(ctx context.Context, sessionToken, environmentID string
 	return ticket, err
 }
 
-// Redeem exchanges a ticket for the editor origin's cookie. A ticket works
+// Redeem exchanges a ticket for a host's cookie. A ticket works
 // once. The cookie replaces any earlier one the same Hangar session had for
 // the environment.
 func (m *Manager) Redeem(ctx context.Context, ticket, environmentID string) (string, error) {
@@ -121,7 +119,7 @@ func (m *Manager) Redeem(ctx context.Context, ticket, environmentID string) (str
 	return cookie, nil
 }
 
-// Authenticate resolves an editor cookie to the environment it may reach.
+// Authenticate resolves a host's cookie to the environment it may reach.
 // It is refused once it or its Hangar session has expired, or the user has
 // been disabled.
 func (m *Manager) Authenticate(ctx context.Context, cookie, environmentID string) (Target, error) {

@@ -24,8 +24,8 @@ const (
 	// and the desktop's VNC server: small, and losing one closes every
 	// tab using it, so they are killed only when nothing else is left.
 	Service = -900
-	// User is whatever the user runs -- shells, SSH commands, the editors'
-	// helpers, the language servers -- which the kernel ranks by size
+	// User is whatever the user runs -- shells, SSH commands, what the Code
+	// service starts, the language servers -- which the kernel ranks by size
 	// alone.
 	User = 0
 )

@@ -721,9 +721,9 @@ export class CodeClient {
   async status(): Promise<GitStatus> {
     const s = await this.request<GitStatus & { branch?: string; ahead?: number; behind?: number }>('git.status')
     if (s.repos) return s
-    // The editor disk of an environment is built apart from this page, and
-    // one whose service lists no repositories reports the folder's own,
-    // its fields beside the changes.
+    // An environment's Code service is built apart from this page, and one
+    // that lists no repositories reports the folder's own, its fields
+    // beside the changes.
     const { branch, ahead, behind, ...rest } = s
     const name = this.root.split('/').pop() || this.root
     return {

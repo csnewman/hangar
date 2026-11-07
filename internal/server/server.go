@@ -54,13 +54,13 @@ type Config struct {
 	// Web is the built UI. Nil serves a page saying it was not built.
 	Web fs.FS
 	// PublicURL is Hangar's origin as browsers reach it, such as
-	// https://hangar.example.com. Each environment's editor is served on a
-	// host of its own named after it, in HostStyle. Empty leaves
-	// environments without an editor.
+	// https://hangar.example.com. Each environment's own web servers are
+	// served on hosts of its own named after it, in HostStyle. Empty leaves
+	// environments without them.
 	PublicURL string
-	// HostStyle names the editors' and the registry's hosts after
-	// PublicURL's: as subdomains of it, code<short>.hangar.example.com, or with
-	// its first label as their suffix, code<short>-hangar.example.com (package
+	// HostStyle names the environments' and the registry's hosts after
+	// PublicURL's: as subdomains of it, env<short>.hangar.example.com, or with
+	// its first label as their suffix, env<short>-hangar.example.com (package
 	// publichost). Empty is subdomains.
 	HostStyle publichost.Style
 	// AutoSignIn, for development only, signs every visitor in as this
@@ -93,8 +93,8 @@ type Server struct {
 	db        *db.DB
 	frontend  http.Handler
 	client    http.Handler
-	editors   *editor.Gateway
-	edits     *editor.Manager
+	envHosts  *editor.Gateway
+	hostSigns *editor.Manager
 	tunnels   *tunnel.Registry
 	workers   *workers.Manager
 	users     *users.Manager
@@ -123,7 +123,7 @@ func New(cfg Config) (*Server, error) {
 	wm := workers.NewManager(cfg.DB)
 	um := users.NewManager(cfg.DB)
 	tunnels := tunnel.NewRegistry(log)
-	edits := editor.NewManager(cfg.DB)
+	hostSigns := editor.NewManager(cfg.DB)
 	if cfg.Blobs == nil {
 		return nil, errors.New("no blob store")
 	}
@@ -157,9 +157,9 @@ func New(cfg Config) (*Server, error) {
 			return nil, fmt.Errorf("registry: %w", err)
 		}
 	}
-	var editors *editor.Gateway
+	var envHosts *editor.Gateway
 	if public != nil {
-		editors = editor.NewGateway(edits, tunnels, public, log)
+		envHosts = editor.NewGateway(hostSigns, tunnels, public, log)
 	}
 	sessions := profile.NewSessions(profiles, packStore, tunnels, log)
 	if reg != nil {
@@ -201,8 +201,8 @@ func New(cfg Config) (*Server, error) {
 		cfgAPI.SSH = gw
 	}
 	// A nil Gateway would be a non-nil interface.
-	if editors != nil {
-		cfgAPI.Editors = editors
+	if envHosts != nil {
+		cfgAPI.Hosts = envHosts
 	}
 	client := clientapi.Config{
 		Environments: cfgAPI.Environments,
@@ -221,8 +221,8 @@ func New(cfg Config) (*Server, error) {
 		db:           cfg.DB,
 		frontend:     frontend,
 		client:       clientapi.New(client),
-		editors:      editors,
-		edits:        edits,
+		envHosts:     envHosts,
+		hostSigns:    hostSigns,
 		tunnels:      tunnels,
 		workers:      wm,
 		users:        um,
@@ -304,10 +304,10 @@ func (s *Server) pruneSessions(ctx context.Context) {
 					"manifests", c.Manifests, "blobs", c.Blobs, "bytes", c.Bytes)
 			}
 		}
-		if n, err := s.edits.Prune(ctx); err != nil && ctx.Err() == nil {
-			s.log.Warn("pruning editor sessions", "err", err)
+		if n, err := s.hostSigns.Prune(ctx); err != nil && ctx.Err() == nil {
+			s.log.Warn("pruning environment host sessions", "err", err)
 		} else if n > 0 {
-			s.log.Info("pruned expired editor sessions", "count", n)
+			s.log.Info("pruned expired environment host sessions", "count", n)
 		}
 		select {
 		case <-ctx.Done():
@@ -355,7 +355,7 @@ func (s *Server) placementLoop(ctx context.Context) {
 // and everything outside /api/ for the UI itself.
 //
 // The worker and client APIs are versioned and the frontend API is not. A
-// worker, the desktop app and the VS Code extension are each upgraded apart
+// worker and the desktop app are each upgraded apart
 // from the server, so what passes between them has to say which version it
 // speaks; the UI ships inside this binary with the API it calls.
 func (s *Server) Handler() http.Handler {
@@ -385,21 +385,16 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/", s.webHandler())
 
 	all := s.logRequests(mux)
-	// The registry, each environment's editor and each environment's own
-	// web servers have hosts of their own, and everything on them is
-	// theirs.
+	// The registry and each environment's own web servers have hosts of
+	// their own, and everything on them is theirs.
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if s.registry != nil && strings.EqualFold(r.Host, s.registryHost) {
 			s.registry.ServeHTTP(w, r)
 			return
 		}
-		if s.editors != nil {
-			if _, ok := s.editors.Owns(r.Host); ok {
-				s.editors.ServeHTTP(w, r)
-				return
-			}
-			if _, ok := s.editors.OwnsPort(r.Host); ok {
-				s.editors.ServePort(w, r)
+		if s.envHosts != nil {
+			if _, ok := s.envHosts.OwnsPort(r.Host); ok {
+				s.envHosts.ServePort(w, r)
 				return
 			}
 		}
@@ -411,10 +406,10 @@ func (s *Server) Handler() http.Handler {
 // servers are reached on, which plain HTTP reaches as it is rather than
 // being sent to HTTPS: it goes to the environment's port 80.
 func (s *Server) EnvironmentHost(host string) bool {
-	if s.editors == nil {
+	if s.envHosts == nil {
 		return false
 	}
-	_, ok := s.editors.OwnsPort(host)
+	_, ok := s.envHosts.OwnsPort(host)
 	return ok
 }
 

@@ -2,7 +2,6 @@ import './settings.css'
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Code2,
   Copy,
   History,
   KeyRound,
@@ -82,14 +81,7 @@ const pages: Page[] = [
     group: 'Keys',
     label: 'Access tokens',
     icon: TicketCheck,
-    about: 'For tools that act as you, such as the VS Code extension.',
-  },
-  {
-    id: 'vscode',
-    group: 'Apps',
-    label: 'VS Code',
-    icon: Code2,
-    about: 'Your environments in VS Code on your own machine, over Remote-SSH.',
+    about: 'For tools and scripts that act as you, through the client API.',
   },
   {
     id: 'desktop-app',
@@ -179,7 +171,6 @@ export function SettingsPage() {
               {page.id === 'ssh-keys' && <SSHKeySettings />}
               {page.id === 'sign-in-keys' && <SignInKeySettings />}
               {page.id === 'access-tokens' && <TokenSettings />}
-              {page.id === 'vscode' && <VSCodeSettings />}
               {page.id === 'desktop-app' && <DesktopAppSettings />}
             </DetailPage>
           </>
@@ -569,7 +560,7 @@ function SignInKeySettings() {
                 ssh &lt;environment&gt;@{gw.host}
                 {gw.port === 22 ? '' : ` -p ${gw.port}`}
               </code>{' '}
-              reaches any environment of yours, and VS Code&rsquo;s Remote-SSH does the same.
+              reaches any environment of yours, and an editor&rsquo;s remote SSH does the same.
             </>
           ) : (
             'This server runs no SSH gateway (HANGAR_SSH_LISTEN), so the keys reach nothing yet.'
@@ -693,7 +684,7 @@ function TokenSettings() {
                 <input
                   className="pane-wide"
                   aria-label="Name"
-                  placeholder="VS Code on my laptop"
+                  placeholder="My laptop"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                 />
@@ -717,43 +708,6 @@ function TokenSettings() {
           </fieldset>
         </form>
       </Section>
-    </>
-  )
-}
-
-function VSCodeSettings() {
-  return (
-    <>
-      <Section title="Signing in">
-        <Rows>
-          <Row label="Extension">
-            <span>
-              Hangar&rsquo;s extension, <span className="mono">hangar.hangar-remote</span>, lists your environments in
-              VS Code and opens each over Remote-SSH, starting it first if it is stopped.
-            </span>
-          </Row>
-          <Row label="Sign in">
-            <span>
-              Run <strong>Hangar: Sign In</strong> and give this server&rsquo;s address,{' '}
-              <span className="mono">{window.location.origin}</span>. Your browser opens Hangar, which asks you to allow
-              it, and gives it an access token for a year.
-            </span>
-          </Row>
-          <Row label="With a token">
-            <span>
-              <strong>Hangar: Sign In with an Access Token</strong> takes one made under{' '}
-              <Link to="/settings/access-tokens">Access tokens</Link> instead.
-            </span>
-          </Row>
-          <Row label="Reaching them">
-            <span>
-              It connects through the SSH gateway with a key from your{' '}
-              <Link to="/settings/sign-in-keys">sign-in keys</Link>, and offers to add one of yours if none is there.
-            </span>
-          </Row>
-        </Rows>
-      </Section>
-      <p className="pane-hint">Signing it out, or revoking its token under Access tokens, ends its access.</p>
     </>
   )
 }

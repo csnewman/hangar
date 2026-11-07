@@ -71,8 +71,9 @@ services:
       # Encrypts users' credentials and SSH keys. Committed, so development
       # only, like the token above.
       HANGAR_SECRET_KEY_FILE: /src/dev/secret-key
-      # Editors are served on e-<environment>.hangar.localhost:8080. Browsers
-      # resolve every *.localhost name to this machine, so no DNS is needed.
+      # Environments' own web servers are served on
+      # <name>-env<short>.hangar.localhost:8080. Browsers resolve every
+      # *.localhost name to this machine, so no DNS is needed.
       HANGAR_PUBLIC_URL: http://hangar.localhost:8080
       # Signs every visitor in as admin, with no password: development only.
       # Remove it to sign in properly, or set it to another existing user.

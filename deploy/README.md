@@ -44,9 +44,10 @@ TCP), 443, 80 and 2222 open, and a DNS zone delegated to it (below).
 
 ## DNS and TLS
 
-Each environment's editor is served on its own name, `code<short>.<host>`
-(its six-character short ID), and
-the registry on `registry.<host>`, so Hangar needs every name under its host and a certificate for all of them. A
+Each environment's web servers are served on names of its own,
+`<name>-env<short>.<host>` (its six-character short ID), and the registry on
+`registry.<host>`, so Hangar needs every name under its host and a
+certificate for all of them. A
 wildcard certificate is only issued against ACME's DNS-01 challenge, which
 means writing TXT records into the zone, so `hangar-server` is the zone's
 authoritative DNS server: every name in it resolves to the control plane,
@@ -106,7 +107,6 @@ the machine's name as their suffix instead of as their parent:
 
 | | subdomain (default) | prefix |
 |---|---|---|
-| editors | `code<short>.hangar1.example.com` | `code<short>-hangar1.example.com` |
 | registry | `registry.hangar1.example.com` | `registry-hangar1.example.com` |
 | web servers | `<name>-env<short>.hangar1.example.com` | `<name>-env<short>-hangar1.example.com` |
 
@@ -115,7 +115,7 @@ Set `HANGAR_PUBLIC_URL=https://hangar1.example.com` and
 network's own DNS answers for these names, so turn off Hangar's DNS server
 with `HANGAR_DNS_LISTEN=` (empty); ACME is not used either, since it only
 issues for the zone Hangar serves. Both kinds of name stay in the same site
-as Hangar's own, which the editor, framed in Hangar's page, relies on.
+as Hangar's own.
 
 ## Environments' web servers
 
@@ -240,10 +240,9 @@ no environment is reachable from the network, and the workers need no
 ports open for it. A person reaches their own environments by name, and
 anyone else's they can see as `<owner>/<environment>`. An environment's
 six-character short ID, on its page, names it whoever owns it
-(`ssh k3x9q2@<host> -p 2222`), which is what the desktop app and the VS
-Code extension use. Shells, commands,
-port forwarding, `scp` and `sftp` all work, and so does VS Code's
-Remote-SSH. The gateway's host key is made on first start and kept in
+(`ssh k3x9q2@<host> -p 2222`), which is what the desktop app uses. Shells,
+commands, port forwarding, `scp` and `sftp` all work, and so do editors'
+remote SSH modes. The gateway's host key is made on first start and kept in
 Postgres, sealed with the secret key, so every replica presents the same
 one.
 
@@ -400,8 +399,8 @@ The server and worker images are pulled from `HANGAR_REGISTRY` at
 each commit on master. `up -d --build` builds them from this checkout
 instead. The worker image holds everything a node supplies, built from
 source -- Cloud Hypervisor with Hangar's patches, libkrun, the virtio-gpu
-backend, the guest kernel, the guest agent and VS Code's server
--- so building it takes a while and wants about 8 GiB of memory.
+backend, the guest kernel and the guest agent -- so building it takes a
+while.
 
 ## libkrun
 

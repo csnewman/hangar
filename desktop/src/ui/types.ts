@@ -66,7 +66,6 @@ export interface Bridge {
   openServer(id: string): Promise<void>
   openEnv(server: string, env: string): Promise<void>
   act(server: string, env: string, action: 'start' | 'stop' | 'suspend'): Promise<void>
-  vscode(server: string, env: string): Promise<void>
   terminal(server: string, env: string): Promise<string | null>
 }
 

@@ -539,7 +539,7 @@ function Editor({ existing }: { existing?: Template }) {
                   placeholder={spec.repos.map((r) => r.path).join('\n') || '/workspace'}
                 />
                 {hint(
-                  'The folders the Code tab and VS Code open side by side, one per line. The first is where they and a new terminal start. Left empty, they are the repositories’ folders.',
+                  'The folders the Code tab opens side by side, one per line. The first is where it and a new terminal start. Left empty, they are the repositories’ folders.',
                 )}
               </Row>
               <Row label="Given of its owner's" modified={changed('access')}>
