@@ -307,59 +307,82 @@ impl Render for EnvTab {
                     .min_h_0()
                     .items_stretch()
                     .child(self.stripe(LEFT, true, waiting, &p, cx))
-                    .when(left.is_some() || left_below.is_some(), |d| {
-                        d.child(
-                            v_flex()
-                                .w(px(220.))
-                                .flex_none()
-                                .bg(p.surface)
-                                .border_r_1()
-                                .border_color(p.border)
-                                .when_some(left, |d, t| {
-                                    d.child(self.tool_window(t, &env, &card, &p, cx))
-                                })
-                                .when_some(left_below, |d, t| {
-                                    d.child(
-                                        div()
-                                            .when(left.is_some(), |d| {
-                                                d.border_t_1().border_color(p.border)
-                                            })
-                                            .flex_1()
-                                            .child(self.tool_window(t, &env, &card, &p, cx)),
-                                    )
-                                }),
-                        )
-                    })
                     .child(
+                        // As IntelliJ: the side windows end above the bottom
+                        // one, which takes the width between the stripes.
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .bg(p.surface)
-                            .child(self.editors(&p))
+                            .child(
+                                h_flex()
+                                    .flex_1()
+                                    .min_h_0()
+                                    .items_stretch()
+                                    .when(left.is_some() || left_below.is_some(), |d| {
+                                        d.child(
+                                            v_flex()
+                                                .w(px(220.))
+                                                .flex_none()
+                                                .bg(p.surface)
+                                                .border_r_1()
+                                                .border_color(p.border)
+                                                .when_some(left, |d, t| {
+                                                    d.child(
+                                                        self.tool_window(t, &env, &card, &p, cx),
+                                                    )
+                                                })
+                                                .when_some(left_below, |d, t| {
+                                                    d.child(
+                                                        div()
+                                                            .when(left.is_some(), |d| {
+                                                                d.border_t_1()
+                                                                    .border_color(p.border)
+                                                            })
+                                                            .flex_1()
+                                                            .child(self.tool_window(
+                                                                t, &env, &card, &p, cx,
+                                                            )),
+                                                    )
+                                                }),
+                                        )
+                                    })
+                                    .child(
+                                        v_flex()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .bg(p.surface)
+                                            .child(self.editors(&p)),
+                                    )
+                                    .when(right.is_some() || right_below.is_some(), |d| {
+                                        d.child(
+                                            v_flex()
+                                                .w(px(260.))
+                                                .flex_none()
+                                                .bg(p.surface)
+                                                .border_l_1()
+                                                .border_color(p.border)
+                                                .when_some(right, |d, t| {
+                                                    d.child(
+                                                        self.tool_window(t, &env, &card, &p, cx),
+                                                    )
+                                                })
+                                                .when_some(right_below, |d, t| {
+                                                    d.child(
+                                                        div()
+                                                            .when(right.is_some(), |d| {
+                                                                d.border_t_1()
+                                                                    .border_color(p.border)
+                                                            })
+                                                            .child(self.tool_window(
+                                                                t, &env, &card, &p, cx,
+                                                            )),
+                                                    )
+                                                }),
+                                        )
+                                    }),
+                            )
                             .when_some(bottom, |d, t| d.child(self.bottom(t, &p))),
                     )
-                    .when(right.is_some() || right_below.is_some(), |d| {
-                        d.child(
-                            v_flex()
-                                .w(px(260.))
-                                .flex_none()
-                                .bg(p.surface)
-                                .border_l_1()
-                                .border_color(p.border)
-                                .when_some(right, |d, t| {
-                                    d.child(self.tool_window(t, &env, &card, &p, cx))
-                                })
-                                .when_some(right_below, |d, t| {
-                                    d.child(
-                                        div()
-                                            .when(right.is_some(), |d| {
-                                                d.border_t_1().border_color(p.border)
-                                            })
-                                            .child(self.tool_window(t, &env, &card, &p, cx)),
-                                    )
-                                }),
-                        )
-                    })
                     .child(self.stripe(RIGHT, false, waiting, &p, cx)),
             )
             .child(self.status_bar(&config, &env, &p))
