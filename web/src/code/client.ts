@@ -1,30 +1,29 @@
-// The browser end of the Code tab's service in the environment (editor/code):
-// requests and events on one WebSocket, and shared documents over Yjs.
+// The browser end of the Code tab's service in the environment: requests
+// and events on one WebSocket, and shared documents, collab ones (collab.ts)
+// from the Rust service or Yjs ones (yjs.ts) from the Node service, as its
+// hello says.
 //
 // The WebSocket carries the service's frames, one per message: a channel
 // byte, 'r' for JSON, 'y' for a document's Yjs message (its number as a
 // big-endian u32, then the y-protocols message), or 'l' for a language
 // server's message (the server's number, then the message's JSON).
 //
-// A dropped connection is reconnected. Open documents keep their Y.Doc
-// across it and are opened again, so nothing typed meanwhile is lost: Yjs
-// merges it when the documents sync. A connection that stops answering is
-// taken as dropped (Heartbeat), and one dropped is tried again at once when
-// the page is shown again or the network comes back.
-
-import * as decoding from 'lib0/decoding'
-import * as encoding from 'lib0/encoding'
-import * as awarenessProtocol from 'y-protocols/awareness'
-import * as syncProtocol from 'y-protocols/sync'
-import * as Y from 'yjs'
+// A dropped connection is reconnected, and open documents are opened again,
+// carrying on from where they were, so nothing typed meanwhile is lost. A
+// connection that stops answering is taken as dropped (Heartbeat), and one
+// dropped is tried again at once when the page is shown again or the
+// network comes back.
 
 import { Heartbeat, onReturn } from '../heartbeat'
+import { CollabFile, type Opened } from './collab'
+import type { DocTransport, SharedFile } from './shared'
+import { YjsFile } from './yjs'
+
+export type { SharedFile } from './shared'
 
 const CHANNEL_JSON = 0x72 // 'r'
 const CHANNEL_YJS = 0x79 // 'y'
 const CHANNEL_LSP = 0x6c // 'l'
-const MESSAGE_SYNC = 0
-const MESSAGE_AWARENESS = 1
 
 // An entry in a folder. Of a file: whether it is a link, runs and may not
 // be written; of either, whether git ignores it.
@@ -282,6 +281,9 @@ type Events = {
   // An open file was deleted from disk. Its path is absolute.
   'doc.deleted': (p: { path: string }) => void
   'doc.restored': (p: { path: string }) => void
+  // The service holds documents as another kind than the open ones, which
+  // are gone: the service was replaced. Each is opened again.
+  'docs.reset': () => void
   // Another tab changed the settings.
   'settings.changed': (s: Record<string, unknown>) => void
   // The workspace's projects changed, in any tab.
@@ -295,88 +297,8 @@ type Events = {
   'docker.logEnd': (p: { stream: number; why: string }) => void
 }
 
-// SharedFile is one file open for editing, shared with everyone who has it
-// open. Its text is the document's 'text'.
-export class SharedFile {
-  readonly doc = new Y.Doc()
-  readonly text = this.doc.getText('text')
-  readonly awareness = new awarenessProtocol.Awareness(this.doc)
-  // n is the service's number for the document on the current connection.
-  n = 0
-  // synced is set once the document has caught up with the service's.
-  synced = false
-  // writable is whether the environment's user may write the file.
-  writable = true
-  private syncedWaiters: (() => void)[] = []
-  refs = 0
-  readonly path: string
-  private client: CodeClient
-
-  constructor(path: string, client: CodeClient) {
-    this.path = path
-    this.client = client
-    this.doc.on('update', (update: Uint8Array, origin: unknown) => {
-      if (origin === this.client) return
-      const enc = encoding.createEncoder()
-      encoding.writeVarUint(enc, MESSAGE_SYNC)
-      syncProtocol.writeUpdate(enc, update)
-      this.send(encoding.toUint8Array(enc))
-    })
-    this.awareness.on('update', ({ added, updated, removed }: AwarenessChange, origin: unknown) => {
-      if (origin === this.client) return
-      const enc = encoding.createEncoder()
-      encoding.writeVarUint(enc, MESSAGE_AWARENESS)
-      encoding.writeVarUint8Array(
-        enc,
-        awarenessProtocol.encodeAwarenessUpdate(this.awareness, [...added, ...updated, ...removed]),
-      )
-      this.send(encoding.toUint8Array(enc))
-    })
-  }
-
-  whenSynced(): Promise<void> {
-    if (this.synced) return Promise.resolve()
-    return new Promise((r) => this.syncedWaiters.push(r))
-  }
-
-  // start begins syncing on a newly opened document number.
-  start(n: number) {
-    this.n = n
-    const enc = encoding.createEncoder()
-    encoding.writeVarUint(enc, MESSAGE_SYNC)
-    syncProtocol.writeSyncStep1(enc, this.doc)
-    this.send(encoding.toUint8Array(enc))
-    if (this.awareness.getLocalState() !== null) {
-      const aw = encoding.createEncoder()
-      encoding.writeVarUint(aw, MESSAGE_AWARENESS)
-      encoding.writeVarUint8Array(aw, awarenessProtocol.encodeAwarenessUpdate(this.awareness, [this.doc.clientID]))
-      this.send(encoding.toUint8Array(aw))
-    }
-  }
-
-  receive(msg: Uint8Array) {
-    const dec = decoding.createDecoder(msg)
-    const type = decoding.readVarUint(dec)
-    if (type === MESSAGE_SYNC) {
-      const enc = encoding.createEncoder()
-      encoding.writeVarUint(enc, MESSAGE_SYNC)
-      const kind = syncProtocol.readSyncMessage(dec, enc, this.doc, this.client)
-      if (encoding.length(enc) > 1) this.send(encoding.toUint8Array(enc))
-      if (kind === syncProtocol.messageYjsSyncStep2 && !this.synced) {
-        this.synced = true
-        for (const w of this.syncedWaiters.splice(0)) w()
-      }
-    } else if (type === MESSAGE_AWARENESS) {
-      awarenessProtocol.applyAwarenessUpdate(this.awareness, decoding.readVarUint8Array(dec), this.client)
-    }
-  }
-
-  private send(msg: Uint8Array) {
-    if (this.n) this.client.sendYjs(this.n, msg)
-  }
-}
-
-type AwarenessChange = { added: number[]; updated: number[]; removed: number[] }
+// The kinds of shared document, as the service holds them.
+type DocFile = YjsFile | CollabFile
 
 export class CodeClient {
   private ws: WebSocket | null = null
@@ -388,6 +310,7 @@ export class CodeClient {
     'git.changed': new Set(),
     'doc.deleted': new Set(),
     'doc.restored': new Set(),
+    'docs.reset': new Set(),
     'settings.changed': new Set(),
     'workspace.changed': new Set(),
     'lsp.exited': new Set(),
@@ -396,8 +319,14 @@ export class CodeClient {
     'docker.logEnd': new Set(),
   }
   private lspHandlers = new Map<number, Set<(json: string) => void>>()
-  private files = new Map<string, SharedFile>()
-  private byNumber = new Map<number, SharedFile>()
+  private files = new Map<string, DocFile>()
+  private byNumber = new Map<number, DocFile>()
+  // Whether the service's documents are collab ones, else Yjs ones.
+  private collab = false
+  private transport: DocTransport = {
+    call: (method, params) => this.call(method, params),
+    sendYjs: (n, msg) => this.sendYjs(n, msg),
+  }
   private retry: ReturnType<typeof setTimeout> | undefined
   private backoff = 500
   private beat: Heartbeat | undefined
@@ -457,11 +386,20 @@ export class CodeClient {
           root: string
           home: string
           settings?: string
+          docs?: string
         }
         this.root = hello.root
         this.home = hello.home
         this.settingsPath = hello.settings ?? ''
         this.backoff = 500
+        const collab = hello.docs === 'collab'
+        if (collab !== this.collab) {
+          this.collab = collab
+          const gone = [...this.files.values()]
+          this.files.clear()
+          for (const f of gone) f.destroy()
+          if (gone.length) this.emit('docs.reset')
+        }
         for (const f of this.files.values()) await this.reopen(f)
         this.setState('live')
         this.markReady()
@@ -490,6 +428,7 @@ export class CodeClient {
     for (const w of this.waiting.values()) w.reject(new Error('the connection dropped'))
     this.waiting.clear()
     this.byNumber.clear()
+    for (const f of this.files.values()) f.detach()
     // Language servers end with the connection.
     this.lspHandlers.clear()
     if (this.closed) return
@@ -516,6 +455,9 @@ export class CodeClient {
         this.emit('fs.changed', m.params)
       } else if (m.event === 'git.changed') {
         this.emit('git.changed')
+      } else if (m.event === 'doc.changes' || m.event === 'doc.presence') {
+        const f = this.byNumber.get(m.params.doc)
+        if (f instanceof CollabFile) f.event(m.event, m.params)
       } else if (m.event === 'doc.deleted') {
         this.emit('doc.deleted', m.params)
       } else if (m.event === 'doc.restored') {
@@ -540,7 +482,8 @@ export class CodeClient {
       for (const h of this.lspHandlers.get(n) ?? []) h(json)
     } else if (msg[0] === CHANNEL_YJS && msg.length >= 5) {
       const n = new DataView(msg.buffer, msg.byteOffset + 1, 4).getUint32(0)
-      this.byNumber.get(n)?.receive(msg.subarray(5))
+      const f = this.byNumber.get(n)
+      if (f instanceof YjsFile) f.receive(msg.subarray(5))
     }
   }
 
@@ -870,37 +813,45 @@ export class CodeClient {
   async open(path: string): Promise<SharedFile> {
     let f = this.files.get(path)
     if (!f) {
-      f = new SharedFile(path, this)
-      this.files.set(path, f)
+      await this.ready
+      f = this.files.get(path)
+    }
+    if (!f) {
+      const made: DocFile = this.collab ? new CollabFile(path, this.transport) : new YjsFile(path, this.transport)
+      this.files.set(path, made)
       try {
-        await this.ready
-        await this.reopen(f)
+        await this.reopen(made)
       } catch (e) {
-        this.files.delete(path)
+        if (this.files.get(path) === made) this.files.delete(path)
+        made.destroy()
         throw e
       }
+      f = made
     }
     f.refs++
     return f
   }
 
-  private async reopen(f: SharedFile) {
-    const { doc, writable } = (await this.call('doc.open', { path: f.path })) as { doc: number; writable?: boolean }
-    f.writable = writable !== false
-    this.byNumber.set(doc, f)
-    f.start(doc)
+  private async reopen(f: DocFile) {
+    const r = (await this.call('doc.open', { path: f.path, ...f.openParams() })) as Opened
+    if (this.files.get(f.path) !== f) {
+      this.call('doc.close', { doc: r.doc }).catch(() => {})
+      return
+    }
+    this.byNumber.set(r.doc, f)
+    f.start(r)
   }
 
-  release(f: SharedFile) {
+  release(file: SharedFile) {
+    const f = file as DocFile
     if (--f.refs > 0) return
+    if (this.files.get(f.path) !== f) return
     this.files.delete(f.path)
     if (f.n) {
       this.byNumber.delete(f.n)
       this.call('doc.close', { doc: f.n }).catch(() => {})
     }
-    awarenessProtocol.removeAwarenessStates(f.awareness, [f.doc.clientID], 'local')
-    f.awareness.destroy()
-    f.doc.destroy()
+    f.destroy()
   }
 
   close() {

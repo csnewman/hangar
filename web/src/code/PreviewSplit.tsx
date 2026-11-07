@@ -1,6 +1,5 @@
 import { Columns2, Eye, SquarePen } from 'lucide-react'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type * as Y from 'yjs'
+import { useRef, useState, type ReactNode } from 'react'
 
 // PreviewLayout is what the tab of a file with a preview shows: its
 // editor, its preview, or both side by side, as IntelliJ offers them.
@@ -20,29 +19,6 @@ function remember(key: string, value: string) {
   } catch {
     // Chosen again next time.
   }
-}
-
-// useYText is a shared document's text, kept up with its edits, at most
-// every tenth of a second.
-export function useYText(text: Y.Text): string {
-  const [value, setValue] = useState(() => text.toString())
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const changed = () => {
-      if (timer) return
-      timer = setTimeout(() => {
-        timer = undefined
-        setValue(text.toString())
-      }, 100)
-    }
-    setValue(text.toString())
-    text.observe(changed)
-    return () => {
-      clearTimeout(timer)
-      text.unobserve(changed)
-    }
-  }, [text])
-  return value
 }
 
 // PreviewSplit lays a file's editor and its preview out as the layout

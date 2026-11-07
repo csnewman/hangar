@@ -38,8 +38,6 @@ import { tags as t } from '@lezer/highlight'
 import { formatDocument, LSPPlugin } from '@codemirror/lsp-client'
 import { useContext, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next'
-import * as Y from 'yjs'
 
 import type { CodeClient, SharedFile } from './client'
 import { copyText, isMac, shortcut, useContextMenu, type MenuItem } from './ContextMenu'
@@ -102,9 +100,9 @@ export const followScheme: Extension = [
   }),
 ]
 
-// editorSetup is CodeMirror's basic setup, less its own undo history: a
-// shared document's undo is Yjs's, which undoes only this window's edits;
-// and with IntelliJ's find bar in place of CodeMirror's search panel.
+// editorSetup is CodeMirror's basic setup, less its undo history, which a
+// shared file's binding brings (undoing only this editor's edits), and with
+// IntelliJ's find bar in place of CodeMirror's search panel.
 export const editorSetup: Extension = [
   lineNumbers(),
   highlightActiveLineGutter(),
@@ -296,7 +294,6 @@ const ideaKeys = Prec.high(
   ]),
 )
 
-const [undoKey, , redoKey] = yUndoManagerKeymap
 const selectedText = (view: EditorView) =>
   view.state.selection.ranges.map((r) => view.state.sliceDoc(r.from, r.to)).join('\n')
 
@@ -420,8 +417,8 @@ export function CodeEditor({
         },
       },
       'separator',
-      { label: 'Undo', shortcut: shortcut('Mod+Z'), onSelect: run(undoKey.run!) },
-      { label: 'Redo', shortcut: shortcut('Mod+Shift+Z'), onSelect: run(redoKey.run!) },
+      { label: 'Undo', shortcut: shortcut('Mod+Z'), onSelect: run(file.undo) },
+      { label: 'Redo', shortcut: shortcut('Mod+Shift+Z'), onSelect: run(file.redo) },
       'separator',
       { label: 'Select All', shortcut: shortcut('Mod+A'), onSelect: run(selectAll) },
       { label: 'Find…', shortcut: shortcut('Mod+F'), onSelect: open(openFind) },
@@ -530,13 +527,11 @@ export function CodeEditor({
   useEffect(() => {
     const el = host.current
     if (!el) return
-    file.awareness.setLocalStateField('user', { name: user.name, color: user.color, colorLight: user.color + '33' })
     const language = new Compartment()
     const lsp = new Compartment()
-    const undo = new Y.UndoManager(file.text)
     let edits = 0
     const indentSlot = new Compartment()
-    let indent: Indent = indentFor(path, file.text.toString(), null)
+    let indent: Indent = indentFor(path, file.text(), null)
     const announce = (): void =>
       status?.set(path, {
         ...caret(view.state),
@@ -552,11 +547,10 @@ export function CodeEditor({
     const view: EditorView = new EditorView({
       parent: el,
       state: EditorState.create({
-        doc: file.text.toString(),
+        doc: file.text(),
         extensions: [
           ideaKeys,
           editorSetup,
-          keymap.of(yUndoManagerKeymap),
           codeTheme,
           language.of([]),
           lsp.of([]),
@@ -566,7 +560,7 @@ export function CodeEditor({
           indentSlot.of(indentation(indent)),
           spelling(path),
           EditorState.readOnly.of(readOnly),
-          yCollab(file.text, file.awareness, { undoManager: undo }),
+          file.binding({ name: user.name, color: user.color }),
           gitGutter((v, h, e) => setHunk({ view: v, h, x: e.clientX, y: e.clientY })),
           EditorView.updateListener.of((u) => {
             if (u.docChanged) edits++
@@ -669,7 +663,6 @@ export function CodeEditor({
       clearTimeout(timer)
       offGit()
       view.destroy()
-      undo.destroy()
       status?.set(path, null)
     }
   }, [file, user.name, user.color, client, path, languages, outside, readOnly, status])

@@ -15,7 +15,8 @@ import { EnvironmentView } from './EnvironmentView'
 import { HexView } from './HexView'
 import { ImageView } from './ImageView'
 import { isMarkdown, MarkdownPreview } from './MarkdownPreview'
-import { PreviewSplit, useYText } from './PreviewSplit'
+import { PreviewSplit } from './PreviewSplit'
+import { useSharedText } from './shared'
 import { isTable, TableView } from './TableView'
 import { HtmlPreview, isHtml } from './HtmlPreview'
 import { MediaView } from './MediaView'
@@ -387,6 +388,12 @@ function TextTab({
     }
   }, [client, path])
 
+  // A service that holds documents as another kind took over (the
+  // environment started again under a newer worker): the file is opened
+  // again from it.
+  const [generation, setGeneration] = useState(0)
+  useEffect(() => client.on('docs.reset', () => setGeneration((g) => g + 1)), [client])
+
   useEffect(() => {
     let f: SharedFile | null = null
     let live = true
@@ -408,7 +415,7 @@ function TextTab({
       live = false
       if (f) client.release(f)
     }
-  }, [client, path])
+  }, [client, path, generation])
 
   if (error) return <div className="code-empty"><p className="code-note-error">{error}</p></div>
   if (!file) return <div className="code-empty"><p className="muted">Opening {path}…</p></div>
@@ -493,7 +500,7 @@ function MarkdownTab({
   onShowCommit: (hash: string, path: string) => void
   onOpenFile: (path: string) => void
 }) {
-  const text = useYText(file.text)
+  const text = useSharedText(file)
   const [view, setView] = useState<EditorView | null>(null)
   return (
     <PreviewSplit
@@ -535,7 +542,7 @@ function TableTab({
   onReveal: (path: string) => void
   onShowCommit: (hash: string, path: string) => void
 }) {
-  const text = useYText(file.text)
+  const text = useSharedText(file)
   const [view, setView] = useState<EditorView | null>(null)
   const toLine = (n: number) => {
     if (!view) return

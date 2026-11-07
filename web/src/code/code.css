@@ -1010,6 +1010,36 @@
   outline: none;
 }
 
+/* Another tab's caret in a collab document (collab.ts), its name shown
+   over it while the pointer is on it. */
+.code-editor .cm-remoteCaret {
+  position: relative;
+  border-left: 2px solid;
+  margin-left: -1px;
+  margin-right: -1px;
+}
+
+.code-editor .cm-remoteCaretName {
+  position: absolute;
+  bottom: 100%;
+  left: -2px;
+  font-family: var(--font);
+  font-size: 10.5px;
+  line-height: 1.3;
+  color: white;
+  white-space: nowrap;
+  padding: 1px 4px;
+  border-radius: 3px 3px 3px 0;
+  opacity: 0;
+  transition: opacity 0.2s;
+  pointer-events: none;
+  user-select: none;
+}
+
+.code-editor .cm-remoteCaret:hover .cm-remoteCaretName {
+  opacity: 1;
+}
+
 /* A shared caret's name, as y-codemirror.next draws it. */
 .code-editor .cm-ySelectionInfo {
   font-family: var(--font);
