@@ -83,9 +83,6 @@ type VMConfig struct {
 	// hangar-agent-rs built for the guest, is the same path with -rs after
 	// it, and goes in the initramfs when it is there.
 	Agent string `yaml:"agent"`
-	// Editor is read and ignored, so a config that names an editor disk
-	// still loads: environments have no editor disk.
-	Editor string `yaml:"editor"`
 	// UpperGiB and DockerGiB are an environment's room for its files and
 	// for Docker's store: one sparse disk of their sum.
 	UpperGiB  int `yaml:"upper_gib"`

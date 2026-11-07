@@ -55,9 +55,6 @@ func run(path string, log *slog.Logger, rings *logs.Rings) error {
 	case "simulated":
 		rt = worker.NewSimulated(2 * time.Second)
 	case "cloud-hypervisor", "krun":
-		if cfg.VM.Editor != "" {
-			log.Warn("vm.editor is ignored: environments have no editor disk", "editor", cfg.VM.Editor)
-		}
 		images := map[string]vm.Image{}
 		for ref, img := range cfg.VM.Images {
 			images[ref] = vm.Image{Base: img.Base}
