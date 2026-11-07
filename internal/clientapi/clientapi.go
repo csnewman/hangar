@@ -43,6 +43,10 @@ type Config struct {
 	// Changes are the environments' changes, for the event stream. Nil
 	// streams only what is there when it opens.
 	Changes *environments.Changes
+	// Tunnels reaches workers, for terminals; nil refuses them as
+	// unreachable. Audit records who reached into which environment.
+	Tunnels Tunnels
+	Audit   *audit.Log
 	// SSH is where the SSH gateway is reached. Nil when there is none.
 	SSH *SSHGateway
 	Log *slog.Logger
@@ -53,6 +57,8 @@ type handler struct {
 	users    *users.Manager
 	profiles *profile.Store
 	changes  *environments.Changes
+	tunnels  Tunnels
+	audit    *audit.Log
 	ssh      *SSHGateway
 	log      *slog.Logger
 }
@@ -70,6 +76,7 @@ type principalKey struct{}
 // their full /api/v1 paths.
 func New(cfg Config) http.Handler {
 	h := &handler{envs: cfg.Environments, users: cfg.Users, profiles: cfg.Profiles, changes: cfg.Changes, ssh: cfg.SSH,
+		tunnels: cfg.Tunnels, audit: cfg.Audit,
 		log: cfg.Log}
 	if h.changes == nil {
 		h.changes = environments.NewChanges()
@@ -97,6 +104,7 @@ func New(cfg Config) http.Handler {
 	})
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", routes)
+	mux.HandleFunc("GET /api/v1/environments/{id}/terminal", h.terminalSocket)
 	return h.authenticate(mux)
 }
 

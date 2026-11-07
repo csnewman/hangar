@@ -17,6 +17,23 @@ info:
     in /api/v1/version.
 
 
+    Terminals. GET /api/v1/environments/{id}/terminal is a WebSocket attached
+    to one of the environment's terminal sessions: ?session= names one (the
+    terminals list gives them), or a new one starts, in ?dir= if given, at
+    ?cols= and ?rows=. The first message from the server is the attach's
+    reply as JSON text: {"session": TerminalSession, "history": N, "owner":
+    bool} or {"err": "..."}. After it every message is binary, one frame
+    each: a type byte, then its payload. From the server: 'o' what the shell
+    wrote (the first "history" bytes of it are recent output replayed,
+    which a terminal must not answer), 's' the size (columns, rows and
+    attached clients as big-endian 16-bit numbers, then 1 if this connection
+    holds the size), 'x' the shell exited (its status, 4 bytes), last. To
+    the server: 'i' keys and pastes, 'r' take the size (columns then rows,
+    16-bit), 'p' the size this window would have, used while it holds the
+    size. The text "ping" is answered "pong". It is refused with 409 for an
+    environment not running and 503 when its worker cannot be reached.
+
+
     A client asks /api/v1/version first. It needs no sign-in, and says which
     versions the server serves and which build it is, so a client can tell
     "this server is too old for me" from "I am too old for this server".
@@ -221,6 +238,42 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /environments/{id}/terminals:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listTerminals
+      summary: The environment's terminal sessions
+      responses:
+        "200":
+          description: The sessions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/TerminalSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /environments/{id}/terminals/{session}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: session
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      operationId: closeTerminal
+      summary: End a terminal session, ending what runs in it
+      responses:
+        "204": { description: Ended. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
   /events:
     get:
       operationId: streamEvents
@@ -282,6 +335,11 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     Conflict:
       description: Not possible in the state it is in.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unavailable:
+      description: The environment's worker cannot be reached from this server just now.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -499,3 +557,20 @@ components:
         needs_you:
           type: boolean
           description: Whether it asks or has finished, and the user has not looked since.
+
+    TerminalSession:
+      type: object
+      required: [id, title, created_at, clients, cols, rows]
+      properties:
+        id:
+          type: string
+          description: Also what HANGAR_TERMINAL_SESSION says in it, and an agent session's terminal.
+        title:
+          type: string
+          description: What the shell or the program in it last set as the window title.
+        created_at: { type: string, format: date-time }
+        clients:
+          type: integer
+          description: How many windows are attached to it.
+        cols: { type: integer }
+        rows: { type: integer }

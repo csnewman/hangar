@@ -211,6 +211,8 @@ func New(cfg Config) (*Server, error) {
 	client := clientapi.Config{
 		Environments: cfgAPI.Environments,
 		Changes:      changes,
+		Tunnels:      tunnels,
+		Audit:        cfgAPI.Audit,
 		Users:        um,
 		Profiles:     profiles,
 		Log:          log,

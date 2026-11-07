@@ -17,6 +17,7 @@ import (
 	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/terminal"
+	"github.com/csnewman/hangar/internal/termws"
 	"github.com/csnewman/hangar/internal/tunnel"
 )
 
@@ -189,47 +190,5 @@ func (h *handler) terminalSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.CloseNow()
-	c.SetReadLimit(terminal.MaxFrame + 1)
-
-	first, _ := json.Marshal(reply)
-	if err := c.Write(ctx, websocket.MessageText, first); err != nil || reply.Err != "" {
-		c.Close(websocket.StatusNormalClosure, "")
-		return
-	}
-
-	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancel()
-	go h.keepAlive(ctx, c)
-	go func() {
-		defer cancel()
-		for {
-			typ, payload, err := terminal.ReadFrame(br)
-			if err != nil {
-				return
-			}
-			msg := append([]byte{typ}, payload...)
-			if err := c.Write(ctx, websocket.MessageBinary, msg); err != nil {
-				return
-			}
-			if typ == terminal.FrameExit {
-				c.Close(websocket.StatusNormalClosure, "the shell exited")
-				return
-			}
-		}
-	}()
-	for {
-		kind, msg, err := c.Read(ctx)
-		if err != nil {
-			return
-		}
-		if answerPing(ctx, c, kind, msg) || kind != websocket.MessageBinary || len(msg) == 0 {
-			continue
-		}
-		switch msg[0] {
-		case terminal.FrameInput, terminal.FrameResize, terminal.FramePrefer:
-			if terminal.WriteFrame(stream, msg[0], msg[1:]) != nil {
-				return
-			}
-		}
-	}
+	termws.Bridge(ctx, c, stream, br, reply, h.socketPing)
 }
