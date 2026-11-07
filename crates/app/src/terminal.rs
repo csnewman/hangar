@@ -4,9 +4,10 @@
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line as GridLine};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 
 /// What the grid is told it measures.
@@ -37,6 +38,35 @@ impl EventListener for Quiet {
     fn send_event(&self, _: Event) {}
 }
 
+/// What a terminal says back to the shell, and what it calls itself, as
+/// the program in it asks: the replies to its queries (its size, its
+/// colours, the device's attributes), which a terminal must write back, and
+/// the window title it sets.
+#[derive(Clone, Default)]
+pub struct Replies {
+    pending: std::sync::Arc<std::sync::Mutex<(Vec<u8>, Option<String>)>>,
+}
+
+impl Replies {
+    /// The replies since this was last called, and the title, if it was
+    /// set meanwhile.
+    pub fn take(&self) -> (Vec<u8>, Option<String>) {
+        let mut p = self.pending.lock().unwrap();
+        (std::mem::take(&mut p.0), p.1.take())
+    }
+}
+
+impl EventListener for Replies {
+    fn send_event(&self, e: Event) {
+        let mut p = self.pending.lock().unwrap();
+        match e {
+            Event::PtyWrite(s) => p.0.extend_from_slice(s.as_bytes()),
+            Event::Title(t) => p.1 = Some(t),
+            _ => {}
+        }
+    }
+}
+
 /// A run of cells drawn alike, `len` bytes of its line's text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
@@ -58,6 +88,9 @@ pub struct Line {
 pub struct Screen<L: EventListener = Quiet> {
     term: Term<L>,
     parser: Processor,
+    /// The colours text and background take when the shell names none.
+    fg: Rgb,
+    bg: Rgb,
 }
 
 impl Screen<Quiet> {
@@ -71,7 +104,37 @@ impl<L: EventListener> Screen<L> {
         Screen {
             term: Term::new(Config::default(), &Size { columns, lines }, listener),
             parser: Processor::new(),
+            fg: named(NamedColor::Foreground),
+            bg: named(NamedColor::Background),
         }
+    }
+
+    /// Sets the colours text and background take when the shell names none.
+    pub fn set_default_colours(&mut self, fg: Rgb, bg: Rgb) {
+        self.fg = fg;
+        self.bg = bg;
+    }
+
+    /// Scrolls the view through the scrollback by lines, up for positive.
+    pub fn scroll(&mut self, lines: i32) {
+        self.term.scroll_display(Scroll::Delta(lines));
+    }
+
+    /// How far the view is scrolled back from the bottom, in lines.
+    pub fn scrolled_back(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    /// Whether the program in the terminal has asked for pastes to be
+    /// bracketed.
+    pub fn bracketed_paste(&self) -> bool {
+        self.term.mode().contains(TermMode::BRACKETED_PASTE)
+    }
+
+    /// Whether the program has asked for the cursor keys' application
+    /// sequences (ESC O A rather than ESC [ A).
+    pub fn app_cursor(&self) -> bool {
+        self.term.mode().contains(TermMode::APP_CURSOR)
     }
 
     /// Takes what the shell wrote.
@@ -140,7 +203,13 @@ impl<L: EventListener> Screen<L> {
     fn rgb(&self, c: Color) -> Rgb {
         match c {
             Color::Spec(rgb) => rgb,
-            Color::Named(n) => self.term.colors()[n].unwrap_or_else(|| named(n)),
+            Color::Named(n) => self.term.colors()[n].unwrap_or(match n {
+                NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::Cursor => {
+                    self.fg
+                }
+                NamedColor::Background => self.bg,
+                n => named(n),
+            }),
             Color::Indexed(i) => self.term.colors()[i as usize].unwrap_or_else(|| indexed(i)),
         }
     }

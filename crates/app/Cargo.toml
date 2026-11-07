@@ -16,6 +16,9 @@ serde_json.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
 ureq = { version = "3", features = ["json", "platform-verifier"] }
 dirs = "6"
+tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-platform-verifier = "0.7"
 keyring = { version = "3", features = ["apple-native", "windows-native", "async-secret-service", "crypto-rust", "async-io"] }
 
 [target.'cfg(unix)'.dependencies]

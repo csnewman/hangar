@@ -7,7 +7,9 @@
 //!
 //! SNAPSHOT_THEME=dark draws it dark; SNAPSHOT_OPEN=<environment name> opens
 //! that environment's tab; SNAPSHOT_HOME=place groups Home by place;
-//! SNAPSHOT_SIZE=WxH sets the window's size.
+//! SNAPSHOT_SIZE=WxH sets the window's size; SNAPSHOT_WAIT=seconds waits
+//! after opening, SNAPSHOT_TYPE types into its terminal (\\n for Enter), and
+//! SNAPSHOT_ANSWER=AGENT:KEY answers an asking agent session.
 
 use std::time::Duration;
 
@@ -76,6 +78,36 @@ fn main() {
                             shell.update(cx, |s, cx| s.open(&p, &e, window, cx));
                         }
                     });
+                }
+                // Time for what was opened to connect, then what to type.
+                let wait = std::env::var("SNAPSHOT_WAIT")
+                    .ok()
+                    .and_then(|w| w.parse::<f64>().ok())
+                    .unwrap_or(0.);
+                cx.background_executor()
+                    .timer(Duration::from_secs_f64(wait))
+                    .await;
+                if let Ok(text) = std::env::var("SNAPSHOT_TYPE") {
+                    let text = text.replace("\\n", "\r");
+                    let _ = handle.update(cx, |_, _, cx| {
+                        if let Some(tab) = shell.read(cx).active_view() {
+                            tab.update(cx, |t, cx| t.type_in_terminal(&text, cx));
+                        }
+                    });
+                    cx.background_executor()
+                        .timer(Duration::from_secs_f64(wait.max(1.)))
+                        .await;
+                }
+                if let Some((agent, key)) = std::env::var("SNAPSHOT_ANSWER").ok().and_then(|a| {
+                    a.split_once(':')
+                        .map(|(a, k)| (a.to_string(), k.to_string()))
+                }) {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        if let Some(tab) = shell.read(cx).active_view() {
+                            tab.update(cx, |t, cx| t.answer(&agent, &key, window, cx));
+                        }
+                    });
+                    cx.background_executor().timer(Duration::from_secs(2)).await;
                 }
                 let _ = handle.update(cx, |_, window, _| window.refresh());
                 cx.background_executor()

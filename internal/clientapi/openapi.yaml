@@ -21,8 +21,8 @@ info:
     to one of the environment's terminal sessions: ?session= names one (the
     terminals list gives them), or a new one starts, in ?dir= if given, at
     ?cols= and ?rows=. The first message from the server is the attach's
-    reply as JSON text: {"session": TerminalSession, "history": N, "owner":
-    bool} or {"err": "..."}. After it every message is binary, one frame
+    reply as JSON text: {"session": {"id", "title", "created", "clients",
+    "cols", "rows"}, "history": N, "owner": bool}, or {"err": "..."}. After it every message is binary, one frame
     each: a type byte, then its payload. From the server: 'o' what the shell
     wrote (the first "history" bytes of it are recent output replayed,
     which a terminal must not answer), 's' the size (columns, rows and

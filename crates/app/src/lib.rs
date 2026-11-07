@@ -11,5 +11,7 @@ pub mod place;
 pub mod places;
 pub mod shell;
 pub mod store;
+pub mod termconn;
 pub mod terminal;
+pub mod termview;
 pub mod ui;

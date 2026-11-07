@@ -106,6 +106,22 @@ pub struct AgentSession {
     pub needs_you: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TerminalSession {
+    pub id: String,
+    /// What the shell or the program in it last set as the window title.
+    #[serde(default)]
+    pub title: String,
+    pub created_at: DateTime<Utc>,
+    /// How many windows are attached to it.
+    #[serde(default)]
+    pub clients: i64,
+    #[serde(default)]
+    pub cols: i64,
+    #[serde(default)]
+    pub rows: i64,
+}
+
 /// Why a request failed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
@@ -221,6 +237,45 @@ impl Client {
             .delete(format!("{}/environments/{id}/task", self.base))
             .header("Authorization", self.auth());
         check(req.call().map_err(transport)?).map(|_| ())
+    }
+
+    /// The environment's terminal sessions.
+    pub fn terminals(&self, id: &str) -> Result<Vec<TerminalSession>, Error> {
+        self.get(&format!("/environments/{id}/terminals"))
+    }
+
+    /// Ends a terminal session, and what runs in it.
+    pub fn close_terminal(&self, id: &str, session: &str) -> Result<(), Error> {
+        let req = self
+            .agent
+            .delete(format!(
+                "{}/environments/{id}/terminals/{session}",
+                self.base
+            ))
+            .header("Authorization", self.auth());
+        check(req.call().map_err(transport)?).map(|_| ())
+    }
+
+    /// Where a terminal session's WebSocket is, and the header that signs
+    /// it in: session, or a new one at cols by rows.
+    pub fn terminal_socket(
+        &self,
+        id: &str,
+        session: Option<&str>,
+        cols: u16,
+        rows: u16,
+    ) -> (String, String) {
+        let base = match self.base.split_once("://") {
+            Some(("https", rest)) => format!("wss://{rest}"),
+            Some((_, rest)) => format!("ws://{rest}"),
+            None => self.base.clone(),
+        };
+        let mut url = format!("{base}/environments/{id}/terminal?cols={cols}&rows={rows}");
+        if let Some(s) = session {
+            url.push_str("&session=");
+            url.push_str(s);
+        }
+        (url, self.auth())
     }
 
     /// Says the user has looked at an agent's session.

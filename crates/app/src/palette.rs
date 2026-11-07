@@ -32,6 +32,8 @@ pub struct Palette {
     pub warn_border: Hsla,
     pub term_bg: Hsla,
     pub term_fg: Hsla,
+    /// A terminal's own background, and its tab's.
+    pub term_tab: Hsla,
 }
 
 fn c(hex: u32) -> Hsla {
@@ -61,6 +63,7 @@ pub fn light() -> Palette {
         warn_border: c(0xc4c6f3),
         term_bg: c(0x142022),
         term_fg: c(0xd3e1e0),
+        term_tab: c(0x1d2c2e),
     }
 }
 
@@ -87,6 +90,7 @@ pub fn dark() -> Palette {
         warn_border: c(0x34387a),
         term_bg: c(0x081011),
         term_fg: c(0xcfdddc),
+        term_tab: c(0x132022),
     }
 }
 

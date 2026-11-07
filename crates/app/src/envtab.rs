@@ -12,13 +12,14 @@ use gpui::{
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{h_flex, v_flex};
 
-use crate::api::{AgentSession, Environment};
+use crate::api::{AgentSession, Client, Environment, TerminalSession};
 use crate::assets;
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Card, Tone};
 use crate::palette::{self, Palette};
 use crate::place::PlaceConfig;
 use crate::places::Places;
+use crate::termview::TerminalView;
 use crate::ui::{button, dot, primary, spark, tone};
 
 /// A tool window.
@@ -218,6 +219,51 @@ pub struct EnvTab {
     hidden: Option<HashMap<Slot, Tool>>,
     /// The tool window last opened, which Hide Active hides.
     last: Option<Tool>,
+    /// The Terminal window's sessions.
+    terms: Terms,
+}
+
+/// The Terminal tool window's tabs: one per session, attached when first
+/// shown.
+#[derive(Default)]
+struct Terms {
+    /// Whether the environment's sessions have been asked for.
+    listed: bool,
+    tabs: Vec<TermTab>,
+    active: Option<usize>,
+    /// The sessions not open here, while the menu listing them is open.
+    menu: Option<Vec<TerminalSession>>,
+}
+
+struct TermTab {
+    /// The session's ID, until a new session's is known.
+    session: Option<String>,
+    title: String,
+    view: Option<Entity<TerminalView>>,
+}
+
+impl TermTab {
+    fn id(&self, cx: &App) -> Option<String> {
+        self.session.clone().or_else(|| {
+            self.view
+                .as_ref()
+                .and_then(|v| v.read(cx).session().map(str::to_string))
+        })
+    }
+
+    fn label(&self, cx: &App) -> String {
+        let title = self
+            .view
+            .as_ref()
+            .map(|v| v.read(cx).title().to_string())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| self.title.clone());
+        if title.is_empty() {
+            "Terminal".into()
+        } else {
+            title
+        }
+    }
 }
 
 impl EnvTab {
@@ -237,6 +283,7 @@ impl EnvTab {
             task_edit: None,
             hidden: None,
             last: None,
+            terms: Terms::default(),
         }
     }
 
@@ -280,6 +327,204 @@ impl EnvTab {
         }
     }
 
+    fn client(&self, cx: &App) -> Option<Client> {
+        self.places.read(cx).client(&self.place)
+    }
+
+    /// Asks for the environment's sessions, once, opening a tab for each;
+    /// with none, a new one starts.
+    fn list_terminals(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.terms.listed {
+            return;
+        }
+        let Some(client) = self.client(cx) else {
+            return;
+        };
+        self.terms.listed = true;
+        let env = self.env.clone();
+        let task = cx.background_spawn(async move { client.terminals(&env) });
+        cx.spawn_in(window, async move |this, cx| {
+            let list = task.await;
+            let _ = this.update_in(cx, |t, window, cx| match list {
+                Ok(list) if !list.is_empty() => {
+                    for s in list {
+                        if !t
+                            .terms
+                            .tabs
+                            .iter()
+                            .any(|x| x.session.as_deref() == Some(s.id.as_str()))
+                        {
+                            t.terms.tabs.push(TermTab {
+                                session: Some(s.id),
+                                title: s.title,
+                                view: None,
+                            });
+                        }
+                    }
+                    if t.terms.active.is_none() {
+                        t.select_terminal(0, false, window, cx);
+                    }
+                    cx.notify();
+                }
+                Ok(_) => t.new_terminal(window, cx),
+                Err(_) => t.terms.listed = false,
+            });
+        })
+        .detach();
+    }
+
+    /// Starts a new session in a tab of its own.
+    pub fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(client) = self.client(cx) else {
+            return;
+        };
+        let env = self.env.clone();
+        let view = cx.new(|cx| TerminalView::new(&client, &env, None, cx));
+        cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        self.terms.tabs.push(TermTab {
+            session: None,
+            title: String::new(),
+            view: Some(view),
+        });
+        self.terms.menu = None;
+        self.select_terminal(self.terms.tabs.len() - 1, true, window, cx);
+    }
+
+    /// Shows a session's tab, attaching to it the first time, and gives it
+    /// the keyboard if focus says so.
+    fn select_terminal(
+        &mut self,
+        i: usize,
+        focus: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.client(cx) else {
+            return;
+        };
+        let Some(tab) = self.terms.tabs.get_mut(i) else {
+            return;
+        };
+        if tab.view.is_none() {
+            let (env, session) = (self.env.clone(), tab.session.clone());
+            let view = cx.new(|cx| TerminalView::new(&client, &env, session.as_deref(), cx));
+            cx.observe(&view, |_, _, cx| cx.notify()).detach();
+            tab.view = Some(view);
+        }
+        self.terms.active = Some(i);
+        if focus && let Some(v) = &tab.view {
+            window.focus(&v.focus_handle(cx), cx);
+        }
+        cx.notify();
+    }
+
+    /// Opens a session's tab in the Terminal window, adding it if it is not
+    /// open here.
+    pub fn open_terminal(&mut self, session: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.open.insert(Slot::Bottom, Tool::Terminal);
+        self.terms.listed = true;
+        let i = match self
+            .terms
+            .tabs
+            .iter()
+            .position(|t| t.id(cx).as_deref() == Some(session))
+        {
+            Some(i) => i,
+            None => {
+                self.terms.tabs.push(TermTab {
+                    session: Some(session.into()),
+                    title: String::new(),
+                    view: None,
+                });
+                self.terms.tabs.len() - 1
+            }
+        };
+        self.terms.menu = None;
+        self.select_terminal(i, true, window, cx);
+    }
+
+    /// Answers an asking agent session as pressing key in its terminal
+    /// would: Claude Code's choices are numbered.
+    pub fn answer(&mut self, agent: &str, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let places = self.places.read(cx);
+        let session = places
+            .get(&self.place)
+            .and_then(|(_, s)| s.environment(&self.env))
+            .and_then(|e| e.agents.iter().find(|a| a.id == agent))
+            .and_then(|a| a.terminal.clone());
+        if let Some(session) = session {
+            self.type_into(&session, key, window, cx);
+        }
+    }
+
+    /// Types into the terminal shown, as the user would.
+    pub fn type_in_terminal(&mut self, text: &str, cx: &mut Context<Self>) {
+        if let Some(v) = self
+            .terms
+            .active
+            .and_then(|i| self.terms.tabs[i].view.clone())
+        {
+            v.update(cx, |v, _| v.type_text(text));
+        }
+    }
+
+    /// Types into a session, as the user would there: an agent's answer.
+    fn type_into(
+        &mut self,
+        session: &str,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_terminal(session, window, cx);
+        if let Some(v) = self
+            .terms
+            .active
+            .and_then(|i| self.terms.tabs[i].view.clone())
+        {
+            v.update(cx, |v, _| v.type_text(text));
+        }
+    }
+
+    /// Takes a tab away, leaving its session running.
+    fn close_terminal_tab(&mut self, i: usize, cx: &mut Context<Self>) {
+        self.terms.tabs.remove(i);
+        self.terms.active = match self.terms.active {
+            Some(a) if a == i => {
+                (!self.terms.tabs.is_empty()).then(|| i.min(self.terms.tabs.len() - 1))
+            }
+            Some(a) if a > i => Some(a - 1),
+            a => a,
+        };
+        cx.notify();
+    }
+
+    /// Opens the menu of sessions not open here, or closes it.
+    fn toggle_terminal_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.terms.menu.take().is_some() {
+            cx.notify();
+            return;
+        }
+        let Some(client) = self.client(cx) else {
+            return;
+        };
+        let env = self.env.clone();
+        let task = cx.background_spawn(async move { client.terminals(&env) });
+        cx.spawn_in(window, async move |this, cx| {
+            let list = task.await.unwrap_or_default();
+            let _ = this.update(cx, |t, cx| {
+                let open: Vec<Option<String>> = t.terms.tabs.iter().map(|x| x.id(cx)).collect();
+                t.terms.menu = Some(
+                    list.into_iter()
+                        .filter(|s| !open.contains(&Some(s.id.clone())))
+                        .collect(),
+                );
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     fn edit_task(&mut self, text: &str, window: &mut Window, cx: &mut Context<Self>) {
         let text = text.to_string();
         let input = cx.new(|cx| {
@@ -317,7 +562,7 @@ impl Focusable for EnvTab {
 }
 
 impl Render for EnvTab {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
         let places = self.places.read(cx);
         let Some((config, state)) = places.get(&self.place) else {
@@ -446,7 +691,14 @@ impl Render for EnvTab {
                                     }),
                             )
                             .when_some(bottom, |d, t| {
-                                d.child(self.bottom(t, sizes.get(Edge::Bottom), &p))
+                                d.child(self.bottom(
+                                    t,
+                                    sizes.get(Edge::Bottom),
+                                    &env,
+                                    &p,
+                                    window,
+                                    cx,
+                                ))
                             }),
                     )
                     .child(self.stripe(RIGHT, false, waiting, &p, cx)),
@@ -688,7 +940,7 @@ impl EnvTab {
                     .on_click(cx.listener(move |this, _, _, cx| this.toggle(t, cx))),
             );
         let body = match t {
-            Tool::Agents => self.agents(env, card, p).into_any_element(),
+            Tool::Agents => self.agents(env, card, p, cx).into_any_element(),
             t => div()
                 .text_size(px(11.5))
                 .text_color(p.muted)
@@ -703,7 +955,13 @@ impl EnvTab {
             .child(body)
     }
 
-    fn agents(&self, env: &Environment, card: &Card, p: &Palette) -> impl IntoElement {
+    fn agents(
+        &self,
+        env: &Environment,
+        card: &Card,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let now = chrono::Utc::now();
         let mut list = v_flex().gap(px(4.));
         let mut sessions: Vec<&AgentSession> =
@@ -720,12 +978,7 @@ impl EnvTab {
         for a in sessions {
             let asking = a.state == "asking";
             let lead = card.session.as_deref() == Some(a.id.as_str());
-            let state_tone = match a.state.as_str() {
-                "asking" => Tone::Wait,
-                "finished" if a.needs_you => Tone::Good,
-                "working" => Tone::Busy,
-                _ => Tone::Idle,
-            };
+            let state_tone = agent_tone(a);
             list = list.child(
                 v_flex()
                     .gap(px(4.))
@@ -775,11 +1028,60 @@ impl EnvTab {
                         .when_some(a.message.clone(), |d, m| {
                             d.child(div().text_color(p.muted).child(m))
                         })
-                        .child(
-                            div()
+                        .when(
+                            a.terminal.is_some()
+                                && a.message
+                                    .as_deref()
+                                    .is_some_and(|m| m.contains("permission")),
+                            |d| {
+                                let mut b = h_flex().flex_wrap().gap(px(4.));
+                                for (n, (label, key)) in
+                                    [("Yes", "1"), ("Yes, and don't ask again", "2"), ("No", "3")]
+                                        .into_iter()
+                                        .enumerate()
+                                {
+                                    let agent = a.id.clone();
+                                    let id = SharedString::from(format!("answer-{}-{n}", a.id));
+                                    let btn = if n == 0 {
+                                        primary(id, label, p)
+                                    } else {
+                                        button(id, label, p)
+                                    };
+                                    b = b.child(
+                                        btn.py(px(1.)).px(px(8.)).text_size(px(11.)).on_click(
+                                            cx.listener(move |t, _, window, cx| {
+                                                t.answer(&agent, key, window, cx)
+                                            }),
+                                        ),
+                                    );
+                                }
+                                d.child(b)
+                            },
+                        )
+                        .when(a.terminal.is_none(), |d| {
+                            d.child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(p.muted)
+                                    .child("Answer it where it runs."),
+                            )
+                        })
+                    })
+                    .when_some(a.terminal.clone(), |d, session| {
+                        d.child(
+                            h_flex().child(
+                                button(
+                                    SharedString::from(format!("open-{}", a.id)),
+                                    "Open session",
+                                    p,
+                                )
+                                .py(px(1.))
+                                .px(px(8.))
                                 .text_size(px(11.))
-                                .text_color(p.muted)
-                                .child("Answer it in its terminal session."),
+                                .on_click(cx.listener(
+                                    move |t, _, window, cx| t.open_terminal(&session, window, cx),
+                                )),
+                            ),
                         )
                     })
                     .when(!asking, |d| {
@@ -819,8 +1121,21 @@ impl EnvTab {
             .child(keys)
     }
 
-    fn bottom(&self, t: Tool, height: gpui::Pixels, p: &Palette) -> impl IntoElement {
-        let dark = t == Tool::Terminal;
+    fn bottom(
+        &mut self,
+        t: Tool,
+        height: gpui::Pixels,
+        env: &Environment,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        if t == Tool::Terminal {
+            return self
+                .terminal_window(height, env, p, window, cx)
+                .into_any_element();
+        }
+        let dark = false;
         v_flex()
             .relative()
             .h(height)
@@ -846,6 +1161,182 @@ impl EnvTab {
                     .text_color(if dark { p.idle } else { p.muted })
                     .child(t.waiting()),
             )
+            .into_any_element()
+    }
+
+    /// The Terminal tool window: a tab per session, then the one shown.
+    fn terminal_window(
+        &mut self,
+        height: gpui::Pixels,
+        env: &Environment,
+        p: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let running = env.phase == "running";
+        if running {
+            self.list_terminals(window, cx);
+        }
+        let mut tabs = h_flex().gap(px(2.)).min_w_0().overflow_hidden();
+        for (i, tab) in self.terms.tabs.iter().enumerate() {
+            let on = self.terms.active == Some(i);
+            let id = tab.id(cx);
+            let agent = env
+                .agents
+                .iter()
+                .find(|a| a.terminal.is_some() && a.terminal == id && a.state != "ended");
+            let hover = p.term_tab;
+            tabs = tabs.child(
+                h_flex()
+                    .id(("term-tab", i))
+                    .gap(px(5.))
+                    .px(px(10.))
+                    .py(px(2.))
+                    .rounded_t(px(5.))
+                    .cursor_pointer()
+                    .text_color(if on { p.term_fg } else { p.idle })
+                    .when(on, |d| d.bg(p.term_tab))
+                    .when(!on, move |d| d.hover(move |s| s.bg(hover.opacity(0.6))))
+                    .when_some(agent, |d, a| d.child(dot(agent_tone(a), p).size(px(7.))))
+                    .child(div().max_w(px(160.)).truncate().child(tab.label(cx)))
+                    .child(
+                        div()
+                            .id(("term-close", i))
+                            .text_color(p.idle)
+                            .child("×")
+                            .on_click(cx.listener(move |t, _: &gpui::ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                t.close_terminal_tab(i, cx);
+                            })),
+                    )
+                    .on_click(
+                        cx.listener(move |t, _, window, cx| t.select_terminal(i, true, window, cx)),
+                    ),
+            );
+        }
+        let menu = self.terms.menu.clone();
+        let body = match self
+            .terms
+            .active
+            .and_then(|i| self.terms.tabs.get(i))
+            .and_then(|t| t.view.clone())
+        {
+            Some(v) if running => v.into_any_element(),
+            _ => div()
+                .px(px(10.))
+                .py(px(6.))
+                .text_size(px(11.))
+                .text_color(p.idle)
+                .child(if running {
+                    "Starting a terminal…"
+                } else {
+                    "The environment is not running."
+                })
+                .into_any_element(),
+        };
+        v_flex()
+            .relative()
+            .h(height)
+            .flex_none()
+            .bg(p.term_bg)
+            .child(layout::handle("bottom-edge", Edge::Bottom))
+            .child(
+                h_flex()
+                    .gap(px(2.))
+                    .px(px(6.))
+                    .pt(px(4.))
+                    .text_size(px(11.))
+                    .child(
+                        div()
+                            .pl(px(4.))
+                            .pr(px(10.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(p.term_fg)
+                            .child("Terminal"),
+                    )
+                    .child(tabs)
+                    .when(running, |d| {
+                        d.child(
+                            div()
+                                .id("term-new")
+                                .px(px(6.))
+                                .text_color(p.idle)
+                                .cursor_pointer()
+                                .child("+")
+                                .on_click(
+                                    cx.listener(|t, _, window, cx| t.new_terminal(window, cx)),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .id("term-more")
+                                .px(px(4.))
+                                .text_color(p.idle)
+                                .cursor_pointer()
+                                .child("▾")
+                                .on_click(cx.listener(|t, _, window, cx| {
+                                    t.toggle_terminal_menu(window, cx)
+                                })),
+                        )
+                    }),
+            )
+            .child(div().flex_1().min_h_0().bg(p.term_tab).child(body))
+            .when_some(menu, |d, list| {
+                let mut m = v_flex()
+                    .absolute()
+                    .top(px(26.))
+                    .left(px(80.))
+                    .min_w(px(240.))
+                    .p(px(4.))
+                    .rounded(px(6.))
+                    .bg(p.surface)
+                    .border_1()
+                    .border_color(p.border)
+                    .text_size(px(12.))
+                    .text_color(p.text)
+                    .child(
+                        div()
+                            .id("term-menu-new")
+                            .px(px(8.))
+                            .py(px(4.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(p.surface_2))
+                            .child("New session")
+                            .on_click(cx.listener(|t, _, window, cx| t.new_terminal(window, cx))),
+                    );
+                if list.is_empty() {
+                    m = m.child(
+                        div()
+                            .px(px(8.))
+                            .py(px(4.))
+                            .text_color(p.muted)
+                            .child("No other sessions"),
+                    );
+                }
+                for (i, s) in list.into_iter().enumerate() {
+                    let id = s.id.clone();
+                    let label = if s.title.is_empty() {
+                        s.id.clone()
+                    } else {
+                        s.title.clone()
+                    };
+                    m = m.child(
+                        div()
+                            .id(("term-menu", i))
+                            .px(px(8.))
+                            .py(px(4.))
+                            .rounded(px(4.))
+                            .cursor_pointer()
+                            .hover(|s| s.bg(p.surface_2))
+                            .child(label)
+                            .on_click(cx.listener(move |t, _, window, cx| {
+                                t.open_terminal(&id, window, cx)
+                            })),
+                    );
+                }
+                d.child(m)
+            })
     }
 
     fn status_bar(&self, config: &PlaceConfig, env: &Environment, p: &Palette) -> impl IntoElement {
@@ -884,4 +1375,14 @@ fn capital(s: &str) -> String {
     c.next()
         .map(|f| f.to_uppercase().chain(c).collect())
         .unwrap_or_default()
+}
+
+/// An agent session's dot.
+fn agent_tone(a: &AgentSession) -> Tone {
+    match a.state.as_str() {
+        "asking" => Tone::Wait,
+        "finished" if a.needs_you => Tone::Good,
+        "working" => Tone::Busy,
+        _ => Tone::Idle,
+    }
 }

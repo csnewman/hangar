@@ -226,7 +226,7 @@ impl Places {
         let _ = dirs.save_places(&listed);
     }
 
-    fn client(&self, place: &str) -> Option<Client> {
+    pub fn client(&self, place: &str) -> Option<Client> {
         let i = self.places.iter().position(|(c, _)| c.id == place)?;
         self.links[i].client.clone()
     }
