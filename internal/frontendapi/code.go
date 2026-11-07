@@ -1,25 +1,18 @@
 package frontendapi
 
 import (
-	"context"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
-	"sync/atomic"
 
 	"github.com/coder/websocket"
 
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/code"
+	"github.com/csnewman/hangar/internal/codews"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/tunnel"
 )
-
-// codeFrameMax is the largest message the Code tab's service and the browser
-// exchange: a whole file's shared document on first sync.
-const codeFrameMax = 64 << 20
 
 // codeSocket carries the Code tab's connection to the environment's Code
 // service over a WebSocket: GET /api/frontend/environments/{id}/code.
@@ -74,55 +67,5 @@ func (h *handler) codeSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer c.CloseNow()
-	c.SetReadLimit(codeFrameMax)
-
-	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancel()
-	go h.keepAlive(ctx, c)
-	var received atomic.Bool
-	done := make(chan struct{}, 2)
-	go func() {
-		defer func() { done <- struct{}{} }()
-		var hdr [4]byte
-		for {
-			if _, err := io.ReadFull(stream, hdr[:]); err != nil {
-				return
-			}
-			n := binary.BigEndian.Uint32(hdr[:])
-			if n > codeFrameMax {
-				return
-			}
-			msg := make([]byte, n)
-			if _, err := io.ReadFull(stream, msg); err != nil {
-				return
-			}
-			received.Store(true)
-			if err := c.Write(ctx, websocket.MessageBinary, msg); err != nil {
-				return
-			}
-		}
-	}()
-	go func() {
-		defer func() { done <- struct{}{} }()
-		for {
-			kind, msg, err := c.Read(ctx)
-			if err != nil {
-				return
-			}
-			if answerPing(ctx, c, kind, msg) || kind != websocket.MessageBinary {
-				continue
-			}
-			var hdr [4]byte
-			binary.BigEndian.PutUint32(hdr[:], uint32(len(msg)))
-			if _, err := stream.Write(append(hdr[:], msg...)); err != nil {
-				return
-			}
-		}
-	}()
-	<-done
-	if !received.Load() {
-		c.Close(websocket.StatusTryAgainLater, "the environment's Code service is not available")
-		return
-	}
-	c.Close(websocket.StatusNormalClosure, "")
+	codews.Bridge(ctx, c, stream, h.socketPing)
 }

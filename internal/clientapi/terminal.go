@@ -15,6 +15,8 @@ import (
 
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/audit"
+	"github.com/csnewman/hangar/internal/code"
+	"github.com/csnewman/hangar/internal/codews"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/terminal"
 	"github.com/csnewman/hangar/internal/termws"
@@ -183,4 +185,57 @@ func (h *handler) terminalSocket(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.CloseNow()
 	termws.Bridge(ctx, c, stream, br, reply, 0)
+}
+
+// codeSocket carries a client's connection to the environment's Code
+// service over a WebSocket, as openapi.yaml's description says: each binary
+// message one of the service's frames. ?root= is the folder it starts in,
+// the environment's editor folder when it is not given.
+func (h *handler) codeSocket(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	if _, ok := ctx.Value(principalKey{}).(users.Principal); !ok {
+		writeError(w, http.StatusUnauthorized, errUnauthorized.Error())
+		return
+	}
+	env, err := h.envs.Get(ctx, principal(ctx), r.PathValue("id"))
+	switch {
+	case errors.Is(err, environments.ErrNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	case err != nil:
+		h.log.Error("opening the code service", "err", err)
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if env.Phase != api.PhaseRunning || env.WorkerID == "" {
+		writeError(w, http.StatusConflict, errNotRunning.Error())
+		return
+	}
+	if h.tunnels == nil {
+		writeError(w, http.StatusServiceUnavailable, errUnreachable.Error())
+		return
+	}
+	h.access(ctx, env, "environment.open_code", nil)
+	stream, err := h.tunnels.Open(env.WorkerID, tunnel.Header{Kind: tunnel.KindCode, Environment: env.ID})
+	if err != nil {
+		h.log.Warn("opening a code stream", "environment", env.ID, "err", err)
+		writeError(w, http.StatusServiceUnavailable, errUnreachable.Error())
+		return
+	}
+	defer stream.Close()
+	root := r.URL.Query().Get("root")
+	if root == "" {
+		root = env.Spec.EditorPath
+	}
+	req, _ := json.Marshal(code.Request{Root: root})
+	if _, err := stream.Write(append(req, '\n')); err != nil {
+		writeError(w, http.StatusServiceUnavailable, errUnreachable.Error())
+		return
+	}
+	c, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer c.CloseNow()
+	codews.Bridge(ctx, c, stream, 0)
 }

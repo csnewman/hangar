@@ -105,6 +105,7 @@ func New(cfg Config) http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/", routes)
 	mux.HandleFunc("GET /api/v1/environments/{id}/terminal", h.terminalSocket)
+	mux.HandleFunc("GET /api/v1/environments/{id}/code", h.codeSocket)
 	return h.authenticate(mux)
 }
 

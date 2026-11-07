@@ -34,6 +34,16 @@ info:
     environment not running and 503 when its worker cannot be reached.
 
 
+    Code. GET /api/v1/environments/{id}/code is a WebSocket to the
+    environment's Code service, in ?root= (an absolute folder) or its
+    editor folder: each binary message is one of the service's frames, a
+    channel byte then its payload; 'r' carries JSON requests ({"id",
+    "method", "params"}), their replies ({"id", "result"} or {"id",
+    "error"}) and events ({"event", "params"}). The service's own
+    documentation (crates/agent) says what each method does. It is refused
+    as the terminal is.
+
+
     A client asks /api/v1/version first. It needs no sign-in, and says which
     versions the server serves and which build it is, so a client can tell
     "this server is too old for me" from "I am too old for this server".

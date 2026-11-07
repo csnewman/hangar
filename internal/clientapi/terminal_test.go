@@ -1,6 +1,8 @@
 package clientapi_test
 
 import (
+	"bufio"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/clientapi"
+	"github.com/csnewman/hangar/internal/code"
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
@@ -32,8 +35,44 @@ type guest struct{ m *terminal.Manager }
 
 func (g guest) Open(_ string, h tunnel.Header) (net.Conn, error) {
 	server, client := net.Pipe()
-	go g.m.Serve(server)
+	if h.Kind == tunnel.KindCode {
+		go codeService(server)
+	} else {
+		go g.m.Serve(server)
+	}
 	return client, nil
+}
+
+// codeService stands in for the Code service: after the request line, it
+// answers each JSON frame with its root and the method asked for.
+func codeService(c net.Conn) {
+	defer c.Close()
+	br := bufio.NewReader(c)
+	line, err := br.ReadBytes('\n')
+	if err != nil {
+		return
+	}
+	var req code.Request
+	json.Unmarshal(line, &req)
+	for {
+		var hdr [4]byte
+		if _, err := io.ReadFull(br, hdr[:]); err != nil {
+			return
+		}
+		msg := make([]byte, binary.BigEndian.Uint32(hdr[:]))
+		if _, err := io.ReadFull(br, msg); err != nil {
+			return
+		}
+		var in struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		json.Unmarshal(msg[1:], &in)
+		out, _ := json.Marshal(map[string]any{"id": in.ID, "result": req.Root + " " + in.Method})
+		frame := append([]byte{'r'}, out...)
+		binary.BigEndian.PutUint32(hdr[:], uint32(len(frame)))
+		c.Write(append(hdr[:], frame...))
+	}
 }
 
 // A client lists an environment's terminals, attaches to a new one over a
@@ -137,5 +176,20 @@ func TestTerminals(t *testing.T) {
 	}
 	if status, _ := f.call("DELETE", "/api/v1/environments/"+env.ID+"/terminals/nope", "", bearer); status != 404 {
 		t.Fatalf("ending no session: %d", status)
+	}
+
+	// The Code service, in a folder asked for, one frame a message.
+	codeURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/environments/" + env.ID + "/code?root=/home/dev/app"
+	cc, _, err := websocket.Dial(ctx, codeURL, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cc.CloseNow()
+	if err := cc.Write(ctx, websocket.MessageBinary, []byte(`r{"id":1,"method":"workspace.get"}`)); err != nil {
+		t.Fatal(err)
+	}
+	_, msg, err := cc.Read(ctx)
+	if err != nil || string(msg) != `r{"id":1,"result":"/home/dev/app workspace.get"}` {
+		t.Fatalf("the service's answer: %q %v", msg, err)
 	}
 }
