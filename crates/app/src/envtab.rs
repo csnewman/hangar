@@ -17,6 +17,7 @@ use crate::assets;
 use crate::commit::CommitView;
 use crate::diff::{DiffView, ShowDiff, Spec};
 use crate::docedit::{self, DocEditor};
+use crate::find::{FindView, OpenAt};
 use crate::gitlog::GitView;
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Card, Tone};
@@ -164,6 +165,7 @@ actions!(
         ToggleProblems,
         ToggleGit,
         ToggleDocker,
+        FindInFiles,
         HideAllToolWindows,
         HideActiveToolWindow
     ]
@@ -205,6 +207,15 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(keys[6], ToggleDocker, ctx),
         KeyBinding::new(keys[7], HideAllToolWindows, ctx),
         KeyBinding::new("shift-escape", HideActiveToolWindow, ctx),
+        KeyBinding::new(
+            if cfg!(target_os = "macos") {
+                "cmd-shift-f"
+            } else {
+                "ctrl-shift-f"
+            },
+            FindInFiles,
+            ctx,
+        ),
     ]);
 }
 
@@ -227,6 +238,12 @@ fn shortcut(t: Tool) -> Option<String> {
         Tool::Problems => format!("{m}6"),
         Tool::Git => format!("{m}9"),
         Tool::Docker => format!("{m}8"),
+        Tool::Find => if cfg!(target_os = "macos") {
+            "⌘⇧F"
+        } else {
+            "Ctrl+Shift+F"
+        }
+        .to_string(),
         _ => return None,
     })
 }
@@ -253,6 +270,7 @@ pub struct EnvTab {
     project: Option<Entity<ProjectView>>,
     commit: Option<Entity<CommitView>>,
     git: Option<Entity<GitView>>,
+    find: Option<Entity<FindView>>,
     /// The files and diffs open in the editors, and the one shown.
     files: Vec<Tab>,
     file: Option<usize>,
@@ -365,6 +383,7 @@ impl EnvTab {
             project: None,
             commit: None,
             git: None,
+            find: None,
             files: vec![],
             file: None,
             subs: vec![],
@@ -649,6 +668,40 @@ impl EnvTab {
         self.project.clone()
     }
 
+    /// Opens the Find window, or brings it to the front, with its query
+    /// ready to type.
+    pub fn find_in_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_open(Tool::Find) {
+            self.toggle(Tool::Find, cx);
+        }
+        if let Some(f) = &self.find {
+            window.focus(&f.focus_handle(cx), cx);
+        }
+        cx.notify();
+    }
+
+    /// The Find window's view, once it has been shown.
+    pub fn find_view(&self) -> Option<Entity<FindView>> {
+        self.find.clone()
+    }
+
+    /// Opens a file in the editors with the cursor at a 0-based line and
+    /// UTF-16 column.
+    pub fn open_file_at(
+        &mut self,
+        root: &str,
+        path: &str,
+        line: u32,
+        column: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_file(root, path, window, cx);
+        if let Some(f) = self.active_file() {
+            f.update(cx, |f, cx| f.go_to(line, column, window, cx));
+        }
+    }
+
     /// The Git window's view, once it has been shown.
     pub fn git_view(&self) -> Option<Entity<GitView>> {
         self.git.clone()
@@ -825,6 +878,17 @@ impl Render for EnvTab {
                 );
                 self.commit = Some(view);
             }
+            if self.find.is_none() && self.is_open(Tool::Find) {
+                let ws = self.workspace(&env, cx);
+                let view = cx.new(|cx| FindView::new(ws, window, cx));
+                self.subs.push(
+                    cx.subscribe_in(&view, window, |t, _, e: &OpenAt, window, cx| {
+                        t.open_file_at(&e.root, &e.path, e.line, e.column, window, cx)
+                    }),
+                );
+                window.focus(&view.focus_handle(cx), cx);
+                self.find = Some(view);
+            }
             if self.git.is_none() && self.is_open(Tool::Git) {
                 let ws = self.workspace(&env, cx);
                 let view = cx.new(|cx| GitView::new(ws, cx));
@@ -861,6 +925,7 @@ impl Render for EnvTab {
             .on_action(cx.listener(|t, _: &ToggleProblems, _, cx| t.toggle(Tool::Problems, cx)))
             .on_action(cx.listener(|t, _: &ToggleGit, _, cx| t.toggle(Tool::Git, cx)))
             .on_action(cx.listener(|t, _: &ToggleDocker, _, cx| t.toggle(Tool::Docker, cx)))
+            .on_action(cx.listener(|t, _: &FindInFiles, window, cx| t.find_in_files(window, cx)))
             .child(self.toolbar(&config, &env, &card, &p, cx))
             .child(
                 h_flex()
@@ -1474,13 +1539,16 @@ impl EnvTab {
                 .terminal_window(height, env, p, window, cx)
                 .into_any_element();
         }
-        let body = match (t, &self.git) {
-            (Tool::Git, Some(git)) if env.phase == "running" => div()
-                .flex_1()
-                .min_h_0()
-                .child(git.clone())
-                .into_any_element(),
-            (Tool::Git, _) if env.phase != "running" => div()
+        let view = match t {
+            Tool::Git => self.git.clone().map(|v| v.into_any_element()),
+            Tool::Find => self.find.clone().map(|v| v.into_any_element()),
+            _ => None,
+        };
+        let body = match view {
+            Some(view) if env.phase == "running" => {
+                div().flex_1().min_h_0().child(view).into_any_element()
+            }
+            _ if env.phase != "running" && matches!(t, Tool::Git | Tool::Find) => div()
                 .px(px(10.))
                 .py(px(6.))
                 .text_size(px(11.))

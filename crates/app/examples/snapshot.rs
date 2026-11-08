@@ -15,6 +15,8 @@
 //! SNAPSHOT_EDIT types at its start; SNAPSHOT_STAGE=ROOT:PATH stages a file
 //! from the Commit window and SNAPSHOT_COMMIT=message commits what is staged;
 //! SNAPSHOT_BRANCH=1 shows the Commit window's Branch view;
+//! SNAPSHOT_FIND=text searches in files and SNAPSHOT_FIND_OPEN=N opens the Nth
+//! result row;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
@@ -202,6 +204,41 @@ fn main() {
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(2)).await;
+                }
+                if let Ok(text) = std::env::var("SNAPSHOT_FIND") {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        if let Some(tab) = shell.read(cx).active_view() {
+                            tab.update(cx, |t, cx| t.find_in_files(window, cx));
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(1)).await;
+                    let _ = handle.update(cx, |_, window, cx| {
+                        let find = shell
+                            .read(cx)
+                            .active_view()
+                            .and_then(|t| t.read(cx).find_view());
+                        if let Some(f) = find {
+                            let query = f.read(cx).query().clone();
+                            query.update(cx, |q, cx| q.set_value(text, window, cx));
+                            f.update(cx, |f, cx| f.search(cx));
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(3)).await;
+                    if let Some(n) = std::env::var("SNAPSHOT_FIND_OPEN")
+                        .ok()
+                        .and_then(|n| n.parse::<usize>().ok())
+                    {
+                        let _ = handle.update(cx, |_, _, cx| {
+                            let find = shell
+                                .read(cx)
+                                .active_view()
+                                .and_then(|t| t.read(cx).find_view());
+                            if let Some(f) = find {
+                                f.update(cx, |f, cx| f.open(n, cx));
+                            }
+                        });
+                        settle(cx, handle.into(), Duration::from_secs(3)).await;
+                    }
                 }
                 if std::env::var("SNAPSHOT_BRANCH").is_ok() {
                     let _ = handle.update(cx, |_, _, cx| {

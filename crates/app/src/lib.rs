@@ -9,6 +9,7 @@ pub mod commit;
 pub mod diff;
 pub mod docedit;
 pub mod envtab;
+pub mod find;
 pub mod gitlog;
 pub mod layout;
 pub mod model;

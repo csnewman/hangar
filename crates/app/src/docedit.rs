@@ -17,7 +17,7 @@ use gpui::{
     App, Context, Entity, EntityInputHandler, FocusHandle, Focusable, IntoElement, ParentElement,
     Render, Styled, Subscription, WeakEntity, Window, div, prelude::*, px,
 };
-use gpui_component::input::{Editor, EditorState, InputEditsEvent, Redo, Rope, Undo};
+use gpui_component::input::{Editor, EditorState, InputEditsEvent, Position, Redo, Rope, Undo};
 use hangar_proto::collab::{self, Update};
 use hangar_proto::{Change, ChangeSet, Error, MapMode, Text};
 use serde_json::{Value, json};
@@ -284,6 +284,13 @@ pub struct DocEditor {
     pushing: bool,
     writable: bool,
     state: State,
+    /// Where to put the cursor once the file is open: 0-based line and
+    /// UTF-16 column.
+    go_to: Option<(u32, u32)>,
+    /// Whether the editor has been drawn with the file's text: opening
+    /// puts it back at the top as it is next drawn, so the cursor is moved
+    /// (and scrolled to) only after.
+    drawn: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -332,6 +339,8 @@ impl DocEditor {
             pushing: false,
             writable: false,
             state: State::Opening,
+            go_to: None,
+            drawn: false,
             _subs: vec![edits],
         }
     }
@@ -419,7 +428,28 @@ impl DocEditor {
         self.applying = false;
         self.shadow = self.editor.read(cx).text().clone();
         self.state = State::Open;
+        self.drawn = false;
         cx.notify();
+    }
+
+    /// Puts the cursor at a 0-based line and UTF-16 column, once the file
+    /// is open.
+    pub fn go_to(&mut self, line: u32, column: u32, window: &mut Window, cx: &mut Context<Self>) {
+        if self.state != State::Open || !self.drawn {
+            self.go_to = Some((line, column));
+            cx.notify();
+            return;
+        }
+        self.editor.update(cx, |e, cx| {
+            e.set_cursor_position(
+                Position {
+                    line,
+                    character: column,
+                },
+                window,
+                cx,
+            )
+        });
     }
 
     /// Takes what the user typed, to send and to undo.
@@ -560,8 +590,18 @@ impl Focusable for DocEditor {
 }
 
 impl Render for DocEditor {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
+        if self.state == State::Open {
+            if !self.drawn {
+                self.drawn = true;
+                if self.go_to.is_some() {
+                    cx.notify();
+                }
+            } else if let Some((line, column)) = self.go_to.take() {
+                self.go_to(line, column, window, cx);
+            }
+        }
         let notice = match &self.state {
             State::Opening => Some("Opening…".to_string()),
             State::Deleted => Some("The file has been deleted.".to_string()),
