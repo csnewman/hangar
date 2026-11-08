@@ -14,7 +14,8 @@ use gpui_component::{h_flex, v_flex};
 
 use crate::api::{AgentSession, Client, Environment, TerminalSession};
 use crate::assets;
-use crate::commit::CommitView;
+use crate::commit::{CommitView, ShowDiff};
+use crate::diff::{DiffView, Spec};
 use crate::docedit::{self, DocEditor};
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Card, Tone};
@@ -250,10 +251,51 @@ pub struct EnvTab {
     /// The Project and Commit windows, made when each is first shown.
     project: Option<Entity<ProjectView>>,
     commit: Option<Entity<CommitView>>,
-    /// The files open in the editors, and the one shown.
-    files: Vec<Entity<DocEditor>>,
+    /// The files and diffs open in the editors, and the one shown.
+    files: Vec<Tab>,
     file: Option<usize>,
     subs: Vec<gpui::Subscription>,
+}
+
+/// An editor tab: a file, or a file's diff.
+#[derive(Clone)]
+enum Tab {
+    Doc(Entity<DocEditor>),
+    Diff(Entity<DiffView>),
+}
+
+impl Tab {
+    /// The file's absolute path.
+    fn path(&self, cx: &App) -> String {
+        match self {
+            Tab::Doc(d) => d.read(cx).path().to_string(),
+            Tab::Diff(d) => d.read(cx).spec().abs(),
+        }
+    }
+
+    fn title(&self, cx: &App) -> String {
+        match self {
+            Tab::Doc(d) => {
+                let path = d.read(cx).path();
+                path.rsplit('/').next().unwrap_or(path).to_string()
+            }
+            Tab::Diff(d) => d.read(cx).title(),
+        }
+    }
+
+    fn focus_handle(&self, cx: &App) -> gpui::FocusHandle {
+        match self {
+            Tab::Doc(d) => d.focus_handle(cx),
+            Tab::Diff(d) => d.focus_handle(cx),
+        }
+    }
+
+    fn element(&self) -> gpui::AnyElement {
+        match self {
+            Tab::Doc(d) => d.clone().into_any_element(),
+            Tab::Diff(d) => d.clone().into_any_element(),
+        }
+    }
 }
 
 /// The Terminal tool window's tabs: one per session, attached when first
@@ -510,9 +552,12 @@ impl EnvTab {
         } else {
             format!("{}/{path}", root.trim_end_matches('/'))
         };
-        let i = match self.files.iter().position(|f| {
-            let f = f.read(cx);
-            f.path() == abs || f.asked() == abs
+        let i = match self.files.iter().position(|f| match f {
+            Tab::Doc(f) => {
+                let f = f.read(cx);
+                f.path() == abs || f.asked() == abs
+            }
+            Tab::Diff(_) => false,
         }) {
             Some(i) => i,
             None => {
@@ -522,7 +567,35 @@ impl EnvTab {
                 let env = self.env.clone();
                 let view = cx.new(|cx| DocEditor::new(&client, &env, root, &abs, window, cx));
                 self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
-                self.files.push(view);
+                self.files.push(Tab::Doc(view));
+                self.files.len() - 1
+            }
+        };
+        self.show_file(i, window, cx);
+    }
+
+    /// Shows a diff in the diff tab, as IntelliJ's preview does: there is
+    /// one, which each diff shown takes over.
+    pub fn open_diff(&mut self, spec: Spec, window: &mut Window, cx: &mut Context<Self>) {
+        let at = self.files.iter().position(|f| matches!(f, Tab::Diff(_)));
+        if let Some(i) = at
+            && let Tab::Diff(d) = &self.files[i]
+            && d.read(cx).spec() == &spec
+        {
+            self.show_file(i, window, cx);
+            return;
+        }
+        let Some(ws) = self.workspace.clone() else {
+            return;
+        };
+        let tab = Tab::Diff(cx.new(|cx| DiffView::new(ws, spec, cx)));
+        let i = match at {
+            Some(i) => {
+                self.files[i] = tab;
+                i
+            }
+            None => {
+                self.files.push(tab);
                 self.files.len() - 1
             }
         };
@@ -549,18 +622,23 @@ impl EnvTab {
 
     /// The files open, by absolute path, and the one shown.
     pub fn open_files(&self, cx: &App) -> (Vec<String>, Option<usize>) {
-        (
-            self.files
-                .iter()
-                .map(|f| f.read(cx).path().to_string())
-                .collect(),
-            self.file,
-        )
+        (self.files.iter().map(|f| f.path(cx)).collect(), self.file)
     }
 
-    /// The editor of the file shown.
+    /// The editor of the file shown, when it is a file's.
     pub fn active_file(&self) -> Option<Entity<DocEditor>> {
-        self.file.and_then(|i| self.files.get(i)).cloned()
+        match self.file.and_then(|i| self.files.get(i)) {
+            Some(Tab::Doc(d)) => Some(d.clone()),
+            _ => None,
+        }
+    }
+
+    /// The diff shown, when it is one.
+    pub fn active_diff(&self) -> Option<Entity<DiffView>> {
+        match self.file.and_then(|i| self.files.get(i)) {
+            Some(Tab::Diff(d)) => Some(d.clone()),
+            _ => None,
+        }
     }
 
     /// The Project window's view, once it has been shown.
@@ -730,6 +808,11 @@ impl Render for EnvTab {
                 self.subs.push(
                     cx.subscribe_in(&view, window, |t, _, e: &OpenFile, window, cx| {
                         t.open_file(&e.root, &e.path, window, cx)
+                    }),
+                );
+                self.subs.push(
+                    cx.subscribe_in(&view, window, |t, _, e: &ShowDiff, window, cx| {
+                        t.open_diff(e.0.clone(), window, cx)
                     }),
                 );
                 self.commit = Some(view);
@@ -1289,8 +1372,8 @@ impl EnvTab {
                 .text_size(px(11.5));
             for (i, f) in self.files.iter().enumerate() {
                 let on = self.file == Some(i);
-                let path = f.read(cx).path().to_string();
-                let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+                let path = f.path(cx);
+                let name = f.title(cx);
                 let hover = p.surface_2;
                 tabs = tabs.child(
                     h_flex()
@@ -1326,7 +1409,7 @@ impl EnvTab {
                 .flex_1()
                 .min_h_0()
                 .child(tabs)
-                .child(div().flex_1().min_h_0().child(active))
+                .child(div().flex_1().min_h_0().child(active.element()))
                 .into_any_element();
         }
         self.no_file(p).into_any_element()

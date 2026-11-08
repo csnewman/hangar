@@ -1,7 +1,7 @@
 //! The Commit tool window: what has changed in each of the environment's
 //! projects, repository by repository as the web UI's Changes view shows
 //! it (staged, changed, unversioned), to stage, roll back and commit, and
-//! push after.
+//! push after. A click shows a file's diff; a double-click opens it.
 
 use std::collections::HashMap;
 
@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 use crate::assets;
 use crate::code::Code;
+use crate::diff::Spec;
 use crate::palette::{self, Palette};
 use crate::project::OpenFile;
 use crate::ui;
@@ -196,6 +197,12 @@ pub struct CommitView {
 }
 
 impl gpui::EventEmitter<OpenFile> for CommitView {}
+
+/// Asks for a diff to be shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShowDiff(pub Spec);
+
+impl gpui::EventEmitter<ShowDiff> for CommitView {}
 
 impl CommitView {
     pub fn new(workspace: Entity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -481,6 +488,11 @@ impl Render for CommitView {
             .map(|f| (f.root.clone(), f.name.clone()))
             .collect();
         let several = folders.len() > 1;
+        let projects = self.projects(cx);
+        let first: std::collections::HashSet<(String, String)> = unique(&projects)
+            .into_iter()
+            .map(|(root, r)| (root.to_string(), r.path.clone()))
+            .collect();
 
         let mut list = v_flex()
             .id("commit-changes")
@@ -511,8 +523,17 @@ impl Render for CommitView {
                             list = list.child(muted("Not a git repository.", &p))
                         }
                         Some(Ok(repos)) => {
-                            let one = repos.len() == 1;
-                            for r in repos {
+                            // A repository an earlier project holds is
+                            // listed there.
+                            let own: Vec<&Repo> = repos
+                                .iter()
+                                .filter(|r| first.contains(&(root.clone(), r.path.clone())))
+                                .collect();
+                            if own.is_empty() {
+                                list = list.child(muted("Its repositories are listed above.", &p));
+                            }
+                            let one = own.len() == 1;
+                            for r in own {
                                 any |= !r.changes.is_empty();
                                 list = list.child(self.repo(root, r, one, &p, cx));
                             }
@@ -528,7 +549,6 @@ impl Render for CommitView {
             list = list.child(muted("Nothing has changed.", &p));
         }
 
-        let projects = self.projects(cx);
         let staged_files: usize = unique(&projects)
             .iter()
             .map(|(_, r)| r.changes.iter().filter(|c| is_staged(c)).count())
@@ -766,6 +786,7 @@ impl CommitView {
         let selected = self.selected.as_ref() == Some(&key);
         let confirming = self.confirm.as_ref() == Some(&key);
         let deleted = letter == "D";
+        let from = c.from.clone();
         let tip = match &c.from {
             Some(from) => format!("{from} → {}", c.path),
             None => c.path.clone(),
@@ -886,6 +907,10 @@ impl CommitView {
                         root: rt.clone(),
                         path: path.clone(),
                     });
+                } else {
+                    let mut spec = Spec::working(&rt, &path);
+                    spec.from = from.clone();
+                    cx.emit(ShowDiff(spec));
                 }
                 cx.notify();
             }))

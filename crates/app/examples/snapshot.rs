@@ -14,6 +14,7 @@
 //! opens a project's folders; SNAPSHOT_FILE=ROOT:PATH opens a file, and
 //! SNAPSHOT_EDIT types at its start; SNAPSHOT_STAGE=ROOT:PATH stages a file
 //! from the Commit window and SNAPSHOT_COMMIT=message commits what is staged;
+//! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
 
 use std::time::Duration;
@@ -182,6 +183,23 @@ fn main() {
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(3)).await;
+                }
+                if let Some((root, path)) = std::env::var("SNAPSHOT_DIFF").ok().and_then(|e| {
+                    e.split_once(':')
+                        .map(|(a, b)| (a.to_string(), b.to_string()))
+                }) {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        if let Some(tab) = shell.read(cx).active_view() {
+                            tab.update(cx, |t, cx| {
+                                t.open_diff(
+                                    hangar_app::diff::Spec::working(&root, &path),
+                                    window,
+                                    cx,
+                                )
+                            });
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(2)).await;
                 }
                 if let Ok(text) = std::env::var("SNAPSHOT_TYPE") {
                     let text = text.replace("\\n", "\r");

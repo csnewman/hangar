@@ -5,6 +5,7 @@ pub mod api;
 pub mod assets;
 pub mod code;
 pub mod commit;
+pub mod diff;
 pub mod docedit;
 pub mod envtab;
 pub mod layout;
