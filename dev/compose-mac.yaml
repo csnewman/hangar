@@ -1,0 +1,13 @@
+# The dev stack without the Lima VM, for the Mac's own worker
+# (dev/mac-worker.sh) alone:
+#
+#   docker compose -f compose.yaml -f dev/compose-mac.yaml up --watch
+#
+# The files environments share are the Mac worker's storage.files, bound
+# into the server, as one share serves the server and every worker of a
+# real deployment. compose.yaml's files volume is the Lima VM's NFS export,
+# which the server cannot start without.
+services:
+  server:
+    volumes:
+      - ./out/mac-worker/files:/var/lib/hangar/files
