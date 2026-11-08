@@ -261,6 +261,9 @@ impl gpui::EventEmitter<OpenAt> for FindView {}
 
 pub struct FindView {
     workspace: Entity<Workspace>,
+    /// What the rows are when they are a language server's answer rather
+    /// than a search: "Usages of refresh".
+    title: Option<String>,
     query: Entity<InputState>,
     mask: Entity<InputState>,
     options: Options,
@@ -302,6 +305,7 @@ impl FindView {
         ];
         FindView {
             workspace,
+            title: None,
             query,
             mask,
             options: Options::default(),
@@ -326,8 +330,33 @@ impl FindView {
         &self.rows
     }
 
+    /// Lists a language server's usages of a symbol: each project's lines,
+    /// by root, under title.
+    pub fn show_usages(
+        &mut self,
+        title: String,
+        found: Vec<(String, Vec<Match>)>,
+        cx: &mut Context<Self>,
+    ) {
+        self.generation += 1;
+        self.title = Some(title);
+        self.rows = rows(&found);
+        self.files = self
+            .rows
+            .iter()
+            .filter(|r| matches!(r, Row::File { .. }))
+            .count();
+        self.matches = self.rows.len() - self.files;
+        self.truncated = false;
+        self.pending = 0;
+        self.errors.clear();
+        self.selected = None;
+        cx.notify();
+    }
+
     /// Lists a search's matches here, as the pop-up's Open in Find Window.
     pub fn show(&mut self, s: Search, window: &mut Window, cx: &mut Context<Self>) {
+        self.title = None;
         self.options = s.options;
         self.scope = s.scope;
         let mask = s.mask.unwrap_or_default();
@@ -628,7 +657,9 @@ impl Render for FindView {
                 note(self.errors.join("\n"), &p)
             }
             State::Ready if self.rows.is_empty() => note(
-                if self.query.read(cx).value().is_empty() {
+                if self.title.is_some() {
+                    "No usages found."
+                } else if self.query.read(cx).value().is_empty() {
                     "Type to search the environment's projects."
                 } else if self.pending > 0 {
                     ""
@@ -652,7 +683,33 @@ impl Render for FindView {
             .size_full()
             .min_h_0()
             .text_size(px(12.))
-            .child(bar)
+            .child(match self.title.clone() {
+                // A language server's answer: what it is, and the way back
+                // to searching.
+                Some(title) => {
+                    h_flex()
+                        .flex_none()
+                        .gap(px(8.))
+                        .px(px(10.))
+                        .py(px(6.))
+                        .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
+                        .child(div().text_color(p.muted).child(format!(
+                            "{} in {} file{}",
+                            self.matches,
+                            self.files,
+                            if self.files == 1 { "" } else { "s" }
+                        )))
+                        .child(div().flex_1())
+                        .child(chip("find-back", "Search ✕".into(), false, &p).on_click(
+                            cx.listener(|v, _, _, cx| {
+                                v.title = None;
+                                v.search(cx);
+                            }),
+                        ))
+                        .into_any_element()
+                }
+                None => bar.into_any_element(),
+            })
             .child(v_flex().flex_1().min_h_0().child(body))
     }
 }

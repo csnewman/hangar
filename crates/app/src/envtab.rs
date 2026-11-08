@@ -176,6 +176,8 @@ actions!(
         CloseTab,
         ReopenClosedTab,
         GoToLine,
+        FindUsages,
+        RenameSymbol,
         HideAllToolWindows,
         HideActiveToolWindow
     ]
@@ -237,6 +239,10 @@ pub fn bind_keys(cx: &mut App) {
     let go_to_line = if mac { "cmd-l" } else { "ctrl-g" };
     cx.bind_keys([
         KeyBinding::new(go_to_line, GoToLine, ctx),
+        KeyBinding::new("alt-f7", FindUsages, ctx),
+        KeyBinding::new("alt-f7", FindUsages, input),
+        KeyBinding::new("shift-f6", RenameSymbol, ctx),
+        KeyBinding::new("shift-f6", RenameSymbol, input),
         KeyBinding::new(go_to_line, GoToLine, input),
         KeyBinding::new(close, CloseTab, ctx),
         KeyBinding::new(reopen, ReopenClosedTab, ctx),
@@ -305,6 +311,9 @@ pub struct EnvTab {
     find_sub: Option<gpui::Subscription>,
     /// A search to list in the Find window once it is made.
     pending_find: Option<Search>,
+    /// A language server's usages to list in the Find window once it is
+    /// made: what of, and each project's lines.
+    pending_usages: Option<(String, Vec<(String, Vec<crate::find::Match>)>)>,
     /// The search Find in Files last made, which it opens on.
     last_search: Option<Search>,
     problems: Option<Entity<ProblemsView>>,
@@ -431,6 +440,7 @@ impl EnvTab {
             find_popup: None,
             find_sub: None,
             pending_find: None,
+            pending_usages: None,
             last_search: None,
             problems: None,
             languages: None,
@@ -806,6 +816,255 @@ impl EnvTab {
                 }
             },
         );
+    }
+
+    /// The file shown, its server, and where its caret is: the word there
+    /// and the request params naming the place.
+    fn at_caret(
+        &self,
+        cx: &App,
+    ) -> Option<(
+        Entity<DocEditor>,
+        Entity<Languages>,
+        String,
+        String,
+        serde_json::Value,
+    )> {
+        use gpui_component::input::RopeExt;
+        let doc = self.active_file()?;
+        let langs = self.languages.clone()?;
+        let abs = doc.read(cx).path().to_string();
+        let (text, caret) = doc.read(cx).text_and_caret(cx);
+        let word = crate::lspops::word_at(&text.to_string(), caret);
+        let params = serde_json::json!({
+            "textDocument": { "uri": languages::file_uri(&abs) },
+            "position": text.offset_to_position(caret),
+        });
+        Some((doc, langs, abs, word, params))
+    }
+
+    /// The connection that reaches a file: its project's, else the editor
+    /// folder's, which reads the whole machine.
+    fn code_for(&self, abs: &str, cx: &App) -> Option<crate::code::Code> {
+        let ws = self.workspace.as_ref()?.read(cx);
+        ws.project_of(abs)
+            .map(|f| f.code.clone())
+            .or_else(|| ws.primary())
+    }
+
+    /// Lists every use of the symbol at the caret in the Find window, as
+    /// its language server finds them (IntelliJ's Find Usages, Alt-F7).
+    pub fn find_usages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, langs, abs, word, mut params)) = self.at_caret(cx) else {
+            return;
+        };
+        params["context"] = serde_json::json!({ "includeDeclaration": true });
+        let asked = langs.update(cx, |l, cx| {
+            l.request(&abs, "textDocument/references", params, cx)
+        });
+        // The files open here are read from their editors, the rest from
+        // disk.
+        let open: HashMap<String, String> = self
+            .files
+            .iter()
+            .filter_map(|f| match f {
+                Tab::Doc(d) => {
+                    let d = d.read(cx);
+                    Some((d.path().to_string(), d.text_and_caret(cx).0.to_string()))
+                }
+                Tab::Diff(_) => None,
+            })
+            .collect();
+        cx.spawn_in(window, async move |this, cx| {
+            let found = match asked.await.and_then(|v| {
+                serde_json::from_value::<Option<Vec<lsp_types::Location>>>(v)
+                    .map_err(|e| e.to_string())
+            }) {
+                Ok(l) => l.unwrap_or_default(),
+                Err(e) => {
+                    let _ = cx.update(|window, cx| {
+                        use gpui_component::WindowExt;
+                        window.push_notification(
+                            gpui_component::notification::Notification::error(format!(
+                                "Find Usages: {e}"
+                            )),
+                            cx,
+                        );
+                    });
+                    return;
+                }
+            };
+            let mut by_file: std::collections::BTreeMap<String, Vec<lsp_types::Range>> =
+                Default::default();
+            for l in found {
+                if let Some(abs) = languages::uri_path(l.uri.as_str()) {
+                    by_file.entry(abs).or_default().push(l.range);
+                }
+            }
+            let mut by_root: std::collections::BTreeMap<String, Vec<crate::find::Match>> =
+                Default::default();
+            for (abs, mut ranges) in by_file {
+                let text = match open.get(&abs) {
+                    Some(t) => t.clone(),
+                    None => {
+                        let Ok(Some(code)) = this.update(cx, |t, cx| t.code_for(&abs, cx)) else {
+                            continue;
+                        };
+                        match code
+                            .call("fs.read", serde_json::json!({ "path": abs }))
+                            .await
+                        {
+                            Ok(v) => v["text"].as_str().unwrap_or_default().to_string(),
+                            Err(_) => continue,
+                        }
+                    }
+                };
+                let root = this
+                    .update(cx, |t, cx| {
+                        t.workspace
+                            .as_ref()
+                            .and_then(|w| w.read(cx).project_of(&abs).map(|f| f.root.clone()))
+                    })
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| "/".into());
+                let rel = abs
+                    .strip_prefix(&format!("{}/", root.trim_end_matches('/')))
+                    .unwrap_or(&abs)
+                    .to_string();
+                let lines: Vec<&str> = text.lines().collect();
+                ranges.sort_by_key(|r| (r.start.line, r.start.character));
+                for r in ranges {
+                    let Some(line) = lines.get(r.start.line as usize) else {
+                        continue;
+                    };
+                    let end = if r.end.line == r.start.line {
+                        r.end.character as usize
+                    } else {
+                        line.encode_utf16().count()
+                    };
+                    by_root
+                        .entry(root.clone())
+                        .or_default()
+                        .push(crate::find::Match {
+                            path: rel.clone(),
+                            line: r.start.line + 1,
+                            text: line.to_string(),
+                            ranges: vec![[r.start.character as usize, end]],
+                        });
+                }
+            }
+            let _ = this.update(cx, |t, cx| {
+                let title = format!("Usages of {word}");
+                let found = by_root.into_iter().collect();
+                if !t.is_open(Tool::Find) {
+                    t.toggle(Tool::Find, cx);
+                }
+                match &t.find {
+                    Some(f) => f.update(cx, |f, cx| f.show_usages(title, found, cx)),
+                    None => t.pending_usages = Some((title, found)),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Renames the symbol at the caret everywhere its language server finds
+    /// it (IntelliJ's Rename, Shift-F6), asking the new name.
+    pub fn rename_symbol(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((_, langs, abs, word, params)) = self.at_caret(cx) else {
+            return;
+        };
+        if word.is_empty() {
+            return;
+        }
+        let this = cx.entity().downgrade();
+        crate::treeops::ask_name(
+            "Rename",
+            &word,
+            "Rename",
+            window,
+            cx,
+            move |name, window, cx| {
+                let mut params = params.clone();
+                params["newName"] = name.into();
+                let asked = langs.update(cx, |l, cx| {
+                    l.request(&abs, "textDocument/rename", params, cx)
+                });
+                let this = this.clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        let edit = asked.await.and_then(|v| {
+                            serde_json::from_value::<Option<lsp_types::WorkspaceEdit>>(v)
+                                .map_err(|e| e.to_string())
+                        });
+                        let _ = cx.update(|window, cx| match edit {
+                            Ok(Some(edit)) => {
+                                let _ = this.update(cx, |t, cx| {
+                                    t.apply_edits(crate::lspops::by_file(edit), window, cx)
+                                });
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                use gpui_component::WindowExt;
+                                window.push_notification(
+                                    gpui_component::notification::Notification::error(format!(
+                                        "Rename: {e}"
+                                    )),
+                                    cx,
+                                );
+                            }
+                        });
+                    })
+                    .detach();
+            },
+        );
+    }
+
+    /// Makes a language server's edits: in a file open here as the user's
+    /// own change, undone with one Undo; in any other through its shared
+    /// document.
+    pub fn apply_edits(
+        &mut self,
+        files: std::collections::BTreeMap<String, Vec<lsp_types::TextEdit>>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        for (abs, edits) in files {
+            let open = self.files.iter().find_map(|f| match f {
+                Tab::Doc(d) if d.read(cx).path() == abs => Some(d.clone()),
+                _ => None,
+            });
+            match open {
+                Some(doc) => {
+                    let text = doc.read(cx).text_and_caret(cx).0;
+                    if let Some(change) = crate::lspops::changeset(&text, &edits) {
+                        doc.update(cx, |d, cx| d.apply_own(change, window, cx));
+                    }
+                }
+                None => {
+                    let Some(code) = self.code_for(&abs, cx) else {
+                        continue;
+                    };
+                    let edit = crate::lspops::edit_closed(code, abs.clone(), edits);
+                    cx.spawn_in(window, async move |_, cx| {
+                        if let Err(e) = edit.await {
+                            let _ = cx.update(|window, cx| {
+                                use gpui_component::WindowExt;
+                                window.push_notification(
+                                    gpui_component::notification::Notification::error(format!(
+                                        "Could not change {abs}: {e}"
+                                    )),
+                                    cx,
+                                );
+                            });
+                        }
+                    })
+                    .detach();
+                }
+            }
+        }
     }
 
     /// Opens the file last closed again, as IntelliJ's Reopen Closed Tab.
@@ -1255,6 +1514,11 @@ impl Render for EnvTab {
                 window.focus(&view.focus_handle(cx), cx);
                 self.find = Some(view);
             }
+            if let (Some(view), Some((title, found))) =
+                (self.find.clone(), self.pending_usages.take())
+            {
+                view.update(cx, |v, cx| v.show_usages(title, found, cx));
+            }
             if let (Some(view), Some(s)) = (self.find.clone(), self.pending_find.take()) {
                 view.update(cx, |v, cx| v.show(s, window, cx));
             }
@@ -1312,6 +1576,8 @@ impl Render for EnvTab {
             .on_action(cx.listener(|t, _: &ToggleDocker, _, cx| t.toggle(Tool::Docker, cx)))
             .on_action(cx.listener(|t, _: &FindInFiles, window, cx| t.find_in_files(window, cx)))
             .on_action(cx.listener(|t, _: &GoToLine, window, cx| t.go_to_line(window, cx)))
+            .on_action(cx.listener(|t, _: &FindUsages, window, cx| t.find_usages(window, cx)))
+            .on_action(cx.listener(|t, _: &RenameSymbol, window, cx| t.rename_symbol(window, cx)))
             .on_action(cx.listener(|t, _: &CloseTab, _, cx| {
                 if let Some(i) = t.file {
                     t.close_file(i, cx);

@@ -17,6 +17,7 @@ pub mod gitlog;
 pub mod languages;
 pub mod layout;
 pub mod lspedit;
+pub mod lspops;
 pub mod menus;
 pub mod model;
 pub mod notices;

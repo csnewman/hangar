@@ -94,6 +94,17 @@ impl DocSync {
         self.client.id()
     }
 
+    /// Takes a change the user asked for in one go, made to before (a
+    /// rename's edits): sent as theirs, and one step of undo.
+    pub fn own(&mut self, change: ChangeSet, before: &Rope) {
+        if let Some(inverse) = invert(&change, before) {
+            self.undo.push(inverse);
+        }
+        self.client.local(change);
+        self.redo.clear();
+        self.last_typed = None;
+    }
+
     /// Takes a change of the user's that is not a step of undo: what was
     /// typed while the authority could not be told, carried onto the
     /// document it has.
@@ -1081,6 +1092,26 @@ impl DocEditor {
         let range = cap(to.start)..cap(to.end);
         self.editor
             .update(cx, |e, cx| e.set_selected_range(range, cx));
+    }
+
+    /// Makes a change of the user's in one go, as Rename's edits to this
+    /// file: put in the editor, sent, and undone with one Undo.
+    pub fn apply_own(&mut self, change: ChangeSet, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.writable {
+            return;
+        }
+        let Some(sync) = self.sync.as_mut() else {
+            return;
+        };
+        sync.own(change.clone(), &self.shadow);
+        self.apply(&change, true, window, cx);
+        self.push(cx);
+    }
+
+    /// The editor's text and the caret's byte offset in it.
+    pub fn text_and_caret(&self, cx: &App) -> (Rope, usize) {
+        let e = self.editor.read(cx);
+        (e.text().clone(), e.cursor())
     }
 
     fn undo(&mut self, window: &mut Window, cx: &mut Context<Self>) {

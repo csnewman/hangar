@@ -6,8 +6,9 @@ use gpui::{App, KeyBinding, Menu, MenuItem, OsAction, actions};
 use gpui_component::input::{Copy, Cut, Paste, Redo, Replace, Search, SelectAll, Undo};
 
 use crate::envtab::{
-    CloseTab, FindInFiles, GoToLine, HideAllToolWindows, ReopenClosedTab, ReplaceInFiles, ToggleCommit,
-    ToggleDocker, ToggleGit, ToggleProblems, ToggleProject, ToggleStructure, ToggleTerminal,
+    CloseTab, FindInFiles, FindUsages, GoToLine, HideAllToolWindows, RenameSymbol, ReopenClosedTab,
+    ReplaceInFiles, ToggleCommit, ToggleDocker, ToggleGit, ToggleProblems, ToggleProject,
+    ToggleStructure, ToggleTerminal,
 };
 use crate::shell::SearchEverywhere;
 
@@ -64,7 +65,9 @@ pub fn init(cx: &mut App) {
             MenuItem::action("Line…", GoToLine),
             MenuItem::action("Find in Files…", FindInFiles),
             MenuItem::action("Replace in Files…", ReplaceInFiles),
+            MenuItem::action("Find Usages", FindUsages),
         ]),
+        Menu::new("Refactor").items([MenuItem::action("Rename…", RenameSymbol)]),
         Menu::new("View").items([
             MenuItem::action("Project", ToggleProject),
             MenuItem::action("Commit", ToggleCommit),
