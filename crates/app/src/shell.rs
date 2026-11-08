@@ -101,6 +101,9 @@ struct AddServer {
 
 impl Shell {
     pub fn new(places: Entity<Places>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        // A context menu opening or closing puts the shield up or down.
+        cx.observe_global::<crate::ui::OpenMenus>(|_, cx| cx.notify())
+            .detach();
         cx.observe_in(&places, window, |this, _, window, cx| {
             this.tell_seen(window, cx);
             this.observe_notices(window, cx);
@@ -534,6 +537,7 @@ impl Render for Shell {
                         .child(self.notices_list(&p, cx)),
                 )
             })
+            .children(crate::ui::shield(cx))
             .when_some(search, |this, view| {
                 this.child(
                     div()

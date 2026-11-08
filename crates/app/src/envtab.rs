@@ -2268,7 +2268,8 @@ impl EnvTab {
                                     path.strip_prefix(&format!("{root}/")).map(str::to_string)
                                 })
                                 .unwrap_or_else(|| path.clone());
-                            move |menu, _, _| {
+                            move |menu, _, cx| {
+                                crate::ui::modal(cx);
                                 Self::tab_menu(
                                     menu,
                                     i,

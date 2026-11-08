@@ -558,7 +558,10 @@ impl Render for ProjectView {
                                 let t = self.target(Some(&proj.root), "", true, cx);
                                 let view = cx.entity().downgrade();
                                 move |menu, _, cx| match &t {
-                                    Some(t) => tree_menu(menu, t, &view, cx),
+                                    Some(t) => {
+                                        crate::ui::modal(cx);
+                                        tree_menu(menu, t, &view, cx)
+                                    }
                                     None => menu,
                                 }
                             }),
@@ -651,6 +654,7 @@ impl ProjectView {
             path: r.path.clone(),
         };
         let selected = self.selected.as_ref() == Some(&sel);
+        let right = sel.clone();
         let colour = match r.mark {
             Some('M') => p.busy,
             Some('A') => p.good,
@@ -712,8 +716,20 @@ impl ProjectView {
                 }
                 cx.notify();
             }))
+            // A right-click selects the row, so it is clear what the menu
+            // is about.
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |v, _, _, cx| {
+                    v.selected = Some(right.clone());
+                    cx.notify();
+                }),
+            )
             .context_menu(move |menu, _, cx| match &target {
-                Some(t) => tree_menu(menu, t, &view, cx),
+                Some(t) => {
+                    crate::ui::modal(cx);
+                    tree_menu(menu, t, &view, cx)
+                }
                 None => menu,
             })
     }

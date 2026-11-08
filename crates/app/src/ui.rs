@@ -2,7 +2,10 @@
 //! buttons, chips.
 
 use gpui::prelude::FluentBuilder;
-use gpui::{Div, Hsla, InteractiveElement, ParentElement, SharedString, Stateful, Styled, div, px};
+use gpui::{
+    Div, Hsla, InteractiveElement, IntoElement, ParentElement, SharedString, Stateful, Styled, div,
+    px,
+};
 
 use crate::model::{Mark, Tone};
 use crate::palette::Palette;
@@ -120,4 +123,56 @@ pub fn chip(text: impl Into<SharedString>, p: &Palette) -> Div {
 /// The mark beside a task the agent set.
 pub fn spark(p: &Palette) -> Div {
     div().flex_none().text_color(p.accent).child("✦")
+}
+
+/// The app's context menus while they are open, held weakly, so a menu
+/// that goes without closing cannot leave the window held still.
+#[derive(Default)]
+pub struct OpenMenus(Vec<gpui::WeakEntity<gpui_component::menu::PopupMenu>>);
+
+impl gpui::Global for OpenMenus {}
+
+/// Just below gpui-component's menus (its POPUP_PRIORITY, 100, which it
+/// does not export).
+const BELOW_MENUS: usize = 99;
+
+/// Makes a context menu modal, as a native one is, called from the menu's
+/// builder: while it is open, the window behind it takes no hover and no
+/// clicks (shield).
+pub fn modal(cx: &mut gpui::Context<gpui_component::menu::PopupMenu>) {
+    let me = cx.entity().downgrade();
+    cx.default_global::<OpenMenus>().0.push(me);
+    cx.subscribe_self(|_, _: &gpui::DismissEvent, cx| {
+        let me = cx.entity().downgrade();
+        cx.default_global::<OpenMenus>()
+            .0
+            .retain(|m| m != &me && m.upgrade().is_some());
+        cx.refresh_windows();
+    })
+    .detach();
+}
+
+/// Whether one of the app's context menus is open.
+pub fn menu_open(cx: &gpui::App) -> bool {
+    cx.try_global::<OpenMenus>()
+        .is_some_and(|m| m.0.iter().any(|w| w.upgrade().is_some()))
+}
+
+/// What lies between an open menu and the rest of the window: it takes the
+/// pointer, so nothing behind the menu reacts to it, and a click there only
+/// closes the menu.
+pub fn shield(cx: &gpui::App) -> Option<gpui::AnyElement> {
+    menu_open(cx).then(|| {
+        gpui::deferred(
+            div()
+                .id("menu-shield")
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .occlude(),
+        )
+        .with_priority(BELOW_MENUS)
+        .into_any_element()
+    })
 }

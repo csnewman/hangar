@@ -133,6 +133,82 @@ fn new_file_from_a_files_menu_is_made_beside_it(cx: &mut TestAppContext) {
     );
 }
 
+/// A context menu is modal, as a native one is: while it is up, a click on
+/// another row only closes it, and the row right-clicked stays selected.
+#[gpui::test]
+fn a_click_beside_an_open_menu_only_closes_it(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    let (asked_tx, _asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let mut tree = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        tree = Some(view.clone());
+        let shell_like = cx.new(|cx| Shielded {
+            inner: view,
+            _o: cx.observe_global::<hangar_app::ui::OpenMenus>(|_, cx| cx.notify()),
+        });
+        Root::new(shell_like, window, cx)
+    });
+    let tree = tree.unwrap();
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-src").is_some()
+    });
+    let file = cx.debug_bounds("tree-row-main.rs").unwrap();
+    cx.simulate_mouse_down(file.center(), MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(file.center(), MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_, cx| hangar_app::ui::menu_open(cx)),
+        "the menu is open"
+    );
+    let selected = |cx: &mut VisualTestContext| {
+        tree.read_with(cx, |t, _| t.selected().map(|s| s.path.clone()))
+    };
+    assert_eq!(
+        selected(cx).as_deref(),
+        Some("main.rs"),
+        "the row right-clicked"
+    );
+    let folder = cx.debug_bounds("tree-row-src").unwrap();
+    cx.simulate_click(folder.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        !cx.update(|_, cx| hangar_app::ui::menu_open(cx)),
+        "the menu closed"
+    );
+    assert_eq!(
+        selected(cx).as_deref(),
+        Some("main.rs"),
+        "the click selected nothing"
+    );
+}
+
+/// The window's root as the shell draws it, for the shield.
+struct Shielded {
+    inner: gpui::Entity<ProjectView>,
+    _o: gpui::Subscription,
+}
+
+impl gpui::Render for Shielded {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement, Styled};
+        gpui::div()
+            .relative()
+            .size_full()
+            .child(self.inner.clone())
+            .children(hangar_app::ui::shield(cx))
+    }
+}
+
 #[test]
 fn a_target_knows_its_folder_and_paths() {
     let code = || {
