@@ -92,6 +92,8 @@ struct Inner {
     /// What the file held when last read or written, so a change on disk
     /// that is our own write is recognised.
     on_disk: String,
+    /// The version the file holds: the document as it was then is on disk.
+    saved: u64,
     /// Whether the file used CRLF line endings. The document holds LF, which
     /// is what editors work in, and the file gets its own endings back.
     crlf: bool,
@@ -133,6 +135,8 @@ pub struct Resume {
 pub struct Joined {
     pub epoch: String,
     pub version: u64,
+    /// The version on disk.
+    pub saved: u64,
     pub text: Option<String>,
     pub updates: Option<Value>,
     pub client: String,
@@ -178,6 +182,7 @@ impl SharedDoc {
                 members: Vec::new(),
                 presence: HashMap::new(),
                 on_disk: content,
+                saved: 0,
                 crlf,
                 deleted: false,
                 save_gen: 0,
@@ -234,6 +239,7 @@ impl SharedDoc {
         Joined {
             epoch: self.epoch.clone(),
             version,
+            saved: inner.saved,
             text,
             updates,
             client,
@@ -348,22 +354,41 @@ impl SharedDoc {
         }
     }
 
+    /// Writes the document to the file, telling every tab that has it which
+    /// version is on disk, or why it could not be written.
     pub async fn save(&self) -> Result<()> {
-        let content = {
+        let (content, version, before) = {
             let mut inner = self.inner.lock().unwrap();
             if inner.deleted {
                 return Ok(());
             }
             let content = to_disk(&inner.authority.text().to_string(), inner.crlf);
+            let version = inner.authority.version();
             if content == inner.on_disk {
+                saved(&mut inner, version, None);
                 return Ok(());
             }
-            inner.on_disk = content.clone();
-            content
+            // Set before writing, so the write is known as ours when the
+            // watch sees it.
+            let before = std::mem::replace(&mut inner.on_disk, content.clone());
+            (content, version, before)
         };
-        tokio::fs::write(&self.path, content.as_bytes())
+        let written = tokio::fs::write(&self.path, content.as_bytes())
             .await
-            .map_err(at(&self.path))
+            .map_err(at(&self.path));
+        let mut inner = self.inner.lock().unwrap();
+        match &written {
+            Ok(()) => saved(&mut inner, version, None),
+            Err(e) => {
+                // Not on disk, so the next save writes it again.
+                if inner.on_disk == content {
+                    inner.on_disk = before;
+                }
+                let at = inner.saved;
+                saved(&mut inner, at, Some(e.to_string()));
+            }
+        }
+        written
     }
 
     /// Follows the file's directory, not the file: an editor that saves by
@@ -433,6 +458,8 @@ impl SharedDoc {
         inner.on_disk = content;
         let cur: Vec<u16> = Text::from(inner.authority.text()).units().to_vec();
         if next == cur {
+            let version = inner.authority.version();
+            saved(&mut inner, version, None);
             return;
         }
         let Some(change) = least_edit(&cur, &next) else {
@@ -444,6 +471,8 @@ impl SharedDoc {
         let before = inner.authority.version();
         if inner.authority.push(before, DISK, &[set]).is_ok() {
             announce(&mut inner, before);
+            let version = inner.authority.version();
+            saved(&mut inner, version, None);
             let _ = self.changed.send(());
         }
     }
@@ -480,6 +509,19 @@ fn announce(inner: &mut Inner, before: u64) {
         &inner.members,
         |n| json!({ "event": "doc.changes", "params": { "doc": n, "version": before, "updates": updates } }),
     );
+}
+
+/// Tells every tab which version is on disk, and why a save failed when one
+/// did.
+fn saved(inner: &mut Inner, version: u64, error: Option<String>) {
+    inner.saved = version;
+    broadcast(&inner.members, |n| {
+        let mut p = json!({ "doc": n, "version": version });
+        if let Some(e) = &error {
+            p["error"] = e.clone().into();
+        }
+        json!({ "event": "doc.saved", "params": p })
+    });
 }
 
 fn broadcast(members: &[Member], event: impl Fn(u32) -> Value) {

@@ -101,7 +101,7 @@ fn find_and_replace_in_files_have_intellijs_keys(cx: &mut TestAppContext) {
     });
     cx.run_until_parked();
     let doc = tab
-        .read_with(cx, |t, _| t.active_doc())
+        .read_with(cx, |t, _| t.active_file())
         .expect("the file open");
     let editor = doc.read_with(cx, |d, _| d.editor().clone());
     let in_editor = |cx: &mut VisualTestContext| {

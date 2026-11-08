@@ -735,14 +735,6 @@ impl EnvTab {
         }
     }
 
-    /// The file shown, when it is one rather than a diff.
-    pub fn active_doc(&self) -> Option<Entity<DocEditor>> {
-        match self.file.and_then(|i| self.files.get(i)) {
-            Some(Tab::Doc(d)) => Some(d.clone()),
-            _ => None,
-        }
-    }
-
     /// The diff shown, when it is one.
     pub fn active_diff(&self) -> Option<Entity<DiffView>> {
         match self.file.and_then(|i| self.files.get(i)) {
@@ -1998,6 +1990,8 @@ impl EnvTab {
             let crumbs = path.trim_start_matches('/').replace('/', " › ");
             (crumbs, format!("{line}:{col}"), docedit::language(&path))
         });
+        // Whether the file shown is on disk.
+        let saved = self.active_file().and_then(|f| f.read(cx).saved());
         let size = match (env.cpus, env.memory_mib) {
             (Some(c), Some(m)) => format!("{c} vCPUs · {} GB", (m as f64 / 1024.).round()),
             _ => String::new(),
@@ -2018,6 +2012,17 @@ impl EnvTab {
                 None => format!("{} › {}", config.name, env.name),
             })
             .child(div().flex_1())
+            .when_some(saved, |d, s| match s {
+                docedit::Saved::Saved => d.child("Saved"),
+                docedit::Saved::Saving => d.child("Saving…"),
+                docedit::Saved::Failed(e) => d.child(
+                    div()
+                        .text_color(p.bad)
+                        .max_w(px(360.))
+                        .truncate()
+                        .child(format!("Not saved: {e}")),
+                ),
+            })
             .when_some(file, |d, (_, pos, lang)| {
                 d.child(pos).child("LF").child("UTF-8").child(lang)
             })

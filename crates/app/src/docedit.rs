@@ -328,6 +328,17 @@ pub fn language(path: &str) -> &'static str {
     }
 }
 
+/// Whether what the editor shows is on disk.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Saved {
+    Saved,
+    /// Changes not yet written: being sent, or written shortly after.
+    Saving,
+    /// The service could not write the file: why. It writes it again on
+    /// the next change.
+    Failed(String),
+}
+
 /// Where the document is.
 #[derive(Debug, Clone, PartialEq)]
 pub enum State {
@@ -351,6 +362,10 @@ pub struct DocEditor {
     /// service starts over, which a reopened document cannot carry on from.
     epoch: String,
     sync: Option<DocSync>,
+    /// The version the service last said is on disk, and why its last
+    /// write failed, if it did.
+    saved: u64,
+    save_error: Option<String>,
     editor: Entity<EditorState>,
     /// The editor's text as of the last change seen, to measure the next
     /// one against.
@@ -412,6 +427,8 @@ impl DocEditor {
             doc: None,
             epoch: String::new(),
             sync: None,
+            saved: 0,
+            save_error: None,
             editor,
             shadow: Rope::new(),
             echoes: Echoes::default(),
@@ -436,6 +453,19 @@ impl DocEditor {
 
     pub fn state(&self) -> &State {
         &self.state
+    }
+
+    /// Whether what it shows is on disk, once it is open.
+    pub fn saved(&self) -> Option<Saved> {
+        let s = self.sync.as_ref()?;
+        if let Some(e) = &self.save_error {
+            return Some(Saved::Failed(e.clone()));
+        }
+        Some(if !s.pending().is_empty() || s.version() > self.saved {
+            Saved::Saving
+        } else {
+            Saved::Saved
+        })
     }
 
     pub fn editor(&self) -> &Entity<EditorState> {
@@ -491,6 +521,13 @@ impl DocEditor {
                             serde_json::from_value(p["updates"].clone()).unwrap_or_default();
                         self.remote(p["version"].as_u64().unwrap_or(0), &updates, window, cx);
                     }
+                    "doc.saved" => {
+                        self.save_error = p["error"].as_str().map(str::to_string);
+                        if let Some(v) = p["version"].as_u64() {
+                            self.saved = v;
+                        }
+                        cx.notify();
+                    }
                     "doc.deleted" => {
                         self.state = State::Deleted;
                         cx.notify();
@@ -542,6 +579,8 @@ impl DocEditor {
             sync.carry(change);
         }
         self.epoch = v["epoch"].as_str().unwrap_or_default().to_string();
+        self.saved = v["saved"].as_u64().unwrap_or(0);
+        self.save_error = None;
         self.sync = Some(sync);
         self.push(cx);
         cx.notify();
@@ -550,6 +589,9 @@ impl DocEditor {
     fn opened(&mut self, v: Value, window: &mut Window, cx: &mut Context<Self>) {
         let text = v["text"].as_str().unwrap_or_default().to_string();
         self.epoch = v["epoch"].as_str().unwrap_or_default().to_string();
+        let version = v["version"].as_u64().unwrap_or(0);
+        self.saved = v["saved"].as_u64().unwrap_or(version);
+        self.save_error = None;
         self.doc = v["doc"].as_u64();
         self.path = v["path"].as_str().unwrap_or(&self.asked).to_string();
         self.writable = v["writable"].as_bool().unwrap_or(false);
@@ -772,6 +814,9 @@ impl Render for DocEditor {
             State::Reconnecting(why) => Some(format!(
                 "Reconnecting ({why}); what you type is kept and saved once it is back"
             )),
+            State::Open if self.save_error.is_some() => {
+                self.save_error.as_ref().map(|e| format!("Not saved: {e}"))
+            }
             State::Open if !self.writable => Some("Read-only".to_string()),
             State::Open => None,
         };

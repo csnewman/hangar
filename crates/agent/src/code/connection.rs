@@ -412,6 +412,7 @@ impl Connection {
             "writable": writable(&doc.path),
             "epoch": joined.epoch,
             "version": joined.version,
+            "saved": joined.saved,
             "client": joined.client,
             "presence": joined.presence,
         });

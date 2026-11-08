@@ -295,6 +295,40 @@ test('a document opened again after a dropped connection carries on', async () =
 	}
 })
 
+// Every tab with a document open is told which version is on disk once it
+// is saved, and why it could not be when a write fails; a failed write is
+// made again on the next change.
+test('a document says when it is saved, and why it is not', async () => {
+	writeFileSync(join(root, 'saved.txt'), 'one\n')
+	const a = new Client()
+	const b = new Client()
+	try {
+		const ra = await a.call('doc.open', { path: 'saved.txt' })
+		const rb = await b.call('doc.open', { path: 'saved.txt' })
+		assert.equal(ra.saved, ra.version, 'the file as opened is on disk')
+		const savedAt = (c: Client, v: number) =>
+			c.events.some((e) => e.event === 'doc.saved' && e.params.version === v && !e.params.error)
+		await a.call('doc.push', { doc: ra.doc, version: 0, changes: [[4, [0, 'two', '']]] })
+		await until('both tabs told it is saved', () => savedAt(a, 1) && savedAt(b, 1))
+		assert.equal(readFileSync(join(root, 'saved.txt'), 'utf8'), 'one\ntwo\n')
+
+		chmodSync(join(root, 'saved.txt'), 0o444)
+		await a.call('doc.push', { doc: ra.doc, version: 1, changes: [[8, [0, 'three', '']]] })
+		await until('told it could not be saved', () =>
+			b.events.some((e) => e.event === 'doc.saved' && e.params.error && e.params.version === 1),
+		)
+		chmodSync(join(root, 'saved.txt'), 0o644)
+		await a.call('doc.push', { doc: ra.doc, version: 2, changes: [[14, [0, 'four', '']]] })
+		await until('saved once it can be', () => savedAt(b, 3))
+		assert.equal(readFileSync(join(root, 'saved.txt'), 'utf8'), 'one\ntwo\nthree\nfour\n')
+		assert.ok(rb.doc)
+	} finally {
+		a.close()
+		b.close()
+		rmSync(join(root, 'saved.txt'), { force: true })
+	}
+})
+
 test('partial staging, amending, branches, push and pull', async () => {
 	const a = new Client()
 	try {
