@@ -85,26 +85,23 @@ impl Action {
 
 /// An environment's dot: its ring is its machine (green running, amber
 /// starting or changing, grey suspended or stopped, red failed) and its
-/// fill its agent (amber working, indigo asking, green finished), so a
-/// running machine with nothing happening is a hollow green ring. A
-/// machine that is off is solid.
+/// centre what is in it: its agent's state while it runs (amber working,
+/// indigo asking, green finished), its kept memory while it is suspended,
+/// and nothing otherwise. A running machine with nothing happening and a
+/// stopped one are both empty rings, green and grey.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mark {
     pub ring: Tone,
-    /// None is hollow.
+    /// None is an empty ring.
     pub fill: Option<Tone>,
 }
 
 impl Mark {
-    pub fn solid(t: Tone) -> Mark {
+    pub fn empty(t: Tone) -> Mark {
         Mark {
             ring: t,
-            fill: Some(t),
+            fill: None,
         }
-    }
-
-    pub fn hollow(t: Tone) -> Mark {
-        Mark { ring: t, fill: None }
     }
 
     fn of(rank: Rank, tone: Tone) -> Mark {
@@ -113,9 +110,13 @@ impl Mark {
                 ring: Tone::Good,
                 fill: Some(tone),
             },
-            Rank::Running => Mark::hollow(Tone::Good),
-            Rank::Starting | Rank::Busy | Rank::Suspended => Mark::hollow(tone),
-            Rank::Failed | Rank::Stopped => Mark::solid(tone),
+            Rank::Suspended => Mark {
+                ring: Tone::Idle,
+                fill: Some(Tone::Idle),
+            },
+            Rank::Running => Mark::empty(Tone::Good),
+            Rank::Stopped => Mark::empty(Tone::Idle),
+            Rank::Starting | Rank::Busy | Rank::Failed => Mark::empty(tone),
         }
     }
 }

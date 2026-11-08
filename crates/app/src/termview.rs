@@ -6,9 +6,8 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, FocusHandle, Focusable, Font, Hsla, IntoElement,
-    KeyBinding, KeyDownEvent, ParentElement, Pixels, Render, Rgba, ScrollEvent, Styled,
-    StyledText, TextRun, UnderlineStyle, WeakEntity, Window, actions, canvas, div, font,
-    prelude::*, px,
+    KeyBinding, KeyDownEvent, ParentElement, Pixels, Render, Rgba, ScrollEvent, Styled, StyledText,
+    TextRun, UnderlineStyle, WeakEntity, Window, actions, canvas, div, font, prelude::*, px,
 };
 
 use crate::api::Client;

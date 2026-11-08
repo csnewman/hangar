@@ -157,10 +157,7 @@ fn each_state_is_a_card() {
     // Running and stopped are told apart by colour, not only by the words.
     let stopped = model::card(&place(), &env("x", "stopped"), now());
     assert_eq!(stopped.tone, Tone::Idle);
-    assert_eq!(
-        stopped.action,
-        Some(Action::Start)
-    );
+    assert_eq!(stopped.action, Some(Action::Start));
     assert_eq!(
         model::card(&place(), &env("x", "stopping"), now()).status,
         "Stopping"
@@ -254,9 +251,9 @@ fn an_offline_place_is_last_known() {
     assert_eq!(model::connection(&groups[0].connection).1, Some("Offline"));
 }
 
-/// A dot's ring is the machine and its centre the agent, so a running
+/// A dot's ring is the machine and its centre what is in it, so a running
 /// machine's agent at work, asking or done each reads apart from the
-/// machine merely running, and from one that is off.
+/// machine merely running, and a suspended machine from a stopped one.
 #[test]
 fn marks_show_the_machine_and_its_agent_apart() {
     let mark = |e: &Environment| model::card(&place(), e, now()).mark;
@@ -274,8 +271,15 @@ fn marks_show_the_machine_and_its_agent_apart() {
     assert_eq!(with("working", false), on(Some(Tone::Busy)));
     assert_eq!(with("asking", true), on(Some(Tone::Wait)));
     assert_eq!(with("finished", true), on(Some(Tone::Good)));
-    assert_eq!(mark(&env("e", "starting")), Mark::hollow(Tone::Busy));
-    assert_eq!(mark(&env("e", "suspended")), Mark::hollow(Tone::Ring));
-    assert_eq!(mark(&env("e", "stopped")), Mark::solid(Tone::Idle));
-    assert_eq!(mark(&env("e", "failed")), Mark::solid(Tone::Bad));
+    assert_eq!(mark(&env("e", "starting")), Mark::empty(Tone::Busy));
+    // Suspended keeps its memory: something is in the ring.
+    assert_eq!(
+        mark(&env("e", "suspended")),
+        Mark {
+            ring: Tone::Idle,
+            fill: Some(Tone::Idle)
+        }
+    );
+    assert_eq!(mark(&env("e", "stopped")), Mark::empty(Tone::Idle));
+    assert_eq!(mark(&env("e", "failed")), Mark::empty(Tone::Bad));
 }

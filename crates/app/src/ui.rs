@@ -1,6 +1,7 @@
 //! The design's small pieces, shared by the window's views: status dots,
 //! buttons, chips.
 
+use gpui::prelude::FluentBuilder;
 use gpui::{Div, Hsla, InteractiveElement, ParentElement, SharedString, Stateful, Styled, div, px};
 
 use crate::model::{Mark, Tone};
@@ -25,25 +26,21 @@ pub fn dot(t: Tone, p: &Palette) -> Div {
     }
 }
 
-/// An environment's dot: its machine's ring around its agent's centre,
-/// with a gap between so the two read apart; solid when they are one.
+/// An environment's dot: its machine's ring around what is in it, with a
+/// gap between so the two read apart.
 pub fn mark(m: Mark, p: &Palette) -> Div {
-    let ring = tone(m.ring, p);
-    let d = div()
+    div()
         .size(px(10.))
         .rounded_full()
         .flex_none()
         .flex()
         .items_center()
-        .justify_center();
-    match m.fill {
-        Some(f) if f == m.ring => d.bg(ring),
-        Some(f) => d
-            .border(px(1.5))
-            .border_color(ring)
-            .child(div().size(px(5.)).rounded_full().bg(tone(f, p))),
-        None => d.border(px(1.5)).border_color(ring),
-    }
+        .justify_center()
+        .border(px(1.5))
+        .border_color(tone(m.ring, p))
+        .when_some(m.fill, |d, f| {
+            d.child(div().size(px(5.)).rounded_full().bg(tone(f, p)))
+        })
 }
 
 /// A button as the design draws one.

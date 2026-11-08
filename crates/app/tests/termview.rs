@@ -50,7 +50,10 @@ fn tab_stays_in_the_terminal(cx: &mut TestAppContext) {
     let (term, field, cx) = open(cx);
     cx.simulate_keystrokes("tab");
     cx.update(|window, cx| {
-        assert!(term.is_focused(window), "Tab moved focus out of the terminal");
+        assert!(
+            term.is_focused(window),
+            "Tab moved focus out of the terminal"
+        );
         assert!(!field.contains_focused(window, cx));
     });
     cx.simulate_keystrokes("shift-tab");
