@@ -1,8 +1,9 @@
-//! The Find tool window, IntelliJ's Find in Files: text searched for in
-//! every project through the Code service's search.text (ripgrep, else git
-//! grep, else reading the files), as you type, with match case, whole
-//! words, regular expressions and a file mask. Results are grouped by
-//! file; a match opens its file at the line.
+//! The Find tool window, where IntelliJ keeps Find in Files' results: text
+//! searched for in the projects through the Code service's search.text
+//! (ripgrep, else git grep, else reading the files), as you type, with
+//! match case, whole words, regular expressions and a file mask. Results
+//! are grouped by file; a match opens its file at the line. The search
+//! itself starts in the pop-up (findpop.rs), which hands its results here.
 
 use std::collections::HashSet;
 use std::ops::Range;
@@ -16,11 +17,155 @@ use gpui::{
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{h_flex, v_flex};
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
+use crate::code::Code;
 use crate::gitlog::chip;
 use crate::palette::{self, Palette};
-use crate::workspace::{Event, State, Workspace};
+use crate::workspace::{Event, Folder, State, Workspace};
+
+/// Match case, whole words, a regular expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Options {
+    pub case: bool,
+    pub word: bool,
+    pub regex: bool,
+}
+
+/// Where a search looks: every project, one of them, or a folder in one,
+/// from its root.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum Scope {
+    #[default]
+    Projects,
+    Project(String),
+    Folder {
+        root: String,
+        dir: String,
+    },
+}
+
+impl Scope {
+    /// The projects searched, by root, each with the folder in it to search.
+    pub fn targets(&self, roots: &[&str]) -> Vec<(String, Option<String>)> {
+        roots
+            .iter()
+            .filter_map(|r| match self {
+                Scope::Projects => Some((r.to_string(), None)),
+                Scope::Project(root) if root == r => Some((r.to_string(), None)),
+                Scope::Folder { root, dir } if root == r => {
+                    Some((r.to_string(), Some(dir.clone())))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The folder typed: from /, in the project holding it, else from the
+    /// root of the project given.
+    pub fn folder(typed: &str, roots: &[&str], current: Option<&str>) -> Result<Scope, String> {
+        let typed = typed.trim().trim_end_matches('/');
+        if typed.is_empty() {
+            return Err("Type a folder to search in.".into());
+        }
+        if typed.starts_with('/') {
+            let root = roots
+                .iter()
+                .filter(|r| {
+                    let r = r.trim_end_matches('/');
+                    typed == r || typed.starts_with(&format!("{r}/"))
+                })
+                .max_by_key(|r| r.len())
+                .ok_or_else(|| format!("{typed} is in no project."))?;
+            let dir = typed[root.trim_end_matches('/').len()..].trim_start_matches('/');
+            return Ok(if dir.is_empty() {
+                Scope::Project(root.to_string())
+            } else {
+                Scope::Folder {
+                    root: root.to_string(),
+                    dir: dir.to_string(),
+                }
+            });
+        }
+        let root = current
+            .or(roots.first().copied())
+            .ok_or("The environment has no projects.")?;
+        Ok(Scope::Folder {
+            root: root.to_string(),
+            dir: typed.trim_start_matches("./").to_string(),
+        })
+    }
+}
+
+/// What to search for, and where.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Search {
+    pub text: String,
+    pub options: Options,
+    /// Comma-separated globs, as IntelliJ's file mask: "*.rs, !*_test.go".
+    pub mask: Option<String>,
+    pub scope: Scope,
+}
+
+impl Search {
+    /// search.text's parameters for a folder of a project, or the whole.
+    pub fn params(&self, dir: Option<&str>) -> Value {
+        let mut params = json!({
+            "query": self.text,
+            "regex": self.options.regex,
+            "caseSensitive": self.options.case,
+            "wholeWord": self.options.word,
+        });
+        if let Some(m) = self
+            .mask
+            .as_deref()
+            .map(str::trim)
+            .filter(|m| !m.is_empty())
+        {
+            params["mask"] = m.into();
+        }
+        if let Some(d) = dir {
+            params["dir"] = d.into();
+        }
+        params
+    }
+
+    /// Each project searched, with its connection and its call's parameters.
+    pub fn calls(&self, projects: &[Folder]) -> Vec<(String, Code, Value)> {
+        let roots: Vec<&str> = projects.iter().map(|f| f.root.as_str()).collect();
+        self.scope
+            .targets(&roots)
+            .into_iter()
+            .filter_map(|(root, dir)| {
+                let code = projects.iter().find(|f| f.root == root)?.code.clone();
+                Some((root, code, self.params(dir.as_deref())))
+            })
+            .collect()
+    }
+}
+
+/// How a scope is named: "every project", a project's name, or a folder
+/// in it.
+pub fn scope_name(scope: &Scope, projects: &[Folder]) -> String {
+    let name = |root: &str| {
+        projects
+            .iter()
+            .find(|f| f.root == root)
+            .map_or_else(|| root.to_string(), |f| f.name.clone())
+    };
+    match scope {
+        Scope::Projects => "every project".into(),
+        Scope::Project(root) => name(root),
+        Scope::Folder { root, dir } => format!("{}/{dir}", name(root)),
+    }
+}
+
+/// Searches a project, its matches or why it could not.
+pub async fn search_text(code: Code, params: Value) -> Result<(Vec<Match>, bool), String> {
+    let v = code.call("search.text", params).await?;
+    let f: Found = serde_json::from_value(v).map_err(|e| e.to_string())?;
+    Ok((f.matches, f.truncated))
+}
 
 /// A matching line, as search.text gives it: ranges are UTF-16 offsets
 /// into text.
@@ -114,18 +259,12 @@ pub struct OpenAt {
 
 impl gpui::EventEmitter<OpenAt> for FindView {}
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct Options {
-    case: bool,
-    word: bool,
-    regex: bool,
-}
-
 pub struct FindView {
     workspace: Entity<Workspace>,
     query: Entity<InputState>,
     mask: Entity<InputState>,
     options: Options,
+    scope: Scope,
     rows: Vec<Row>,
     files: usize,
     matches: usize,
@@ -166,6 +305,7 @@ impl FindView {
             query,
             mask,
             options: Options::default(),
+            scope: Scope::Projects,
             rows: vec![],
             files: 0,
             matches: 0,
@@ -186,6 +326,27 @@ impl FindView {
         &self.rows
     }
 
+    /// Lists a search's matches here, as the pop-up's Open in Find Window.
+    pub fn show(&mut self, s: Search, window: &mut Window, cx: &mut Context<Self>) {
+        self.options = s.options;
+        self.scope = s.scope;
+        let mask = s.mask.unwrap_or_default();
+        self.query
+            .update(cx, |q, cx| q.set_value(s.text, window, cx));
+        self.mask.update(cx, |m, cx| m.set_value(mask, window, cx));
+        self.search(cx);
+    }
+
+    /// The search as it stands.
+    fn current(&self, cx: &gpui::App) -> Search {
+        Search {
+            text: self.query.read(cx).value().to_string(),
+            options: self.options,
+            mask: Some(self.mask.read(cx).value().trim().to_string()),
+            scope: self.scope.clone(),
+        }
+    }
+
     /// Searches once typing pauses.
     fn search_soon(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
@@ -203,12 +364,11 @@ impl FindView {
         .detach();
     }
 
-    /// Searches every project for the query, as it is now.
+    /// Searches for the query, as it is now.
     pub fn search(&mut self, cx: &mut Context<Self>) {
         self.generation += 1;
         let generation = self.generation;
-        let text = self.query.read(cx).value().to_string();
-        let mask = self.mask.read(cx).value().trim().to_string();
+        let search = self.current(cx);
         self.rows.clear();
         self.files = 0;
         self.matches = 0;
@@ -216,46 +376,29 @@ impl FindView {
         self.errors.clear();
         self.selected = None;
         self.pending = 0;
-        if text.is_empty() {
+        if search.text.is_empty() {
             cx.notify();
             return;
         }
-        let projects: Vec<(String, crate::code::Code)> = self
-            .workspace
-            .read(cx)
-            .projects()
-            .iter()
-            .map(|f| (f.root.clone(), f.code.clone()))
-            .collect();
-        let mut params = json!({
-            "query": text,
-            "regex": self.options.regex,
-            "caseSensitive": self.options.case,
-            "wholeWord": self.options.word,
-        });
-        if !mask.is_empty() {
-            params["mask"] = mask.into();
-        }
-        self.pending = projects.len();
-        let calls: Vec<_> = projects
-            .iter()
-            .map(|(root, code)| (root.clone(), code.call("search.text", params.clone())))
+        let calls = search.calls(self.workspace.read(cx).projects());
+        self.pending = calls.len();
+        let calls: Vec<_> = calls
+            .into_iter()
+            .map(|(root, code, params)| (root, search_text(code, params)))
             .collect();
         cx.spawn(async move |this, cx| {
             let mut found: Vec<(String, Vec<Match>)> = Vec::new();
             for (root, call) in calls {
-                let result = call
-                    .await
-                    .and_then(|v| serde_json::from_value::<Found>(v).map_err(|e| e.to_string()));
+                let result = call.await;
                 let keep = this.update(cx, |v, cx| {
                     if v.generation != generation {
                         return false;
                     }
                     v.pending -= 1;
                     match result {
-                        Ok(f) => {
-                            v.truncated |= f.truncated;
-                            found.push((root, f.matches));
+                        Ok((matches, truncated)) => {
+                            v.truncated |= truncated;
+                            found.push((root, matches));
                             v.rows = rows(&found);
                             v.files = v
                                 .rows
@@ -452,6 +595,20 @@ impl Render for FindView {
                 toggle("find-regex", ".*", o.regex, "Regular expression")
                     .on_click(cx.listener(|v, _, _, cx| v.toggle(|o| &mut o.regex, cx))),
             )
+            .when(self.scope != Scope::Projects, |d| {
+                let name = scope_name(&self.scope, self.workspace.read(cx).projects());
+                d.child(
+                    chip("find-scope", format!("in {name} ✕"), true, &p)
+                        .tooltip(|window, cx| {
+                            gpui_component::tooltip::Tooltip::new("Search every project")
+                                .build(window, cx)
+                        })
+                        .on_click(cx.listener(|v, _, _, cx| {
+                            v.scope = Scope::Projects;
+                            v.search(cx);
+                        })),
+                )
+            })
             .child(div().w(px(200.)).flex_none().child(Input::new(&self.mask)))
             .child(
                 div()

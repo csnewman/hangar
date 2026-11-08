@@ -19,8 +19,9 @@
 //! SNAPSHOT_NOTICES=1 opens the bell's notifications;
 //! SNAPSHOT_ASK=METHOD:LINE:COLUMN asks the open file's language server
 //! (textDocument/hover, textDocument/definition) and prints its answer;
-//! SNAPSHOT_FIND=text searches in files and SNAPSHOT_FIND_OPEN=N opens the Nth
-//! result row;
+//! SNAPSHOT_FIND=text searches in files in Find in Files' pop-up,
+//! SNAPSHOT_FIND_SELECT=N chooses its Nth match, SNAPSHOT_FIND_OPEN=N opens it,
+//! and SNAPSHOT_FIND_WINDOW=1 keeps the matches in the Find window;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
@@ -241,29 +242,39 @@ fn main() {
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(1)).await;
-                    let _ = handle.update(cx, |_, window, cx| {
-                        let find = shell
+                    let popup = |cx: &mut gpui::App| {
+                        shell
                             .read(cx)
                             .active_view()
-                            .and_then(|t| t.read(cx).find_view());
-                        if let Some(f) = find {
-                            let query = f.read(cx).query().clone();
-                            query.update(cx, |q, cx| q.set_value(text, window, cx));
-                            f.update(cx, |f, cx| f.search(cx));
+                            .and_then(|t| t.read(cx).find_popup())
+                    };
+                    let _ = handle.update(cx, |_, window, cx| {
+                        if let Some(f) = popup(cx) {
+                            f.update(cx, |f, cx| f.set_query(&text, window, cx));
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(3)).await;
-                    if let Some(n) = std::env::var("SNAPSHOT_FIND_OPEN")
-                        .ok()
-                        .and_then(|n| n.parse::<usize>().ok())
-                    {
+                    let n = |k| std::env::var(k).ok().and_then(|n| n.parse::<usize>().ok());
+                    if let Some(n) = n("SNAPSHOT_FIND_SELECT") {
                         let _ = handle.update(cx, |_, _, cx| {
-                            let find = shell
-                                .read(cx)
-                                .active_view()
-                                .and_then(|t| t.read(cx).find_view());
-                            if let Some(f) = find {
+                            if let Some(f) = popup(cx) {
+                                f.update(cx, |f, cx| f.select(n, cx));
+                            }
+                        });
+                        settle(cx, handle.into(), Duration::from_secs(2)).await;
+                    }
+                    if let Some(n) = n("SNAPSHOT_FIND_OPEN") {
+                        let _ = handle.update(cx, |_, _, cx| {
+                            if let Some(f) = popup(cx) {
                                 f.update(cx, |f, cx| f.open(n, cx));
+                            }
+                        });
+                        settle(cx, handle.into(), Duration::from_secs(3)).await;
+                    }
+                    if std::env::var("SNAPSHOT_FIND_WINDOW").is_ok() {
+                        let _ = handle.update(cx, |_, _, cx| {
+                            if let Some(f) = popup(cx) {
+                                f.update(cx, |f, cx| f.to_window(cx));
                             }
                         });
                         settle(cx, handle.into(), Duration::from_secs(3)).await;

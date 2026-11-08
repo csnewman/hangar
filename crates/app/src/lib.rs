@@ -11,6 +11,7 @@ pub mod docedit;
 pub mod doubleshift;
 pub mod envtab;
 pub mod find;
+pub mod findpop;
 pub mod fuzzy;
 pub mod gitlog;
 pub mod languages;

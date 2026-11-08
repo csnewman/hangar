@@ -52,3 +52,51 @@ fn utf16_ranges_become_byte_ranges() {
     assert_eq!(byte_ranges(text, &[[1, 3]]), vec![2..6]);
     assert_eq!(byte_ranges("abc", &[[0, 3], [5, 5]]), vec![0..3]);
 }
+
+/// A search covers every project, one, or a folder in one.
+#[test]
+fn a_scope_picks_the_projects_searched() {
+    use hangar_app::find::Scope;
+    let roots = ["/home/dev", "/home/dev/shop", "/srv/api"];
+    assert_eq!(Scope::Projects.targets(&roots).len(), 3);
+    assert_eq!(
+        Scope::Project("/srv/api".into()).targets(&roots),
+        vec![("/srv/api".to_string(), None)]
+    );
+    assert_eq!(
+        Scope::Folder {
+            root: "/home/dev/shop".into(),
+            dir: "src".into()
+        }
+        .targets(&roots),
+        vec![("/home/dev/shop".to_string(), Some("src".to_string()))]
+    );
+}
+
+/// A folder typed from / is found in the innermost project holding it; one
+/// typed from a project is in the first project.
+#[test]
+fn a_folder_typed_is_read_within_its_project() {
+    use hangar_app::find::Scope;
+    let roots = ["/home/dev", "/home/dev/shop"];
+    assert_eq!(
+        Scope::folder("/home/dev/shop/src/", &roots, None),
+        Ok(Scope::Folder {
+            root: "/home/dev/shop".into(),
+            dir: "src".into()
+        })
+    );
+    assert_eq!(
+        Scope::folder("/home/dev/shop", &roots, None),
+        Ok(Scope::Project("/home/dev/shop".into()))
+    );
+    assert_eq!(
+        Scope::folder("./notes", &roots, None),
+        Ok(Scope::Folder {
+            root: "/home/dev".into(),
+            dir: "notes".into()
+        })
+    );
+    assert!(Scope::folder("/etc", &roots, None).is_err());
+    assert!(Scope::folder(" ", &roots, None).is_err());
+}

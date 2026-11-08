@@ -17,7 +17,8 @@ use crate::assets;
 use crate::commit::CommitView;
 use crate::diff::{DiffView, ShowDiff, Spec};
 use crate::docedit::{self, DocEditor};
-use crate::find::{FindView, OpenAt};
+use crate::find::{FindView, OpenAt, Search};
+use crate::findpop::{Done, FindPopup};
 use crate::gitlog::GitView;
 use crate::languages::{self, Languages};
 use crate::layout::{self, Edge, Layout, Sizes};
@@ -274,6 +275,15 @@ pub struct EnvTab {
     commit: Option<Entity<CommitView>>,
     git: Option<Entity<GitView>>,
     find: Option<Entity<FindView>>,
+    /// Find in Files' pop-up while it is open; asked for, it opens at the
+    /// next draw of a running environment.
+    find_popup: Option<Entity<FindPopup>>,
+    find_sub: Option<gpui::Subscription>,
+    find_wanted: bool,
+    /// A search to list in the Find window once it is made.
+    pending_find: Option<Search>,
+    /// The search Find in Files last made, which it opens on.
+    last_search: Option<Search>,
     problems: Option<Entity<ProblemsView>>,
     /// The language servers, made with the workspace.
     languages: Option<Entity<Languages>>,
@@ -390,6 +400,11 @@ impl EnvTab {
             commit: None,
             git: None,
             find: None,
+            find_popup: None,
+            find_sub: None,
+            find_wanted: false,
+            pending_find: None,
+            last_search: None,
             problems: None,
             languages: None,
             files: vec![],
@@ -726,16 +741,43 @@ impl EnvTab {
         self.project.clone()
     }
 
-    /// Opens the Find window, or brings it to the front, with its query
-    /// ready to type.
+    /// Opens Find in Files' pop-up, or brings it back to the front.
     pub fn find_in_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.is_open(Tool::Find) {
-            self.toggle(Tool::Find, cx);
-        }
-        if let Some(f) = &self.find {
-            window.focus(&f.focus_handle(cx), cx);
+        match &self.find_popup {
+            Some(f) => window.focus(&f.focus_handle(cx), cx),
+            None => self.find_wanted = true,
         }
         cx.notify();
+    }
+
+    /// Find in Files' pop-up, while it is open.
+    pub fn find_popup(&self) -> Option<Entity<FindPopup>> {
+        self.find_popup.clone()
+    }
+
+    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find_sub = None;
+        if let Some(f) = self.find_popup.take()
+            && let Ok(s) = f.read(cx).current(cx)
+        {
+            self.last_search = Some(s);
+        }
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    fn found(&mut self, done: &Done, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_find(window, cx);
+        match done {
+            Done::Open(at) => self.open_file_at(&at.root, &at.path, at.line, at.column, window, cx),
+            Done::ToWindow(search) => {
+                if !self.is_open(Tool::Find) {
+                    self.toggle(Tool::Find, cx);
+                }
+                self.pending_find = Some(search.clone());
+            }
+            Done::Close => {}
+        }
     }
 
     /// The environment's projects, once a window showing them has been
@@ -979,6 +1021,22 @@ impl Render for EnvTab {
                 window.focus(&view.focus_handle(cx), cx);
                 self.find = Some(view);
             }
+            if let (Some(view), Some(s)) = (self.find.clone(), self.pending_find.take()) {
+                view.update(cx, |v, cx| v.show(s, window, cx));
+            }
+            if self.find_wanted && self.find_popup.is_none() {
+                let ws = self.workspace(&env, cx);
+                let last = self.last_search.clone();
+                let popup = cx.new(|cx| FindPopup::new(ws, last, window, cx));
+                self.find_sub = Some(cx.subscribe_in(
+                    &popup,
+                    window,
+                    |t, _, e: &Done, window, cx| t.found(e, window, cx),
+                ));
+                window.focus(&popup.focus_handle(cx), cx);
+                self.find_popup = Some(popup);
+            }
+            self.find_wanted = false;
             if self.problems.is_none() && self.is_open(Tool::Problems) {
                 let ws = self.workspace(&env, cx);
                 if let Some(langs) = self.languages.clone() {
@@ -1006,8 +1064,10 @@ impl Render for EnvTab {
         }
         let sizes = Layout::sizes(cx);
 
+        let find_popup = self.find_popup.clone();
         v_flex()
             .size_full()
+            .relative()
             .key_context("EnvTab")
             .on_action(cx.listener(|t, _: &HideAllToolWindows, _, cx| t.hide_all(cx)))
             .on_action(cx.listener(|t, _: &HideActiveToolWindow, _, cx| t.hide_active(cx)))
@@ -1086,6 +1146,25 @@ impl Render for EnvTab {
                     .child(self.stripe(RIGHT, false, waiting, &p, cx)),
             )
             .child(self.status_bar(&config, &env, &p, cx))
+            .when_some(find_popup, |d, popup| {
+                d.child(
+                    div()
+                        .id("find-scrim")
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui::black().opacity(0.18))
+                        .on_click(cx.listener(|t, _, window, cx| t.close_find(window, cx))),
+                )
+                .child(
+                    h_flex()
+                        .absolute()
+                        .top(px(36.))
+                        .left_0()
+                        .right_0()
+                        .justify_center()
+                        .child(popup),
+                )
+            })
             .into_any_element()
     }
 }
