@@ -1,4 +1,4 @@
-//! Search Everywhere (⌘K): one box for environments in every place, the
+//! Search Everywhere (⌘K, or Shift twice): one box for environments in every place, the
 //! open environment's files (search.files of each of its projects), and
 //! what can be done: its tool windows, its actions, and the app's own.
 //! What is typed is matched as IntelliJ's is (fuzzy.rs); the arrows choose,
@@ -42,6 +42,8 @@ pub enum Target {
     },
     SuspendIdle,
     AddPlace,
+    /// Turns opening this with Shift pressed twice off, or on.
+    DoubleShift,
 }
 
 /// Asks the shell to go to a result, or (None) to close.
@@ -317,6 +319,19 @@ impl SearchView {
                 target: Target::SuspendIdle,
             });
         }
+        let on = crate::settings::Settings::get(cx).double_shift;
+        out.push(Candidate {
+            group: "Actions",
+            label: if on {
+                "Stop opening this with Shift pressed twice".into()
+            } else {
+                "Open this with Shift pressed twice".into()
+            },
+            also: "double shift setting".into(),
+            detail: if on { "⇧⇧ on" } else { "⇧⇧ off" }.into(),
+            tone: None,
+            target: Target::DoubleShift,
+        });
         out.push(Candidate {
             group: "Actions",
             label: "Add a place".into(),

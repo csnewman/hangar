@@ -15,12 +15,14 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::{TitleBar, h_flex, v_flex};
 
 use crate::assets;
+use crate::doubleshift::DoubleShift;
 use crate::envtab::{EnvTab, Tool};
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Action, Card, LineKind};
 use crate::palette::{self, Palette};
 use crate::places::Places;
 use crate::search::{Chose, SearchView, Target};
+use crate::settings::Settings;
 use crate::ui::{button, chip, dot, primary, spark};
 
 /// How often the window is drawn again with nothing changed, so ages
@@ -62,6 +64,12 @@ pub struct Shell {
     told_seen: Vec<(String, String, chrono::DateTime<chrono::Utc>)>,
     /// Search Everywhere, while it is open.
     search: Option<(Entity<SearchView>, gpui::Subscription)>,
+    /// Shift pressed twice, which also opens it.
+    double_shift: DoubleShift,
+    /// The window's focus when nothing in it has its own: the shell's keys
+    /// (⌘K, Shift twice) reach it from wherever focus is, and gpui sends
+    /// them nowhere else when nothing is focused.
+    focus: gpui::FocusHandle,
 }
 
 gpui::actions!(shell, [SearchEverywhere]);
@@ -115,7 +123,10 @@ impl Shell {
             adding: None,
             told_seen: vec![],
             search: None,
+            double_shift: DoubleShift::default(),
+            focus: cx.focus_handle(),
         };
+        window.focus(&shell.focus, cx);
         if empty {
             shell.open_add(window, cx);
         }
@@ -256,8 +267,8 @@ impl Shell {
 
     /// Opens Search Everywhere over the window, or closes it.
     pub fn search_everywhere(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.search.take().is_some() {
-            cx.notify();
+        if self.search.is_some() {
+            self.close_search(window, cx);
             return;
         }
         let active = self
@@ -269,7 +280,7 @@ impl Shell {
         let places = self.places.clone();
         let view = cx.new(|cx| SearchView::new(places, active, workspace, window, cx));
         let sub = cx.subscribe_in(&view, window, |s, _, e: &Chose, window, cx| {
-            s.search = None;
+            s.close_search(window, cx);
             if let Some(t) = &e.0 {
                 s.go(t.clone(), window, cx);
             }
@@ -277,6 +288,13 @@ impl Shell {
         });
         window.focus(&view.focus_handle(cx), cx);
         self.search = Some((view, sub));
+        cx.notify();
+    }
+
+    /// Closes Search Everywhere, the focus it had going back to the shell.
+    fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.search = None;
+        window.focus(&self.focus, cx);
         cx.notify();
     }
 
@@ -314,6 +332,7 @@ impl Shell {
                 .update(cx, |p, cx| p.act(&place, &env, action, cx)),
             Target::SuspendIdle => self.suspend_idle(cx),
             Target::AddPlace => self.open_add(window, cx),
+            Target::DoubleShift => Settings::update(cx, |v| v.double_shift = !v.double_shift),
         }
     }
 
@@ -349,10 +368,22 @@ impl Render for Shell {
         v_flex()
             .size_full()
             .relative()
+            .track_focus(&self.focus)
             .key_context("Shell")
             .on_action(
                 cx.listener(|s, _: &SearchEverywhere, window, cx| s.search_everywhere(window, cx)),
             )
+            .on_modifiers_changed(
+                cx.listener(|s, e: &gpui::ModifiersChangedEvent, window, cx| {
+                    let pressed = s
+                        .double_shift
+                        .modifiers(&e.modifiers, std::time::Instant::now());
+                    if pressed && Settings::get(cx).double_shift {
+                        s.search_everywhere(window, cx);
+                    }
+                }),
+            )
+            .capture_key_down(cx.listener(|s, _: &gpui::KeyDownEvent, _, _| s.double_shift.key()))
             .on_drag_move(cx.listener(|_, e: &DragMoveEvent<Edge>, _, cx| {
                 if *e.drag(cx) == Edge::Sidebar {
                     let size = Sizes::dragged(Edge::Sidebar, e.event.position, e.bounds, 0.);
@@ -397,10 +428,7 @@ impl Render for Shell {
                         .absolute()
                         .inset_0()
                         .bg(gpui::black().opacity(0.18))
-                        .on_click(cx.listener(|s, _, _, cx| {
-                            s.search = None;
-                            cx.notify();
-                        })),
+                        .on_click(cx.listener(|s, _, window, cx| s.close_search(window, cx))),
                 )
                 .child(
                     h_flex()

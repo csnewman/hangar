@@ -33,6 +33,10 @@ impl Dirs {
         self.config.join("layout.json")
     }
 
+    pub fn settings_file(&self) -> PathBuf {
+        self.config.join("settings.json")
+    }
+
     fn places_file(&self) -> PathBuf {
         self.config.join("places.json")
     }

@@ -69,3 +69,38 @@ fn tool_windows_share_their_slots(cx: &mut TestAppContext) {
         assert!(!t.is_open(Tool::Git));
     });
 }
+
+/// Search Everywhere opens on ⌘K, and on Shift pressed twice, though not
+/// on a capital typed between.
+#[gpui::test]
+fn search_everywhere_opens_on_its_keys(cx: &mut TestAppContext) {
+    use gpui::Modifiers;
+    cx.update(gpui_component::init);
+    cx.update(hangar_app::shell::bind_keys);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(places.clone(), window, cx));
+    let shift = |down: bool| Modifiers {
+        shift: down,
+        ..Default::default()
+    };
+    cx.simulate_modifiers_change(shift(true));
+    cx.simulate_modifiers_change(shift(false));
+    cx.simulate_modifiers_change(shift(true));
+    cx.simulate_modifiers_change(shift(false));
+    shell.read_with(cx, |s, _| assert!(s.search().is_some(), "Shift twice"));
+
+    cx.simulate_keystrokes("escape");
+    shell.read_with(cx, |s, _| assert!(s.search().is_none(), "Escape leaves"));
+
+    cx.simulate_modifiers_change(shift(true));
+    cx.simulate_keystrokes("shift-a");
+    cx.simulate_modifiers_change(shift(false));
+    cx.simulate_modifiers_change(shift(true));
+    shell.read_with(cx, |s, _| {
+        assert!(s.search().is_none(), "a capital between")
+    });
+    cx.simulate_modifiers_change(shift(false));
+
+    cx.simulate_keystrokes("cmd-k");
+    shell.read_with(cx, |s, _| assert!(s.search().is_some(), "⌘K"));
+}

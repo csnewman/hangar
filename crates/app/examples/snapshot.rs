@@ -52,6 +52,10 @@ fn main() {
                 hangar_app::store::Dirs::user().map(|d| d.layout_file()),
                 cx,
             );
+            hangar_app::settings::Settings::init(
+                hangar_app::store::Dirs::user().map(|d| d.settings_file()),
+                cx,
+            );
             let places = places::from_env(cx);
             let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
             let mut shell = None;

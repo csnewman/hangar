@@ -19,6 +19,10 @@ fn main() {
                 hangar_app::store::Dirs::user().map(|d| d.layout_file()),
                 cx,
             );
+            hangar_app::settings::Settings::init(
+                hangar_app::store::Dirs::user().map(|d| d.settings_file()),
+                cx,
+            );
             let places = places::from_env(cx);
             let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
             cx.open_window(
