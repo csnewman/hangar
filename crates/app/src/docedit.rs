@@ -424,6 +424,16 @@ pub enum State {
     Failed(String),
 }
 
+/// A file's editor as the app draws it: the height it is given, with no
+/// border of its own. gpui-component lays an input out as a row with a gap
+/// between its parts, and its popovers (hover, a diagnostic, completions)
+/// join that row while open, drawn elsewhere but taking a gap from the
+/// text's width, so a soft-wrapped line moved as the pointer rested on a
+/// symbol; with no gap the text keeps its width.
+pub fn code_editor(state: &Entity<EditorState>) -> Editor {
+    Editor::new(state).h_full().bordered(false).gap_0()
+}
+
 pub struct DocEditor {
     code: Code,
     /// The file's absolute path, once open, and the path asked for.
@@ -1267,7 +1277,7 @@ impl Render for DocEditor {
                 d.redo(window, cx);
             }))
             .child({
-                let editor = Editor::new(&self.editor).h_full().bordered(false).readonly(
+                let editor = code_editor(&self.editor).readonly(
                     !self.writable || !matches!(self.state, State::Open | State::Reconnecting(_)),
                 );
                 match self.preview {

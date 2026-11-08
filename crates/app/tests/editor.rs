@@ -5,7 +5,7 @@
 //! history (as hangar-proto change sets, taking Undo and Redo before the
 //! editor does); local and applied edits are told alike; a large file; and
 //! other people's selections as decorations, their carets placed by
-//! range_to_bounds.
+//! range_to_bounds; and the text keeping its width as a hover opens.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -232,4 +232,90 @@ fn a_place_typed_for_go_to_line() {
     assert_eq!(line_column("12:0"), None);
     assert_eq!(line_column("twelve"), None);
     assert_eq!(line_column(""), None);
+}
+
+/// A hover provider that has something to say about every word.
+struct Says;
+
+impl gpui_component::input::HoverProvider for Says {
+    fn hover(
+        &self,
+        _: &gpui_component::input::Rope,
+        _: usize,
+        _: &mut gpui::Window,
+        _: &mut gpui::App,
+    ) -> gpui::Task<anyhow::Result<Option<lsp_types::Hover>>> {
+        gpui::Task::ready(Ok(Some(lsp_types::Hover {
+            contents: lsp_types::HoverContents::Scalar(lsp_types::MarkedString::String(
+                "i64".into(),
+            )),
+            range: None,
+        })))
+    }
+}
+
+struct Narrow {
+    state: gpui::Entity<EditorState>,
+}
+
+impl gpui::Render for Narrow {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{ParentElement, Styled};
+        gpui::div()
+            .w(gpui::px(240.))
+            .h(gpui::px(300.))
+            .child(hangar_app::docedit::code_editor(&self.state))
+    }
+}
+
+/// The pointer resting on a symbol opens its hover, and the text keeps its
+/// width: soft-wrapped lines stay where they were.
+#[gpui::test]
+fn a_hover_leaves_the_text_its_width(cx: &mut TestAppContext) {
+    use gpui::AppContext;
+    cx.update(gpui_component::init);
+    let mut state = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let s = cx.new(|cx| {
+            let mut e = EditorState::new(window, cx)
+                .language("rust")
+                .line_number(true);
+            e.lsp_mut().hover_provider = Some(Rc::new(Says));
+            e
+        });
+        state = Some(s.clone());
+        gpui_component::Root::new(cx.new(|_| Narrow { state: s }), window, cx)
+    });
+    let state = state.unwrap();
+    cx.update(|window, cx| {
+        state.update(cx, |e, cx| {
+            e.set_value(
+                "fn record(&mut self, amount: i64) -> i64 { amount }",
+                window,
+                cx,
+            )
+        })
+    });
+    cx.run_until_parked();
+    let width = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_, cx| state.read(cx).input_bounds().size.width)
+    };
+    let before = width(cx);
+    let text = cx.update(|_, cx| state.read(cx).text_bounds()).unwrap();
+    let on = gpui::point(text.left() + gpui::px(60.), text.top() + gpui::px(6.));
+    cx.simulate_mouse_move(on, None, gpui::Modifiers::none());
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(400));
+    cx.run_until_parked();
+    cx.simulate_mouse_move(on, None, gpui::Modifiers::none());
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_, cx| state.read(cx).hover_popover().is_some()),
+        "the hover is open"
+    );
+    assert_eq!(width(cx), before, "the text's width");
 }

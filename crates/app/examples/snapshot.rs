@@ -28,6 +28,7 @@
 //! SNAPSHOT_SYMBOL=text goes to a symbol;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
+//! SNAPSHOT_HOVER=X,Y rests the pointer there;
 //! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would, and
 //! SNAPSHOT_PRESS="down enter |text| enter" then presses keys, typing what
 //! is between bars;
@@ -458,6 +459,27 @@ fn main() {
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(2)).await;
+                }
+                if let Some((x, y)) = std::env::var("SNAPSHOT_HOVER").ok().and_then(|e| {
+                    let (x, y) = e.split_once(',')?;
+                    Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+                }) {
+                    // Moved again a moment later, for a language server
+                    // still starting to answer.
+                    for (dx, wait) in [(0., 10), (1., 3)] {
+                        let position = gpui::point(px(x + dx), px(y));
+                        let _ = cx.update_window(handle.into(), |_, window, cx| {
+                            window.dispatch_event(
+                                gpui::PlatformInput::MouseMove(gpui::MouseMoveEvent {
+                                    position,
+                                    pressed_button: None,
+                                    modifiers: gpui::Modifiers::none(),
+                                }),
+                                cx,
+                            );
+                        });
+                        settle(cx, handle.into(), Duration::from_secs(wait)).await;
+                    }
                 }
                 if let Some((x, y)) = std::env::var("SNAPSHOT_RIGHT_CLICK").ok().and_then(|e| {
                     let (x, y) = e.split_once(',')?;
