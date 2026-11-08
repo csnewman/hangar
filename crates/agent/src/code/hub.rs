@@ -140,7 +140,16 @@ impl Hub {
                 tokio::select! {
                     m = from.recv() => match (m, me.upgrade()) {
                         (Some(m), Some(h)) => h.server_message(m),
-                        _ => return,
+                        (Some(_), None) => return,
+                        // Its output ends as it exits: the hub waits to be
+                        // told so, or it would be kept with no server, and
+                        // the next tab's requests never answered.
+                        (None, _) => {
+                            if let (Ok(why), Some(h)) = ((&mut ended).await, me.upgrade()) {
+                                h.exited(why);
+                            }
+                            return;
+                        }
                     },
                     why = &mut ended => {
                         // What it said before it went is passed on first.

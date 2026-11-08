@@ -621,6 +621,40 @@ test('a language server, shared by tabs and kept across a reload', async () => {
 	}
 })
 
+test('a language server that exits while no tab uses it is started afresh for the next', async () => {
+	const settings = { languageServers: { fake: { command: process.execPath, args: [join(import.meta.dirname, 'fake-lsp.mjs')] } } }
+	// The server's pid, from its answer to initialize.
+	const pidOf = async (c: Client) => {
+		const n = (await c.call('lsp.start', { language: 'fake' })).server
+		c.sendLsp(n, { jsonrpc: '2.0', id: 1, method: 'initialize', params: { capabilities: {} } })
+		await until('initialized', () => c.lsp.some((m) => m.server === n && m.msg.id === 1))
+		return Number(c.lsp.find((m) => m.server === n && m.msg.id === 1)!.msg.result.serverInfo.version)
+	}
+	const a = new Client()
+	const b = new Client()
+	try {
+		await a.call('hello')
+		await a.call('settings.set', { settings })
+		const pid = await pidOf(a)
+		// The server is kept for the next tab, and exits meanwhile.
+		a.close()
+		await new Promise((r) => setTimeout(r, 200))
+		process.kill(pid)
+		await b.call('hello')
+		let running = true
+		for (let i = 0; running && i < 50; i++) {
+			running = (await b.call('lsp.info', { language: 'fake' })).running
+			if (running) await new Promise((r) => setTimeout(r, 100))
+		}
+		assert.equal(running, false, 'the exit is noticed')
+		assert.notEqual(await pidOf(b), pid)
+	} finally {
+		await b.call('lsp.restart', { language: 'fake' }).catch(() => {})
+		a.close()
+		b.close()
+	}
+})
+
 test('docker: containers, actions, logs and changes', async () => {
 	// A fake Docker Engine: one container, one image; starting the
 	// container is reported as an event; its logs are framed as Docker
