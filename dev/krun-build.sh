@@ -158,8 +158,10 @@ if [ "$(git -C "$src" rev-parse HEAD)" != "$want" ]; then
     GIT_CONFIG_GLOBAL=/dev/null git -C "$src" fetch -q "$from" "$branch"
     git -C "$src" checkout -q "$want"
 fi
-# bindgen needs libclang, and its build scripts load it at run time.
+# bindgen needs libclang, and its build scripts load it at run time: Xcode
+# keeps it in its default toolchain, the Command Line Tools in usr/lib.
 clang=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib
+[ -f "$clang/libclang.dylib" ] || clang=$(xcode-select -p)/usr/lib
 (cd "$src" && LIBRARY_PATH=$out/virgl/lib PKG_CONFIG_PATH=$out/virgl/lib/pkgconfig \
     LIBCLANG_PATH=$clang DYLD_FALLBACK_LIBRARY_PATH=$clang \
     cargo build -q --release -p libkrun --no-default-features --features "$features")
