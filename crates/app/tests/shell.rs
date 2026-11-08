@@ -104,3 +104,21 @@ fn search_everywhere_opens_on_its_keys(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("cmd-k");
     shell.read_with(cx, |s, _| assert!(s.search().is_some(), "⌘K"));
 }
+
+/// Go to Symbol is the search on symbols alone, on IntelliJ's key.
+#[gpui::test]
+fn go_to_symbol_opens_on_its_key(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    cx.update(hangar_app::shell::bind_keys);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(places.clone(), window, cx));
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "alt-cmd-o"
+    } else {
+        "ctrl-alt-shift-n"
+    });
+    let search = shell
+        .read_with(cx, |s, _| s.search())
+        .expect("the search open");
+    assert_eq!(search.read_with(cx, |s, _| s.only()), Some("Symbols"));
+}

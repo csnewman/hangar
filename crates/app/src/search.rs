@@ -34,6 +34,13 @@ pub enum Target {
         root: String,
         path: String,
     },
+    /// A place in a file: a symbol's, 0-based, the column in UTF-16 units.
+    At {
+        root: String,
+        path: String,
+        line: u32,
+        column: u32,
+    },
     Tool(Tool),
     Act {
         place: String,
@@ -129,6 +136,14 @@ pub struct SearchView {
     /// The open environment's files, as each project lists them: its root,
     /// its name and the file's path in it.
     files: Vec<(String, String, String)>,
+    /// The language servers, asked for symbols as the query changes, and
+    /// what they last answered: name, where it is in, and its place.
+    languages: Option<Entity<crate::languages::Languages>>,
+    symbols: Vec<(String, String, Target)>,
+    /// Counts the symbol requests made, so an older answer is dropped.
+    asked: u64,
+    /// Only one group, as Go to Symbol shows only symbols.
+    only: Option<&'static str>,
     items: Vec<Item>,
     selected: usize,
     _subs: Vec<gpui::Subscription>,
@@ -139,10 +154,16 @@ impl SearchView {
         places: Entity<Places>,
         active: Option<(String, String)>,
         workspace: Option<Entity<Workspace>>,
+        languages: Option<Entity<crate::languages::Languages>>,
+        only: Option<&'static str>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let query = cx.new(|cx| InputState::new(window, cx).placeholder("Search Everywhere"));
+        let placeholder = match only {
+            Some("Symbols") => "Go to Symbol",
+            _ => "Search Everywhere",
+        };
+        let query = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
         let subs = vec![cx.subscribe(&query, |v, _, e: &InputEvent, cx| match e {
             InputEvent::Change => {
                 v.selected = 0;
@@ -157,6 +178,10 @@ impl SearchView {
             workspace,
             query,
             files: vec![],
+            languages,
+            symbols: vec![],
+            asked: 0,
+            only,
             items: vec![],
             selected: 0,
             _subs: subs,
@@ -177,6 +202,11 @@ impl SearchView {
             .update(cx, |q, cx| q.set_value(text.to_string(), window, cx));
         self.selected = 0;
         self.refresh(cx);
+    }
+
+    /// The one group shown, when only one is.
+    pub fn only(&self) -> Option<&'static str> {
+        self.only
     }
 
     pub fn items(&self) -> &[Item] {
@@ -340,20 +370,82 @@ impl SearchView {
             mark: None,
             target: Target::AddPlace,
         });
-        (out, vec!["Environments", files_group, "Actions"])
+        for (name, within, target) in &self.symbols {
+            out.push(Candidate {
+                group: "Symbols",
+                label: name.clone(),
+                also: String::new(),
+                detail: within.clone(),
+                mark: None,
+                target: target.clone(),
+            });
+        }
+        (out, vec!["Environments", files_group, "Symbols", "Actions"])
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let query = self.query.read(cx).value().to_string();
+        self.ask_symbols(&query, cx);
         let (candidates, groups) = self.candidates(cx);
-        // Files are many: shown once something is typed.
+        // Files and symbols are many: shown once something is typed.
         let candidates: Vec<Candidate> = candidates
             .into_iter()
-            .filter(|c| c.group != "Files" || !query.trim().is_empty())
+            .filter(|c| !matches!(c.group, "Files" | "Symbols") || !query.trim().is_empty())
+            .filter(|c| self.only.is_none_or(|g| c.group == g))
             .collect();
         self.items = rank(&query, &candidates, &groups);
         self.selected = self.selected.min(self.items.len().saturating_sub(1));
         cx.notify();
+    }
+
+    /// Asks the language servers for the symbols matching query, shortly
+    /// after typing pauses.
+    fn ask_symbols(&mut self, query: &str, cx: &mut Context<Self>) {
+        self.asked += 1;
+        let asked = self.asked;
+        let query = query.trim().to_string();
+        if query.is_empty() {
+            self.symbols.clear();
+            return;
+        }
+        let Some(langs) = self.languages.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(std::time::Duration::from_millis(150))
+                .await;
+            let Ok(calls) = this.update(cx, |v, cx| {
+                if v.asked != asked {
+                    return vec![];
+                }
+                langs.update(cx, |l, cx| l.workspace_symbols(&query, cx))
+            }) else {
+                return;
+            };
+            let mut found = vec![];
+            for call in calls {
+                if let Ok(v) = call.await {
+                    found.extend(symbols(&v));
+                }
+            }
+            let _ = this.update(cx, |v, cx| {
+                if v.asked == asked {
+                    v.symbols = found;
+                    let (candidates, groups) = v.candidates(cx);
+                    let q = v.query.read(cx).value().to_string();
+                    let candidates: Vec<Candidate> = candidates
+                        .into_iter()
+                        .filter(|c| !matches!(c.group, "Files" | "Symbols") || !q.trim().is_empty())
+                        .filter(|c| v.only.is_none_or(|g| c.group == g))
+                        .collect();
+                    v.items = rank(&q, &candidates, &groups);
+                    v.selected = v.selected.min(v.items.len().saturating_sub(1));
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     pub fn choose(&mut self, i: usize, cx: &mut Context<Self>) {
@@ -502,4 +594,38 @@ impl SearchView {
             )
             .on_click(cx.listener(move |v, _, _, cx| v.choose(i, cx)))
     }
+}
+
+/// A workspace/symbol answer as results: each symbol's name, what it is
+/// in (its container, else its file's name), and its place.
+pub fn symbols(answer: &serde_json::Value) -> Vec<(String, String, Target)> {
+    let Some(list) = answer.as_array() else {
+        return vec![];
+    };
+    list.iter()
+        .filter_map(|s| {
+            let name = s["name"].as_str()?.to_string();
+            let loc = &s["location"];
+            let path = crate::languages::uri_path(loc["uri"].as_str()?)?;
+            // A WorkspaceSymbol may give its file alone, without a range.
+            let start = &loc["range"]["start"];
+            let line = start["line"].as_u64().unwrap_or(0) as u32;
+            let column = start["character"].as_u64().unwrap_or(0) as u32;
+            let file = path.rsplit('/').next().unwrap_or(&path).to_string();
+            let within = match s["containerName"].as_str().filter(|c| !c.is_empty()) {
+                Some(c) => format!("{c} · {file}"),
+                None => file,
+            };
+            Some((
+                name,
+                within,
+                Target::At {
+                    root: "/".into(),
+                    path,
+                    line,
+                    column,
+                },
+            ))
+        })
+        .collect()
 }

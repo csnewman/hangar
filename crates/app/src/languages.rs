@@ -459,6 +459,25 @@ impl Languages {
         self.request_on(&key, method, params, cx)
     }
 
+    /// Asks every running server for the symbols matching query, as
+    /// IntelliJ's Go to Symbol: each answer is a list of SymbolInformation
+    /// or WorkspaceSymbol.
+    pub fn workspace_symbols(
+        &mut self,
+        query: &str,
+        cx: &gpui::App,
+    ) -> Vec<impl std::future::Future<Output = Result<Value, String>> + use<>> {
+        let keys: Vec<Key> = self
+            .servers
+            .iter()
+            .filter(|(_, s)| matches!(s, Server::Ready { .. }))
+            .map(|(k, _)| k.clone())
+            .collect();
+        keys.iter()
+            .map(|k| self.request_on(k, "workspace/symbol", json!({ "query": query }), cx))
+            .collect()
+    }
+
     /// The characters an open file's server shows completions after.
     pub fn triggers(&self, abs: &str) -> &[String] {
         self.opened

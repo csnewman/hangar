@@ -77,16 +77,20 @@ pub struct Shell {
     notices_open: bool,
 }
 
-gpui::actions!(shell, [SearchEverywhere]);
+gpui::actions!(shell, [SearchEverywhere, GoToSymbol]);
 
-/// Binds the shell's keys: ⌘K (Ctrl+K elsewhere) for Search Everywhere.
+/// Binds the shell's keys: ⌘K (Ctrl+K elsewhere) for Search Everywhere,
+/// and IntelliJ's ⌥⌘O (Ctrl+Alt+Shift+N elsewhere) for Go to Symbol.
 pub fn bind_keys(cx: &mut gpui::App) {
-    let key = if cfg!(target_os = "macos") {
-        "cmd-k"
+    let (key, symbol) = if cfg!(target_os = "macos") {
+        ("cmd-k", "alt-cmd-o")
     } else {
-        "ctrl-k"
+        ("ctrl-k", "ctrl-alt-shift-n")
     };
-    cx.bind_keys([gpui::KeyBinding::new(key, SearchEverywhere, Some("Shell"))]);
+    cx.bind_keys([
+        gpui::KeyBinding::new(key, SearchEverywhere, Some("Shell")),
+        gpui::KeyBinding::new(symbol, GoToSymbol, Some("Shell")),
+    ]);
 }
 
 struct AddServer {
@@ -289,10 +293,26 @@ impl Shell {
 
     /// Opens Search Everywhere over the window, or closes it.
     pub fn search_everywhere(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_search(None, window, cx);
+    }
+
+    /// Opens the search on the open environment's symbols alone, as
+    /// IntelliJ's Go to Symbol, or closes it.
+    pub fn go_to_symbol(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_search(Some("Symbols"), window, cx);
+    }
+
+    fn open_search(
+        &mut self,
+        only: Option<&'static str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.search.is_some() {
             self.close_search(window, cx);
             return;
         }
+        let languages = self.active.and_then(|i| self.views[i].read(cx).languages());
         let active = self
             .active
             .map(|i| (self.tabs[i].place.clone(), self.tabs[i].env.clone()));
@@ -300,7 +320,8 @@ impl Shell {
             .active
             .and_then(|i| self.views[i].read(cx).current_workspace());
         let places = self.places.clone();
-        let view = cx.new(|cx| SearchView::new(places, active, workspace, window, cx));
+        let view =
+            cx.new(|cx| SearchView::new(places, active, workspace, languages, only, window, cx));
         let sub = cx.subscribe_in(&view, window, |s, _, e: &Chose, window, cx| {
             s.close_search(window, cx);
             if let Some(t) = &e.0 {
@@ -376,6 +397,18 @@ impl Shell {
                     tab.update(cx, |t, cx| t.open_file(&root, &path, window, cx));
                 }
             }
+            Target::At {
+                root,
+                path,
+                line,
+                column,
+            } => {
+                if let Some(tab) = tab {
+                    tab.update(cx, |t, cx| {
+                        t.open_file_at(&root, &path, line, column, window, cx)
+                    });
+                }
+            }
             Target::Tool(Tool::Find) => {
                 if let Some(tab) = tab {
                     tab.update(cx, |t, cx| t.find_in_files(window, cx));
@@ -436,6 +469,7 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|s, _: &SearchEverywhere, window, cx| s.search_everywhere(window, cx)),
             )
+            .on_action(cx.listener(|s, _: &GoToSymbol, window, cx| s.go_to_symbol(window, cx)))
             .on_modifiers_changed(
                 cx.listener(|s, e: &gpui::ModifiersChangedEvent, window, cx| {
                     let pressed = s

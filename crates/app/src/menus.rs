@@ -10,7 +10,7 @@ use crate::envtab::{
     ReplaceInFiles, ToggleCommit, ToggleDocker, ToggleGit, ToggleProblems, ToggleProject,
     ToggleStructure, ToggleTerminal,
 };
-use crate::shell::SearchEverywhere;
+use crate::shell::{GoToSymbol, SearchEverywhere};
 
 actions!(app, [Quit, Hide, HideOthers, ShowAll, Minimize, Zoom]);
 
@@ -62,6 +62,7 @@ pub fn init(cx: &mut App) {
         ]),
         Menu::new("Go").items([
             MenuItem::action("Search Everywhere…", SearchEverywhere),
+            MenuItem::action("Symbol…", GoToSymbol),
             MenuItem::action("Line…", GoToLine),
             MenuItem::action("Find in Files…", FindInFiles),
             MenuItem::action("Replace in Files…", ReplaceInFiles),
