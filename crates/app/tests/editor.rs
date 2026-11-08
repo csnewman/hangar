@@ -221,3 +221,15 @@ fn edits_are_told_after_the_update_making_them(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(*seen.borrow(), [(false, "zero one\n".to_string())]);
 }
+
+/// Go to Line takes a line, or a line and a column after a colon, from 1.
+#[test]
+fn a_place_typed_for_go_to_line() {
+    use hangar_app::docedit::line_column;
+    assert_eq!(line_column("45"), Some((45, 1)));
+    assert_eq!(line_column(" 45 : 9 "), Some((45, 9)));
+    assert_eq!(line_column("0"), None);
+    assert_eq!(line_column("12:0"), None);
+    assert_eq!(line_column("twelve"), None);
+    assert_eq!(line_column(""), None);
+}

@@ -175,6 +175,7 @@ actions!(
         ReplaceInFiles,
         CloseTab,
         ReopenClosedTab,
+        GoToLine,
         HideAllToolWindows,
         HideActiveToolWindow
     ]
@@ -233,7 +234,10 @@ pub fn bind_keys(cx: &mut App) {
     } else {
         ("ctrl-f4", "ctrl-shift-t")
     };
+    let go_to_line = if mac { "cmd-l" } else { "ctrl-g" };
     cx.bind_keys([
+        KeyBinding::new(go_to_line, GoToLine, ctx),
+        KeyBinding::new(go_to_line, GoToLine, input),
         KeyBinding::new(close, CloseTab, ctx),
         KeyBinding::new(reopen, ReopenClosedTab, ctx),
         KeyBinding::new(find_files, FindInFiles, ctx),
@@ -780,6 +784,30 @@ impl EnvTab {
         }
     }
 
+    /// Asks for a line, and a column after a colon, and puts the caret of
+    /// the file shown there, as IntelliJ's Go to Line.
+    pub fn go_to_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(doc) = self.active_file() else {
+            return;
+        };
+        let (line, col) = doc.read(cx).position(cx);
+        crate::treeops::ask_name(
+            "Go to Line:Column",
+            &format!("{line}:{col}"),
+            "Go",
+            window,
+            cx,
+            move |typed, window, cx| {
+                if let Some((line, col)) = docedit::line_column(&typed) {
+                    doc.update(cx, |d, cx| {
+                        d.go_to(line - 1, col - 1, window, cx);
+                        window.focus(&d.focus_handle(cx), cx);
+                    });
+                }
+            },
+        );
+    }
+
     /// Opens the file last closed again, as IntelliJ's Reopen Closed Tab.
     pub fn reopen_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some((root, abs)) = self.closed.pop() {
@@ -1283,6 +1311,7 @@ impl Render for EnvTab {
             .on_action(cx.listener(|t, _: &ToggleGit, _, cx| t.toggle(Tool::Git, cx)))
             .on_action(cx.listener(|t, _: &ToggleDocker, _, cx| t.toggle(Tool::Docker, cx)))
             .on_action(cx.listener(|t, _: &FindInFiles, window, cx| t.find_in_files(window, cx)))
+            .on_action(cx.listener(|t, _: &GoToLine, window, cx| t.go_to_line(window, cx)))
             .on_action(cx.listener(|t, _: &CloseTab, _, cx| {
                 if let Some(i) = t.file {
                     t.close_file(i, cx);

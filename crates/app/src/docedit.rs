@@ -252,6 +252,17 @@ pub fn map_selection(change: &ChangeSet, sel: Range<usize>) -> Range<usize> {
     }
 }
 
+/// A place typed as Go to Line takes it: "45", or "45:9", from 1; the
+/// column is 1 when not given.
+pub fn line_column(typed: &str) -> Option<(u32, u32)> {
+    let (line, col) = match typed.split_once(':') {
+        Some((l, c)) => (l.trim(), c.trim()),
+        None => (typed.trim(), "1"),
+    };
+    let (line, col) = (line.parse::<u32>().ok()?, col.parse::<u32>().ok()?);
+    (line > 0 && col > 0).then_some((line, col))
+}
+
 /// The change from one text to another, in UTF-16 positions, as few
 /// replacements as a character diff finds; None when they are the same.
 pub fn difference(before: &str, after: &str) -> Option<ChangeSet> {
