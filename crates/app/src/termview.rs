@@ -38,6 +38,8 @@ pub fn bind_keys(cx: &mut App) {
 pub enum State {
     Connecting,
     Live,
+    /// Lost, and being dialled again: why.
+    Reconnecting(String),
     Exited(i32),
     Failed(String),
 }
@@ -45,6 +47,11 @@ pub enum State {
 pub struct TerminalView {
     screen: Screen<Replies>,
     replies: Replies,
+    /// The default foreground and background, for a screen made afresh.
+    colours: (
+        alacritty_terminal::vte::ansi::Rgb,
+        alacritty_terminal::vte::ansi::Rgb,
+    ),
     conn: Option<Connection>,
     focus: FocusHandle,
     state: State,
@@ -97,9 +104,10 @@ impl TerminalView {
     pub fn new(client: &Client, env: &str, session: Option<&str>, cx: &mut Context<Self>) -> Self {
         let (cols, rows) = (80, 24);
         let replies = Replies::default();
-        let mut screen = Screen::with_listener(cols as usize, rows as usize, replies.clone());
         let p = palette::of(cx);
-        screen.set_default_colours(rgb(p.term_fg), rgb(p.term_tab));
+        let colours = (rgb(p.term_fg), rgb(p.term_tab));
+        let mut screen = Screen::with_listener(cols as usize, rows as usize, replies.clone());
+        screen.set_default_colours(colours.0, colours.1);
         let (tx, rx) = async_channel::unbounded();
         let conn = termconn::attach(client, env, session, cols, rows, move |e| {
             tx.send_blocking(e).is_ok()
@@ -124,6 +132,7 @@ impl TerminalView {
         TerminalView {
             screen,
             replies,
+            colours,
             conn: Some(conn),
             focus: cx.focus_handle(),
             state: State::Connecting,
@@ -168,6 +177,17 @@ impl TerminalView {
                 title,
                 history,
             } => {
+                // Attached again, the session's past is replayed: drawn on
+                // a clean screen, not over what was shown.
+                if self.session.is_some() && self.state != State::Connecting {
+                    let mut screen = Screen::with_listener(
+                        self.cols as usize,
+                        self.rows as usize,
+                        self.replies.clone(),
+                    );
+                    screen.set_default_colours(self.colours.0, self.colours.1);
+                    self.screen = screen;
+                }
                 self.session = Some(session);
                 self.title = title;
                 self.history = history;
@@ -192,6 +212,10 @@ impl TerminalView {
                 if !owner && (cols, rows) != (self.cols, self.rows) {
                     self.screen.resize(cols as usize, rows as usize);
                 }
+            }
+            Event::Reconnecting { why, retry_in } => {
+                self.state =
+                    State::Reconnecting(format!("{why}; trying again in {}", seconds(retry_in)));
             }
             Event::Exited(code) => {
                 self.state = State::Exited(code);
@@ -434,8 +458,10 @@ impl Render for TerminalView {
             State::Connecting => Some("Connecting…".to_string()),
             State::Exited(code) => Some(format!("The shell exited ({code}).")),
             State::Failed(e) => Some(format!("Could not connect: {e}")),
+            State::Reconnecting(why) => Some(format!("Reconnecting: {why}")),
             State::Live => None,
         };
+        let reconnecting = matches!(self.state, State::Reconnecting(_));
         div()
             .id("terminal")
             .track_focus(&self.focus)
@@ -484,9 +510,18 @@ impl Render for TerminalView {
                         .bottom(px(6.))
                         .right(px(10.))
                         .text_size(px(11.))
-                        .text_color(p.idle)
+                        .text_color(if reconnecting { p.busy } else { p.idle })
                         .child(n),
                 )
             })
+    }
+}
+
+/// A wait as said: "0.5s", "4s".
+fn seconds(d: Duration) -> String {
+    if d < Duration::from_secs(1) {
+        format!("{:.1}s", d.as_secs_f32())
+    } else {
+        format!("{}s", d.as_secs())
     }
 }
