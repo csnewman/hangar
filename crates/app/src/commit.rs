@@ -562,11 +562,7 @@ impl Render for CommitView {
 
         // At least a few rows of changes however short the window: the
         // window scrolls rather than the commit box squeezing them out.
-        let mut list = v_flex()
-            .id("commit-changes")
-            .flex_1()
-            .min_h(px(66.))
-            .overflow_y_scroll();
+        let mut list = v_flex();
         let mut any = false;
         match &state {
             State::Connecting => list = list.child(muted("Connecting…", &p)),
@@ -708,7 +704,11 @@ impl Render for CommitView {
             .overflow_y_scroll()
             .text_size(px(12.))
             .child(switch)
-            .child(list)
+            .child(
+                crate::project::scroll("commit-changes", list)
+                    .flex_1()
+                    .min_h(px(66.)),
+            )
             .child(foot.flex_none())
             .into_any_element()
     }

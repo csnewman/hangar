@@ -683,12 +683,7 @@ impl Shell {
     /// The bell's list, as the design draws it.
     fn notices_list(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let now = chrono::Utc::now();
-        let mut list = v_flex()
-            .id("notices")
-            .max_h(px(420.))
-            .overflow_y_scroll()
-            .px(px(4.))
-            .pb(px(6.));
+        let mut list = v_flex().px(px(4.)).pb(px(6.));
         if self.notices.list().is_empty() {
             list = list.child(
                 div()
@@ -777,7 +772,7 @@ impl Shell {
                     .child(div().flex_1())
                     .child(div().font_weight(FontWeight::NORMAL).child("every place")),
             )
-            .child(list)
+            .child(crate::project::scroll("notices", list).max_h(px(420.)))
     }
 
     fn sidebar(
@@ -787,12 +782,7 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let active = self.active.and_then(|i| self.tabs.get(i)).cloned();
-        let mut list = v_flex()
-            .id("sidebar-list")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll()
-            .gap(px(6.));
+        let mut list = v_flex().gap(px(6.));
         for g in groups {
             let (ctone, state, warn) = model::connection(&g.connection);
             let open = !self.collapsed.contains(&g.place);
@@ -891,7 +881,11 @@ impl Shell {
                     },
                 )),
             ))
-            .child(list)
+            .child(
+                crate::project::scroll("sidebar-list", list)
+                    .flex_1()
+                    .min_h_0(),
+            )
             .child(
                 div()
                     .id("add-place")

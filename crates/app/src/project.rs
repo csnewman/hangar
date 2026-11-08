@@ -500,11 +500,7 @@ impl Render for ProjectView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
         let scope = self.scope;
-        let mut list = v_flex()
-            .id("project-tree")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll();
+        let mut list = v_flex();
         let ws = self.workspace.read(cx);
         let state = ws.state().clone();
         let names: Vec<(String, String)> = self
@@ -600,7 +596,7 @@ impl Render for ProjectView {
             .size_full()
             .min_h_0()
             .text_size(px(12.))
-            .child(list)
+            .child(scroll("project-tree", list).flex_1().min_h_0())
     }
 }
 
@@ -844,4 +840,10 @@ fn tree_menu(
             .item(item("Git: Add to .gitignore", t, treeops::ignore).disabled(is_root));
     }
     menu
+}
+
+/// A box that scrolls its rows, which keep their own size however many
+/// there are: a column the height of its content, inside the box.
+pub fn scroll(id: &'static str, rows: gpui::Div) -> gpui::Stateful<gpui::Div> {
+    div().id(id).overflow_y_scroll().child(rows)
 }

@@ -498,11 +498,7 @@ fn muted(text: impl Into<SharedString>, p: &Palette) -> impl IntoElement {
 impl Render for BranchView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
-        let mut list = v_flex()
-            .id("branch-changes")
-            .flex_1()
-            .min_h_0()
-            .overflow_y_scroll();
+        let mut list = v_flex();
         if self.order.is_empty() {
             list = list.child(muted(
                 "No git repository in the environment's projects.",
@@ -513,6 +509,8 @@ impl Render for BranchView {
         for key in self.order.clone() {
             list = list.child(self.repo(&key, alone, &p, cx));
         }
-        list
+        crate::project::scroll("branch-changes", list)
+            .flex_1()
+            .min_h_0()
     }
 }

@@ -32,10 +32,18 @@ fn service(asked: mpsc::Sender<(String, Value)>) -> String {
                     let result = match method {
                         "hello" => json!({ "root": params["root"], "home": "/home/dev" }),
                         "workspace.get" => json!({ "folders": ["/home/dev/app"] }),
-                        "fs.list" if params["path"] == "" => json!([
-                            { "name": "src", "dir": true, "size": 0 },
-                            { "name": "main.rs", "dir": false, "size": 10 },
-                        ]),
+                        "fs.list" if params["path"] == "" => {
+                            let mut entries = vec![
+                                json!({ "name": "src", "dir": true, "size": 0 }),
+                                json!({ "name": "main.rs", "dir": false, "size": 10 }),
+                            ];
+                            // More than the window shows, as a real
+                            // folder has.
+                            for i in 0..120 {
+                                entries.push(json!({ "name": format!("note{i:03}.md"), "dir": false, "size": 1 }));
+                            }
+                            Value::Array(entries)
+                        }
                         "fs.list" => json!([]),
                         "git.status" => json!({ "changes": [] }),
                         m if m.starts_with("fs.") => {
@@ -131,6 +139,34 @@ fn new_file_from_a_files_menu_is_made_beside_it(cx: &mut TestAppContext) {
         (open.root.as_str(), open.path.as_str()),
         ("/home/dev/app", "notes.md")
     );
+}
+
+/// Rows keep their height however many there are: the tree scrolls rather
+/// than squeezing them.
+#[gpui::test]
+fn many_rows_keep_their_height(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    let (asked_tx, _asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        Root::new(view, window, cx)
+    });
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-note119.md").is_some()
+    });
+    for row in [
+        "tree-row-main.rs",
+        "tree-row-note000.md",
+        "tree-row-note119.md",
+    ] {
+        let h = cx.debug_bounds(row).unwrap().size.height;
+        assert_eq!(h, gpui::px(20.), "{row} squeezed to {h:?}");
+    }
 }
 
 /// A context menu is modal, as a native one is: while it is up, a click on

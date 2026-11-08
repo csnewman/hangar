@@ -224,7 +224,7 @@ impl Render for StructureView {
             State::Failed(e) => note(e.clone()),
             _ if self.symbols.is_empty() => note("Its language server lists nothing.".into()),
             _ => {
-                let mut list = v_flex().id("structure").overflow_y_scroll().size_full();
+                let mut list = v_flex();
                 for (i, s) in self.symbols.iter().enumerate() {
                     let hover = p.surface_2;
                     list = list.child(
@@ -254,7 +254,9 @@ impl Render for StructureView {
                             .on_click(cx.listener(move |v, _, window, cx| v.go(i, window, cx))),
                     );
                 }
-                list.into_any_element()
+                crate::project::scroll("structure", list)
+                    .size_full()
+                    .into_any_element()
             }
         };
         v_flex().size_full().min_h_0().child(body)
