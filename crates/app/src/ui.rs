@@ -50,6 +50,15 @@ pub fn primary(
     )
 }
 
+/// A button that cannot be pressed now: greyed, and without a hover.
+pub fn disabled(
+    id: impl Into<SharedString>,
+    label: impl Into<SharedString>,
+    p: &Palette,
+) -> Stateful<Div> {
+    styled_button(id, label, p.surface_2, p.border, p.muted, p.surface_2).cursor_default()
+}
+
 pub fn styled_button(
     id: impl Into<SharedString>,
     label: impl Into<SharedString>,

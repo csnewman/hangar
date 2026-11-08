@@ -620,7 +620,9 @@ impl Render for CommitView {
                 }
             }
         }
-        if state == State::Ready && !any && !self.status.is_empty() {
+        // Without a repository there is nothing to change or commit.
+        let has_repo = !first.is_empty();
+        if state == State::Ready && !any && has_repo {
             list = list.child(muted("Nothing has changed.", &p));
         }
 
@@ -642,8 +644,8 @@ impl Render for CommitView {
         let check = h_flex()
             .id("commit-amend")
             .gap(px(5.))
-            .cursor_pointer()
             .text_color(p.muted)
+            .when(!has_repo, |d| d.opacity(0.5))
             .child(
                 div()
                     .size(px(12.))
@@ -659,26 +661,23 @@ impl Render for CommitView {
                     .when(amend, |d| d.child("✓")),
             )
             .child("Amend")
-            .on_click(cx.listener(|v, _, window, cx| v.toggle_amend(window, cx)));
-        let commit = if can && self.busy.is_none() {
-            ui::primary("commit-go", label, &p)
-                .on_click(cx.listener(|v, _, window, cx| v.commit(false, window, cx)))
-        } else {
-            ui::styled_button(
-                "commit-go",
-                label,
-                p.surface_2,
-                p.border,
-                p.muted,
-                p.surface_2,
+            .when(has_repo, |d| {
+                d.cursor_pointer()
+                    .on_click(cx.listener(|v, _, window, cx| v.toggle_amend(window, cx)))
+            });
+        let (commit, push) = if can && self.busy.is_none() {
+            (
+                ui::primary("commit-go", label, &p)
+                    .on_click(cx.listener(|v, _, window, cx| v.commit(false, window, cx))),
+                ui::button("commit-push", "Commit and Push", &p)
+                    .on_click(cx.listener(|v, _, window, cx| v.commit(true, window, cx))),
             )
-            .cursor_default()
+        } else {
+            (
+                ui::disabled("commit-go", label, &p),
+                ui::disabled("commit-push", "Commit and Push", &p),
+            )
         };
-        let push = ui::button("commit-push", "Commit and Push", &p)
-            .when(!can || self.busy.is_some(), |b| {
-                b.text_color(p.muted).cursor_default()
-            })
-            .on_click(cx.listener(|v, _, window, cx| v.commit(true, window, cx)));
 
         let foot = v_flex()
             .gap(px(6.))
@@ -686,7 +685,7 @@ impl Render for CommitView {
             .border_t_1()
             .border_color(p.border)
             .child(h_flex().child(check))
-            .child(Textarea::new(&self.message))
+            .child(Textarea::new(&self.message).disabled(!has_repo))
             .child(h_flex().flex_wrap().gap(px(8.)).child(commit).child(push))
             .when_some(self.busy.clone(), |d, b| d.child(muted(b, &p)))
             .when_some(self.error.clone(), |d, e| {
