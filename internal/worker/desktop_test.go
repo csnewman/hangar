@@ -32,7 +32,7 @@ func TestDesktop(t *testing.T) {
 	defer hs.Close()
 	signIn(t, srv, hs.URL)
 
-	w, err := worker.New(writeConfig(t, hs.URL), worker.NewSimulated(50*time.Millisecond), quiet())
+	w, err := worker.New(writeConfig(t, hs.URL), NewSimulated(50*time.Millisecond), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestDesktop(t *testing.T) {
 	width, height := binary.BigEndian.Uint16(init), binary.BigEndian.Uint16(init[2:])
 	name := make([]byte, binary.BigEndian.Uint32(init[20:]))
 	io.ReadFull(rfb, name)
-	if string(name) != worker.SimulatedDesktopName {
+	if string(name) != SimulatedDesktopName {
 		t.Errorf("desktop name %q", name)
 	}
 

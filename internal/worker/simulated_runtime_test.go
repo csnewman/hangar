@@ -1,4 +1,4 @@
-package worker
+package worker_test
 
 import (
 	"context"
@@ -18,9 +18,9 @@ import (
 	"github.com/csnewman/hangar/internal/terminal"
 )
 
-// Simulated is a Runtime that runs nothing. Each environment walks through
-// the phases a real one would, with a delay at each step, so the control
-// plane and the UI can be exercised end to end on a machine without KVM.
+// Simulated is the tests' Runtime: it runs nothing. Each environment walks
+// through the phases a real one would, with a delay at each step, so a
+// worker can be tested against a real server without KVM.
 //
 // An image whose reference contains "fail" fails to start, to exercise the
 // failure path.

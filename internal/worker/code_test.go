@@ -31,7 +31,7 @@ func TestCode(t *testing.T) {
 	defer hs.Close()
 	signIn(t, srv, hs.URL)
 
-	w, err := worker.New(writeConfig(t, hs.URL), worker.NewSimulated(50*time.Millisecond), quiet())
+	w, err := worker.New(writeConfig(t, hs.URL), NewSimulated(50*time.Millisecond), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}

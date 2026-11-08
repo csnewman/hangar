@@ -1,4 +1,4 @@
-package worker
+package worker_test
 
 import (
 	"context"

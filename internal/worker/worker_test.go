@@ -60,7 +60,7 @@ func TestEndToEnd(t *testing.T) {
 	signIn(t, srv, hs.URL)
 
 	cfg := writeConfig(t, hs.URL)
-	w, err := worker.New(cfg, worker.NewSimulated(50*time.Millisecond), quiet())
+	w, err := worker.New(cfg, NewSimulated(50*time.Millisecond), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestRevokedWorkerStops(t *testing.T) {
 	signIn(t, srv, hs.URL)
 
 	cfg := writeConfig(t, hs.URL)
-	w, err := worker.New(cfg, worker.NewSimulated(time.Millisecond), quiet())
+	w, err := worker.New(cfg, NewSimulated(time.Millisecond), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestWorkerOutlastsItsServersDatabase(t *testing.T) {
 	signIn(t, srv, hs.URL)
 
 	cfg := writeConfig(t, hs.URL)
-	w, err := worker.New(cfg, worker.NewSimulated(time.Millisecond), quiet())
+	w, err := worker.New(cfg, NewSimulated(time.Millisecond), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,11 +231,11 @@ func TestOvercommit(t *testing.T) {
 		t.Error("an overcommit below 1 was accepted")
 	}
 
-	plain, err := worker.New(writeConfig(t, "http://unused"), worker.NewSimulated(time.Millisecond), quiet())
+	plain, err := worker.New(writeConfig(t, "http://unused"), NewSimulated(time.Millisecond), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
-	over, err := worker.New(writeConfig(t, "http://unused", "overcommit:\n  cpus: 4"), worker.NewSimulated(time.Millisecond), quiet())
+	over, err := worker.New(writeConfig(t, "http://unused", "overcommit:\n  cpus: 4"), NewSimulated(time.Millisecond), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +403,7 @@ func openTerminals(t *testing.T, ctx context.Context, ping time.Duration) (*serv
 	signIn(t, srv, hs.URL)
 
 	wctx, wcancel := context.WithCancel(ctx)
-	w, err := worker.New(writeConfig(t, hs.URL), worker.NewSimulated(50*time.Millisecond), quiet())
+	w, err := worker.New(writeConfig(t, hs.URL), NewSimulated(50*time.Millisecond), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}

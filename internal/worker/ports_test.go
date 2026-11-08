@@ -37,7 +37,7 @@ func TestPorts(t *testing.T) {
 	defer tlsServer.Close()
 	signIn(t, srv, hs.URL)
 
-	w, err := worker.New(writeConfig(t, hs.URL), worker.NewSimulated(50*time.Millisecond), quiet())
+	w, err := worker.New(writeConfig(t, hs.URL), NewSimulated(50*time.Millisecond), quiet())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,13 +88,13 @@ func TestPorts(t *testing.T) {
 		}
 		return resp
 	}
-	seen := func(resp *http.Response) worker.SimulatedPortRequest {
+	seen := func(resp *http.Response) SimulatedPortRequest {
 		t.Helper()
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("status %d", resp.StatusCode)
 		}
-		var got worker.SimulatedPortRequest
+		var got SimulatedPortRequest
 		if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
 			t.Fatal(err)
 		}

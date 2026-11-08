@@ -36,7 +36,7 @@ func TestLogs(t *testing.T) {
 
 	rings := logs.NewRings()
 	log := slog.New(logs.Tee(slog.NewTextHandler(io.Discard, nil), rings))
-	w, err := worker.New(writeConfig(t, hs.URL), worker.NewSimulated(50*time.Millisecond), log)
+	w, err := worker.New(writeConfig(t, hs.URL), NewSimulated(50*time.Millisecond), log)
 	if err != nil {
 		t.Fatal(err)
 	}

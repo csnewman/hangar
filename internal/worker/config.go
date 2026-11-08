@@ -64,9 +64,7 @@ type Config struct {
 
 	// Runtime is what runs environments on this machine: "cloud-hypervisor"
 	// runs each as a virtual machine on Linux, and "krun" under libkrun, on
-	// Linux or macOS; "simulated" runs nothing and walks each environment
-	// through its phases, for developing the control plane on a machine
-	// without either.
+	// Linux or macOS.
 	Runtime string `yaml:"runtime"`
 
 	// VM configures the cloud-hypervisor and krun runtimes.
