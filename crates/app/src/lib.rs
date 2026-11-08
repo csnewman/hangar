@@ -31,6 +31,7 @@ pub mod search;
 pub mod settings;
 pub mod shell;
 pub mod store;
+pub mod structure;
 pub mod termconn;
 pub mod terminal;
 pub mod termview;

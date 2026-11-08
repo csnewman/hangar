@@ -306,6 +306,7 @@ pub struct EnvTab {
     commit: Option<Entity<CommitView>>,
     git: Option<Entity<GitView>>,
     find: Option<Entity<FindView>>,
+    structure: Option<Entity<crate::structure::StructureView>>,
     /// Find in Files' pop-up while it is open.
     find_popup: Option<Entity<FindPopup>>,
     find_sub: Option<gpui::Subscription>,
@@ -446,6 +447,7 @@ impl EnvTab {
             commit: None,
             git: None,
             find: None,
+            structure: None,
             find_popup: None,
             find_sub: None,
             pending_find: None,
@@ -1502,6 +1504,16 @@ impl Render for EnvTab {
                 ));
                 self.project = Some(view);
             }
+            if self.structure.is_none()
+                && self.is_open(Tool::Structure)
+                && let Some(langs) = self.languages.clone()
+            {
+                self.structure = Some(cx.new(|_| crate::structure::StructureView::new(langs)));
+            }
+            if let Some(s) = self.structure.clone() {
+                let doc = self.active_file();
+                s.update(cx, |s, cx| s.follow(doc, cx));
+            }
             if let (Some(p), Some(abs)) = (self.project.clone(), self.pending_reveal.take()) {
                 p.update(cx, |p, cx| p.reveal(&abs, cx));
             }
@@ -1988,6 +2000,11 @@ impl EnvTab {
                 .unwrap_or_else(|| div().into_any_element()),
             Tool::Commit if self.commit.is_some() => self
                 .commit
+                .clone()
+                .map(|v| v.into_any_element())
+                .unwrap_or_else(|| div().into_any_element()),
+            Tool::Structure if self.structure.is_some() => self
+                .structure
                 .clone()
                 .map(|v| v.into_any_element())
                 .unwrap_or_else(|| div().into_any_element()),
