@@ -568,6 +568,7 @@ impl Render for CommitView {
         let mut any = false;
         match &state {
             State::Connecting => list = list.child(muted("Connecting…", &p)),
+            State::Reconnecting(why) => list = list.child(muted(State::reconnecting(why), &p)),
             State::Failed(e) => {
                 list = list.child(muted(format!("Could not reach the Code service: {e}"), &p))
             }

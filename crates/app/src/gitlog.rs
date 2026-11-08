@@ -811,6 +811,7 @@ impl Render for GitView {
 
         let log: gpui::AnyElement = match (&state, &self.error) {
             (State::Connecting, _) => note("Connecting…", &p),
+            (State::Reconnecting(why), _) => note(State::reconnecting(why), &p),
             (State::Failed(e), _) => note(format!("Could not reach the Code service: {e}"), &p),
             (_, Some(e)) => note(e.clone(), &p),
             _ if self.chosen.is_none() => note(

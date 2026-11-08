@@ -184,3 +184,25 @@ fn the_apps_own_edits_are_known_by_the_text_they_leave() {
     assert!(e.take(&Rope::from("ab")));
     assert!(!e.take(&Rope::from("a")));
 }
+
+/// What was typed while the service could not be told is carried onto the
+/// text it has as the change between the two.
+#[test]
+fn the_difference_between_two_texts() {
+    use hangar_app::docedit::difference;
+    use hangar_proto::Text;
+    assert!(difference("same", "same").is_none());
+    let check = |a: &str, b: &str| {
+        let c = difference(a, b).expect("a change");
+        assert_eq!(
+            c.apply(&Text::from(a)).unwrap().to_string(),
+            b,
+            "{a} -> {b}"
+        );
+    };
+    check("fn main() {}\n", "fn main() {\n    run();\n}\n");
+    check("let x = 1;\nlet y = 2;\n", "let y = 2;\n");
+    check("héllo wörld 🦀", "hello 🦀 world");
+    check("", "new file\n");
+    check("gone\n", "");
+}

@@ -55,6 +55,21 @@ impl DocSync {
         self.client.version()
     }
 
+    /// The authority's id for this client.
+    pub fn id(&self) -> &str {
+        self.client.id()
+    }
+
+    /// Takes a change of the user's that is not a step of undo: what was
+    /// typed while the authority could not be told, carried onto the
+    /// document it has.
+    pub fn carry(&mut self, change: ChangeSet) {
+        self.client.local(change);
+        self.undo.clear();
+        self.redo.clear();
+        self.last_typed = None;
+    }
+
     /// The changes to push, at version.
     pub fn pending(&self) -> &[ChangeSet] {
         self.client.pending()
@@ -196,6 +211,32 @@ pub fn map_selection(change: &ChangeSet, sel: Range<usize>) -> Range<usize> {
     }
 }
 
+/// The change from one text to another, in UTF-16 positions, as few
+/// replacements as a character diff finds; None when they are the same.
+pub fn difference(before: &str, after: &str) -> Option<ChangeSet> {
+    use similar::{DiffOp, TextDiff};
+    let diff = TextDiff::from_chars(before, after);
+    let (old, new): (Vec<char>, Vec<char>) = (before.chars().collect(), after.chars().collect());
+    let u16s = |cs: &[char]| cs.iter().map(|c| c.len_utf16()).sum::<usize>();
+    let mut changes = vec![];
+    for op in diff.ops() {
+        let (o, n) = (op.old_range(), op.new_range());
+        if matches!(op, DiffOp::Equal { .. }) {
+            continue;
+        }
+        let from = u16s(&old[..o.start]);
+        changes.push(Change {
+            from,
+            to: from + u16s(&old[o.clone()]),
+            insert: Text::from(new[n].iter().collect::<String>().as_str()),
+        });
+    }
+    if changes.is_empty() {
+        return None;
+    }
+    ChangeSet::of(changes, u16s(&old)).ok()
+}
+
 /// One edit as a change from before to after, and its inverse.
 fn single(
     before: &Rope,
@@ -292,6 +333,9 @@ pub fn language(path: &str) -> &'static str {
 pub enum State {
     Opening,
     Open,
+    /// The connection was lost and is being made again: why. What is typed
+    /// meanwhile is kept, and sent once the document is open again.
+    Reconnecting(String),
     /// The file was deleted while open.
     Deleted,
     Failed(String),
@@ -303,6 +347,9 @@ pub struct DocEditor {
     path: String,
     asked: String,
     doc: Option<u64>,
+    /// The authority's document as the service holds it: changed when the
+    /// service starts over, which a reopened document cannot carry on from.
+    epoch: String,
     sync: Option<DocSync>,
     editor: Entity<EditorState>,
     /// The editor's text as of the last change seen, to measure the next
@@ -363,6 +410,7 @@ impl DocEditor {
             path: path.to_string(),
             asked: path.to_string(),
             doc: None,
+            epoch: String::new(),
             sync: None,
             editor,
             shadow: Rope::new(),
@@ -403,10 +451,22 @@ impl DocEditor {
     fn heard(&mut self, n: Notice, window: &mut Window, cx: &mut Context<Self>) {
         match n {
             Notice::Ready(_) => {
-                let call = self.code.call("doc.open", json!({ "path": self.asked }));
+                // Open before, it carries on from what it had: the service
+                // sends what it missed.
+                let params = match &self.sync {
+                    Some(s) => json!({
+                        "path": self.path,
+                        "epoch": self.epoch,
+                        "client": s.id(),
+                        "since": s.version(),
+                    }),
+                    None => json!({ "path": self.asked }),
+                };
+                let call = self.code.call("doc.open", params);
                 cx.spawn_in(window, async move |this, cx| {
                     let result = call.await;
                     let _ = this.update_in(cx, |d, window, cx| match result {
+                        Ok(v) if d.sync.is_some() => d.reopened(v, window, cx),
                         Ok(v) => d.opened(v, window, cx),
                         Err(e) => {
                             d.state = State::Failed(e);
@@ -415,6 +475,14 @@ impl DocEditor {
                     });
                 })
                 .detach();
+            }
+            Notice::Lost { why, .. } if self.state != State::Deleted => {
+                if self.sync.is_some() {
+                    self.state = State::Reconnecting(why);
+                    self.doc = None;
+                    self.pushing = false;
+                    cx.notify();
+                }
             }
             Notice::Event(e, p) if self.doc.is_some() && p["doc"].as_u64() == self.doc => {
                 match e.as_str() {
@@ -443,8 +511,45 @@ impl DocEditor {
         }
     }
 
+    /// Takes the service's answer to opening the document again after the
+    /// connection was lost: what it missed, when the service could carry on;
+    /// else the text afresh, onto which what was typed meanwhile is put.
+    fn reopened(&mut self, v: Value, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(sync) = &self.sync else {
+            return self.opened(v, window, cx);
+        };
+        let carried = v["epoch"].as_str() == Some(self.epoch.as_str())
+            && v["client"].as_str() == Some(sync.id())
+            && v.get("updates").is_some();
+        self.doc = v["doc"].as_u64();
+        self.writable = v["writable"].as_bool().unwrap_or(false);
+        self.state = State::Open;
+        if carried {
+            let updates: Vec<Update> =
+                serde_json::from_value(v["updates"].clone()).unwrap_or_default();
+            self.remote(v["version"].as_u64().unwrap_or(0), &updates, window, cx);
+            cx.notify();
+            return;
+        }
+        // The service started over: its text is the document, and the
+        // editor's differences from it are the user's, sent as such.
+        let text = v["text"].as_str().unwrap_or_default().to_string();
+        let mut sync = DocSync::new(
+            v["client"].as_str().unwrap_or_default(),
+            v["version"].as_u64().unwrap_or(0),
+        );
+        if let Some(change) = difference(&text, &self.shadow.to_string()) {
+            sync.carry(change);
+        }
+        self.epoch = v["epoch"].as_str().unwrap_or_default().to_string();
+        self.sync = Some(sync);
+        self.push(cx);
+        cx.notify();
+    }
+
     fn opened(&mut self, v: Value, window: &mut Window, cx: &mut Context<Self>) {
         let text = v["text"].as_str().unwrap_or_default().to_string();
+        self.epoch = v["epoch"].as_str().unwrap_or_default().to_string();
         self.doc = v["doc"].as_u64();
         self.path = v["path"].as_str().unwrap_or(&self.asked).to_string();
         self.writable = v["writable"].as_bool().unwrap_or(false);
@@ -531,7 +636,8 @@ impl DocEditor {
         let (Some(s), Some(doc)) = (&self.sync, self.doc) else {
             return;
         };
-        if self.pushing || s.pending().is_empty() {
+        let away = matches!(self.state, State::Reconnecting(_) | State::Failed(_));
+        if self.pushing || s.pending().is_empty() || away {
             return;
         }
         self.pushing = true;
@@ -663,6 +769,9 @@ impl Render for DocEditor {
             State::Opening => Some("Opening…".to_string()),
             State::Deleted => Some("The file has been deleted.".to_string()),
             State::Failed(e) => Some(format!("Not connected: {e}")),
+            State::Reconnecting(why) => Some(format!(
+                "Reconnecting ({why}); what you type is kept and saved once it is back"
+            )),
             State::Open if !self.writable => Some("Read-only".to_string()),
             State::Open => None,
         };

@@ -137,6 +137,7 @@ impl Languages {
     pub fn new(workspace: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
         let sub = cx.subscribe(&workspace, |l, _, e: &workspace::Event, cx| match e {
             workspace::Event::Projects => l.attach_all(cx),
+            workspace::Event::Lost { root } => l.lost(root, cx),
             workspace::Event::Lsp {
                 root,
                 server,
@@ -213,6 +214,23 @@ impl Languages {
                 cx,
             );
         }
+    }
+
+    /// Forgets the servers of a project whose connection was lost: they
+    /// are started again, and its files opened in them, once it is back.
+    fn lost(&mut self, root: &str, cx: &mut Context<Self>) {
+        self.servers.retain(|(r, _), _| r != root);
+        self.triggers.retain(|(r, _), _| r != root);
+        self.opened.retain(|_, (r, _)| r != root);
+        self.pending.retain(|((r, _), _), waiting| {
+            let keep = r != root;
+            if !keep {
+                let _ = waiting.try_send(Err("the connection was lost".into()));
+            }
+            keep
+        });
+        cx.emit(Event::Servers);
+        cx.notify();
     }
 
     fn attach_all(&mut self, cx: &mut Context<Self>) {

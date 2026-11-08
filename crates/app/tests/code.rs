@@ -105,3 +105,81 @@ fn git_changes_become_marks() {
     assert_eq!(m["src/d.rs"], 'D');
     assert_eq!(m["src/e.rs"], '!');
 }
+
+/// A connection lost is dialled again and the service greeted again; what
+/// is asked while it is lost fails at once rather than waiting.
+#[test]
+fn a_lost_connection_is_made_again() {
+    let ln = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", ln.local_addr().unwrap());
+    let (drop_tx, drop_rx) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        for n in 0..2 {
+            let (tcp, _) = ln.accept().unwrap();
+            let mut ws = tungstenite::accept(tcp).unwrap();
+            let Ok(Message::Binary(b)) = ws.read() else {
+                return;
+            };
+            let req: Value = serde_json::from_slice(&b[1..]).unwrap();
+            ws.send(frame(
+                json!({ "id": req["id"], "result": { "root": "/r", "n": n } }),
+            ))
+            .unwrap();
+            if n == 0 {
+                // Dropped without a close, as a network that went away.
+                drop_rx.recv().unwrap();
+                drop(ws);
+            } else {
+                thread::sleep(Duration::from_secs(2));
+            }
+        }
+    });
+    let (tx, rx) = mpsc::channel();
+    let code = Code::connect(&Client::new(&url, "hgr_t"), "env1", "/r", move |n| {
+        tx.send(n).is_ok()
+    });
+    let next = || rx.recv_timeout(Duration::from_secs(5)).expect("a notice");
+    assert!(matches!(next(), Notice::Ready(h) if h["n"] == 0));
+    drop_tx.send(()).unwrap();
+    assert!(matches!(next(), Notice::Lost { .. }));
+    assert!(
+        futures_block(code.call("fs.list", json!({}))).is_err(),
+        "a call while lost fails"
+    );
+    assert!(matches!(next(), Notice::Ready(h) if h["n"] == 1));
+}
+
+/// A server that refuses the token is not dialled again.
+#[test]
+fn a_refused_connection_ends() {
+    use std::io::{Read, Write};
+    let ln = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", ln.local_addr().unwrap());
+    thread::spawn(move || {
+        let (mut tcp, _) = ln.accept().unwrap();
+        let mut req = Vec::new();
+        let mut buf = [0; 1024];
+        while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+            let n = tcp.read(&mut buf).unwrap();
+            if n == 0 {
+                return;
+            }
+            req.extend_from_slice(&buf[..n]);
+        }
+        let body = r#"{"error":"the token is not valid"}"#;
+        let resp = format!(
+            "HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        tcp.write_all(resp.as_bytes()).unwrap();
+        thread::sleep(Duration::from_millis(500));
+    });
+    let (tx, rx) = mpsc::channel();
+    let _code = Code::connect(&Client::new(&url, "hgr_bad"), "env1", "/r", move |n| {
+        tx.send(n).is_ok()
+    });
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        Notice::Closed("the token is not valid".into())
+    );
+}

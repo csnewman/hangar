@@ -14,6 +14,9 @@ use crate::places::Places;
 pub enum State {
     Connecting,
     Ready,
+    /// The editor folder's connection was lost, and is being made again:
+    /// why.
+    Reconnecting(String),
     Failed(String),
 }
 
@@ -36,6 +39,10 @@ pub enum Event {
         event: String,
         params: Value,
     },
+    /// A project's connection (its root) or the editor folder's (PRIMARY)
+    /// was lost: what was started on it, its language servers, is gone.
+    /// Projects follows once it is made again.
+    Lost { root: String },
     /// A language server's message, on a project's connection.
     Lsp {
         root: String,
@@ -50,6 +57,14 @@ impl EventEmitter<Event> for Workspace {}
 /// root.
 pub const PRIMARY: &str = "";
 
+impl State {
+    /// What a view says in place of the projects while the service is
+    /// out of reach.
+    pub fn reconnecting(why: &str) -> String {
+        format!("Reconnecting to the Code service ({why})…")
+    }
+}
+
 pub struct Workspace {
     places: Entity<Places>,
     place: String,
@@ -58,6 +73,8 @@ pub struct Workspace {
     primary: Option<Code>,
     home: String,
     projects: Vec<Folder>,
+    /// The connections lost and not yet made again, by key.
+    lost: std::collections::HashSet<String>,
     notices: async_channel::Sender<(String, Notice)>,
 }
 
@@ -87,6 +104,7 @@ impl Workspace {
             primary: None,
             home: String::new(),
             projects: vec![],
+            lost: Default::default(),
             notices: tx,
         };
         w.primary = w.connect(PRIMARY, editor, cx);
@@ -145,6 +163,7 @@ impl Workspace {
     fn heard(&mut self, key: String, notice: Notice, cx: &mut Context<Self>) {
         match notice {
             Notice::Ready(hello) if key == PRIMARY => {
+                self.lost.remove(&key);
                 self.home = hello["home"].as_str().unwrap_or_default().to_string();
                 let root = hello["root"].as_str().unwrap_or_default().to_string();
                 self.read(&root, cx);
@@ -154,6 +173,21 @@ impl Workspace {
             }
             Notice::Closed(why) if key == PRIMARY => {
                 self.state = State::Failed(why);
+                cx.emit(Event::Projects);
+                cx.notify();
+            }
+            Notice::Lost { why, .. } => {
+                if key == PRIMARY {
+                    self.state = State::Reconnecting(why);
+                    cx.emit(Event::Projects);
+                    cx.notify();
+                }
+                self.lost.insert(key.clone());
+                cx.emit(Event::Lost { root: key });
+            }
+            // A project's connection made again: what the views show of it
+            // is read again.
+            Notice::Ready(_) if self.lost.remove(&key) => {
                 cx.emit(Event::Projects);
                 cx.notify();
             }

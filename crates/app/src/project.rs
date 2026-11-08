@@ -461,6 +461,7 @@ impl Render for ProjectView {
             .collect();
         match (&state, scope) {
             (State::Connecting, _) => list = list.child(muted("Connecting…", &p)),
+            (State::Reconnecting(why), _) => list = list.child(muted(State::reconnecting(why), &p)),
             (State::Failed(e), _) => {
                 list = list.child(muted(format!("Could not reach the Code service: {e}"), &p))
             }

@@ -622,6 +622,7 @@ impl Render for FindView {
         let state = self.workspace.read(cx).state().clone();
         let body: gpui::AnyElement = match state {
             State::Connecting => note("Connecting…", &p),
+            State::Reconnecting(why) => note(State::reconnecting(&why), &p),
             State::Failed(e) => note(format!("Could not reach the Code service: {e}"), &p),
             State::Ready if !self.errors.is_empty() && self.rows.is_empty() => {
                 note(self.errors.join("\n"), &p)
