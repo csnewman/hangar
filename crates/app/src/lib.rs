@@ -15,6 +15,7 @@ pub mod findpop;
 pub mod fuzzy;
 pub mod gitlog;
 pub mod languages;
+pub mod latency;
 pub mod layout;
 pub mod lspedit;
 pub mod lspops;

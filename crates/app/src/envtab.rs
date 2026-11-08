@@ -220,6 +220,10 @@ pub struct EnvTab {
     task_edit: Option<Entity<InputState>>,
     /// The tool windows Hide All put away, to bring back.
     hidden: Option<HashMap<Slot, Tool>>,
+    /// How long the way to the environment and back last took, in
+    /// milliseconds, and what times it.
+    latency: Option<f64>,
+    pinger: Option<gpui::Task<()>>,
     /// The editor tabs' sideways scroll, and the tab shown and the number
     /// of tabs when it was last scrolled into view.
     tab_scroll: gpui::ScrollHandle,
@@ -375,6 +379,8 @@ impl EnvTab {
             open,
             task_edit: None,
             hidden: None,
+            latency: None,
+            pinger: None,
             tab_scroll: gpui::ScrollHandle::new(),
             tab_in_view: (None, 0),
             dragging: false,
@@ -1318,6 +1324,17 @@ impl EnvTab {
         let editor = env.editor_path.clone().unwrap_or_default();
         let ws = cx.new(|cx| Workspace::new(places, &place, &id, &editor, cx));
         self.workspace = Some(ws.clone());
+        self.pinger = Some(crate::latency::watch(
+            ws.clone(),
+            cx.entity().downgrade(),
+            |t: &mut Self, ms, cx| {
+                if t.latency != ms {
+                    t.latency = ms;
+                    cx.notify();
+                }
+            },
+            cx,
+        ));
         let langs = cx.new(|cx| Languages::new(ws.clone(), cx));
         self.subs
             .push(cx.subscribe(&langs, |t, l, e: &languages::Event, cx| {
@@ -2679,6 +2696,29 @@ impl EnvTab {
             })
             .when_some(file, |d, (_, pos, lang)| {
                 d.child(pos).child("LF").child("UTF-8").child(lang)
+            })
+            .when_some(self.latency, |d, ms| {
+                let (t, icon) = crate::latency::rating(ms);
+                d.child(
+                    h_flex()
+                        .id("latency")
+                        .gap(px(4.))
+                        .text_color(tone(t, p))
+                        .child(
+                            svg()
+                                .path(assets::icon(icon))
+                                .size(px(12.))
+                                .text_color(tone(t, p)),
+                        )
+                        .child(format!("{} ms", ms.round()))
+                        .tooltip(|window, cx| {
+                            gpui_component::tooltip::Tooltip::new(
+                                "How long a request takes to reach the environment and come \
+                                 back, through Hangar's server and its worker",
+                            )
+                            .build(window, cx)
+                        }),
+                )
             })
             .when_some(env.worker.clone(), |d, w| d.child(format!("on {w}")))
             .child(size)

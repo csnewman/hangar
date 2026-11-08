@@ -210,11 +210,9 @@ fn popup(
                 let take = take.clone();
                 let _ = handle.update(cx, |_, window, cx| take(name, window, cx));
             }
-            InputEvent::Change => {
-                // What went wrong was about the name as it was.
-                if error.borrow_mut().take().is_some() {
-                    let _ = handle.update(cx, |_, window, _| window.refresh());
-                }
+            // What went wrong was about the name as it was.
+            InputEvent::Change if error.borrow_mut().take().is_some() => {
+                let _ = handle.update(cx, |_, window, _| window.refresh());
             }
             _ => {}
         })
