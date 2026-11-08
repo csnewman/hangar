@@ -48,6 +48,8 @@ fn a_files_edits_as_one_change() {
 }
 
 #[test]
+// lsp_types keys its edits by Uri, which clippy takes for mutable.
+#[allow(clippy::mutable_key_type)]
 fn a_workspace_edit_by_file() {
     let uri = |p: &str| p.parse::<Uri>().unwrap();
     let mut changes = std::collections::HashMap::new();

@@ -247,6 +247,9 @@ pub fn byte_ranges(text: &str, ranges: &[[usize; 2]]) -> Vec<Range<usize>> {
         .collect()
 }
 
+/// Each project's matching lines, by its root.
+pub type Lines = Vec<(String, Vec<Match>)>;
+
 /// Asks for a file to be opened at a place in it: 0-based, the column in
 /// UTF-16 units.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,12 +335,7 @@ impl FindView {
 
     /// Lists a language server's usages of a symbol: each project's lines,
     /// by root, under title.
-    pub fn show_usages(
-        &mut self,
-        title: String,
-        found: Vec<(String, Vec<Match>)>,
-        cx: &mut Context<Self>,
-    ) {
+    pub fn show_usages(&mut self, title: String, found: Lines, cx: &mut Context<Self>) {
         self.generation += 1;
         self.title = Some(title);
         self.rows = rows(&found);

@@ -313,7 +313,7 @@ pub struct EnvTab {
     pending_find: Option<Search>,
     /// A language server's usages to list in the Find window once it is
     /// made: what of, and each project's lines.
-    pending_usages: Option<(String, Vec<(String, Vec<crate::find::Match>)>)>,
+    pending_usages: Option<(String, crate::find::Lines)>,
     /// The search Find in Files last made, which it opens on.
     last_search: Option<Search>,
     problems: Option<Entity<ProblemsView>>,
@@ -328,6 +328,15 @@ pub struct EnvTab {
     /// A file to show in the Project window once it is made.
     pending_reveal: Option<String>,
     subs: Vec<gpui::Subscription>,
+}
+
+/// Where the caret of the file shown is, for its language server: the
+/// server, the file, the word there, and the params naming the place.
+struct Caret {
+    langs: Entity<Languages>,
+    abs: String,
+    word: String,
+    params: serde_json::Value,
 }
 
 /// An editor tab: a file, or a file's diff.
@@ -820,16 +829,7 @@ impl EnvTab {
 
     /// The file shown, its server, and where its caret is: the word there
     /// and the request params naming the place.
-    fn at_caret(
-        &self,
-        cx: &App,
-    ) -> Option<(
-        Entity<DocEditor>,
-        Entity<Languages>,
-        String,
-        String,
-        serde_json::Value,
-    )> {
+    fn at_caret(&self, cx: &App) -> Option<Caret> {
         use gpui_component::input::RopeExt;
         let doc = self.active_file()?;
         let langs = self.languages.clone()?;
@@ -840,7 +840,12 @@ impl EnvTab {
             "textDocument": { "uri": languages::file_uri(&abs) },
             "position": text.offset_to_position(caret),
         });
-        Some((doc, langs, abs, word, params))
+        Some(Caret {
+            langs,
+            abs,
+            word,
+            params,
+        })
     }
 
     /// The connection that reaches a file: its project's, else the editor
@@ -855,7 +860,13 @@ impl EnvTab {
     /// Lists every use of the symbol at the caret in the Find window, as
     /// its language server finds them (IntelliJ's Find Usages, Alt-F7).
     pub fn find_usages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((_, langs, abs, word, mut params)) = self.at_caret(cx) else {
+        let Some(Caret {
+            langs,
+            abs,
+            word,
+            mut params,
+        }) = self.at_caret(cx)
+        else {
             return;
         };
         params["context"] = serde_json::json!({ "includeDeclaration": true });
@@ -973,7 +984,13 @@ impl EnvTab {
     /// Renames the symbol at the caret everywhere its language server finds
     /// it (IntelliJ's Rename, Shift-F6), asking the new name.
     pub fn rename_symbol(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((_, langs, abs, word, params)) = self.at_caret(cx) else {
+        let Some(Caret {
+            langs,
+            abs,
+            word,
+            params,
+        }) = self.at_caret(cx)
+        else {
             return;
         };
         if word.is_empty() {
