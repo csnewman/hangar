@@ -11,7 +11,7 @@
 //! after opening, SNAPSHOT_TYPE types into its terminal (\\n for Enter), and
 //! SNAPSHOT_ANSWER=AGENT:KEY answers an asking agent session;
 //! SNAPSHOT_TOOLS=structure,ports toggles tool windows; SNAPSHOT_EXPAND=ROOT:PATH
-//! opens a project's folders; SNAPSHOT_FILE=ROOT:PATH opens a file, and
+//! opens a project's folders; SNAPSHOT_FILE=ROOT:PATH opens a file (PATH,PATH... several), and
 //! SNAPSHOT_EDIT types at its start, then SNAPSHOT_KEYS a key at a time; SNAPSHOT_STAGE=ROOT:PATH stages a file
 //! from the Commit window and SNAPSHOT_COMMIT=message commits what is staged;
 //! SNAPSHOT_BRANCH=1 shows the Commit window's Branch view;
@@ -161,7 +161,11 @@ fn main() {
                 }) {
                     let _ = handle.update(cx, |_, window, cx| {
                         if let Some(tab) = shell.read(cx).active_view() {
-                            tab.update(cx, |t, cx| t.open_file(&root, &path, window, cx));
+                            tab.update(cx, |t, cx| {
+                                for path in path.split(',') {
+                                    t.open_file(&root, path, window, cx)
+                                }
+                            });
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(2)).await;

@@ -1,11 +1,11 @@
 //! The editor's tabs: closing as IntelliJ does (Cmd-W, the tab menu's Close
-//! Others and Close to one side), and Shift-Cmd-T opening the last closed
-//! again.
+//! Others and Close to one side), Shift-Cmd-T opening the last closed
+//! again, and the tab shown kept in view however many there are.
 
 use std::sync::Arc;
 
 use chrono::Utc;
-use gpui::{AppContext, Entity, TestAppContext, VisualTestContext};
+use gpui::{AppContext, Entity, TestAppContext, VisualTestContext, px, size};
 use hangar_app::api::Environment;
 use hangar_app::envtab::EnvTab;
 use hangar_app::place::Update;
@@ -116,5 +116,51 @@ fn close_others_and_to_either_side(cx: &mut TestAppContext) {
         names(&tab, cx),
         ["b.rs", "c.rs", "d.rs"],
         "the last closed first"
+    );
+}
+
+/// With more tabs than the bar has room for, the tab of the file shown is
+/// scrolled into view, as each is opened and when an early one is shown
+/// again.
+#[gpui::test]
+fn the_tab_shown_stays_in_view(cx: &mut TestAppContext) {
+    let (tab, cx) = four(cx);
+    cx.simulate_resize(size(px(1100.), px(700.)));
+    let files: Vec<String> = (0..30).map(|i| format!("file-{i:02}.rs")).collect();
+    cx.update(|window, cx| {
+        tab.update(cx, |t, cx| {
+            for f in &files {
+                t.open_file("/home/dev", f, window, cx);
+            }
+        })
+    });
+    cx.run_until_parked();
+    // The scroll is applied as the frame after the change is laid out.
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let bar = |cx: &mut VisualTestContext| {
+        let first = cx.debug_bounds("file-tab-0").unwrap();
+        let last = cx.debug_bounds("file-tab-33").unwrap();
+        (first, last)
+    };
+    let in_view = |b: gpui::Bounds<gpui::Pixels>, cx: &mut VisualTestContext| {
+        let window = cx.update(|window, _| window.bounds().size.width);
+        b.left() >= px(0.) && b.right() <= window
+    };
+    let (first, last) = bar(cx);
+    assert!(in_view(last, cx), "the last opened is in view: {last:?}");
+    assert!(
+        !in_view(first, cx),
+        "the first has scrolled away: {first:?}"
+    );
+
+    cx.update(|window, cx| tab.update(cx, |t, cx| t.open_file("/home/dev", "a.rs", window, cx)));
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let (first, _) = bar(cx);
+    assert!(
+        in_view(first, cx),
+        "shown again, the first is in view: {first:?}"
     );
 }

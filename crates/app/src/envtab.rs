@@ -10,8 +10,10 @@ use gpui::{
     KeyBinding, ParentElement, Render, SharedString, Styled, Window, actions, div, prelude::*, px,
     relative, svg,
 };
+use gpui_component::Sizable;
+use gpui_component::button::ButtonVariants;
 use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::menu::ContextMenuExt;
+use gpui_component::menu::{ContextMenuExt, DropdownMenu, PopupMenuItem};
 use gpui_component::{h_flex, v_flex};
 
 use crate::api::{AgentSession, Client, Environment, TerminalSession};
@@ -218,6 +220,10 @@ pub struct EnvTab {
     task_edit: Option<Entity<InputState>>,
     /// The tool windows Hide All put away, to bring back.
     hidden: Option<HashMap<Slot, Tool>>,
+    /// The editor tabs' sideways scroll, and the tab shown and the number
+    /// of tabs when it was last scrolled into view.
+    tab_scroll: gpui::ScrollHandle,
+    tab_in_view: (Option<usize>, usize),
     /// Whether a stripe's icon is being dragged, which shows the right
     /// stripe even with nothing on it, to drop onto.
     dragging: bool,
@@ -369,6 +375,8 @@ impl EnvTab {
             open,
             task_edit: None,
             hidden: None,
+            tab_scroll: gpui::ScrollHandle::new(),
+            tab_in_view: (None, 0),
             dragging: false,
             last: None,
             terms: Terms::default(),
@@ -2217,13 +2225,25 @@ impl EnvTab {
         list
     }
 
-    fn editors(&self, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+    fn editors(&mut self, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+        // The tab of the file shown is scrolled into view whenever it, or
+        // the tabs, change.
+        let shown = (self.file, self.files.len());
+        if self.tab_in_view != shown {
+            self.tab_in_view = shown;
+            if let Some(i) = self.file {
+                self.tab_scroll.scroll_to_item(i);
+            }
+        }
         if let Some(active) = self.file.and_then(|i| self.files.get(i)).cloned() {
+            // One row of tabs, scrolled sideways by the wheel when they do
+            // not fit, with a list of them all at its end.
             let mut tabs = h_flex()
-                .flex_none()
-                .border_b_1()
-                .border_color(p.border)
-                .text_size(px(11.5));
+                .id("file-tabs")
+                .flex_1()
+                .min_w_0()
+                .overflow_x_scroll()
+                .track_scroll(&self.tab_scroll);
             for (i, f) in self.files.iter().enumerate() {
                 let on = self.file == Some(i);
                 let path = f.path(cx);
@@ -2232,6 +2252,8 @@ impl EnvTab {
                 tabs = tabs.child(
                     h_flex()
                         .id(("file-tab", i))
+                        .debug_selector(move || format!("file-tab-{i}"))
+                        .flex_none()
                         .gap(px(6.))
                         .px(px(12.))
                         .py(px(5.))
@@ -2242,7 +2264,7 @@ impl EnvTab {
                         .when(!on, move |d| {
                             d.text_color(p.muted).hover(move |s| s.bg(hover))
                         })
-                        .child(name)
+                        .child(div().max_w(px(220.)).truncate().child(name))
                         .child(
                             div()
                                 .id(("file-close", i))
@@ -2261,6 +2283,11 @@ impl EnvTab {
                             }
                         })
                         .on_click(cx.listener(move |t, _, window, cx| t.show_file(i, window, cx)))
+                        // As in IntelliJ, the middle button closes a tab.
+                        .on_mouse_down(
+                            gpui::MouseButton::Middle,
+                            cx.listener(move |t, _, _, cx| t.close_file(i, cx)),
+                        )
                         .context_menu({
                             let (count, tab) = (self.files.len(), cx.entity().downgrade());
                             let rel = self
@@ -2287,10 +2314,57 @@ impl EnvTab {
                         }),
                 );
             }
+            let overflowing = self.tab_scroll.max_offset().x > px(0.);
+            let all: Vec<(usize, String)> = self
+                .files
+                .iter()
+                .enumerate()
+                .map(|(i, f)| (i, f.title(cx).to_string()))
+                .collect();
+            let (shown, tab) = (self.file, cx.entity().downgrade());
+            let bar = h_flex()
+                .flex_none()
+                .border_b_1()
+                .border_color(p.border)
+                .text_size(px(11.5))
+                .child(tabs)
+                .when(overflowing, |d| {
+                    d.child(
+                        div().flex_none().px(px(4.)).child(
+                            gpui_component::button::Button::new("file-tabs-all")
+                                .ghost()
+                                .xsmall()
+                                .icon(
+                                    gpui_component::Icon::empty()
+                                        .path(assets::icon("chevron-down")),
+                                )
+                                .tooltip("Every open file")
+                                .dropdown_menu_with_anchor(
+                                    gpui::Anchor::TopRight,
+                                    move |mut menu, _, cx| {
+                                        crate::ui::modal(cx);
+                                        for (i, title) in &all {
+                                            let (i, tab) = (*i, tab.clone());
+                                            menu = menu.item(
+                                                PopupMenuItem::new(title.clone())
+                                                    .checked(shown == Some(i))
+                                                    .on_click(move |_, window, cx| {
+                                                        let _ = tab.update(cx, |t, cx| {
+                                                            t.show_file(i, window, cx)
+                                                        });
+                                                    }),
+                                            );
+                                        }
+                                        menu
+                                    },
+                                ),
+                        ),
+                    )
+                });
             return v_flex()
                 .flex_1()
                 .min_h_0()
-                .child(tabs)
+                .child(bar)
                 .child(div().flex_1().min_h_0().child(active.element()))
                 .into_any_element();
         }
