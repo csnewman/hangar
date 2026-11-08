@@ -14,7 +14,8 @@
 //! opens a project's folders; SNAPSHOT_FILE=ROOT:PATH opens a file, and
 //! SNAPSHOT_EDIT types at its start; SNAPSHOT_STAGE=ROOT:PATH stages a file
 //! from the Commit window and SNAPSHOT_COMMIT=message commits what is staged;
-//! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes;
+//! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
+//! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
 
 use std::time::Duration;
@@ -197,6 +198,41 @@ fn main() {
                                     cx,
                                 )
                             });
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(2)).await;
+                }
+                if let Some(n) = std::env::var("SNAPSHOT_GIT")
+                    .ok()
+                    .and_then(|n| n.parse::<usize>().ok())
+                {
+                    let _ = handle.update(cx, |_, _, cx| {
+                        let git = shell
+                            .read(cx)
+                            .active_view()
+                            .and_then(|t| t.read(cx).git_view());
+                        if let Some(g) = git {
+                            g.update(cx, |g, cx| {
+                                if let Some(c) = g.commits().get(n) {
+                                    let hash = c.hash.clone();
+                                    g.select(hash, cx);
+                                }
+                            });
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(1)).await;
+                }
+                if let Some(n) = std::env::var("SNAPSHOT_GIT_FILE")
+                    .ok()
+                    .and_then(|n| n.parse::<usize>().ok())
+                {
+                    let _ = handle.update(cx, |_, _, cx| {
+                        let git = shell
+                            .read(cx)
+                            .active_view()
+                            .and_then(|t| t.read(cx).git_view());
+                        if let Some(g) = git {
+                            g.update(cx, |g, cx| g.diff_file(n, cx));
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(2)).await;

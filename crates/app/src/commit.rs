@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 
 use crate::assets;
 use crate::code::Code;
-use crate::diff::Spec;
+use crate::diff::{ShowDiff, Spec};
 use crate::palette::{self, Palette};
 use crate::project::OpenFile;
 use crate::ui;
@@ -197,10 +197,6 @@ pub struct CommitView {
 }
 
 impl gpui::EventEmitter<OpenFile> for CommitView {}
-
-/// Asks for a diff to be shown.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ShowDiff(pub Spec);
 
 impl gpui::EventEmitter<ShowDiff> for CommitView {}
 

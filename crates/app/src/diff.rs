@@ -201,6 +201,10 @@ impl Spec {
     }
 }
 
+/// Asks for a diff to be shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShowDiff(pub Spec);
+
 enum Loaded {
     Reading,
     Failed(String),

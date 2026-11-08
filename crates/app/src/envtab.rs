@@ -14,9 +14,10 @@ use gpui_component::{h_flex, v_flex};
 
 use crate::api::{AgentSession, Client, Environment, TerminalSession};
 use crate::assets;
-use crate::commit::{CommitView, ShowDiff};
-use crate::diff::{DiffView, Spec};
+use crate::commit::CommitView;
+use crate::diff::{DiffView, ShowDiff, Spec};
 use crate::docedit::{self, DocEditor};
+use crate::gitlog::GitView;
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Card, Tone};
 use crate::palette::{self, Palette};
@@ -248,9 +249,10 @@ pub struct EnvTab {
     /// The environment's projects and their Code connections, made when
     /// a window showing them is first shown on a running environment.
     workspace: Option<Entity<Workspace>>,
-    /// The Project and Commit windows, made when each is first shown.
+    /// The Project, Commit and Git windows, made when each is first shown.
     project: Option<Entity<ProjectView>>,
     commit: Option<Entity<CommitView>>,
+    git: Option<Entity<GitView>>,
     /// The files and diffs open in the editors, and the one shown.
     files: Vec<Tab>,
     file: Option<usize>,
@@ -362,6 +364,7 @@ impl EnvTab {
             workspace: None,
             project: None,
             commit: None,
+            git: None,
             files: vec![],
             file: None,
             subs: vec![],
@@ -646,6 +649,11 @@ impl EnvTab {
         self.project.clone()
     }
 
+    /// The Git window's view, once it has been shown.
+    pub fn git_view(&self) -> Option<Entity<GitView>> {
+        self.git.clone()
+    }
+
     /// The Commit window's view, once it has been shown.
     pub fn commit_view(&self) -> Option<Entity<CommitView>> {
         self.commit.clone()
@@ -816,6 +824,16 @@ impl Render for EnvTab {
                     }),
                 );
                 self.commit = Some(view);
+            }
+            if self.git.is_none() && self.is_open(Tool::Git) {
+                let ws = self.workspace(&env, cx);
+                let view = cx.new(|cx| GitView::new(ws, cx));
+                self.subs.push(
+                    cx.subscribe_in(&view, window, |t, _, e: &ShowDiff, window, cx| {
+                        t.open_diff(e.0.clone(), window, cx)
+                    }),
+                );
+                self.git = Some(view);
             }
         }
         let sizes = Layout::sizes(cx);
@@ -1456,12 +1474,32 @@ impl EnvTab {
                 .terminal_window(height, env, p, window, cx)
                 .into_any_element();
         }
-        let dark = false;
+        let body = match (t, &self.git) {
+            (Tool::Git, Some(git)) if env.phase == "running" => div()
+                .flex_1()
+                .min_h_0()
+                .child(git.clone())
+                .into_any_element(),
+            (Tool::Git, _) if env.phase != "running" => div()
+                .px(px(10.))
+                .py(px(6.))
+                .text_size(px(11.))
+                .text_color(p.muted)
+                .child("The environment is not running.")
+                .into_any_element(),
+            _ => div()
+                .px(px(10.))
+                .py(px(6.))
+                .text_size(px(11.))
+                .text_color(p.muted)
+                .child(t.waiting())
+                .into_any_element(),
+        };
         v_flex()
             .relative()
             .h(height)
             .flex_none()
-            .bg(if dark { p.term_bg } else { p.surface })
+            .bg(p.surface)
             .child(layout::handle("bottom-edge", Edge::Bottom))
             .child(
                 h_flex()
@@ -1470,18 +1508,12 @@ impl EnvTab {
                     .py(px(5.))
                     .text_size(px(11.))
                     .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(if dark { p.term_fg } else { p.text })
-                    .when(!dark, |d| d.border_b_1().border_color(p.border))
+                    .text_color(p.text)
+                    .border_b_1()
+                    .border_color(p.border)
                     .child(t.name()),
             )
-            .child(
-                div()
-                    .px(px(10.))
-                    .py(px(6.))
-                    .text_size(px(11.))
-                    .text_color(if dark { p.idle } else { p.muted })
-                    .child(t.waiting()),
-            )
+            .child(body)
             .into_any_element()
     }
 
