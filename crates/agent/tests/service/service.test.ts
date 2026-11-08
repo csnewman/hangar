@@ -621,6 +621,38 @@ test('a language server, shared by tabs and kept across a reload', async () => {
 	}
 })
 
+test('a file changed on disk just after its last window left is edited without doubling', async () => {
+	const file = join(root, 'left.txt')
+	writeFileSync(file, 'one\ntwo\n')
+	const a = new Client()
+	const b = new Client()
+	try {
+		await a.call('hello')
+		const da = await a.open('left.txt')
+		await until('the file to load', () => da.getText('text').toString() === 'one\ntwo\n')
+		da.getText('text').insert(0, 'first\n')
+		await until('the edit to reach the disk', () => readFileSync(file, 'utf8') === 'first\none\ntwo\n')
+		a.close()
+		// Put back on disk as git checkout does, a new file renamed over
+		// it, while the service still holds the document.
+		writeFileSync(file + '.new', 'one\ntwo\n')
+		renameSync(file + '.new', file)
+		await new Promise((r) => setTimeout(r, 300))
+		await b.call('hello')
+		const db = await b.open('left.txt')
+		await until('the second window to load', () => db.getText('text').toString() === 'one\ntwo\n')
+		db.getText('text').insert(0, 'second\n')
+		await until('the edit to reach the disk', () => readFileSync(file, 'utf8') !== 'one\ntwo\n')
+		await new Promise((r) => setTimeout(r, 500))
+		assert.equal(readFileSync(file, 'utf8'), 'second\none\ntwo\n')
+		assert.equal(db.getText('text').toString(), 'second\none\ntwo\n')
+	} finally {
+		a.close()
+		b.close()
+		rmSync(file, { force: true })
+	}
+})
+
 test('a language server that exits while no tab uses it is started afresh for the next', async () => {
 	const settings = { languageServers: { fake: { command: process.execPath, args: [join(import.meta.dirname, 'fake-lsp.mjs')] } } }
 	// The server's pid, from its answer to initialize.

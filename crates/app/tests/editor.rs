@@ -191,3 +191,33 @@ fn other_peoples_selections_as_decorations(cx: &mut TestAppContext) {
     assert!(bounds.is_some(), "an offset has a place on screen");
     let _ = decorations;
 }
+
+/// An edit's event reaches its subscribers once the update making it is
+/// over, not while it runs: a flag set around the edit is clear by then,
+/// so the app tells its own edits from the user's by the text each leaves.
+/// Setting the whole value is not told as an edit.
+#[gpui::test]
+fn edits_are_told_after_the_update_making_them(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let (editor, cx) = cx.add_window_view(EditorState::new);
+    let applying = Rc::new(RefCell::new(false));
+    let seen: Rc<RefCell<Vec<(bool, String)>>> = Rc::default();
+    let (flag, log) = (applying.clone(), seen.clone());
+    let _sub = cx.update(|_, cx| {
+        cx.subscribe(&editor, move |_, event: &InputEditsEvent, _| {
+            for (_, after) in event.edits() {
+                log.borrow_mut().push((*flag.borrow(), after.to_string()));
+            }
+        })
+    });
+    cx.update(|window, cx| {
+        *applying.borrow_mut() = true;
+        editor.update(cx, |e, cx| {
+            e.set_value("one\n", window, cx);
+            e.replace_text_in_range(Some(0..0), "zero ", window, cx)
+        });
+        *applying.borrow_mut() = false;
+    });
+    cx.run_until_parked();
+    assert_eq!(*seen.borrow(), [(false, "zero one\n".to_string())]);
+}

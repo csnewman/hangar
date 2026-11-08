@@ -126,6 +126,35 @@ impl DocSync {
     }
 }
 
+/// The texts the editor will hold after changes the app put into it. The
+/// editor tells of an edit once the update making it is over, so the app
+/// knows its own by the text each leaves, not by a flag set while making
+/// them; each is passed over as it is told, as not the user's.
+#[derive(Default)]
+pub struct Echoes(std::collections::VecDeque<Rope>);
+
+impl Echoes {
+    pub fn expect(&mut self, text: Rope) {
+        self.0.push_back(text);
+    }
+
+    /// Whether an edit leaving the text after is one of the app's; it, and
+    /// any expected before it, are then done with.
+    pub fn take(&mut self, after: &Rope) -> bool {
+        let found = self
+            .0
+            .iter()
+            .position(|t| t.len() == after.len() && t == after);
+        match found {
+            Some(i) => {
+                self.0.drain(..=i);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 /// A change as replacements to make one after another: UTF-16 ranges of
 /// the text before it, last first, so each is still where it says.
 pub fn replacements(change: &ChangeSet) -> Vec<(Range<usize>, String)> {
@@ -279,8 +308,8 @@ pub struct DocEditor {
     /// The editor's text as of the last change seen, to measure the next
     /// one against.
     shadow: Rope,
-    /// Set while a change not typed is put into the editor.
-    applying: bool,
+    /// The texts the app's own edits leave, to pass over when told.
+    echoes: Echoes,
     pushing: bool,
     writable: bool,
     state: State,
@@ -337,7 +366,7 @@ impl DocEditor {
             sync: None,
             editor,
             shadow: Rope::new(),
-            applying: false,
+            echoes: Echoes::default(),
             pushing: false,
             writable: false,
             state: State::Opening,
@@ -423,12 +452,12 @@ impl DocEditor {
             v["client"].as_str().unwrap_or_default(),
             v["version"].as_u64().unwrap_or(0),
         ));
-        self.applying = true;
+        // Setting the value is not told as an edit.
+        self.echoes = Echoes::default();
         self.editor.update(cx, |e, cx| {
             e.set_value(text, window, cx);
             e.set_selected_range(0..0, cx);
         });
-        self.applying = false;
         self.shadow = self.editor.read(cx).text().clone();
         self.state = State::Open;
         self.drawn = false;
@@ -478,9 +507,11 @@ impl DocEditor {
     fn typed(&mut self, e: &InputEditsEvent, cx: &mut Context<Self>) {
         let now = Instant::now();
         for (edit, after) in e.edits() {
-            if !self.applying
-                && let Some(sync) = &mut self.sync
-            {
+            if self.echoes.take(after) {
+                self.shadow = after.clone();
+                continue;
+            }
+            if let Some(sync) = &mut self.sync {
                 sync.typed(
                     &self.shadow,
                     after,
@@ -563,13 +594,17 @@ impl DocEditor {
             ..before.byte_to_utf16_idx(sel.end.min(before.len()));
         let mut end = None;
         change.iter_changes(false, |_, _, _, tb, _| end = Some(tb));
-        self.applying = true;
-        self.editor.update(cx, |e, cx| {
+        let left = self.editor.update(cx, |e, cx| {
+            let mut left = vec![];
             for (range, text) in replacements(change) {
                 e.replace_text_in_range(Some(range), &text, window, cx);
+                left.push(e.text().clone());
             }
+            left
         });
-        self.applying = false;
+        for t in left {
+            self.echoes.expect(t);
+        }
         self.shadow = self.editor.read(cx).text().clone();
         let to = match (own, end) {
             (true, Some(end)) => end..end,
