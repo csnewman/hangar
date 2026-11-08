@@ -538,6 +538,13 @@ impl Render for ProjectView {
                             .hover(|s| s.bg(p.surface_2))
                             .child(chevron(proj.open, &p))
                             .child(
+                                svg()
+                                    .path(assets::icon("folder"))
+                                    .size(px(14.))
+                                    .flex_none()
+                                    .text_color(p.accent),
+                            )
+                            .child(
                                 div()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(names[i].0.clone()),
@@ -621,6 +628,20 @@ fn chevron(open: bool, p: &Palette) -> impl IntoElement {
         .text_color(p.muted)
 }
 
+/// A row's icon: a folder, open or shut, or a file.
+fn kind_icon(dir: bool, open: bool, p: &Palette) -> impl IntoElement {
+    let (name, colour) = match (dir, open) {
+        (true, true) => ("folder-open", p.folder),
+        (true, false) => ("folder", p.folder),
+        _ => ("file", p.muted),
+    };
+    svg()
+        .path(assets::icon(name))
+        .size(px(14.))
+        .flex_none()
+        .text_color(colour)
+}
+
 impl ProjectView {
     /// What the menu acts on for a row: a project's entry by its path from
     /// the root ("" the project itself), or the machine's by its absolute
@@ -677,6 +698,7 @@ impl ProjectView {
             } else {
                 div().w(px(10.)).flex_none().into_any_element()
             })
+            .child(kind_icon(r.dir, r.open, p))
             .child(
                 div()
                     .min_w_0()
