@@ -560,10 +560,12 @@ impl Render for CommitView {
             .map(|(root, r)| (root.to_string(), r.path.clone()))
             .collect();
 
+        // At least a few rows of changes however short the window: the
+        // window scrolls rather than the commit box squeezing them out.
         let mut list = v_flex()
             .id("commit-changes")
             .flex_1()
-            .min_h_0()
+            .min_h(px(66.))
             .overflow_y_scroll();
         let mut any = false;
         match &state {
@@ -700,12 +702,14 @@ impl Render for CommitView {
             });
 
         v_flex()
+            .id("commit-window")
             .size_full()
             .min_h_0()
+            .overflow_y_scroll()
             .text_size(px(12.))
             .child(switch)
             .child(list)
-            .child(foot)
+            .child(foot.flex_none())
             .into_any_element()
     }
 }
