@@ -188,7 +188,7 @@ impl ProblemsView {
                     .pl(px(20.))
                     .pr(px(8.))
                     .cursor_pointer()
-                    .when(selected, |e| e.bg(p.sidebar_active))
+                    .when(selected, |e| e.bg(p.selection))
                     .when(!selected, |e| e.hover(|s| s.bg(p.surface_2)))
                     .child(div().flex_none().size(px(7.)).rounded(px(4.)).bg(c))
                     .child(div().min_w_0().truncate().child(message))

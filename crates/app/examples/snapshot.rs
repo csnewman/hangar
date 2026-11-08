@@ -28,6 +28,7 @@
 //! SNAPSHOT_SYMBOL=text goes to a symbol;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
+//! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
 
 use std::time::Duration;
@@ -451,6 +452,46 @@ fn main() {
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(2)).await;
+                }
+                if let Some((x, y)) = std::env::var("SNAPSHOT_RIGHT_CLICK").ok().and_then(|e| {
+                    let (x, y) = e.split_once(',')?;
+                    Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+                }) {
+                    use gpui::{
+                        Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+                        PlatformInput, point,
+                    };
+                    let position = point(px(x), px(y));
+                    let _ = handle.update(cx, |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseMove(MouseMoveEvent {
+                                position,
+                                pressed_button: None,
+                                modifiers: Modifiers::none(),
+                            }),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                button: MouseButton::Right,
+                                position,
+                                modifiers: Modifiers::none(),
+                                click_count: 1,
+                                first_mouse: false,
+                            }),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            PlatformInput::MouseUp(MouseUpEvent {
+                                button: MouseButton::Right,
+                                position,
+                                modifiers: Modifiers::none(),
+                                click_count: 1,
+                            }),
+                            cx,
+                        );
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(1)).await;
                 }
                 if let Some(hold) = std::env::var("SNAPSHOT_HOLD")
                     .ok()

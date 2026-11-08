@@ -940,7 +940,7 @@ impl CommitView {
             .pr(px(4.))
             .rounded(px(4.))
             .cursor_pointer()
-            .when(selected, |d| d.bg(p.sidebar_active))
+            .when(selected, |d| d.bg(p.selection))
             .when(!selected, |d| d.hover(|s| s.bg(p.surface_2)))
             .child(
                 div()
