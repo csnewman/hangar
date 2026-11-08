@@ -3,6 +3,7 @@
 //! in the middle, and a status bar. Drawn to the design's environment tab.
 
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use gpui::{
     App, Context, DragMoveEvent, Entity, FocusHandle, Focusable, FontWeight, IntoElement,
@@ -10,6 +11,7 @@ use gpui::{
     relative, svg,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::menu::ContextMenuExt;
 use gpui_component::{h_flex, v_flex};
 
 use crate::api::{AgentSession, Client, Environment, TerminalSession};
@@ -171,6 +173,8 @@ actions!(
         ToggleDocker,
         FindInFiles,
         ReplaceInFiles,
+        CloseTab,
+        ReopenClosedTab,
         HideAllToolWindows,
         HideActiveToolWindow
     ]
@@ -224,7 +228,14 @@ pub fn bind_keys(cx: &mut App) {
         ("ctrl-shift-f", "ctrl-shift-r", "ctrl-r")
     };
     let input = Some("Input");
+    let (close, reopen) = if mac {
+        ("cmd-w", "cmd-shift-t")
+    } else {
+        ("ctrl-f4", "ctrl-shift-t")
+    };
     cx.bind_keys([
+        KeyBinding::new(close, CloseTab, ctx),
+        KeyBinding::new(reopen, ReopenClosedTab, ctx),
         KeyBinding::new(find_files, FindInFiles, ctx),
         KeyBinding::new(find_files, FindInFiles, input),
         KeyBinding::new(replace_files, ReplaceInFiles, ctx),
@@ -298,6 +309,11 @@ pub struct EnvTab {
     /// The files and diffs open in the editors, and the one shown.
     files: Vec<Tab>,
     file: Option<usize>,
+    /// The files closed, last last, to open again: each with the root it
+    /// was opened from.
+    closed: Vec<(String, String)>,
+    /// A file to show in the Project window once it is made.
+    pending_reveal: Option<String>,
     subs: Vec<gpui::Subscription>,
 }
 
@@ -416,6 +432,8 @@ impl EnvTab {
             languages: None,
             files: vec![],
             file: None,
+            closed: vec![],
+            pending_reveal: None,
             subs: vec![],
         }
     }
@@ -723,12 +741,26 @@ impl EnvTab {
         cx.notify();
     }
 
-    fn close_file(&mut self, i: usize, cx: &mut Context<Self>) {
-        if let Tab::Doc(doc) = self.files.remove(i)
-            && let Some(l) = &self.languages
-        {
-            let abs = doc.read(cx).asked().to_string();
-            l.update(cx, |l, cx| l.close(&abs, cx));
+    pub fn close_file(&mut self, i: usize, cx: &mut Context<Self>) {
+        if i >= self.files.len() {
+            return;
+        }
+        if let Tab::Doc(doc) = self.files.remove(i) {
+            let abs = doc.read(cx).path().to_string();
+            if let Some(l) = &self.languages {
+                let asked = doc.read(cx).asked().to_string();
+                l.update(cx, |l, cx| l.close(&asked, cx));
+            }
+            let root = self
+                .workspace
+                .as_ref()
+                .and_then(|w| w.read(cx).project_of(&abs).map(|f| f.root.clone()))
+                .unwrap_or_else(|| "/".into());
+            self.closed.retain(|(_, a)| a != &abs);
+            self.closed.push((root, abs));
+            if self.closed.len() > 30 {
+                self.closed.remove(0);
+            }
         }
         self.file = match self.file {
             Some(a) if a == i => (!self.files.is_empty()).then(|| i.min(self.files.len() - 1)),
@@ -736,6 +768,98 @@ impl EnvTab {
             a => a,
         };
         cx.notify();
+    }
+
+    /// Closes every tab but those keep says to keep, as the tab menu's Close
+    /// Others, Close Tabs to the Left or Right, and Close All do.
+    pub fn close_tabs(&mut self, keep: impl Fn(usize) -> bool, cx: &mut Context<Self>) {
+        for i in (0..self.files.len()).rev() {
+            if !keep(i) {
+                self.close_file(i, cx);
+            }
+        }
+    }
+
+    /// Opens the file last closed again, as IntelliJ's Reopen Closed Tab.
+    pub fn reopen_closed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((root, abs)) = self.closed.pop() {
+            self.open_file(&root, &abs, window, cx);
+        }
+    }
+
+    /// Shows a file in the Project window, opening the window.
+    pub fn reveal_in_project(&mut self, abs: &str, cx: &mut Context<Self>) {
+        if !self.is_open(Tool::Project) {
+            self.toggle(Tool::Project, cx);
+        }
+        match &self.project {
+            Some(p) => p.update(cx, |p, cx| p.reveal(abs, cx)),
+            None => self.pending_reveal = Some(abs.to_string()),
+        }
+        cx.notify();
+    }
+
+    /// The menu on an editor tab.
+    fn tab_menu(
+        menu: gpui_component::menu::PopupMenu,
+        i: usize,
+        count: usize,
+        abs: String,
+        rel: String,
+        tab: gpui::WeakEntity<Self>,
+    ) -> gpui_component::menu::PopupMenu {
+        use gpui_component::menu::PopupMenuItem;
+        type Act = Rc<dyn Fn(&mut EnvTab, &mut Window, &mut Context<EnvTab>)>;
+        let on = |label: &str, f: Act| {
+            let tab = tab.clone();
+            PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
+                let f = f.clone();
+                let _ = tab.update(cx, |t, cx| f(t, window, cx));
+            })
+        };
+        let copy = |label: &str, text: String| {
+            PopupMenuItem::new(label.to_string())
+                .on_click(move |_, _, cx| crate::treeops::copy(text.clone(), cx))
+        };
+        let reveal = abs.clone();
+        menu.item(on("Close", Rc::new(move |t, _, cx| t.close_file(i, cx))))
+            .item(
+                on(
+                    "Close Others",
+                    Rc::new(move |t, _, cx| t.close_tabs(|j| j == i, cx)),
+                )
+                .disabled(count < 2),
+            )
+            .item(
+                on(
+                    "Close Tabs to the Left",
+                    Rc::new(move |t, _, cx| t.close_tabs(|j| j >= i, cx)),
+                )
+                .disabled(i == 0),
+            )
+            .item(
+                on(
+                    "Close Tabs to the Right",
+                    Rc::new(move |t, _, cx| t.close_tabs(|j| j <= i, cx)),
+                )
+                .disabled(i + 1 >= count),
+            )
+            .item(on(
+                "Close All",
+                Rc::new(|t, _, cx| t.close_tabs(|_| false, cx)),
+            ))
+            .separator()
+            .item(on(
+                "Reopen Closed Tab",
+                Rc::new(|t, window, cx| t.reopen_closed(window, cx)),
+            ))
+            .separator()
+            .item(copy("Copy Path", abs))
+            .item(copy("Copy Relative Path", rel))
+            .item(on(
+                "Reveal in Project",
+                Rc::new(move |t, _, cx| t.reveal_in_project(&reveal, cx)),
+            ))
     }
 
     /// The files open, by absolute path, and the one shown.
@@ -1074,6 +1198,9 @@ impl Render for EnvTab {
                 ));
                 self.project = Some(view);
             }
+            if let (Some(p), Some(abs)) = (self.project.clone(), self.pending_reveal.take()) {
+                p.update(cx, |p, cx| p.reveal(&abs, cx));
+            }
             if self.commit.is_none() && self.is_open(Tool::Commit) {
                 let ws = self.workspace(&env, cx);
                 let view = cx.new(|cx| CommitView::new(ws, window, cx));
@@ -1156,6 +1283,14 @@ impl Render for EnvTab {
             .on_action(cx.listener(|t, _: &ToggleGit, _, cx| t.toggle(Tool::Git, cx)))
             .on_action(cx.listener(|t, _: &ToggleDocker, _, cx| t.toggle(Tool::Docker, cx)))
             .on_action(cx.listener(|t, _: &FindInFiles, window, cx| t.find_in_files(window, cx)))
+            .on_action(cx.listener(|t, _: &CloseTab, _, cx| {
+                if let Some(i) = t.file {
+                    t.close_file(i, cx);
+                }
+            }))
+            .on_action(
+                cx.listener(|t, _: &ReopenClosedTab, window, cx| t.reopen_closed(window, cx)),
+            )
             .on_action(
                 cx.listener(|t, _: &ReplaceInFiles, window, cx| t.replace_in_files(window, cx)),
             )
@@ -1734,10 +1869,37 @@ impl EnvTab {
                                     t.close_file(i, cx);
                                 })),
                         )
-                        .tooltip(move |window, cx| {
-                            gpui_component::tooltip::Tooltip::new(path.clone()).build(window, cx)
+                        .tooltip({
+                            let path = path.clone();
+                            move |window, cx| {
+                                gpui_component::tooltip::Tooltip::new(path.clone())
+                                    .build(window, cx)
+                            }
                         })
-                        .on_click(cx.listener(move |t, _, window, cx| t.show_file(i, window, cx))),
+                        .on_click(cx.listener(move |t, _, window, cx| t.show_file(i, window, cx)))
+                        .context_menu({
+                            let (count, tab) = (self.files.len(), cx.entity().downgrade());
+                            let rel = self
+                                .workspace
+                                .as_ref()
+                                .and_then(|w| {
+                                    let w = w.read(cx);
+                                    let root =
+                                        w.project_of(&path)?.root.trim_end_matches('/').to_string();
+                                    path.strip_prefix(&format!("{root}/")).map(str::to_string)
+                                })
+                                .unwrap_or_else(|| path.clone());
+                            move |menu, _, _| {
+                                Self::tab_menu(
+                                    menu,
+                                    i,
+                                    count,
+                                    path.clone(),
+                                    rel.clone(),
+                                    tab.clone(),
+                                )
+                            }
+                        }),
                 );
             }
             return v_flex()

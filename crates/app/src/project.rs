@@ -294,6 +294,68 @@ impl ProjectView {
         self.selected.as_ref()
     }
 
+    /// Shows a file in the tree: the project holding it open, the folders
+    /// down to it expanded, and it selected. A file in no project is shown
+    /// in the machine's files.
+    pub fn reveal(&mut self, abs: &str, cx: &mut Context<Self>) {
+        let at = self.projects.iter().enumerate().find_map(|(i, p)| {
+            let root = p.root.trim_end_matches('/');
+            abs.strip_prefix(&format!("{root}/"))
+                .map(|rel| (i, p.root.clone(), rel.to_string()))
+        });
+        match at {
+            Some((i, root, rel)) => {
+                self.scope = Scope::Projects;
+                self.projects[i].open = true;
+                let mut dir = String::new();
+                for part in rel
+                    .split('/')
+                    .collect::<Vec<_>>()
+                    .split_last()
+                    .map_or(&[][..], |(_, d)| d)
+                {
+                    dir = if dir.is_empty() {
+                        part.to_string()
+                    } else {
+                        format!("{dir}/{part}")
+                    };
+                    if self.projects[i].tree.expanded.insert(dir.clone())
+                        && !self.projects[i].tree.children.contains_key(&dir)
+                    {
+                        self.load(i, &dir, cx);
+                    }
+                }
+                self.selected = Some(Selection {
+                    root: Some(root),
+                    path: rel,
+                });
+            }
+            None => {
+                self.set_scope(Scope::Filesystem, cx);
+                let mut dir = String::new();
+                for part in abs
+                    .trim_start_matches('/')
+                    .split('/')
+                    .collect::<Vec<_>>()
+                    .split_last()
+                    .map_or(&[][..], |(_, d)| d)
+                {
+                    dir = format!("{dir}/{part}");
+                    if self.machine.expanded.insert(dir.clone())
+                        && !self.machine.children.contains_key(&dir)
+                    {
+                        self.load_machine(&dir, cx);
+                    }
+                }
+                self.selected = Some(Selection {
+                    root: None,
+                    path: abs.to_string(),
+                });
+            }
+        }
+        cx.notify();
+    }
+
     /// The projects' roots, in order.
     pub fn roots(&self) -> Vec<String> {
         self.projects.iter().map(|p| p.root.clone()).collect()
