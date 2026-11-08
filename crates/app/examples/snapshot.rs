@@ -16,6 +16,7 @@
 //! from the Commit window and SNAPSHOT_COMMIT=message commits what is staged;
 //! SNAPSHOT_BRANCH=1 shows the Commit window's Branch view;
 //! SNAPSHOT_SEARCH=text opens Search Everywhere and types it;
+//! SNAPSHOT_NOTICES=1 opens the bell's notifications;
 //! SNAPSHOT_ASK=METHOD:LINE:COLUMN asks the open file's language server
 //! (textDocument/hover, textDocument/definition) and prints its answer;
 //! SNAPSHOT_FIND=text searches in files and SNAPSHOT_FIND_OPEN=N opens the Nth
@@ -358,6 +359,12 @@ fn main() {
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(2)).await;
+                }
+                if std::env::var("SNAPSHOT_NOTICES").is_ok() {
+                    let _ = handle.update(cx, |_, _, cx| {
+                        shell.update(cx, |s, cx| s.toggle_notices(cx));
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(1)).await;
                 }
                 if let Ok(text) = std::env::var("SNAPSHOT_SEARCH") {
                     let _ = handle.update(cx, |_, window, cx| {

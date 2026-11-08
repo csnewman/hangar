@@ -17,6 +17,7 @@ pub mod languages;
 pub mod layout;
 pub mod lspedit;
 pub mod model;
+pub mod notices;
 pub mod palette;
 pub mod place;
 pub mod places;

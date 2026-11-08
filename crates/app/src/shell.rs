@@ -19,6 +19,7 @@ use crate::doubleshift::DoubleShift;
 use crate::envtab::{EnvTab, Tool};
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Action, Card, LineKind};
+use crate::notices::Notices;
 use crate::palette::{self, Palette};
 use crate::places::Places;
 use crate::search::{Chose, SearchView, Target};
@@ -70,6 +71,10 @@ pub struct Shell {
     /// (⌘K, Shift twice) reach it from wherever focus is, and gpui sends
     /// them nowhere else when nothing is focused.
     focus: gpui::FocusHandle,
+    /// What has come to need the user, in every place.
+    notices: Notices,
+    /// Whether the bell's list is open.
+    notices_open: bool,
 }
 
 gpui::actions!(shell, [SearchEverywhere]);
@@ -94,9 +99,23 @@ impl Shell {
     pub fn new(places: Entity<Places>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.observe_in(&places, window, |this, _, window, cx| {
             this.tell_seen(window, cx);
+            this.observe_notices(window, cx);
             cx.notify();
         })
         .detach();
+        // A system notification clicked opens its environment.
+        let (me, handle) = (cx.entity().downgrade(), window.window_handle());
+        cx.on_system_notification_response(move |r, cx| {
+            let Some((place, env)) = r.tag.split_once('\u{1f}') else {
+                return;
+            };
+            let (place, env) = (place.to_string(), env.to_string());
+            let me = me.clone();
+            let _ = handle.update(cx, |_, window, cx| {
+                window.activate_window();
+                let _ = me.update(cx, |s, cx| s.open(&place, &env, window, cx));
+            });
+        });
         cx.observe_window_activation(window, |this, window, cx| this.tell_seen(window, cx))
             .detach();
         cx.observe_window_appearance(window, |_, window, cx| {
@@ -125,7 +144,10 @@ impl Shell {
             search: None,
             double_shift: DoubleShift::default(),
             focus: cx.focus_handle(),
+            notices: Notices::default(),
+            notices_open: false,
         };
+        shell.observe_notices(window, cx);
         window.focus(&shell.focus, cx);
         if empty {
             shell.open_add(window, cx);
@@ -291,6 +313,47 @@ impl Shell {
         cx.notify();
     }
 
+    /// Notes what has come to need the user since the places were last
+    /// seen, and tells the system of it while the window is behind others.
+    fn observe_notices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let news = self
+            .notices
+            .observe(self.places.read(cx).list(), chrono::Utc::now());
+        if window.is_window_active() {
+            return;
+        }
+        for n in news {
+            let tag = match &n.env {
+                Some(env) => format!("{}\u{1f}{env}", n.place),
+                None => n.place.clone(),
+            };
+            let body = if n.detail.is_empty() {
+                n.what.clone()
+            } else {
+                format!("{} · {}", n.what, n.detail)
+            };
+            cx.show_system_notification(gpui::SystemNotification {
+                tag: tag.into(),
+                title: n.title.clone().into(),
+                body: body.into(),
+                actions: vec![],
+            });
+        }
+    }
+
+    pub fn notices(&self) -> &Notices {
+        &self.notices
+    }
+
+    /// Opens the bell's list, which marks what is in it read, or closes it.
+    pub fn toggle_notices(&mut self, cx: &mut Context<Self>) {
+        self.notices_open = !self.notices_open;
+        if self.notices_open {
+            self.notices.read_all();
+        }
+        cx.notify();
+    }
+
     /// Closes Search Everywhere, the focus it had going back to the shell.
     fn close_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.search = None;
@@ -421,6 +484,22 @@ impl Render for Shell {
                         })),
                 )
             })
+            .when(self.notices_open, |this| {
+                this.child(
+                    div()
+                        .id("notices-scrim")
+                        .absolute()
+                        .inset_0()
+                        .on_click(cx.listener(|s, _, _, cx| s.toggle_notices(cx))),
+                )
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(38.))
+                        .right(px(10.))
+                        .child(self.notices_list(&p, cx)),
+                )
+            })
             .when_some(search, |this, view| {
                 this.child(
                     div()
@@ -504,7 +583,7 @@ impl Shell {
                     .on_click(cx.listener(move |this, _, window, cx| this.show(i, window, cx))),
             );
         }
-        let waiting = cards.iter().filter(|c| c.rank.needs_you()).count();
+        let waiting = self.notices.unread();
         TitleBar::new().bg(p.sidebar).border_color(p.border).child(
             h_flex()
                 .size_full()
@@ -558,9 +637,107 @@ impl Shell {
                                     .child(waiting.to_string()),
                             )
                         })
-                        .on_click(cx.listener(|this, _, _, cx| this.show_home(cx))),
+                        .on_click(cx.listener(|this, _, _, cx| this.toggle_notices(cx))),
                 ),
         )
+    }
+
+    /// The bell's list, as the design draws it.
+    fn notices_list(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let now = chrono::Utc::now();
+        let mut list = v_flex()
+            .id("notices")
+            .max_h(px(420.))
+            .overflow_y_scroll()
+            .px(px(4.))
+            .pb(px(6.));
+        if self.notices.list().is_empty() {
+            list = list.child(
+                div()
+                    .px(px(10.))
+                    .py(px(10.))
+                    .text_color(p.muted)
+                    .child("Nothing needs you. Agents asking or finishing, and environments failing, show here."),
+            );
+        }
+        for (i, n) in self.notices.list().iter().enumerate() {
+            let target = n.env.clone().map(|e| (n.place.clone(), e));
+            list = list.child(
+                h_flex()
+                    .id(("notice", i))
+                    .items_start()
+                    .gap(px(8.))
+                    .px(px(10.))
+                    .py(px(7.))
+                    .rounded(px(6.))
+                    .when(target.is_some(), |d| {
+                        d.cursor_pointer().hover(|s| s.bg(p.surface_2))
+                    })
+                    .child(div().pt(px(5.)).child(dot(n.tone, p)))
+                    .child(
+                        v_flex()
+                            .flex_1()
+                            .min_w_0()
+                            .child(
+                                h_flex()
+                                    .gap(px(4.))
+                                    .min_w_0()
+                                    .child(
+                                        div()
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .truncate()
+                                            .child(n.title.clone()),
+                                    )
+                                    .child(div().flex_none().child(format!("· {}", n.what))),
+                            )
+                            .when(!n.detail.is_empty(), |d| {
+                                d.child(
+                                    div()
+                                        .text_size(px(11.5))
+                                        .text_color(p.muted)
+                                        .truncate()
+                                        .child(n.detail.clone()),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child(model::age(n.at, now)),
+                    )
+                    .on_click(cx.listener(move |s, _, window, cx| {
+                        if let Some((place, env)) = &target {
+                            s.notices_open = false;
+                            s.open(place, env, window, cx);
+                        }
+                    })),
+            );
+        }
+        v_flex()
+            .w(px(380.))
+            .rounded(px(10.))
+            .border_1()
+            .border_color(p.border_strong)
+            .bg(p.surface)
+            .shadow_lg()
+            .overflow_hidden()
+            .text_size(px(12.5))
+            .child(
+                h_flex()
+                    .px(px(14.))
+                    .pt(px(10.))
+                    .pb(px(8.))
+                    .border_b_1()
+                    .border_color(p.border)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(p.muted)
+                    .child("Notifications")
+                    .child(div().flex_1())
+                    .child(div().font_weight(FontWeight::NORMAL).child("every place")),
+            )
+            .child(list)
     }
 
     fn sidebar(
