@@ -105,6 +105,19 @@ impl Places {
         self.connect(self.places.len() - 1);
     }
 
+    /// Makes every place's connection again now, as after the machine
+    /// slept: one waiting out a dead stream or a retry would be stale
+    /// until its timer ran out.
+    pub fn reconnect(&mut self, cx: &mut Context<Self>) {
+        if !self.connects {
+            return;
+        }
+        for i in 0..self.places.len() {
+            self.connect(i);
+        }
+        cx.notify();
+    }
+
     /// Starts a place's connection, with the token it has.
     fn connect(&mut self, i: usize) {
         let (config, state) = &mut self.places[i];
