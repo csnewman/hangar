@@ -23,6 +23,9 @@
 //! SNAPSHOT_FIND_SELECT=N chooses its Nth match, SNAPSHOT_FIND_OPEN=N opens it,
 //! and SNAPSHOT_FIND_WINDOW=1 keeps the matches in the Find window;
 //! SNAPSHOT_REPLACE=1 shows the pop-up as Replace in Files;
+//! SNAPSHOT_CARET=LINE:COL puts the open file's caret there, then
+//! SNAPSHOT_USAGES=1 finds its usages, SNAPSHOT_RENAME=name renames it, and
+//! SNAPSHOT_SYMBOL=text goes to a symbol;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
@@ -302,6 +305,45 @@ fn main() {
                         });
                         settle(cx, handle.into(), Duration::from_secs(3)).await;
                     }
+                }
+                // The language features, at a place in the file open.
+                if let Ok(at) = std::env::var("SNAPSHOT_CARET") {
+                    let (l, c) = hangar_app::docedit::line_column(&at).expect("LINE:COL");
+                    let _ = handle.update(cx, |_, window, cx| {
+                        if let Some(doc) = shell
+                            .read(cx)
+                            .active_view()
+                            .and_then(|t| t.read(cx).active_file())
+                        {
+                            doc.update(cx, |d, cx| d.go_to(l - 1, c - 1, window, cx));
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(1)).await;
+                }
+                if std::env::var("SNAPSHOT_USAGES").is_ok() {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        if let Some(tab) = shell.read(cx).active_view() {
+                            tab.update(cx, |t, cx| t.find_usages(window, cx));
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(5)).await;
+                }
+                if let Ok(name) = std::env::var("SNAPSHOT_RENAME") {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        if let Some(tab) = shell.read(cx).active_view() {
+                            tab.update(cx, |t, cx| t.rename_to(name, window, cx));
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(5)).await;
+                }
+                if let Ok(query) = std::env::var("SNAPSHOT_SYMBOL") {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        shell.update(cx, |s, cx| s.go_to_symbol(window, cx));
+                        if let Some(search) = shell.read(cx).search() {
+                            search.update(cx, |s, cx| s.set_query(&query, window, cx));
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(4)).await;
                 }
                 if std::env::var("SNAPSHOT_BRANCH").is_ok() {
                     let _ = handle.update(cx, |_, _, cx| {

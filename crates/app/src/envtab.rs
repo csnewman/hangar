@@ -994,59 +994,48 @@ impl EnvTab {
     /// Renames the symbol at the caret everywhere its language server finds
     /// it (IntelliJ's Rename, Shift-F6), asking the new name.
     pub fn rename_symbol(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(Caret {
-            langs,
-            abs,
-            word,
-            params,
-        }) = self.at_caret(cx)
-        else {
+        let Some(Caret { word, .. }) = self.at_caret(cx) else {
             return;
         };
         if word.is_empty() {
             return;
         }
         let this = cx.entity().downgrade();
-        crate::treeops::ask_name(
-            "Rename",
-            &word,
-            "Rename",
-            window,
-            cx,
-            move |name, window, cx| {
-                let mut params = params.clone();
-                params["newName"] = name.into();
-                let asked = langs.update(cx, |l, cx| {
-                    l.request(&abs, "textDocument/rename", params, cx)
-                });
-                let this = this.clone();
-                window
-                    .spawn(cx, async move |cx| {
-                        let edit = asked.await.and_then(|v| {
-                            serde_json::from_value::<Option<lsp_types::WorkspaceEdit>>(v)
-                                .map_err(|e| e.to_string())
-                        });
-                        let _ = cx.update(|window, cx| match edit {
-                            Ok(Some(edit)) => {
-                                let _ = this.update(cx, |t, cx| {
-                                    t.apply_edits(crate::lspops::by_file(edit), window, cx)
-                                });
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                use gpui_component::WindowExt;
-                                window.push_notification(
-                                    gpui_component::notification::Notification::error(format!(
-                                        "Rename: {e}"
-                                    )),
-                                    cx,
-                                );
-                            }
-                        });
-                    })
-                    .detach();
-            },
-        );
+        crate::treeops::ask_name("Rename", &word, "Rename", window, cx, move |name, window, cx| {
+            let _ = this.update(cx, |t, cx| t.rename_to(name, window, cx));
+        });
+    }
+
+    /// Renames the symbol at the caret to name, everywhere its language
+    /// server finds it.
+    pub fn rename_to(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Caret {
+            langs, abs, params, ..
+        }) = self.at_caret(cx)
+        else {
+            return;
+        };
+        let mut params = params;
+        params["newName"] = name.into();
+        let asked = langs.update(cx, |l, cx| l.request(&abs, "textDocument/rename", params, cx));
+        cx.spawn_in(window, async move |this, cx| {
+            let edit = asked.await.and_then(|v| {
+                serde_json::from_value::<Option<lsp_types::WorkspaceEdit>>(v)
+                    .map_err(|e| e.to_string())
+            });
+            let _ = this.update_in(cx, |t, window, cx| match edit {
+                Ok(Some(edit)) => t.apply_edits(crate::lspops::by_file(edit), window, cx),
+                Ok(None) => {}
+                Err(e) => {
+                    use gpui_component::WindowExt;
+                    window.push_notification(
+                        gpui_component::notification::Notification::error(format!("Rename: {e}")),
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
     }
 
     /// Makes a language server's edits: in a file open here as the user's

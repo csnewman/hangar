@@ -47,10 +47,19 @@ fn walk(s: &Value, depth: usize, out: &mut Vec<Symbol>) {
     } else {
         &s["location"]["range"]["start"]
     };
+    let kind = kind(s["kind"].as_u64().unwrap_or(0));
+    let name = s["name"].as_str().unwrap_or_default();
+    // rust-analyzer names an impl block "impl Ledger", which its kind
+    // already says.
+    let name = name
+        .strip_prefix(kind)
+        .and_then(|n| n.strip_prefix(' '))
+        .filter(|_| !kind.is_empty())
+        .unwrap_or(name);
     out.push(Symbol {
         depth,
-        name: s["name"].as_str().unwrap_or_default().to_string(),
-        kind: kind(s["kind"].as_u64().unwrap_or(0)),
+        name: name.to_string(),
+        kind,
         line: start["line"].as_u64().unwrap_or(0) as u32,
         column: start["character"].as_u64().unwrap_or(0) as u32,
     });
@@ -73,6 +82,8 @@ fn kind(k: u64) -> &'static str {
         13 => "var",
         14 => "const",
         15 => "string",
+        // rust-analyzer gives an impl block as Object.
+        19 => "impl",
         22 => "variant",
         23 => "struct",
         26 => "type",

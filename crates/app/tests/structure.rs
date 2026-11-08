@@ -46,3 +46,14 @@ fn flat_symbols_at_their_locations() {
     );
     assert!(outline(&json!(null)).is_empty());
 }
+
+#[test]
+fn a_name_that_starts_with_its_kind_is_not_said_twice() {
+    let answer = json!([
+        { "name": "impl Ledger", "kind": 19, "range": at(4, 0), "selectionRange": at(4, 5) },
+        { "name": "implement", "kind": 12, "range": at(9, 0), "selectionRange": at(9, 3) },
+    ]);
+    let o = outline(&answer);
+    assert_eq!((o[0].kind, o[0].name.as_str()), ("impl", "Ledger"));
+    assert_eq!((o[1].kind, o[1].name.as_str()), ("fn", "implement"));
+}
