@@ -391,6 +391,15 @@ pub fn language(path: &str) -> &'static str {
     }
 }
 
+/// How a Markdown file is shown: its text, its preview, or both side by
+/// side, as the web UI's Code tab opens it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preview {
+    Text,
+    Both,
+    Rendered,
+}
+
 /// Whether what the editor shows is on disk.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Saved {
@@ -430,6 +439,8 @@ pub struct DocEditor {
     saved: u64,
     save_error: Option<String>,
     editor: Entity<EditorState>,
+    /// How a Markdown file is shown; None for any other.
+    preview: Option<Preview>,
     /// The editor's text as of the last change seen, to measure the next
     /// one against.
     shadow: Rope,
@@ -505,6 +516,7 @@ impl DocEditor {
             doc: None,
             epoch: String::new(),
             sync: None,
+            preview: (language(path) == "markdown").then_some(Preview::Both),
             saved: 0,
             save_error: None,
             editor,
@@ -1108,6 +1120,18 @@ impl DocEditor {
         self.push(cx);
     }
 
+    /// How a Markdown file is shown, if it is one.
+    pub fn preview(&self) -> Option<Preview> {
+        self.preview
+    }
+
+    pub fn set_preview(&mut self, p: Preview, cx: &mut Context<Self>) {
+        if self.preview.is_some() {
+            self.preview = Some(p);
+            cx.notify();
+        }
+    }
+
     /// The editor's text and the caret's byte offset in it.
     pub fn text_and_caret(&self, cx: &App) -> (Rope, usize) {
         let e = self.editor.read(cx);
@@ -1140,6 +1164,68 @@ impl DocEditor {
 impl Focusable for DocEditor {
     fn focus_handle(&self, cx: &App) -> FocusHandle {
         self.editor.read(cx).focus_handle(cx)
+    }
+}
+
+impl DocEditor {
+    /// A Markdown file's text beside its preview, or either alone, with the
+    /// switch between them.
+    fn with_preview(
+        &self,
+        mode: Preview,
+        editor: Editor,
+        p: &palette::Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let text = self.editor.read(cx).text().to_string();
+        let modes = [
+            ("Text", Preview::Text),
+            ("Both", Preview::Both),
+            ("Preview", Preview::Rendered),
+        ];
+        let switch = h_flex()
+            .absolute()
+            .bottom(px(8.))
+            .left(px(14.))
+            .gap(px(2.))
+            .p(px(2.))
+            .rounded(px(6.))
+            .bg(p.surface_2)
+            .text_size(px(11.))
+            .children(modes.map(|(label, m)| {
+                div()
+                    .id(label)
+                    .px(px(8.))
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .when(m == mode, |d| d.bg(p.surface).text_color(p.text))
+                    .when(m != mode, |d| d.text_color(p.muted))
+                    .child(label)
+                    .on_click(cx.listener(move |d, _, _, cx| d.set_preview(m, cx)))
+            }));
+        let rendered = div()
+            .id("md-preview")
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .overflow_y_scroll()
+            .px(px(20.))
+            .py(px(14.))
+            .bg(p.surface)
+            .child(
+                gpui_component::text::TextView::markdown("md-preview-text", text).selectable(true),
+            );
+        h_flex()
+            .size_full()
+            .relative()
+            .when(mode != Preview::Rendered, |d| {
+                d.child(div().flex_1().min_w_0().h_full().child(editor))
+            })
+            .when(mode == Preview::Both, |d| {
+                d.child(div().w(px(1.)).h_full().bg(p.border))
+            })
+            .when(mode != Preview::Text, |d| d.child(rendered))
+            .child(switch)
     }
 }
 
@@ -1180,9 +1266,15 @@ impl Render for DocEditor {
                 cx.stop_propagation();
                 d.redo(window, cx);
             }))
-            .child(Editor::new(&self.editor).h_full().bordered(false).readonly(
-                !self.writable || !matches!(self.state, State::Open | State::Reconnecting(_)),
-            ))
+            .child({
+                let editor = Editor::new(&self.editor).h_full().bordered(false).readonly(
+                    !self.writable || !matches!(self.state, State::Open | State::Reconnecting(_)),
+                );
+                match self.preview {
+                    None => div().size_full().child(editor).into_any_element(),
+                    Some(mode) => self.with_preview(mode, editor, &p, cx).into_any_element(),
+                }
+            })
             .when(!self.remotes.is_empty(), |d| {
                 // Who else has the file open, in the colours their carets
                 // are drawn in.
