@@ -149,7 +149,7 @@ pub fn age(since: DateTime<Utc>, now: DateTime<Utc>) -> String {
 }
 
 /// "2h ago", "yesterday", "just now".
-fn ago(since: DateTime<Utc>, now: DateTime<Utc>) -> String {
+pub fn ago(since: DateTime<Utc>, now: DateTime<Utc>) -> String {
     match age(since, now).as_str() {
         "now" => "just now".into(),
         "yesterday" => "yesterday".into(),

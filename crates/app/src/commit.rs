@@ -1,7 +1,9 @@
 //! The Commit tool window: what has changed in each of the environment's
 //! projects, repository by repository as the web UI's Changes view shows
 //! it (staged, changed, unversioned), to stage, roll back and commit, and
-//! push after. A click shows a file's diff; a double-click opens it.
+//! push after. A click shows a file's diff; a double-click opens it. Its
+//! Branch view (branch.rs) shows what each branch has changed since it
+//! left its base.
 
 use std::collections::HashMap;
 
@@ -15,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::assets;
+use crate::branch::BranchView;
 use crate::code::Code;
 use crate::diff::{ShowDiff, Spec};
 use crate::palette::{self, Palette};
@@ -193,6 +196,10 @@ pub struct CommitView {
     /// The row whose rollback waits to be confirmed.
     confirm: Option<String>,
     selected: Option<String>,
+    /// Whether the window shows what the branches have changed rather
+    /// than what is uncommitted.
+    branch_mode: bool,
+    branch: Entity<BranchView>,
     _subs: Vec<gpui::Subscription>,
 }
 
@@ -207,7 +214,10 @@ impl CommitView {
                 .auto_grow(3, 10)
                 .placeholder("Commit message")
         });
+        let branch = cx.new(|_| BranchView::new(workspace.clone()));
         let subs = vec![
+            cx.subscribe(&branch, |_, _, e: &ShowDiff, cx| cx.emit(e.clone())),
+            cx.subscribe(&branch, |_, _, e: &OpenFile, cx| cx.emit(e.clone())),
             cx.subscribe(&workspace, |v, _, e: &Event, cx| match e {
                 Event::Projects => v.reload_all(cx),
                 Event::Heard { root, event, .. } if event == "git.changed" => {
@@ -236,6 +246,8 @@ impl CommitView {
             error: None,
             confirm: None,
             selected: None,
+            branch_mode: false,
+            branch,
             _subs: subs,
         };
         view.reload_all(cx);
@@ -278,6 +290,31 @@ impl CommitView {
         cx.notify();
     }
 
+    /// Has the Branch view read again what each repository's branch has
+    /// changed, while it is shown.
+    fn sync_branch(&mut self, cx: &mut Context<Self>) {
+        if !self.branch_mode {
+            return;
+        }
+        let projects = self.projects(cx);
+        let repos: Vec<(String, Repo)> = unique(&projects)
+            .into_iter()
+            .filter(|(_, r)| usable(r))
+            .map(|(root, r)| (root.to_string(), r.clone()))
+            .collect();
+        self.branch.update(cx, |b, cx| b.set_repos(repos, cx));
+    }
+
+    pub fn set_branch_mode(&mut self, on: bool, cx: &mut Context<Self>) {
+        self.branch_mode = on;
+        self.sync_branch(cx);
+        cx.notify();
+    }
+
+    pub fn branch_view(&self) -> &Entity<BranchView> {
+        &self.branch
+    }
+
     fn reload(&mut self, root: String, cx: &mut Context<Self>) {
         let Some(code) = self.workspace.read(cx).code(&root) else {
             return;
@@ -287,6 +324,7 @@ impl CommitView {
             let result = call.await;
             let _ = this.update(cx, |v, cx| {
                 v.status.insert(root, result.map(|s| repos(&s)));
+                v.sync_branch(cx);
                 cx.notify();
             });
         })
@@ -476,6 +514,38 @@ impl CommitView {
 impl Render for CommitView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
+        let mode = self.branch_mode;
+        let seg = |id: &'static str, label: &'static str, on: bool, cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .px(px(6.))
+                .cursor_pointer()
+                .when(on == mode, |d| d.bg(p.accent_soft).text_color(p.accent))
+                .when(on != mode, |d| d.text_color(p.muted))
+                .child(label)
+                .on_click(cx.listener(move |v, _, _, cx| v.set_branch_mode(on, cx)))
+        };
+        let switch = h_flex()
+            .mb(px(6.))
+            .self_start()
+            .flex_none()
+            .rounded(px(5.))
+            .border_1()
+            .border_color(p.border)
+            .overflow_hidden()
+            .text_size(px(11.))
+            .child(seg("mode-local", "Local", false, cx))
+            .child(div().w(px(1.)).h_full().bg(p.border))
+            .child(seg("mode-branch", "Branch", true, cx));
+        if mode {
+            return v_flex()
+                .size_full()
+                .min_h_0()
+                .text_size(px(12.))
+                .child(switch)
+                .child(self.branch.clone())
+                .into_any_element();
+        }
         let ws = self.workspace.read(cx);
         let state = ws.state().clone();
         let folders: Vec<(String, String)> = ws
@@ -526,7 +596,16 @@ impl Render for CommitView {
                                 .filter(|r| first.contains(&(root.clone(), r.path.clone())))
                                 .collect();
                             if own.is_empty() {
-                                list = list.child(muted("Its repositories are listed above.", &p));
+                                let names: Vec<&str> =
+                                    repos.iter().map(|r| r.name.as_str()).collect();
+                                list = list.child(muted(
+                                    format!(
+                                        "Holds {}, which {} listed above.",
+                                        names.join(", "),
+                                        if names.len() == 1 { "is" } else { "are" }
+                                    ),
+                                    &p,
+                                ));
                             }
                             let one = own.len() == 1;
                             for r in own {
@@ -624,8 +703,10 @@ impl Render for CommitView {
             .size_full()
             .min_h_0()
             .text_size(px(12.))
+            .child(switch)
             .child(list)
             .child(foot)
+            .into_any_element()
     }
 }
 

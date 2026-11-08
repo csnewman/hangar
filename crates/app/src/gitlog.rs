@@ -753,7 +753,8 @@ fn badge(r: &Ref, p: &Palette) -> impl IntoElement {
         })
 }
 
-fn status_colour(s: &str, p: &Palette) -> Hsla {
+/// A file's colour by how it changed: A, M, D, R or C.
+pub(crate) fn status_colour(s: &str, p: &Palette) -> Hsla {
     match s {
         "A" | "C" => p.good,
         "D" => p.bad,
@@ -875,7 +876,8 @@ impl Render for GitView {
     }
 }
 
-fn chip(
+/// A toggle among a few: on, or muted until hovered.
+pub(crate) fn chip(
     id: impl Into<gpui::ElementId>,
     label: String,
     on: bool,

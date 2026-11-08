@@ -14,6 +14,7 @@
 //! opens a project's folders; SNAPSHOT_FILE=ROOT:PATH opens a file, and
 //! SNAPSHOT_EDIT types at its start; SNAPSHOT_STAGE=ROOT:PATH stages a file
 //! from the Commit window and SNAPSHOT_COMMIT=message commits what is staged;
+//! SNAPSHOT_BRANCH=1 shows the Commit window's Branch view;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
@@ -198,6 +199,18 @@ fn main() {
                                     cx,
                                 )
                             });
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(2)).await;
+                }
+                if std::env::var("SNAPSHOT_BRANCH").is_ok() {
+                    let _ = handle.update(cx, |_, _, cx| {
+                        let commit = shell
+                            .read(cx)
+                            .active_view()
+                            .and_then(|t| t.read(cx).commit_view());
+                        if let Some(c) = commit {
+                            c.update(cx, |c, cx| c.set_branch_mode(true, cx));
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(2)).await;
