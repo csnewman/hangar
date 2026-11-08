@@ -275,11 +275,9 @@ pub struct EnvTab {
     commit: Option<Entity<CommitView>>,
     git: Option<Entity<GitView>>,
     find: Option<Entity<FindView>>,
-    /// Find in Files' pop-up while it is open; asked for, it opens at the
-    /// next draw of a running environment.
+    /// Find in Files' pop-up while it is open.
     find_popup: Option<Entity<FindPopup>>,
     find_sub: Option<gpui::Subscription>,
-    find_wanted: bool,
     /// A search to list in the Find window once it is made.
     pending_find: Option<Search>,
     /// The search Find in Files last made, which it opens on.
@@ -402,7 +400,6 @@ impl EnvTab {
             find: None,
             find_popup: None,
             find_sub: None,
-            find_wanted: false,
             pending_find: None,
             last_search: None,
             problems: None,
@@ -741,12 +738,32 @@ impl EnvTab {
         self.project.clone()
     }
 
-    /// Opens Find in Files' pop-up, or brings it back to the front.
+    /// Opens Find in Files' pop-up on a running environment, or brings it
+    /// back to the front, its query taking what is typed.
     pub fn find_in_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        match &self.find_popup {
-            Some(f) => window.focus(&f.focus_handle(cx), cx),
-            None => self.find_wanted = true,
+        if let Some(f) = &self.find_popup {
+            window.focus(&f.focus_handle(cx), cx);
+            return;
         }
+        let env = self
+            .places
+            .read(cx)
+            .get(&self.place)
+            .and_then(|(_, s)| s.environment(&self.env).cloned())
+            .filter(|e| e.phase == "running");
+        let Some(env) = env else {
+            return;
+        };
+        let ws = self.workspace(&env, cx);
+        let last = self.last_search.clone();
+        let popup = cx.new(|cx| FindPopup::new(ws, last, window, cx));
+        self.find_sub = Some(
+            cx.subscribe_in(&popup, window, |t, _, e: &Done, window, cx| {
+                t.found(e, window, cx)
+            }),
+        );
+        window.focus(&popup.focus_handle(cx), cx);
+        self.find_popup = Some(popup);
         cx.notify();
     }
 
@@ -1024,19 +1041,6 @@ impl Render for EnvTab {
             if let (Some(view), Some(s)) = (self.find.clone(), self.pending_find.take()) {
                 view.update(cx, |v, cx| v.show(s, window, cx));
             }
-            if self.find_wanted && self.find_popup.is_none() {
-                let ws = self.workspace(&env, cx);
-                let last = self.last_search.clone();
-                let popup = cx.new(|cx| FindPopup::new(ws, last, window, cx));
-                self.find_sub = Some(cx.subscribe_in(
-                    &popup,
-                    window,
-                    |t, _, e: &Done, window, cx| t.found(e, window, cx),
-                ));
-                window.focus(&popup.focus_handle(cx), cx);
-                self.find_popup = Some(popup);
-            }
-            self.find_wanted = false;
             if self.problems.is_none() && self.is_open(Tool::Problems) {
                 let ws = self.workspace(&env, cx);
                 if let Some(langs) = self.languages.clone() {

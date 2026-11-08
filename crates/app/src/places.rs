@@ -138,7 +138,9 @@ impl Places {
         };
     }
 
-    fn apply(&mut self, id: &str, u: Update, cx: &mut Context<Self>) {
+    /// Takes what a place's connection says: its connection, who is signed
+    /// in, and its environments.
+    pub fn apply(&mut self, id: &str, u: Update, cx: &mut Context<Self>) {
         let Some(i) = self.places.iter().position(|(c, _)| c.id == id) else {
             return;
         };

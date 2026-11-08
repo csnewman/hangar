@@ -724,6 +724,8 @@ impl Shell {
             .shadow_lg()
             .overflow_hidden()
             .text_size(px(12.5))
+            // Clicks in the list stay in it, not reaching the shade behind.
+            .occlude()
             .child(
                 h_flex()
                     .px(px(14.))

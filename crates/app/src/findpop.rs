@@ -715,6 +715,10 @@ impl Render for FindPopup {
             .shadow_lg()
             .overflow_hidden()
             .text_size(px(12.5))
+            // Clicks in the pop-up stay in it, not reaching the shade
+            // behind, which closes it.
+            .occlude()
+            .debug_selector(|| "find-popup".into())
             .capture_key_down(cx.listener(|v, e: &KeyDownEvent, _, cx| v.key(e, cx)))
             .child(head)
             .when(self.place == Where::Folder, |d| {
