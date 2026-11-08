@@ -83,6 +83,43 @@ impl Action {
     }
 }
 
+/// An environment's dot: its ring is its machine (green running, amber
+/// starting or changing, grey suspended or stopped, red failed) and its
+/// fill its agent (amber working, indigo asking, green finished), so a
+/// running machine with nothing happening is a hollow green ring. A
+/// machine that is off is solid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mark {
+    pub ring: Tone,
+    /// None is hollow.
+    pub fill: Option<Tone>,
+}
+
+impl Mark {
+    pub fn solid(t: Tone) -> Mark {
+        Mark {
+            ring: t,
+            fill: Some(t),
+        }
+    }
+
+    pub fn hollow(t: Tone) -> Mark {
+        Mark { ring: t, fill: None }
+    }
+
+    fn of(rank: Rank, tone: Tone) -> Mark {
+        match rank {
+            Rank::Asking | Rank::Finished | Rank::Working => Mark {
+                ring: Tone::Good,
+                fill: Some(tone),
+            },
+            Rank::Running => Mark::hollow(Tone::Good),
+            Rank::Starting | Rank::Busy | Rank::Suspended => Mark::hollow(tone),
+            Rank::Failed | Rank::Stopped => Mark::solid(tone),
+        }
+    }
+}
+
 /// An environment as Home and the sidebar show it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Card {
@@ -99,7 +136,10 @@ pub struct Card {
     pub subtitle: String,
     pub lines: Vec<Line>,
     pub rank: Rank,
+    /// The one colour it is summed up in, as a notice shows it.
     pub tone: Tone,
+    /// Its dot, machine and agent apart.
+    pub mark: Mark,
     /// The card's footer: "Asking · 3m".
     pub status: String,
     /// The sidebar row's second line: "Claude is asking: run the
@@ -293,8 +333,6 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
             lines.push(line(text, LineKind::Plain));
             Look {
                 rank: Rank::Running,
-                // The design's "running, fine": green, as the tab's own
-                // header shows it, apart from a stopped one's grey.
                 tone: Tone::Good,
                 status: format!("Running · {}", age(e.updated_at, now)),
                 summary: format!("{summary} · {}", age(e.updated_at, now)),
@@ -386,6 +424,7 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
         lines,
         rank: look.rank,
         tone: look.tone,
+        mark: Mark::of(look.rank, look.tone),
         status: look.status,
         summary: look.summary,
         action: look.action,

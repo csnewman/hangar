@@ -3,7 +3,7 @@
 
 use gpui::{Div, Hsla, InteractiveElement, ParentElement, SharedString, Stateful, Styled, div, px};
 
-use crate::model::Tone;
+use crate::model::{Mark, Tone};
 use crate::palette::Palette;
 
 pub fn tone(t: Tone, p: &Palette) -> Hsla {
@@ -22,6 +22,27 @@ pub fn dot(t: Tone, p: &Palette) -> Div {
     match t {
         Tone::Ring => d.border(px(1.5)).border_color(p.idle),
         t => d.bg(tone(t, p)),
+    }
+}
+
+/// An environment's dot: its machine's ring around its agent's centre,
+/// with a gap between so the two read apart; solid when they are one.
+pub fn mark(m: Mark, p: &Palette) -> Div {
+    let ring = tone(m.ring, p);
+    let d = div()
+        .size(px(10.))
+        .rounded_full()
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center();
+    match m.fill {
+        Some(f) if f == m.ring => d.bg(ring),
+        Some(f) => d
+            .border(px(1.5))
+            .border_color(ring)
+            .child(div().size(px(5.)).rounded_full().bg(tone(f, p))),
+        None => d.border(px(1.5)).border_color(ring),
     }
 }
 

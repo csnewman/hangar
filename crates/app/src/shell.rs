@@ -24,7 +24,7 @@ use crate::palette::{self, Palette};
 use crate::places::Places;
 use crate::search::{Chose, SearchView, Target};
 use crate::settings::Settings;
-use crate::ui::{button, chip, dot, primary, spark};
+use crate::ui::{button, chip, dot, mark, primary, spark};
 
 /// How often the window is drawn again with nothing changed, so ages
 /// ("3m") keep up.
@@ -559,7 +559,7 @@ impl Shell {
             let on = self.active == Some(i) && self.adding.is_none();
             tabs = tabs.child(
                 tab(format!("tab-{i}").into(), on)
-                    .when_some(card, |d, c| d.child(dot(c.tone, p)))
+                    .when_some(card, |d, c| d.child(mark(c.mark, p)))
                     .child(div().max_w(px(170.)).truncate().child(title))
                     .when_some(card, |d, c| {
                         d.child(
@@ -888,7 +888,7 @@ impl Shell {
             .when(on, |d| d.bg(p.sidebar_active))
             .when(!on, move |d| d.hover(move |s| s.bg(hover.opacity(0.6))))
             .when(c.stale, |d| d.opacity(0.55))
-            .child(div().pt(px(5.)).child(dot(c.tone, p)))
+            .child(div().pt(px(4.)).child(mark(c.mark, p)))
             .child(
                 v_flex()
                     .min_w_0()
@@ -1079,7 +1079,7 @@ impl Shell {
                     .px(px(10.))
                     .pt(px(8.))
                     .pb(px(4.))
-                    .child(dot(c.tone, p))
+                    .child(mark(c.mark, p))
                     .child(
                         div()
                             .min_w_0()
@@ -1115,7 +1115,7 @@ impl Shell {
                     .pt(px(7.))
                     .pb(px(9.))
                     .text_size(px(11.5))
-                    .child(dot(c.tone, p))
+                    .child(mark(c.mark, p))
                     .child(div().flex_1().truncate().child(c.status.clone()))
                     .when_some(c.action, |d, a| {
                         d.child(

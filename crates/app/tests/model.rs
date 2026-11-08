@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use hangar_app::api::{AgentSession, Environment, StartProgress, Task};
-use hangar_app::model::{self, Action, LineKind, Rank, Tone};
+use hangar_app::model::{self, Action, LineKind, Mark, Rank, Tone};
 use hangar_app::place::{Connection, PlaceConfig, PlaceState};
 
 fn now() -> DateTime<Utc> {
@@ -252,4 +252,30 @@ fn an_offline_place_is_last_known() {
     );
     let groups = model::sidebar(&places, now());
     assert_eq!(model::connection(&groups[0].connection).1, Some("Offline"));
+}
+
+/// A dot's ring is the machine and its centre the agent, so a running
+/// machine's agent at work, asking or done each reads apart from the
+/// machine merely running, and from one that is off.
+#[test]
+fn marks_show_the_machine_and_its_agent_apart() {
+    let mark = |e: &Environment| model::card(&place(), e, now()).mark;
+    let with = |state: &str, needs_you: bool| {
+        let mut e = env("e", "running");
+        e.agents = vec![agent("a", state, needs_you, 2)];
+        mark(&e)
+    };
+    let on = |fill| Mark {
+        ring: Tone::Good,
+        fill,
+    };
+    assert_eq!(mark(&env("e", "running")), on(None));
+    assert_eq!(with("idle", false), on(None));
+    assert_eq!(with("working", false), on(Some(Tone::Busy)));
+    assert_eq!(with("asking", true), on(Some(Tone::Wait)));
+    assert_eq!(with("finished", true), on(Some(Tone::Good)));
+    assert_eq!(mark(&env("e", "starting")), Mark::hollow(Tone::Busy));
+    assert_eq!(mark(&env("e", "suspended")), Mark::hollow(Tone::Ring));
+    assert_eq!(mark(&env("e", "stopped")), Mark::solid(Tone::Idle));
+    assert_eq!(mark(&env("e", "failed")), Mark::solid(Tone::Bad));
 }

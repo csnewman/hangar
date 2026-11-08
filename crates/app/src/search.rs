@@ -17,7 +17,7 @@ use serde_json::json;
 
 use crate::envtab::Tool;
 use crate::fuzzy;
-use crate::model::{self, Action, Card, Rank, Tone};
+use crate::model::{self, Action, Card, Mark, Rank};
 use crate::palette::{self, Palette};
 use crate::places::Places;
 use crate::ui;
@@ -57,7 +57,7 @@ pub struct Item {
     pub group: &'static str,
     pub label: String,
     pub detail: String,
-    pub tone: Option<Tone>,
+    pub mark: Option<Mark>,
     /// The byte offsets of label matched, to show.
     pub matched: Vec<usize>,
     pub target: Target,
@@ -70,7 +70,7 @@ struct Candidate {
     /// What else it is found by: an environment's name and place.
     also: String,
     detail: String,
-    tone: Option<Tone>,
+    mark: Option<Mark>,
     target: Target,
 }
 
@@ -111,7 +111,7 @@ fn rank(query: &str, candidates: &[Candidate], groups: &[&'static str]) -> Vec<I
                 group: c.group,
                 label: c.label.clone(),
                 detail: c.detail.clone(),
-                tone: c.tone,
+                mark: c.mark,
                 matched: at,
                 target: c.target.clone(),
             });
@@ -236,7 +236,7 @@ impl SearchView {
                     c.place_name,
                     c.status.to_lowercase()
                 ),
-                tone: Some(c.tone),
+                mark: Some(c.mark),
                 target: Target::Env {
                     place: c.place.clone(),
                     env: c.env.clone(),
@@ -256,7 +256,7 @@ impl SearchView {
                 label: path.clone(),
                 also: String::new(),
                 detail: project.clone(),
-                tone: None,
+                mark: None,
                 target: Target::File {
                     root: root.clone(),
                     path: path.clone(),
@@ -279,7 +279,7 @@ impl SearchView {
                     label: label.into(),
                     also: String::new(),
                     detail: "tool window".into(),
-                    tone: None,
+                    mark: None,
                     target: Target::Tool(tool),
                 });
             }
@@ -299,7 +299,7 @@ impl SearchView {
                     label: format!("{} {name}", action.label()),
                     also: String::new(),
                     detail: "this environment".into(),
-                    tone: None,
+                    mark: None,
                     target: Target::Act {
                         place: place.clone(),
                         env: env.clone(),
@@ -315,7 +315,7 @@ impl SearchView {
                 label: "Suspend all idle environments".into(),
                 also: String::new(),
                 detail: idle.to_string(),
-                tone: None,
+                mark: None,
                 target: Target::SuspendIdle,
             });
         }
@@ -329,7 +329,7 @@ impl SearchView {
             },
             also: "double shift setting".into(),
             detail: if on { "⇧⇧ on" } else { "⇧⇧ off" }.into(),
-            tone: None,
+            mark: None,
             target: Target::DoubleShift,
         });
         out.push(Candidate {
@@ -337,7 +337,7 @@ impl SearchView {
             label: "Add a place".into(),
             also: "server".into(),
             detail: String::new(),
-            tone: None,
+            mark: None,
             target: Target::AddPlace,
         });
         (out, vec!["Environments", files_group, "Actions"])
@@ -485,7 +485,7 @@ impl SearchView {
             .cursor_pointer()
             .when(on, |d| d.bg(p.accent_soft))
             .when(!on, |d| d.hover(|s| s.bg(p.surface_2)))
-            .when_some(item.tone, |d, t| d.child(ui::dot(t, p)))
+            .when_some(item.mark, |d, m| d.child(ui::mark(m, p)))
             .child(div().min_w_0().truncate().child(label))
             .child(div().flex_1())
             .child(
