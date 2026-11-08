@@ -5,9 +5,13 @@
 # the real API on the same origin. The Go services restart on any change to
 # Go source; `go run` rebuilds them from a cached build.
 #
-# `docker compose down -v` resets everything, including the database and the
-# worker's credential. Resetting only one of the two leaves a worker whose
-# credential the server has never heard of.
+# Environments run on real workers beside the stack: dev/mac-worker.sh on
+# this machine, dev/lima-worker.sh in the Lima VM.
+#
+# `docker compose down -v` resets everything, the database included. Each
+# worker keeps its credential in its own state (credential_file in its
+# config): delete that too, or the worker presents a credential the server
+# has never heard of.
 
 name: hangar
 
@@ -99,17 +103,6 @@ services:
       rustfs:
         condition: service_healthy
 
-  worker:
-    <<: *go
-    command: [go, run, ./cmd/hangar-worker, -config, /src/dev/worker.yaml]
-    volumes:
-      - .:/src
-      - gomod:/go/pkg/mod
-      - gocache:/root/.cache/go-build
-      - workerstate:/var/lib/hangar
-    depends_on:
-      - server
-
   web:
     image: node:24
     working_dir: /src/web
@@ -147,6 +140,5 @@ volumes:
   pgdata:
   gomod:
   gocache:
-  workerstate:
   webmodules:
   blobs:
