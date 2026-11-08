@@ -775,6 +775,24 @@ impl EnvTab {
         self.open_find(true, window, cx);
     }
 
+    /// Find or Replace in Files on a folder, as the Project window's menu
+    /// asks: the last search, looking there.
+    pub fn find_in(
+        &mut self,
+        scope: crate::find::Scope,
+        replace: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.find_popup.is_some() {
+            self.close_find(window, cx);
+        }
+        let mut search = self.last_search.clone().unwrap_or_default();
+        search.scope = scope;
+        self.last_search = Some(search);
+        self.open_find(replace, window, cx);
+    }
+
     fn open_find(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(f) = &self.find_popup {
             f.update(cx, |f, cx| f.set_replacing(replace, cx));
@@ -1047,6 +1065,13 @@ impl Render for EnvTab {
                         t.open_file(&e.root, &e.path, window, cx)
                     }),
                 );
+                self.subs.push(cx.subscribe_in(
+                    &view,
+                    window,
+                    |t, _, e: &crate::project::FindIn, window, cx| {
+                        t.find_in(e.scope.clone(), e.replace, window, cx)
+                    },
+                ));
                 self.project = Some(view);
             }
             if self.commit.is_none() && self.is_open(Tool::Commit) {

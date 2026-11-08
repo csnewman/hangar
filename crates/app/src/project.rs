@@ -9,13 +9,16 @@ use gpui::{
     Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled, Window,
     div, prelude::*, px, svg,
 };
+use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::{h_flex, v_flex};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::assets;
 use crate::code::Code;
+use crate::find::Scope as FindScope;
 use crate::palette::{self, Palette};
+use crate::treeops::{self, Taken, Target};
 use crate::workspace::{Event, PRIMARY, State, Workspace};
 
 /// What the window shows.
@@ -66,6 +69,15 @@ pub struct OpenFile {
 
 impl gpui::EventEmitter<OpenFile> for ProjectView {}
 
+/// Asks for Find in Files on a folder, or Replace in Files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FindIn {
+    pub scope: FindScope,
+    pub replace: bool,
+}
+
+impl gpui::EventEmitter<FindIn> for ProjectView {}
+
 /// What a click in the tree selects: a project's file (by the project's
 /// root and its path) or the machine's.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +92,8 @@ pub struct ProjectView {
     scope: Scope,
     machine: Tree,
     selected: Option<Selection>,
+    /// What Cut or Copy took, to paste.
+    taken: Option<Taken>,
     _sub: gpui::Subscription,
 }
 
@@ -93,6 +107,7 @@ impl ProjectView {
             scope: Scope::Projects,
             machine: Tree::default(),
             selected: None,
+            taken: None,
             _sub: sub,
         };
         view.sync(cx);
@@ -492,7 +507,15 @@ impl Render for ProjectView {
                                     .text_color(p.muted)
                                     .child(names[i].1.clone()),
                             )
-                            .on_click(cx.listener(move |v, _, _, cx| v.toggle_project(i, cx))),
+                            .on_click(cx.listener(move |v, _, _, cx| v.toggle_project(i, cx)))
+                            .context_menu({
+                                let t = self.target(Some(&proj.root), "", true, cx);
+                                let view = cx.entity().downgrade();
+                                move |menu, _, cx| match &t {
+                                    Some(t) => tree_menu(menu, t, &view, cx),
+                                    None => menu,
+                                }
+                            }),
                     );
                     if proj.open {
                         let mut out = Vec::new();
@@ -555,6 +578,24 @@ fn chevron(open: bool, p: &Palette) -> impl IntoElement {
 }
 
 impl ProjectView {
+    /// What the menu acts on for a row: a project's entry by its path from
+    /// the root ("" the project itself), or the machine's by its absolute
+    /// path, through the connection that reaches it.
+    fn target(&self, root: Option<&str>, path: &str, dir: bool, cx: &gpui::App) -> Option<Target> {
+        let ws = self.workspace.read(cx);
+        let (code, abs) = match root {
+            Some(root) if path.is_empty() => (ws.code(root)?, root.to_string()),
+            Some(root) => (ws.code(root)?, treeops::join(root, path)),
+            None => (ws.primary()?, path.to_string()),
+        };
+        Some(Target {
+            code,
+            root: root.map(str::to_string),
+            abs,
+            dir,
+        })
+    }
+
     fn row(&self, r: Row, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let root = r
             .project
@@ -573,6 +614,8 @@ impl ProjectView {
             _ => p.text,
         };
         let (project, path, dir) = (r.project, r.path.clone(), r.dir);
+        let target = self.target(root.as_deref(), &r.path, r.dir, cx);
+        let view = cx.entity().downgrade();
         let id = SharedString::from(format!("row-{}-{}", root.as_deref().unwrap_or("/"), r.path));
         h_flex()
             .id(id)
@@ -605,6 +648,10 @@ impl ProjectView {
                         .child(m.to_string()),
                 )
             })
+            .debug_selector({
+                let path = r.path.clone();
+                move || format!("tree-row-{path}")
+            })
             .on_click(cx.listener(move |v, e: &gpui::ClickEvent, _, cx| {
                 v.selected = Some(sel.clone());
                 if dir {
@@ -620,5 +667,120 @@ impl ProjectView {
                 }
                 cx.notify();
             }))
+            .context_menu(move |menu, _, cx| match &target {
+                Some(t) => tree_menu(menu, t, &view, cx),
+                None => menu,
+            })
     }
+}
+
+/// The Project window's menu for a file or folder, as IntelliJ's: making,
+/// clipboard, paths, renaming and the trash, finding in a folder, and git.
+fn tree_menu(
+    menu: PopupMenu,
+    t: &Target,
+    view: &gpui::WeakEntity<ProjectView>,
+    cx: &gpui::App,
+) -> PopupMenu {
+    let item = |label: &str, t: &Target, f: fn(&Target, &mut Window, &mut gpui::App)| {
+        let t = t.clone();
+        PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| f(&t, window, cx))
+    };
+    let new_file = {
+        let (t, view) = (t.clone(), view.clone());
+        PopupMenuItem::new("New File…").on_click(move |_, window, cx| {
+            let (root, view) = (t.root.clone(), view.clone());
+            treeops::new_file(&t, window, cx, move |abs, _, cx| {
+                let path = match &root {
+                    Some(r) => abs
+                        .strip_prefix(&format!("{}/", r.trim_end_matches('/')))
+                        .unwrap_or(&abs)
+                        .to_string(),
+                    None => abs.clone(),
+                };
+                let root = root.clone().unwrap_or_else(|| "/".into());
+                let _ = view.update(cx, |_, cx| cx.emit(OpenFile { root, path }));
+            });
+        })
+    };
+    let take = |label: &str, cut: bool| {
+        let (t, view) = (t.clone(), view.clone());
+        PopupMenuItem::new(label.to_string()).on_click(move |_, _, cx| {
+            let taken = Taken {
+                code: t.code.clone(),
+                paths: vec![t.abs.clone()],
+                cut,
+            };
+            let _ = view.update(cx, |v, _| v.taken = Some(taken));
+        })
+    };
+    let taken = view.upgrade().and_then(|v| v.read(cx).taken.clone());
+    let paste = {
+        let t = t.clone();
+        let view = view.clone();
+        PopupMenuItem::new("Paste")
+            .disabled(taken.is_none())
+            .on_click(move |_, window, cx| {
+                let Some(taken) = view.upgrade().and_then(|v| v.read(cx).taken.clone()) else {
+                    return;
+                };
+                treeops::paste(&taken, &t, window, cx);
+                // What was cut is moved once; what was copied can be pasted
+                // again.
+                if taken.cut {
+                    let _ = view.update(cx, |v, _| v.taken = None);
+                }
+            })
+    };
+    let copy_path = |label: &str, text: String| {
+        PopupMenuItem::new(label.to_string())
+            .on_click(move |_, _, cx| treeops::copy(text.clone(), cx))
+    };
+    let find = |label: &str, replace: bool| {
+        let (t, view) = (t.clone(), view.clone());
+        let root = t.root.clone();
+        PopupMenuItem::new(label.to_string())
+            .disabled(root.is_none())
+            .on_click(move |_, _, cx| {
+                let Some(root) = t.root.clone() else { return };
+                let dir = Target {
+                    dir: true,
+                    abs: t.folder(),
+                    ..t.clone()
+                }
+                .relative();
+                let scope = if t.folder() == root {
+                    FindScope::Project(root)
+                } else {
+                    FindScope::Folder { root, dir }
+                };
+                let _ = view.update(cx, |_, cx| cx.emit(FindIn { scope, replace }));
+            })
+    };
+    let is_root = t.root.as_deref() == Some(t.abs.as_str());
+    let in_project = t.root.is_some();
+    let mut menu = menu
+        .item(new_file)
+        .item(item("New Folder…", t, treeops::new_folder))
+        .separator()
+        .item(take("Cut", true).disabled(is_root))
+        .item(take("Copy", false))
+        .item(paste)
+        .separator()
+        .item(copy_path("Copy Absolute Path", t.abs.clone()))
+        .item(copy_path("Copy Path From Project Root", t.relative()).disabled(!in_project))
+        .item(copy_path("Copy File Name", t.name().to_string()))
+        .separator()
+        .item(item("Rename…", t, treeops::rename).disabled(is_root))
+        .item(item("Delete…", t, treeops::trash).disabled(is_root))
+        .separator()
+        .item(find("Find in Folder…", false))
+        .item(find("Replace in Folder…", true));
+    if in_project {
+        menu = menu
+            .separator()
+            .item(item("Git: Stage", t, treeops::stage))
+            .item(item("Git: Add to .gitignore", t, treeops::ignore).disabled(is_root));
+    }
+    menu
 }

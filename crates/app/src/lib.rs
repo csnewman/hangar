@@ -33,6 +33,7 @@ pub mod store;
 pub mod termconn;
 pub mod terminal;
 pub mod termview;
+pub mod treeops;
 pub mod ui;
 pub mod wake;
 pub mod workspace;
