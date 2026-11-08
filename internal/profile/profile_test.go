@@ -35,6 +35,7 @@ type guests struct {
 	worker string
 	mu     sync.Mutex
 	by     map[string]*profile.Guest
+	served map[string]*served
 	// sets, when set, holds back the copies the server sends until it is
 	// closed.
 	sets chan struct{}
@@ -45,16 +46,50 @@ func (g *guests) Connected() []string { return []string{g.worker} }
 func (g *guests) Open(worker string, h tunnel.Header) (net.Conn, error) {
 	g.mu.Lock()
 	guest := g.by[h.Environment]
-	g.mu.Unlock()
 	if worker != g.worker || h.Kind != tunnel.KindProfile || guest == nil {
+		g.mu.Unlock()
 		return nil, errors.New("no such environment")
 	}
 	server, env := net.Pipe()
-	go guest.Serve(env)
+	s := g.served[h.Environment]
+	if s == nil {
+		s = &served{}
+		g.served[h.Environment] = s
+	}
+	s.conns = append(s.conns, server)
+	s.wg.Add(1)
+	g.mu.Unlock()
+	go func() {
+		defer s.wg.Done()
+		guest.Serve(env)
+	}()
 	if g.sets != nil {
 		return &slowSets{Conn: server, sets: g.sets}, nil
 	}
 	return server, nil
+}
+
+// served are an environment's sessions with its guest.
+type served struct {
+	conns []net.Conn
+	wg    sync.WaitGroup
+}
+
+// stop ends an environment's sessions and refuses it more, returning once
+// its guest has finished with them and so with its home directory.
+func (g *guests) stop(id string) {
+	g.mu.Lock()
+	delete(g.by, id)
+	s := g.served[id]
+	delete(g.served, id)
+	g.mu.Unlock()
+	if s == nil {
+		return
+	}
+	for _, c := range s.conns {
+		c.Close()
+	}
+	s.wg.Wait()
 }
 
 // slowSets holds back the copies written to it until sets is closed.
@@ -108,7 +143,7 @@ func newPlane(t *testing.T) *plane {
 		if err := tx.QueryRow(ctx, `INSERT INTO workers (name, credential_hash) VALUES ('w', '\x00') RETURNING id`).Scan(&worker); err != nil {
 			return err
 		}
-		p.guests = &guests{worker: worker, by: map[string]*profile.Guest{}}
+		p.guests = &guests{worker: worker, by: map[string]*profile.Guest{}, served: map[string]*served{}}
 		return nil
 	})
 	if err != nil {
@@ -172,6 +207,9 @@ func (p *plane) guestFor(t *testing.T, id, home string) *profile.Guest {
 	p.guests.mu.Lock()
 	p.guests.by[id] = g
 	p.guests.mu.Unlock()
+	// Registered after the guest's directories, so it runs before they are
+	// removed.
+	t.Cleanup(func() { p.guests.stop(id) })
 	return g
 }
 
