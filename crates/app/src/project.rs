@@ -114,6 +114,13 @@ impl ProjectView {
         view
     }
 
+    /// The machine's files alone, from /: the Filesystem tool window.
+    pub fn machine(workspace: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
+        let mut view = ProjectView::new(workspace, cx);
+        view.set_scope(Scope::Filesystem, cx);
+        view
+    }
+
     pub fn scope(&self) -> Scope {
         self.scope
     }
@@ -294,18 +301,18 @@ impl ProjectView {
         self.selected.as_ref()
     }
 
-    /// Shows a file in the tree: the project holding it open, the folders
-    /// down to it expanded, and it selected. A file in no project is shown
-    /// in the machine's files.
-    pub fn reveal(&mut self, abs: &str, cx: &mut Context<Self>) {
+    /// Shows a file in the tree: the project holding it open (or, in the
+    /// machine's files, /), the folders down to it expanded, and it
+    /// selected. False when the file is in no project the tree shows.
+    pub fn reveal(&mut self, abs: &str, cx: &mut Context<Self>) -> bool {
         let at = self.projects.iter().enumerate().find_map(|(i, p)| {
             let root = p.root.trim_end_matches('/');
             abs.strip_prefix(&format!("{root}/"))
                 .map(|rel| (i, p.root.clone(), rel.to_string()))
         });
-        match at {
-            Some((i, root, rel)) => {
-                self.scope = Scope::Projects;
+        match (self.scope, at) {
+            (Scope::Projects, None) => return false,
+            (Scope::Projects, Some((i, root, rel))) => {
                 self.projects[i].open = true;
                 let mut dir = String::new();
                 for part in rel
@@ -330,8 +337,7 @@ impl ProjectView {
                     path: rel,
                 });
             }
-            None => {
-                self.set_scope(Scope::Filesystem, cx);
+            (Scope::Filesystem, _) => {
                 let mut dir = String::new();
                 for part in abs
                     .trim_start_matches('/')
@@ -354,6 +360,7 @@ impl ProjectView {
             }
         }
         cx.notify();
+        true
     }
 
     /// The projects' roots, in order.
@@ -493,29 +500,6 @@ impl Render for ProjectView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
         let scope = self.scope;
-        let seg = |id: &'static str, label: &'static str, s: Scope, cx: &mut Context<Self>| {
-            let on = scope == s;
-            div()
-                .id(id)
-                .px(px(6.))
-                .cursor_pointer()
-                .when(on, |d| d.bg(p.accent_soft).text_color(p.accent))
-                .when(!on, |d| d.text_color(p.muted))
-                .child(label)
-                .on_click(cx.listener(move |v, _, _, cx| v.set_scope(s, cx)))
-        };
-        let switch = h_flex()
-            .mb(px(6.))
-            .self_start()
-            .rounded(px(5.))
-            .border_1()
-            .border_color(p.border)
-            .overflow_hidden()
-            .text_size(px(11.))
-            .child(seg("scope-projects", "Projects", Scope::Projects, cx))
-            .child(div().w(px(1.)).h_full().bg(p.border))
-            .child(seg("scope-machine", "Filesystem", Scope::Filesystem, cx));
-
         let mut list = v_flex()
             .id("project-tree")
             .flex_1()
@@ -613,7 +597,6 @@ impl Render for ProjectView {
             .size_full()
             .min_h_0()
             .text_size(px(12.))
-            .child(switch)
             .child(list)
     }
 }

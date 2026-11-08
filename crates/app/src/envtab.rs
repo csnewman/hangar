@@ -39,6 +39,7 @@ use crate::workspace::Workspace;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Tool {
     Project,
+    Filesystem,
     Commit,
     Structure,
     Terminal,
@@ -65,7 +66,7 @@ pub enum Slot {
 
 /// The left stripe: its top group, the group below the line, and the foot.
 const LEFT: (&[Tool], &[Tool], &[Tool]) = (
-    &[Tool::Project, Tool::Commit],
+    &[Tool::Project, Tool::Filesystem, Tool::Commit],
     &[Tool::Structure],
     &[
         Tool::Terminal,
@@ -82,6 +83,7 @@ impl Tool {
     pub fn name(self) -> &'static str {
         match self {
             Tool::Project => "Project",
+            Tool::Filesystem => "Filesystem",
             Tool::Commit => "Commit",
             Tool::Structure => "Structure",
             Tool::Terminal => "Terminal",
@@ -100,6 +102,7 @@ impl Tool {
             Tool::Find => "search",
             t => match t.name() {
                 "Project" => "project",
+                "Filesystem" => "filesystem",
                 "Commit" => "commit",
                 "Structure" => "structure",
                 "Terminal" => "terminal",
@@ -117,6 +120,7 @@ impl Tool {
     pub fn by_name(name: &str) -> Option<Tool> {
         [
             Tool::Project,
+            Tool::Filesystem,
             Tool::Commit,
             Tool::Structure,
             Tool::Terminal,
@@ -134,7 +138,7 @@ impl Tool {
 
     pub fn slot(self) -> Slot {
         match self {
-            Tool::Project | Tool::Commit => Slot::Left,
+            Tool::Project | Tool::Filesystem | Tool::Commit => Slot::Left,
             Tool::Structure => Slot::LeftBelow,
             Tool::Agents => Slot::Right,
             Tool::Ports => Slot::RightBelow,
@@ -147,6 +151,7 @@ impl Tool {
     fn waiting(self) -> &'static str {
         match self {
             Tool::Project => "The environment's projects and their files.",
+            Tool::Filesystem => "The machine's files, from /.",
             Tool::Commit => "What has changed, to commit and push.",
             Tool::Structure => "The open file's outline.",
             Tool::Terminal => "The environment's terminal sessions, Claude's among them.",
@@ -303,6 +308,8 @@ pub struct EnvTab {
     workspace: Option<Entity<Workspace>>,
     /// The Project, Commit and Git windows, made when each is first shown.
     project: Option<Entity<ProjectView>>,
+    /// The Filesystem window's tree: the machine's files.
+    filesystem: Option<Entity<ProjectView>>,
     commit: Option<Entity<CommitView>>,
     git: Option<Entity<GitView>>,
     find: Option<Entity<FindView>>,
@@ -444,6 +451,7 @@ impl EnvTab {
             terms: Terms::default(),
             workspace: None,
             project: None,
+            filesystem: None,
             commit: None,
             git: None,
             find: None,
@@ -1093,13 +1101,30 @@ impl EnvTab {
         }
     }
 
-    /// Shows a file in the Project window, opening the window.
+    /// Shows a file in the Project window, or in Filesystem when it is in
+    /// no project, opening the window.
     pub fn reveal_in_project(&mut self, abs: &str, cx: &mut Context<Self>) {
-        if !self.is_open(Tool::Project) {
-            self.toggle(Tool::Project, cx);
+        let in_project = self
+            .workspace
+            .as_ref()
+            .is_some_and(|w| w.read(cx).project_of(abs).is_some());
+        let tool = if in_project {
+            Tool::Project
+        } else {
+            Tool::Filesystem
+        };
+        if !self.is_open(tool) {
+            self.toggle(tool, cx);
         }
-        match &self.project {
-            Some(p) => p.update(cx, |p, cx| p.reveal(abs, cx)),
+        let view = if in_project {
+            &self.project
+        } else {
+            &self.filesystem
+        };
+        match view {
+            Some(v) => {
+                v.update(cx, |v, cx| v.reveal(abs, cx));
+            }
             None => self.pending_reveal = Some(abs.to_string()),
         }
         cx.notify();
@@ -1514,8 +1539,24 @@ impl Render for EnvTab {
                 let doc = self.active_file();
                 s.update(cx, |s, cx| s.follow(doc, cx));
             }
-            if let (Some(p), Some(abs)) = (self.project.clone(), self.pending_reveal.take()) {
-                p.update(cx, |p, cx| p.reveal(&abs, cx));
+            if self.filesystem.is_none() && self.is_open(Tool::Filesystem) {
+                let ws = self.workspace(&env, cx);
+                let view = cx.new(|cx| ProjectView::machine(ws, cx));
+                self.subs.push(
+                    cx.subscribe_in(&view, window, |t, _, e: &OpenFile, window, cx| {
+                        t.open_file(&e.root, &e.path, window, cx)
+                    }),
+                );
+                self.filesystem = Some(view);
+            }
+            if let Some(abs) = self.pending_reveal.take() {
+                let shown = [self.project.clone(), self.filesystem.clone()]
+                    .into_iter()
+                    .flatten()
+                    .any(|v| v.update(cx, |v, cx| v.reveal(&abs, cx)));
+                if !shown && self.project.is_none() && self.filesystem.is_none() {
+                    self.pending_reveal = Some(abs);
+                }
             }
             if self.commit.is_none() && self.is_open(Tool::Commit) {
                 let ws = self.workspace(&env, cx);
@@ -1988,11 +2029,20 @@ impl EnvTab {
             );
         let body = match t {
             Tool::Agents => self.agents(env, card, p, cx).into_any_element(),
-            Tool::Project | Tool::Commit if env.phase != "running" => div()
-                .text_size(px(11.5))
-                .text_color(p.muted)
-                .child("The environment is not running.")
-                .into_any_element(),
+            Tool::Project | Tool::Filesystem | Tool::Commit | Tool::Structure
+                if env.phase != "running" =>
+            {
+                div()
+                    .text_size(px(11.5))
+                    .text_color(p.muted)
+                    .child("The environment is not running.")
+                    .into_any_element()
+            }
+            Tool::Filesystem if self.filesystem.is_some() => self
+                .filesystem
+                .clone()
+                .map(|v| v.into_any_element())
+                .unwrap_or_else(|| div().into_any_element()),
             Tool::Project if self.project.is_some() => self
                 .project
                 .clone()

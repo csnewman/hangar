@@ -63,7 +63,7 @@ fn walk(s: &Value, depth: usize, out: &mut Vec<Symbol>) {
 fn kind(k: u64) -> &'static str {
     match k {
         1 => "file",
-        2 | 3 | 4 => "mod",
+        2..=4 => "mod",
         5 => "class",
         6 | 12 => "fn",
         7 | 8 => "field",

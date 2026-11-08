@@ -32,6 +32,10 @@ const ICONS: &[(&str, &str)] = &[
         r#"<path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-8l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1z"/>"#,
     ),
     (
+        "filesystem",
+        r#"<rect x="2" y="13" width="20" height="8" rx="2"/><path d="M5 13 7.5 4h9L19 13"/><path d="M6 17h.01M10 17h.01"/>"#,
+    ),
+    (
         "commit",
         r#"<path d="M12 4v8M8 8h8M8 18h8"/><rect x="3" y="2" width="18" height="20" rx="2"/>"#,
     ),
