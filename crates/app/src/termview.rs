@@ -6,8 +6,9 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, FocusHandle, Focusable, Font, Hsla, IntoElement,
-    KeyDownEvent, ParentElement, Pixels, Render, Rgba, ScrollEvent, Styled, StyledText, TextRun,
-    UnderlineStyle, WeakEntity, Window, canvas, div, font, prelude::*, px,
+    KeyBinding, KeyDownEvent, ParentElement, Pixels, Render, Rgba, ScrollEvent, Styled,
+    StyledText, TextRun, UnderlineStyle, WeakEntity, Window, actions, canvas, div, font,
+    prelude::*, px,
 };
 
 use crate::api::Client;
@@ -21,6 +22,17 @@ const LINE_HEIGHT: Pixels = px(17.);
 
 /// How long a burst of output is taken in before a frame is drawn.
 const FEED_BUDGET: Duration = Duration::from_millis(4);
+
+actions!(terminal, [SendTab, SendBackTab]);
+
+/// Binds Tab and Shift-Tab to the shell, ahead of gpui-component's binding
+/// of them to moving focus, which takes them before a key handler sees them.
+pub fn bind_keys(cx: &mut App) {
+    cx.bind_keys([
+        KeyBinding::new("tab", SendTab, Some("Terminal")),
+        KeyBinding::new("shift-tab", SendBackTab, Some("Terminal")),
+    ]);
+}
 
 /// Where a terminal's connection is.
 #[derive(Debug, Clone, PartialEq)]
@@ -237,12 +249,17 @@ impl TerminalView {
             return;
         }
         if let Some(b) = bytes(e, self.screen.app_cursor()) {
-            if self.screen.scrolled_back() > 0 {
-                self.screen.scroll(-(self.screen.scrolled_back() as i32));
-            }
-            self.send(Command::Input(b));
+            self.input(b);
             cx.stop_propagation();
         }
+    }
+
+    /// Sends what a key types, back at the bottom of the screen.
+    fn input(&mut self, b: Vec<u8>) {
+        if self.screen.scrolled_back() > 0 {
+            self.screen.scroll(-(self.screen.scrolled_back() as i32));
+        }
+        self.send(Command::Input(b));
     }
 
     fn scroll(&mut self, e: &ScrollEvent, cx: &mut Context<Self>) {
@@ -425,6 +442,8 @@ impl Render for TerminalView {
             .track_focus(&self.focus)
             .key_context("Terminal")
             .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| this.key(e, cx)))
+            .on_action(cx.listener(|this, _: &SendTab, _, _| this.input(b"\t".to_vec())))
+            .on_action(cx.listener(|this, _: &SendBackTab, _, _| this.input(b"\x1b[Z".to_vec())))
             .on_scroll(cx.listener(|this, e: &ScrollEvent, _, cx| this.scroll(e, cx)))
             .on_mouse_down(
                 gpui::MouseButton::Left,
