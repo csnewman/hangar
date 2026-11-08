@@ -152,6 +152,13 @@ impl Languages {
                 let why = params["why"].as_str().unwrap_or("it exited").to_string();
                 l.exited(root, n, why, cx);
             }
+            // A folder trusted: the servers it was refused are tried again.
+            workspace::Event::Heard { event, .. } if event == "trust.changed" => {
+                l.servers
+                    .retain(|_, s| !matches!(s, Server::Unavailable(_)));
+                cx.emit(Event::Servers);
+                l.attach_all(cx);
+            }
             _ => {}
         });
         Languages {

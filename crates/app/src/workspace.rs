@@ -131,6 +131,29 @@ impl Workspace {
         &self.projects
     }
 
+    /// Makes the projects the folders given, by absolute path, in order: the
+    /// workspace file the service keeps, which every tab follows.
+    pub fn set_folders(
+        &self,
+        folders: Vec<String>,
+    ) -> impl std::future::Future<Output = Result<Value, String>> + use<> {
+        let call = self
+            .primary
+            .as_ref()
+            .map(|c| c.call("workspace.set", json!({ "folders": folders })));
+        async move {
+            match call {
+                Some(c) => c.await,
+                None => Err("not connected to the Code service".into()),
+            }
+        }
+    }
+
+    /// The projects' roots, in order.
+    pub fn roots(&self) -> Vec<String> {
+        self.projects.iter().map(|f| f.root.clone()).collect()
+    }
+
     /// A project's connection, by its root.
     pub fn code(&self, root: &str) -> Option<Code> {
         self.projects

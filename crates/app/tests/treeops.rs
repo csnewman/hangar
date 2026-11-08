@@ -46,7 +46,7 @@ fn service(asked: mpsc::Sender<(String, Value)>) -> String {
                         }
                         "fs.list" => json!([]),
                         "git.status" => json!({ "changes": [] }),
-                        m if m.starts_with("fs.") => {
+                        m if m.starts_with("fs.") || m == "workspace.set" => {
                             asked.send((m.to_string(), params.clone())).unwrap();
                             Value::Null
                         }
@@ -280,5 +280,76 @@ fn a_target_knows_its_folder_and_paths() {
     assert_eq!(
         join("/home/dev/app/", "/notes.md"),
         "/home/dev/app/notes.md"
+    );
+}
+
+#[test]
+fn the_workspace_reordered() {
+    use hangar_app::treeops::{Reorder, reordered};
+    let roots = vec!["/a".to_string(), "/b".into(), "/c".into()];
+    assert_eq!(
+        reordered(&roots, Reorder::Add("/d".into())),
+        ["/a", "/b", "/c", "/d"]
+    );
+    assert_eq!(
+        reordered(&roots, Reorder::Add("/b".into())),
+        ["/a", "/b", "/c"],
+        "once"
+    );
+    assert_eq!(
+        reordered(&roots, Reorder::Remove("/b".into())),
+        ["/a", "/c"]
+    );
+    assert_eq!(
+        reordered(&roots, Reorder::Move("/c".into(), -1)),
+        ["/a", "/c", "/b"]
+    );
+    assert_eq!(
+        reordered(&roots, Reorder::Move("/a".into(), -1)),
+        ["/a", "/b", "/c"],
+        "the first stays"
+    );
+    assert_eq!(
+        reordered(&roots, Reorder::Move("/a".into(), 1)),
+        ["/b", "/a", "/c"]
+    );
+}
+
+/// A folder's menu adds it to the workspace, which the service is asked to
+/// keep: the projects there were, then the folder.
+#[gpui::test]
+fn a_folder_is_added_to_the_workspace(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    let (asked_tx, asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        Root::new(view, window, cx)
+    });
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-src").is_some()
+    });
+    let folder = cx.debug_bounds("tree-row-src").unwrap();
+    cx.simulate_mouse_down(folder.center(), MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(folder.center(), MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    // Add to Workspace is a folder's last item.
+    cx.simulate_keystrokes("up enter");
+    let set = std::cell::RefCell::new(None);
+    until(cx, "the workspace set", |_| {
+        if let Ok(m) = asked.try_recv() {
+            *set.borrow_mut() = Some(m);
+        }
+        set.borrow().is_some()
+    });
+    let (method, params) = set.into_inner().unwrap();
+    assert_eq!(method, "workspace.set");
+    assert_eq!(
+        params["folders"],
+        json!(["/home/dev/app", "/home/dev/app/src"])
     );
 }

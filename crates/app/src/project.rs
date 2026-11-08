@@ -839,6 +839,33 @@ fn tree_menu(
             .item(item("Git: Stage", t, treeops::stage))
             .item(item("Git: Add to .gitignore", t, treeops::ignore).disabled(is_root));
     }
+    // The workspace's projects: a folder added, a project removed or moved.
+    let ws = view.upgrade().map(|v| v.read(cx).workspace.clone());
+    let change = |label: &str, change: treeops::Reorder| {
+        let ws = ws.clone();
+        PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
+            if let Some(ws) = &ws {
+                treeops::change_workspace(ws, change.clone(), window, cx);
+            }
+        })
+    };
+    if is_root {
+        let root = t.abs.clone();
+        menu = menu
+            .separator()
+            .item(change("Move Up", treeops::Reorder::Move(root.clone(), -1)))
+            .item(change("Move Down", treeops::Reorder::Move(root.clone(), 1)))
+            .item(change(
+                "Remove from Workspace",
+                treeops::Reorder::Remove(root),
+            ))
+            .item(item("Trust This Folder", t, treeops::trust));
+    } else if t.dir {
+        menu = menu.separator().item(change(
+            "Add to Workspace",
+            treeops::Reorder::Add(t.abs.clone()),
+        ));
+    }
     menu
 }
 

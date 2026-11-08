@@ -332,3 +332,59 @@ pub fn ignore(t: &Target, window: &mut Window, cx: &mut App) {
         cx,
     );
 }
+
+/// The workspace's projects as they would be after a change: a folder
+/// added at the end, or a project removed, or moved by one place.
+pub fn reordered(roots: &[String], change: Reorder) -> Vec<String> {
+    let mut out = roots.to_vec();
+    match change {
+        Reorder::Add(dir) => {
+            if !out.contains(&dir) {
+                out.push(dir);
+            }
+        }
+        Reorder::Remove(root) => out.retain(|r| r != &root),
+        Reorder::Move(root, by) => {
+            if let Some(i) = out.iter().position(|r| r == &root) {
+                let j = (i as i64 + by).clamp(0, out.len() as i64 - 1) as usize;
+                let r = out.remove(i);
+                out.insert(j, r);
+            }
+        }
+    }
+    out
+}
+
+/// A change to the workspace's projects.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Reorder {
+    Add(String),
+    Remove(String),
+    Move(String, i64),
+}
+
+/// Changes the workspace's projects, saying what went wrong in a
+/// notification.
+pub fn change_workspace(
+    ws: &gpui::Entity<crate::workspace::Workspace>,
+    change: Reorder,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    let folders = reordered(&ws.read(cx).roots(), change);
+    let call = ws.read(cx).set_folders(folders);
+    let handle = window.window_handle();
+    cx.spawn(async move |cx| {
+        if let Err(e) = call.await {
+            let _ = handle.update(cx, |_, window, cx| {
+                window.push_notification(Notification::error(e), cx)
+            });
+        }
+    })
+    .detach();
+}
+
+/// Trusts a project to run its own code, as its language servers do.
+pub fn trust(t: &Target, window: &mut Window, cx: &mut App) {
+    run(&t.code, "trust.grant", json!({}), window, cx);
+}
