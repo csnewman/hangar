@@ -27,6 +27,8 @@ pub struct Palette {
     pub wait: Hsla,
     pub idle: Hsla,
     pub bad: Hsla,
+    /// Someone else's hand in a file: an agent's or another tab's edits.
+    pub peer: Hsla,
     /// Behind a row that needs the user.
     pub warn_bg: Hsla,
     pub warn_border: Hsla,
@@ -59,6 +61,7 @@ pub fn light() -> Palette {
         wait: c(0x5357d1),
         idle: c(0x93a3a4),
         bad: c(0xc6383a),
+        peer: c(0xd9622b),
         warn_bg: c(0xeeeffc),
         warn_border: c(0xc4c6f3),
         term_bg: c(0x142022),
@@ -86,6 +89,7 @@ pub fn dark() -> Palette {
         wait: c(0x8e92f6),
         idle: c(0x5f7476),
         bad: c(0xf2716f),
+        peer: c(0xf08a55),
         warn_bg: c(0x1a1c3a),
         warn_border: c(0x34387a),
         term_bg: c(0x081011),

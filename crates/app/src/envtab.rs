@@ -617,7 +617,23 @@ impl EnvTab {
                     return;
                 };
                 let env = self.env.clone();
-                let view = cx.new(|cx| DocEditor::new(&client, &env, root, &abs, window, cx));
+                // Shown to the others by the place's name for this user, in
+                // the colour the web UI gives them.
+                let me = self
+                    .places
+                    .read(cx)
+                    .get(&self.place)
+                    .and_then(|(_, st)| st.me.clone())
+                    .map(|m| {
+                        let colour = crate::presence::colour_for(&m.username).to_string();
+                        let name = if m.display_name.is_empty() {
+                            m.username
+                        } else {
+                            m.display_name
+                        };
+                        (name, colour)
+                    });
+                let view = cx.new(|cx| DocEditor::new(&client, &env, root, &abs, me, window, cx));
                 self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
                 self.attach_language(&view, cx);
                 self.files.push(Tab::Doc(view));

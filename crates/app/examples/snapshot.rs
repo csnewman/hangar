@@ -54,12 +54,25 @@ fn main() {
             hangar_app::termview::bind_keys(cx);
             // A picture, not an app to switch to: no Dock icon or menu bar.
             cx.set_activation_policy(gpui::ActivationPolicy::Accessory);
+            // The user's layout and settings, as the app has them, copied:
+            // what a picture toggles stays out of the app's own.
+            let scratch =
+                std::env::temp_dir().join(format!("hangar-snapshot-{}", std::process::id()));
+            let _ = std::fs::create_dir_all(&scratch);
+            let copy = |from: Option<std::path::PathBuf>, name: &str| {
+                let to = scratch.join(name);
+                if let Some(from) = from {
+                    let _ = std::fs::copy(from, &to);
+                }
+                Some(to)
+            };
+            let dirs = hangar_app::store::Dirs::user();
             hangar_app::layout::Layout::init(
-                hangar_app::store::Dirs::user().map(|d| d.layout_file()),
+                copy(dirs.as_ref().map(|d| d.layout_file()), "layout.json"),
                 cx,
             );
             hangar_app::settings::Settings::init(
-                hangar_app::store::Dirs::user().map(|d| d.settings_file()),
+                copy(dirs.as_ref().map(|d| d.settings_file()), "settings.json"),
                 cx,
             );
             let places = places::from_env(cx);

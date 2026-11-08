@@ -17,7 +17,14 @@ use gpui::{
     App, Context, Entity, EntityInputHandler, FocusHandle, Focusable, IntoElement, ParentElement,
     Render, Styled, Subscription, WeakEntity, Window, div, prelude::*, px,
 };
-use gpui_component::input::{Editor, EditorState, InputEditsEvent, Position, Redo, Rope, Undo};
+use std::collections::HashMap;
+
+use gpui::Hsla;
+use gpui_component::h_flex;
+use gpui_component::input::{
+    Editor, EditorState, GutterDecoration, GutterDecorationCollection, InputEditsEvent, Position,
+    RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Redo, Rope, Undo,
+};
 use hangar_proto::collab::{self, Update};
 use hangar_proto::{Change, ChangeSet, Error, MapMode, Text};
 use serde_json::{Value, json};
@@ -25,6 +32,19 @@ use serde_json::{Value, json};
 use crate::api::Client;
 use crate::code::{Code, Notice};
 use crate::palette;
+use crate::presence::{Presence, Sel, parse_colour};
+
+/// How long others' edits stay marked.
+const EDITED_FOR: Duration = Duration::from_secs(5);
+
+/// Another tab in the document: its name and colour, and its carets and
+/// selections drawn, which move with the text as it is edited.
+struct Remote {
+    name: String,
+    colour: Hsla,
+    marks: RangeDecorationCollection,
+    gutter: GutterDecorationCollection,
+}
 
 /// Changes typed within this of each other are one step of undo.
 pub const UNDO_GROUP: Duration = Duration::from_millis(800);
@@ -33,6 +53,9 @@ pub const UNDO_GROUP: Duration = Duration::from_millis(800);
 /// authority's to take, and the user's own steps of undo and redo.
 pub struct DocSync {
     client: collab::Client,
+    /// The authority's changes received lately, to place others' carets
+    /// made at an earlier version.
+    recent: crate::presence::Recent,
     /// The user's own changes, inverted: each undoes one step, at the
     /// document as it is.
     undo: Vec<ChangeSet>,
@@ -45,6 +68,7 @@ impl DocSync {
     pub fn new(id: &str, version: u64) -> Self {
         DocSync {
             client: collab::Client::new(id, version),
+            recent: Default::default(),
             undo: vec![],
             redo: vec![],
             last_typed: None,
@@ -53,6 +77,16 @@ impl DocSync {
 
     pub fn version(&self) -> u64 {
         self.client.version()
+    }
+
+    /// A position another tab gave at version, in the editor's text: moved
+    /// over what the authority has changed since, then over this client's
+    /// changes it has not yet confirmed. None when it is from too long ago.
+    pub fn place(&self, version: u64, pos: usize) -> Option<usize> {
+        let p = self.recent.place(version, self.version(), pos)?;
+        self.pending()
+            .iter()
+            .try_fold(p, |p, c| c.map_pos(p, 1, MapMode::Simple).ok().flatten())
     }
 
     /// The authority's id for this client.
@@ -113,6 +147,13 @@ impl DocSync {
         version: u64,
         updates: &[Update],
     ) -> Result<Option<ChangeSet>, Error> {
+        let had = self.client.version();
+        for (k, u) in updates.iter().enumerate() {
+            let v = version + k as u64;
+            if v >= had {
+                self.recent.add(v, u.changes.clone());
+            }
+        }
         let Some(change) = self.client.receive(version, updates)? else {
             return Ok(None);
         };
@@ -384,17 +425,31 @@ pub struct DocEditor {
     drawn: bool,
     /// The language server's diagnostics for the file, drawn in it.
     diagnostics: Vec<lsp_types::Diagnostic>,
+    /// Who this app's user is to the others: a name and a colour.
+    me: Option<(String, String)>,
+    /// The other tabs in the document, and those whose presence came from
+    /// a version not yet received.
+    remotes: HashMap<String, Remote>,
+    early: HashMap<String, (u64, Presence)>,
+    /// Others' latest edits, marked for a moment, and a count of the marks
+    /// made, so an older one's timer leaves a newer mark.
+    edited: Option<(RangeDecorationCollection, GutterDecorationCollection)>,
+    edited_gen: u64,
+    /// The selection last told to the others, and whether telling is due.
+    sent: Option<(usize, usize)>,
+    sending: bool,
     _subs: Vec<Subscription>,
 }
 
 impl DocEditor {
     /// Opens path (absolute, or from root) through a Code connection in
-    /// root.
+    /// root; me is the name and colour the others see this user by.
     pub fn new(
         client: &Client,
         env: &str,
         root: &str,
         path: &str,
+        me: Option<(String, String)>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -407,6 +462,7 @@ impl DocEditor {
         let edits = cx.subscribe_in(&editor, window, |this, _, e: &InputEditsEvent, _, cx| {
             this.typed(e, cx)
         });
+        let moved = cx.observe(&editor, |this, _, cx| this.selection_moved(cx));
         let (tx, rx) = async_channel::unbounded::<Notice>();
         let code = Code::connect(client, env, root, move |n| tx.send_blocking(n).is_ok());
         cx.spawn_in(window, async move |this: WeakEntity<Self>, cx| {
@@ -438,7 +494,14 @@ impl DocEditor {
             go_to: None,
             drawn: false,
             diagnostics: vec![],
-            _subs: vec![edits],
+            me,
+            remotes: HashMap::new(),
+            early: HashMap::new(),
+            edited: None,
+            edited_gen: 0,
+            sent: None,
+            sending: false,
+            _subs: vec![edits, moved],
         }
     }
 
@@ -521,6 +584,11 @@ impl DocEditor {
                             serde_json::from_value(p["updates"].clone()).unwrap_or_default();
                         self.remote(p["version"].as_u64().unwrap_or(0), &updates, window, cx);
                     }
+                    "doc.presence" => {
+                        let client = p["client"].as_str().unwrap_or_default().to_string();
+                        let state = serde_json::from_value(p["state"].clone()).ok();
+                        self.presence(client, p["version"].as_u64().unwrap_or(0), state, cx);
+                    }
                     "doc.saved" => {
                         self.save_error = p["error"].as_str().map(str::to_string);
                         if let Some(v) = p["version"].as_u64() {
@@ -565,6 +633,7 @@ impl DocEditor {
             let updates: Vec<Update> =
                 serde_json::from_value(v["updates"].clone()).unwrap_or_default();
             self.remote(v["version"].as_u64().unwrap_or(0), &updates, window, cx);
+            self.presences(&v, cx);
             cx.notify();
             return;
         }
@@ -582,6 +651,7 @@ impl DocEditor {
         self.saved = v["saved"].as_u64().unwrap_or(0);
         self.save_error = None;
         self.sync = Some(sync);
+        self.presences(&v, cx);
         self.push(cx);
         cx.notify();
     }
@@ -609,7 +679,237 @@ impl DocEditor {
         self.state = State::Open;
         self.drawn = false;
         self.show_diagnostics(cx);
+        self.presences(&v, cx);
         cx.notify();
+    }
+
+    /// Takes the others' presence as the document was opened with them.
+    fn presences(&mut self, v: &Value, cx: &mut Context<Self>) {
+        for r in std::mem::take(&mut self.remotes).into_values() {
+            r.marks.dispose(cx);
+            r.gutter.dispose(cx);
+        }
+        self.early.clear();
+        self.sent = None;
+        for p in v["presence"].as_array().into_iter().flatten() {
+            let state = serde_json::from_value(p["state"].clone()).ok();
+            let client = p["client"].as_str().unwrap_or_default().to_string();
+            self.presence(client, p["version"].as_u64().unwrap_or(0), state, cx);
+        }
+    }
+
+    /// The names and colours of the others in the document.
+    pub fn others(&self) -> Vec<(String, Hsla)> {
+        let mut o: Vec<_> = self
+            .remotes
+            .values()
+            .map(|r| (r.name.clone(), r.colour))
+            .collect();
+        o.sort_by(|a, b| a.0.cmp(&b.0));
+        o
+    }
+
+    /// Draws another tab's carets and selections, made at version, where
+    /// they are now; None is the tab gone.
+    fn presence(
+        &mut self,
+        client: String,
+        version: u64,
+        state: Option<Presence>,
+        cx: &mut Context<Self>,
+    ) {
+        self.early.remove(&client);
+        let Some(state) = state else {
+            if let Some(r) = self.remotes.remove(&client) {
+                r.marks.dispose(cx);
+                r.gutter.dispose(cx);
+            }
+            cx.notify();
+            return;
+        };
+        let Some(sync) = &self.sync else {
+            return;
+        };
+        if version > sync.version() {
+            self.early.insert(client, (version, state));
+            return;
+        }
+        let s = &self.shadow;
+        let len16 = s.len_utf16();
+        // Made too long ago to move: shown where it said, until it moves.
+        let at = |p: usize| sync.place(version, p).unwrap_or(p).min(len16);
+        let byte = |p: usize| s.utf16_to_byte_idx(p);
+        let colour = parse_colour(&state.color).unwrap_or(palette::of(cx).peer);
+        let (mut marks, mut gutter) = (vec![], vec![]);
+        for Sel { anchor, head } in &state.ranges {
+            let (a, h) = (at(*anchor), at(*head));
+            if a != h {
+                marks.push(
+                    RangeDecoration::new(byte(a.min(h))..byte(a.max(h)))
+                        .with_style(RangeDecorationStyle::Fill)
+                        .with_color(colour.opacity(0.22)),
+                );
+            }
+            // The caret: a frame round the character after it, or before
+            // it at the end.
+            let caret = if h < len16 {
+                byte(h)..byte(h + 1)
+            } else {
+                byte(h.saturating_sub(1))..byte(h)
+            };
+            if caret.start < caret.end {
+                marks.push(
+                    RangeDecoration::new(caret)
+                        .with_style(RangeDecorationStyle::Frame)
+                        .with_color(colour),
+                );
+            }
+            gutter.push(GutterDecoration::new(byte(h)..byte(h)).with_color(colour));
+        }
+        match self.remotes.get_mut(&client) {
+            Some(r) => {
+                r.name = state.name;
+                r.colour = colour;
+                r.marks.set(marks, cx);
+                r.gutter.set(gutter, cx);
+            }
+            None => {
+                let (marks, gutter) = self.editor.update(cx, |e, cx| {
+                    (
+                        e.create_range_decorations_collection(marks, cx),
+                        e.create_gutter_decorations_collection(gutter, cx),
+                    )
+                });
+                self.remotes.insert(
+                    client,
+                    Remote {
+                        name: state.name,
+                        colour,
+                        marks,
+                        gutter,
+                    },
+                );
+            }
+        }
+        cx.notify();
+    }
+
+    /// Marks for a moment what others just changed: the text they put in.
+    fn mark_edited(&mut self, change: &ChangeSet, cx: &mut Context<Self>) {
+        let s = &self.shadow;
+        let mut ranges = vec![];
+        change.iter_changes(false, |_, _, fb, tb, _| {
+            if tb > fb {
+                ranges.push(s.utf16_to_byte_idx(fb)..s.utf16_to_byte_idx(tb));
+            }
+        });
+        if ranges.is_empty() {
+            return;
+        }
+        let colour = palette::of(cx).peer;
+        let marks: Vec<_> = ranges
+            .iter()
+            .map(|r| {
+                RangeDecoration::new(r.clone())
+                    .with_style(RangeDecorationStyle::Fill)
+                    .with_color(colour.opacity(0.28))
+            })
+            .collect();
+        let gutter: Vec<_> = ranges
+            .iter()
+            .map(|r| GutterDecoration::new(r.clone()).with_color(colour))
+            .collect();
+        match &self.edited {
+            Some((m, g)) => {
+                m.append(marks, cx);
+                g.append(gutter, cx);
+            }
+            None => {
+                self.edited = Some(self.editor.update(cx, |e, cx| {
+                    (
+                        e.create_range_decorations_collection(marks, cx),
+                        e.create_gutter_decorations_collection(gutter, cx),
+                    )
+                }));
+            }
+        }
+        self.edited_gen += 1;
+        let generation = self.edited_gen;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(EDITED_FOR).await;
+            let _ = this.update(cx, |d, cx| {
+                if d.edited_gen == generation
+                    && let Some((m, g)) = &d.edited
+                {
+                    m.clear(cx);
+                    g.clear(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Tells the others where this user's caret and selection are, shortly
+    /// after they move. Told at the version the authority confirmed, so
+    /// only while no change of this user's awaits confirming.
+    fn selection_moved(&mut self, cx: &mut Context<Self>) {
+        if self.sending || self.me.is_none() || self.doc.is_none() || self.state != State::Open {
+            return;
+        }
+        if self.selection(cx) == self.sent {
+            return;
+        }
+        self.sending = true;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(80))
+                .await;
+            let _ = this.update(cx, |d, cx| {
+                d.sending = false;
+                d.send_presence(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// The selection as anchor and caret, in bytes.
+    fn selection(&self, cx: &App) -> Option<(usize, usize)> {
+        let e = self.editor.read(cx);
+        let (range, head) = (e.selected_range(), e.cursor());
+        let anchor = if head == range.end {
+            range.start
+        } else {
+            range.end
+        };
+        Some((anchor, head))
+    }
+
+    fn send_presence(&mut self, cx: &mut Context<Self>) {
+        let (Some(sync), Some(doc), Some((name, colour))) = (&self.sync, self.doc, &self.me) else {
+            return;
+        };
+        if !sync.pending().is_empty() {
+            return;
+        }
+        let Some((anchor, head)) = self.selection(cx) else {
+            return;
+        };
+        let s = &self.shadow;
+        let at = |b: usize| s.byte_to_utf16_idx(b.min(s.len()));
+        let state = Presence {
+            name: name.clone(),
+            color: colour.clone(),
+            ranges: vec![Sel {
+                anchor: at(anchor),
+                head: at(head),
+            }],
+        };
+        let call = self.code.call(
+            "doc.presence",
+            json!({ "doc": doc, "version": sync.version(), "state": state }),
+        );
+        self.sent = Some((anchor, head));
+        cx.background_executor().spawn(call).detach();
     }
 
     /// Draws the language server's diagnostics in the file.
@@ -714,7 +1014,10 @@ impl DocEditor {
     ) {
         let Some(s) = &mut self.sync else { return };
         match s.receive(version, updates) {
-            Ok(Some(change)) => self.apply(&change, false, window, cx),
+            Ok(Some(change)) => {
+                self.apply(&change, false, window, cx);
+                self.mark_edited(&change, cx);
+            }
             Ok(None) => {}
             Err(e) => {
                 self.state = State::Failed(format!("lost track of the document: {e}"));
@@ -723,7 +1026,11 @@ impl DocEditor {
                 return;
             }
         }
+        for (client, (v, p)) in std::mem::take(&mut self.early) {
+            self.presence(client, v, Some(p), cx);
+        }
         self.push(cx);
+        self.selection_moved(cx);
     }
 
     /// Puts a change into the editor as it stands. Another's keeps the
@@ -831,12 +1138,29 @@ impl Render for DocEditor {
                 cx.stop_propagation();
                 d.redo(window, cx);
             }))
-            .child(
-                Editor::new(&self.editor)
-                    .h_full()
-                    .bordered(false)
-                    .readonly(!self.writable || self.state != State::Open),
-            )
+            .child(Editor::new(&self.editor).h_full().bordered(false).readonly(
+                !self.writable || !matches!(self.state, State::Open | State::Reconnecting(_)),
+            ))
+            .when(!self.remotes.is_empty(), |d| {
+                // Who else has the file open, in the colours their carets
+                // are drawn in.
+                d.child(
+                    h_flex()
+                        .absolute()
+                        .bottom(px(6.))
+                        .right(px(14.))
+                        .gap(px(4.))
+                        .children(self.others().into_iter().map(|(name, colour)| {
+                            div()
+                                .px(px(6.))
+                                .rounded(px(4.))
+                                .bg(colour)
+                                .text_size(px(10.5))
+                                .text_color(gpui::white())
+                                .child(name)
+                        })),
+                )
+            })
             .when_some(notice, |d, n| {
                 d.child(
                     div()
