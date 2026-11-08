@@ -738,6 +738,12 @@ impl EnvTab {
         cx.notify();
     }
 
+    /// The environment's projects, once a window showing them has been
+    /// shown.
+    pub fn current_workspace(&self) -> Option<Entity<Workspace>> {
+        self.workspace.clone()
+    }
+
     /// The language servers, once there is a workspace.
     pub fn languages(&self) -> Option<Entity<Languages>> {
         self.languages.clone()

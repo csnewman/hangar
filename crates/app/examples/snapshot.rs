@@ -15,6 +15,7 @@
 //! SNAPSHOT_EDIT types at its start, then SNAPSHOT_KEYS a key at a time; SNAPSHOT_STAGE=ROOT:PATH stages a file
 //! from the Commit window and SNAPSHOT_COMMIT=message commits what is staged;
 //! SNAPSHOT_BRANCH=1 shows the Commit window's Branch view;
+//! SNAPSHOT_SEARCH=text opens Search Everywhere and types it;
 //! SNAPSHOT_ASK=METHOD:LINE:COLUMN asks the open file's language server
 //! (textDocument/hover, textDocument/definition) and prints its answer;
 //! SNAPSHOT_FIND=text searches in files and SNAPSHOT_FIND_OPEN=N opens the Nth
@@ -46,6 +47,7 @@ fn main() {
         .run(move |cx| {
             gpui_component::init(cx);
             hangar_app::envtab::bind_keys(cx);
+            hangar_app::shell::bind_keys(cx);
             hangar_app::layout::Layout::init(
                 hangar_app::store::Dirs::user().map(|d| d.layout_file()),
                 cx,
@@ -349,6 +351,15 @@ fn main() {
                     let _ = handle.update(cx, |_, window, cx| {
                         if let Some(tab) = shell.read(cx).active_view() {
                             tab.update(cx, |t, cx| t.answer(&agent, &key, window, cx));
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(2)).await;
+                }
+                if let Ok(text) = std::env::var("SNAPSHOT_SEARCH") {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        shell.update(cx, |s, cx| s.search_everywhere(window, cx));
+                        if let Some(v) = shell.read(cx).search() {
+                            v.update(cx, |v, cx| v.set_query(&text, window, cx));
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(2)).await;

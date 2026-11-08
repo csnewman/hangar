@@ -15,11 +15,12 @@ use gpui_component::input::{Input, InputState};
 use gpui_component::{TitleBar, h_flex, v_flex};
 
 use crate::assets;
-use crate::envtab::EnvTab;
+use crate::envtab::{EnvTab, Tool};
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Action, Card, LineKind};
 use crate::palette::{self, Palette};
 use crate::places::Places;
+use crate::search::{Chose, SearchView, Target};
 use crate::ui::{button, chip, dot, primary, spark};
 
 /// How often the window is drawn again with nothing changed, so ages
@@ -59,6 +60,20 @@ pub struct Shell {
     adding: Option<AddServer>,
     /// The sessions said to be seen, so each is said once.
     told_seen: Vec<(String, String, chrono::DateTime<chrono::Utc>)>,
+    /// Search Everywhere, while it is open.
+    search: Option<(Entity<SearchView>, gpui::Subscription)>,
+}
+
+gpui::actions!(shell, [SearchEverywhere]);
+
+/// Binds the shell's keys: ⌘K (Ctrl+K elsewhere) for Search Everywhere.
+pub fn bind_keys(cx: &mut gpui::App) {
+    let key = if cfg!(target_os = "macos") {
+        "cmd-k"
+    } else {
+        "ctrl-k"
+    };
+    cx.bind_keys([gpui::KeyBinding::new(key, SearchEverywhere, Some("Shell"))]);
 }
 
 struct AddServer {
@@ -99,6 +114,7 @@ impl Shell {
             collapsed: HashSet::new(),
             adding: None,
             told_seen: vec![],
+            search: None,
         };
         if empty {
             shell.open_add(window, cx);
@@ -238,6 +254,69 @@ impl Shell {
         }
     }
 
+    /// Opens Search Everywhere over the window, or closes it.
+    pub fn search_everywhere(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.search.take().is_some() {
+            cx.notify();
+            return;
+        }
+        let active = self
+            .active
+            .map(|i| (self.tabs[i].place.clone(), self.tabs[i].env.clone()));
+        let workspace = self
+            .active
+            .and_then(|i| self.views[i].read(cx).current_workspace());
+        let places = self.places.clone();
+        let view = cx.new(|cx| SearchView::new(places, active, workspace, window, cx));
+        let sub = cx.subscribe_in(&view, window, |s, _, e: &Chose, window, cx| {
+            s.search = None;
+            if let Some(t) = &e.0 {
+                s.go(t.clone(), window, cx);
+            }
+            cx.notify();
+        });
+        window.focus(&view.focus_handle(cx), cx);
+        self.search = Some((view, sub));
+        cx.notify();
+    }
+
+    /// The Search Everywhere view, while it is open.
+    pub fn search(&self) -> Option<Entity<SearchView>> {
+        self.search.as_ref().map(|(v, _)| v.clone())
+    }
+
+    /// Goes where a search result leads.
+    fn go(&mut self, t: Target, window: &mut Window, cx: &mut Context<Self>) {
+        let tab = self.active.map(|i| self.views[i].clone());
+        match t {
+            Target::Env { place, env } => self.open(&place, &env, window, cx),
+            Target::File { root, path } => {
+                if let Some(tab) = tab {
+                    tab.update(cx, |t, cx| t.open_file(&root, &path, window, cx));
+                }
+            }
+            Target::Tool(Tool::Find) => {
+                if let Some(tab) = tab {
+                    tab.update(cx, |t, cx| t.find_in_files(window, cx));
+                }
+            }
+            Target::Tool(tool) => {
+                if let Some(tab) = tab {
+                    tab.update(cx, |t, cx| {
+                        if !t.is_open(tool) {
+                            t.toggle(tool, cx);
+                        }
+                    });
+                }
+            }
+            Target::Act { place, env, action } => self
+                .places
+                .update(cx, |p, cx| p.act(&place, &env, action, cx)),
+            Target::SuspendIdle => self.suspend_idle(cx),
+            Target::AddPlace => self.open_add(window, cx),
+        }
+    }
+
     fn suspend_idle(&mut self, cx: &mut Context<Self>) {
         let cards = model::home(self.places.read(cx).list(), chrono::Utc::now());
         for (place, env) in model::idle(&cards) {
@@ -266,8 +345,14 @@ impl Render for Shell {
             (None, Some(i)) => self.views[i].clone().into_any_element(),
         };
 
+        let search = self.search.as_ref().map(|(v, _)| v.clone());
         v_flex()
             .size_full()
+            .relative()
+            .key_context("Shell")
+            .on_action(
+                cx.listener(|s, _: &SearchEverywhere, window, cx| s.search_everywhere(window, cx)),
+            )
             .on_drag_move(cx.listener(|_, e: &DragMoveEvent<Edge>, _, cx| {
                 if *e.drag(cx) == Edge::Sidebar {
                     let size = Sizes::dragged(Edge::Sidebar, e.event.position, e.bounds, 0.);
@@ -303,6 +388,28 @@ impl Render for Shell {
                             this.places.update(cx, |p, _| p.error = None);
                             cx.notify();
                         })),
+                )
+            })
+            .when_some(search, |this, view| {
+                this.child(
+                    div()
+                        .id("search-scrim")
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui::black().opacity(0.18))
+                        .on_click(cx.listener(|s, _, _, cx| {
+                            s.search = None;
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    h_flex()
+                        .absolute()
+                        .top(px(44.))
+                        .left_0()
+                        .right_0()
+                        .justify_center()
+                        .child(view),
                 )
             })
     }
@@ -389,8 +496,11 @@ impl Shell {
                         .border_color(p.border)
                         .bg(p.surface)
                         .text_color(p.muted)
+                        .cursor_pointer()
+                        .hover(|s| s.border_color(p.border_strong))
                         .child("⌘K")
-                        .child("Go to environment, file or command"),
+                        .child("Go to environment, file or command")
+                        .on_click(cx.listener(|s, _, window, cx| s.search_everywhere(window, cx))),
                 )
                 .child(
                     div()

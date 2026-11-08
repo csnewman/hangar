@@ -173,8 +173,8 @@ fn a_selection_keeps_its_place() {
 
 #[test]
 fn the_apps_own_edits_are_known_by_the_text_they_leave() {
-    use hangar_app::docedit::Echoes;
     use gpui_component::input::Rope;
+    use hangar_app::docedit::Echoes;
     let mut e = Echoes::default();
     e.expect(Rope::from("a"));
     e.expect(Rope::from("ab"));
