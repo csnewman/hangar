@@ -88,3 +88,42 @@ fn a_click_in_it_leaves_it_open_and_one_outside_closes_it(cx: &mut TestAppContex
         "a click outside closes it"
     );
 }
+
+/// IntelliJ's keys: Shift-Cmd-F finds in files and Shift-Cmd-R replaces in
+/// files from the code editor too, whose own binding of Shift-Cmd-F
+/// (replacing in the file) they take the place of; Cmd-R replaces in the
+/// file.
+#[gpui::test]
+fn find_and_replace_in_files_have_intellijs_keys(cx: &mut TestAppContext) {
+    let (tab, cx) = open(cx);
+    cx.update(|window, cx| {
+        tab.update(cx, |t, cx| t.open_file("/home/dev", "notes.md", window, cx))
+    });
+    cx.run_until_parked();
+    let doc = tab
+        .read_with(cx, |t, _| t.active_doc())
+        .expect("the file open");
+    let editor = doc.read_with(cx, |d, _| d.editor().clone());
+    let in_editor = |cx: &mut VisualTestContext| {
+        cx.update(|window, cx| window.focus(&editor.focus_handle(cx), cx));
+        cx.run_until_parked();
+    };
+    let (find, replace) = if cfg!(target_os = "macos") {
+        ("cmd-shift-f", "cmd-shift-r")
+    } else {
+        ("ctrl-shift-f", "ctrl-shift-r")
+    };
+    in_editor(cx);
+    cx.simulate_keystrokes(find);
+    let popup = tab
+        .read_with(cx, |t, _| t.find_popup())
+        .expect("Find in Files from the editor");
+    assert!(!popup.read_with(cx, |p, _| p.replacing()));
+    cx.update(|window, cx| tab.update(cx, |t, cx| t.close_find(window, cx)));
+    in_editor(cx);
+    cx.simulate_keystrokes(replace);
+    let popup = tab
+        .read_with(cx, |t, _| t.find_popup())
+        .expect("Replace in Files from the editor");
+    assert!(popup.read_with(cx, |p, _| p.replacing()));
+}

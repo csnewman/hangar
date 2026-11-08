@@ -2,7 +2,9 @@
 //! case, whole words and a regular expression; where, every project, one of
 //! them or a folder in one; an optional file mask; the matching lines as
 //! they are found, and the chosen one in its file. Enter opens it, and
-//! ⌘Enter keeps every match in the Find window to go through.
+//! ⌘Enter keeps every match in the Find window to go through. Replace in
+//! Files (⌘⇧R) is the same pop-up with a replacement, put in the chosen
+//! match's file or in every file.
 
 use std::ops::Range;
 use std::time::Duration;
@@ -55,6 +57,13 @@ pub struct FindPopup {
     query: Entity<InputState>,
     mask: Entity<InputState>,
     folder: Entity<InputState>,
+    replacement: Entity<InputState>,
+    /// Whether it replaces, as Replace in Files.
+    replacing: bool,
+    /// Replace All was pressed once, and asks to be pressed again.
+    confirming: bool,
+    /// What the last replacement did.
+    replaced: Option<String>,
     options: Options,
     masked: bool,
     place: Where,
@@ -78,6 +87,7 @@ impl FindPopup {
     pub fn new(
         workspace: Entity<Workspace>,
         last: Option<Search>,
+        replacing: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -105,8 +115,11 @@ impl FindPopup {
                 .placeholder("A folder: src, or /home/dev/project/src")
                 .default_value(folder)
         });
+        let replacement = cx.new(|cx| InputState::new(window, cx).placeholder("Replace with"));
         let soon = |v: &mut Self, _: Entity<InputState>, e: &InputEvent, cx: &mut Context<Self>| {
             if let InputEvent::Change = e {
+                v.confirming = false;
+                v.replaced = None;
                 v.search_soon(cx);
             }
         };
@@ -114,12 +127,22 @@ impl FindPopup {
             cx.subscribe(&query, soon),
             cx.subscribe(&mask, soon),
             cx.subscribe(&folder, soon),
+            cx.subscribe(&replacement, |v, _, e: &InputEvent, cx| {
+                if let InputEvent::Change = e {
+                    v.confirming = false;
+                    cx.notify();
+                }
+            }),
         ];
         let mut popup = FindPopup {
             workspace,
             query,
             mask,
             folder,
+            replacement,
+            replacing,
+            confirming: false,
+            replaced: None,
             options: last.options,
             masked: last.mask.is_some_and(|m| !m.trim().is_empty()),
             place,
@@ -336,6 +359,75 @@ impl FindPopup {
             window.focus(&self.folder.focus_handle(cx), cx);
         }
         self.search(cx);
+    }
+
+    /// Shows or hides the replacement, as Replace in Files or Find in Files.
+    pub fn set_replacing(&mut self, replacing: bool, cx: &mut Context<Self>) {
+        self.replacing = replacing;
+        self.confirming = false;
+        cx.notify();
+    }
+
+    pub fn replacing(&self) -> bool {
+        self.replacing
+    }
+
+    /// How many matches there are: a line's row may hold several.
+    fn occurrences(&self) -> usize {
+        self.found.iter().map(|(_, m)| m.ranges.len().max(1)).sum()
+    }
+
+    /// Replaces the matches with the replacement: in one project's file, or
+    /// everywhere the search looks. Then searches again, to show what is
+    /// left.
+    pub fn replace(&mut self, only: Option<(String, String)>, cx: &mut Context<Self>) {
+        self.confirming = false;
+        let Ok(search) = self.current(cx) else {
+            return;
+        };
+        if search.text.is_empty() {
+            return;
+        }
+        let replacement = self.replacement.read(cx).value().to_string();
+        let calls: Vec<_> = search
+            .calls(self.workspace.read(cx).projects())
+            .into_iter()
+            .filter(|(root, _, _)| only.as_ref().is_none_or(|(r, _)| r == root))
+            .map(|(_, code, mut params)| {
+                params["replacement"] = replacement.clone().into();
+                if let Some((_, path)) = &only {
+                    params["paths"] = json!([path]);
+                }
+                code.call("search.replace", params)
+            })
+            .collect();
+        cx.spawn(async move |this, cx| {
+            let (mut n, mut files, mut errors) = (0, 0, vec![]);
+            for call in calls {
+                match call.await {
+                    Ok(v) => {
+                        n += v["replaced"].as_u64().unwrap_or(0);
+                        files += v["files"].as_array().map_or(0, |f| f.len());
+                    }
+                    Err(e) => errors.push(e),
+                }
+            }
+            let _ = this.update(cx, |v, cx| {
+                v.replaced = Some(if !errors.is_empty() {
+                    errors.join("\n")
+                } else if n == 0 {
+                    "Nothing was replaced.".into()
+                } else {
+                    format!(
+                        "Replaced {n} match{} in {files} file{}.",
+                        if n == 1 { "" } else { "es" },
+                        if files == 1 { "" } else { "s" }
+                    )
+                });
+                v.search(cx);
+            });
+        })
+        .detach();
     }
 
     fn toggle(&mut self, which: fn(&mut Options) -> &mut bool, cx: &mut Context<Self>) {
@@ -597,7 +689,11 @@ impl Render for FindPopup {
             .child(
                 div()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child("Find in Files"),
+                    .child(if self.replacing {
+                        "Replace in Files"
+                    } else {
+                        "Find in Files"
+                    }),
             )
             .child(places)
             .child(div().flex_1())
@@ -635,7 +731,66 @@ impl Render for FindPopup {
             .child(
                 toggle("find-pop-regex", ".*", o.regex, "Regular expression")
                     .on_click(cx.listener(|v, _, _, cx| v.toggle(|o| &mut o.regex, cx))),
+            )
+            .child(
+                toggle(
+                    "find-pop-replace",
+                    "Replace",
+                    self.replacing,
+                    "Replace in Files",
+                )
+                .on_click(cx.listener(|v, _, _, cx| {
+                    let on = !v.replacing;
+                    v.set_replacing(on, cx);
+                })),
             );
+        let current = self.found.get(self.selected).cloned();
+        let files = self.files;
+        let occurrences = self.occurrences();
+        let replace_row = self.replacing.then(|| {
+            let in_file = match &current {
+                Some((root, m)) if self.pending == 0 => {
+                    let only = (root.clone(), m.path.clone());
+                    ui::button("find-replace-file", "Replace in File", &p)
+                        .on_click(cx.listener(move |v, _, _, cx| v.replace(Some(only.clone()), cx)))
+                }
+                _ => ui::disabled("find-replace-file", "Replace in File", &p),
+            };
+            let all = if n == 0 || self.pending > 0 {
+                ui::disabled("find-replace-all", "Replace All", &p)
+            } else if self.confirming {
+                let label = if self.truncated {
+                    "Replace every match?".to_string()
+                } else {
+                    format!(
+                        "Replace {occurrences} match{} in {files} file{}?",
+                        if occurrences == 1 { "" } else { "es" },
+                        if files == 1 { "" } else { "s" }
+                    )
+                };
+                ui::styled_button("find-replace-all", label, p.bad, p.bad, p.on_accent, p.bad)
+                    .on_click(cx.listener(|v, _, _, cx| v.replace(None, cx)))
+            } else {
+                ui::button("find-replace-all", "Replace All", &p).on_click(cx.listener(
+                    |v, _, _, cx| {
+                        v.confirming = true;
+                        cx.notify();
+                    },
+                ))
+            };
+            h_flex()
+                .gap(px(6.))
+                .px(px(10.))
+                .pb(px(6.))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(Input::new(&self.replacement)),
+                )
+                .child(in_file)
+                .child(all)
+        });
         let summary = h_flex()
             .px(px(12.))
             .pb(px(4.))
@@ -643,6 +798,7 @@ impl Render for FindPopup {
             .text_size(px(11.))
             .text_color(p.muted)
             .child(status)
+            .when_some(self.replaced.clone(), |d, r| d.child(r))
             .when(self.place != Where::Projects, |d| {
                 let ws = self.workspace.read(cx);
                 let name = match self.current(cx) {
@@ -730,6 +886,7 @@ impl Render for FindPopup {
                 )
             })
             .child(query)
+            .children(replace_row)
             .child(summary)
             .child(div().flex_1().min_h_0().child(list))
             .child(self.preview(&p))

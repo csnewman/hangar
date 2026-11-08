@@ -22,6 +22,7 @@
 //! SNAPSHOT_FIND=text searches in files in Find in Files' pop-up,
 //! SNAPSHOT_FIND_SELECT=N chooses its Nth match, SNAPSHOT_FIND_OPEN=N opens it,
 //! and SNAPSHOT_FIND_WINDOW=1 keeps the matches in the Find window;
+//! SNAPSHOT_REPLACE=1 shows the pop-up as Replace in Files;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
@@ -256,6 +257,13 @@ fn main() {
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(3)).await;
+                    if std::env::var("SNAPSHOT_REPLACE").is_ok() {
+                        let _ = handle.update(cx, |_, _, cx| {
+                            if let Some(f) = popup(cx) {
+                                f.update(cx, |f, cx| f.set_replacing(true, cx));
+                            }
+                        });
+                    }
                     let n = |k| std::env::var(k).ok().and_then(|n| n.parse::<usize>().ok());
                     if let Some(n) = n("SNAPSHOT_FIND_SELECT") {
                         let _ = handle.update(cx, |_, _, cx| {

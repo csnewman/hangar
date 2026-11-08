@@ -3,11 +3,11 @@
 //! and Window. Each item shows the key it is bound to.
 
 use gpui::{App, KeyBinding, Menu, MenuItem, OsAction, actions};
-use gpui_component::input::{Copy, Cut, Paste, Redo, SelectAll, Undo};
+use gpui_component::input::{Copy, Cut, Paste, Redo, Replace, Search, SelectAll, Undo};
 
 use crate::envtab::{
-    FindInFiles, HideAllToolWindows, ToggleCommit, ToggleDocker, ToggleGit, ToggleProblems,
-    ToggleProject, ToggleStructure, ToggleTerminal,
+    FindInFiles, HideAllToolWindows, ReplaceInFiles, ToggleCommit, ToggleDocker, ToggleGit,
+    ToggleProblems, ToggleProject, ToggleStructure, ToggleTerminal,
 };
 use crate::shell::SearchEverywhere;
 
@@ -51,10 +51,14 @@ pub fn init(cx: &mut App) {
             MenuItem::os_action("Copy", Copy, OsAction::Copy),
             MenuItem::os_action("Paste", Paste, OsAction::Paste),
             MenuItem::os_action("Select All", SelectAll, OsAction::SelectAll),
+            MenuItem::separator(),
+            MenuItem::action("Find…", Search),
+            MenuItem::action("Replace…", Replace),
         ]),
         Menu::new("Go").items([
             MenuItem::action("Search Everywhere…", SearchEverywhere),
             MenuItem::action("Find in Files…", FindInFiles),
+            MenuItem::action("Replace in Files…", ReplaceInFiles),
         ]),
         Menu::new("View").items([
             MenuItem::action("Project", ToggleProject),

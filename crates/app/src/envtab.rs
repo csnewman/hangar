@@ -170,6 +170,7 @@ actions!(
         ToggleGit,
         ToggleDocker,
         FindInFiles,
+        ReplaceInFiles,
         HideAllToolWindows,
         HideActiveToolWindow
     ]
@@ -211,15 +212,24 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(keys[6], ToggleDocker, ctx),
         KeyBinding::new(keys[7], HideAllToolWindows, ctx),
         KeyBinding::new("shift-escape", HideActiveToolWindow, ctx),
-        KeyBinding::new(
-            if cfg!(target_os = "macos") {
-                "cmd-shift-f"
-            } else {
-                "ctrl-shift-f"
-            },
-            FindInFiles,
-            ctx,
-        ),
+    ]);
+    // Find and replace as IntelliJ has them, in a file and in files. The
+    // text fields' own context (gpui-component's "Input", the editor's
+    // among them) binds Shift-Cmd-F to replacing in the field; bound here
+    // after it, these take its place there too.
+    let mac = cfg!(target_os = "macos");
+    let (find_files, replace_files, replace) = if mac {
+        ("cmd-shift-f", "cmd-shift-r", "cmd-r")
+    } else {
+        ("ctrl-shift-f", "ctrl-shift-r", "ctrl-r")
+    };
+    let input = Some("Input");
+    cx.bind_keys([
+        KeyBinding::new(find_files, FindInFiles, ctx),
+        KeyBinding::new(find_files, FindInFiles, input),
+        KeyBinding::new(replace_files, ReplaceInFiles, ctx),
+        KeyBinding::new(replace_files, ReplaceInFiles, input),
+        KeyBinding::new(replace, gpui_component::input::Replace, input),
     ]);
 }
 
@@ -725,6 +735,14 @@ impl EnvTab {
         }
     }
 
+    /// The file shown, when it is one rather than a diff.
+    pub fn active_doc(&self) -> Option<Entity<DocEditor>> {
+        match self.file.and_then(|i| self.files.get(i)) {
+            Some(Tab::Doc(d)) => Some(d.clone()),
+            _ => None,
+        }
+    }
+
     /// The diff shown, when it is one.
     pub fn active_diff(&self) -> Option<Entity<DiffView>> {
         match self.file.and_then(|i| self.files.get(i)) {
@@ -741,7 +759,17 @@ impl EnvTab {
     /// Opens Find in Files' pop-up on a running environment, or brings it
     /// back to the front, its query taking what is typed.
     pub fn find_in_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_find(false, window, cx);
+    }
+
+    /// The same pop-up with a replacement, as IntelliJ's Replace in Files.
+    pub fn replace_in_files(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.open_find(true, window, cx);
+    }
+
+    fn open_find(&mut self, replace: bool, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(f) = &self.find_popup {
+            f.update(cx, |f, cx| f.set_replacing(replace, cx));
             window.focus(&f.focus_handle(cx), cx);
             return;
         }
@@ -756,7 +784,7 @@ impl EnvTab {
         };
         let ws = self.workspace(&env, cx);
         let last = self.last_search.clone();
-        let popup = cx.new(|cx| FindPopup::new(ws, last, window, cx));
+        let popup = cx.new(|cx| FindPopup::new(ws, last, replace, window, cx));
         self.find_sub = Some(
             cx.subscribe_in(&popup, window, |t, _, e: &Done, window, cx| {
                 t.found(e, window, cx)
@@ -772,7 +800,8 @@ impl EnvTab {
         self.find_popup.clone()
     }
 
-    fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Closes Find in Files' pop-up, keeping its search for next time.
+    pub fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.find_sub = None;
         if let Some(f) = self.find_popup.take()
             && let Ok(s) = f.read(cx).current(cx)
@@ -1094,6 +1123,9 @@ impl Render for EnvTab {
             .on_action(cx.listener(|t, _: &ToggleGit, _, cx| t.toggle(Tool::Git, cx)))
             .on_action(cx.listener(|t, _: &ToggleDocker, _, cx| t.toggle(Tool::Docker, cx)))
             .on_action(cx.listener(|t, _: &FindInFiles, window, cx| t.find_in_files(window, cx)))
+            .on_action(
+                cx.listener(|t, _: &ReplaceInFiles, window, cx| t.replace_in_files(window, cx)),
+            )
             .child(self.toolbar(&config, &env, &card, &p, cx))
             .child(
                 h_flex()
