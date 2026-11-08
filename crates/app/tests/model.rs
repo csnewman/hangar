@@ -119,7 +119,10 @@ fn each_state_is_a_card() {
     let mut idle = env("docs-1", "running");
     idle.agents = vec![agent("a", "idle", false, 30)];
     let c = model::card(&place(), &idle, now());
-    assert_eq!((c.rank, c.action), (Rank::Running, Some(Action::Suspend)));
+    assert_eq!(
+        (c.rank, c.tone, c.action),
+        (Rank::Running, Tone::Good, Some(Action::Suspend))
+    );
     assert_eq!(c.lines[0].text, "Claude is waiting for a prompt");
     assert_eq!(
         model::card(&place(), &env("bare", "running"), now()).lines[0].text,
@@ -151,8 +154,11 @@ fn each_state_is_a_card() {
         (Rank::Suspended, Tone::Ring, Some(Action::Resume))
     );
     assert_eq!(c.summary, "Suspended 2h ago");
+    // Running and stopped are told apart by colour, not only by the words.
+    let stopped = model::card(&place(), &env("x", "stopped"), now());
+    assert_eq!(stopped.tone, Tone::Idle);
     assert_eq!(
-        model::card(&place(), &env("x", "stopped"), now()).action,
+        stopped.action,
         Some(Action::Start)
     );
     assert_eq!(

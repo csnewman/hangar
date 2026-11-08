@@ -293,7 +293,9 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
             lines.push(line(text, LineKind::Plain));
             Look {
                 rank: Rank::Running,
-                tone: Tone::Idle,
+                // The design's "running, fine": green, as the tab's own
+                // header shows it, apart from a stopped one's grey.
+                tone: Tone::Good,
                 status: format!("Running · {}", age(e.updated_at, now)),
                 summary: format!("{summary} · {}", age(e.updated_at, now)),
                 action: Some(Action::Suspend),
