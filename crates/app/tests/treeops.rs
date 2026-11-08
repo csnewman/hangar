@@ -1,5 +1,6 @@
 //! The Project window's menu on a file: making a file beside it, through a
-//! stand-in Code service, as a right-click, a name typed and Enter make it.
+//! stand-in Code service, as a right-click, a name typed and Enter make it;
+//! a name taken is said in the pop-up, and what is made is selected.
 
 use std::net::TcpListener;
 use std::sync::{Arc, mpsc};
@@ -7,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use gpui::{AppContext, Modifiers, MouseButton, TestAppContext, VisualTestContext};
-use gpui_component::Root;
+use gpui_component::{Root, WindowExt};
 use hangar_app::places::Places;
 use hangar_app::project::{OpenFile, ProjectView};
 use hangar_app::store::MemoryTokens;
@@ -46,6 +47,16 @@ fn service(asked: mpsc::Sender<(String, Value)>) -> String {
                         }
                         "fs.list" => json!([]),
                         "git.status" => json!({ "changes": [] }),
+                        "fs.create"
+                            if params["path"]
+                                .as_str()
+                                .is_some_and(|p| p.ends_with("/main.rs")) =>
+                        {
+                            let reply =
+                                json!({ "id": req["id"], "error": "main.rs already exists" });
+                            send(&mut ws, reply);
+                            continue;
+                        }
                         m if m.starts_with("fs.") || m == "workspace.set" => {
                             asked.send((m.to_string(), params.clone())).unwrap();
                             Value::Null
@@ -103,7 +114,7 @@ fn new_file_from_a_files_menu_is_made_beside_it(cx: &mut TestAppContext) {
         tree = Some(view.clone());
         Root::new(view, window, cx)
     });
-    let _tree = tree.unwrap();
+    let tree = tree.unwrap();
     until(cx, "the project's files", |cx| {
         cx.debug_bounds("tree-row-main.rs").is_some()
     });
@@ -139,6 +150,99 @@ fn new_file_from_a_files_menu_is_made_beside_it(cx: &mut TestAppContext) {
         (open.root.as_str(), open.path.as_str()),
         ("/home/dev/app", "notes.md")
     );
+    assert!(
+        !cx.update(|window, cx| window.has_active_dialog(cx)),
+        "the pop-up closed"
+    );
+    tree.read_with(cx, |t, _| {
+        let s = t.selected().unwrap();
+        assert_eq!(
+            (s.root.as_deref(), s.path.as_str()),
+            (Some("/home/dev/app"), "notes.md"),
+            "the new file is selected"
+        );
+    });
+}
+
+/// A name already taken is said under it in the pop-up, which stays; the
+/// file made with another is selected and scrolled into view, here at the
+/// foot of a long folder.
+#[gpui::test]
+fn a_name_taken_is_said_and_the_file_made_is_shown(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    let (asked_tx, asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let mut tree = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        tree = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let tree = tree.unwrap();
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-main.rs").is_some()
+    });
+    assert!(
+        cx.debug_bounds("tree-row-note119.md")
+            .is_none_or(|b| b.top() > cx.update(|w, _| w.bounds().size.height)),
+        "the folder's foot is out of view"
+    );
+    let row = cx.debug_bounds("tree-row-main.rs").unwrap();
+    cx.simulate_mouse_down(row.center(), MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(row.center(), MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    cx.simulate_input("main.rs");
+    cx.simulate_keystrokes("enter");
+    // The service refuses; the pop-up stays, for another name.
+    let asked_at = Instant::now();
+    while asked_at.elapsed() < Duration::from_millis(400) {
+        cx.run_until_parked();
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "the pop-up stays"
+    );
+    assert!(asked.try_recv().is_err(), "nothing was made");
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+
+    // A project's own row is selected by the right-click that opens its
+    // menu, as its files are.
+    let root = cx.debug_bounds("project-row-/home/dev/app").unwrap();
+    cx.simulate_mouse_down(root.center(), MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(root.center(), MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    tree.read_with(cx, |t, _| {
+        let s = t.selected().unwrap();
+        assert_eq!(
+            (s.root.as_deref(), s.path.as_str()),
+            (Some("/home/dev/app"), "")
+        );
+    });
+    // Its New File… makes the file in the project's root.
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    cx.simulate_input("note119.md");
+    cx.simulate_keystrokes("enter");
+    until(cx, "the file made is selected", |cx| {
+        tree.read_with(cx, |t, _| t.selected().map(|s| s.path.clone())) == Some("note119.md".into())
+    });
+    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    until(cx, "it is scrolled into view", |cx| {
+        cx.update(|window, _| window.refresh());
+        let height = cx.update(|w, _| w.bounds().size.height);
+        cx.debug_bounds("tree-row-note119.md")
+            .is_some_and(|b| b.top() >= gpui::px(0.) && b.bottom() <= height)
+    });
 }
 
 /// Rows keep their height however many there are: the tree scrolls rather

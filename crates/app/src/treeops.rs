@@ -1,10 +1,10 @@
 //! What the Project window's menu does to files, as IntelliJ's Project view
 //! does: making files and folders, renaming, moving to the trash, cutting,
 //! copying and pasting, and copying paths, through the Code service's fs.*
-//! calls. Names are asked for in a dialog; the tree follows the files as
-//! they change (fs.changed), so nothing here redraws it.
+//! calls. Names are asked for in IntelliJ's small pop-up; the tree follows
+//! the files as they change (fs.changed), so nothing here redraws it.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gpui::{
@@ -60,6 +60,11 @@ impl Target {
 
 /// What is done with a name typed in a dialog.
 type WithName = Rc<dyn Fn(String, &mut Window, &mut App)>;
+/// The call a name typed makes: through which connection, its method and
+/// its parameters; None when there is nothing to do.
+type CallFor = Rc<dyn Fn(&str) -> Option<(Code, &'static str, Value)>>;
+/// What is done with a name once its call has answered.
+type Made = Rc<dyn Fn(String, &mut Window, &mut App)>;
 /// What is done once a dialog is confirmed.
 type Then = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -104,52 +109,146 @@ pub fn copy(text: String, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text));
 }
 
-/// Asks for a name in a dialog, then does done with it, trimmed; Enter is
-/// OK, Escape cancels. A name with nothing in it is not taken.
+/// Asks for a name in IntelliJ's small pop-up, then does done with it,
+/// trimmed: Enter takes it, Escape or a click elsewhere closes the pop-up.
+/// A name with nothing in it is not taken.
 pub fn ask_name(
     title: &str,
     initial: &str,
-    ok: &str,
     window: &mut Window,
     cx: &mut App,
     done: impl Fn(String, &mut Window, &mut App) + 'static,
 ) {
-    let input = cx.new(|cx| InputState::new(window, cx).default_value(initial.to_string()));
     let done: WithName = Rc::new(done);
-    let take = {
-        let (input, done) = (input.clone(), done.clone());
-        Rc::new(move |window: &mut Window, cx: &mut App| {
-            let name = input.read(cx).value().trim().to_string();
-            if name.is_empty() {
-                return;
-            }
+    popup(
+        title,
+        initial,
+        Rc::new(RefCell::new(None)),
+        window,
+        cx,
+        Rc::new(move |name, window, cx| {
             window.close_dialog(cx);
             done(name, window, cx);
-        })
-    };
+        }),
+    );
+}
+
+/// Asks for a name as ask_name does, then makes the call it is for; the
+/// pop-up stays until the call answers, saying what went wrong under the
+/// name, so it can be changed and tried again. Once made, done has the
+/// name.
+pub fn ask_call(
+    title: &str,
+    initial: &str,
+    window: &mut Window,
+    cx: &mut App,
+    call: impl Fn(&str) -> Option<(Code, &'static str, Value)> + 'static,
+    done: impl Fn(String, &mut Window, &mut App) + 'static,
+) {
+    let (call, done): (CallFor, Made) = (Rc::new(call), Rc::new(done));
+    let error: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+    let busy = Rc::new(Cell::new(false));
+    let shown = error.clone();
+    popup(
+        title,
+        initial,
+        shown,
+        window,
+        cx,
+        Rc::new(move |name, window, cx| {
+            if busy.get() {
+                return;
+            }
+            let Some((code, method, params)) = call(&name) else {
+                window.close_dialog(cx);
+                return;
+            };
+            busy.set(true);
+            let asked = code.call(method, params);
+            let (error, busy, done) = (error.clone(), busy.clone(), done.clone());
+            let handle = window.window_handle();
+            cx.spawn(async move |cx| {
+                let result = asked.await;
+                let _ = handle.update(cx, |_, window, cx| {
+                    busy.set(false);
+                    match result {
+                        Ok(_) => {
+                            window.close_dialog(cx);
+                            done(name, window, cx);
+                        }
+                        Err(e) => {
+                            *error.borrow_mut() = Some(e);
+                            window.refresh();
+                        }
+                    }
+                });
+            })
+            .detach();
+        }),
+    );
+}
+
+/// The pop-up: a title, the name, and what went wrong under it.
+fn popup(
+    title: &str,
+    initial: &str,
+    error: Rc<RefCell<Option<String>>>,
+    window: &mut Window,
+    cx: &mut App,
+    take: WithName,
+) {
+    let input = cx.new(|cx| InputState::new(window, cx).default_value(initial.to_string()));
     let handle = window.window_handle();
-    let on_enter = take.clone();
-    cx.subscribe(&input, move |_, e: &InputEvent, cx| {
-        if let InputEvent::PressEnter { .. } = e {
-            let on_enter = on_enter.clone();
-            let _ = handle.update(cx, |_, window, cx| on_enter(window, cx));
-        }
-    })
-    .detach();
-    let (title, ok) = (title.to_string(), ok.to_string());
+    {
+        let (take, error) = (take.clone(), error.clone());
+        cx.subscribe(&input, move |state, e: &InputEvent, cx| match e {
+            InputEvent::PressEnter { .. } => {
+                let name = state.read(cx).value().trim().to_string();
+                if name.is_empty() {
+                    return;
+                }
+                let take = take.clone();
+                let _ = handle.update(cx, |_, window, cx| take(name, window, cx));
+            }
+            InputEvent::Change => {
+                // What went wrong was about the name as it was.
+                if error.borrow_mut().take().is_some() {
+                    let _ = handle.update(cx, |_, window, _| window.refresh());
+                }
+            }
+            _ => {}
+        })
+        .detach();
+    }
+    let title = title.to_string();
     let first = Cell::new(true);
     window.open_dialog(cx, move |dialog, window, cx| {
         if first.replace(false) {
             window.focus(&input.focus_handle(cx), cx);
         }
         let p = palette::of(cx);
-        let take = take.clone();
-        dialog.title(title.clone()).w(px(420.)).child(
-            v_flex()
-                .gap(px(10.))
-                .child(Input::new(&input))
-                .child(buttons(&ok, &p, move |window, cx| take(window, cx))),
-        )
+        let wrong = error.borrow().clone();
+        dialog
+            .title(
+                div()
+                    .text_size(px(12.))
+                    .text_color(p.muted)
+                    .child(title.clone()),
+            )
+            .w(px(380.))
+            .margin_top(px(90.))
+            .close_button(false)
+            .overlay(false)
+            // Enter is the name's own: the pop-up closes once it is taken.
+            .on_ok(|_, _, _| false)
+            .child(
+                v_flex()
+                    .gap(px(6.))
+                    .child(Input::new(&input))
+                    .when_some(wrong, |d, e| {
+                        d.child(div().text_size(px(11.5)).text_color(p.bad).child(e))
+                    }),
+            )
     });
 }
 
@@ -208,76 +307,67 @@ pub fn new_file(
     opened: impl Fn(String, &mut Window, &mut App) + 'static,
 ) {
     let (code, folder) = (t.code.clone(), t.folder());
-    let opened = Rc::new(opened);
-    ask_name(
+    let at = folder.clone();
+    ask_call(
         "New File",
         "",
-        "Create",
         window,
         cx,
-        move |name, window, cx| {
-            let path = join(&folder, &name);
-            let opened = opened.clone();
-            let made = path.clone();
-            run_then(
-                &code,
+        move |name| {
+            Some((
+                code.clone(),
                 "fs.create",
-                json!({ "path": path }),
-                window,
-                cx,
-                move |_, window, cx| opened(made, window, cx),
-            );
+                json!({ "path": join(&at, name) }),
+            ))
         },
+        move |name, window, cx| opened(join(&folder, &name), window, cx),
     );
 }
 
-/// Makes a folder, asking its name; a name with slashes makes each folder
-/// on the way.
-pub fn new_folder(t: &Target, window: &mut Window, cx: &mut App) {
+/// Makes a folder, asking its name, then does made with its path; a name
+/// with slashes makes each folder on the way.
+pub fn new_folder(
+    t: &Target,
+    window: &mut Window,
+    cx: &mut App,
+    made: impl Fn(String, &mut Window, &mut App) + 'static,
+) {
     let (code, folder) = (t.code.clone(), t.folder());
-    ask_name(
+    let at = folder.clone();
+    ask_call(
         "New Folder",
         "",
-        "Create",
         window,
         cx,
-        move |name, window, cx| {
-            run(
-                &code,
-                "fs.mkdir",
-                json!({ "path": join(&folder, &name) }),
-                window,
-                cx,
-            );
-        },
+        move |name| Some((code.clone(), "fs.mkdir", json!({ "path": join(&at, name) }))),
+        move |name, window, cx| made(join(&folder, &name), window, cx),
     );
 }
 
-pub fn rename(t: &Target, window: &mut Window, cx: &mut App) {
+/// Renames, asking the new name, then does renamed with the new path.
+pub fn rename(
+    t: &Target,
+    window: &mut Window,
+    cx: &mut App,
+    renamed: impl Fn(String, &mut Window, &mut App) + 'static,
+) {
     let (code, from) = (t.code.clone(), t.abs.clone());
     let parent = Target {
         dir: false,
         ..t.clone()
     }
     .folder();
-    ask_name(
+    let at = parent.clone();
+    ask_call(
         "Rename",
         t.name(),
-        "Rename",
         window,
         cx,
-        move |name, window, cx| {
-            let to = join(&parent, &name);
-            if to != from {
-                run(
-                    &code,
-                    "fs.rename",
-                    json!({ "from": from, "to": to }),
-                    window,
-                    cx,
-                );
-            }
+        move |name| {
+            let to = join(&at, name);
+            (to != from).then(|| (code.clone(), "fs.rename", json!({ "from": from, "to": to })))
         },
+        move |name, window, cx| renamed(join(&parent, &name), window, cx),
     );
 }
 

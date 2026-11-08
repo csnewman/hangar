@@ -3,7 +3,9 @@
 //! the whole machine's files, through the environment's Workspace, and
 //! reloaded as the service says its files and repositories change.
 
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use gpui::{
     Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled, Window,
@@ -92,6 +94,10 @@ pub struct ProjectView {
     scope: Scope,
     machine: Tree,
     selected: Option<Selection>,
+    /// The tree's scroll, and whether the row selected is still to be
+    /// scrolled into view, once it is there.
+    scroll: gpui::ScrollHandle,
+    reveal: Rc<Cell<bool>>,
     /// What Cut or Copy took, to paste.
     taken: Option<Taken>,
     _sub: gpui::Subscription,
@@ -107,6 +113,8 @@ impl ProjectView {
             scope: Scope::Projects,
             machine: Tree::default(),
             selected: None,
+            scroll: gpui::ScrollHandle::new(),
+            reveal: Rc::new(Cell::new(false)),
             taken: None,
             _sub: sub,
         };
@@ -359,6 +367,7 @@ impl ProjectView {
                 });
             }
         }
+        self.reveal.set(true);
         cx.notify();
         true
     }
@@ -501,6 +510,10 @@ impl Render for ProjectView {
         let p = palette::of(cx);
         let scope = self.scope;
         let mut list = v_flex();
+        // How many rows are in the list so far, and where the selected one
+        // is.
+        let mut n = 0usize;
+        let mut at = None;
         let ws = self.workspace.read(cx);
         let state = ws.state().clone();
         let names: Vec<(String, String)> = self
@@ -527,15 +540,32 @@ impl Render for ProjectView {
                     list = list.child(muted("The environment has no projects.", &p));
                 }
                 for (i, proj) in self.projects.iter().enumerate() {
+                    // A project's own row is selected as its files are,
+                    // with its path from its root empty.
+                    let me = Selection {
+                        root: Some(proj.root.clone()),
+                        path: String::new(),
+                    };
+                    let selected = self.selected.as_ref() == Some(&me);
+                    if selected {
+                        at = Some(n);
+                    }
+                    n += 1;
+                    let (on_click, on_right) = (me.clone(), me);
                     list = list.child(
                         h_flex()
                             .id(("project", i))
+                            .debug_selector({
+                                let root = proj.root.clone();
+                                move || format!("project-row-{root}")
+                            })
                             .h(px(22.))
                             .gap(px(4.))
                             .px(px(4.))
                             .rounded(px(4.))
                             .cursor_pointer()
-                            .hover(|s| s.bg(p.surface_2))
+                            .when(selected, |d| d.bg(p.selection))
+                            .when(!selected, |d| d.hover(|s| s.bg(p.surface_2)))
                             .child(chevron(proj.open, &p))
                             .child(
                                 svg()
@@ -556,7 +586,17 @@ impl Render for ProjectView {
                                     .text_color(p.muted)
                                     .child(names[i].1.clone()),
                             )
-                            .on_click(cx.listener(move |v, _, _, cx| v.toggle_project(i, cx)))
+                            .on_click(cx.listener(move |v, _, _, cx| {
+                                v.selected = Some(on_click.clone());
+                                v.toggle_project(i, cx)
+                            }))
+                            .on_mouse_down(
+                                gpui::MouseButton::Right,
+                                cx.listener(move |v, _, _, cx| {
+                                    v.selected = Some(on_right.clone());
+                                    cx.notify();
+                                }),
+                            )
                             .context_menu({
                                 let t = self.target(Some(&proj.root), "", true, cx);
                                 let view = cx.entity().downgrade();
@@ -573,9 +613,14 @@ impl Render for ProjectView {
                         let mut out = Vec::new();
                         rows(&proj.tree, Some(i), &proj.git, "", 1, &mut out);
                         if let Some(e) = proj.tree.errors.get("") {
+                            n += 1;
                             list = list.child(muted(e.clone(), &p));
                         }
                         for r in out {
+                            if self.is_selected(&r) {
+                                at = Some(n);
+                            }
+                            n += 1;
                             list = list.child(self.row(r, &p, cx));
                         }
                     }
@@ -595,15 +640,43 @@ impl Render for ProjectView {
                     ));
                 }
                 for r in out {
+                    if self.is_selected(&r) {
+                        at = Some(n);
+                    }
+                    n += 1;
                     list = list.child(self.row(r, &p, cx));
                 }
             }
         }
-        v_flex()
-            .size_full()
-            .min_h_0()
-            .text_size(px(12.))
-            .child(scroll("project-tree", list).flex_1().min_h_0())
+        // A row revealed is scrolled into view once it is laid out, which
+        // may be after its folder has been listed.
+        let (handle, reveal) = (self.scroll.clone(), self.reveal.clone());
+        let list = list.on_children_prepainted(move |rows, window, _| {
+            let (Some(i), true) = (at, reveal.get()) else {
+                return;
+            };
+            let Some(row) = rows.get(i) else {
+                return;
+            };
+            reveal.set(false);
+            let view = handle.bounds();
+            let mut offset = handle.offset();
+            if row.top() < view.top() {
+                offset.y += view.top() - row.top();
+            } else if row.bottom() > view.bottom() {
+                offset.y -= row.bottom() - view.bottom();
+            } else {
+                return;
+            }
+            handle.set_offset(offset);
+            window.request_animation_frame();
+        });
+        v_flex().size_full().min_h_0().text_size(px(12.)).child(
+            scroll("project-tree", list)
+                .track_scroll(&self.scroll)
+                .flex_1()
+                .min_h_0(),
+        )
     }
 }
 
@@ -659,6 +732,16 @@ impl ProjectView {
             abs,
             dir,
         })
+    }
+
+    fn is_selected(&self, r: &Row) -> bool {
+        let root = r
+            .project
+            .and_then(|i| self.projects.get(i))
+            .map(|p| p.root.as_str());
+        self.selected
+            .as_ref()
+            .is_some_and(|s| s.root.as_deref() == root && s.path == r.path)
     }
 
     fn row(&self, r: Row, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
@@ -753,6 +836,9 @@ impl ProjectView {
     }
 }
 
+/// Selects what was made at a path in the tree.
+type Reveal = Box<dyn Fn(String, &mut Window, &mut gpui::App)>;
+
 /// The Project window's menu for a file or folder, as IntelliJ's: making,
 /// clipboard, paths, renaming and the trash, finding in a folder, and git.
 fn tree_menu(
@@ -778,8 +864,26 @@ fn tree_menu(
                     None => abs.clone(),
                 };
                 let root = root.clone().unwrap_or_else(|| "/".into());
-                let _ = view.update(cx, |_, cx| cx.emit(OpenFile { root, path }));
+                let _ = view.update(cx, |v, cx| {
+                    v.reveal(&abs, cx);
+                    cx.emit(OpenFile { root, path })
+                });
             });
+        })
+    };
+    // What makes or renames something, then selects it in the tree.
+    let made = |label: &str, f: fn(&Target, &mut Window, &mut gpui::App, Reveal)| {
+        let (t, view) = (t.clone(), view.clone());
+        PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
+            let view = view.clone();
+            f(
+                &t,
+                window,
+                cx,
+                Box::new(move |abs, _, cx| {
+                    let _ = view.update(cx, |v, cx| v.reveal(&abs, cx));
+                }),
+            )
         })
     };
     let take = |label: &str, cut: bool| {
@@ -840,7 +944,7 @@ fn tree_menu(
     let in_project = t.root.is_some();
     let mut menu = menu
         .item(new_file)
-        .item(item("New Folder…", t, treeops::new_folder))
+        .item(made("New Folder…", treeops::new_folder))
         .separator()
         .item(take("Cut", true).disabled(is_root))
         .item(take("Copy", false))
@@ -850,7 +954,7 @@ fn tree_menu(
         .item(copy_path("Copy Path From Project Root", t.relative()).disabled(!in_project))
         .item(copy_path("Copy File Name", t.name().to_string()))
         .separator()
-        .item(item("Rename…", t, treeops::rename).disabled(is_root))
+        .item(made("Rename…", treeops::rename).disabled(is_root))
         .item(item("Delete…", t, treeops::trash).disabled(is_root))
         .separator()
         .item(find("Find in Folder…", false))

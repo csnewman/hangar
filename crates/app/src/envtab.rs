@@ -791,7 +791,6 @@ impl EnvTab {
         crate::treeops::ask_name(
             "Go to Line:Column",
             &format!("{line}:{col}"),
-            "Go",
             window,
             cx,
             move |typed, window, cx| {
@@ -969,16 +968,9 @@ impl EnvTab {
             return;
         }
         let this = cx.entity().downgrade();
-        crate::treeops::ask_name(
-            "Rename",
-            &word,
-            "Rename",
-            window,
-            cx,
-            move |name, window, cx| {
-                let _ = this.update(cx, |t, cx| t.rename_to(name, window, cx));
-            },
-        );
+        crate::treeops::ask_name("Rename", &word, window, cx, move |name, window, cx| {
+            let _ = this.update(cx, |t, cx| t.rename_to(name, window, cx));
+        });
     }
 
     /// Renames the symbol at the caret to name, everywhere its language

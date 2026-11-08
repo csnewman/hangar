@@ -28,7 +28,9 @@
 //! SNAPSHOT_SYMBOL=text goes to a symbol;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
-//! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would;
+//! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would, and
+//! SNAPSHOT_PRESS="down enter |text| enter" then presses keys, typing what
+//! is between bars;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
 
 use std::time::Duration;
@@ -466,7 +468,7 @@ fn main() {
                         PlatformInput, point,
                     };
                     let position = point(px(x), px(y));
-                    let _ = handle.update(cx, |_, window, cx| {
+                    let _ = cx.update_window(handle.into(), |_, window, cx| {
                         window.dispatch_event(
                             PlatformInput::MouseMove(MouseMoveEvent {
                                 position,
@@ -495,6 +497,29 @@ fn main() {
                             cx,
                         );
                     });
+                    settle(cx, handle.into(), Duration::from_secs(1)).await;
+                }
+                if let Ok(press) = std::env::var("SNAPSHOT_PRESS") {
+                    for (i, part) in press.split('|').enumerate() {
+                        let keys: Vec<String> = if i % 2 == 1 {
+                            part.chars().map(|c| c.to_string()).collect()
+                        } else {
+                            part.split_whitespace().map(str::to_string).collect()
+                        };
+                        for k in keys {
+                            // Keystroke::parse keeps its source.
+                            let k: &'static str = Box::leak(k.into_boxed_str());
+                            let Some(stroke) = gpui::Keystroke::parse(k).ok() else {
+                                continue;
+                            };
+                            // As the platform does: not while the root is
+                            // being updated, which the pop-ups update.
+                            let _ = cx.update_window(handle.into(), |_, window, cx| {
+                                window.dispatch_keystroke(stroke, cx);
+                            });
+                            settle(cx, handle.into(), Duration::from_millis(150)).await;
+                        }
+                    }
                     settle(cx, handle.into(), Duration::from_secs(1)).await;
                 }
                 if let Some(hold) = std::env::var("SNAPSHOT_HOLD")
