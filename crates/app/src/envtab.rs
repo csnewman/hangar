@@ -32,120 +32,13 @@ use crate::places::Places;
 use crate::problems::ProblemsView;
 use crate::project::{OpenFile, ProjectView};
 use crate::termview::TerminalView;
+use crate::tools::Stripes;
 use crate::ui::{button, dot, primary, spark, tone};
 use crate::workspace::Workspace;
 
-/// A tool window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Tool {
-    Project,
-    Filesystem,
-    Commit,
-    Structure,
-    Terminal,
-    Problems,
-    Git,
-    Docker,
-    Find,
-    Log,
-    Agents,
-    Ports,
-}
-
-/// Where a tool window docks: IntelliJ's stripes put the top group on
-/// their side, the group below the line beneath it, and the foot along the
-/// bottom.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Slot {
-    Left,
-    LeftBelow,
-    Bottom,
-    Right,
-    RightBelow,
-}
-
-/// The left stripe: its top group, the group below the line, and the foot.
-const LEFT: (&[Tool], &[Tool], &[Tool]) = (
-    &[Tool::Project, Tool::Filesystem, Tool::Commit],
-    &[Tool::Structure],
-    &[
-        Tool::Terminal,
-        Tool::Problems,
-        Tool::Git,
-        Tool::Docker,
-        Tool::Find,
-        Tool::Log,
-    ],
-);
-const RIGHT: (&[Tool], &[Tool], &[Tool]) = (&[Tool::Agents], &[Tool::Ports], &[]);
+pub use crate::tools::{Group, Slot, Tool};
 
 impl Tool {
-    pub fn name(self) -> &'static str {
-        match self {
-            Tool::Project => "Project",
-            Tool::Filesystem => "Filesystem",
-            Tool::Commit => "Commit",
-            Tool::Structure => "Structure",
-            Tool::Terminal => "Terminal",
-            Tool::Problems => "Problems",
-            Tool::Git => "Git",
-            Tool::Docker => "Docker",
-            Tool::Find => "Find",
-            Tool::Log => "Log",
-            Tool::Agents => "Agents",
-            Tool::Ports => "Ports",
-        }
-    }
-
-    fn icon(self) -> &'static str {
-        match self {
-            Tool::Find => "search",
-            t => match t.name() {
-                "Project" => "project",
-                "Filesystem" => "filesystem",
-                "Commit" => "commit",
-                "Structure" => "structure",
-                "Terminal" => "terminal",
-                "Problems" => "problems",
-                "Git" => "git",
-                "Docker" => "docker",
-                "Log" => "log",
-                "Agents" => "agents",
-                _ => "ports",
-            },
-        }
-    }
-
-    /// The tool window with a name, ignoring case.
-    pub fn by_name(name: &str) -> Option<Tool> {
-        [
-            Tool::Project,
-            Tool::Filesystem,
-            Tool::Commit,
-            Tool::Structure,
-            Tool::Terminal,
-            Tool::Problems,
-            Tool::Git,
-            Tool::Docker,
-            Tool::Find,
-            Tool::Log,
-            Tool::Agents,
-            Tool::Ports,
-        ]
-        .into_iter()
-        .find(|t| t.name().eq_ignore_ascii_case(name))
-    }
-
-    pub fn slot(self) -> Slot {
-        match self {
-            Tool::Project | Tool::Filesystem | Tool::Commit => Slot::Left,
-            Tool::Structure => Slot::LeftBelow,
-            Tool::Agents => Slot::Right,
-            Tool::Ports => Slot::RightBelow,
-            _ => Slot::Bottom,
-        }
-    }
-
     /// What it will hold, while the app cannot reach the environment's own
     /// services.
     fn waiting(self) -> &'static str {
@@ -163,6 +56,32 @@ impl Tool {
             Tool::Ports => "The ports the environment listens on, each with its address.",
             Tool::Agents => "",
         }
+    }
+}
+
+/// A stripe's icon being dragged, and what is drawn under the pointer.
+#[derive(Clone)]
+pub struct DraggedTool(pub Tool);
+
+impl Render for DraggedTool {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette::of(cx);
+        div()
+            .size(px(28.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(6.))
+            .bg(p.surface)
+            .border_1()
+            .border_color(p.border_strong)
+            .shadow_md()
+            .child(
+                svg()
+                    .path(assets::icon(self.0.icon()))
+                    .size(px(16.))
+                    .text_color(p.accent),
+            )
     }
 }
 
@@ -299,6 +218,9 @@ pub struct EnvTab {
     task_edit: Option<Entity<InputState>>,
     /// The tool windows Hide All put away, to bring back.
     hidden: Option<HashMap<Slot, Tool>>,
+    /// Whether a stripe's icon is being dragged, which shows the right
+    /// stripe even with nothing on it, to drop onto.
+    dragging: bool,
     /// The tool window last opened, which Hide Active hides.
     last: Option<Tool>,
     /// The Terminal window's sessions.
@@ -447,6 +369,7 @@ impl EnvTab {
             open,
             task_edit: None,
             hidden: None,
+            dragging: false,
             last: None,
             terms: Terms::default(),
             workspace: None,
@@ -472,12 +395,12 @@ impl EnvTab {
     }
 
     pub fn is_open(&self, tool: Tool) -> bool {
-        self.open.get(&tool.slot()) == Some(&tool)
+        self.open.values().any(|t| *t == tool)
     }
 
     /// Opens a tool window in its slot, or closes it if it is open there.
     pub fn toggle(&mut self, tool: Tool, cx: &mut Context<Self>) {
-        let slot = tool.slot();
+        let slot = Layout::slot(tool, cx);
         if self.open.get(&slot) == Some(&tool) {
             self.open.remove(&slot);
         } else {
@@ -501,12 +424,48 @@ impl EnvTab {
         cx.notify();
     }
 
+    /// Moves a tool's icon into a stripe's group, before another of its
+    /// tools or at its end; open, the tool window moves with it.
+    pub fn move_tool(&mut self, t: Tool, to: Group, before: Option<Tool>, cx: &mut Context<Self>) {
+        let was_open = self.is_open(t);
+        Layout::arrange(cx, |s| {
+            s.moved(t, to, before);
+        });
+        if was_open {
+            self.open.retain(|_, x| *x != t);
+            self.open.insert(to.slot(), t);
+        }
+        self.dragging = false;
+        cx.notify();
+    }
+
+    /// Keeps each open tool window in the slot its stripe gives it, as a
+    /// tool moved in another tab moves here too: one whose slot changed
+    /// moves there, unless another is open there.
+    fn settle(&mut self, stripes: &Stripes) {
+        let fix = |open: &mut HashMap<Slot, Tool>| {
+            let moved: Vec<(Slot, Tool)> = open
+                .iter()
+                .filter(|(s, t)| stripes.slot(**t) != **s)
+                .map(|(s, t)| (*s, *t))
+                .collect();
+            for (s, t) in moved {
+                open.remove(&s);
+                open.entry(stripes.slot(t)).or_insert(t);
+            }
+        };
+        fix(&mut self.open);
+        if let Some(h) = self.hidden.as_mut() {
+            fix(h);
+        }
+    }
+
     /// Hides the tool window last opened, if it is still open.
     pub fn hide_active(&mut self, cx: &mut Context<Self>) {
         if let Some(t) = self.last.take()
             && self.is_open(t)
         {
-            self.open.remove(&t.slot());
+            self.open.retain(|_, x| *x != t);
             cx.notify();
         }
     }
@@ -605,7 +564,8 @@ impl EnvTab {
     /// Opens a session's tab in the Terminal window, adding it if it is not
     /// open here.
     pub fn open_terminal(&mut self, session: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.open.insert(Slot::Bottom, Tool::Terminal);
+        self.open
+            .insert(Layout::slot(Tool::Terminal, cx), Tool::Terminal);
         self.terms.listed = true;
         let i = match self
             .terms
@@ -1001,9 +961,16 @@ impl EnvTab {
             return;
         }
         let this = cx.entity().downgrade();
-        crate::treeops::ask_name("Rename", &word, "Rename", window, cx, move |name, window, cx| {
-            let _ = this.update(cx, |t, cx| t.rename_to(name, window, cx));
-        });
+        crate::treeops::ask_name(
+            "Rename",
+            &word,
+            "Rename",
+            window,
+            cx,
+            move |name, window, cx| {
+                let _ = this.update(cx, |t, cx| t.rename_to(name, window, cx));
+            },
+        );
     }
 
     /// Renames the symbol at the caret to name, everywhere its language
@@ -1017,7 +984,9 @@ impl EnvTab {
         };
         let mut params = params;
         params["newName"] = name.into();
-        let asked = langs.update(cx, |l, cx| l.request(&abs, "textDocument/rename", params, cx));
+        let asked = langs.update(cx, |l, cx| {
+            l.request(&abs, "textDocument/rename", params, cx)
+        });
         cx.spawn_in(window, async move |this, cx| {
             let edit = asked.await.and_then(|v| {
                 serde_json::from_value::<Option<lsp_types::WorkspaceEdit>>(v)
@@ -1494,6 +1463,11 @@ impl Render for EnvTab {
         let config = config.clone();
         let card = model::card(&config, &env, chrono::Utc::now());
 
+        let stripes = Layout::stripes(cx);
+        self.settle(&stripes);
+        if !cx.has_active_drag() {
+            self.dragging = false;
+        }
         let left = self.open.get(&Slot::Left).copied();
         let left_below = self.open.get(&Slot::LeftBelow).copied();
         let right = self.open.get(&Slot::Right).copied();
@@ -1654,7 +1628,7 @@ impl Render for EnvTab {
                     .flex_1()
                     .min_h_0()
                     .items_stretch()
-                    .child(self.stripe(LEFT, true, waiting, &p, cx))
+                    .child(self.stripe(&stripes, true, waiting, &p, cx))
                     .child(
                         // As IntelliJ: the side windows end above the bottom
                         // one, which takes the width between the stripes.
@@ -1701,7 +1675,9 @@ impl Render for EnvTab {
                                 ))
                             }),
                     )
-                    .child(self.stripe(RIGHT, false, waiting, &p, cx)),
+                    .when(!stripes.side_empty(false) || self.dragging, |d| {
+                        d.child(self.stripe(&stripes, false, waiting, &p, cx))
+                    }),
             )
             .child(self.status_bar(&config, &env, &p, cx))
             .when_some(find_popup, |d, popup| {
@@ -1857,82 +1833,122 @@ impl EnvTab {
 
     fn stripe(
         &self,
-        groups: (&[Tool], &[Tool], &[Tool]),
+        stripes: &Stripes,
         left: bool,
         waiting: usize,
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let (top, mid, foot) = groups;
-        let icon = |t: Tool, cx: &mut Context<Self>| {
+        let [top, mid, foot] = Group::of_side(left);
+        let accent = p.accent;
+        let tab = cx.entity().downgrade();
+        // An icon: clicked, its window opens or closes; dragged, it moves,
+        // landing before the icon it is let go on, which shows a line above
+        // it meanwhile.
+        let icon = |t: Tool, group: Group, cx: &mut Context<Self>| {
             let on = self.is_open(t);
             let badge = (t == Tool::Agents && waiting > 0).then(|| waiting.to_string());
             let hover = p.surface_2;
+            let tab = tab.clone();
             div()
-                .id(SharedString::from(format!("stripe-{}", t.name())))
-                .relative()
-                .size(px(28.))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .when(on, |d| d.bg(p.accent_soft))
-                .when(!on, move |d| d.hover(move |s| s.bg(hover)))
+                .id(SharedString::from(format!("stripe-drop-{}", t.name())))
+                .pt(px(2.))
+                .border_t_2()
+                .border_color(gpui::transparent_black())
+                .drag_over::<DraggedTool>(move |s, _, _, _| s.border_color(accent))
+                .on_drop(cx.listener(move |this, d: &DraggedTool, _, cx| {
+                    this.move_tool(d.0, group, Some(t), cx)
+                }))
                 .child(
-                    svg()
-                        .path(assets::icon(t.icon()))
-                        .size(px(16.))
-                        .text_color(if on { p.accent } else { p.muted }),
+                    div()
+                        .id(SharedString::from(format!("stripe-{}", t.name())))
+                        .debug_selector(move || format!("stripe-{}", t.name()))
+                        .relative()
+                        .size(px(28.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.))
+                        .cursor_pointer()
+                        .when(on, |d| d.bg(p.accent_soft))
+                        .when(!on, move |d| d.hover(move |s| s.bg(hover)))
+                        .child(
+                            svg()
+                                .path(assets::icon(t.icon()))
+                                .size(px(16.))
+                                .text_color(if on { p.accent } else { p.muted }),
+                        )
+                        .when_some(badge, |d, b| {
+                            d.child(
+                                div()
+                                    .absolute()
+                                    .right(px(-3.))
+                                    .top(px(-3.))
+                                    .px(px(4.))
+                                    .rounded(px(7.))
+                                    .bg(p.accent)
+                                    .text_color(p.on_accent)
+                                    .text_size(px(9.))
+                                    .line_height(px(14.))
+                                    .child(b),
+                            )
+                        })
+                        .tooltip(move |window, cx| {
+                            let label = match shortcut(t) {
+                                Some(k) => format!("{} {k}", t.name()),
+                                None => t.name().to_string(),
+                            };
+                            gpui_component::tooltip::Tooltip::new(label).build(window, cx)
+                        })
+                        .on_drag(DraggedTool(t), move |d, _, _, cx| {
+                            let _ = tab.update(cx, |this, cx| {
+                                this.dragging = true;
+                                cx.notify();
+                            });
+                            cx.new(|_| d.clone())
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| this.toggle(t, cx))),
                 )
-                .when_some(badge, |d, b| {
-                    d.child(
-                        div()
-                            .absolute()
-                            .right(px(-3.))
-                            .top(px(-3.))
-                            .px(px(4.))
-                            .rounded(px(7.))
-                            .bg(p.accent)
-                            .text_color(p.on_accent)
-                            .text_size(px(9.))
-                            .line_height(px(14.))
-                            .child(b),
-                    )
-                })
-                .tooltip(move |window, cx| {
-                    let label = match shortcut(t) {
-                        Some(k) => format!("{} {k}", t.name()),
-                        None => t.name().to_string(),
-                    };
-                    gpui_component::tooltip::Tooltip::new(label).build(window, cx)
-                })
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle(t, cx)))
+        };
+        // The space after a group's icons: an icon let go there goes to the
+        // group's end.
+        let tail = |group: Group, grow: bool, cx: &mut Context<Self>| {
+            div()
+                .id(SharedString::from(format!("stripe-end-{group:?}")))
+                .debug_selector(move || format!("stripe-end-{group:?}"))
+                .w(px(28.))
+                .when(grow, |d| d.flex_1().min_h(px(10.)))
+                .when(!grow, |d| d.h(px(10.)).flex_none())
+                .border_t_2()
+                .border_color(gpui::transparent_black())
+                .drag_over::<DraggedTool>(move |s, _, _, _| s.border_color(accent))
+                .on_drop(cx.listener(move |this, d: &DraggedTool, _, cx| {
+                    this.move_tool(d.0, group, None, cx)
+                }))
         };
         let mut s = v_flex()
             .w(px(38.))
             .flex_none()
             .items_center()
-            .gap(px(3.))
-            .py(px(6.))
+            .py(px(4.))
             .bg(p.sidebar)
             .border_color(p.border)
             .when(left, |d| d.border_r_1())
             .when(!left, |d| d.border_l_1());
-        for t in top {
-            s = s.child(icon(*t, cx));
+        for t in stripes.group(top) {
+            s = s.child(icon(*t, top, cx));
         }
-        if !mid.is_empty() {
-            s = s.child(div().w(px(20.)).h(px(1.)).my(px(4.)).bg(p.border_strong));
-            for t in mid {
-                s = s.child(icon(*t, cx));
-            }
+        s = s
+            .child(tail(top, false, cx))
+            .child(div().w(px(20.)).h(px(1.)).flex_none().bg(p.border_strong));
+        for t in stripes.group(mid) {
+            s = s.child(icon(*t, mid, cx));
         }
-        s = s.child(div().flex_1());
-        for t in foot {
-            s = s.child(icon(*t, cx));
+        s = s.child(tail(mid, true, cx));
+        for t in stripes.group(foot) {
+            s = s.child(icon(*t, foot, cx));
         }
-        s
+        s.child(tail(foot, false, cx))
     }
 
     /// A side's tool windows: the one docked there, and the one below the

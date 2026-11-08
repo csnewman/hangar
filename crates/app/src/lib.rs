@@ -35,6 +35,7 @@ pub mod structure;
 pub mod termconn;
 pub mod terminal;
 pub mod termview;
+pub mod tools;
 pub mod treeops;
 pub mod ui;
 pub mod wake;

@@ -1,5 +1,6 @@
-//! The panels' sizes: dragged by their edges within limits, reset, and the
-//! tool windows put away and brought back.
+//! The panels' sizes: dragged by their edges within limits, reset, kept
+//! with the stripes' arrangement, and the tool windows put away and brought
+//! back.
 
 use std::sync::Arc;
 
@@ -9,6 +10,7 @@ use hangar_app::layout::{Edge, Layout, Sizes};
 use hangar_app::places::Places;
 use hangar_app::shell::Shell;
 use hangar_app::store::MemoryTokens;
+use hangar_app::tools::{Group, Stripes};
 
 #[test]
 fn sizes_stay_within_limits() {
@@ -95,4 +97,32 @@ fn tool_windows_are_hidden_and_brought_back(cx: &mut TestAppContext) {
         t.hide_active(cx);
         assert!(!t.is_open(Tool::Git) && t.is_open(Tool::Project));
     });
+}
+
+/// A layout file from before the stripes were kept reads with them where
+/// they start; a change is written a moment later and read back.
+#[gpui::test]
+fn the_layout_is_kept_with_the_stripes(cx: &mut TestAppContext) {
+    let dir = std::env::temp_dir().join(format!("hangar-app-layout-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("layout.json");
+    std::fs::write(&file, r#"{"sidebar": 300}"#).unwrap();
+    cx.update(|cx| Layout::init(Some(file.clone()), cx));
+    cx.update(|cx| {
+        assert_eq!(Layout::sizes(cx).sidebar, 300.);
+        assert_eq!(Layout::sizes(cx).left, Sizes::default().left);
+        assert_eq!(Layout::stripes(cx), Stripes::default());
+        Layout::arrange(cx, |s| {
+            s.moved(Tool::Git, Group::RightFoot, None);
+        });
+    });
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(600));
+    cx.run_until_parked();
+    cx.update(|cx| Layout::init(Some(file.clone()), cx));
+    cx.update(|cx| {
+        assert_eq!(Layout::sizes(cx).sidebar, 300.);
+        assert_eq!(Layout::stripes(cx).group(Group::RightFoot), [Tool::Git]);
+    });
+    let _ = std::fs::remove_dir_all(&dir);
 }

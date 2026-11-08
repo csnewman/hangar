@@ -1,6 +1,7 @@
 //! How big the window's panels are: the sidebar, and each environment tab's
 //! tool windows on the left, the right and along the bottom. Dragged by
-//! their edges, reset by double-clicking one, and kept between runs.
+//! their edges, reset by double-clicking one, and kept between runs, with
+//! where each tool window docks.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -11,6 +12,8 @@ use gpui::{
 use gpui_component::InteractiveElementExt;
 use gpui_component::resizable::{HandleEdge, resize_handle};
 use serde::{Deserialize, Serialize};
+
+use crate::tools::{Slot, Stripes, Tool};
 
 /// A panel edge that can be dragged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,11 +134,22 @@ impl Sizes {
     }
 }
 
-/// The sizes, app-wide, and where they are kept.
+/// The sizes and the stripes' arrangement, app-wide, and where they are
+/// kept.
 pub struct Layout {
     pub sizes: Sizes,
+    pub stripes: Stripes,
     file: Option<PathBuf>,
     saving: Option<Task<()>>,
+}
+
+/// The layout as kept: the sizes, then the stripes.
+#[derive(Default, Serialize, Deserialize)]
+struct Kept {
+    #[serde(flatten)]
+    sizes: Sizes,
+    #[serde(default)]
+    stripes: Stripes,
 }
 
 impl Global for Layout {}
@@ -144,15 +158,16 @@ impl Global for Layout {}
 const SAVE_AFTER: Duration = Duration::from_millis(500);
 
 impl Layout {
-    /// The sizes kept in file, or the defaults.
+    /// The layout kept in file, or the defaults.
     pub fn init(file: Option<PathBuf>, cx: &mut App) {
-        let sizes = file
+        let kept: Kept = file
             .as_ref()
             .and_then(|f| std::fs::read(f).ok())
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         cx.set_global(Layout {
-            sizes,
+            sizes: kept.sizes,
+            stripes: kept.stripes,
             file,
             saving: None,
         });
@@ -164,6 +179,20 @@ impl Layout {
             .unwrap_or_default()
     }
 
+    /// Where a tool window opens.
+    pub fn slot(t: Tool, cx: &App) -> Slot {
+        match cx.try_global::<Layout>() {
+            Some(l) => l.stripes.slot(t),
+            None => Stripes::default().slot(t),
+        }
+    }
+
+    pub fn stripes(cx: &App) -> Stripes {
+        cx.try_global::<Layout>()
+            .map(|l| l.stripes.clone())
+            .unwrap_or_default()
+    }
+
     /// Changes the sizes, and keeps them a moment later.
     pub fn update(cx: &mut App, f: impl FnOnce(&mut Sizes)) {
         if !cx.has_global::<Layout>() {
@@ -172,16 +201,37 @@ impl Layout {
         let before = Layout::sizes(cx);
         let layout = cx.global_mut::<Layout>();
         f(&mut layout.sizes);
-        if layout.sizes == before {
-            return;
+        if layout.sizes != before {
+            Layout::changed(cx);
         }
+    }
+
+    /// Changes the stripes' arrangement, and keeps it a moment later.
+    pub fn arrange(cx: &mut App, f: impl FnOnce(&mut Stripes)) {
+        if !cx.has_global::<Layout>() {
+            Layout::init(None, cx);
+        }
+        let before = Layout::stripes(cx);
+        let layout = cx.global_mut::<Layout>();
+        f(&mut layout.stripes);
+        if layout.stripes != before {
+            Layout::changed(cx);
+        }
+    }
+
+    fn changed(cx: &mut App) {
+        let layout = cx.global_mut::<Layout>();
         if layout.file.is_some() && layout.saving.is_none() {
             let task = cx.spawn(async move |cx| {
                 cx.background_executor().timer(SAVE_AFTER).await;
                 cx.update(|cx| {
                     let l = cx.global_mut::<Layout>();
                     l.saving = None;
-                    if let (Some(file), Ok(b)) = (&l.file, serde_json::to_vec_pretty(&l.sizes)) {
+                    let kept = Kept {
+                        sizes: l.sizes,
+                        stripes: l.stripes.clone(),
+                    };
+                    if let (Some(file), Ok(b)) = (&l.file, serde_json::to_vec_pretty(&kept)) {
                         if let Some(dir) = file.parent() {
                             let _ = std::fs::create_dir_all(dir);
                         }
