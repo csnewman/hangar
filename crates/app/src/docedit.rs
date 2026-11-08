@@ -291,6 +291,8 @@ pub struct DocEditor {
     /// puts it back at the top as it is next drawn, so the cursor is moved
     /// (and scrolled to) only after.
     drawn: bool,
+    /// The language server's diagnostics for the file, drawn in it.
+    diagnostics: Vec<lsp_types::Diagnostic>,
     _subs: Vec<Subscription>,
 }
 
@@ -341,6 +343,7 @@ impl DocEditor {
             state: State::Opening,
             go_to: None,
             drawn: false,
+            diagnostics: vec![],
             _subs: vec![edits],
         }
     }
@@ -429,7 +432,26 @@ impl DocEditor {
         self.shadow = self.editor.read(cx).text().clone();
         self.state = State::Open;
         self.drawn = false;
+        self.show_diagnostics(cx);
         cx.notify();
+    }
+
+    /// Draws the language server's diagnostics in the file.
+    pub fn set_diagnostics(&mut self, d: Vec<lsp_types::Diagnostic>, cx: &mut Context<Self>) {
+        self.diagnostics = d;
+        self.show_diagnostics(cx);
+    }
+
+    fn show_diagnostics(&mut self, cx: &mut Context<Self>) {
+        let d = self.diagnostics.clone();
+        self.editor.update(cx, |e, cx| {
+            let text = e.text().clone();
+            if let Some(set) = e.diagnostics_mut() {
+                set.reset(&text);
+                set.extend(d);
+            }
+            cx.notify();
+        });
     }
 
     /// Puts the cursor at a 0-based line and UTF-16 column, once the file

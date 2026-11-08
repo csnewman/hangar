@@ -18,6 +18,8 @@ alacritty_terminal = "0.26"
 hangar-proto = { path = "../proto" }
 async-channel = "2"
 similar = "2.7"
+anyhow = "1"
+lsp-types = { version = "0.97", features = ["proposed"] }
 serde.workspace = true
 serde_json.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
@@ -38,4 +40,3 @@ gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", features =
 image = { version = "0.25", default-features = false, features = ["png"] }
 pollster = "0.4"
 ropey.workspace = true
-lsp-types = { version = "0.97", features = ["proposed"] }

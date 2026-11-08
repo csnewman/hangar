@@ -1,6 +1,8 @@
 //! A connection to an environment's Code service (crates/agent's code
 //! module), through the client API's Code socket: JSON requests answered
-//! by id, and the service's events, on a thread of its own.
+//! by id, and the service's events, on a thread of its own; and the
+//! language servers' messages it relays, each tagged with the server's
+//! number.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -20,6 +22,8 @@ pub enum Notice {
     Ready(Value),
     /// One of the service's events: fs.changed, git.changed, ...
     Event(String, Value),
+    /// A language server's message, by the number lsp.start gave it.
+    Lsp(u32, Value),
     /// The connection ended, or could not be made.
     Closed(String),
 }
@@ -105,6 +109,17 @@ impl Code {
     }
 }
 
+impl Code {
+    /// Sends a JSON-RPC message to a language server started on this
+    /// connection.
+    pub fn send_lsp(&self, server: u32, message: &Value) {
+        let mut b = vec![b'l'];
+        b.extend_from_slice(&server.to_be_bytes());
+        b.extend_from_slice(message.to_string().as_bytes());
+        let _ = self.0.tx.send(Out::Frame(b));
+    }
+}
+
 fn request(id: u64, method: &str, params: Value) -> Vec<u8> {
     let mut b = vec![b'r'];
     b.extend_from_slice(
@@ -148,6 +163,15 @@ fn run(
             Err(e) => return Err(e.to_string()),
         };
         let b = match msg {
+            Message::Binary(b) if b.first() == Some(&b'l') && b.len() >= 5 => {
+                let server = u32::from_be_bytes([b[1], b[2], b[3], b[4]]);
+                if let Ok(v) = serde_json::from_slice::<Value>(&b[5..])
+                    && !notices(Notice::Lsp(server, v))
+                {
+                    return Ok(());
+                }
+                continue;
+            }
             Message::Binary(b) if b.first() == Some(&b'r') => b,
             Message::Close(f) => {
                 return match f {

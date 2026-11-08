@@ -36,6 +36,12 @@ pub enum Event {
         event: String,
         params: Value,
     },
+    /// A language server's message, on a project's connection.
+    Lsp {
+        root: String,
+        server: u32,
+        message: Value,
+    },
 }
 
 impl EventEmitter<Event> for Workspace {}
@@ -120,6 +126,14 @@ impl Workspace {
         self.primary.clone()
     }
 
+    /// The project a file is in, by its absolute path: the innermost.
+    pub fn project_of(&self, abs: &str) -> Option<&Folder> {
+        self.projects
+            .iter()
+            .filter(|f| abs.starts_with(&format!("{}/", f.root.trim_end_matches('/'))))
+            .max_by_key(|f| f.root.len())
+    }
+
     /// The path shown for a folder: under the home folder as ~.
     pub fn shown(&self, root: &str) -> String {
         match root.strip_prefix(&self.home) {
@@ -147,6 +161,11 @@ impl Workspace {
                 root: key,
                 event,
                 params,
+            }),
+            Notice::Lsp(server, message) => cx.emit(Event::Lsp {
+                root: key,
+                server,
+                message,
             }),
             _ => {}
         }

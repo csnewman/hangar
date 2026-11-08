@@ -15,6 +15,8 @@
 //! SNAPSHOT_EDIT types at its start; SNAPSHOT_STAGE=ROOT:PATH stages a file
 //! from the Commit window and SNAPSHOT_COMMIT=message commits what is staged;
 //! SNAPSHOT_BRANCH=1 shows the Commit window's Branch view;
+//! SNAPSHOT_ASK=METHOD:LINE:COLUMN asks the open file's language server
+//! (textDocument/hover, textDocument/definition) and prints its answer;
 //! SNAPSHOT_FIND=text searches in files and SNAPSHOT_FIND_OPEN=N opens the Nth
 //! result row;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
@@ -286,6 +288,31 @@ fn main() {
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(2)).await;
+                }
+                if let Some((method, line, column)) =
+                    std::env::var("SNAPSHOT_ASK").ok().and_then(|a| {
+                        let mut p = a.split(':');
+                        Some((
+                            p.next()?.to_string(),
+                            p.next()?.parse::<u32>().ok()?,
+                            p.next()?.parse::<u32>().ok()?,
+                        ))
+                    })
+                {
+                    let answer = handle.update(cx, |_, _, cx| {
+                        let tab = shell.read(cx).active_view()?;
+                        let abs = tab.read(cx).active_file()?.read(cx).path().to_string();
+                        let langs = tab.read(cx).languages()?;
+                        let params = serde_json::json!({
+                            "textDocument": { "uri": hangar_app::languages::file_uri(&abs) },
+                            "position": { "line": line, "character": column },
+                        });
+                        Some(langs.update(cx, |l, cx| l.request(&abs, &method, params, cx)))
+                    });
+                    match answer {
+                        Ok(Some(answer)) => eprintln!("answer: {:?}", answer.await),
+                        _ => eprintln!("answer: no open file, or no language servers"),
+                    }
                 }
                 if let Ok(text) = std::env::var("SNAPSHOT_TYPE") {
                     let text = text.replace("\\n", "\r");

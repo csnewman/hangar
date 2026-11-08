@@ -19,11 +19,14 @@ use crate::diff::{DiffView, ShowDiff, Spec};
 use crate::docedit::{self, DocEditor};
 use crate::find::{FindView, OpenAt};
 use crate::gitlog::GitView;
+use crate::languages::{self, Languages};
 use crate::layout::{self, Edge, Layout, Sizes};
+use crate::lspedit;
 use crate::model::{self, Card, Tone};
 use crate::palette::{self, Palette};
 use crate::place::PlaceConfig;
 use crate::places::Places;
+use crate::problems::ProblemsView;
 use crate::project::{OpenFile, ProjectView};
 use crate::termview::TerminalView;
 use crate::ui::{button, dot, primary, spark, tone};
@@ -271,6 +274,9 @@ pub struct EnvTab {
     commit: Option<Entity<CommitView>>,
     git: Option<Entity<GitView>>,
     find: Option<Entity<FindView>>,
+    problems: Option<Entity<ProblemsView>>,
+    /// The language servers, made with the workspace.
+    languages: Option<Entity<Languages>>,
     /// The files and diffs open in the editors, and the one shown.
     files: Vec<Tab>,
     file: Option<usize>,
@@ -384,6 +390,8 @@ impl EnvTab {
             commit: None,
             git: None,
             find: None,
+            problems: None,
+            languages: None,
             files: vec![],
             file: None,
             subs: vec![],
@@ -589,11 +597,56 @@ impl EnvTab {
                 let env = self.env.clone();
                 let view = cx.new(|cx| DocEditor::new(&client, &env, root, &abs, window, cx));
                 self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
+                self.attach_language(&view, cx);
                 self.files.push(Tab::Doc(view));
                 self.files.len() - 1
             }
         };
         self.show_file(i, window, cx);
+    }
+
+    /// Opens a file in its language server, and gives its editor the
+    /// diagnostics it has, hover and Go to Definition.
+    fn attach_language(&mut self, doc: &Entity<DocEditor>, cx: &mut Context<Self>) {
+        let Some(l) = self.languages.clone() else {
+            return;
+        };
+        let abs = doc.read(cx).asked().to_string();
+        let d = l.read(cx).diagnostics_of(&abs).to_vec();
+        doc.update(cx, |v, cx| v.set_diagnostics(d, cx));
+        l.update(cx, |l, cx| l.open(&abs, cx));
+        let tab = cx.entity().downgrade();
+        let editor = doc.read(cx).editor().clone();
+        lspedit::attach(
+            &editor,
+            lspedit::Providers {
+                languages: l.downgrade(),
+                abs,
+            },
+            move |abs, line, column, window, cx| {
+                let _ = tab.update(cx, |t, cx| {
+                    let (root, path) = t.place_of(&abs, cx);
+                    t.open_file_at(&root, &path, line, column, window, cx)
+                });
+            },
+            cx,
+        );
+    }
+
+    /// A file's project root and its path there, or / and its absolute
+    /// path for a file in none.
+    fn place_of(&self, abs: &str, cx: &App) -> (String, String) {
+        let project = self
+            .workspace
+            .as_ref()
+            .and_then(|w| w.read(cx).project_of(abs).map(|f| f.root.clone()));
+        match project {
+            Some(root) => {
+                let path = abs[root.trim_end_matches('/').len() + 1..].to_string();
+                (root, path)
+            }
+            None => ("/".into(), abs.to_string()),
+        }
     }
 
     /// Shows a diff in the diff tab, as IntelliJ's preview does: there is
@@ -633,7 +686,12 @@ impl EnvTab {
     }
 
     fn close_file(&mut self, i: usize, cx: &mut Context<Self>) {
-        self.files.remove(i);
+        if let Tab::Doc(doc) = self.files.remove(i)
+            && let Some(l) = &self.languages
+        {
+            let abs = doc.read(cx).asked().to_string();
+            l.update(cx, |l, cx| l.close(&abs, cx));
+        }
         self.file = match self.file {
             Some(a) if a == i => (!self.files.is_empty()).then(|| i.min(self.files.len() - 1)),
             Some(a) if a > i => Some(a - 1),
@@ -680,6 +738,11 @@ impl EnvTab {
         cx.notify();
     }
 
+    /// The language servers, once there is a workspace.
+    pub fn languages(&self) -> Option<Entity<Languages>> {
+        self.languages.clone()
+    }
+
     /// The Find window's view, once it has been shown.
     pub fn find_view(&self) -> Option<Entity<FindView>> {
         self.find.clone()
@@ -722,6 +785,27 @@ impl EnvTab {
         let editor = env.editor_path.clone().unwrap_or_default();
         let ws = cx.new(|cx| Workspace::new(places, &place, &id, &editor, cx));
         self.workspace = Some(ws.clone());
+        let langs = cx.new(|cx| Languages::new(ws.clone(), cx));
+        self.subs
+            .push(cx.subscribe(&langs, |t, l, e: &languages::Event, cx| {
+                if let languages::Event::Diagnostics(abs) = e {
+                    let d = l.read(cx).diagnostics_of(abs).to_vec();
+                    for f in &t.files {
+                        if let Tab::Doc(doc) = f
+                            && (doc.read(cx).path() == abs || doc.read(cx).asked() == abs)
+                        {
+                            doc.update(cx, |doc, cx| doc.set_diagnostics(d.clone(), cx));
+                        }
+                    }
+                }
+            }));
+        self.languages = Some(langs);
+        // Files opened before there was a workspace.
+        for f in self.files.clone() {
+            if let Tab::Doc(doc) = f {
+                self.attach_language(&doc, cx);
+            }
+        }
         ws
     }
 
@@ -888,6 +972,20 @@ impl Render for EnvTab {
                 );
                 window.focus(&view.focus_handle(cx), cx);
                 self.find = Some(view);
+            }
+            if self.problems.is_none() && self.is_open(Tool::Problems) {
+                let ws = self.workspace(&env, cx);
+                if let Some(langs) = self.languages.clone() {
+                    let view = cx.new(|cx| ProblemsView::new(ws, langs, cx));
+                    self.subs.push(cx.subscribe_in(
+                        &view,
+                        window,
+                        |t, _, e: &OpenAt, window, cx| {
+                            t.open_file_at(&e.root, &e.path, e.line, e.column, window, cx)
+                        },
+                    ));
+                    self.problems = Some(view);
+                }
             }
             if self.git.is_none() && self.is_open(Tool::Git) {
                 let ws = self.workspace(&env, cx);
@@ -1542,19 +1640,22 @@ impl EnvTab {
         let view = match t {
             Tool::Git => self.git.clone().map(|v| v.into_any_element()),
             Tool::Find => self.find.clone().map(|v| v.into_any_element()),
+            Tool::Problems => self.problems.clone().map(|v| v.into_any_element()),
             _ => None,
         };
         let body = match view {
             Some(view) if env.phase == "running" => {
                 div().flex_1().min_h_0().child(view).into_any_element()
             }
-            _ if env.phase != "running" && matches!(t, Tool::Git | Tool::Find) => div()
-                .px(px(10.))
-                .py(px(6.))
-                .text_size(px(11.))
-                .text_color(p.muted)
-                .child("The environment is not running.")
-                .into_any_element(),
+            _ if env.phase != "running" && matches!(t, Tool::Git | Tool::Find | Tool::Problems) => {
+                div()
+                    .px(px(10.))
+                    .py(px(6.))
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .child("The environment is not running.")
+                    .into_any_element()
+            }
             _ => div()
                 .px(px(10.))
                 .py(px(6.))
