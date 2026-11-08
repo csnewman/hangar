@@ -14,6 +14,7 @@ use gpui_component::{h_flex, v_flex};
 
 use crate::api::{AgentSession, Client, Environment, TerminalSession};
 use crate::assets;
+use crate::commit::CommitView;
 use crate::docedit::{self, DocEditor};
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Card, Tone};
@@ -23,6 +24,7 @@ use crate::places::Places;
 use crate::project::{OpenFile, ProjectView};
 use crate::termview::TerminalView;
 use crate::ui::{button, dot, primary, spark, tone};
+use crate::workspace::Workspace;
 
 /// A tool window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -242,9 +244,12 @@ pub struct EnvTab {
     last: Option<Tool>,
     /// The Terminal window's sessions.
     terms: Terms,
-    /// The Project window, made when it is first shown on a running
-    /// environment.
+    /// The environment's projects and their Code connections, made when
+    /// a window showing them is first shown on a running environment.
+    workspace: Option<Entity<Workspace>>,
+    /// The Project and Commit windows, made when each is first shown.
     project: Option<Entity<ProjectView>>,
+    commit: Option<Entity<CommitView>>,
     /// The files open in the editors, and the one shown.
     files: Vec<Entity<DocEditor>>,
     file: Option<usize>,
@@ -312,7 +317,9 @@ impl EnvTab {
             hidden: None,
             last: None,
             terms: Terms::default(),
+            workspace: None,
             project: None,
+            commit: None,
             files: vec![],
             file: None,
             subs: vec![],
@@ -561,6 +568,24 @@ impl EnvTab {
         self.project.clone()
     }
 
+    /// The Commit window's view, once it has been shown.
+    pub fn commit_view(&self) -> Option<Entity<CommitView>> {
+        self.commit.clone()
+    }
+
+    /// The environment's workspace, connected the first time it is asked
+    /// for.
+    fn workspace(&mut self, env: &Environment, cx: &mut Context<Self>) -> Entity<Workspace> {
+        if let Some(ws) = &self.workspace {
+            return ws.clone();
+        }
+        let (places, place, id) = (self.places.clone(), self.place.clone(), self.env.clone());
+        let editor = env.editor_path.clone().unwrap_or_default();
+        let ws = cx.new(|cx| Workspace::new(places, &place, &id, &editor, cx));
+        self.workspace = Some(ws.clone());
+        ws
+    }
+
     /// Types into the terminal shown, as the user would.
     pub fn type_in_terminal(&mut self, text: &str, cx: &mut Context<Self>) {
         if let Some(v) = self
@@ -688,16 +713,27 @@ impl Render for EnvTab {
         let right_below = self.open.get(&Slot::RightBelow).copied();
         let bottom = self.open.get(&Slot::Bottom).copied();
         let waiting = env.agents.iter().filter(|a| a.needs_you).count();
-        if self.project.is_none() && env.phase == "running" && self.is_open(Tool::Project) {
-            let (places, place, id) = (self.places.clone(), self.place.clone(), self.env.clone());
-            let editor = env.editor_path.clone().unwrap_or_default();
-            let view = cx.new(|cx| ProjectView::new(places, &place, &id, &editor, cx));
-            self.subs.push(
-                cx.subscribe_in(&view, window, |t, _, e: &OpenFile, window, cx| {
-                    t.open_file(&e.root, &e.path, window, cx)
-                }),
-            );
-            self.project = Some(view);
+        if env.phase == "running" {
+            if self.project.is_none() && self.is_open(Tool::Project) {
+                let ws = self.workspace(&env, cx);
+                let view = cx.new(|cx| ProjectView::new(ws, cx));
+                self.subs.push(
+                    cx.subscribe_in(&view, window, |t, _, e: &OpenFile, window, cx| {
+                        t.open_file(&e.root, &e.path, window, cx)
+                    }),
+                );
+                self.project = Some(view);
+            }
+            if self.commit.is_none() && self.is_open(Tool::Commit) {
+                let ws = self.workspace(&env, cx);
+                let view = cx.new(|cx| CommitView::new(ws, window, cx));
+                self.subs.push(
+                    cx.subscribe_in(&view, window, |t, _, e: &OpenFile, window, cx| {
+                        t.open_file(&e.root, &e.path, window, cx)
+                    }),
+                );
+                self.commit = Some(view);
+            }
         }
         let sizes = Layout::sizes(cx);
 
@@ -1075,13 +1111,18 @@ impl EnvTab {
             );
         let body = match t {
             Tool::Agents => self.agents(env, card, p, cx).into_any_element(),
-            Tool::Project if env.phase != "running" => div()
+            Tool::Project | Tool::Commit if env.phase != "running" => div()
                 .text_size(px(11.5))
                 .text_color(p.muted)
                 .child("The environment is not running.")
                 .into_any_element(),
             Tool::Project if self.project.is_some() => self
                 .project
+                .clone()
+                .map(|v| v.into_any_element())
+                .unwrap_or_else(|| div().into_any_element()),
+            Tool::Commit if self.commit.is_some() => self
+                .commit
                 .clone()
                 .map(|v| v.into_any_element())
                 .unwrap_or_else(|| div().into_any_element()),

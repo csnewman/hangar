@@ -9,6 +9,16 @@ use gpui::{AssetSource, SharedString};
 const ICONS: &[(&str, &str)] = &[
     ("chevron-down", r#"<path d="m6 9 6 6 6-6"/>"#),
     ("chevron-right", r#"<path d="m9 6 6 6-6 6"/>"#),
+    ("plus", r#"<path d="M12 5v14M5 12h14"/>"#),
+    ("minus", r#"<path d="M5 12h14"/>"#),
+    (
+        "undo",
+        r#"<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>"#,
+    ),
+    (
+        "refresh",
+        r#"<path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/>"#,
+    ),
     (
         "bell",
         r#"<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"/>"#,

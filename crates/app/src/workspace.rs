@@ -1,0 +1,217 @@
+//! An environment's workspace: its projects (the workspace file's
+//! folders), each with a Code connection of its own, as the web UI's Code
+//! tab has, and the connection in its editor folder that reads the
+//! workspace and the machine's files. The tool windows showing projects
+//! share one, and hear the service's events through it.
+
+use gpui::{Context, Entity, EventEmitter, WeakEntity};
+use serde_json::{Value, json};
+
+use crate::code::{Code, Notice};
+use crate::places::Places;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum State {
+    Connecting,
+    Ready,
+    Failed(String),
+}
+
+/// A project: a folder of the workspace.
+pub struct Folder {
+    pub root: String,
+    pub name: String,
+    pub code: Code,
+}
+
+/// What the workspace tells the views showing it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Event {
+    /// The projects, or the workspace's state, changed.
+    Projects,
+    /// One of the service's events, from a project's connection (its root)
+    /// or the editor folder's (PRIMARY).
+    Heard {
+        root: String,
+        event: String,
+        params: Value,
+    },
+}
+
+impl EventEmitter<Event> for Workspace {}
+
+/// The editor folder's connection among the events; a project's is its
+/// root.
+pub const PRIMARY: &str = "";
+
+pub struct Workspace {
+    places: Entity<Places>,
+    place: String,
+    env: String,
+    state: State,
+    primary: Option<Code>,
+    home: String,
+    projects: Vec<Folder>,
+    notices: async_channel::Sender<(String, Notice)>,
+}
+
+impl Workspace {
+    /// Connects to the environment's Code service, from its editor folder.
+    pub fn new(
+        places: Entity<Places>,
+        place: &str,
+        env: &str,
+        editor: &str,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let (tx, rx) = async_channel::unbounded::<(String, Notice)>();
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            while let Ok((key, notice)) = rx.recv().await {
+                if this.update(cx, |w, cx| w.heard(key, notice, cx)).is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
+        let mut w = Workspace {
+            places,
+            place: place.into(),
+            env: env.into(),
+            state: State::Connecting,
+            primary: None,
+            home: String::new(),
+            projects: vec![],
+            notices: tx,
+        };
+        w.primary = w.connect(PRIMARY, editor, cx);
+        if w.primary.is_none() {
+            w.state = State::Failed("This place has no connection.".into());
+        }
+        w
+    }
+
+    fn connect(&self, key: &str, root: &str, cx: &Context<Self>) -> Option<Code> {
+        let client = self.places.read(cx).client(&self.place)?;
+        let tx = self.notices.clone();
+        let key = key.to_string();
+        Some(Code::connect(&client, &self.env, root, move |n| {
+            tx.send_blocking((key.clone(), n)).is_ok()
+        }))
+    }
+
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
+    pub fn projects(&self) -> &[Folder] {
+        &self.projects
+    }
+
+    /// A project's connection, by its root.
+    pub fn code(&self, root: &str) -> Option<Code> {
+        self.projects
+            .iter()
+            .find(|f| f.root == root)
+            .map(|f| f.code.clone())
+    }
+
+    /// The editor folder's connection, which reaches the whole machine.
+    pub fn primary(&self) -> Option<Code> {
+        self.primary.clone()
+    }
+
+    /// The path shown for a folder: under the home folder as ~.
+    pub fn shown(&self, root: &str) -> String {
+        match root.strip_prefix(&self.home) {
+            Some(rest) if !self.home.is_empty() => format!("~{rest}"),
+            _ => root.to_string(),
+        }
+    }
+
+    fn heard(&mut self, key: String, notice: Notice, cx: &mut Context<Self>) {
+        match notice {
+            Notice::Ready(hello) if key == PRIMARY => {
+                self.home = hello["home"].as_str().unwrap_or_default().to_string();
+                let root = hello["root"].as_str().unwrap_or_default().to_string();
+                self.read(&root, cx);
+            }
+            Notice::Event(e, params) if key == PRIMARY && e == "workspace.changed" => {
+                self.set_projects(folders(&params), cx);
+            }
+            Notice::Closed(why) if key == PRIMARY => {
+                self.state = State::Failed(why);
+                cx.emit(Event::Projects);
+                cx.notify();
+            }
+            Notice::Event(event, params) => cx.emit(Event::Heard {
+                root: key,
+                event,
+                params,
+            }),
+            _ => {}
+        }
+    }
+
+    /// Reads the workspace's projects through the primary connection.
+    fn read(&mut self, primary_root: &str, cx: &mut Context<Self>) {
+        let Some(code) = self.primary.clone() else {
+            return;
+        };
+        let call = code.call("workspace.get", json!({}));
+        let fallback = primary_root.to_string();
+        cx.spawn(async move |this, cx| {
+            let result = call.await;
+            let _ = this.update(cx, |w, cx| match result {
+                Ok(v) => {
+                    let mut f = folders(&v);
+                    if f.is_empty() && !fallback.is_empty() {
+                        f.push(fallback);
+                    }
+                    w.state = State::Ready;
+                    w.set_projects(f, cx);
+                }
+                Err(e) => {
+                    w.state = State::Failed(e);
+                    cx.emit(Event::Projects);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Makes the projects the folders, keeping those already connected.
+    fn set_projects(&mut self, folders: Vec<String>, cx: &mut Context<Self>) {
+        let mut old = std::mem::take(&mut self.projects);
+        for root in folders {
+            if let Some(i) = old.iter().position(|f| f.root == root) {
+                self.projects.push(old.remove(i));
+                continue;
+            }
+            let Some(code) = self.connect(&root, &root, cx) else {
+                continue;
+            };
+            let name = root
+                .rsplit('/')
+                .next()
+                .filter(|n| !n.is_empty())
+                .unwrap_or(&root)
+                .to_string();
+            self.projects.push(Folder { root, name, code });
+        }
+        cx.emit(Event::Projects);
+        cx.notify();
+    }
+}
+
+/// The folders a workspace (or its change event) names.
+fn folders(v: &Value) -> Vec<String> {
+    v["folders"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|f| f.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}

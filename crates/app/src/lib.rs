@@ -4,6 +4,7 @@
 pub mod api;
 pub mod assets;
 pub mod code;
+pub mod commit;
 pub mod docedit;
 pub mod envtab;
 pub mod layout;
@@ -18,4 +19,5 @@ pub mod termconn;
 pub mod terminal;
 pub mod termview;
 pub mod ui;
+pub mod workspace;
 pub mod ws;

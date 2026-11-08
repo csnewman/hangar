@@ -12,8 +12,9 @@
 //! SNAPSHOT_ANSWER=AGENT:KEY answers an asking agent session;
 //! SNAPSHOT_TOOLS=structure,ports toggles tool windows; SNAPSHOT_EXPAND=ROOT:PATH
 //! opens a project's folders; SNAPSHOT_FILE=ROOT:PATH opens a file, and
-//! SNAPSHOT_EDIT types at its start; SNAPSHOT_HOLD=seconds waits before the
-//! picture is taken.
+//! SNAPSHOT_EDIT types at its start; SNAPSHOT_STAGE=ROOT:PATH stages a file
+//! from the Commit window and SNAPSHOT_COMMIT=message commits what is staged;
+//! SNAPSHOT_HOLD=seconds waits before the picture is taken.
 
 use std::time::Duration;
 
@@ -149,6 +150,38 @@ fn main() {
                         });
                         settle(cx, handle.into(), Duration::from_secs(2)).await;
                     }
+                }
+                if let Some((root, path)) = std::env::var("SNAPSHOT_STAGE").ok().and_then(|e| {
+                    e.split_once(':')
+                        .map(|(a, b)| (a.to_string(), b.to_string()))
+                }) {
+                    let _ = handle.update(cx, |_, _, cx| {
+                        let commit = shell
+                            .read(cx)
+                            .active_view()
+                            .and_then(|t| t.read(cx).commit_view());
+                        if let Some(c) = commit {
+                            c.update(cx, |c, cx| c.stage(&root, &path, cx));
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(2)).await;
+                }
+                if let Ok(message) = std::env::var("SNAPSHOT_COMMIT") {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        let commit = shell
+                            .read(cx)
+                            .active_view()
+                            .and_then(|t| t.read(cx).commit_view());
+                        if let Some(c) = commit {
+                            c.update(cx, |c, cx| {
+                                c.message()
+                                    .clone()
+                                    .update(cx, |m, cx| m.set_value(message, window, cx));
+                                c.commit(false, window, cx);
+                            });
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(3)).await;
                 }
                 if let Ok(text) = std::env::var("SNAPSHOT_TYPE") {
                     let text = text.replace("\\n", "\r");

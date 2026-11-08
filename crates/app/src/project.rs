@@ -1,23 +1,22 @@
 //! The Project tool window: the environment's projects (its workspace
 //! file's folders), each a tree of its files with what git says of them, or
-//! the whole machine's files. Each project has a Code connection of its own,
-//! as the web UI's Code tab does, and is reloaded as the service says its
-//! files and repositories change.
+//! the whole machine's files, through the environment's Workspace, and
+//! reloaded as the service says its files and repositories change.
 
 use std::collections::{HashMap, HashSet};
 
 use gpui::{
-    Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled,
-    WeakEntity, Window, div, prelude::*, px, svg,
+    Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled, Window,
+    div, prelude::*, px, svg,
 };
 use gpui_component::{h_flex, v_flex};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::assets;
-use crate::code::{Code, Notice};
+use crate::code::Code;
 use crate::palette::{self, Palette};
-use crate::places::Places;
+use crate::workspace::{Event, PRIMARY, State, Workspace};
 
 /// What the window shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,19 +50,10 @@ struct Tree {
 
 struct Project {
     root: String,
-    name: String,
-    code: Code,
     tree: Tree,
     /// Each changed file's mark, by its path from the root: M, A, D or !.
     git: HashMap<String, char>,
     open: bool,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-enum State {
-    Connecting,
-    Ready,
-    Failed(String),
 }
 
 /// Asks for a file to be opened in the editor: its project's root (or /
@@ -85,70 +75,28 @@ pub struct Selection {
 }
 
 pub struct ProjectView {
-    places: Entity<Places>,
-    place: String,
-    env: String,
-    state: State,
-    /// The connection in the environment's editor folder, which also
-    /// lists the machine's files.
-    primary: Option<Code>,
-    home: String,
+    workspace: Entity<Workspace>,
     projects: Vec<Project>,
     scope: Scope,
     machine: Tree,
     selected: Option<Selection>,
-    notices: async_channel::Sender<(String, Notice)>,
+    _sub: gpui::Subscription,
 }
 
-/// The primary connection's key among the notices; a project's is its
-/// root.
-const PRIMARY: &str = "";
-
 impl ProjectView {
-    /// Connects to the environment's Code service, from its editor folder.
-    pub fn new(
-        places: Entity<Places>,
-        place: &str,
-        env: &str,
-        editor: &str,
-        cx: &mut Context<Self>,
-    ) -> Self {
-        let (tx, rx) = async_channel::unbounded::<(String, Notice)>();
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            while let Ok((key, notice)) = rx.recv().await {
-                if this.update(cx, |p, cx| p.heard(&key, notice, cx)).is_err() {
-                    return;
-                }
-            }
-        })
-        .detach();
+    /// Shows the workspace's projects, as it connects to them.
+    pub fn new(workspace: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
+        let sub = cx.subscribe(&workspace, |v, _, e: &Event, cx| v.heard(e, cx));
         let mut view = ProjectView {
-            places,
-            place: place.into(),
-            env: env.into(),
-            state: State::Connecting,
-            primary: None,
-            home: String::new(),
+            workspace,
             projects: vec![],
             scope: Scope::Projects,
             machine: Tree::default(),
             selected: None,
-            notices: tx,
+            _sub: sub,
         };
-        view.primary = view.connect(PRIMARY, editor, cx);
-        if view.primary.is_none() {
-            view.state = State::Failed("This place has no connection.".into());
-        }
+        view.sync(cx);
         view
-    }
-
-    fn connect(&self, key: &str, root: &str, cx: &Context<Self>) -> Option<Code> {
-        let client = self.places.read(cx).client(&self.place)?;
-        let tx = self.notices.clone();
-        let key = key.to_string();
-        Some(Code::connect(&client, &self.env, root, move |n| {
-            tx.send_blocking((key.clone(), n)).is_ok()
-        }))
     }
 
     pub fn scope(&self) -> Scope {
@@ -163,34 +111,30 @@ impl ProjectView {
         cx.notify();
     }
 
-    fn heard(&mut self, key: &str, notice: Notice, cx: &mut Context<Self>) {
-        match (key, notice) {
-            (PRIMARY, Notice::Ready(hello)) => {
-                self.home = hello["home"].as_str().unwrap_or_default().to_string();
-                let primary_root = hello["root"].as_str().unwrap_or_default().to_string();
-                self.workspace(&primary_root, cx);
-            }
-            (PRIMARY, Notice::Event(e, params)) if e == "workspace.changed" => {
-                let folders = folders(&params);
-                self.set_projects(folders, cx);
-            }
-            (PRIMARY, Notice::Event(e, params)) if e == "fs.changed" => {
-                for dir in dirs(&params) {
+    fn heard(&mut self, e: &Event, cx: &mut Context<Self>) {
+        match e {
+            Event::Projects => self.sync(cx),
+            Event::Heard {
+                root,
+                event,
+                params,
+            } if event == "fs.changed" && root == PRIMARY => {
+                for dir in dirs(params) {
                     if self.machine.children.contains_key(&dir) {
                         self.load_machine(&dir, cx);
                     }
                 }
             }
-            (PRIMARY, Notice::Closed(why)) => {
-                self.state = State::Failed(why);
-                cx.notify();
-            }
-            (root, Notice::Event(e, params)) if e == "fs.changed" => {
-                let Some(i) = self.projects.iter().position(|p| p.root == root) else {
+            Event::Heard {
+                root,
+                event,
+                params,
+            } if event == "fs.changed" => {
+                let Some(i) = self.projects.iter().position(|p| &p.root == root) else {
                     return;
                 };
-                for dir in dirs(&params) {
-                    let rel = if dir == root {
+                for dir in dirs(params) {
+                    let rel = if &dir == root {
                         Some(String::new())
                     } else {
                         dir.strip_prefix(&format!("{root}/")).map(str::to_string)
@@ -202,8 +146,8 @@ impl ProjectView {
                     }
                 }
             }
-            (root, Notice::Event(e, _)) if e == "git.changed" => {
-                if let Some(i) = self.projects.iter().position(|p| p.root == root) {
+            Event::Heard { root, event, .. } if event == "git.changed" => {
+                if let Some(i) = self.projects.iter().position(|p| &p.root == root) {
                     self.git(i, cx);
                 }
             }
@@ -211,54 +155,24 @@ impl ProjectView {
         }
     }
 
-    /// Reads the workspace's projects through the primary connection.
-    fn workspace(&mut self, primary_root: &str, cx: &mut Context<Self>) {
-        let Some(code) = self.primary.clone() else {
-            return;
-        };
-        let call = code.call("workspace.get", json!({}));
-        let fallback = primary_root.to_string();
-        cx.spawn(async move |this, cx| {
-            let result = call.await;
-            let _ = this.update(cx, |p, cx| match result {
-                Ok(w) => {
-                    let mut f = folders(&w);
-                    if f.is_empty() && !fallback.is_empty() {
-                        f.push(fallback);
-                    }
-                    p.state = State::Ready;
-                    p.set_projects(f, cx);
-                }
-                Err(e) => {
-                    p.state = State::Failed(e);
-                    cx.notify();
-                }
-            });
-        })
-        .detach();
-    }
-
-    /// Makes the projects the folders, keeping those already there.
-    fn set_projects(&mut self, folders: Vec<String>, cx: &mut Context<Self>) {
-        let mut old: Vec<Project> = std::mem::take(&mut self.projects);
-        for root in folders {
+    /// Keeps a tree for each of the workspace's projects, in its order,
+    /// reading those it has not shown before.
+    fn sync(&mut self, cx: &mut Context<Self>) {
+        let roots: Vec<String> = self
+            .workspace
+            .read(cx)
+            .projects()
+            .iter()
+            .map(|f| f.root.clone())
+            .collect();
+        let mut old = std::mem::take(&mut self.projects);
+        for root in roots {
             if let Some(i) = old.iter().position(|p| p.root == root) {
                 self.projects.push(old.remove(i));
                 continue;
             }
-            let Some(code) = self.connect(&root, &root, cx) else {
-                continue;
-            };
-            let name = root
-                .rsplit('/')
-                .next()
-                .filter(|n| !n.is_empty())
-                .unwrap_or(&root)
-                .to_string();
             self.projects.push(Project {
-                root: root.clone(),
-                name,
-                code,
+                root,
                 tree: Tree::default(),
                 git: HashMap::new(),
                 open: true,
@@ -270,11 +184,17 @@ impl ProjectView {
         cx.notify();
     }
 
+    fn code(&self, i: usize, cx: &Context<Self>) -> Option<Code> {
+        self.workspace.read(cx).code(&self.projects.get(i)?.root)
+    }
+
     /// Lists a project's folder, by its path from the root.
     fn load(&mut self, i: usize, rel: &str, cx: &mut Context<Self>) {
-        let p = &self.projects[i];
-        let call = p.code.call("fs.list", json!({ "path": rel }));
-        let (root, rel) = (p.root.clone(), rel.to_string());
+        let Some(code) = self.code(i, cx) else {
+            return;
+        };
+        let call = code.call("fs.list", json!({ "path": rel }));
+        let (root, rel) = (self.projects[i].root.clone(), rel.to_string());
         cx.spawn(async move |this, cx| {
             let result = call.await;
             let _ = this.update(cx, |v, cx| {
@@ -290,7 +210,7 @@ impl ProjectView {
 
     /// Lists a folder of the machine, by its absolute path.
     fn load_machine(&mut self, abs: &str, cx: &mut Context<Self>) {
-        let Some(code) = self.primary.clone() else {
+        let Some(code) = self.workspace.read(cx).primary() else {
             return;
         };
         let call = code.call("fs.list", json!({ "path": abs }));
@@ -307,9 +227,11 @@ impl ProjectView {
 
     /// Reads what git says of a project's files.
     fn git(&mut self, i: usize, cx: &mut Context<Self>) {
-        let p = &self.projects[i];
-        let call = p.code.call("git.status", json!({}));
-        let root = p.root.clone();
+        let Some(code) = self.code(i, cx) else {
+            return;
+        };
+        let call = code.call("git.status", json!({}));
+        let root = self.projects[i].root.clone();
         cx.spawn(async move |this, cx| {
             let Ok(status) = call.await else { return };
             let _ = this.update(cx, |v, cx| {
@@ -380,26 +302,6 @@ impl ProjectView {
             }
         }
     }
-
-    /// The path shown for a project's root: under the home folder as ~.
-    fn shown(&self, root: &str) -> String {
-        match root.strip_prefix(&self.home) {
-            Some(rest) if !self.home.is_empty() => format!("~{rest}"),
-            _ => root.to_string(),
-        }
-    }
-}
-
-/// The folders a workspace (or its change event) names.
-fn folders(v: &Value) -> Vec<String> {
-    v["folders"]
-        .as_array()
-        .map(|a| {
-            a.iter()
-                .filter_map(|f| f.as_str().map(str::to_string))
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// The folders an fs.changed event names, absolute.
@@ -542,7 +444,22 @@ impl Render for ProjectView {
             .flex_1()
             .min_h_0()
             .overflow_y_scroll();
-        match (&self.state, scope) {
+        let ws = self.workspace.read(cx);
+        let state = ws.state().clone();
+        let names: Vec<(String, String)> = self
+            .projects
+            .iter()
+            .map(|proj| {
+                let name = ws
+                    .projects()
+                    .iter()
+                    .find(|f| f.root == proj.root)
+                    .map(|f| f.name.clone())
+                    .unwrap_or_default();
+                (name, ws.shown(&proj.root))
+            })
+            .collect();
+        match (&state, scope) {
             (State::Connecting, _) => list = list.child(muted("Connecting…", &p)),
             (State::Failed(e), _) => {
                 list = list.child(muted(format!("Could not reach the Code service: {e}"), &p))
@@ -565,14 +482,14 @@ impl Render for ProjectView {
                             .child(
                                 div()
                                     .font_weight(FontWeight::SEMIBOLD)
-                                    .child(proj.name.clone()),
+                                    .child(names[i].0.clone()),
                             )
                             .child(
                                 div()
                                     .min_w_0()
                                     .truncate()
                                     .text_color(p.muted)
-                                    .child(self.shown(&proj.root)),
+                                    .child(names[i].1.clone()),
                             )
                             .on_click(cx.listener(move |v, _, _, cx| v.toggle_project(i, cx))),
                     );
