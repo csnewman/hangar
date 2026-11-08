@@ -14,12 +14,13 @@ use gpui_component::{h_flex, v_flex};
 
 use crate::api::{AgentSession, Client, Environment, TerminalSession};
 use crate::assets;
+use crate::docedit::{self, DocEditor};
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Card, Tone};
 use crate::palette::{self, Palette};
 use crate::place::PlaceConfig;
 use crate::places::Places;
-use crate::project::ProjectView;
+use crate::project::{OpenFile, ProjectView};
 use crate::termview::TerminalView;
 use crate::ui::{button, dot, primary, spark, tone};
 
@@ -244,6 +245,10 @@ pub struct EnvTab {
     /// The Project window, made when it is first shown on a running
     /// environment.
     project: Option<Entity<ProjectView>>,
+    /// The files open in the editors, and the one shown.
+    files: Vec<Entity<DocEditor>>,
+    file: Option<usize>,
+    subs: Vec<gpui::Subscription>,
 }
 
 /// The Terminal tool window's tabs: one per session, attached when first
@@ -308,6 +313,9 @@ impl EnvTab {
             last: None,
             terms: Terms::default(),
             project: None,
+            files: vec![],
+            file: None,
+            subs: vec![],
         }
     }
 
@@ -481,6 +489,73 @@ impl EnvTab {
         }
     }
 
+    /// Opens a file in the editors, or shows it if it is open: its path
+    /// from root, a project's or /.
+    pub fn open_file(
+        &mut self,
+        root: &str,
+        path: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let abs = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("{}/{path}", root.trim_end_matches('/'))
+        };
+        let i = match self.files.iter().position(|f| {
+            let f = f.read(cx);
+            f.path() == abs || f.asked() == abs
+        }) {
+            Some(i) => i,
+            None => {
+                let Some(client) = self.client(cx) else {
+                    return;
+                };
+                let env = self.env.clone();
+                let view = cx.new(|cx| DocEditor::new(&client, &env, root, &abs, window, cx));
+                self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
+                self.files.push(view);
+                self.files.len() - 1
+            }
+        };
+        self.show_file(i, window, cx);
+    }
+
+    fn show_file(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.file = Some(i);
+        if let Some(f) = self.files.get(i) {
+            window.focus(&f.focus_handle(cx), cx);
+        }
+        cx.notify();
+    }
+
+    fn close_file(&mut self, i: usize, cx: &mut Context<Self>) {
+        self.files.remove(i);
+        self.file = match self.file {
+            Some(a) if a == i => (!self.files.is_empty()).then(|| i.min(self.files.len() - 1)),
+            Some(a) if a > i => Some(a - 1),
+            a => a,
+        };
+        cx.notify();
+    }
+
+    /// The files open, by absolute path, and the one shown.
+    pub fn open_files(&self, cx: &App) -> (Vec<String>, Option<usize>) {
+        (
+            self.files
+                .iter()
+                .map(|f| f.read(cx).path().to_string())
+                .collect(),
+            self.file,
+        )
+    }
+
+    /// The editor of the file shown.
+    pub fn active_file(&self) -> Option<Entity<DocEditor>> {
+        self.file.and_then(|i| self.files.get(i)).cloned()
+    }
+
     /// The Project window's view, once it has been shown.
     pub fn project(&self) -> Option<Entity<ProjectView>> {
         self.project.clone()
@@ -616,7 +691,13 @@ impl Render for EnvTab {
         if self.project.is_none() && env.phase == "running" && self.is_open(Tool::Project) {
             let (places, place, id) = (self.places.clone(), self.place.clone(), self.env.clone());
             let editor = env.editor_path.clone().unwrap_or_default();
-            self.project = Some(cx.new(|cx| ProjectView::new(places, &place, &id, &editor, cx)));
+            let view = cx.new(|cx| ProjectView::new(places, &place, &id, &editor, cx));
+            self.subs.push(
+                cx.subscribe_in(&view, window, |t, _, e: &OpenFile, window, cx| {
+                    t.open_file(&e.root, &e.path, window, cx)
+                }),
+            );
+            self.project = Some(view);
         }
         let sizes = Layout::sizes(cx);
 
@@ -671,7 +752,7 @@ impl Render for EnvTab {
                                             .flex_1()
                                             .min_w_0()
                                             .bg(p.surface)
-                                            .child(self.editors(&p)),
+                                            .child(self.editors(&p, cx)),
                                     )
                                     .when(right.is_some() || right_below.is_some(), |d| {
                                         d.child(self.side(
@@ -698,7 +779,7 @@ impl Render for EnvTab {
                     )
                     .child(self.stripe(RIGHT, false, waiting, &p, cx)),
             )
-            .child(self.status_bar(&config, &env, &p))
+            .child(self.status_bar(&config, &env, &p, cx))
             .into_any_element()
     }
 }
@@ -1158,7 +1239,59 @@ impl EnvTab {
         list
     }
 
-    fn editors(&self, p: &Palette) -> impl IntoElement {
+    fn editors(&self, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if let Some(active) = self.file.and_then(|i| self.files.get(i)).cloned() {
+            let mut tabs = h_flex()
+                .flex_none()
+                .border_b_1()
+                .border_color(p.border)
+                .text_size(px(11.5));
+            for (i, f) in self.files.iter().enumerate() {
+                let on = self.file == Some(i);
+                let path = f.read(cx).path().to_string();
+                let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+                let hover = p.surface_2;
+                tabs = tabs.child(
+                    h_flex()
+                        .id(("file-tab", i))
+                        .gap(px(6.))
+                        .px(px(12.))
+                        .py(px(5.))
+                        .border_r_1()
+                        .border_color(p.border)
+                        .cursor_pointer()
+                        .when(on, |d| d.bg(p.bg).text_color(p.text))
+                        .when(!on, move |d| {
+                            d.text_color(p.muted).hover(move |s| s.bg(hover))
+                        })
+                        .child(name)
+                        .child(
+                            div()
+                                .id(("file-close", i))
+                                .text_color(p.muted)
+                                .child("×")
+                                .on_click(cx.listener(move |t, _: &gpui::ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    t.close_file(i, cx);
+                                })),
+                        )
+                        .tooltip(move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(path.clone()).build(window, cx)
+                        })
+                        .on_click(cx.listener(move |t, _, window, cx| t.show_file(i, window, cx))),
+                );
+            }
+            return v_flex()
+                .flex_1()
+                .min_h_0()
+                .child(tabs)
+                .child(div().flex_1().min_h_0().child(active))
+                .into_any_element();
+        }
+        self.no_file(p).into_any_element()
+    }
+
+    fn no_file(&self, p: &Palette) -> impl IntoElement {
         let mut keys = v_flex().gap(px(6.)).items_center();
         for t in [Tool::Project, Tool::Terminal, Tool::Commit, Tool::Git] {
             if let Some(k) = shortcut(t) {
@@ -1403,7 +1536,22 @@ impl EnvTab {
             })
     }
 
-    fn status_bar(&self, config: &PlaceConfig, env: &Environment, p: &Palette) -> impl IntoElement {
+    fn status_bar(
+        &self,
+        config: &PlaceConfig,
+        env: &Environment,
+        p: &Palette,
+        cx: &App,
+    ) -> impl IntoElement {
+        // The file shown: where it is, from its environment's home, the
+        // caret's line and column, and its language.
+        let file = self.active_file().map(|f| {
+            let f = f.read(cx);
+            let (line, col) = f.position(cx);
+            let path = f.path().to_string();
+            let crumbs = path.trim_start_matches('/').replace('/', " › ");
+            (crumbs, format!("{line}:{col}"), docedit::language(&path))
+        });
         let size = match (env.cpus, env.memory_mib) {
             (Some(c), Some(m)) => format!("{c} vCPUs · {} GB", (m as f64 / 1024.).round()),
             _ => String::new(),
@@ -1419,8 +1567,14 @@ impl EnvTab {
             .text_size(px(11.))
             .text_color(p.muted)
             .whitespace_nowrap()
-            .child(format!("{} › {}", config.name, env.name))
+            .child(match &file {
+                Some((crumbs, _, _)) => crumbs.clone(),
+                None => format!("{} › {}", config.name, env.name),
+            })
             .child(div().flex_1())
+            .when_some(file, |d, (_, pos, lang)| {
+                d.child(pos).child("LF").child("UTF-8").child(lang)
+            })
             .when_some(env.worker.clone(), |d, w| d.child(format!("on {w}")))
             .child(size)
             .child(div().size(px(6.)).rounded_full().bg(tone(

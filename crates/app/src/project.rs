@@ -66,6 +66,16 @@ enum State {
     Failed(String),
 }
 
+/// Asks for a file to be opened in the editor: its project's root (or /
+/// for the machine's), and its path from there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenFile {
+    pub root: String,
+    pub path: String,
+}
+
+impl gpui::EventEmitter<OpenFile> for ProjectView {}
+
 /// What a click in the tree selects: a project's file (by the project's
 /// root and its path) or the machine's.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -677,13 +687,18 @@ impl ProjectView {
                         .child(m.to_string()),
                 )
             })
-            .on_click(cx.listener(move |v, _, _, cx| {
+            .on_click(cx.listener(move |v, e: &gpui::ClickEvent, _, cx| {
                 v.selected = Some(sel.clone());
                 if dir {
                     match project {
                         Some(i) => v.toggle(i, &path, cx),
                         None => v.toggle_machine(&path, cx),
                     }
+                } else if e.click_count() >= 2 {
+                    cx.emit(OpenFile {
+                        root: sel.root.clone().unwrap_or_else(|| "/".into()),
+                        path: path.clone(),
+                    });
                 }
                 cx.notify();
             }))

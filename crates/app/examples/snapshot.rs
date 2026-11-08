@@ -11,7 +11,9 @@
 //! after opening, SNAPSHOT_TYPE types into its terminal (\\n for Enter), and
 //! SNAPSHOT_ANSWER=AGENT:KEY answers an asking agent session;
 //! SNAPSHOT_TOOLS=structure,ports toggles tool windows; SNAPSHOT_EXPAND=ROOT:PATH
-//! opens a project's folders.
+//! opens a project's folders; SNAPSHOT_FILE=ROOT:PATH opens a file, and
+//! SNAPSHOT_EDIT types at its start; SNAPSHOT_HOLD=seconds waits before the
+//! picture is taken.
 
 use std::time::Duration;
 
@@ -63,7 +65,7 @@ fn main() {
                 .expect("opening the window");
             let shell = shell.unwrap();
             cx.spawn(async move |cx| {
-                cx.background_executor().timer(Duration::from_secs(3)).await;
+                settle(cx, handle.into(), Duration::from_secs(3)).await;
                 if std::env::var("SNAPSHOT_HOME").as_deref() == Ok("place") {
                     let _ = handle.update(cx, |_, _, cx| {
                         shell.update(cx, |s, cx| s.set_home_mode(HomeMode::Place, cx))
@@ -100,9 +102,7 @@ fn main() {
                     .ok()
                     .and_then(|w| w.parse::<f64>().ok())
                     .unwrap_or(0.);
-                cx.background_executor()
-                    .timer(Duration::from_secs_f64(wait))
-                    .await;
+                settle(cx, handle.into(), Duration::from_secs_f64(wait)).await;
                 if let Some((root, rel)) = std::env::var("SNAPSHOT_EXPAND").ok().and_then(|e| {
                     e.split_once(':')
                         .map(|(a, b)| (a.to_string(), b.to_string()))
@@ -116,7 +116,39 @@ fn main() {
                             p.update(cx, |p, cx| p.expand(&root, &rel, cx));
                         }
                     });
-                    cx.background_executor().timer(Duration::from_secs(1)).await;
+                    settle(cx, handle.into(), Duration::from_secs(1)).await;
+                }
+                if let Some((root, path)) = std::env::var("SNAPSHOT_FILE").ok().and_then(|e| {
+                    e.split_once(':')
+                        .map(|(a, b)| (a.to_string(), b.to_string()))
+                }) {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        if let Some(tab) = shell.read(cx).active_view() {
+                            tab.update(cx, |t, cx| t.open_file(&root, &path, window, cx));
+                        }
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(2)).await;
+                    if let Ok(text) = std::env::var("SNAPSHOT_EDIT") {
+                        let _ = handle.update(cx, |_, window, cx| {
+                            let file = shell
+                                .read(cx)
+                                .active_view()
+                                .and_then(|t| t.read(cx).active_file());
+                            if let Some(f) = file {
+                                let editor = f.read(cx).editor().clone();
+                                editor.update(cx, |e, cx| {
+                                    use gpui::EntityInputHandler;
+                                    e.replace_text_in_range(
+                                        Some(0..0),
+                                        &text.replace("\\n", "\n"),
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }
+                        });
+                        settle(cx, handle.into(), Duration::from_secs(2)).await;
+                    }
                 }
                 if let Ok(text) = std::env::var("SNAPSHOT_TYPE") {
                     let text = text.replace("\\n", "\r");
@@ -125,9 +157,7 @@ fn main() {
                             tab.update(cx, |t, cx| t.type_in_terminal(&text, cx));
                         }
                     });
-                    cx.background_executor()
-                        .timer(Duration::from_secs_f64(wait.max(1.)))
-                        .await;
+                    settle(cx, handle.into(), Duration::from_secs_f64(wait.max(1.))).await;
                 }
                 if let Some((agent, key)) = std::env::var("SNAPSHOT_ANSWER").ok().and_then(|a| {
                     a.split_once(':')
@@ -138,12 +168,16 @@ fn main() {
                             tab.update(cx, |t, cx| t.answer(&agent, &key, window, cx));
                         }
                     });
-                    cx.background_executor().timer(Duration::from_secs(2)).await;
+                    settle(cx, handle.into(), Duration::from_secs(2)).await;
+                }
+                if let Some(hold) = std::env::var("SNAPSHOT_HOLD")
+                    .ok()
+                    .and_then(|h| h.parse::<f64>().ok())
+                {
+                    settle(cx, handle.into(), Duration::from_secs_f64(hold)).await;
                 }
                 let _ = handle.update(cx, |_, window, _| window.refresh());
-                cx.background_executor()
-                    .timer(Duration::from_millis(500))
-                    .await;
+                settle(cx, handle.into(), Duration::from_millis(500)).await;
                 // A window off the screen is not drawn by itself: draw the
                 // frame to be captured.
                 let image = cx.update_window(handle.into(), |_, window, cx| {
@@ -162,4 +196,20 @@ fn main() {
             })
             .detach();
         });
+}
+
+/// Waits, drawing the window every so often meanwhile: a window off the
+/// screen, or on a screen asleep, is not drawn by itself, and what its
+/// views make as they are first drawn would not be made.
+async fn settle(cx: &mut gpui::AsyncApp, window: gpui::AnyWindowHandle, d: Duration) {
+    let until = std::time::Instant::now() + d;
+    while std::time::Instant::now() < until {
+        let _ = cx.update_window(window, |_, window, cx| {
+            window.refresh();
+            let _ = window.draw(cx);
+        });
+        cx.background_executor()
+            .timer(Duration::from_millis(100))
+            .await;
+    }
 }
