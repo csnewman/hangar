@@ -1,12 +1,14 @@
-//! What a file's language server gives its editor: hover, and Go to
-//! Definition (Cmd-click, or F12), asked through Languages. A definition in
-//! another file opens it in the editors.
+//! What a file's language server gives its editor: completions, hover, and
+//! Go to Definition (Cmd-click, or F12), asked through Languages. A
+//! definition in another file opens it in the editors.
 
 use std::rc::Rc;
 
 use gpui::{App, AppContext, Task, WeakEntity, Window};
-use gpui_component::input::{DefinitionProvider, HoverProvider, Rope, RopeExt};
-use lsp_types::{GotoDefinitionResponse, Hover, LocationLink};
+use gpui_component::input::{CompletionProvider, DefinitionProvider, HoverProvider, Rope, RopeExt};
+use lsp_types::{
+    CompletionContext, CompletionResponse, GotoDefinitionResponse, Hover, LocationLink,
+};
 use serde_json::json;
 
 use crate::languages::{Languages, file_uri};
@@ -26,14 +28,27 @@ impl Providers {
         offset: usize,
         cx: &mut App,
     ) -> Task<anyhow::Result<Option<T>>> {
+        self.ask_with(method, text, offset, serde_json::Map::new(), cx)
+    }
+
+    /// Asks the server about the place at offset, with more params.
+    fn ask_with<T: serde::de::DeserializeOwned + Send + 'static>(
+        &self,
+        method: &str,
+        text: &Rope,
+        offset: usize,
+        more: serde_json::Map<String, serde_json::Value>,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<Option<T>>> {
         let Some(l) = self.languages.upgrade() else {
             return Task::ready(Ok(None));
         };
         let position = text.offset_to_position(offset);
-        let params = json!({
+        let mut params = json!({
             "textDocument": { "uri": file_uri(&self.abs) },
             "position": position,
         });
+        params.as_object_mut().unwrap().extend(more);
         let answer = l.update(cx, |l, cx| l.request(&self.abs, method, params, cx));
         cx.background_spawn(async move {
             let v = answer.await.map_err(anyhow::Error::msg)?;
@@ -51,6 +66,40 @@ impl HoverProvider for Providers {
         cx: &mut App,
     ) -> Task<anyhow::Result<Option<Hover>>> {
         self.ask("textDocument/hover", text, offset, cx)
+    }
+}
+
+impl CompletionProvider for Providers {
+    fn completions(
+        &self,
+        text: &Rope,
+        offset: usize,
+        trigger: CompletionContext,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<CompletionResponse>> {
+        let mut more = serde_json::Map::new();
+        more.insert("context".into(), json!(trigger));
+        let asked =
+            self.ask_with::<CompletionResponse>("textDocument/completion", text, offset, more, cx);
+        cx.background_spawn(
+            async move { Ok(asked.await?.unwrap_or(CompletionResponse::Array(vec![]))) },
+        )
+    }
+
+    fn is_completion_trigger(&self, _: usize, new_text: &str, cx: &mut App) -> bool {
+        let Some(c) = new_text.chars().last() else {
+            return false;
+        };
+        if c.is_alphanumeric() || c == '_' {
+            return true;
+        }
+        self.languages.upgrade().is_some_and(|l| {
+            l.read(cx)
+                .triggers(&self.abs)
+                .iter()
+                .any(|t| new_text.ends_with(t.as_str()))
+        })
     }
 }
 
@@ -97,6 +146,7 @@ pub fn attach(
     let open = Rc::new(open);
     editor.update(cx, |e, cx| {
         let lsp = e.lsp_mut();
+        lsp.completion_provider = Some(p.clone());
         lsp.hover_provider = Some(p.clone());
         lsp.definition_provider = Some(p);
         lsp.show_document = Some(Rc::new(move |params, window, cx| {

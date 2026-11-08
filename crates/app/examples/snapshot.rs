@@ -12,7 +12,7 @@
 //! SNAPSHOT_ANSWER=AGENT:KEY answers an asking agent session;
 //! SNAPSHOT_TOOLS=structure,ports toggles tool windows; SNAPSHOT_EXPAND=ROOT:PATH
 //! opens a project's folders; SNAPSHOT_FILE=ROOT:PATH opens a file, and
-//! SNAPSHOT_EDIT types at its start; SNAPSHOT_STAGE=ROOT:PATH stages a file
+//! SNAPSHOT_EDIT types at its start, then SNAPSHOT_KEYS a key at a time; SNAPSHOT_STAGE=ROOT:PATH stages a file
 //! from the Commit window and SNAPSHOT_COMMIT=message commits what is staged;
 //! SNAPSHOT_BRANCH=1 shows the Commit window's Branch view;
 //! SNAPSHOT_ASK=METHOD:LINE:COLUMN asks the open file's language server
@@ -156,6 +156,25 @@ fn main() {
                             }
                         });
                         settle(cx, handle.into(), Duration::from_secs(2)).await;
+                    }
+                    // Typed a character at a time at the cursor, as keys are.
+                    if let Ok(keys) = std::env::var("SNAPSHOT_KEYS") {
+                        for c in keys.chars() {
+                            let _ = handle.update(cx, |_, window, cx| {
+                                let file = shell
+                                    .read(cx)
+                                    .active_view()
+                                    .and_then(|t| t.read(cx).active_file());
+                                if let Some(f) = file {
+                                    let editor = f.read(cx).editor().clone();
+                                    editor.update(cx, |e, cx| {
+                                        use gpui::EntityInputHandler;
+                                        e.replace_text_in_range(None, &c.to_string(), window, cx)
+                                    });
+                                }
+                            });
+                            settle(cx, handle.into(), Duration::from_millis(300)).await;
+                        }
                     }
                 }
                 if let Some((root, path)) = std::env::var("SNAPSHOT_STAGE").ok().and_then(|e| {

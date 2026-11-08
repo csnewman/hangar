@@ -127,6 +127,9 @@ pub struct Languages {
     /// Requests sent, by server and id, awaiting their answers.
     pending: HashMap<(Key, u64), async_channel::Sender<Result<Value, String>>>,
     next_id: u64,
+    /// The characters each server asks to be shown completions after,
+    /// from its answer to initialize.
+    triggers: HashMap<Key, Vec<String>>,
     _sub: gpui::Subscription,
 }
 
@@ -158,6 +161,7 @@ impl Languages {
             diagnostics: BTreeMap::new(),
             pending: HashMap::new(),
             next_id: 1,
+            triggers: HashMap::new(),
             _sub: sub,
         }
     }
@@ -350,11 +354,23 @@ impl Languages {
                         return;
                     }
                 };
-                if let Err(e) = result {
-                    l.servers.insert(key, Server::Unavailable(e));
-                    cx.emit(Event::Servers);
-                    return;
-                }
+                let caps = match result {
+                    Ok(v) => v["capabilities"].clone(),
+                    Err(e) => {
+                        l.servers.insert(key, Server::Unavailable(e));
+                        cx.emit(Event::Servers);
+                        return;
+                    }
+                };
+                let triggers = caps["completionProvider"]["triggerCharacters"]
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|c| c.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                l.triggers.insert(key.clone(), triggers);
                 l.servers.insert(key.clone(), Server::Ready { n });
                 l.notify(&key, "initialized", json!({}), cx);
                 for abs in waiting {
@@ -423,6 +439,14 @@ impl Languages {
     ) -> impl std::future::Future<Output = Result<Value, String>> + use<> {
         let key = self.opened.get(abs).cloned().unwrap_or_default();
         self.request_on(&key, method, params, cx)
+    }
+
+    /// The characters an open file's server shows completions after.
+    pub fn triggers(&self, abs: &str) -> &[String] {
+        self.opened
+            .get(abs)
+            .and_then(|k| self.triggers.get(k))
+            .map_or(&[], |t| t.as_slice())
     }
 
     fn key_of(&self, root: &str, n: u32) -> Option<Key> {
