@@ -58,6 +58,11 @@ impl Target {
     }
 }
 
+/// What is done with a name typed in a dialog.
+type WithName = Rc<dyn Fn(String, &mut Window, &mut App)>;
+/// What is done once a dialog is confirmed.
+type Then = Rc<dyn Fn(&mut Window, &mut App)>;
+
 /// A path made of a folder and a name typed for something in it.
 pub fn join(folder: &str, name: &str) -> String {
     format!(
@@ -110,7 +115,7 @@ pub fn ask_name(
     done: impl Fn(String, &mut Window, &mut App) + 'static,
 ) {
     let input = cx.new(|cx| InputState::new(window, cx).default_value(initial.to_string()));
-    let done: Rc<dyn Fn(String, &mut Window, &mut App)> = Rc::new(done);
+    let done: WithName = Rc::new(done);
     let take = {
         let (input, done) = (input.clone(), done.clone());
         Rc::new(move |window: &mut Window, cx: &mut App| {
@@ -158,7 +163,7 @@ pub fn confirm(
     cx: &mut App,
     done: impl Fn(&mut Window, &mut App) + 'static,
 ) {
-    let done: Rc<dyn Fn(&mut Window, &mut App)> = Rc::new(done);
+    let done: Then = Rc::new(done);
     let (title, body, ok) = (title.to_string(), body.to_string(), ok.to_string());
     window.open_dialog(cx, move |dialog, _, cx| {
         let p = palette::of(cx);
