@@ -181,3 +181,36 @@ fn tempdir() -> std::path::PathBuf {
     std::fs::create_dir_all(&dir).unwrap();
     dir
 }
+
+/// Reset and Delete reach the environment's own paths; a refusal is an
+/// error with the server's words.
+#[test]
+fn an_environment_is_reset_and_deleted() {
+    let (seen_tx, seen) = mpsc::channel();
+    let url = serve(move |path, _, conn| {
+        seen_tx.send(path.to_string()).unwrap();
+        match path {
+            "/api/v1/environments/e1/reset" => {
+                json(conn, "200 OK", &env_json("e1", "dev", "stopped"))
+            }
+            "/api/v1/environments/e1" => {
+                write!(conn, "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n").unwrap()
+            }
+            _ => json(conn, "404 Not Found", r#"{"error":"no such environment"}"#),
+        }
+    });
+    let c = Client::new(&url, "hgr_good");
+    assert_eq!(c.reset("e1").unwrap().id, "e1");
+    c.delete("e1").unwrap();
+    let err = c.delete("e2").unwrap_err().to_string();
+    assert!(err.contains("no such environment"), "{err}");
+    let paths: Vec<String> = seen.try_iter().collect();
+    assert_eq!(
+        paths,
+        [
+            "/api/v1/environments/e1/reset",
+            "/api/v1/environments/e1",
+            "/api/v1/environments/e2"
+        ]
+    );
+}

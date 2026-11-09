@@ -139,6 +139,27 @@ func TestClientAPI(t *testing.T) {
 		t.Fatalf("a start with the cookie from no page: %d %v", status, body)
 	}
 
+	// Reset takes an environment's settings back to its template's.
+	if status, _ := f.call("POST", "/api/v1/environments/"+env.ID+"/stop", "", bearer); status != 200 {
+		t.Fatalf("stop again: %d", status)
+	}
+	status, body = f.call("POST", "/api/v1/environments/"+env.ID+"/reset", "", bearer)
+	if e, _ := body.(map[string]any); status != 200 || e["id"] != env.ID {
+		t.Fatalf("reset: %d %v", status, body)
+	}
+	if status, _ := f.call("POST", "/api/v1/environments/00000000-0000-4000-8000-00000000abcd/reset", "", bearer); status != 404 {
+		t.Fatalf("reset a missing environment: %d", status)
+	}
+
+	// Deleted, it goes, at once when it is not running, or once it stops.
+	status, body = f.call("DELETE", "/api/v1/environments/"+env.ID, "", bearer)
+	if e, _ := body.(map[string]any); status != 204 && (status != 200 || e["desired"] != "deleted") {
+		t.Fatalf("delete: %d %v", status, body)
+	}
+	if status, _ := f.call("DELETE", "/api/v1/environments/00000000-0000-4000-8000-00000000abcd", "", bearer); status != 404 {
+		t.Fatalf("delete a missing environment: %d", status)
+	}
+
 	// Sign-in keys, added and listed.
 	key := "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB0v2OP9Td7AjOQCzzislbj5sqwJ6Ks6aX9uDPWkXAPX laptop"
 	if status, body := f.call("POST", "/api/v1/me/login-keys", `{"public_key":"`+key+`"}`, bearer); status != 201 {

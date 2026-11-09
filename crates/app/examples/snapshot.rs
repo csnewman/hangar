@@ -28,7 +28,7 @@
 //! SNAPSHOT_SYMBOL=text goes to a symbol;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
-//! SNAPSHOT_HOVER=X,Y rests the pointer there;
+//! SNAPSHOT_HOVER=X,Y rests the pointer there; SNAPSHOT_CLICK=X,Y clicks there;
 //! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would, and
 //! SNAPSHOT_PRESS="down enter |text| enter" then presses keys, typing what
 //! is between bars;
@@ -482,6 +482,37 @@ fn main() {
                         });
                         settle(cx, handle.into(), Duration::from_secs(wait)).await;
                     }
+                }
+                if let Some((x, y)) = std::env::var("SNAPSHOT_CLICK").ok().and_then(|e| {
+                    let (x, y) = e.split_once(',')?;
+                    Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+                }) {
+                    use gpui::{
+                        Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput,
+                    };
+                    let position = gpui::point(px(x), px(y));
+                    let _ = cx.update_window(handle.into(), |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                button: MouseButton::Left,
+                                position,
+                                modifiers: Modifiers::none(),
+                                click_count: 1,
+                                first_mouse: false,
+                            }),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            PlatformInput::MouseUp(MouseUpEvent {
+                                button: MouseButton::Left,
+                                position,
+                                modifiers: Modifiers::none(),
+                                click_count: 1,
+                            }),
+                            cx,
+                        );
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(1)).await;
                 }
                 if let Some((x, y)) = std::env::var("SNAPSHOT_RIGHT_CLICK").ok().and_then(|e| {
                     let (x, y) = e.split_once(',')?;

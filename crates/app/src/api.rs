@@ -32,6 +32,17 @@ pub struct Me {
     pub display_name: String,
     #[serde(default)]
     pub admin: bool,
+    /// Where the server's SSH gateway is, if it has one.
+    #[serde(default)]
+    pub ssh: Option<SshGateway>,
+}
+
+/// Where environments are reached over SSH: ssh <environment>@<host> -p
+/// <port>.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SshGateway {
+    pub host: String,
+    pub port: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -220,6 +231,22 @@ impl Client {
 
     pub fn suspend(&self, id: &str) -> Result<Environment, Error> {
         self.post(&format!("/environments/{id}/suspend"), None)
+    }
+
+    /// Gives a stopped environment its template's settings, keeping its
+    /// disks.
+    pub fn reset(&self, id: &str) -> Result<Environment, Error> {
+        self.post(&format!("/environments/{id}/reset"), None)
+    }
+
+    /// Deletes an environment and its disks: at once if it is stopped, else
+    /// once it has stopped.
+    pub fn delete(&self, id: &str) -> Result<(), Error> {
+        let req = self
+            .agent
+            .delete(format!("{}/environments/{id}", self.base))
+            .header("Authorization", self.auth());
+        check(req.call().map_err(transport)?).map(|_| ())
     }
 
     pub fn set_task(&self, id: &str, text: &str) -> Result<Task, Error> {

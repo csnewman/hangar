@@ -257,6 +257,9 @@ impl Places {
             match action {
                 Action::Suspend => client.suspend(&env).map(|_| ()),
                 Action::Resume | Action::Start => client.start(&env).map(|_| ()),
+                Action::Stop => client.stop(&env).map(|_| ()),
+                Action::Reset => client.reset(&env).map(|_| ()),
+                Action::Delete => client.delete(&env),
                 _ => Ok(()),
             }
         });

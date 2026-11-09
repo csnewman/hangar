@@ -219,12 +219,18 @@ type ServerInterface interface {
 	// ListEnvironments Every environment the user can reach, oldest first
 	// (GET /environments)
 	ListEnvironments(w http.ResponseWriter, r *http.Request)
+	// DeleteEnvironment Delete an environment and its disks
+	// (DELETE /environments/{id})
+	DeleteEnvironment(w http.ResponseWriter, r *http.Request, id ID)
 	// GetEnvironment One environment
 	// (GET /environments/{id})
 	GetEnvironment(w http.ResponseWriter, r *http.Request, id ID)
 	// SeeAgent Say the user has looked at an agent's session
 	// (POST /environments/{id}/agents/{session}/seen)
 	SeeAgent(w http.ResponseWriter, r *http.Request, id ID, session string)
+	// ResetEnvironment Give a stopped environment its template's current settings
+	// (POST /environments/{id}/reset)
+	ResetEnvironment(w http.ResponseWriter, r *http.Request, id ID)
 	// StartEnvironment Ask for an environment to run
 	// (POST /environments/{id}/start)
 	StartEnvironment(w http.ResponseWriter, r *http.Request, id ID)
@@ -289,6 +295,32 @@ func (siw *ServerInterfaceWrapper) ListEnvironments(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteEnvironment operation middleware
+func (siw *ServerInterfaceWrapper) DeleteEnvironment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteEnvironment(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetEnvironment operation middleware
 func (siw *ServerInterfaceWrapper) GetEnvironment(w http.ResponseWriter, r *http.Request) {
 
@@ -341,6 +373,32 @@ func (siw *ServerInterfaceWrapper) SeeAgent(w http.ResponseWriter, r *http.Reque
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SeeAgent(w, r, id, session)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResetEnvironment operation middleware
+func (siw *ServerInterfaceWrapper) ResetEnvironment(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResetEnvironment(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -762,7 +820,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me/login-keys", wrapper.ListLoginKeys)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/me/login-keys", wrapper.AddLoginKey)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments", wrapper.ListEnvironments)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/environments/{id}", wrapper.DeleteEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}", wrapper.GetEnvironment)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/reset", wrapper.ResetEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/start", wrapper.StartEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/stop", wrapper.StopEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/suspend", wrapper.SuspendEnvironment)
@@ -820,6 +880,64 @@ func (response ListEnvironments401JSONResponse) VisitListEnvironmentsResponse(w 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteEnvironmentRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type DeleteEnvironmentResponseObject interface {
+	VisitDeleteEnvironmentResponse(w http.ResponseWriter) error
+}
+
+type DeleteEnvironment200JSONResponse struct{ EnvironmentJSONResponse }
+
+func (response DeleteEnvironment200JSONResponse) VisitDeleteEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteEnvironment204Response struct {
+}
+
+func (response DeleteEnvironment204Response) VisitDeleteEnvironmentResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteEnvironment401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteEnvironment401JSONResponse) VisitDeleteEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteEnvironment404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteEnvironment404JSONResponse) VisitDeleteEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -915,6 +1033,84 @@ func (response SeeAgent404JSONResponse) VisitSeeAgentResponse(w http.ResponseWri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetEnvironmentRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type ResetEnvironmentResponseObject interface {
+	VisitResetEnvironmentResponse(w http.ResponseWriter) error
+}
+
+type ResetEnvironment200JSONResponse struct{ EnvironmentJSONResponse }
+
+func (response ResetEnvironment200JSONResponse) VisitResetEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetEnvironment400JSONResponse struct{ InvalidJSONResponse }
+
+func (response ResetEnvironment400JSONResponse) VisitResetEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetEnvironment401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ResetEnvironment401JSONResponse) VisitResetEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetEnvironment404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ResetEnvironment404JSONResponse) VisitResetEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResetEnvironment409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ResetEnvironment409JSONResponse) VisitResetEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1631,12 +1827,18 @@ type StrictServerInterface interface {
 	// ListEnvironments Every environment the user can reach, oldest first
 	// (GET /environments)
 	ListEnvironments(ctx context.Context, request ListEnvironmentsRequestObject) (ListEnvironmentsResponseObject, error)
+	// DeleteEnvironment Delete an environment and its disks
+	// (DELETE /environments/{id})
+	DeleteEnvironment(ctx context.Context, request DeleteEnvironmentRequestObject) (DeleteEnvironmentResponseObject, error)
 	// GetEnvironment One environment
 	// (GET /environments/{id})
 	GetEnvironment(ctx context.Context, request GetEnvironmentRequestObject) (GetEnvironmentResponseObject, error)
 	// SeeAgent Say the user has looked at an agent's session
 	// (POST /environments/{id}/agents/{session}/seen)
 	SeeAgent(ctx context.Context, request SeeAgentRequestObject) (SeeAgentResponseObject, error)
+	// ResetEnvironment Give a stopped environment its template's current settings
+	// (POST /environments/{id}/reset)
+	ResetEnvironment(ctx context.Context, request ResetEnvironmentRequestObject) (ResetEnvironmentResponseObject, error)
 	// StartEnvironment Ask for an environment to run
 	// (POST /environments/{id}/start)
 	StartEnvironment(ctx context.Context, request StartEnvironmentRequestObject) (StartEnvironmentResponseObject, error)
@@ -1741,6 +1943,32 @@ func (sh *strictHandler) ListEnvironments(w http.ResponseWriter, r *http.Request
 	}
 }
 
+// DeleteEnvironment operation middleware
+func (sh *strictHandler) DeleteEnvironment(w http.ResponseWriter, r *http.Request, id ID) {
+	var request DeleteEnvironmentRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteEnvironment(ctx, request.(DeleteEnvironmentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteEnvironment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteEnvironmentResponseObject); ok {
+		if err := validResponse.VisitDeleteEnvironmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetEnvironment operation middleware
 func (sh *strictHandler) GetEnvironment(w http.ResponseWriter, r *http.Request, id ID) {
 	var request GetEnvironmentRequestObject
@@ -1787,6 +2015,32 @@ func (sh *strictHandler) SeeAgent(w http.ResponseWriter, r *http.Request, id ID,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SeeAgentResponseObject); ok {
 		if err := validResponse.VisitSeeAgentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResetEnvironment operation middleware
+func (sh *strictHandler) ResetEnvironment(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ResetEnvironmentRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResetEnvironment(ctx, request.(ResetEnvironmentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResetEnvironment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResetEnvironmentResponseObject); ok {
+		if err := validResponse.VisitResetEnvironmentResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

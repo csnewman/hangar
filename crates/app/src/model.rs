@@ -68,6 +68,26 @@ pub enum Action {
     Suspend,
     Resume,
     Start,
+    Stop,
+    /// Back to its template's settings.
+    Reset,
+    Delete,
+}
+
+/// The command that reaches an environment through its server's SSH
+/// gateway, as the web UI gives it: by its name alone for its owner, and by
+/// owner/name for anyone else; None when the server has no gateway.
+pub fn ssh_command(me: &crate::api::Me, env: &crate::api::Environment) -> Option<String> {
+    let gw = me.ssh.as_ref()?;
+    let user = if env.owner == me.username {
+        env.name.clone()
+    } else {
+        format!("{}/{}", env.owner, env.name)
+    };
+    Some(match gw.port {
+        22 => format!("ssh {user}@{}", gw.host),
+        port => format!("ssh {user}@{} -p {port}", gw.host),
+    })
 }
 
 impl Action {
@@ -79,6 +99,9 @@ impl Action {
             Action::Suspend => "Suspend",
             Action::Resume => "Resume",
             Action::Start => "Start",
+            Action::Stop => "Stop",
+            Action::Reset => "Reset to Template",
+            Action::Delete => "Delete",
         }
     }
 }

@@ -1824,6 +1824,90 @@ impl Render for EnvTab {
 }
 
 impl EnvTab {
+    /// The environment's ⋯ menu, as the design's toolbar has it: stopping
+    /// it, its SSH command, resetting it to its template, the web UI's
+    /// page, and deleting it; what cannot be taken back is asked first.
+    fn env_menu(&self, env: &Environment, web: String, cx: &mut Context<Self>) -> impl IntoElement {
+        let (place, id, name) = (self.place.clone(), self.env.clone(), env.name.clone());
+        let ssh = self
+            .places
+            .read(cx)
+            .get(&self.place)
+            .and_then(|(_, s)| s.me.as_ref())
+            .and_then(|me| model::ssh_command(me, env));
+        let stoppable = !matches!(env.phase.as_str(), "stopped" | "failed" | "deleting")
+            && env.desired != "stopped";
+        let stopped = matches!(env.phase.as_str(), "stopped" | "failed");
+        let places = self.places.clone();
+        gpui_component::button::Button::new("env-more")
+            .ghost()
+            .small()
+            .icon(gpui_component::Icon::empty().path(assets::icon("more")))
+            .tooltip("More")
+            .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, cx| {
+                crate::ui::modal(cx);
+                let act = |action: model::Action| {
+                    let (places, place, id) = (places.clone(), place.clone(), id.clone());
+                    move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
+                        places.update(cx, |pl, cx| pl.act(&place, &id, action, cx));
+                    }
+                };
+                let ask = |title: String, body: &'static str, ok: &'static str, action| {
+                    let act = act(action);
+                    move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+                        let act = act.clone();
+                        crate::treeops::confirm(&title, body, ok, window, cx, move |window, cx| {
+                            act(&gpui::ClickEvent::default(), window, cx)
+                        });
+                    }
+                };
+                let copy_ssh = ssh.clone();
+                let web = web.clone();
+                menu.item(
+                    PopupMenuItem::new("Stop")
+                        .disabled(!stoppable)
+                        .on_click(act(model::Action::Stop)),
+                )
+                .item(
+                    PopupMenuItem::new("Copy SSH Command")
+                        .disabled(ssh.is_none())
+                        .on_click(move |_, window, cx| {
+                            if let Some(c) = &copy_ssh {
+                                crate::treeops::copy(c.clone(), cx);
+                                use gpui_component::WindowExt;
+                                window.push_notification(
+                                    gpui_component::notification::Notification::info(format!(
+                                        "Copied: {c}"
+                                    )),
+                                    cx,
+                                );
+                            }
+                        }),
+                )
+                .item(
+                    PopupMenuItem::new("Reset to Template…")
+                        .disabled(!stopped)
+                        .on_click(ask(
+                            format!("Reset {name} to its template?"),
+                            "It takes its template's current settings; its disks and everything on them are kept.",
+                            "Reset",
+                            model::Action::Reset,
+                        )),
+                )
+                .item(
+                    PopupMenuItem::new("Open in Browser")
+                        .on_click(move |_, _, cx| cx.open_url(&web)),
+                )
+                .separator()
+                .item(PopupMenuItem::new("Delete…").on_click(ask(
+                    format!("Delete {name}?"),
+                    "Its disks and everything on them go with it. This cannot be undone.",
+                    "Delete",
+                    model::Action::Delete,
+                )))
+            })
+    }
+
     fn toolbar(
         &self,
         config: &PlaceConfig,
@@ -1948,7 +2032,7 @@ impl EnvTab {
                     })),
                 )
             })
-            .child(button("more", "Open in browser", p).on_click(move |_, _, cx| cx.open_url(&web)))
+            .child(self.env_menu(env, web, cx))
     }
 
     fn stripe(

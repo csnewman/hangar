@@ -283,3 +283,32 @@ fn marks_show_the_machine_and_its_agent_apart() {
     assert_eq!(mark(&env("e", "stopped")), Mark::empty(Tone::Idle));
     assert_eq!(mark(&env("e", "failed")), Mark::empty(Tone::Bad));
 }
+
+/// The SSH command, as the web UI gives it: by name for its owner, by
+/// owner/name for anyone else, the port only when it is not 22.
+#[test]
+fn an_environment_is_reached_over_ssh() {
+    let gw = |port| {
+        Some(hangar_app::api::SshGateway {
+            host: "hangar.example.com".into(),
+            port,
+        })
+    };
+    let me = |name: &str, ssh| hangar_app::api::Me {
+        id: "u1".into(),
+        username: name.into(),
+        display_name: String::new(),
+        admin: false,
+        ssh,
+    };
+    let dev = env("dev", "running");
+    assert_eq!(
+        model::ssh_command(&me("alice", gw(2222)), &dev).as_deref(),
+        Some("ssh dev@hangar.example.com -p 2222")
+    );
+    assert_eq!(
+        model::ssh_command(&me("bob", gw(22)), &dev).as_deref(),
+        Some("ssh alice/dev@hangar.example.com")
+    );
+    assert_eq!(model::ssh_command(&me("alice", None), &dev), None);
+}

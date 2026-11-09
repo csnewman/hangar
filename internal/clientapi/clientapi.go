@@ -290,6 +290,34 @@ func (h *handler) GetEnvironment(ctx context.Context, req GetEnvironmentRequestO
 	return GetEnvironment200JSONResponse(environment(e)), nil
 }
 
+func (h *handler) DeleteEnvironment(ctx context.Context, req DeleteEnvironmentRequestObject) (DeleteEnvironmentResponseObject, error) {
+	e, err := h.setDesired(ctx, req.ID, api.DesiredDeleted)
+	switch {
+	case errors.Is(err, environments.ErrNotFound):
+		return DeleteEnvironment404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	case e == nil:
+		return DeleteEnvironment204Response{}, nil
+	}
+	return DeleteEnvironment200JSONResponse{EnvironmentJSONResponse(environment(*e))}, nil
+}
+
+func (h *handler) ResetEnvironment(ctx context.Context, req ResetEnvironmentRequestObject) (ResetEnvironmentResponseObject, error) {
+	e, err := h.envs.ResetToTemplate(ctx, principal(ctx), req.ID)
+	switch {
+	case errors.Is(err, environments.ErrNotFound):
+		return ResetEnvironment404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil
+	case errors.Is(err, environments.ErrInvalid):
+		return ResetEnvironment400JSONResponse{InvalidJSONResponse{Error: err.Error()}}, nil
+	case errors.Is(err, environments.ErrConflict):
+		return ResetEnvironment409JSONResponse{ConflictJSONResponse{Error: err.Error()}}, nil
+	case err != nil:
+		return nil, err
+	}
+	return ResetEnvironment200JSONResponse{EnvironmentJSONResponse(environment(e))}, nil
+}
+
 func (h *handler) StartEnvironment(ctx context.Context, req StartEnvironmentRequestObject) (StartEnvironmentResponseObject, error) {
 	e, err := h.setDesired(ctx, req.ID, api.DesiredRunning)
 	switch {

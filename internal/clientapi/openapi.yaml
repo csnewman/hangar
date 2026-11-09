@@ -144,6 +144,36 @@ paths:
               schema: { $ref: "#/components/schemas/Environment" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
+    delete:
+      operationId: deleteEnvironment
+      summary: Delete an environment and its disks
+      description: >-
+        One that is running is asked to stop and goes once it has, and is
+        answered as it stands; one already stopped goes at once, answered
+        with no content.
+      responses:
+        "200": { $ref: "#/components/responses/Environment" }
+        "204":
+          description: The environment is gone.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /environments/{id}/reset:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: resetEnvironment
+      summary: Give a stopped environment its template's current settings
+      description: >-
+        Its disks and everything on them are kept. Refused when the template
+        names another image or other repositories, or placement its worker
+        does not meet.
+      responses:
+        "200": { $ref: "#/components/responses/Environment" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
 
   /environments/{id}/start:
     parameters:
