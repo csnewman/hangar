@@ -1,19 +1,23 @@
 //! A terminal session in the window: its screen drawn as styled text in
 //! the design's terminal colours, sized to fit where it is shown, with what
-//! is typed and pasted sent to the session.
+//! is typed and pasted sent to the session. The mouse selects, as in any
+//! terminal, and Find looks through the output.
 
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, FocusHandle, Focusable, Font, Hsla, IntoElement,
-    KeyBinding, KeyDownEvent, ParentElement, Pixels, Render, Rgba, ScrollEvent, Styled, StyledText,
+    App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Font, Hsla, IntoElement,
+    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, Pixels, Point, Render, Rgba, ScrollEvent, Styled, StyledText, Subscription,
     TextRun, UnderlineStyle, WeakEntity, Window, actions, canvas, div, font, prelude::*, px,
 };
+use gpui_component::Sizable;
+use gpui_component::input::{Input, InputEvent, InputState};
 
 use crate::api::Client;
 use crate::palette;
 use crate::termconn::{self, Command, Connection, Event};
-use crate::terminal::{Replies, Screen};
+use crate::terminal::{Mark, Replies, Screen, Select};
 
 /// The text's size, and the height of a line.
 const FONT_SIZE: Pixels = px(12.5);
@@ -22,14 +26,22 @@ const LINE_HEIGHT: Pixels = px(17.);
 /// How long a burst of output is taken in before a frame is drawn.
 const FEED_BUDGET: Duration = Duration::from_millis(4);
 
-actions!(terminal, [SendTab, SendBackTab]);
+actions!(terminal, [SendTab, SendBackTab, Find]);
 
 /// Binds Tab and Shift-Tab to the shell, ahead of gpui-component's binding
-/// of them to moving focus, which takes them before a key handler sees them.
+/// of them to moving focus, which takes them before a key handler sees them;
+/// and Find, Cmd-F on macOS and Ctrl-Shift-F elsewhere, where Ctrl-F is the
+/// shell's.
 pub fn bind_keys(cx: &mut App) {
+    let find = if cfg!(target_os = "macos") {
+        "cmd-f"
+    } else {
+        "ctrl-shift-f"
+    };
     cx.bind_keys([
         KeyBinding::new("tab", SendTab, Some("Terminal")),
         KeyBinding::new("shift-tab", SendBackTab, Some("Terminal")),
+        KeyBinding::new(find, Find, Some("Terminal")),
     ]);
 }
 
@@ -67,6 +79,14 @@ pub struct TerminalView {
     cell: Option<Pixels>,
     /// Scrolling, in pixels, not yet a whole line.
     scroll_left: f32,
+    /// Where the text starts in the window, for the mouse.
+    origin: Point<Pixels>,
+    /// Whether a drag is selecting.
+    selecting: bool,
+    /// Find's query, while it is open, and whether its text is nowhere.
+    find: Option<Entity<InputState>>,
+    missing: bool,
+    _find: Option<Subscription>,
 }
 
 fn mono() -> Font {
@@ -144,6 +164,11 @@ impl TerminalView {
             font: mono(),
             cell: None,
             scroll_left: 0.,
+            origin: Point::default(),
+            selecting: false,
+            find: None,
+            missing: false,
+            _find: None,
         }
     }
 
@@ -244,6 +269,7 @@ impl TerminalView {
         let rows = (f32::from(bounds.size.height) / f32::from(LINE_HEIGHT))
             .floor()
             .max(1.) as u16;
+        self.origin = bounds.origin;
         if (cols, rows) != (self.cols, self.rows) {
             (self.cols, self.rows) = (cols, rows);
             self.screen.resize(cols as usize, rows as usize);
@@ -254,6 +280,15 @@ impl TerminalView {
 
     fn key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
         let k = &e.keystroke;
+        let copy = if cfg!(target_os = "macos") {
+            k.modifiers.platform && k.key == "c"
+        } else {
+            k.modifiers.control && k.modifiers.shift && k.key == "c"
+        };
+        if copy {
+            self.copy(cx);
+            return;
+        }
         let paste = if cfg!(target_os = "macos") {
             k.modifiers.platform && k.key == "v"
         } else {
@@ -295,18 +330,116 @@ impl TerminalView {
         }
     }
 
-    /// Copies the visible screen's text, which there is no selection to
-    /// narrow yet.
-    pub fn copy_screen(&self, cx: &mut App) {
-        let text: Vec<String> = self
-            .screen
-            .lines()
-            .into_iter()
-            .map(|l| l.text.trim_end().to_string())
-            .collect();
-        cx.write_to_clipboard(ClipboardItem::new_string(
-            text.join("\n").trim_end().to_string(),
-        ));
+    /// Copies what is selected.
+    pub fn copy(&self, cx: &mut App) {
+        if let Some(text) = self.screen.selection() {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+    }
+
+    /// The cell under the pointer: its row, its column, and whether the
+    /// pointer is on its right half.
+    fn cell_at(&self, at: Point<Pixels>) -> (usize, usize, bool) {
+        let cell = f32::from(self.cell.unwrap_or(px(7.5)));
+        let x = (f32::from(at.x - self.origin.x) / cell).max(0.);
+        let y = (f32::from(at.y - self.origin.y) / f32::from(LINE_HEIGHT)).max(0.);
+        (y as usize, x as usize, x.fract() >= 0.5)
+    }
+
+    /// A press starts a selection: a click cells, a double click words, a
+    /// triple click lines; with Shift it carries the one there is on.
+    fn press(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus, cx);
+        let (row, col, right) = self.cell_at(e.position);
+        if e.modifiers.shift && self.screen.selection().is_some() {
+            self.screen.select_to(row, col, right);
+        } else {
+            let how = match e.click_count {
+                0 | 1 => Select::Cells,
+                2 => Select::Words,
+                _ => Select::Lines,
+            };
+            self.screen.select(row, col, right, how);
+        }
+        self.selecting = true;
+        cx.notify();
+    }
+
+    fn drag(&mut self, e: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if !self.selecting || e.pressed_button != Some(MouseButton::Left) {
+            return;
+        }
+        let (row, col, right) = self.cell_at(e.position);
+        self.screen.select_to(row, col, right);
+        cx.notify();
+    }
+
+    /// A click that selected nothing clears the selection.
+    fn release(&mut self, _: &MouseUpEvent, cx: &mut Context<Self>) {
+        self.selecting = false;
+        if self.screen.selection().is_none() {
+            self.screen.clear_selection();
+        }
+        cx.notify();
+    }
+
+    /// Opens Find over the terminal, its query focused, starting from what
+    /// is selected.
+    pub fn open_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let input = match &self.find {
+            Some(i) => i.clone(),
+            None => {
+                let start = self
+                    .screen
+                    .selection()
+                    .filter(|s| !s.contains('\n'))
+                    .unwrap_or_default();
+                let input = cx.new(|cx| {
+                    InputState::new(window, cx)
+                        .placeholder("Find")
+                        .default_value(start)
+                });
+                self._find = Some(cx.subscribe_in(
+                    &input,
+                    window,
+                    |t, input, e: &InputEvent, _, cx| {
+                        let query = input.read(cx).value().to_string();
+                        match e {
+                            InputEvent::Change => t.find_text(&query, true, cx),
+                            InputEvent::PressEnter { shift, .. } => t.find_text(&query, !shift, cx),
+                            _ => {}
+                        }
+                    },
+                ));
+                self.find = Some(input.clone());
+                let query = input.read(cx).value().to_string();
+                self.find_text(&query, true, cx);
+                input
+            }
+        };
+        window.focus(&input.focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// Whether Find is open, and if so whether its query is found.
+    pub fn finding(&self) -> Option<bool> {
+        self.find.as_ref().map(|_| !self.missing)
+    }
+
+    /// Finds the query, up (older) or down (newer).
+    fn find_text(&mut self, query: &str, up: bool, cx: &mut Context<Self>) {
+        self.missing = !query.is_empty() && !self.screen.find(query, up);
+        cx.notify();
+    }
+
+    /// Closes Find, giving the terminal the keyboard back.
+    pub fn close_find(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.find = None;
+        self._find = None;
+        self.missing = false;
+        self.screen.find("", true);
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 }
 
@@ -408,6 +541,12 @@ impl Render for TerminalView {
         self.screen
             .set_default_colours(rgb(p.term_fg), rgb(p.term_tab));
         let focused = self.focus.is_focused(window);
+        // The selection in the accent, Find's matches in amber, the one it
+        // is on in solid amber.
+        let selected = p.accent.opacity(0.35);
+        let found = p.busy.opacity(0.3);
+        let current = p.busy;
+        let mark_text = p.term_bg;
         let show_cursor = focused && self.screen.scrolled_back() == 0;
         let (cursor_row, cursor_col) = self.screen.cursor();
         let rows: Vec<_> = self
@@ -434,8 +573,16 @@ impl Render for TerminalView {
                             },
                             ..self.font.clone()
                         },
-                        color: hsla(s.fg),
-                        background_color: Some(hsla(s.bg)),
+                        color: match s.mark {
+                            Mark::Current => mark_text,
+                            _ => hsla(s.fg),
+                        },
+                        background_color: Some(match s.mark {
+                            Mark::None => hsla(s.bg),
+                            Mark::Selected => selected,
+                            Mark::Match => found,
+                            Mark::Current => current,
+                        }),
                         underline: s.underline.then(|| UnderlineStyle {
                             thickness: px(1.),
                             ..Default::default()
@@ -464,18 +611,37 @@ impl Render for TerminalView {
         let reconnecting = matches!(self.state, State::Reconnecting(_));
         div()
             .id("terminal")
+            .debug_selector(|| "terminal".into())
             .track_focus(&self.focus)
             .key_context("Terminal")
-            .on_key_down(cx.listener(|this, e: &KeyDownEvent, _, cx| this.key(e, cx)))
-            .on_action(cx.listener(|this, _: &SendTab, _, _| this.input(b"\t".to_vec())))
-            .on_action(cx.listener(|this, _: &SendBackTab, _, _| this.input(b"\x1b[Z".to_vec())))
+            // Keys typed in Find, inside the terminal, are Find's.
+            .on_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
+                if this.focus.is_focused(window) {
+                    this.key(e, cx)
+                }
+            }))
+            .on_action(cx.listener(|this, _: &SendTab, window, _| {
+                if this.focus.is_focused(window) {
+                    this.input(b"\t".to_vec())
+                }
+            }))
+            .on_action(cx.listener(|this, _: &SendBackTab, window, _| {
+                if this.focus.is_focused(window) {
+                    this.input(b"\x1b[Z".to_vec())
+                }
+            }))
             .on_scroll(cx.listener(|this, e: &ScrollEvent, _, cx| this.scroll(e, cx)))
             .on_mouse_down(
-                gpui::MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    window.focus(&this.focus, cx);
-                }),
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseDownEvent, window, cx| this.press(e, window, cx)),
             )
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.drag(e, cx)))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseUpEvent, _, cx| this.release(e, cx)),
+            )
+            .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Copy, _, cx| this.copy(cx)))
             .relative()
             .size_full()
             .overflow_hidden()
@@ -503,6 +669,31 @@ impl Render for TerminalView {
                         .size_full(),
                     ),
             )
+            .when_some(self.find.clone(), |d, input| {
+                let missing = self.missing;
+                d.child(
+                    div()
+                        .absolute()
+                        .top(px(4.))
+                        .right(px(12.))
+                        .w(px(260.))
+                        // Escape closes Find, taken before the query's
+                        // field, which would keep it.
+                        .capture_action(cx.listener(
+                            |this, _: &gpui_component::input::Escape, window, cx| {
+                                cx.stop_propagation();
+                                this.close_find(window, cx)
+                            },
+                        ))
+                        .p(px(4.))
+                        .rounded(px(6.))
+                        .bg(p.surface)
+                        .border_1()
+                        .border_color(if missing { p.bad } else { p.border })
+                        .shadow_md()
+                        .child(Input::new(&input).small()),
+                )
+            })
             .when_some(notice, |d, n| {
                 d.child(
                     div()

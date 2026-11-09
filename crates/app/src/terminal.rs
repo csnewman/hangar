@@ -1,12 +1,15 @@
 //! A terminal's screen: alacritty_terminal parses what the shell writes and
 //! keeps the grid and its scrollback; this turns the visible part into lines
-//! of styled spans, which the terminal view draws as text.
+//! of styled spans, which the terminal view draws as text. It also keeps
+//! what is selected, and finds text in the scrollback.
 
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::index::{Column, Line as GridLine};
+use alacritty_terminal::index::{Column, Direction, Line as GridLine, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 
@@ -67,6 +70,26 @@ impl EventListener for Replies {
     }
 }
 
+/// How a cell is marked over its colours: selected, or found by Find, the
+/// match Find is on drawn apart from the others.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Mark {
+    #[default]
+    None,
+    Selected,
+    Match,
+    Current,
+}
+
+/// What a drag selects: cells, whole words, or whole lines, as a click,
+/// a double click and a triple click start it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Select {
+    Cells,
+    Words,
+    Lines,
+}
+
 /// A run of cells drawn alike, `len` bytes of its line's text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
@@ -76,6 +99,7 @@ pub struct Span {
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
+    pub mark: Mark,
 }
 
 /// One row of the screen.
@@ -91,6 +115,9 @@ pub struct Screen<L: EventListener = Quiet> {
     /// The colours text and background take when the shell names none.
     fg: Rgb,
     bg: Rgb,
+    /// What Find looks for, and the match it is on.
+    search: Option<(String, RegexSearch)>,
+    found: Option<Match>,
 }
 
 impl Screen<Quiet> {
@@ -106,6 +133,8 @@ impl<L: EventListener> Screen<L> {
             parser: Processor::new(),
             fg: named(NamedColor::Foreground),
             bg: named(NamedColor::Background),
+            search: None,
+            found: None,
         }
     }
 
@@ -146,20 +175,139 @@ impl<L: EventListener> Screen<L> {
         self.term.resize(Size { columns, lines });
     }
 
+    /// A row and column of the screen as a place in the grid, the view's
+    /// scroll taken into account.
+    fn point(&self, row: usize, col: usize) -> Point {
+        let grid = self.term.grid();
+        let row = row.min(grid.screen_lines().saturating_sub(1)) as i32;
+        let col = col.min(grid.columns().saturating_sub(1));
+        Point::new(GridLine(row - grid.display_offset() as i32), Column(col))
+    }
+
+    /// Starts a selection at a cell of the screen; right_half is whether
+    /// the pointer is on the cell's right half, so a drag takes the cell or
+    /// leaves it as a text editor does.
+    pub fn select(&mut self, row: usize, col: usize, right_half: bool, how: Select) {
+        let ty = match how {
+            Select::Cells => SelectionType::Simple,
+            Select::Words => SelectionType::Semantic,
+            Select::Lines => SelectionType::Lines,
+        };
+        let side = if right_half { Side::Right } else { Side::Left };
+        self.term.selection = Some(Selection::new(ty, self.point(row, col), side));
+    }
+
+    /// Takes the selection to a cell, as a drag or a Shift-click does.
+    pub fn select_to(&mut self, row: usize, col: usize, right_half: bool) {
+        let point = self.point(row, col);
+        let side = if right_half { Side::Right } else { Side::Left };
+        if let Some(s) = &mut self.term.selection {
+            s.update(point, side);
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.term.selection = None;
+    }
+
+    /// The selected text, lines joined as the shell wrote them; None with
+    /// nothing selected.
+    pub fn selection(&self) -> Option<String> {
+        self.term.selection_to_string().filter(|s| !s.is_empty())
+    }
+
+    /// Finds text in the screen and its scrollback, any case unless it has
+    /// a capital, and scrolls to it. A new query finds its last match, the
+    /// newest; asked again, up goes to the one before, older, and down to
+    /// the one after, wrapping round. False when it is nowhere; an empty
+    /// query ends finding.
+    pub fn find(&mut self, query: &str, up: bool) -> bool {
+        if query.is_empty() {
+            self.search = None;
+            self.found = None;
+            return false;
+        }
+        let fresh = self.search.as_ref().is_none_or(|(q, _)| q != query);
+        if fresh {
+            let Ok(regex) = RegexSearch::new(&literal(query)) else {
+                return false;
+            };
+            self.search = Some((query.to_string(), regex));
+            self.found = None;
+        }
+        let grid = self.term.grid();
+        let last = Point::new(
+            GridLine(grid.screen_lines() as i32 - 1),
+            Column(grid.columns() - 1),
+        );
+        let (origin, direction) = match (&self.found, up) {
+            (None, _) => (last, Direction::Left),
+            (Some(m), true) => (*m.start(), Direction::Left),
+            (Some(m), false) => (*m.end(), Direction::Right),
+        };
+        let Some((_, regex)) = self.search.as_mut() else {
+            return false;
+        };
+        // From a match, the search starts beside it, not on it.
+        let origin = match (&self.found, direction) {
+            (Some(_), Direction::Left) => {
+                origin.sub(&self.term, alacritty_terminal::index::Boundary::None, 1)
+            }
+            (Some(_), Direction::Right) => {
+                origin.add(&self.term, alacritty_terminal::index::Boundary::None, 1)
+            }
+            _ => origin,
+        };
+        let found = self
+            .term
+            .search_next(regex, origin, direction, Side::Left, None);
+        if let Some(m) = &found {
+            self.term.scroll_to_point(*m.start());
+        }
+        self.found = found;
+        self.found.is_some()
+    }
+
+    /// Whether Find is on a match.
+    pub fn found(&self) -> bool {
+        self.found.is_some()
+    }
+
     /// The cursor's row and column on the screen.
     pub fn cursor(&self) -> (usize, usize) {
         let p = self.term.grid().cursor.point;
         (p.line.0.max(0) as usize, p.column.0)
     }
 
-    /// The visible rows, each a line of text with its spans.
-    pub fn lines(&self) -> Vec<Line> {
+    /// The visible rows, each a line of text with its spans, the selection
+    /// and Find's matches marked.
+    pub fn lines(&mut self) -> Vec<Line> {
+        let selected = self
+            .term
+            .selection
+            .as_ref()
+            .and_then(|s| s.to_range(&self.term));
         let grid = self.term.grid();
         let columns = grid.columns();
         let offset = grid.display_offset() as i32;
+        let (top, bottom) = (-offset, grid.screen_lines() as i32 - 1 - offset);
+        let matches: Vec<Match> = match self.search.as_mut() {
+            Some((_, regex)) => RegexIter::new(
+                Point::new(GridLine(top), Column(0)),
+                Point::new(GridLine(bottom), Column(columns - 1)),
+                Direction::Right,
+                &self.term,
+                regex,
+            )
+            .collect(),
+            None => vec![],
+        };
+        let grid = self.term.grid();
+        let found = self.found.clone();
         (0..grid.screen_lines() as i32)
             .map(|row| {
-                let row = &grid[GridLine(row - offset)];
+                let line_at = GridLine(row - offset);
+                let row = &grid[line_at];
                 let mut line = Line::default();
                 for col in 0..columns {
                     let cell = &row[Column(col)];
@@ -170,6 +318,16 @@ impl<L: EventListener> Screen<L> {
                     if cell.flags.contains(Flags::INVERSE) {
                         std::mem::swap(&mut fg, &mut bg);
                     }
+                    let point = Point::new(line_at, Column(col));
+                    let mark = if found.as_ref().is_some_and(|m| m.contains(&point)) {
+                        Mark::Current
+                    } else if selected.as_ref().is_some_and(|s| s.contains(point)) {
+                        Mark::Selected
+                    } else if matches.iter().any(|m| m.contains(&point)) {
+                        Mark::Match
+                    } else {
+                        Mark::None
+                    };
                     let span = Span {
                         len: 0,
                         fg,
@@ -177,6 +335,7 @@ impl<L: EventListener> Screen<L> {
                         bold: cell.flags.contains(Flags::BOLD),
                         italic: cell.flags.contains(Flags::ITALIC),
                         underline: cell.flags.intersects(Flags::ALL_UNDERLINES),
+                        mark,
                     };
                     let start = line.text.len();
                     line.text.push(cell.c);
@@ -213,6 +372,18 @@ impl<L: EventListener> Screen<L> {
             Color::Indexed(i) => self.term.colors()[i as usize].unwrap_or_else(|| indexed(i)),
         }
     }
+}
+
+/// Text as a pattern that matches it and nothing else.
+fn literal(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if "\\.+*?()|[]{}^$#&-~".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 fn named(n: NamedColor) -> Rgb {
