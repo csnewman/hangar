@@ -568,3 +568,82 @@ fn the_tree_is_used_from_the_keyboard(cx: &mut TestAppContext) {
         "Delete asks first"
     );
 }
+
+fn running() -> hangar_app::api::Environment {
+    hangar_app::api::Environment {
+        id: "e1".into(),
+        short_id: "abc123".into(),
+        name: "ledger-1".into(),
+        owner: "alice".into(),
+        template: "t".into(),
+        phase: "running".into(),
+        desired: "running".into(),
+        reason: None,
+        progress: None,
+        worker: None,
+        worker_online: Some(true),
+        cpus: None,
+        memory_mib: None,
+        editor_path: Some("/home/dev".into()),
+        task: None,
+        agents: vec![],
+        created_at: chrono::Utc::now(),
+        updated_at: chrono::Utc::now(),
+    }
+}
+
+/// The file shown is selected in the Project window as it is shown, as
+/// IntelliJ's Always Select Opened File; turned off, the tree is left be.
+#[gpui::test]
+fn the_file_shown_is_selected_in_the_tree(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    let (asked_tx, _asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| {
+        let id = p.add_server(&url, "hgr_t", cx).unwrap();
+        p.apply(
+            &id,
+            hangar_app::place::Update::Snapshot(vec![running()]),
+            cx,
+        );
+        id
+    });
+    let (shell, cx) =
+        cx.add_window_view(|window, cx| hangar_app::shell::Shell::new(places.clone(), window, cx));
+    cx.update(|window, cx| shell.update(cx, |s, cx| s.open(&id, "e1", window, cx)));
+    let tab = shell.read_with(cx, |s, _| s.active_view()).unwrap();
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-main.rs").is_some()
+    });
+    let tree = tab.read_with(cx, |t, _| t.project()).unwrap();
+    let selected = |cx: &mut VisualTestContext| {
+        tree.read_with(cx, |t, _| t.selected().map(|s| s.path.clone()))
+            .unwrap_or_default()
+    };
+    for f in ["main.rs", "note090.md"] {
+        cx.update(|window, cx| tab.update(cx, |t, cx| t.open_file("/home/dev/app", f, window, cx)));
+        cx.run_until_parked();
+        assert_eq!(selected(cx), f, "shown, it is selected");
+    }
+    until(cx, "and scrolled to", |cx| {
+        cx.update(|window, _| window.refresh());
+        let height = cx.update(|w, _| w.bounds().size.height);
+        cx.debug_bounds("tree-row-note090.md")
+            .is_some_and(|b| b.top() >= gpui::px(0.) && b.bottom() <= height)
+    });
+
+    cx.update(|_, cx| hangar_app::settings::Settings::update(cx, |s| s.select_opened = false));
+    cx.update(|window, cx| {
+        tab.update(cx, |t, cx| {
+            t.open_file("/home/dev/app", "main.rs", window, cx)
+        })
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        selected(cx),
+        "note090.md",
+        "turned off, the tree is left be"
+    );
+}

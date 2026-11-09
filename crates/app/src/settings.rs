@@ -11,11 +11,17 @@ pub struct Values {
     /// Whether pressing Shift twice opens Search Everywhere, as in
     /// IntelliJ.
     pub double_shift: bool,
+    /// Whether the file shown is selected in the Project window as it is
+    /// shown, as IntelliJ's Always Select Opened File.
+    pub select_opened: bool,
 }
 
 impl Default for Values {
     fn default() -> Self {
-        Values { double_shift: true }
+        Values {
+            double_shift: true,
+            select_opened: true,
+        }
     }
 }
 

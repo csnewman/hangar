@@ -32,6 +32,11 @@ const ICONS: &[(&str, &str)] = &[
         r#"<path d="M4 20h16a1 1 0 0 0 1-1V8a1 1 0 0 0-1-1h-8l-2-3H4a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1z"/>"#,
     ),
     (
+        "locate",
+        r#"<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>"#,
+    ),
+    ("more", r#"<path d="M5 12h.01M12 12h.01M19 12h.01"/>"#),
+    (
         "signal-high",
         r#"<path d="M2 20h.01M7 20v-4M12 20v-8M17 20V8"/>"#,
     ),

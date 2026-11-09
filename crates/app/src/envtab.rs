@@ -753,7 +753,34 @@ impl EnvTab {
         if let Some(f) = self.files.get(i) {
             window.focus(&f.focus_handle(cx), cx);
         }
+        if crate::settings::Settings::get(cx).select_opened {
+            self.select_opened(false, cx);
+        }
         cx.notify();
+    }
+
+    /// Selects the file shown in the Project window, or in Filesystem when
+    /// no project holds it; asked for, the window opens, else it is only
+    /// selected there for when it is.
+    pub fn select_opened(&mut self, asked: bool, cx: &mut Context<Self>) {
+        let Some(abs) = self.active_file().map(|f| f.read(cx).path().to_string()) else {
+            return;
+        };
+        if asked {
+            return self.reveal_in_project(&abs, cx);
+        }
+        let in_project = self
+            .workspace
+            .as_ref()
+            .is_some_and(|w| w.read(cx).project_of(&abs).is_some());
+        let view = if in_project {
+            self.project.clone()
+        } else {
+            self.filesystem.clone()
+        };
+        if let Some(v) = view {
+            v.update(cx, |v, cx| v.reveal(&abs, cx));
+        }
     }
 
     pub fn close_file(&mut self, i: usize, cx: &mut Context<Self>) {
@@ -2052,12 +2079,65 @@ impl EnvTab {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let trees = matches!(t, Tool::Project | Tool::Filesystem);
+        let always = crate::settings::Settings::get(cx).select_opened;
+        let hover = p.surface_2;
         let head = h_flex()
+            .h(px(20.))
+            .flex_none()
             .gap(px(8.))
             .mb(px(8.))
             .font_weight(FontWeight::SEMIBOLD)
             .child(t.name())
             .child(div().flex_1())
+            .when(trees, |d| {
+                d.child(
+                    div()
+                        .id(SharedString::from(format!("select-opened-{}", t.name())))
+                        .size(px(20.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(4.))
+                        .cursor_pointer()
+                        .hover(move |d| d.bg(hover))
+                        .child(
+                            svg()
+                                .path(assets::icon("locate"))
+                                .size(px(14.))
+                                .text_color(p.muted),
+                        )
+                        .tooltip(|window, cx| {
+                            gpui_component::tooltip::Tooltip::new("Select Opened File")
+                                .build(window, cx)
+                        })
+                        .on_click(cx.listener(|this, _, _, cx| this.select_opened(true, cx))),
+                )
+                .child(
+                    gpui_component::button::Button::new(SharedString::from(format!(
+                        "options-{}",
+                        t.name()
+                    )))
+                    .ghost()
+                    .xsmall()
+                    .icon(gpui_component::Icon::empty().path(assets::icon("more")))
+                    .dropdown_menu_with_anchor(
+                        gpui::Anchor::TopRight,
+                        move |menu, _, cx| {
+                            crate::ui::modal(cx);
+                            menu.item(
+                                PopupMenuItem::new("Always Select Opened File")
+                                    .checked(always)
+                                    .on_click(|_, _, cx| {
+                                        crate::settings::Settings::update(cx, |s| {
+                                            s.select_opened = !s.select_opened
+                                        })
+                                    }),
+                            )
+                        },
+                    ),
+                )
+            })
             .child(
                 div()
                     .id(SharedString::from(format!("hide-{}", t.name())))
