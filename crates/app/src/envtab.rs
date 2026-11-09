@@ -740,6 +740,14 @@ impl EnvTab {
         self.show_file(i, window, cx);
     }
 
+    /// Gives the keyboard to the file shown, as Escape in a tool window
+    /// does.
+    pub fn focus_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(f) = self.file.and_then(|i| self.files.get(i)) {
+            window.focus(&f.focus_handle(cx), cx);
+        }
+    }
+
     fn show_file(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.file = Some(i);
         if let Some(f) = self.files.get(i) {
@@ -1507,6 +1515,11 @@ impl Render for EnvTab {
                         t.find_in(e.scope.clone(), e.replace, window, cx)
                     },
                 ));
+                self.subs.push(cx.subscribe_in(
+                    &view,
+                    window,
+                    |t, _, _: &crate::project::Leave, window, cx| t.focus_editor(window, cx),
+                ));
                 self.project = Some(view);
             }
             if self.structure.is_none()
@@ -1527,6 +1540,11 @@ impl Render for EnvTab {
                         t.open_file(&e.root, &e.path, window, cx)
                     }),
                 );
+                self.subs.push(cx.subscribe_in(
+                    &view,
+                    window,
+                    |t, _, _: &crate::project::Leave, window, cx| t.focus_editor(window, cx),
+                ));
                 self.filesystem = Some(view);
             }
             if let Some(abs) = self.pending_reveal.take() {

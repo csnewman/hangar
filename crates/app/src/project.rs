@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui::{
-    Context, Entity, FontWeight, IntoElement, ParentElement, Render, SharedString, Styled, Window,
-    div, prelude::*, px, svg,
+    App, Context, Entity, FocusHandle, Focusable, FontWeight, IntoElement, KeyBinding,
+    ParentElement, Render, SharedString, Styled, Window, actions, div, prelude::*, px, svg,
 };
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::{h_flex, v_flex};
@@ -80,6 +80,91 @@ pub struct FindIn {
 
 impl gpui::EventEmitter<FindIn> for ProjectView {}
 
+/// Asks for the keyboard to go back to the editor: Escape in the tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Leave;
+
+impl gpui::EventEmitter<Leave> for ProjectView {}
+
+actions!(
+    project_tree,
+    [
+        SelectUp,
+        SelectDown,
+        SelectFirst,
+        SelectLast,
+        PageUp,
+        PageDown,
+        Expand,
+        Collapse,
+        Open,
+        Delete,
+        Rename,
+        NewFile,
+        Copy,
+        Cut,
+        Paste,
+        CopyPath,
+        Escape,
+    ]
+);
+
+/// The tree's keys, as IntelliJ's Project view has them, while it has the
+/// keyboard.
+pub fn bind_keys(cx: &mut App) {
+    let ctx = Some("ProjectTree");
+    // Delete, New File, Copy, Cut, Paste, Copy Path.
+    #[cfg(target_os = "macos")]
+    let keys = [
+        "cmd-backspace",
+        "cmd-n",
+        "cmd-c",
+        "cmd-x",
+        "cmd-v",
+        "cmd-shift-c",
+    ];
+    #[cfg(not(target_os = "macos"))]
+    let keys = [
+        "delete",
+        "ctrl-n",
+        "ctrl-c",
+        "ctrl-x",
+        "ctrl-v",
+        "ctrl-shift-c",
+    ];
+    cx.bind_keys([
+        KeyBinding::new("up", SelectUp, ctx),
+        KeyBinding::new("down", SelectDown, ctx),
+        KeyBinding::new("home", SelectFirst, ctx),
+        KeyBinding::new("end", SelectLast, ctx),
+        KeyBinding::new("pageup", PageUp, ctx),
+        KeyBinding::new("pagedown", PageDown, ctx),
+        KeyBinding::new("right", Expand, ctx),
+        KeyBinding::new("left", Collapse, ctx),
+        KeyBinding::new("enter", Open, ctx),
+        KeyBinding::new("delete", Delete, ctx),
+        KeyBinding::new(keys[0], Delete, ctx),
+        KeyBinding::new("shift-f6", Rename, ctx),
+        KeyBinding::new(keys[1], NewFile, ctx),
+        KeyBinding::new(keys[2], Copy, ctx),
+        KeyBinding::new(keys[3], Cut, ctx),
+        KeyBinding::new(keys[4], Paste, ctx),
+        KeyBinding::new(keys[5], CopyPath, ctx),
+        KeyBinding::new("escape", Escape, ctx),
+    ]);
+}
+
+/// A row as the keys move over it: what selecting it selects, and whether
+/// it is a folder (a project's own row among them) and open.
+#[derive(Debug, Clone)]
+struct Visible {
+    sel: Selection,
+    project: Option<usize>,
+    depth: usize,
+    dir: bool,
+    open: bool,
+}
+
 /// What a click in the tree selects: a project's file (by the project's
 /// root and its path) or the machine's.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,7 +185,14 @@ pub struct ProjectView {
     reveal: Rc<Cell<bool>>,
     /// What Cut or Copy took, to paste.
     taken: Option<Taken>,
+    focus: FocusHandle,
     _sub: gpui::Subscription,
+}
+
+impl Focusable for ProjectView {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus.clone()
+    }
 }
 
 impl ProjectView {
@@ -116,6 +208,7 @@ impl ProjectView {
             scroll: gpui::ScrollHandle::new(),
             reveal: Rc::new(Cell::new(false)),
             taken: None,
+            focus: cx.focus_handle(),
             _sub: sub,
         };
         view.sync(cx);
@@ -307,6 +400,153 @@ impl ProjectView {
 
     pub fn selected(&self) -> Option<&Selection> {
         self.selected.as_ref()
+    }
+
+    /// The rows shown, in order, as the keys move over them.
+    fn visible(&self) -> Vec<Visible> {
+        let mut out = vec![];
+        let row = |r: Row, root: Option<String>| Visible {
+            sel: Selection { root, path: r.path },
+            project: r.project,
+            depth: r.depth,
+            dir: r.dir,
+            open: r.open,
+        };
+        match self.scope {
+            Scope::Projects => {
+                for (i, proj) in self.projects.iter().enumerate() {
+                    out.push(Visible {
+                        sel: Selection {
+                            root: Some(proj.root.clone()),
+                            path: String::new(),
+                        },
+                        project: Some(i),
+                        depth: 0,
+                        dir: true,
+                        open: proj.open,
+                    });
+                    if proj.open {
+                        let mut rs = vec![];
+                        rows(&proj.tree, Some(i), &proj.git, "", 1, &mut rs);
+                        out.extend(rs.into_iter().map(|r| row(r, Some(proj.root.clone()))));
+                    }
+                }
+            }
+            Scope::Filesystem => {
+                let mut rs = vec![];
+                rows(&self.machine, None, &HashMap::new(), "/", 0, &mut rs);
+                out.extend(rs.into_iter().map(|r| row(r, None)));
+            }
+        }
+        out
+    }
+
+    /// Selects the row at an index of the rows shown, scrolling to it.
+    fn select_at(&mut self, rows: &[Visible], i: usize, cx: &mut Context<Self>) {
+        if let Some(r) = rows.get(i) {
+            self.selected = Some(r.sel.clone());
+            self.reveal.set(true);
+            cx.notify();
+        }
+    }
+
+    /// Moves the selection by some rows, up for a negative count; with
+    /// nothing selected, the first row is.
+    fn select_by(&mut self, by: i64, cx: &mut Context<Self>) {
+        let rows = self.visible();
+        if rows.is_empty() {
+            return;
+        }
+        let at = self.at(&rows);
+        let i = match at {
+            Some(i) => (i as i64 + by).clamp(0, rows.len() as i64 - 1) as usize,
+            None => 0,
+        };
+        self.select_at(&rows, i, cx);
+    }
+
+    fn at(&self, rows: &[Visible]) -> Option<usize> {
+        let sel = self.selected.as_ref()?;
+        rows.iter().position(|r| &r.sel == sel)
+    }
+
+    /// Opens or closes a folder row, a project's own among them.
+    fn toggle_row(&mut self, r: &Visible, cx: &mut Context<Self>) {
+        match (r.project, r.sel.path.as_str()) {
+            (Some(i), "") => self.toggle_project(i, cx),
+            (Some(i), path) => self.toggle(i, path, cx),
+            (None, path) => self.toggle_machine(path, cx),
+        }
+    }
+
+    /// Right: a shut folder opens; an open one gives way to its first row.
+    fn expand_selected(&mut self, cx: &mut Context<Self>) {
+        let rows = self.visible();
+        let Some(i) = self.at(&rows) else {
+            return self.select_by(0, cx);
+        };
+        let r = rows[i].clone();
+        if r.dir && !r.open {
+            self.toggle_row(&r, cx);
+        } else if r.dir && rows.get(i + 1).is_some_and(|n| n.depth > r.depth) {
+            self.select_at(&rows, i + 1, cx);
+        }
+    }
+
+    /// Left: an open folder shuts; anything else gives way to its folder.
+    fn collapse_selected(&mut self, cx: &mut Context<Self>) {
+        let rows = self.visible();
+        let Some(i) = self.at(&rows) else {
+            return self.select_by(0, cx);
+        };
+        let r = rows[i].clone();
+        if r.dir && r.open {
+            self.toggle_row(&r, cx);
+        } else if let Some(parent) = rows[..i].iter().rposition(|p| p.depth < r.depth) {
+            self.select_at(&rows, parent, cx);
+        }
+    }
+
+    /// Enter: a file opens in the editor; a folder opens or shuts.
+    fn open_selected(&mut self, cx: &mut Context<Self>) {
+        let rows = self.visible();
+        let Some(i) = self.at(&rows) else {
+            return;
+        };
+        let r = rows[i].clone();
+        if r.dir {
+            self.toggle_row(&r, cx);
+        } else {
+            cx.emit(OpenFile {
+                root: r.sel.root.clone().unwrap_or_else(|| "/".into()),
+                path: r.sel.path.clone(),
+            });
+        }
+    }
+
+    /// What the selected row is, for the menu's actions run from keys.
+    fn selected_target(&self, cx: &App) -> Option<Target> {
+        let rows = self.visible();
+        let r = rows.get(self.at(&rows)?)?;
+        self.target(r.sel.root.as_deref(), &r.sel.path, r.dir, cx)
+    }
+
+    /// Cut or Copy of the selected row, to paste.
+    fn take(&mut self, cut: bool, cx: &mut Context<Self>) {
+        if let Some(t) = self.selected_target(cx).filter(|t| !(cut && t.is_root())) {
+            self.taken = Some(Taken {
+                code: t.code,
+                paths: vec![t.abs],
+                cut,
+            });
+        }
+    }
+
+    /// How many rows the tree shows at once, for Page Up and Page Down.
+    fn page(&self) -> i64 {
+        (f32::from(self.scroll.bounds().size.height) / 20.)
+            .floor()
+            .max(1.) as i64
     }
 
     /// Shows a file in the tree: the project holding it open (or, in the
@@ -586,7 +826,8 @@ impl Render for ProjectView {
                                     .text_color(p.muted)
                                     .child(names[i].1.clone()),
                             )
-                            .on_click(cx.listener(move |v, _, _, cx| {
+                            .on_click(cx.listener(move |v, _, window, cx| {
+                                window.focus(&v.focus, cx);
                                 v.selected = Some(on_click.clone());
                                 v.toggle_project(i, cx)
                             }))
@@ -671,12 +912,76 @@ impl Render for ProjectView {
             handle.set_offset(offset);
             window.request_animation_frame();
         });
-        v_flex().size_full().min_h_0().text_size(px(12.)).child(
-            scroll("project-tree", list)
-                .track_scroll(&self.scroll)
-                .flex_1()
-                .min_h_0(),
-        )
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .text_size(px(12.))
+            .key_context("ProjectTree")
+            .track_focus(&self.focus)
+            .on_action(cx.listener(|v, _: &SelectUp, _, cx| v.select_by(-1, cx)))
+            .on_action(cx.listener(|v, _: &SelectDown, _, cx| v.select_by(1, cx)))
+            .on_action(cx.listener(|v, _: &SelectFirst, _, cx| v.select_by(i64::MIN / 2, cx)))
+            .on_action(cx.listener(|v, _: &SelectLast, _, cx| v.select_by(i64::MAX / 2, cx)))
+            .on_action(cx.listener(|v, _: &PageUp, _, cx| v.select_by(-v.page(), cx)))
+            .on_action(cx.listener(|v, _: &PageDown, _, cx| v.select_by(v.page(), cx)))
+            .on_action(cx.listener(|v, _: &Expand, _, cx| v.expand_selected(cx)))
+            .on_action(cx.listener(|v, _: &Collapse, _, cx| v.collapse_selected(cx)))
+            .on_action(cx.listener(|v, _: &Open, _, cx| v.open_selected(cx)))
+            .on_action(cx.listener(|_, _: &Escape, _, cx| cx.emit(Leave)))
+            .on_action(cx.listener(|v, _: &Delete, window, cx| {
+                if let Some(t) = v.selected_target(cx).filter(|t| !t.is_root()) {
+                    treeops::trash(&t, window, cx);
+                }
+            }))
+            .on_action(cx.listener(|v, _: &Rename, window, cx| {
+                if let Some(t) = v.selected_target(cx).filter(|t| !t.is_root()) {
+                    let view = cx.entity().downgrade();
+                    treeops::rename(&t, window, cx, move |abs, _, cx| {
+                        let _ = view.update(cx, |v, cx| v.reveal(&abs, cx));
+                    });
+                }
+            }))
+            .on_action(cx.listener(|v, _: &NewFile, window, cx| {
+                if let Some(t) = v.selected_target(cx) {
+                    let view = cx.entity().downgrade();
+                    let root = t.root.clone();
+                    treeops::new_file(&t, window, cx, move |abs, _, cx| {
+                        let path = match &root {
+                            Some(r) => abs
+                                .strip_prefix(&format!("{}/", r.trim_end_matches('/')))
+                                .unwrap_or(&abs)
+                                .to_string(),
+                            None => abs.clone(),
+                        };
+                        let root = root.clone().unwrap_or_else(|| "/".into());
+                        let _ = view.update(cx, |v, cx| {
+                            v.reveal(&abs, cx);
+                            cx.emit(OpenFile { root, path })
+                        });
+                    });
+                }
+            }))
+            .on_action(cx.listener(|v, _: &Copy, _, cx| v.take(false, cx)))
+            .on_action(cx.listener(|v, _: &Cut, _, cx| v.take(true, cx)))
+            .on_action(cx.listener(|v, _: &Paste, window, cx| {
+                if let (Some(taken), Some(t)) = (v.taken.clone(), v.selected_target(cx)) {
+                    treeops::paste(&taken, &t, window, cx);
+                    if taken.cut {
+                        v.taken = None;
+                    }
+                }
+            }))
+            .on_action(cx.listener(|v, _: &CopyPath, _, cx| {
+                if let Some(t) = v.selected_target(cx) {
+                    treeops::copy(t.abs.clone(), cx);
+                }
+            }))
+            .child(
+                scroll("project-tree", list)
+                    .track_scroll(&self.scroll)
+                    .flex_1()
+                    .min_h_0(),
+            )
     }
 }
 
@@ -802,7 +1107,8 @@ impl ProjectView {
                 let path = r.path.clone();
                 move || format!("tree-row-{path}")
             })
-            .on_click(cx.listener(move |v, e: &gpui::ClickEvent, _, cx| {
+            .on_click(cx.listener(move |v, e: &gpui::ClickEvent, window, cx| {
+                window.focus(&v.focus, cx);
                 v.selected = Some(sel.clone());
                 if dir {
                     match project {
@@ -940,7 +1246,7 @@ fn tree_menu(
                 let _ = view.update(cx, |_, cx| cx.emit(FindIn { scope, replace }));
             })
     };
-    let is_root = t.root.as_deref() == Some(t.abs.as_str());
+    let is_root = t.is_root();
     let in_project = t.root.is_some();
     let mut menu = menu
         .item(new_file)

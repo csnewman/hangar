@@ -48,6 +48,12 @@ impl Target {
         }
     }
 
+    /// Whether it is a project's own folder, which is not renamed, moved
+    /// or deleted from the tree.
+    pub fn is_root(&self) -> bool {
+        self.root.as_deref() == Some(self.abs.as_str())
+    }
+
     /// Its path from its project's root, or from / for the machine's.
     pub fn relative(&self) -> String {
         let root = self.root.as_deref().unwrap_or("/").trim_end_matches('/');

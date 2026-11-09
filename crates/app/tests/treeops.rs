@@ -457,3 +457,114 @@ fn a_folder_is_added_to_the_workspace(cx: &mut TestAppContext) {
         json!(["/home/dev/app", "/home/dev/app/src"])
     );
 }
+
+/// The tree's keys, as IntelliJ's: up and down, Home and End (scrolled to),
+/// right and left over folders, Enter to open, Escape back to the editor,
+/// Copy and Paste into a folder, and Delete asking first.
+#[gpui::test]
+fn the_tree_is_used_from_the_keyboard(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        hangar_app::project::bind_keys(cx);
+    });
+    let (asked_tx, asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (opened_tx, opened) = mpsc::channel();
+    let (left_tx, left) = mpsc::channel();
+    let mut tree = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        cx.subscribe(&view, move |_, _, e: &OpenFile, _| {
+            opened_tx.send(e.clone()).unwrap();
+        })
+        .detach();
+        cx.subscribe(&view, move |_, _, _: &hangar_app::project::Leave, _| {
+            left_tx.send(()).unwrap();
+        })
+        .detach();
+        tree = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let tree = tree.unwrap();
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-main.rs").is_some()
+    });
+    let selected = |cx: &mut VisualTestContext| {
+        tree.read_with(cx, |t, _| t.selected().map(|s| s.path.clone()))
+            .unwrap_or_default()
+    };
+    let main = cx.debug_bounds("tree-row-main.rs").unwrap();
+    cx.simulate_click(main.center(), Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(
+        selected(cx),
+        "main.rs",
+        "a click selects, and takes the keys"
+    );
+
+    cx.simulate_keystrokes("up");
+    assert_eq!(selected(cx), "src");
+    cx.simulate_keystrokes("up");
+    assert_eq!(selected(cx), "", "the project's own row");
+    cx.simulate_keystrokes("left");
+    assert!(
+        cx.debug_bounds("tree-row-src").is_none(),
+        "left shuts the project"
+    );
+    cx.simulate_keystrokes("right down");
+    assert_eq!(selected(cx), "src", "right opens it again");
+    cx.simulate_keystrokes("down down");
+    assert_eq!(selected(cx), "note000.md");
+    cx.simulate_keystrokes("left");
+    assert_eq!(selected(cx), "", "left on a file goes to its folder");
+
+    cx.simulate_keystrokes("end");
+    assert_eq!(selected(cx), "note119.md");
+    until(cx, "the last row is scrolled to", |cx| {
+        cx.update(|window, _| window.refresh());
+        let height = cx.update(|w, _| w.bounds().size.height);
+        cx.debug_bounds("tree-row-note119.md")
+            .is_some_and(|b| b.bottom() <= height)
+    });
+    cx.simulate_keystrokes("home down down");
+    assert_eq!(selected(cx), "main.rs");
+
+    cx.simulate_keystrokes("enter");
+    let open = opened.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(open.path, "main.rs", "Enter opens the file");
+    cx.simulate_keystrokes("escape");
+    left.recv_timeout(Duration::from_secs(5))
+        .expect("Escape gives the editor the keys");
+
+    let (copy, paste, delete) = if cfg!(target_os = "macos") {
+        ("cmd-c", "cmd-v", "cmd-backspace")
+    } else {
+        ("ctrl-c", "ctrl-v", "delete")
+    };
+    cx.simulate_keystrokes(copy);
+    cx.simulate_keystrokes("up");
+    cx.simulate_keystrokes(paste);
+    let pasted = std::cell::RefCell::new(None);
+    until(cx, "the copy is pasted into src", |_| {
+        if let Ok(m) = asked.try_recv() {
+            *pasted.borrow_mut() = Some(m);
+        }
+        pasted.borrow().is_some()
+    });
+    let (method, params) = pasted.into_inner().unwrap();
+    assert_eq!(method, "fs.transfer");
+    assert_eq!(params["op"], "copy");
+    assert_eq!(params["from"], json!(["/home/dev/app/main.rs"]));
+    assert_eq!(params["to"], "/home/dev/app/src");
+
+    cx.simulate_keystrokes(delete);
+    cx.run_until_parked();
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "Delete asks first"
+    );
+}
