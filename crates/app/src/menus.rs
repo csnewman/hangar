@@ -5,6 +5,10 @@
 use gpui::{App, KeyBinding, Menu, MenuItem, OsAction, actions};
 use gpui_component::input::{Copy, Cut, Paste, Redo, Replace, Search, SelectAll, Undo};
 
+use crate::docedit::{
+    CommentLine, DeleteLine, DuplicateLine, JoinLines, MoveLineDown, MoveLineUp, Reformat,
+    ToggleSoftWrap,
+};
 use crate::envtab::{
     CloseTab, FindInFiles, FindUsages, GoToLine, HideAllToolWindows, RenameSymbol, ReopenClosedTab,
     ReplaceInFiles, ToggleCommit, ToggleDocker, ToggleGit, ToggleProblems, ToggleProject,
@@ -68,6 +72,17 @@ pub fn init(cx: &mut App) {
             MenuItem::action("Replace in Files…", ReplaceInFiles),
             MenuItem::action("Find Usages", FindUsages),
         ]),
+        Menu::new("Code").items([
+            MenuItem::action("Reformat Code", Reformat),
+            MenuItem::separator(),
+            MenuItem::action("Comment with Line Comment", CommentLine),
+            MenuItem::action("Duplicate Line or Selection", DuplicateLine),
+            MenuItem::action("Delete Line", DeleteLine),
+            MenuItem::action("Join Lines", JoinLines),
+            MenuItem::separator(),
+            MenuItem::action("Move Line Up", MoveLineUp),
+            MenuItem::action("Move Line Down", MoveLineDown),
+        ]),
         Menu::new("Refactor").items([MenuItem::action("Rename…", RenameSymbol)]),
         Menu::new("View").items([
             MenuItem::action("Project", ToggleProject),
@@ -80,6 +95,8 @@ pub fn init(cx: &mut App) {
             MenuItem::action("Docker", ToggleDocker),
             MenuItem::separator(),
             MenuItem::action("Hide All Tool Windows", HideAllToolWindows),
+            MenuItem::separator(),
+            MenuItem::action("Soft-Wrap", ToggleSoftWrap),
         ]),
         Menu::new("Window").items([
             MenuItem::action("Minimize", Minimize),

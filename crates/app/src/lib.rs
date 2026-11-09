@@ -17,6 +17,7 @@ pub mod gitlog;
 pub mod languages;
 pub mod latency;
 pub mod layout;
+pub mod lineops;
 pub mod lspedit;
 pub mod lspops;
 pub mod menus;

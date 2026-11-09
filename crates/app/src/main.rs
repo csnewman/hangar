@@ -15,6 +15,7 @@ fn main() {
             gpui_component::init(cx);
             hangar_app::envtab::bind_keys(cx);
             hangar_app::project::bind_keys(cx);
+            hangar_app::docedit::bind_keys(cx);
             hangar_app::shell::bind_keys(cx);
             hangar_app::termview::bind_keys(cx);
             hangar_app::menus::init(cx);

@@ -875,6 +875,56 @@ impl EnvTab {
             .or_else(|| ws.primary())
     }
 
+    /// Reformats the file shown as its language server formats it
+    /// (IntelliJ's Reformat Code), as one change, the caret kept on its line.
+    pub fn reformat(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let (Some(doc), Some(langs)) = (self.active_file(), self.languages.clone()) else {
+            return;
+        };
+        let abs = doc.read(cx).path().to_string();
+        let (line, column) = doc.read(cx).position(cx);
+        let asked = langs.update(cx, |l, cx| {
+            l.request(
+                &abs,
+                "textDocument/formatting",
+                serde_json::json!({
+                    "textDocument": { "uri": languages::file_uri(&abs) },
+                    "options": { "tabSize": 4, "insertSpaces": true },
+                }),
+                cx,
+            )
+        });
+        cx.spawn_in(window, async move |_, cx| {
+            let edits = asked.await.and_then(|v| {
+                serde_json::from_value::<Option<Vec<lsp_types::TextEdit>>>(v)
+                    .map_err(|e| e.to_string())
+            });
+            let _ = cx.update(|window, cx| match edits {
+                Ok(edits) => {
+                    let text = doc.read(cx).text_and_caret(cx).0;
+                    if let Some(change) =
+                        crate::lspops::changeset(&text, &edits.unwrap_or_default())
+                    {
+                        doc.update(cx, |d, cx| {
+                            d.apply_own(change, window, cx);
+                            d.go_to(line.saturating_sub(1), column.saturating_sub(1), window, cx);
+                        });
+                    }
+                }
+                Err(e) => {
+                    use gpui_component::WindowExt;
+                    window.push_notification(
+                        gpui_component::notification::Notification::error(format!(
+                            "Reformat Code: {e}"
+                        )),
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Lists every use of the symbol at the caret in the Find window, as
     /// its language server finds them (IntelliJ's Find Usages, Alt-F7).
     pub fn find_usages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1688,6 +1738,9 @@ impl Render for EnvTab {
             )
             .on_action(
                 cx.listener(|t, _: &ReplaceInFiles, window, cx| t.replace_in_files(window, cx)),
+            )
+            .on_action(
+                cx.listener(|t, _: &crate::docedit::Reformat, window, cx| t.reformat(window, cx)),
             )
             .child(self.toolbar(&config, &env, &card, &p, cx))
             .child(

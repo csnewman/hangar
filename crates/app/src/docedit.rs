@@ -364,6 +364,41 @@ fn map_all(steps: &[ChangeSet], change: &ChangeSet) -> Vec<ChangeSet> {
     out
 }
 
+gpui::actions!(
+    doc_editor,
+    [
+        DuplicateLine,
+        DeleteLine,
+        MoveLineUp,
+        MoveLineDown,
+        CommentLine,
+        JoinLines,
+        Reformat,
+        ToggleSoftWrap,
+    ]
+);
+
+/// The editor's keys for IntelliJ's line commands, in a file's editor only
+/// (other text fields keep their own), bound after gpui-component's so they
+/// take Cmd-Backspace's place there.
+pub fn bind_keys(cx: &mut App) {
+    use gpui::KeyBinding;
+    let ctx = Some("DocEditor > Input");
+    #[cfg(target_os = "macos")]
+    let keys = ["cmd-d", "cmd-backspace", "cmd-/", "cmd-alt-l"];
+    #[cfg(not(target_os = "macos"))]
+    let keys = ["ctrl-d", "ctrl-y", "ctrl-/", "ctrl-alt-l"];
+    cx.bind_keys([
+        KeyBinding::new(keys[0], DuplicateLine, ctx),
+        KeyBinding::new(keys[1], DeleteLine, ctx),
+        KeyBinding::new("alt-shift-up", MoveLineUp, ctx),
+        KeyBinding::new("alt-shift-down", MoveLineDown, ctx),
+        KeyBinding::new(keys[2], CommentLine, ctx),
+        KeyBinding::new("ctrl-shift-j", JoinLines, ctx),
+        KeyBinding::new(keys[3], Reformat, ctx),
+    ]);
+}
+
 /// The language the editor highlights a file as, by its name.
 pub fn language(path: &str) -> &'static str {
     let name = path.rsplit('/').next().unwrap_or(path);
@@ -434,6 +469,32 @@ pub fn code_editor(state: &Entity<EditorState>) -> Editor {
     Editor::new(state).h_full().bordered(false).gap_0()
 }
 
+/// The editor's menu, as IntelliJ's: going to and renaming the symbol at
+/// the caret, reformatting and commenting, the clipboard, and soft wrap.
+/// Each item names its action, so the menu shows its key.
+fn editor_menu(
+    menu: gpui_component::native_menu::NativeMenu,
+    comment: bool,
+    wrap: bool,
+    _: &App,
+) -> gpui_component::native_menu::NativeMenu {
+    use gpui_component::input::{Copy, Cut, GoToDefinition, Paste, SelectAll};
+    menu.menu("Go to Definition", Box::new(GoToDefinition))
+        .menu("Find Usages", Box::new(crate::envtab::FindUsages))
+        .menu("Rename…", Box::new(crate::envtab::RenameSymbol))
+        .separator()
+        .menu("Reformat Code", Box::new(Reformat))
+        .menu_with_disabled("Comment with Line Comment", !comment, Box::new(CommentLine))
+        .menu("Duplicate Line or Selection", Box::new(DuplicateLine))
+        .separator()
+        .menu("Cut", Box::new(Cut))
+        .menu("Copy", Box::new(Copy))
+        .menu("Paste", Box::new(Paste))
+        .menu("Select All", Box::new(SelectAll))
+        .separator()
+        .menu_with_check("Soft-Wrap", wrap, Box::new(ToggleSoftWrap))
+}
+
 pub struct DocEditor {
     code: Code,
     /// The file's absolute path, once open, and the path asked for.
@@ -466,6 +527,8 @@ pub struct DocEditor {
     /// puts it back at the top as it is next drawn, so the cursor is moved
     /// (and scrolled to) only after.
     drawn: bool,
+    /// The soft wrap last given to the editor, from the settings.
+    wrapped: Option<bool>,
     /// The language server's diagnostics for the file, drawn in it.
     diagnostics: Vec<lsp_types::Diagnostic>,
     /// Who this app's user is to the others: a name and a colour.
@@ -537,6 +600,7 @@ impl DocEditor {
             state: State::Opening,
             go_to: None,
             drawn: false,
+            wrapped: None,
             diagnostics: vec![],
             me,
             remotes: HashMap::new(),
@@ -1130,6 +1194,45 @@ impl DocEditor {
         self.push(cx);
     }
 
+    /// Runs one of the line commands on the text and selection, as one
+    /// change of the user's: sent, and undone with one Undo.
+    pub fn line_command(
+        &mut self,
+        f: impl FnOnce(&str, std::ops::Range<usize>) -> Option<crate::lineops::Change>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.writable || !matches!(self.state, State::Open | State::Reconnecting(_)) {
+            return;
+        }
+        let (text, sel) = {
+            let e = self.editor.read(cx);
+            (e.text().clone(), e.selected_range())
+        };
+        let plain = text.to_string();
+        let Some(c) = f(&plain, sel) else {
+            return;
+        };
+        let at = |b: usize| text.byte_to_utf16_idx(b.min(text.len()));
+        let change = Change {
+            from: at(c.replace.start),
+            to: at(c.replace.end),
+            insert: Text::from(c.with.as_str()),
+        };
+        let Ok(change) = ChangeSet::of(vec![change], text.len_utf16()) else {
+            return;
+        };
+        self.apply_own(change, window, cx);
+        let range = c.selection.clone();
+        self.editor
+            .update(cx, |e, cx| e.set_selected_range(range, cx));
+    }
+
+    /// The file's line comment, by its language.
+    fn comment(&self) -> Option<&'static str> {
+        crate::lineops::comment_for(language(&self.path))
+    }
+
     /// How a Markdown file is shown, if it is one.
     pub fn preview(&self) -> Option<Preview> {
         self.preview
@@ -1265,9 +1368,44 @@ impl Render for DocEditor {
             State::Open if !self.writable => Some("Read-only".to_string()),
             State::Open => None,
         };
+        let wrap = crate::settings::Settings::get(cx).soft_wrap;
+        if self.wrapped != Some(wrap) {
+            self.wrapped = Some(wrap);
+            self.editor
+                .update(cx, |e, cx| e.set_soft_wrap(wrap, window, cx));
+        }
+        use crate::lineops;
         div()
             .size_full()
             .relative()
+            .key_context("DocEditor")
+            .on_action(cx.listener(|d, _: &DuplicateLine, window, cx| {
+                d.line_command(|t, s| Some(lineops::duplicate(t, s)), window, cx)
+            }))
+            .on_action(cx.listener(|d, _: &DeleteLine, window, cx| {
+                d.line_command(|t, s| Some(lineops::delete_lines(t, s)), window, cx)
+            }))
+            .on_action(cx.listener(|d, _: &MoveLineUp, window, cx| {
+                d.line_command(|t, s| lineops::move_lines(t, s, true), window, cx)
+            }))
+            .on_action(cx.listener(|d, _: &MoveLineDown, window, cx| {
+                d.line_command(|t, s| lineops::move_lines(t, s, false), window, cx)
+            }))
+            .on_action(cx.listener(|d, _: &CommentLine, window, cx| {
+                if let Some(prefix) = d.comment() {
+                    d.line_command(
+                        |t, s| Some(lineops::toggle_comment(t, s, prefix)),
+                        window,
+                        cx,
+                    )
+                }
+            }))
+            .on_action(cx.listener(|d, _: &JoinLines, window, cx| {
+                d.line_command(lineops::join_lines, window, cx)
+            }))
+            .on_action(cx.listener(|_, _: &ToggleSoftWrap, _, cx| {
+                crate::settings::Settings::update(cx, |s| s.soft_wrap = !s.soft_wrap)
+            }))
             .capture_action(cx.listener(|d, _: &Undo, window, cx| {
                 cx.stop_propagation();
                 d.undo(window, cx);
@@ -1277,9 +1415,13 @@ impl Render for DocEditor {
                 d.redo(window, cx);
             }))
             .child({
-                let editor = code_editor(&self.editor).readonly(
-                    !self.writable || !matches!(self.state, State::Open | State::Reconnecting(_)),
-                );
+                let comment = self.comment().is_some();
+                let editor = code_editor(&self.editor)
+                    .readonly(
+                        !self.writable
+                            || !matches!(self.state, State::Open | State::Reconnecting(_)),
+                    )
+                    .context_menu(move |menu, _, cx| editor_menu(menu, comment, wrap, cx));
                 match self.preview {
                     None => div().size_full().child(editor).into_any_element(),
                     Some(mode) => self.with_preview(mode, editor, &p, cx).into_any_element(),

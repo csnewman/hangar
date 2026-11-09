@@ -14,6 +14,8 @@ pub struct Values {
     /// Whether the file shown is selected in the Project window as it is
     /// shown, as IntelliJ's Always Select Opened File.
     pub select_opened: bool,
+    /// Whether long lines wrap at the editor's edge.
+    pub soft_wrap: bool,
 }
 
 impl Default for Values {
@@ -21,6 +23,7 @@ impl Default for Values {
         Values {
             double_shift: true,
             select_opened: true,
+            soft_wrap: true,
         }
     }
 }
