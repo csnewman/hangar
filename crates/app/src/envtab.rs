@@ -1591,6 +1591,11 @@ impl Render for EnvTab {
                         t.open_file(&e.root, &e.path, window, cx)
                     }),
                 );
+                self.subs.push(cx.subscribe_in(
+                    &view,
+                    window,
+                    |t, _, e: &crate::project::Reveal, _, cx| t.reveal_in_project(&e.abs, cx),
+                ));
                 self.subs.push(
                     cx.subscribe_in(&view, window, |t, _, e: &ShowDiff, window, cx| {
                         t.open_diff(e.0.clone(), window, cx)

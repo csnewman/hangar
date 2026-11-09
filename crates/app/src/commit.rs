@@ -12,6 +12,7 @@ use gpui::{
     Window, div, prelude::*, px, svg,
 };
 use gpui_component::input::{InputEvent, Textarea, TextareaState};
+use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::{h_flex, v_flex};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -21,7 +22,7 @@ use crate::branch::BranchView;
 use crate::code::Code;
 use crate::diff::{ShowDiff, Spec};
 use crate::palette::{self, Palette};
-use crate::project::OpenFile;
+use crate::project::{OpenFile, Reveal};
 use crate::ui;
 use crate::workspace::{Event, State, Workspace};
 
@@ -206,6 +207,8 @@ pub struct CommitView {
 impl gpui::EventEmitter<OpenFile> for CommitView {}
 
 impl gpui::EventEmitter<ShowDiff> for CommitView {}
+
+impl gpui::EventEmitter<Reveal> for CommitView {}
 
 impl CommitView {
     pub fn new(workspace: Entity<Workspace>, window: &mut Window, cx: &mut Context<Self>) -> Self {
@@ -874,6 +877,17 @@ impl CommitView {
         };
 
         let (rt, path) = (root.to_string(), c.path.clone());
+        let key_right = key.clone();
+        let view = cx.entity().downgrade();
+        let menu_for = MenuFor {
+            root: rt.clone(),
+            path: path.clone(),
+            from: c.from.clone(),
+            staged,
+            deleted,
+            untracked: c.index == "?",
+            submodule: c.submodule,
+        };
         let stage_button = icon_button(
             format!("stage-{key}"),
             if staged { "minus" } else { "plus" },
@@ -933,6 +947,10 @@ impl CommitView {
 
         h_flex()
             .id(SharedString::from(format!("change-{key}")))
+            .debug_selector({
+                let name = format!("change-{}-{}", if staged { 's' } else { 'w' }, c.path);
+                move || name
+            })
             .group("change")
             .h(px(20.))
             .gap(px(6.))
@@ -995,13 +1013,164 @@ impl CommitView {
                 }
                 cx.notify();
             }))
+            // A right-click selects the row, so it is clear what the menu
+            // is about.
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener({
+                    let key = key_right;
+                    move |v, _, _, cx| {
+                        v.selected = Some(key.clone());
+                        cx.notify();
+                    }
+                }),
+            )
             .tooltip(move |window, cx| {
                 gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+            })
+            .context_menu(move |menu, _, cx| {
+                crate::ui::modal(cx);
+                change_menu(menu, &menu_for, &view)
             })
     }
 }
 
+/// What a change's menu acts on.
+#[derive(Clone)]
+struct MenuFor {
+    root: String,
+    path: String,
+    from: Option<String>,
+    staged: bool,
+    deleted: bool,
+    untracked: bool,
+    submodule: bool,
+}
+
+/// A change's menu, as IntelliJ's Commit window has it: its diff and its
+/// file, staging it, rolling it back, ignoring it if untracked, its paths,
+/// and finding it in the Project window.
+fn change_menu(menu: PopupMenu, c: &MenuFor, view: &gpui::WeakEntity<CommitView>) -> PopupMenu {
+    let abs = crate::treeops::join(&c.root, &c.path);
+    let on = |label: &str, f: MenuAction| {
+        let view = view.clone();
+        PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
+            let _ = view.update(cx, |v, cx| f(v, window, cx));
+        })
+    };
+    let (root, path, from) = (c.root.clone(), c.path.clone(), c.from.clone());
+    let diff = {
+        let (root, path, from) = (root.clone(), path.clone(), from.clone());
+        on(
+            "Show Diff",
+            Box::new(move |_, _, cx| {
+                let mut spec = Spec::working(&root, &path);
+                spec.from = from.clone();
+                cx.emit(ShowDiff(spec));
+            }),
+        )
+    };
+    let source = {
+        let (root, path) = (root.clone(), path.clone());
+        on(
+            "Jump to Source",
+            Box::new(move |_, _, cx| {
+                cx.emit(OpenFile {
+                    root: root.clone(),
+                    path: path.clone(),
+                })
+            }),
+        )
+        .disabled(c.deleted)
+    };
+    let stage = {
+        let (root, path, staged) = (root.clone(), path.clone(), c.staged);
+        on(
+            if staged { "Unstage" } else { "Stage" },
+            Box::new(move |v, _, cx| {
+                if staged {
+                    v.unstage(&root, &path, cx)
+                } else {
+                    v.stage(&root, &path, cx)
+                }
+            }),
+        )
+    };
+    let rollback = {
+        let (root, path, untracked) = (root.clone(), path.clone(), c.untracked);
+        on(
+            "Rollback…",
+            Box::new(move |_, window, cx| {
+                let (root, path) = (root.clone(), path.clone());
+                let view = cx.entity().downgrade();
+                let (title, body, ok) = if untracked {
+                    (
+                        format!("Delete {path}?"),
+                        "It is not in git, so nothing can bring it back.",
+                        "Delete",
+                    )
+                } else {
+                    (
+                        format!("Roll back {path}?"),
+                        "Its changes are discarded, back to the last commit.",
+                        "Roll Back",
+                    )
+                };
+                crate::treeops::confirm(&title, body, ok, window, cx, move |_, cx| {
+                    let _ = view.update(cx, |v, cx| v.rollback(&root, &path, cx));
+                });
+            }),
+        )
+        .disabled(c.submodule)
+    };
+    let ignore = {
+        let (root, abs) = (root.clone(), abs.clone());
+        on(
+            "Add to .gitignore",
+            Box::new(move |v, _, cx| {
+                v.act(
+                    &root,
+                    "Ignoring…",
+                    vec![(
+                        "git.ignore",
+                        serde_json::json!({ "path": abs, "dir": false }),
+                    )],
+                    cx,
+                )
+            }),
+        )
+    };
+    let copy = |label: &str, text: String| {
+        PopupMenuItem::new(label.to_string())
+            .on_click(move |_, _, cx| crate::treeops::copy(text.clone(), cx))
+    };
+    let reveal = {
+        let abs = abs.clone();
+        on(
+            "Select in Project",
+            Box::new(move |_, _, cx| cx.emit(Reveal { abs: abs.clone() })),
+        )
+        .disabled(c.deleted)
+    };
+    let mut menu = menu
+        .item(diff)
+        .item(source)
+        .separator()
+        .item(stage)
+        .item(rollback);
+    if c.untracked {
+        menu = menu.item(ignore);
+    }
+    menu.separator()
+        .item(copy("Copy Absolute Path", abs.clone()))
+        .item(copy("Copy Path From Project Root", path))
+        .separator()
+        .item(reveal)
+}
+
 type BulkAction = Box<dyn Fn(&mut CommitView, &mut Context<CommitView>)>;
+/// What a change's menu item does to the window.
+type MenuAction = Box<dyn Fn(&mut CommitView, &mut Window, &mut Context<CommitView>)>;
 
 fn letter_colour(letter: &str, p: &Palette) -> Hsla {
     match letter {

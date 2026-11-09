@@ -80,6 +80,13 @@ pub struct FindIn {
 
 impl gpui::EventEmitter<FindIn> for ProjectView {}
 
+/// Asks for a file to be selected in the Project window, by its absolute
+/// path: Select in Project from another window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reveal {
+    pub abs: String,
+}
+
 /// Asks for the keyboard to go back to the editor: Escape in the tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Leave;
@@ -1143,7 +1150,7 @@ impl ProjectView {
 }
 
 /// Selects what was made at a path in the tree.
-type Reveal = Box<dyn Fn(String, &mut Window, &mut gpui::App)>;
+type Selects = Box<dyn Fn(String, &mut Window, &mut gpui::App)>;
 
 /// The Project window's menu for a file or folder, as IntelliJ's: making,
 /// clipboard, paths, renaming and the trash, finding in a folder, and git.
@@ -1178,7 +1185,7 @@ fn tree_menu(
         })
     };
     // What makes or renames something, then selects it in the tree.
-    let made = |label: &str, f: fn(&Target, &mut Window, &mut gpui::App, Reveal)| {
+    let made = |label: &str, f: fn(&Target, &mut Window, &mut gpui::App, Selects)| {
         let (t, view) = (t.clone(), view.clone());
         PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
             let view = view.clone();
