@@ -665,7 +665,12 @@ impl Render for TerminalView {
                             },
                             |_, _, _, _| {},
                         )
+                        // Pinned to the top left, so its bounds are the
+                        // text's: an absolute box with no offsets sits
+                        // after the rows.
                         .absolute()
+                        .top_0()
+                        .left_0()
                         .size_full(),
                     ),
             )

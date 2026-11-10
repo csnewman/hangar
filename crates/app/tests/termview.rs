@@ -107,9 +107,10 @@ fn a_word_is_selected_copied_and_found(cx: &mut TestAppContext) {
     }
     cx.run_until_parked();
 
-    // A double click on the first word, "cargo", then Cmd-C.
-    let at =
-        cx.debug_bounds("terminal").unwrap().origin + gpui::point(gpui::px(14.), gpui::px(10.));
+    // A double click on the second line's first word, "error", then
+    // Cmd-C: the pointer's row and column are the cell's.
+    let at = cx.debug_bounds("terminal").unwrap().origin
+        + gpui::point(gpui::px(14.), gpui::px(4. + 17. + 8.));
     for count in [1, 2] {
         cx.simulate_event(gpui::MouseDownEvent {
             button: gpui::MouseButton::Left,
@@ -132,7 +133,7 @@ fn a_word_is_selected_copied_and_found(cx: &mut TestAppContext) {
     };
     cx.simulate_keystrokes(copy);
     let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|c| c.text()));
-    assert_eq!(copied.as_deref(), Some("cargo"));
+    assert_eq!(copied.as_deref(), Some("error"));
 
     // Find opens with the selection as its query, which is there.
     cx.simulate_keystrokes(find);
