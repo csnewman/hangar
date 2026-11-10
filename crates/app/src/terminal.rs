@@ -302,6 +302,30 @@ impl<L: EventListener> Screen<L> {
         self.found.is_some()
     }
 
+    /// The link at a cell of the screen: one the program wrote (OSC 8), or
+    /// a URL in the text, which may wrap onto the lines either side.
+    pub fn link_at(&mut self, row: usize, col: usize) -> Option<String> {
+        let point = self.point(row, col);
+        if let Some(link) = self.term.grid()[point].hyperlink() {
+            return Some(link.uri().to_string());
+        }
+        let mut regex = RegexSearch::new(URL).ok()?;
+        let columns = self.term.grid().columns();
+        let (start, end) = (
+            Point::new(point.line - 1, Column(0)),
+            Point::new(point.line + 1, Column(columns - 1)),
+        );
+        let start = start.grid_clamp(&self.term, alacritty_terminal::index::Boundary::Grid);
+        let end = end.grid_clamp(&self.term, alacritty_terminal::index::Boundary::Grid);
+        let found = RegexIter::new(start, end, Direction::Right, &self.term, &mut regex)
+            .find(|m| m.contains(&point))?;
+        Some(
+            self.term
+                .bounds_to_string(*found.start(), *found.end())
+                .replace('\n', ""),
+        )
+    }
+
     /// Whether Find is on a match.
     pub fn found(&self) -> bool {
         self.found.is_some()
@@ -407,6 +431,10 @@ impl<L: EventListener> Screen<L> {
         }
     }
 }
+
+/// A URL in a terminal's text: a scheme a browser or the system opens,
+/// then anything up to a space, a quote or an angle bracket.
+const URL: &str = r#"(https?|file|ftp)://[^\s<>"'`\x00-\x1f\x7f]+"#;
 
 /// Text as a pattern that matches it and nothing else.
 fn literal(text: &str) -> String {

@@ -439,6 +439,19 @@ impl TerminalView {
             MouseButton::Right => Button::Right,
             _ => return,
         };
+        // Cmd-click (Ctrl-click elsewhere) opens a link.
+        let opens = if cfg!(target_os = "macos") {
+            e.modifiers.platform
+        } else {
+            e.modifiers.control
+        };
+        if opens && button == Button::Left {
+            let (row, col, _) = self.cell_at(e.position);
+            if let Some(url) = self.screen.link_at(row, col) {
+                cx.open_url(&url);
+            }
+            return;
+        }
         if self.report(button, Press::Down, e.position, &e.modifiers) {
             self.reporting = Some(button);
             return;

@@ -167,3 +167,29 @@ fn a_programs_asks_are_kept() {
         "a full-screen program's moves its cursor"
     );
 }
+
+/// A link is found where it is clicked: one the program wrote (OSC 8), or
+/// a URL in the text, whole when it wraps onto the next line.
+#[test]
+fn links_are_found_where_they_are() {
+    let mut s = Screen::new(30, 4);
+    s.feed(b"see https://example.com/a?b=1 now\r\n");
+    assert_eq!(
+        s.link_at(0, 8).as_deref(),
+        Some("https://example.com/a?b=1")
+    );
+    assert_eq!(s.link_at(0, 1), None, "not on the link");
+    s.feed(b"\x1b]8;;https://hangar.dev/docs\x1b\\the docs\x1b]8;;\x1b\\ here");
+    assert_eq!(s.link_at(2, 2).as_deref(), Some("https://hangar.dev/docs"));
+    assert_eq!(s.link_at(2, 10), None, "after the link");
+
+    let mut s = Screen::new(20, 3);
+    s.feed(b"go to https://example.com/a/long/path ok");
+    let url = "https://example.com/a/long/path";
+    assert_eq!(s.link_at(0, 10).as_deref(), Some(url));
+    assert_eq!(
+        s.link_at(1, 3).as_deref(),
+        Some(url),
+        "from its wrapped half"
+    );
+}
