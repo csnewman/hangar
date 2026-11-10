@@ -357,6 +357,7 @@ impl BranchWidget {
 
 impl Render for BranchWidget {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette::of(cx);
         let Some((_, repo)) = self.shown(cx) else {
             return div().into_any_element();
         };
@@ -382,12 +383,18 @@ impl Render for BranchWidget {
                 let _ = me.update(cx, |w, cx| w.set_open(*open, window, cx));
             })
             .when_some(focus, |p, f| p.track_focus(&f))
+            // A pill, as the toolbar's others are.
             .trigger(
                 Button::new("branch")
                     .ghost()
                     .xsmall()
                     .debug_selector(|| "branch-widget".into())
-                    .label(format!("⑂ {branch}{counts} ▾")),
+                    .icon(gpui_component::Icon::empty().path(crate::assets::icon("branch")))
+                    .label(format!("{branch}{counts} ▾"))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(p.border)
+                    .text_color(p.muted),
             )
             .content(move |_, _, _| match &popup {
                 Some(p) => p.clone().into_any_element(),
