@@ -10,6 +10,7 @@ use gpui::{
     Bounds, Context, Entity, FontWeight, Hsla, IntoElement, ParentElement, PathBuilder, Pixels,
     Render, SharedString, Styled, Window, canvas, div, hsla, point, prelude::*, px, uniform_list,
 };
+use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use gpui_component::{h_flex, v_flex};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -507,6 +508,7 @@ impl GitView {
         .h(px(ROW))
         .flex_none();
         let hash = c.hash.clone();
+        let (right, copy_hash, copy_subject) = (c.hash.clone(), c.hash.clone(), c.subject.clone());
         let mut subject = h_flex().flex_1().min_w_0().gap(px(4.)).overflow_hidden();
         for r in &c.refs {
             subject = subject.child(badge(r, p));
@@ -544,7 +546,29 @@ impl GitView {
                     .text_color(p.muted)
                     .child(when(c.time, Local::now())),
             )
+            .debug_selector({
+                let at = format!("commit-{i}");
+                move || at
+            })
             .on_click(cx.listener(move |v, _, _, cx| v.select(hash.clone(), cx)))
+            // A right-click selects the commit, so it is clear what the
+            // menu is about.
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(move |v, _, _, cx| v.select(right.clone(), cx)),
+            )
+            .context_menu(move |menu, _, cx| {
+                crate::ui::modal(cx);
+                let (hash, subject) = (copy_hash.clone(), copy_subject.clone());
+                menu.item(
+                    PopupMenuItem::new("Copy Revision Number")
+                        .on_click(move |_, _, cx| crate::treeops::copy(hash.clone(), cx)),
+                )
+                .item(
+                    PopupMenuItem::new("Copy Subject")
+                        .on_click(move |_, _, cx| crate::treeops::copy(subject.clone(), cx)),
+                )
+            })
             .into_any_element()
     }
 
