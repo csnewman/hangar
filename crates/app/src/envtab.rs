@@ -33,7 +33,7 @@ use crate::place::PlaceConfig;
 use crate::places::Places;
 use crate::problems::ProblemsView;
 use crate::project::{OpenFile, ProjectView};
-use crate::termview::TerminalView;
+use crate::termview::{self, TerminalView};
 use crate::tools::Stripes;
 use crate::ui::{button, dot, primary, spark, tone};
 use crate::workspace::Workspace;
@@ -178,6 +178,37 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(replace_files, ReplaceInFiles, input),
         KeyBinding::new(replace, gpui_component::input::Replace, input),
     ]);
+}
+
+/// A terminal tab's menu: a new session; closing this tab or the others,
+/// their sessions left running; ending this one's.
+fn terminal_tab_menu(
+    menu: gpui_component::menu::PopupMenu,
+    view: gpui::WeakEntity<EnvTab>,
+    i: usize,
+    only: bool,
+) -> gpui_component::menu::PopupMenu {
+    let on = |f: fn(&mut EnvTab, usize, &mut Window, &mut Context<EnvTab>)| {
+        let view = view.clone();
+        move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+            let _ = view.update(cx, |t, cx| f(t, i, window, cx));
+        }
+    };
+    menu.item(
+        PopupMenuItem::new("New Session")
+            .on_click(on(|t, _, window, cx| t.new_terminal(window, cx))),
+    )
+    .separator()
+    .item(PopupMenuItem::new("Close Tab").on_click(on(|t, i, _, cx| t.close_terminal_tab(i, cx))))
+    .item(
+        PopupMenuItem::new("Close Other Tabs")
+            .disabled(only)
+            .on_click(on(|t, i, _, cx| t.close_other_terminal_tabs(i, cx))),
+    )
+    .item(
+        PopupMenuItem::new("End Session…")
+            .on_click(on(|t, i, window, cx| t.end_terminal(i, window, cx))),
+    )
 }
 
 fn shortcut(t: Tool) -> Option<String> {
@@ -1475,6 +1506,9 @@ impl EnvTab {
 
     /// Takes a tab away, leaving its session running.
     fn close_terminal_tab(&mut self, i: usize, cx: &mut Context<Self>) {
+        if i >= self.terms.tabs.len() {
+            return;
+        }
         self.terms.tabs.remove(i);
         self.terms.active = match self.terms.active {
             Some(a) if a == i => {
@@ -1484,6 +1518,62 @@ impl EnvTab {
             a => a,
         };
         cx.notify();
+    }
+
+    /// Closes the tab shown, as Close Tab in its terminal does, and gives
+    /// the keyboard to the one shown after it.
+    fn close_shown_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(i) = self.terms.active {
+            self.close_terminal_tab(i, cx);
+            if let Some(a) = self.terms.active {
+                self.select_terminal(a, true, window, cx);
+            }
+        }
+    }
+
+    /// Takes every tab away but one, leaving their sessions running.
+    fn close_other_terminal_tabs(&mut self, i: usize, cx: &mut Context<Self>) {
+        if i < self.terms.tabs.len() {
+            let keep = self.terms.tabs.swap_remove(i);
+            self.terms.tabs = vec![keep];
+            self.terms.active = Some(0);
+            cx.notify();
+        }
+    }
+
+    /// Ends a tab's session, and what runs in it, once asked; its tab goes.
+    fn end_terminal(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.terms.tabs.get(i) else {
+            return;
+        };
+        let (label, session) = (tab.label(cx), tab.id(cx));
+        let view = tab.view.as_ref().map(|v| v.entity_id());
+        let me = cx.entity().downgrade();
+        crate::treeops::confirm(
+            &format!("End {label}?"),
+            "The session ends, and what runs in it.",
+            "End Session",
+            window,
+            cx,
+            move |_, cx| {
+                let session = session.clone();
+                let _ = me.update(cx, |t, cx| {
+                    // The tab, found again: others may have closed since.
+                    let at = t.terms.tabs.iter().position(|x| {
+                        x.id(cx) == session && x.view.as_ref().map(|v| v.entity_id()) == view
+                    });
+                    if let Some(at) = at {
+                        t.close_terminal_tab(at, cx);
+                    }
+                    let (Some(session), Some(client)) = (session, t.client(cx)) else {
+                        return;
+                    };
+                    let env = t.env.clone();
+                    cx.background_spawn(async move { client.close_terminal(&env, &session) })
+                        .detach();
+                });
+            },
+        );
     }
 
     /// Opens the menu of sessions not open here, or closes it.
@@ -2735,6 +2825,7 @@ impl EnvTab {
             tabs = tabs.child(
                 h_flex()
                     .id(("term-tab", i))
+                    .debug_selector(move || format!("term-tab-{i}"))
                     .gap(px(5.))
                     .px(px(10.))
                     .py(px(2.))
@@ -2757,7 +2848,23 @@ impl EnvTab {
                     )
                     .on_click(
                         cx.listener(move |t, _, window, cx| t.select_terminal(i, true, window, cx)),
-                    ),
+                    )
+                    // A right-click shows the tab, so it is clear what the
+                    // menu is about.
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |t, _, window, cx| {
+                            t.select_terminal(i, false, window, cx)
+                        }),
+                    )
+                    .context_menu({
+                        let me = cx.entity().downgrade();
+                        let only = self.terms.tabs.len() == 1;
+                        move |menu, _, cx| {
+                            crate::ui::modal(cx);
+                            terminal_tab_menu(menu, me.clone(), i, only)
+                        }
+                    }),
             );
         }
         let menu = self.terms.menu.clone();
@@ -2785,6 +2892,18 @@ impl EnvTab {
             .h(height)
             .flex_none()
             .bg(p.term_bg)
+            // The session commands from a terminal's menu and keys.
+            .on_action(
+                cx.listener(|t, _: &termview::NewSession, window, cx| t.new_terminal(window, cx)),
+            )
+            .on_action(cx.listener(|t, _: &termview::CloseSession, window, cx| {
+                t.close_shown_terminal(window, cx)
+            }))
+            .on_action(cx.listener(|t, _: &termview::EndSession, window, cx| {
+                if let Some(i) = t.terms.active {
+                    t.end_terminal(i, window, cx)
+                }
+            }))
             .child(layout::handle("bottom-edge", Edge::Bottom))
             .child(
                 h_flex()

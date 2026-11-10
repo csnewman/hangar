@@ -298,6 +298,7 @@ fn buttons(
         )
         .child(
             ui::primary("dialog-ok", ok.to_string(), p)
+                .debug_selector(|| "dialog-ok".into())
                 .on_click(move |_, window, cx| on_ok(window, cx)),
         )
 }

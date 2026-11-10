@@ -193,3 +193,30 @@ fn links_are_found_where_they_are() {
         "from its wrapped half"
     );
 }
+
+/// Select All takes the scrollback and the screen; Clear Buffer leaves the
+/// cursor's line, the prompt, at the top, and nothing before it.
+#[test]
+fn select_all_and_clear_the_buffer() {
+    let mut s = Screen::new(20, 3);
+    s.feed(b"one\r\ntwo\r\nthree\r\nfour\r\n$ ls");
+    s.select_all();
+    assert_eq!(
+        s.selection().as_deref(),
+        Some("one\ntwo\nthree\nfour\n$ ls")
+    );
+
+    s.clear_buffer();
+    assert_eq!(s.selection(), None, "the selection goes with the text");
+    let text: Vec<String> = s
+        .lines()
+        .iter()
+        .map(|l| l.text.trim_end().to_string())
+        .collect();
+    assert_eq!(text, ["$ ls", "", ""]);
+    assert_eq!(s.cursor(), (0, 4), "the cursor stays on its line");
+    s.scroll(5);
+    assert_eq!(s.scrolled_back(), 0, "no scrollback is left");
+    s.select_all();
+    assert_eq!(s.selection().as_deref(), Some("$ ls"));
+}

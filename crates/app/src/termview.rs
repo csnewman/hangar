@@ -1,7 +1,9 @@
 //! A terminal session in the window: its screen drawn as styled text in
 //! the design's terminal colours, sized to fit where it is shown, with what
 //! is typed and pasted sent to the session. The mouse selects, as in any
-//! terminal, and Find looks through the output.
+//! terminal, and Find looks through the output. Its menu is IntelliJ's
+//! terminal's: copy, paste, select all, find, clear the buffer, and the
+//! session's own commands.
 
 use std::time::{Duration, Instant};
 
@@ -13,6 +15,7 @@ use gpui::{
 };
 use gpui_component::Sizable;
 use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 
 use crate::api::Client;
 use crate::palette;
@@ -26,22 +29,54 @@ const LINE_HEIGHT: Pixels = px(17.);
 /// How long a burst of output is taken in before a frame is drawn.
 const FEED_BUDGET: Duration = Duration::from_millis(4);
 
-actions!(terminal, [SendTab, SendBackTab, Find]);
+actions!(
+    terminal,
+    [
+        SendTab,
+        SendBackTab,
+        Find,
+        CopySelection,
+        Paste,
+        SelectAll,
+        ClearBuffer,
+        /// A new session in a tab of its own, for the window holding the
+        /// terminal to start.
+        NewSession,
+        /// The terminal's tab closed, its session left running.
+        CloseSession,
+        /// The terminal's session ended, and what runs in it, once asked.
+        EndSession,
+    ]
+);
 
 /// Binds Tab and Shift-Tab to the shell, ahead of gpui-component's binding
 /// of them to moving focus, which takes them before a key handler sees them;
-/// and Find, Cmd-F on macOS and Ctrl-Shift-F elsewhere, where Ctrl-F is the
-/// shell's.
+/// and the menu's commands, with Cmd on macOS and Ctrl-Shift elsewhere,
+/// where Ctrl and a letter are the shell's.
 pub fn bind_keys(cx: &mut App) {
-    let find = if cfg!(target_os = "macos") {
-        "cmd-f"
+    let keys = if cfg!(target_os = "macos") {
+        ["cmd-f", "cmd-c", "cmd-v", "cmd-a", "cmd-t", "cmd-w"]
     } else {
-        "ctrl-shift-f"
+        [
+            "ctrl-shift-f",
+            "ctrl-shift-c",
+            "ctrl-shift-v",
+            "ctrl-shift-a",
+            "ctrl-shift-t",
+            "ctrl-shift-w",
+        ]
     };
+    let [find, copy, paste, all, new, close] = keys;
+    let ctx = Some("Terminal");
     cx.bind_keys([
-        KeyBinding::new("tab", SendTab, Some("Terminal")),
-        KeyBinding::new("shift-tab", SendBackTab, Some("Terminal")),
-        KeyBinding::new(find, Find, Some("Terminal")),
+        KeyBinding::new("tab", SendTab, ctx),
+        KeyBinding::new("shift-tab", SendBackTab, ctx),
+        KeyBinding::new(find, Find, ctx),
+        KeyBinding::new(copy, CopySelection, ctx),
+        KeyBinding::new(paste, Paste, ctx),
+        KeyBinding::new(all, SelectAll, ctx),
+        KeyBinding::new(new, NewSession, ctx),
+        KeyBinding::new(close, CloseSession, ctx),
     ]);
 }
 
@@ -85,6 +120,8 @@ pub struct TerminalView {
     selecting: bool,
     /// The button held, while the program is told of the mouse.
     reporting: Option<crate::termkeys::Button>,
+    /// The link under the last right-click, for the menu to open or copy.
+    menu_link: Option<String>,
     /// Find's query, while it is open, and whether its text is nowhere.
     find: Option<Entity<InputState>>,
     missing: bool,
@@ -169,6 +206,7 @@ impl TerminalView {
             origin: Point::default(),
             selecting: false,
             reporting: None,
+            menu_link: None,
             find: None,
             missing: false,
             _find: None,
@@ -283,32 +321,6 @@ impl TerminalView {
 
     fn key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
         let k = &e.keystroke;
-        let copy = if cfg!(target_os = "macos") {
-            k.modifiers.platform && k.key == "c"
-        } else {
-            k.modifiers.control && k.modifiers.shift && k.key == "c"
-        };
-        if copy {
-            self.copy(cx);
-            return;
-        }
-        let paste = if cfg!(target_os = "macos") {
-            k.modifiers.platform && k.key == "v"
-        } else {
-            k.modifiers.control && k.modifiers.shift && k.key == "v"
-        };
-        if paste {
-            if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
-                let text = text.replace("\r\n", "\r").replace('\n', "\r");
-                let b = if self.screen.bracketed_paste() {
-                    format!("\x1b[200~{text}\x1b[201~")
-                } else {
-                    text
-                };
-                self.send(Command::Input(b.into_bytes()));
-            }
-            return;
-        }
         if k.modifiers.platform {
             return;
         }
@@ -417,6 +429,52 @@ impl TerminalView {
         if let Some(text) = self.screen.selection() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
         }
+    }
+
+    /// Sends the clipboard's text, as the program asks for a paste to be
+    /// marked, its line ends as Enter.
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        if let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) {
+            let text = text.replace("\r\n", "\r").replace('\n', "\r");
+            let b = if self.screen.bracketed_paste() {
+                format!("\x1b[200~{text}\x1b[201~")
+            } else {
+                text
+            };
+            self.input(b.into_bytes());
+        }
+    }
+
+    fn select_all(&mut self, cx: &mut Context<Self>) {
+        self.screen.select_all();
+        cx.notify();
+    }
+
+    fn clear_buffer(&mut self, cx: &mut Context<Self>) {
+        self.screen.clear_buffer();
+        if let Some(input) = &self.find {
+            let query = input.read(cx).value().to_string();
+            self.find_text(&query, true, cx);
+        }
+        cx.notify();
+    }
+
+    /// A right-press, taken before the menu opens on it: to a program that
+    /// asked for the mouse, its report and no menu (Shift still gives the
+    /// menu); else the link under it is kept for the menu.
+    fn right_press(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::termkeys::{Button, Press};
+        if e.button != MouseButton::Right {
+            return;
+        }
+        window.focus(&self.focus, cx);
+        if self.report(Button::Right, Press::Down, e.position, &e.modifiers) {
+            self.reporting = Some(Button::Right);
+            cx.stop_propagation();
+            return;
+        }
+        let (row, col, _) = self.cell_at(e.position);
+        self.menu_link = self.screen.link_at(row, col);
     }
 
     /// The cell under the pointer: its row, its column, and whether the
@@ -563,6 +621,35 @@ impl TerminalView {
     }
 }
 
+/// The terminal's menu, as IntelliJ's: the link right-clicked, if any; the
+/// text; then the session.
+fn terminal_menu(
+    mut menu: gpui_component::menu::PopupMenu,
+    link: Option<String>,
+    selected: bool,
+) -> gpui_component::menu::PopupMenu {
+    if let Some(url) = link {
+        let copied = url.clone();
+        menu = menu
+            .item(PopupMenuItem::new("Open Link").on_click(move |_, _, cx| cx.open_url(&url)))
+            .item(
+                PopupMenuItem::new("Copy Link")
+                    .on_click(move |_, _, cx| crate::treeops::copy(copied.clone(), cx)),
+            )
+            .separator();
+    }
+    menu.menu_with_disabled("Copy", Box::new(CopySelection), !selected)
+        .menu("Paste", Box::new(Paste))
+        .menu("Select All", Box::new(SelectAll))
+        .separator()
+        .menu("Find", Box::new(Find))
+        .menu("Clear Buffer", Box::new(ClearBuffer))
+        .separator()
+        .menu("New Session", Box::new(NewSession))
+        .menu("Close Tab", Box::new(CloseSession))
+        .menu("End Session…", Box::new(EndSession))
+}
+
 /// Splits the runs at the cursor's cell and swaps that cell's colours.
 fn cursor_runs(runs: Vec<TextRun>, at: usize, len: usize) -> Vec<TextRun> {
     let mut out = Vec::new();
@@ -702,9 +789,8 @@ impl Render for TerminalView {
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, window, cx| this.press(e, window, cx)),
             )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(|this, e: &MouseDownEvent, window, cx| this.press(e, window, cx)),
+            .capture_any_mouse_down(
+                cx.listener(|this, e: &MouseDownEvent, window, cx| this.right_press(e, window, cx)),
             )
             .on_mouse_down(
                 MouseButton::Middle,
@@ -724,7 +810,33 @@ impl Render for TerminalView {
                 cx.listener(|this, e: &MouseUpEvent, _, cx| this.release(e, cx)),
             )
             .on_action(cx.listener(|this, _: &Find, window, cx| this.open_find(window, cx)))
+            .on_action(cx.listener(|this, _: &CopySelection, _, cx| this.copy(cx)))
+            .on_action(cx.listener(|this, _: &Paste, _, cx| this.paste(cx)))
+            .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
+            .on_action(cx.listener(|this, _: &ClearBuffer, _, cx| this.clear_buffer(cx)))
+            // The Edit menu's.
             .on_action(cx.listener(|this, _: &gpui_component::input::Copy, _, cx| this.copy(cx)))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Paste, _, cx| this.paste(cx)))
+            .on_action(
+                cx.listener(|this, _: &gpui_component::input::SelectAll, _, cx| {
+                    this.select_all(cx)
+                }),
+            )
+            .context_menu({
+                let me = cx.entity().downgrade();
+                let focus = self.focus.clone();
+                move |menu, _, cx| {
+                    crate::ui::modal(cx);
+                    let (link, selected) = me
+                        .upgrade()
+                        .map(|t| {
+                            let t = t.read(cx);
+                            (t.menu_link.clone(), t.screen.selection().is_some())
+                        })
+                        .unwrap_or_default();
+                    terminal_menu(menu.action_context(focus.clone()), link, selected)
+                }
+            })
             .relative()
             .size_full()
             .overflow_hidden()

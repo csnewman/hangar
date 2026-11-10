@@ -244,6 +244,39 @@ impl<L: EventListener> Screen<L> {
         self.term.selection = None;
     }
 
+    /// Selects everything: the scrollback and the screen, down to its last
+    /// line with text or the cursor's, whichever is lower.
+    pub fn select_all(&mut self) {
+        let grid = self.term.grid();
+        let mut last = self.term.bottommost_line();
+        while last > grid.cursor.point.line && grid[last].is_clear() {
+            last -= 1;
+        }
+        let start = Point::new(self.term.topmost_line(), Column(0));
+        let end = Point::new(last, self.term.last_column());
+        let mut s = Selection::new(SelectionType::Simple, start, Side::Left);
+        s.update(end, Side::Right);
+        self.term.selection = Some(s);
+    }
+
+    /// Clears the scrollback and the screen above the cursor, as IntelliJ's
+    /// Clear Buffer does: the cursor's line, the prompt, goes to the top.
+    /// A full-screen program's own screen is left as it is.
+    pub fn clear_buffer(&mut self) {
+        use alacritty_terminal::vte::ansi::{ClearMode, Handler};
+        self.term.selection = None;
+        self.found = None;
+        if !self.term.mode().contains(TermMode::ALT_SCREEN) {
+            self.term.scroll_display(Scroll::Bottom);
+            let row = self.term.grid().cursor.point.line.0;
+            if row > 0 {
+                self.term.scroll_up(row as usize);
+                self.term.goto_line(0);
+            }
+        }
+        self.term.clear_screen(ClearMode::Saved);
+    }
+
     /// The selected text, lines joined as the shell wrote them; None with
     /// nothing selected.
     pub fn selection(&self) -> Option<String> {
