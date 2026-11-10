@@ -33,14 +33,15 @@ fn a_session_attaches_talks_and_exits() {
         .unwrap();
         got_tx.send(format!("{path} {auth}")).unwrap();
         ws.send(Message::text(
-            r#"{"session":{"id":"s1","title":"zsh","created":"2026-11-07T10:00:00Z","clients":1,"cols":80,"rows":24},"history":6}"#,
+            r#"{"session":{"id":"s1","title":"zsh","created":"2026-11-07T10:00:00Z","clients":1,"cols":80,"rows":24},"history":6,"owner":true}"#,
         ))
         .unwrap();
         ws.send(Message::binary(b"oold\r\nnew".to_vec())).unwrap();
-        ws.send(Message::binary(vec![b's', 0, 100, 0, 30, 0, 1, 1]))
+        ws.send(Message::binary(vec![b's', 0, 100, 0, 30, 0, 2, 1]))
             .unwrap();
-        // What the client sends: its keys and its size.
-        for _ in 0..2 {
+        // What the client sends: its keys, the size it takes, and the size
+        // it would have.
+        for _ in 0..3 {
             if let Message::Binary(b) = ws.read().unwrap() {
                 got_tx.send(format!("{:?}", b.to_vec())).unwrap();
             }
@@ -68,7 +69,8 @@ fn a_session_attaches_talks_and_exits() {
         Event::Attached {
             session: "s1".into(),
             title: "zsh".into(),
-            history: 6
+            history: 6,
+            owner: true,
         }
     );
     assert_eq!(next(), Event::Output(b"old\r\nnew".to_vec()));
@@ -77,11 +79,13 @@ fn a_session_attaches_talks_and_exits() {
         Event::Size {
             cols: 100,
             rows: 30,
-            owner: true
+            viewers: 2,
+            owner: true,
         }
     );
     conn.send(Command::Input(b"ls\r".to_vec()));
     conn.send(Command::Resize(90, 20));
+    conn.send(Command::Prefer(91, 21));
     assert_eq!(
         got_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
         format!("{:?}", b"ils\r".to_vec())
@@ -89,6 +93,10 @@ fn a_session_attaches_talks_and_exits() {
     assert_eq!(
         got_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
         format!("{:?}", vec![b'r', 0, 90, 0, 20])
+    );
+    assert_eq!(
+        got_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        format!("{:?}", vec![b'p', 0, 91, 0, 21])
     );
     assert_eq!(next(), Event::Exited(3));
 }

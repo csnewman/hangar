@@ -377,3 +377,114 @@ fn a_program_that_asked_for_the_mouse_gets_the_right_click(cx: &mut TestAppConte
     right_click(cx, gpui::Modifiers::shift(), "down enter");
     assert_eq!(next(), b"pasted", "Shift gives the menu, and its Paste");
 }
+
+/// A session the test speaks for: what it sends goes to the terminal, and
+/// every frame the terminal sends comes back.
+fn shared(
+    hello: &'static str,
+) -> (
+    String,
+    std::sync::mpsc::Sender<Vec<u8>>,
+    std::sync::mpsc::Receiver<Vec<u8>>,
+) {
+    use tungstenite::Message;
+    let ln = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", ln.local_addr().unwrap());
+    let (to_tx, to) = std::sync::mpsc::channel::<Vec<u8>>();
+    let (from_tx, from) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (tcp, _) = ln.accept().unwrap();
+        tcp.set_read_timeout(Some(std::time::Duration::from_millis(10)))
+            .unwrap();
+        let mut ws = tungstenite::accept(tcp).unwrap();
+        ws.send(Message::text(hello)).unwrap();
+        loop {
+            while let Ok(b) = to.try_recv() {
+                ws.send(Message::binary(b)).unwrap();
+            }
+            match ws.read() {
+                Ok(Message::Binary(b)) => {
+                    let _ = from_tx.send(b.to_vec());
+                }
+                Ok(_) => {}
+                Err(tungstenite::Error::Io(e))
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(_) => return,
+            }
+        }
+    });
+    (url, to_tx, from)
+}
+
+/// While another window holds the size, the terminal is drawn at it and
+/// says so, with Fit to This Window; typing takes the size too, as the
+/// web's terminal does. Only the window holding it answers a program.
+#[gpui::test]
+fn the_size_another_window_holds_is_said(cx: &mut TestAppContext) {
+    let (url, to, from) = shared(
+        r#"{"session":{"id":"s1","title":"zsh","created":"2026-11-07T10:00:00Z","clients":2,"cols":100,"rows":30},"history":0,"owner":false}"#,
+    );
+    let (term, cx) = attached(cx, &url);
+    let wait = std::time::Duration::from_secs(5);
+    let until =
+        |cx: &mut VisualTestContext, what: &str, done: &dyn Fn(&mut VisualTestContext) -> bool| {
+            let start = std::time::Instant::now();
+            while !done(cx) {
+                assert!(start.elapsed() < wait, "{what}");
+                cx.run_until_parked();
+                cx.update(|window, _| window.refresh());
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+    to.send(vec![b's', 0, 100, 0, 30, 0, 2, 0]).unwrap();
+    until(cx, "the bar says so", &|cx| {
+        cx.debug_bounds("term-fit").is_some()
+    });
+
+    // The window has said the size it would have, and taken nothing.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    let mut own = None;
+    while let Ok(f) = from.try_recv() {
+        assert_eq!(f[0], b'p', "only the size it would have: {f:?}");
+        own = Some(f[1..5].to_vec());
+    }
+    let own = own.expect("its size");
+    assert_ne!(own, vec![0, 100, 0, 30]);
+
+    // A program's question is the holder's to answer.
+    to.send(b"o\x1b[6n".to_vec()).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    cx.run_until_parked();
+    assert!(from.try_recv().is_err(), "no answer from this window");
+
+    // Fit to This Window takes the size.
+    let fit = cx.debug_bounds("term-fit").unwrap().center();
+    cx.simulate_click(fit, gpui::Modifiers::none());
+    let mut claim = vec![b'r'];
+    claim.extend_from_slice(&own);
+    assert_eq!(from.recv_timeout(wait).unwrap(), claim);
+    let mut held = vec![b's'];
+    held.extend_from_slice(&own);
+    held.extend_from_slice(&[0, 2, 1]);
+    to.send(held).unwrap();
+    until(cx, "the offer goes", &|cx| {
+        cx.debug_bounds("term-fit").is_none()
+    });
+    assert!(
+        cx.debug_bounds("term-sizing").is_some(),
+        "the two windows watching are still said"
+    );
+    assert!(term.read_with(cx, |t, _| t.sizing().unwrap().owner));
+
+    // Another window takes it; typing here takes it back.
+    to.send(vec![b's', 0, 100, 0, 30, 0, 2, 0]).unwrap();
+    until(cx, "the offer is back", &|cx| {
+        cx.debug_bounds("term-fit").is_some()
+    });
+    cx.simulate_keystrokes("a");
+    assert_eq!(from.recv_timeout(wait).unwrap(), claim, "the size first");
+    assert_eq!(from.recv_timeout(wait).unwrap(), b"ia", "then the key");
+}

@@ -24,11 +24,19 @@ pub enum Event {
         session: String,
         title: String,
         history: usize,
+        /// Whether this connection holds the size.
+        owner: bool,
     },
     /// What the shell wrote.
     Output(Vec<u8>),
-    /// The terminal's size, and whether this connection holds it.
-    Size { cols: u16, rows: u16, owner: bool },
+    /// The terminal's size, how many windows have it open, and whether
+    /// this connection holds the size.
+    Size {
+        cols: u16,
+        rows: u16,
+        viewers: u16,
+        owner: bool,
+    },
     /// The connection was lost, and is dialled again in the time given.
     Reconnecting { why: String, retry_in: Duration },
     /// The shell exited, with its status.
@@ -41,8 +49,11 @@ pub enum Event {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     Input(Vec<u8>),
-    /// Take the size.
+    /// Take the size, at this window's.
     Resize(u16, u16),
+    /// The size this window would have the terminal: its size while this
+    /// connection holds it.
+    Prefer(u16, u16),
     Close,
 }
 
@@ -136,7 +147,7 @@ fn pause(wait: Duration, rx: &Receiver<Command>, size: &mut (u16, u16)) -> bool 
             return true;
         }
         match rx.recv_timeout(left) {
-            Ok(Command::Resize(c, r)) => *size = (c, r),
+            Ok(Command::Resize(c, r) | Command::Prefer(c, r)) => *size = (c, r),
             Ok(Command::Input(_)) => {}
             Ok(Command::Close) | Err(RecvTimeoutError::Disconnected) => return false,
             Err(RecvTimeoutError::Timeout) => return true,
@@ -152,6 +163,8 @@ struct Reply {
     session: Option<Attached>,
     #[serde(default)]
     history: usize,
+    #[serde(default)]
+    owner: bool,
 }
 
 #[derive(Deserialize)]
@@ -180,12 +193,8 @@ fn run(
         loop {
             let sent = match rx.try_recv() {
                 Ok(Command::Input(b)) => frame(&mut ws, b'i', &b),
-                Ok(Command::Resize(c, r)) => {
-                    *size = (c, r);
-                    let mut p = c.to_be_bytes().to_vec();
-                    p.extend_from_slice(&r.to_be_bytes());
-                    frame(&mut ws, b'r', &p)
-                }
+                Ok(Command::Resize(c, r)) => sized(&mut ws, b'r', (c, r), size),
+                Ok(Command::Prefer(c, r)) => sized(&mut ws, b'p', (c, r), size),
                 Ok(Command::Close) | Err(TryRecvError::Disconnected) => {
                     let _ = ws.close(None);
                     let _ = ws.flush();
@@ -225,6 +234,7 @@ fn run(
                             session: a.id,
                             title: a.title,
                             history: r.history,
+                            owner: r.owner,
                         }
                     }
                     None => continue,
@@ -237,6 +247,7 @@ fn run(
                     b's' if p.len() == 7 => Event::Size {
                         cols: u16::from_be_bytes([p[0], p[1]]),
                         rows: u16::from_be_bytes([p[2], p[3]]),
+                        viewers: u16::from_be_bytes([p[4], p[5]]),
                         owner: p[6] == 1,
                     },
                     b'x' => {
@@ -265,4 +276,18 @@ fn frame(ws: &mut crate::ws::Socket, typ: u8, payload: &[u8]) -> Result<(), Stri
     b.extend_from_slice(payload);
     ws.write(Message::Binary(b.into()))
         .map_err(|e| e.to_string())
+}
+
+/// Sends a size, to take (r) or as this window's (p), keeping it for the
+/// next dial.
+fn sized(
+    ws: &mut crate::ws::Socket,
+    typ: u8,
+    (c, r): (u16, u16),
+    size: &mut (u16, u16),
+) -> Result<(), String> {
+    *size = (c, r);
+    let mut p = c.to_be_bytes().to_vec();
+    p.extend_from_slice(&r.to_be_bytes());
+    frame(ws, typ, &p)
 }

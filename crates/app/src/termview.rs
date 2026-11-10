@@ -80,6 +80,17 @@ pub fn bind_keys(cx: &mut App) {
     ]);
 }
 
+/// The terminal's size as the session has it, how many windows have the
+/// session open, and whether this one holds the size. One window holds it,
+/// as tmux's latest: the last to type or click there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Sizing {
+    pub cols: u16,
+    pub rows: u16,
+    pub viewers: u16,
+    pub owner: bool,
+}
+
 /// Where a terminal's connection is.
 #[derive(Debug, Clone, PartialEq)]
 pub enum State {
@@ -122,6 +133,8 @@ pub struct TerminalView {
     reporting: Option<crate::termkeys::Button>,
     /// The link under the last right-click, for the menu to open or copy.
     menu_link: Option<String>,
+    /// The size as the session has it, once it says.
+    sizing: Option<Sizing>,
     /// Find's query, while it is open, and whether its text is nowhere.
     find: Option<Entity<InputState>>,
     missing: bool,
@@ -207,6 +220,7 @@ impl TerminalView {
             selecting: false,
             reporting: None,
             menu_link: None,
+            sizing: None,
             find: None,
             missing: false,
             _find: None,
@@ -225,8 +239,38 @@ impl TerminalView {
         &self.state
     }
 
+    pub fn sizing(&self) -> Option<Sizing> {
+        self.sizing
+    }
+
+    /// Whether this window's size is the terminal's: until the session says,
+    /// it is taken to be.
+    fn holds_size(&self) -> bool {
+        self.sizing.is_none_or(|s| s.owner)
+    }
+
+    /// Someone types, pastes or clicks here: the window takes the size, as
+    /// the web's terminal does.
+    fn claim(&mut self) {
+        if let Some(s) = &mut self.sizing
+            && !s.owner
+        {
+            s.owner = true;
+            self.screen.resize(self.cols as usize, self.rows as usize);
+            self.send(Command::Resize(self.cols, self.rows));
+        }
+    }
+
+    /// Fit to This Window: the size taken, the keys given back.
+    fn fit_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.claim();
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
     /// Types text into the session, as if it had been typed.
     pub fn type_text(&mut self, text: &str) {
+        self.claim();
         self.send(Command::Input(text.as_bytes().to_vec()));
     }
 
@@ -242,6 +286,7 @@ impl TerminalView {
                 session,
                 title,
                 history,
+                owner,
             } => {
                 // Attached again, the session's past is replayed: drawn on
                 // a clean screen, not over what was shown.
@@ -258,26 +303,47 @@ impl TerminalView {
                 self.title = title;
                 self.history = history;
                 self.state = State::Live;
-                // The size this window has, which the session's may not be.
-                self.send(Command::Resize(self.cols, self.rows));
+                self.sizing = self.sizing.map(|s| Sizing { owner, ..s });
+                // The size this window would have: the session's, if it
+                // holds the size.
+                self.send(Command::Prefer(self.cols, self.rows));
             }
             Event::Output(b) => {
                 self.screen.feed(&b);
                 let replayed = self.history.min(b.len());
                 self.history -= replayed;
                 let (replies, title) = self.replies.take();
-                // What the past asked was answered then.
-                if replayed == 0 && !replies.is_empty() {
+                // What the past asked was answered then; what the program
+                // asks is answered by the window holding the size alone,
+                // since every window watching would answer, and the program
+                // read every answer.
+                if replayed == 0 && !replies.is_empty() && self.holds_size() {
                     self.send(Command::Input(replies));
                 }
                 if let Some(t) = title {
                     self.title = t;
                 }
             }
-            Event::Size { cols, rows, owner } => {
-                if !owner && (cols, rows) != (self.cols, self.rows) {
-                    self.screen.resize(cols as usize, rows as usize);
-                }
+            Event::Size {
+                cols,
+                rows,
+                viewers,
+                owner,
+            } => {
+                self.sizing = Some(Sizing {
+                    cols,
+                    rows,
+                    viewers,
+                    owner,
+                });
+                // Drawn at the session's size while another window holds
+                // it, so the program's screen is as it drew it.
+                let (c, r) = if owner {
+                    (self.cols, self.rows)
+                } else {
+                    (cols, rows)
+                };
+                self.screen.resize(c as usize, r as usize);
             }
             Event::Reconnecting { why, retry_in } => {
                 self.state =
@@ -313,8 +379,10 @@ impl TerminalView {
         self.origin = bounds.origin;
         if (cols, rows) != (self.cols, self.rows) {
             (self.cols, self.rows) = (cols, rows);
-            self.screen.resize(cols as usize, rows as usize);
-            self.send(Command::Resize(cols, rows));
+            if self.holds_size() {
+                self.screen.resize(cols as usize, rows as usize);
+            }
+            self.send(Command::Prefer(cols, rows));
             cx.notify();
         }
     }
@@ -340,6 +408,7 @@ impl TerminalView {
 
     /// Sends what a key types, back at the bottom of the screen.
     fn input(&mut self, b: Vec<u8>) {
+        self.claim();
         if self.screen.scrolled_back() > 0 {
             self.screen.scroll(-(self.screen.scrolled_back() as i32));
         }
@@ -359,6 +428,9 @@ impl TerminalView {
         self.scroll_left -= lines * f32::from(LINE_HEIGHT);
         let up = lines > 0.;
         let mouse = self.screen.mouse_modes();
+        if mouse.any() || self.screen.wheel_is_arrows() {
+            self.claim();
+        }
         if mouse.any() {
             let (row, col, _) = self.cell_at(e.position);
             let button = if up {
@@ -410,6 +482,11 @@ impl TerminalView {
         let modes = self.screen.mouse_modes();
         if !modes.any() || m.shift {
             return false;
+        }
+        // A press is someone using this window; the pointer passing over
+        // it is not.
+        if press != crate::termkeys::Press::Moved {
+            self.claim();
         }
         let (row, col, _) = self.cell_at(at);
         let (row, col) = (
@@ -618,6 +695,70 @@ impl TerminalView {
         self.screen.find("", true);
         window.focus(&self.focus, cx);
         cx.notify();
+    }
+}
+
+impl TerminalView {
+    /// Says when the terminal is drawn at another window's size, with
+    /// fitting it to this one, and how many windows have it open, as the
+    /// web's terminal does; None when there is nothing to say.
+    fn size_bar(&self, p: &palette::Palette, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let s = self.sizing.filter(|_| self.state == State::Live)?;
+        let other = !s.owner && (s.cols, s.rows) != (self.cols, self.rows);
+        if !other && s.viewers < 2 {
+            return None;
+        }
+        let viewers = s.viewers;
+        Some(
+            gpui_component::h_flex()
+                .id("term-sizing")
+                .debug_selector(|| "term-sizing".into())
+                .absolute()
+                .bottom(px(8.))
+                .right(px(12.))
+                .gap(px(10.))
+                .pl(px(10.))
+                .pr(px(4.))
+                .py(px(3.))
+                .rounded(px(6.))
+                .bg(p.surface)
+                .border_1()
+                .border_color(p.border)
+                .shadow_md()
+                .text_size(px(11.))
+                .text_color(p.muted)
+                // Its clicks are its own, not a selection's in the text.
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .when(viewers > 1, |d| {
+                    d.child(
+                        gpui_component::h_flex()
+                            .id("term-viewers")
+                            .gap(px(4.))
+                            .child(
+                                gpui::svg()
+                                    .path(crate::assets::icon("eye"))
+                                    .size(px(12.))
+                                    .text_color(p.muted),
+                            )
+                            .child(viewers.to_string())
+                            .tooltip(move |window, cx| {
+                                gpui_component::tooltip::Tooltip::new(format!(
+                                    "{viewers} windows have this terminal open"
+                                ))
+                                .build(window, cx)
+                            }),
+                    )
+                })
+                .when(other, |d| {
+                    d.child(format!("Sized for another window ({}×{})", s.cols, s.rows))
+                        .child(
+                            crate::ui::button("term-fit", "Fit to This Window", p)
+                                .debug_selector(|| "term-fit".into())
+                                .on_click(cx.listener(|t, _, window, cx| t.fit_here(window, cx))),
+                        )
+                })
+                .into_any_element(),
+        )
     }
 }
 
@@ -894,6 +1035,7 @@ impl Render for TerminalView {
                         .child(Input::new(&input).small()),
                 )
             })
+            .when_some(self.size_bar(&p, cx), |d, bar| d.child(bar))
             .when_some(notice, |d, n| {
                 d.child(
                     div()
