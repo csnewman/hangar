@@ -29,6 +29,7 @@
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
 //! SNAPSHOT_HOVER=X,Y rests the pointer there; SNAPSHOT_CLICK=X,Y clicks there;
+//! SNAPSHOT_DRAG=X1,Y1,X2,Y2 drags from one place to the other;
 //! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would, and
 //! SNAPSHOT_PRESS="down enter |text| enter" then presses keys, typing what
 //! is between bars;
@@ -482,6 +483,67 @@ fn main() {
                         });
                         settle(cx, handle.into(), Duration::from_secs(wait)).await;
                     }
+                }
+                if let Some(points) = std::env::var("SNAPSHOT_DRAG").ok().and_then(|e| {
+                    let v: Vec<f32> = e.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                    (v.len() == 4).then_some(v)
+                }) {
+                    use gpui::{
+                        Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+                        PlatformInput,
+                    };
+                    let (from, to) = (
+                        gpui::point(px(points[0]), px(points[1])),
+                        gpui::point(px(points[2]), px(points[3])),
+                    );
+                    let _ = cx.update_window(handle.into(), |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseMove(MouseMoveEvent {
+                                position: from,
+                                pressed_button: None,
+                                modifiers: Modifiers::none(),
+                            }),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                button: MouseButton::Left,
+                                position: from,
+                                modifiers: Modifiers::none(),
+                                click_count: 1,
+                                first_mouse: false,
+                            }),
+                            cx,
+                        );
+                    });
+                    for i in 1..=10 {
+                        let f = i as f32 / 10.;
+                        let at =
+                            gpui::point(from.x + (to.x - from.x) * f, from.y + (to.y - from.y) * f);
+                        let _ = cx.update_window(handle.into(), |_, window, cx| {
+                            window.dispatch_event(
+                                PlatformInput::MouseMove(MouseMoveEvent {
+                                    position: at,
+                                    pressed_button: Some(MouseButton::Left),
+                                    modifiers: Modifiers::none(),
+                                }),
+                                cx,
+                            );
+                        });
+                        settle(cx, handle.into(), Duration::from_millis(30)).await;
+                    }
+                    let _ = cx.update_window(handle.into(), |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseUp(MouseUpEvent {
+                                button: MouseButton::Left,
+                                position: to,
+                                modifiers: Modifiers::none(),
+                                click_count: 1,
+                            }),
+                            cx,
+                        );
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(1)).await;
                 }
                 if let Some((x, y)) = std::env::var("SNAPSHOT_CLICK").ok().and_then(|e| {
                     let (x, y) = e.split_once(',')?;
