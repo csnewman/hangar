@@ -83,6 +83,8 @@ pub struct TerminalView {
     origin: Point<Pixels>,
     /// Whether a drag is selecting.
     selecting: bool,
+    /// The button held, while the program is told of the mouse.
+    reporting: Option<crate::termkeys::Button>,
     /// Find's query, while it is open, and whether its text is nowhere.
     find: Option<Entity<InputState>>,
     missing: bool,
@@ -166,6 +168,7 @@ impl TerminalView {
             scroll_left: 0.,
             origin: Point::default(),
             selecting: false,
+            reporting: None,
             find: None,
             missing: false,
             _find: None,
@@ -306,7 +309,18 @@ impl TerminalView {
             }
             return;
         }
-        if let Some(b) = bytes(e, self.screen.app_cursor()) {
+        if k.modifiers.platform {
+            return;
+        }
+        let key = crate::termkeys::Key {
+            name: &k.key,
+            text: k.key_char.as_deref(),
+            shift: k.modifiers.shift,
+            alt: k.modifiers.alt,
+            ctrl: k.modifiers.control,
+        };
+        let modes = self.screen.key_modes(!cfg!(target_os = "macos"));
+        if let Some(b) = crate::termkeys::encode(&key, &modes) {
             self.input(b);
             cx.stop_propagation();
         }
@@ -320,14 +334,82 @@ impl TerminalView {
         self.send(Command::Input(b));
     }
 
+    /// The wheel: to a program that asked for the mouse, its reports; in a
+    /// full-screen program that asked, the cursor keys; else through the
+    /// scrollback.
     fn scroll(&mut self, e: &ScrollEvent, cx: &mut Context<Self>) {
+        use crate::termkeys::{Button, Press};
         self.scroll_left += f32::from(e.delta.pixel_delta(LINE_HEIGHT).y);
         let lines = (self.scroll_left / f32::from(LINE_HEIGHT)).trunc();
-        if lines != 0. {
-            self.scroll_left -= lines * f32::from(LINE_HEIGHT);
+        if lines == 0. {
+            return;
+        }
+        self.scroll_left -= lines * f32::from(LINE_HEIGHT);
+        let up = lines > 0.;
+        let mouse = self.screen.mouse_modes();
+        if mouse.any() {
+            let (row, col, _) = self.cell_at(e.position);
+            let button = if up {
+                Button::WheelUp
+            } else {
+                Button::WheelDown
+            };
+            for _ in 0..lines.abs() as usize {
+                let m = &e.modifiers;
+                if let Some(b) = crate::termkeys::mouse(
+                    button,
+                    Press::Down,
+                    col,
+                    row,
+                    m.shift,
+                    m.alt,
+                    m.control,
+                    &mouse,
+                ) {
+                    self.send(Command::Input(b));
+                }
+            }
+        } else if self.screen.wheel_is_arrows() {
+            let modes = self.screen.key_modes(false);
+            let key = crate::termkeys::Key {
+                name: if up { "up" } else { "down" },
+                ..Default::default()
+            };
+            if let Some(b) = crate::termkeys::encode(&key, &modes) {
+                for _ in 0..lines.abs() as usize {
+                    self.send(Command::Input(b.clone()));
+                }
+            }
+        } else {
             self.screen.scroll(lines as i32);
             cx.notify();
         }
+    }
+
+    /// Tells the program of the mouse, if it asked and Shift is not held
+    /// (Shift selects, as in other terminals); false when it did not.
+    fn report(
+        &mut self,
+        button: crate::termkeys::Button,
+        press: crate::termkeys::Press,
+        at: Point<Pixels>,
+        m: &gpui::Modifiers,
+    ) -> bool {
+        let modes = self.screen.mouse_modes();
+        if !modes.any() || m.shift {
+            return false;
+        }
+        let (row, col, _) = self.cell_at(at);
+        let (row, col) = (
+            row.min(self.rows as usize - 1),
+            col.min(self.cols as usize - 1),
+        );
+        if let Some(b) =
+            crate::termkeys::mouse(button, press, col, row, false, m.alt, m.control, &modes)
+        {
+            self.send(Command::Input(b));
+        }
+        true
     }
 
     /// Copies what is selected.
@@ -350,6 +432,20 @@ impl TerminalView {
     /// triple click lines; with Shift it carries the one there is on.
     fn press(&mut self, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
+        use crate::termkeys::{Button, Press};
+        let button = match e.button {
+            MouseButton::Left => Button::Left,
+            MouseButton::Middle => Button::Middle,
+            MouseButton::Right => Button::Right,
+            _ => return,
+        };
+        if self.report(button, Press::Down, e.position, &e.modifiers) {
+            self.reporting = Some(button);
+            return;
+        }
+        if e.button != MouseButton::Left {
+            return;
+        }
         let (row, col, right) = self.cell_at(e.position);
         if e.modifiers.shift && self.screen.selection().is_some() {
             self.screen.select_to(row, col, right);
@@ -366,6 +462,13 @@ impl TerminalView {
     }
 
     fn drag(&mut self, e: &MouseMoveEvent, cx: &mut Context<Self>) {
+        use crate::termkeys::{Button, Press};
+        let held = self.reporting.unwrap_or(Button::None);
+        if (self.reporting.is_some() || !self.selecting)
+            && self.report(held, Press::Moved, e.position, &e.modifiers)
+        {
+            return;
+        }
         if !self.selecting || e.pressed_button != Some(MouseButton::Left) {
             return;
         }
@@ -375,7 +478,11 @@ impl TerminalView {
     }
 
     /// A click that selected nothing clears the selection.
-    fn release(&mut self, _: &MouseUpEvent, cx: &mut Context<Self>) {
+    fn release(&mut self, e: &MouseUpEvent, cx: &mut Context<Self>) {
+        if let Some(button) = self.reporting.take() {
+            self.report(button, crate::termkeys::Press::Up, e.position, &e.modifiers);
+            return;
+        }
         self.selecting = false;
         if self.screen.selection().is_none() {
             self.screen.clear_selection();
@@ -441,59 +548,6 @@ impl TerminalView {
         window.focus(&self.focus, cx);
         cx.notify();
     }
-}
-
-/// What a key sends to the shell; app_cursor is the program's asking for
-/// the cursor keys' application sequences.
-fn bytes(e: &KeyDownEvent, app_cursor: bool) -> Option<Vec<u8>> {
-    let k = &e.keystroke;
-    if k.modifiers.platform {
-        return None;
-    }
-    let arrow = |c: u8| {
-        if app_cursor {
-            vec![0x1b, b'O', c]
-        } else {
-            vec![0x1b, b'[', c]
-        }
-    };
-    let named: Option<Vec<u8>> = match k.key.as_str() {
-        "enter" => Some(b"\r".to_vec()),
-        "backspace" if k.modifiers.alt => Some(b"\x1b\x7f".to_vec()),
-        "backspace" => Some(b"\x7f".to_vec()),
-        "tab" if k.modifiers.shift => Some(b"\x1b[Z".to_vec()),
-        "tab" => Some(b"\t".to_vec()),
-        "escape" => Some(b"\x1b".to_vec()),
-        "up" => Some(arrow(b'A')),
-        "down" => Some(arrow(b'B')),
-        "right" if k.modifiers.alt => Some(b"\x1bf".to_vec()),
-        "left" if k.modifiers.alt => Some(b"\x1bb".to_vec()),
-        "right" => Some(arrow(b'C')),
-        "left" => Some(arrow(b'D')),
-        "home" => Some(b"\x1b[H".to_vec()),
-        "end" => Some(b"\x1b[F".to_vec()),
-        "pageup" => Some(b"\x1b[5~".to_vec()),
-        "pagedown" => Some(b"\x1b[6~".to_vec()),
-        "delete" => Some(b"\x1b[3~".to_vec()),
-        "space" if k.modifiers.control => Some(vec![0]),
-        _ => None,
-    };
-    if named.is_some() {
-        return named;
-    }
-    if k.modifiers.control && k.key.len() == 1 {
-        let c = k.key.as_bytes()[0].to_ascii_lowercase();
-        if c.is_ascii_lowercase() {
-            return Some(vec![c & 0x1f]);
-        }
-    }
-    let text = k.key_char.as_ref()?;
-    if k.modifiers.alt && !cfg!(target_os = "macos") {
-        let mut b = vec![0x1b];
-        b.extend_from_slice(text.as_bytes());
-        return Some(b);
-    }
-    Some(text.as_bytes().to_vec())
 }
 
 /// Splits the runs at the cursor's cell and swaps that cell's colours.
@@ -634,6 +688,22 @@ impl Render for TerminalView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, window, cx| this.press(e, window, cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Right,
+                cx.listener(|this, e: &MouseDownEvent, window, cx| this.press(e, window, cx)),
+            )
+            .on_mouse_down(
+                MouseButton::Middle,
+                cx.listener(|this, e: &MouseDownEvent, window, cx| this.press(e, window, cx)),
+            )
+            .on_mouse_up(
+                MouseButton::Right,
+                cx.listener(|this, e: &MouseUpEvent, _, cx| this.release(e, cx)),
+            )
+            .on_mouse_up(
+                MouseButton::Middle,
+                cx.listener(|this, e: &MouseUpEvent, _, cx| this.release(e, cx)),
             )
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.drag(e, cx)))
             .on_mouse_up(

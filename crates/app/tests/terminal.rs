@@ -137,3 +137,33 @@ fn find_goes_through_the_scrollback_newest_first() {
     s.find("", true);
     assert_eq!(marked(&mut s, 2, Mark::Match), "");
 }
+
+/// What a program asks of the keyboard and mouse is kept: the Kitty
+/// keyboard protocol, mouse reports, and the wheel as arrows on its own
+/// screen.
+#[test]
+fn a_programs_asks_are_kept() {
+    let mut s = Screen::new(20, 4);
+    assert!(!s.key_modes(false).disambiguate);
+    s.feed(b"\x1b[>1u");
+    assert!(
+        s.key_modes(false).disambiguate,
+        "Kitty's disambiguate pushed"
+    );
+    s.feed(b"\x1b[<u");
+    assert!(!s.key_modes(false).disambiguate, "and popped");
+
+    assert!(!s.mouse_modes().any());
+    s.feed(b"\x1b[?1000h\x1b[?1006h");
+    let m = s.mouse_modes();
+    assert!(m.clicks && m.sgr && !m.drags);
+    s.feed(b"\x1b[?1002h");
+    assert!(s.mouse_modes().drags);
+
+    assert!(!s.wheel_is_arrows(), "the shell's own screen scrolls back");
+    s.feed(b"\x1b[?1049h");
+    assert!(
+        s.wheel_is_arrows(),
+        "a full-screen program's moves its cursor"
+    );
+}

@@ -129,7 +129,16 @@ impl Screen<Quiet> {
 impl<L: EventListener> Screen<L> {
     pub fn with_listener(columns: usize, lines: usize, listener: L) -> Self {
         Screen {
-            term: Term::new(Config::default(), &Size { columns, lines }, listener),
+            // The Kitty keyboard protocol, for programs that ask for it,
+            // so they can tell Shift-Enter from Enter.
+            term: Term::new(
+                Config {
+                    kitty_keyboard: true,
+                    ..Config::default()
+                },
+                &Size { columns, lines },
+                listener,
+            ),
             parser: Processor::new(),
             fg: named(NamedColor::Foreground),
             bg: named(NamedColor::Background),
@@ -160,10 +169,35 @@ impl<L: EventListener> Screen<L> {
         self.term.mode().contains(TermMode::BRACKETED_PASTE)
     }
 
-    /// Whether the program has asked for the cursor keys' application
-    /// sequences (ESC O A rather than ESC [ A).
-    pub fn app_cursor(&self) -> bool {
-        self.term.mode().contains(TermMode::APP_CURSOR)
+    /// What the program has asked of the keyboard; alt_is_meta is the
+    /// platform's choice.
+    pub fn key_modes(&self, alt_is_meta: bool) -> crate::termkeys::KeyModes {
+        let m = self.term.mode();
+        crate::termkeys::KeyModes {
+            app_cursor: m.contains(TermMode::APP_CURSOR),
+            disambiguate: m.contains(TermMode::DISAMBIGUATE_ESC_CODES),
+            all_as_escapes: m.contains(TermMode::REPORT_ALL_KEYS_AS_ESC),
+            alt_is_meta,
+        }
+    }
+
+    /// What the program has asked of the mouse.
+    pub fn mouse_modes(&self) -> crate::termkeys::MouseModes {
+        let m = self.term.mode();
+        crate::termkeys::MouseModes {
+            clicks: m.contains(TermMode::MOUSE_REPORT_CLICK),
+            drags: m.contains(TermMode::MOUSE_DRAG),
+            motion: m.contains(TermMode::MOUSE_MOTION),
+            sgr: m.contains(TermMode::SGR_MOUSE),
+        }
+    }
+
+    /// Whether the wheel moves a full-screen program's cursor instead of
+    /// the scrollback: on its own screen, as it asks (1007).
+    pub fn wheel_is_arrows(&self) -> bool {
+        self.term
+            .mode()
+            .contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL)
     }
 
     /// Takes what the shell wrote.

@@ -165,3 +165,65 @@ fn a_word_is_selected_copied_and_found(cx: &mut TestAppContext) {
         "Escape closes Find"
     );
 }
+
+/// A program that asks for Kitty's escape codes is sent Shift-Enter as
+/// itself, so it can tell it from Enter.
+#[gpui::test]
+fn shift_enter_reaches_a_program_that_asks(cx: &mut TestAppContext) {
+    use tungstenite::Message;
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    cx.update(hangar_app::termview::bind_keys);
+    let ln = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", ln.local_addr().unwrap());
+    let (typed_tx, typed) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let (tcp, _) = ln.accept().unwrap();
+        let mut ws = tungstenite::accept(tcp).unwrap();
+        ws.send(Message::text(
+            r#"{"session":{"id":"s1","title":"agent","created":"2026-11-07T10:00:00Z","clients":1,"cols":80,"rows":24},"history":0}"#,
+        ))
+        .unwrap();
+        ws.send(Message::binary(b"o\x1b[>1u> ".to_vec())).unwrap();
+        while let Ok(m) = ws.read() {
+            if let Message::Binary(b) = m
+                && b.first() == Some(&b'i')
+            {
+                typed_tx.send(b[1..].to_vec()).unwrap();
+            }
+        }
+    });
+    let client = Client::new(&url, "hgr_t");
+    let mut term = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let t = cx.new(|cx| TerminalView::new(&client, "env1", None, cx));
+        term = Some(t.clone());
+        Root::new(t, window, cx)
+    });
+    let term = term.unwrap();
+    let start = std::time::Instant::now();
+    while term.read_with(cx, |t, _| t.state() != &hangar_app::termview::State::Live) {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "attached"
+        );
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let focus = term.read_with(cx, |t, cx| t.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&focus, cx));
+    cx.run_until_parked();
+    // The program's ask arrives with its output, before the keys.
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("shift-enter");
+    cx.simulate_keystrokes("enter");
+    let first = typed
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    let second = typed
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(first, b"\x1b[13;2u");
+    assert_eq!(second, b"\r");
+}
