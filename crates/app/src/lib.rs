@@ -4,6 +4,7 @@
 pub mod api;
 pub mod assets;
 pub mod branch;
+pub mod branches;
 pub mod code;
 pub mod commit;
 pub mod diff;

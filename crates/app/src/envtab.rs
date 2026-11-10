@@ -269,6 +269,11 @@ pub struct EnvTab {
     /// The environment's projects and their Code connections, made when
     /// a window showing them is first shown on a running environment.
     workspace: Option<Entity<Workspace>>,
+    /// The branch widget in the toolbar, with the workspace.
+    branches: Option<Entity<crate::branches::BranchWidget>>,
+    /// Whether the Commit window's message is to take the keys once the
+    /// window is shown.
+    focus_commit: bool,
     /// The Project, Commit and Git windows, made when each is first shown.
     project: Option<Entity<ProjectView>>,
     /// The Filesystem window's tree: the machine's files.
@@ -418,6 +423,8 @@ impl EnvTab {
             last: None,
             terms: Terms::default(),
             workspace: None,
+            branches: None,
+            focus_commit: false,
             project: None,
             filesystem: None,
             commit: None,
@@ -437,6 +444,20 @@ impl EnvTab {
             pending_reveal: None,
             subs: vec![],
         }
+    }
+
+    /// Shows the Commit window, its message taking the keys, as the branch
+    /// widget's Commit… does.
+    pub fn open_commit(&mut self, cx: &mut Context<Self>) {
+        if !self.is_open(Tool::Commit) {
+            self.toggle(Tool::Commit, cx);
+        }
+        self.focus_commit = true;
+        cx.notify();
+    }
+
+    pub fn branch_widget(&self) -> Option<Entity<crate::branches::BranchWidget>> {
+        self.branches.clone()
     }
 
     pub fn is_open(&self, tool: Tool) -> bool {
@@ -1440,6 +1461,13 @@ impl EnvTab {
         let editor = env.editor_path.clone().unwrap_or_default();
         let ws = cx.new(|cx| Workspace::new(places, &place, &id, &editor, cx));
         self.workspace = Some(ws.clone());
+        let branches = cx.new(|cx| crate::branches::BranchWidget::new(ws.clone(), cx));
+        self.subs.push(
+            cx.subscribe(&branches, |t, _, _: &crate::branches::OpenCommit, cx| {
+                t.open_commit(cx)
+            }),
+        );
+        self.branches = Some(branches);
         self.pinger = Some(crate::latency::watch(
             ws.clone(),
             cx.entity().downgrade(),
@@ -1742,6 +1770,13 @@ impl Render for EnvTab {
                     }),
                 );
                 self.commit = Some(view);
+            }
+            if self.focus_commit
+                && let Some(view) = &self.commit
+            {
+                self.focus_commit = false;
+                let message = view.read(cx).message().focus_handle(cx);
+                window.focus(&message, cx);
             }
             if self.find.is_none() && self.is_open(Tool::Find) {
                 let ws = self.workspace(&env, cx);
@@ -2112,6 +2147,9 @@ impl EnvTab {
             .border_color(p.border)
             .child(title)
             .child(pill(p).child(dot(phase_tone, p)).child(where_))
+            .when(env.phase == "running", |d| {
+                d.when_some(self.branches.clone(), |d, b| d.child(b))
+            })
             .child(div().flex_1())
             .when_some(lifecycle, |d, (label, action)| {
                 let (place, id) = (place.clone(), id.clone());
