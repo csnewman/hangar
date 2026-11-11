@@ -62,6 +62,8 @@ pub struct BranchView {
     workspace: Entity<Workspace>,
     order: Vec<Key>,
     repos: HashMap<Key, Shown>,
+    /// Bases asked for repositories not shown yet.
+    asked: HashMap<Key, String>,
 }
 
 impl gpui::EventEmitter<ShowDiff> for BranchView {}
@@ -73,6 +75,7 @@ impl BranchView {
             workspace,
             order: vec![],
             repos: HashMap::new(),
+            asked: HashMap::new(),
         }
     }
 
@@ -90,6 +93,10 @@ impl BranchView {
                 commits_open: true,
                 ..Default::default()
             });
+            if let Some(base) = self.asked.remove(&key) {
+                shown.base = Some(base);
+                shown.changes = None;
+            }
             shown.name = r.name;
             shown.branch = r.branch;
             self.load(key, cx);
@@ -175,7 +182,18 @@ impl BranchView {
         .detach();
     }
 
-    fn set_base(&mut self, key: Key, base: Option<String>, cx: &mut Context<Self>) {
+    /// Compares a repository's branch with another branch, once the
+    /// repository is shown.
+    pub fn compare(&mut self, key: Key, base: String, cx: &mut Context<Self>) {
+        if self.repos.contains_key(&key) {
+            self.set_base(key, Some(base), cx);
+        } else {
+            self.asked.insert(key, base);
+        }
+    }
+
+    /// Compares a repository's branch with another (None: the main one).
+    pub fn set_base(&mut self, key: Key, base: Option<String>, cx: &mut Context<Self>) {
         if let Some(s) = self.repos.get_mut(&key) {
             s.picking = None;
             if s.base != base {

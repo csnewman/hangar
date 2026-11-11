@@ -67,6 +67,9 @@ pub enum Do {
     Rename(String),
     /// A local branch deleted, once asked.
     Delete(String),
+    /// What the current branch has changed since it left another, in the
+    /// Commit window's Branch view: IntelliJ's Compare with Current.
+    Compare(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -190,6 +193,16 @@ pub fn first(rows: &[Row], query: &str) -> Option<usize> {
 /// Asks the Commit window to open, its message focused.
 pub struct OpenCommit;
 
+/// Asks the Commit window's Branch view to show what a repository's
+/// branch has changed since it left another: the project's root, the
+/// repository's path in it, and the other branch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompareBranch {
+    pub root: String,
+    pub repo: String,
+    pub base: String,
+}
+
 /// The widget: its button, and the pop-up while it is open.
 pub struct BranchWidget {
     workspace: Entity<Workspace>,
@@ -203,6 +216,7 @@ pub struct BranchWidget {
 }
 
 impl EventEmitter<OpenCommit> for BranchWidget {}
+impl EventEmitter<CompareBranch> for BranchWidget {}
 
 impl BranchWidget {
     pub fn new(workspace: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
@@ -316,6 +330,10 @@ impl BranchWidget {
         let (method, params, doing) = match does {
             Do::Commit => {
                 cx.emit(OpenCommit);
+                return;
+            }
+            Do::Compare(base) => {
+                cx.emit(CompareBranch { root, repo, base });
                 return;
             }
             Do::Repository(root, path) => {
@@ -489,6 +507,9 @@ impl Render for BranchWidget {
         Popover::new("branch-widget")
             .anchor(gpui::Anchor::TopLeft)
             .open(popup.is_some())
+            // A branch's menu lies outside the pop-up: a click on it must
+            // not close the pop-up, and the menu with it, before it lands.
+            .overlay_closable(!crate::ui::menu_open(cx))
             .on_open_change(move |open, window, cx| {
                 let _ = me.update(cx, |w, cx| w.set_open(*open, window, cx));
             })
@@ -791,6 +812,14 @@ impl BranchPopup {
                     item(
                         format!("Rebase {current} onto {name}"),
                         Do::Rebase(name.clone()),
+                    )
+                    .disabled(is_current || current.is_empty()),
+                )
+                .separator()
+                .item(
+                    item(
+                        format!("Compare {current} with {name}"),
+                        Do::Compare(name.clone()),
                     )
                     .disabled(is_current || current.is_empty()),
                 )

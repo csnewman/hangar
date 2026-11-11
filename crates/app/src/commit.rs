@@ -314,6 +314,14 @@ impl CommitView {
         cx.notify();
     }
 
+    /// Shows the Branch view comparing a repository's branch with another,
+    /// as IntelliJ's Compare with Current.
+    pub fn compare(&mut self, root: String, repo: String, base: String, cx: &mut Context<Self>) {
+        self.branch
+            .update(cx, |b, cx| b.compare((root, repo), base, cx));
+        self.set_branch_mode(true, cx);
+    }
+
     pub fn branch_view(&self) -> &Entity<BranchView> {
         &self.branch
     }

@@ -341,6 +341,8 @@ pub struct EnvTab {
     /// Whether the Commit window's message is to take the keys once the
     /// window is shown.
     focus_commit: bool,
+    /// A comparison of branches the Commit window is to show once it is.
+    pending_compare: Option<crate::branches::CompareBranch>,
     /// The Project, Commit and Git windows, made when each is first shown.
     project: Option<Entity<ProjectView>>,
     /// The Filesystem window's tree: the machine's files.
@@ -600,6 +602,7 @@ impl EnvTab {
             workspace: None,
             branches: None,
             focus_commit: false,
+            pending_compare: None,
             project: None,
             filesystem: None,
             commit: None,
@@ -2481,6 +2484,15 @@ impl EnvTab {
                 t.open_commit(cx)
             }),
         );
+        self.subs.push(
+            cx.subscribe(&branches, |t, _, e: &crate::branches::CompareBranch, cx| {
+                t.pending_compare = Some(e.clone());
+                if !t.is_open(Tool::Commit) {
+                    t.toggle(Tool::Commit, cx);
+                }
+                cx.notify();
+            }),
+        );
         self.branches = Some(branches);
         self.pinger = Some(crate::latency::watch(
             ws.clone(),
@@ -2930,6 +2942,9 @@ impl Render for EnvTab {
                     }),
                 );
                 self.commit = Some(view);
+            }
+            if let (Some(view), Some(c)) = (self.commit.clone(), self.pending_compare.take()) {
+                view.update(cx, |v, cx| v.compare(c.root, c.repo, c.base, cx));
             }
             if self.focus_commit
                 && let Some(view) = &self.commit
