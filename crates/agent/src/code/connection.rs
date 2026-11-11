@@ -15,7 +15,7 @@ use super::error::{Error, Result};
 use super::fileops::{Clash, Encoding, Separator};
 use super::files::{Listening, Run, writable};
 use super::frame;
-use super::git::Named;
+use super::git::{LogFilter, Named};
 use super::hub::{Hub, Tab};
 use super::lsp;
 use super::paths::resolve;
@@ -818,18 +818,24 @@ impl Connection {
             "git.log" => {
                 let skip = p.num("skip").unwrap_or(0.0);
                 let max = p.num("max").unwrap_or(300.0);
+                let given = |k: &str| p.opt(k).filter(|v| !v.is_empty()).map(str::to_owned);
+                let filter = LogFilter {
+                    text: given("text"),
+                    author: given("author"),
+                    since: given("since"),
+                };
                 match p.opt("path") {
                     Some(path) => {
                         let r = self.in_repo(path).await;
                         to_value(
                             r.git
-                                .log(p.opt("ref"), skip, max, Some(&abs_str(&r)))
+                                .log(p.opt("ref"), skip, max, Some(&abs_str(&r)), &filter)
                                 .await?,
                         )
                     }
                     None => {
                         let r = self.of_repo(p.opt("repo")).await;
-                        to_value(r.git.log(p.opt("ref"), skip, max, None).await?)
+                        to_value(r.git.log(p.opt("ref"), skip, max, None, &filter).await?)
                     }
                 }
             }
@@ -907,7 +913,47 @@ impl Connection {
             }
             "git.createBranch" => {
                 let r = self.of_repo(p.opt("repo")).await;
-                r.git.create_branch(p.str("name")?).await?;
+                r.git.create_branch(p.str("name")?, p.opt("at")).await?;
+                Value::Null
+            }
+            "git.checkoutCommit" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.checkout_commit(p.str("rev")?).await?;
+                Value::Null
+            }
+            "git.cherryPick" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.cherry_pick(p.str("rev")?).await?;
+                Value::Null
+            }
+            "git.revert" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.revert(p.str("rev")?).await?;
+                Value::Null
+            }
+            "git.reset" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.reset(p.str("rev")?, p.str("mode")?).await?;
+                Value::Null
+            }
+            "git.merge" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.merge(p.str("branch")?).await?;
+                Value::Null
+            }
+            "git.rebase" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.rebase(p.str("onto")?).await?;
+                Value::Null
+            }
+            "git.renameBranch" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.rename_branch(p.str("from")?, p.str("to")?).await?;
+                Value::Null
+            }
+            "git.deleteBranch" => {
+                let r = self.of_repo(p.opt("repo")).await;
+                r.git.delete_branch(p.str("name")?, p.flag("force")).await?;
                 Value::Null
             }
             "git.push" => {

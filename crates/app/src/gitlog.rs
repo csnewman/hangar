@@ -11,7 +11,7 @@ use gpui::{
     Render, SharedString, Styled, Window, canvas, div, hsla, point, prelude::*, px, uniform_list,
 };
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
-use gpui_component::{h_flex, v_flex};
+use gpui_component::{Sizable, h_flex, v_flex};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -253,6 +253,18 @@ pub struct GitView {
     history: Option<String>,
     /// The commits of every branch, or of HEAD's alone.
     current_only: bool,
+    /// The filters, as IntelliJ's Log has them: text in the message, an
+    /// author, how recent (an index of SINCE), and a branch whose history
+    /// alone is shown; the branches to choose from; and a count of the
+    /// times the log was asked for, so only the last answer is kept.
+    text: Option<Entity<gpui_component::input::InputState>>,
+    text_sub: Option<gpui::Subscription>,
+    text_asked: u64,
+    author: Option<String>,
+    since: Option<usize>,
+    branch: Option<String>,
+    branch_names: Vec<String>,
+    log_asked: u64,
     commits: Vec<Commit>,
     graph: Vec<GraphRow>,
     lanes: usize,
@@ -284,6 +296,14 @@ impl GitView {
             chosen: None,
             history: None,
             current_only: false,
+            text: None,
+            text_sub: None,
+            text_asked: 0,
+            author: None,
+            since: None,
+            branch: None,
+            branch_names: vec![],
+            log_asked: 0,
             commits: vec![],
             graph: vec![],
             lanes: 0,
@@ -372,10 +392,53 @@ impl GitView {
         }
         self.history = None;
         self.chosen = Some(c);
+        self.branch = None;
         self.commits.clear();
         self.selected = None;
         self.info = None;
+        self.read_branch_names(cx);
         self.load(false, cx);
+    }
+
+    /// Reads the chosen repository's branches, for the Branch filter.
+    fn read_branch_names(&mut self, cx: &mut Context<Self>) {
+        let Some(c) = &self.chosen else {
+            return;
+        };
+        let Some(code) = self.workspace.read(cx).code(&c.root) else {
+            return;
+        };
+        let call = code.call("git.branches", json!({ "repo": c.repo }));
+        cx.spawn(async move |this, cx| {
+            let Ok(b) = call.await else { return };
+            let names: Vec<String> = b["local"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|l| l["name"].as_str().map(str::to_string))
+                .chain(
+                    b["remote"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|r| r.as_str().map(str::to_string)),
+                )
+                .collect();
+            let _ = this.update(cx, |v, cx| {
+                v.branch_names = names;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Narrows the log by a filter, read again from its start.
+    fn set_filter(&mut self, f: impl FnOnce(&mut Self), cx: &mut Context<Self>) {
+        f(self);
+        self.commits.clear();
+        self.selected = None;
+        self.load(false, cx);
+        cx.notify();
     }
 
     /// Shows the history of one file or folder of a project's: its path
@@ -442,9 +505,27 @@ impl GitView {
             PAGE.max(self.commits.len())
         };
         let mut params = json!({ "skip": skip, "max": max, "repo": c.repo });
-        if self.current_only {
+        if let Some(b) = &self.branch {
+            params["ref"] = Value::String(b.clone());
+        } else if self.current_only {
             params["ref"] = Value::String("HEAD".into());
         }
+        let text = self
+            .text
+            .as_ref()
+            .map(|t| t.read(cx).value().trim().to_string())
+            .unwrap_or_default();
+        if !text.is_empty() {
+            params["text"] = Value::String(text);
+        }
+        if let Some(a) = &self.author {
+            params["author"] = Value::String(a.clone());
+        }
+        if let Some(i) = self.since {
+            params["since"] = Value::String(SINCE[i].1.into());
+        }
+        self.log_asked += 1;
+        let asked = self.log_asked;
         if let Some(h) = &self.history {
             params["path"] = Value::String(h.clone());
         }
@@ -461,6 +542,7 @@ impl GitView {
                 if v.chosen.as_ref() != Some(&c)
                     || v.current_only != current_only
                     || v.history != history
+                    || v.log_asked != asked
                 {
                     return;
                 }
@@ -563,6 +645,7 @@ impl GitView {
         .flex_none();
         let hash = c.hash.clone();
         let (right, copy_hash, copy_subject) = (c.hash.clone(), c.hash.clone(), c.subject.clone());
+        let view = cx.entity().downgrade();
         let mut subject = h_flex().flex_1().min_w_0().gap(px(4.)).overflow_hidden();
         for r in &c.refs {
             subject = subject.child(badge(r, p));
@@ -614,16 +697,272 @@ impl GitView {
             .context_menu(move |menu, _, cx| {
                 crate::ui::modal(cx);
                 let (hash, subject) = (copy_hash.clone(), copy_subject.clone());
+                let short: String = hash.chars().take(8).collect();
+                // What each acts on: this commit, through the Git window.
+                let on = |label: &str, f: fn(&mut GitView, String, &mut Window, &mut Context<GitView>)| {
+                    let (view, hash) = (view.clone(), hash.clone());
+                    PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
+                        let _ = view.update(cx, |v, cx| f(v, hash.clone(), window, cx));
+                    })
+                };
+                // IntelliJ's commit menu.
+                let copied = hash.clone();
                 menu.item(
                     PopupMenuItem::new("Copy Revision Number")
-                        .on_click(move |_, _, cx| crate::treeops::copy(hash.clone(), cx)),
+                        .on_click(move |_, _, cx| crate::treeops::copy(copied.clone(), cx)),
                 )
                 .item(
                     PopupMenuItem::new("Copy Subject")
                         .on_click(move |_, _, cx| crate::treeops::copy(subject.clone(), cx)),
                 )
+                .separator()
+                .item(on("Cherry-Pick", |v, h, window, cx| {
+                    v.act("git.cherryPick", json!({ "rev": h }), "Cherry-picked", window, cx)
+                }))
+                .item(on("Checkout Revision", |v, h, window, cx| {
+                    let short: String = h.chars().take(8).collect();
+                    let done = format!("Checked out {short}; no branch is current");
+                    v.act_saying("git.checkoutCommit", json!({ "rev": h }), done, window, cx)
+                }))
+                .separator()
+                .item(on("Reset Current Branch to Here…", |v, h, window, cx| {
+                    v.ask_reset(h, window, cx)
+                }))
+                .item(on("Revert Commit", |v, h, window, cx| {
+                    v.act("git.revert", json!({ "rev": h }), "Reverted", window, cx)
+                }))
+                .separator()
+                .item(on("New Branch…", |v, h, window, cx| {
+                    v.ask_branch_at(h, window, cx)
+                }))
+                .label(short)
             })
             .into_any_element()
+    }
+
+    /// Asks the chosen repository's service to do something to it, saying
+    /// how it went in a notification; the log follows as git changes.
+    fn act(
+        &mut self,
+        method: &'static str,
+        params: Value,
+        done: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.act_saying(method, params, done.to_string(), window, cx)
+    }
+
+    fn act_saying(
+        &mut self,
+        method: &'static str,
+        mut params: Value,
+        done: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(c) = &self.chosen else {
+            return;
+        };
+        let Some(code) = self.workspace.read(cx).code(&c.root) else {
+            return;
+        };
+        params["repo"] = Value::String(c.repo.clone());
+        let call = code.call(method, params);
+        cx.spawn_in(window, async move |_, cx| {
+            let got = call.await;
+            let _ = cx.update(|window, cx| {
+                use gpui_component::WindowExt;
+                use gpui_component::notification::Notification;
+                window.push_notification(
+                    match got {
+                        Ok(_) => Notification::success(done),
+                        Err(e) => Notification::error(e),
+                    },
+                    cx,
+                )
+            });
+        })
+        .detach();
+    }
+
+    /// IntelliJ's Reset Current Branch to Here: asks what becomes of the
+    /// changes since, then moves the branch.
+    fn ask_reset(&mut self, hash: String, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_component::WindowExt;
+        let short: String = hash.chars().take(8).collect();
+        let me = cx.entity().downgrade();
+        let modes = [
+            ("Soft", "soft", "Keeps the changes since, staged."),
+            ("Mixed", "mixed", "Keeps the changes since, not staged."),
+            (
+                "Hard",
+                "hard",
+                "Throws the changes since away, and any not committed.",
+            ),
+        ];
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let p = palette::of(cx);
+            let mut body = v_flex().gap(px(8.)).child(
+                div()
+                    .text_color(p.muted)
+                    .child(format!("The current branch is moved to {short}.")),
+            );
+            for (label, mode, about) in modes {
+                let (me, hash) = (me.clone(), hash.clone());
+                body = body.child(
+                    h_flex()
+                        .gap(px(10.))
+                        .child(
+                            crate::ui::button(
+                                SharedString::from(format!("reset-{mode}")),
+                                label,
+                                &p,
+                            )
+                            .debug_selector(move || format!("reset-{mode}"))
+                            .on_click(move |_, window, cx| {
+                                window.close_dialog(cx);
+                                let said = format!("Reset to {}", &hash[..hash.len().min(8)]);
+                                let _ = me.update(cx, |v, cx| {
+                                    v.act_saying(
+                                        "git.reset",
+                                        json!({ "rev": hash, "mode": mode }),
+                                        said,
+                                        window,
+                                        cx,
+                                    )
+                                });
+                            }),
+                        )
+                        .child(div().text_size(px(11.5)).text_color(p.muted).child(about)),
+                );
+            }
+            dialog
+                .title("Reset Current Branch to Here")
+                .w(px(440.))
+                .child(body)
+        });
+    }
+
+    /// IntelliJ's New Branch… on a commit: asks a name, then makes the
+    /// branch there and switches to it.
+    fn ask_branch_at(&mut self, hash: String, window: &mut Window, cx: &mut Context<Self>) {
+        let me = cx.entity().downgrade();
+        crate::treeops::ask_name("New Branch", "", window, cx, move |name, window, cx| {
+            let said = format!("Made {name}, and switched to it");
+            let _ = me.update(cx, |v, cx| {
+                v.act_saying(
+                    "git.createBranch",
+                    json!({ "name": name, "at": hash }),
+                    said,
+                    window,
+                    cx,
+                )
+            });
+        });
+    }
+
+    /// The User filter: every author of the commits read, or all of them.
+    fn author_filter(&self, _: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let mut authors: Vec<String> = vec![];
+        for c in &self.commits {
+            if !authors.contains(&c.author) && authors.len() < 40 {
+                authors.push(c.author.clone());
+            }
+        }
+        let label = match &self.author {
+            Some(a) => format!("User: {a}"),
+            None => "User".into(),
+        };
+        let (me, chosen) = (cx.entity().downgrade(), self.author.clone());
+        filter_button("git-user", label, move |mut menu, cx| {
+            let pick = |a: Option<String>| {
+                let me = me.clone();
+                move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut gpui::App| {
+                    let a = a.clone();
+                    let _ = me.update(cx, |v, cx| v.set_filter(|v| v.author = a, cx));
+                }
+            };
+            menu = menu.item(
+                PopupMenuItem::new("All")
+                    .checked(chosen.is_none())
+                    .on_click(pick(None)),
+            );
+            for a in &authors {
+                menu = menu.item(
+                    PopupMenuItem::new(a.clone())
+                        .checked(chosen.as_ref() == Some(a))
+                        .on_click(pick(Some(a.clone()))),
+                );
+            }
+            let _ = cx;
+            menu
+        })
+    }
+
+    /// The Date filter: how recent the commits shown are.
+    fn since_filter(&self, _: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let label = match self.since {
+            Some(i) => SINCE[i].0.to_string(),
+            None => "Date".into(),
+        };
+        let (me, chosen) = (cx.entity().downgrade(), self.since);
+        filter_button("git-date", label, move |mut menu, _| {
+            let pick = |s: Option<usize>| {
+                let me = me.clone();
+                move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut gpui::App| {
+                    let _ = me.update(cx, |v, cx| v.set_filter(|v| v.since = s, cx));
+                }
+            };
+            menu = menu.item(
+                PopupMenuItem::new("All")
+                    .checked(chosen.is_none())
+                    .on_click(pick(None)),
+            );
+            for (i, (label, _)) in SINCE.iter().enumerate() {
+                menu = menu.item(
+                    PopupMenuItem::new(*label)
+                        .checked(chosen == Some(i))
+                        .on_click(pick(Some(i))),
+                );
+            }
+            menu
+        })
+    }
+
+    /// The Branch filter: one branch's history alone, local or remote.
+    fn branch_filter(&self, _: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let label = match &self.branch {
+            Some(b) => format!("Branch: {b}"),
+            None => "Branch".into(),
+        };
+        let (me, chosen, names) = (
+            cx.entity().downgrade(),
+            self.branch.clone(),
+            self.branch_names.clone(),
+        );
+        filter_button("git-branch", label, move |mut menu, _| {
+            let pick = |b: Option<String>| {
+                let me = me.clone();
+                move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut gpui::App| {
+                    let b = b.clone();
+                    let _ = me.update(cx, |v, cx| v.set_filter(|v| v.branch = b, cx));
+                }
+            };
+            menu = menu.item(
+                PopupMenuItem::new("As chosen above")
+                    .checked(chosen.is_none())
+                    .on_click(pick(None)),
+            );
+            for b in &names {
+                menu = menu.item(
+                    PopupMenuItem::new(b.clone())
+                        .checked(chosen.as_ref() == Some(b))
+                        .on_click(pick(Some(b.clone()))),
+                );
+            }
+            menu.max_h(px(360.)).scrollable(true)
+        })
     }
 
     fn details(&self, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -850,10 +1189,37 @@ fn note(text: impl Into<SharedString>, p: &Palette) -> gpui::AnyElement {
 }
 
 impl Render for GitView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
         let state = self.workspace.read(cx).state().clone();
         let repos = self.repos(cx);
+        if self.text.is_none() {
+            let text = cx.new(|cx| {
+                gpui_component::input::InputState::new(window, cx).placeholder("Text in messages")
+            });
+            // Typed text narrows the log once typing pauses.
+            self.text_sub = Some(cx.subscribe(
+                &text,
+                |v, _, e: &gpui_component::input::InputEvent, cx| {
+                    if let gpui_component::input::InputEvent::Change = e {
+                        v.text_asked += 1;
+                        let asked = v.text_asked;
+                        cx.spawn(async move |this, cx| {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(300))
+                                .await;
+                            let _ = this.update(cx, |v, cx| {
+                                if v.text_asked == asked {
+                                    v.set_filter(|_| {}, cx)
+                                }
+                            });
+                        })
+                        .detach();
+                    }
+                },
+            ));
+            self.text = Some(text);
+        }
 
         let mut bar = h_flex().gap(px(4.)).px(px(8.)).h(px(28.)).flex_none();
         if repos.len() > 1 {
@@ -886,6 +1252,20 @@ impl Render for GitView {
                 chip("current-branch", format!("⑂ {branch}"), current, &p)
                     .on_click(cx.listener(|v, _, _, cx| v.set_current_only(true, cx))),
             );
+        bar = bar.child(div().w(px(1.)).h(px(14.)).mx(px(4.)).bg(p.border));
+        if let Some(text) = &self.text {
+            bar = bar.child(
+                div().w(px(170.)).child(
+                    gpui_component::input::Input::new(text)
+                        .xsmall()
+                        .cleanable(true),
+                ),
+            );
+        }
+        bar = bar
+            .child(self.author_filter(&p, cx))
+            .child(self.since_filter(&p, cx))
+            .child(self.branch_filter(&p, cx));
         if let Some(h) = &self.history {
             let name = h.rsplit('/').next().unwrap_or(h).to_string();
             bar = bar
@@ -994,4 +1374,35 @@ pub(crate) fn chip(
             d.text_color(p.muted).hover(move |s| s.bg(hover))
         })
         .child(label)
+}
+
+/// The Date filter's choices: what each says, and how git is told it.
+const SINCE: [(&str, &str); 4] = [
+    ("Last 24 hours", "24 hours ago"),
+    ("Last 7 days", "7 days ago"),
+    ("Last 30 days", "30 days ago"),
+    ("Last year", "1 year ago"),
+];
+
+/// A filter's button, its menu built as it opens.
+fn filter_button(
+    id: &'static str,
+    label: String,
+    menu: impl Fn(
+        gpui_component::menu::PopupMenu,
+        &mut gpui::Context<gpui_component::menu::PopupMenu>,
+    ) -> gpui_component::menu::PopupMenu
+    + 'static,
+) -> gpui::AnyElement {
+    use gpui_component::button::ButtonVariants;
+    use gpui_component::menu::DropdownMenu;
+    gpui_component::button::Button::new(id)
+        .ghost()
+        .xsmall()
+        .label(format!("{label} ▾"))
+        .dropdown_menu(move |m, _, cx| {
+            crate::ui::modal(cx);
+            menu(m, cx)
+        })
+        .into_any_element()
 }

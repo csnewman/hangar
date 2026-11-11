@@ -392,6 +392,85 @@ test('partial staging, amending, branches, push and pull', async () => {
 	}
 })
 
+test("a commit's actions and a branch's: check out, branch, cherry-pick, revert, reset, merge, rebase, rename and delete", async () => {
+	const a = new Client()
+	try {
+		git('checkout', '-q', '-b', 'acts')
+		const commit = (name: string, text: string) => {
+			writeFileSync(join(root, name), text)
+			git('add', name)
+			git('commit', '-q', '-m', name)
+			return git('rev-parse', 'HEAD').toString().trim()
+		}
+		const first = commit('a1.txt', 'one\n')
+		const second = commit('a2.txt', 'two\n')
+
+		// A commit checked out leaves no branch current; a branch made there.
+		await a.call('git.checkoutCommit', { rev: first })
+		assert.equal((await a.call('git.branches')).current, undefined, 'none current')
+		await a.call('git.createBranch', { name: 'from-first', at: first })
+		assert.equal((await a.call('git.branches')).current, 'from-first')
+		assert.ok(!existsSync(join(root, 'a2.txt')))
+
+		// The second commit's change cherry-picked here, then reverted.
+		await a.call('git.cherryPick', { rev: second })
+		assert.equal(readFileSync(join(root, 'a2.txt'), 'utf8'), 'two\n')
+		await a.call('git.revert', { rev: 'HEAD' })
+		assert.ok(!existsSync(join(root, 'a2.txt')))
+		assert.match(git('log', '-1', '--format=%s').toString(), /^Revert/)
+
+		// Reset back to the first commit, the changes kept staged.
+		await a.call('git.reset', { rev: first, mode: 'soft' })
+		assert.equal(git('rev-parse', 'HEAD').toString().trim(), first)
+		await a.call('git.reset', { rev: first, mode: 'hard' })
+		await assert.rejects(a.call('git.reset', { rev: first, mode: 'sideways' }))
+		await assert.rejects(a.call('git.cherryPick', { rev: '--abort' }), 'never an option')
+
+		// Merged and rebased onto the other branch; renamed; deleted.
+		await a.call('git.merge', { branch: 'acts' })
+		assert.equal(readFileSync(join(root, 'a2.txt'), 'utf8'), 'two\n')
+		await a.call('git.renameBranch', { from: 'from-first', to: 'renamed' })
+		assert.equal((await a.call('git.branches')).current, 'renamed')
+		await a.call('git.checkout', { name: 'acts' })
+		await a.call('git.deleteBranch', { name: 'renamed' })
+		assert.ok(!(await a.call('git.branches')).local.some((b: any) => b.name === 'renamed'))
+		await a.call('git.createBranch', { name: 'later', at: first })
+		commit('a3.txt', 'three\n')
+		await a.call('git.rebase', { onto: 'acts' })
+		assert.ok(existsSync(join(root, 'a2.txt')) && existsSync(join(root, 'a3.txt')))
+		await a.call('git.checkout', { name: 'acts' })
+		await assert.rejects(a.call('git.deleteBranch', { name: 'later' }), 'not merged')
+		await a.call('git.deleteBranch', { name: 'later', force: true })
+		git('checkout', '-q', 'main')
+	} finally {
+		a.close()
+	}
+})
+
+test('the log narrowed by text in the message, by author and by date', async () => {
+	const a = new Client()
+	try {
+		const commit = (name: string, subject: string, author: string) => {
+			writeFileSync(join(root, name), subject)
+			git('add', name)
+			execFileSync('git', ['-C', root, 'commit', '-q', '-m', subject], {
+				env: { ...process.env, GIT_AUTHOR_NAME: author, GIT_AUTHOR_EMAIL: `${author}@x` },
+			})
+		}
+		commit('f1.txt', 'Fix the Rounding', 'ada')
+		commit('f2.txt', 'Add totals', 'bob')
+		const subjects = async (filter: object) =>
+			(await a.call('git.log', { ref: 'HEAD', max: 50, ...filter })).commits.map((c: any) => c.subject)
+		assert.deepEqual(await subjects({ text: 'rounding' }), ['Fix the Rounding'], 'any case')
+		assert.deepEqual(await subjects({ text: 'Add', author: 'bob' }), ['Add totals'])
+		assert.deepEqual(await subjects({ author: 'nobody' }), [])
+		assert.deepEqual(await subjects({ since: '2099-12-31' }), [], 'nothing since')
+		assert.deepEqual(await subjects({ text: '--all' }), [], 'never an option')
+	} finally {
+		a.close()
+	}
+})
+
 test('reading git state is not announced as a change to it', async () => {
 	const a = new Client()
 	try {

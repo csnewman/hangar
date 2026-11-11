@@ -84,6 +84,15 @@ pub struct LogCommit {
     refs: Vec<Ref>,
 }
 
+/// What a log is narrowed to: commits whose message has text, by an
+/// author, and since a date git reads ("2026-11-01", "2 weeks ago").
+#[derive(Default)]
+pub struct LogFilter {
+    pub text: Option<String>,
+    pub author: Option<String>,
+    pub since: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct Log {
     commits: Vec<LogCommit>,
@@ -954,6 +963,7 @@ impl Git {
         skip: f64,
         max: f64,
         path: Option<&str>,
+        filter: &LogFilter,
     ) -> Result<Log> {
         let n = (max as i64).clamp(1, 2000);
         let skip = format!("--skip={}", skip.floor().max(0.0) as i64);
@@ -963,6 +973,17 @@ impl Git {
             args.push("--parents");
         }
         args.extend(["--decorate=full", &skip, &count]);
+        // The filters: text in the message, the author, and how recent, as
+        // IntelliJ's Log narrows by; each one argument, so never an option.
+        let grep = filter.text.as_ref().map(|t| format!("--grep={t}"));
+        let author = filter.author.as_ref().map(|a| format!("--author={a}"));
+        let since = filter.since.as_ref().map(|s| format!("--since={s}"));
+        if grep.is_some() || author.is_some() {
+            args.extend(["--regexp-ignore-case", "--fixed-strings"]);
+        }
+        args.extend(grep.as_deref());
+        args.extend(author.as_deref());
+        args.extend(since.as_deref());
         args.push("--format=%H%x1f%P%x1f%an%x1f%ae%x1f%at%x1f%D%x1f%s%x1e");
         match rev {
             Some(r) => args.push(revision(r)?),
@@ -1365,9 +1386,78 @@ impl Git {
         Ok(())
     }
 
-    pub async fn create_branch(&self, name: &str) -> Result<()> {
+    /// Makes a branch and switches to it: at the commit named, else where
+    /// the current one is.
+    pub async fn create_branch(&self, name: &str, at: Option<&str>) -> Result<()> {
         run(&self.root, &["check-ref-format", "--branch", name]).await?;
-        run(&self.root, &["checkout", "-b", name]).await?;
+        match at {
+            Some(at) => run(&self.root, &["checkout", "-b", name, revision(at)?]).await?,
+            None => run(&self.root, &["checkout", "-b", name]).await?,
+        };
+        self.changed();
+        Ok(())
+    }
+
+    /// Checks out a commit, no branch then current.
+    pub async fn checkout_commit(&self, rev: &str) -> Result<()> {
+        run(&self.root, &["checkout", "--detach", revision(rev)?]).await?;
+        self.changed();
+        Ok(())
+    }
+
+    /// Makes a commit's change again on the current branch.
+    pub async fn cherry_pick(&self, rev: &str) -> Result<()> {
+        let done = run(&self.root, &["cherry-pick", revision(rev)?]).await;
+        self.changed();
+        done.map(|_| ())
+    }
+
+    /// Makes a commit undoing a commit's change.
+    pub async fn revert(&self, rev: &str) -> Result<()> {
+        let done = run(&self.root, &["revert", "--no-edit", revision(rev)?]).await;
+        self.changed();
+        done.map(|_| ())
+    }
+
+    /// Moves the current branch to a commit: keeping what changed staged
+    /// (soft), changed but not staged (mixed), or throwing it away (hard).
+    pub async fn reset(&self, rev: &str, mode: &str) -> Result<()> {
+        let mode = match mode {
+            "soft" => "--soft",
+            "mixed" => "--mixed",
+            "hard" => "--hard",
+            m => return Err(Error::msg(format!("no such reset: {m}"))),
+        };
+        run(&self.root, &["reset", mode, revision(rev)?]).await?;
+        self.changed();
+        Ok(())
+    }
+
+    /// Merges a branch into the current one.
+    pub async fn merge(&self, branch: &str) -> Result<()> {
+        let done = run(&self.root, &["merge", "--no-edit", revision(branch)?]).await;
+        self.changed();
+        done.map(|_| ())
+    }
+
+    /// Rebases the current branch onto another.
+    pub async fn rebase(&self, onto: &str) -> Result<()> {
+        let done = run(&self.root, &["rebase", revision(onto)?]).await;
+        self.changed();
+        done.map(|_| ())
+    }
+
+    pub async fn rename_branch(&self, from: &str, to: &str) -> Result<()> {
+        run(&self.root, &["check-ref-format", "--branch", to]).await?;
+        run(&self.root, &["branch", "-m", revision(from)?, to]).await?;
+        self.changed();
+        Ok(())
+    }
+
+    /// Deletes a branch: only one merged, unless forced.
+    pub async fn delete_branch(&self, name: &str, force: bool) -> Result<()> {
+        let flag = if force { "-D" } else { "-d" };
+        run(&self.root, &["branch", flag, revision(name)?]).await?;
         self.changed();
         Ok(())
     }

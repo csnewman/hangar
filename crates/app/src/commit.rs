@@ -485,6 +485,36 @@ impl CommitView {
         .detach();
     }
 
+    /// IntelliJ's Fetch: what every repository's remotes have, without
+    /// changing a branch; the branches' ahead and behind follow.
+    fn fetch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.busy.is_some() {
+            return;
+        }
+        let projects = self.projects(cx);
+        let calls: Vec<(Code, String, String)> = unique(&projects)
+            .into_iter()
+            .filter_map(|(root, r)| Some((self.code(root, cx)?, r.path.clone(), r.name.clone())))
+            .collect();
+        self.busy = Some("Fetching…".into());
+        self.error = None;
+        cx.notify();
+        cx.spawn_in(window, async move |this, cx| {
+            let mut failed = None;
+            for (code, repo, name) in &calls {
+                if let Err(e) = code.call("git.fetch", json!({ "repo": repo })).await {
+                    failed = Some(format!("{name}: {e}"));
+                }
+            }
+            let _ = this.update(cx, |v, cx| {
+                v.busy = None;
+                v.error = failed;
+                v.reload_all(cx);
+            });
+        })
+        .detach();
+    }
+
     /// Turns Amend on or off; on, an empty message starts as the last
     /// commit's.
     fn toggle_amend(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -528,8 +558,17 @@ impl Render for CommitView {
                 .child(label)
                 .on_click(cx.listener(move |v, _, _, cx| v.set_branch_mode(on, cx)))
         };
+        let fetch = div()
+            .id("commit-fetch")
+            .debug_selector(|| "commit-fetch".into())
+            .px(px(6.))
+            .text_size(px(11.))
+            .text_color(p.muted)
+            .cursor_pointer()
+            .hover(|s| s.text_color(p.text))
+            .child("Fetch")
+            .on_click(cx.listener(|v, _, window, cx| v.fetch(window, cx)));
         let switch = h_flex()
-            .mb(px(6.))
             .self_start()
             .flex_none()
             .rounded(px(5.))
@@ -540,6 +579,13 @@ impl Render for CommitView {
             .child(seg("mode-local", "Local", false, cx))
             .child(div().w(px(1.)).h_full().bg(p.border))
             .child(seg("mode-branch", "Branch", true, cx));
+        let switch = h_flex()
+            .mb(px(6.))
+            .flex_none()
+            .items_center()
+            .justify_between()
+            .child(switch)
+            .child(fetch);
         if mode {
             return v_flex()
                 .size_full()

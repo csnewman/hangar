@@ -57,6 +57,16 @@ pub enum Do {
     Checkout(String),
     /// Another of the projects' repositories, by its project and path.
     Repository(String, String),
+    /// A new branch from another, named as asked.
+    NewBranchFrom(String),
+    /// Another branch merged into the current one.
+    Merge(String),
+    /// The current branch rebased onto another.
+    Rebase(String),
+    /// A local branch renamed as asked.
+    Rename(String),
+    /// A local branch deleted, once asked.
+    Delete(String),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -335,7 +345,107 @@ impl BranchWidget {
             ),
             Do::Update => ("git.pull", json!({}), "Could not update the project".into()),
             Do::Push => ("git.push", json!({}), "Could not push".into()),
+            Do::NewBranchFrom(from) => {
+                let me = cx.entity().downgrade();
+                crate::treeops::ask_name(
+                    &format!("New Branch from {from}"),
+                    "",
+                    window,
+                    cx,
+                    move |name, window, cx| {
+                        let (root, repo, from) = (root.clone(), repo.clone(), from.clone());
+                        let _ = me.update(cx, |w, cx| {
+                            w.call(
+                                root,
+                                repo,
+                                "git.createBranch",
+                                json!({ "name": name, "at": from }),
+                                format!("Could not create {name}"),
+                                window,
+                                cx,
+                            )
+                        });
+                    },
+                );
+                return;
+            }
+            Do::Merge(name) => (
+                "git.merge",
+                json!({ "branch": name }),
+                format!("Could not merge {name}"),
+            ),
+            Do::Rebase(name) => (
+                "git.rebase",
+                json!({ "onto": name }),
+                format!("Could not rebase onto {name}"),
+            ),
+            Do::Rename(from) => {
+                let me = cx.entity().downgrade();
+                let named = from.clone();
+                crate::treeops::ask_name(
+                    "Rename Branch",
+                    &named,
+                    window,
+                    cx,
+                    move |to, window, cx| {
+                        let (root, repo, from) = (root.clone(), repo.clone(), from.clone());
+                        let _ = me.update(cx, |w, cx| {
+                            w.call(
+                                root,
+                                repo,
+                                "git.renameBranch",
+                                json!({ "from": from, "to": to }),
+                                format!("Could not rename {from}"),
+                                window,
+                                cx,
+                            )
+                        });
+                    },
+                );
+                return;
+            }
+            Do::Delete(name) => {
+                let me = cx.entity().downgrade();
+                crate::treeops::confirm(
+                    &format!("Delete {name}?"),
+                    "A branch not merged anywhere is kept; git says so.",
+                    "Delete",
+                    window,
+                    cx,
+                    move |window, cx| {
+                        let (root, repo, name) = (root.clone(), repo.clone(), name.clone());
+                        let _ = me.update(cx, |w, cx| {
+                            w.call(
+                                root,
+                                repo,
+                                "git.deleteBranch",
+                                json!({ "name": name }),
+                                format!("Could not delete {name}"),
+                                window,
+                                cx,
+                            )
+                        });
+                    },
+                );
+                return;
+            }
         };
+        self.call(root, repo, method, params, doing, window, cx);
+    }
+
+    /// Asks a repository's service something, saying what went wrong, then
+    /// reads it again.
+    #[allow(clippy::too_many_arguments)]
+    fn call(
+        &mut self,
+        root: String,
+        repo: String,
+        method: &'static str,
+        params: serde_json::Value,
+        doing: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(code) = self.workspace.read(cx).code(&root) else {
             return;
         };
@@ -507,6 +617,11 @@ impl BranchPopup {
         let Some(does) = self.rows.get(i).and_then(Row::does).cloned() else {
             return;
         };
+        self.act(does, window, cx);
+    }
+
+    /// Has the widget do something to the repository.
+    fn act(&mut self, does: Do, window: &mut Window, cx: &mut Context<Self>) {
         let (root, repo) = (self.root.clone(), self.repo.path.clone());
         let widget = self.widget.clone();
         // Run after this pop-up's own update, which the widget closes.
@@ -593,7 +708,7 @@ impl BranchPopup {
             } => {
                 let on = self.selected == Some(i);
                 let id = SharedString::from(format!("branch-row-{label}"));
-                h_flex()
+                let el = h_flex()
                     .id(("branch-row", i))
                     .debug_selector(move || id.to_string())
                     .gap(px(6.))
@@ -611,10 +726,80 @@ impl BranchPopup {
                     .when_some(hint.clone(), |d, h| {
                         d.child(div().text_color(p.muted).child(h))
                     })
-                    .on_click(cx.listener(move |v, _, window, cx| v.choose(i, window, cx)))
-                    .into_any_element()
+                    .on_click(cx.listener(move |v, _, window, cx| v.choose(i, window, cx)));
+                match self.branch_menu(row, cx) {
+                    Some(menu) => {
+                        use gpui_component::menu::ContextMenuExt;
+                        el.context_menu(menu).into_any_element()
+                    }
+                    None => el.into_any_element(),
+                }
             }
         }
+    }
+}
+
+/// What a branch's menu does, as IntelliJ's branch pop-up's submenus.
+type BranchMenu = Box<
+    dyn Fn(
+        gpui_component::menu::PopupMenu,
+        &mut Window,
+        &mut Context<gpui_component::menu::PopupMenu>,
+    ) -> gpui_component::menu::PopupMenu,
+>;
+
+impl BranchPopup {
+    /// A branch row's menu: check it out, branch from it, merge it into the
+    /// current one or rebase the current one onto it; a local one renamed
+    /// or deleted.
+    fn branch_menu(&self, row: &Row, cx: &mut Context<Self>) -> Option<BranchMenu> {
+        let Some(Do::Checkout(name)) = row.does() else {
+            return None;
+        };
+        let (local, current) = match &self.branches {
+            Some(Ok(b)) => (
+                b.local.iter().any(|l| &l.name == name),
+                b.current.clone().unwrap_or_default(),
+            ),
+            _ => (false, String::new()),
+        };
+        let (me, name) = (cx.entity().downgrade(), name.clone());
+        Some(Box::new(move |menu, _, cx| {
+            crate::ui::modal(cx);
+            let item = |label: String, does: Do| {
+                let me = me.clone();
+                gpui_component::menu::PopupMenuItem::new(label).on_click(move |_, window, cx| {
+                    let does = does.clone();
+                    let _ = me.update(cx, |v, cx| v.act(does, window, cx));
+                })
+            };
+            let is_current = name == current;
+            menu.item(item("Checkout".into(), Do::Checkout(name.clone())).disabled(is_current))
+                .item(item(
+                    format!("New Branch from {name}…"),
+                    Do::NewBranchFrom(name.clone()),
+                ))
+                .separator()
+                .item(
+                    item(
+                        format!("Merge {name} into {current}"),
+                        Do::Merge(name.clone()),
+                    )
+                    .disabled(is_current || current.is_empty()),
+                )
+                .item(
+                    item(
+                        format!("Rebase {current} onto {name}"),
+                        Do::Rebase(name.clone()),
+                    )
+                    .disabled(is_current || current.is_empty()),
+                )
+                .when(local, |m| {
+                    m.separator()
+                        .item(item("Rename…".into(), Do::Rename(name.clone())))
+                        .item(item("Delete".into(), Do::Delete(name.clone())).disabled(is_current))
+                })
+        }))
     }
 }
 
