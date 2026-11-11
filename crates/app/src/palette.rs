@@ -70,9 +70,9 @@ pub fn light() -> Palette {
         folder: c(0xc09553),
         warn_bg: c(0xeeeffc),
         warn_border: c(0xc4c6f3),
-        term_bg: c(0x142022),
-        term_fg: c(0xd3e1e0),
-        term_tab: c(0x1d2c2e),
+        term_bg: c(0xeef2f2),
+        term_fg: c(0x102021),
+        term_tab: c(0xffffff),
     }
 }
 

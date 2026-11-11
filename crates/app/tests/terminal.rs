@@ -21,6 +21,28 @@ fn colours_and_attributes_become_spans() {
     assert_eq!(s.cursor(), (1, 3));
 }
 
+/// On a light background the sixteen named colours are a light theme's,
+/// yellow and white dark enough to read; on a dark one they are a dark
+/// theme's. Colours the shell gives exactly are its own either way.
+#[test]
+fn named_colours_follow_the_background() {
+    use alacritty_terminal::vte::ansi::Rgb;
+    let rgb = |r, g, b| Rgb { r, g, b };
+    let mut s = Screen::new(30, 1);
+    s.feed(b"\x1b[33my\x1b[37mw\x1b[38;2;1;2;3mx");
+    let fg = |s: &mut Screen| -> Vec<Rgb> { s.lines()[0].spans.iter().map(|sp| sp.fg).collect() };
+    s.set_default_colours(rgb(0xd3, 0xe1, 0xe0), rgb(0x1d, 0x2c, 0x2e));
+    assert_eq!(
+        fg(&mut s)[..3],
+        [rgb(0xe5, 0xe5, 0x10), rgb(0xe5, 0xe5, 0xe5), rgb(1, 2, 3)]
+    );
+    s.set_default_colours(rgb(0x10, 0x20, 0x21), rgb(0xff, 0xff, 0xff));
+    assert_eq!(
+        fg(&mut s)[..3],
+        [rgb(0x94, 0x98, 0x00), rgb(0x55, 0x55, 0x55), rgb(1, 2, 3)]
+    );
+}
+
 #[test]
 fn a_full_screen_program_and_a_resize() {
     let mut s = Screen::new(10, 4);

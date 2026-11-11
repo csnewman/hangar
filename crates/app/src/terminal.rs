@@ -147,10 +147,19 @@ impl<L: EventListener> Screen<L> {
         }
     }
 
-    /// Sets the colours text and background take when the shell names none.
+    /// Sets the colours text and background take when the shell names none;
+    /// on a light background the sixteen named colours are a light theme's,
+    /// so yellow and white stay readable.
     pub fn set_default_colours(&mut self, fg: Rgb, bg: Rgb) {
         self.fg = fg;
         self.bg = bg;
+    }
+
+    /// Whether the background is light, and the named colours a light
+    /// theme's.
+    fn light(&self) -> bool {
+        let Rgb { r, g, b } = self.bg;
+        (r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000 > 128
     }
 
     /// Scrolls the view through the scrollback by lines, up for positive.
@@ -458,9 +467,11 @@ impl<L: EventListener> Screen<L> {
                     self.fg
                 }
                 NamedColor::Background => self.bg,
-                n => named(n),
+                n => named_in(n, self.light()),
             }),
-            Color::Indexed(i) => self.term.colors()[i as usize].unwrap_or_else(|| indexed(i)),
+            Color::Indexed(i) => {
+                self.term.colors()[i as usize].unwrap_or_else(|| indexed_in(i, self.light()))
+            }
         }
     }
 }
@@ -482,6 +493,11 @@ fn literal(text: &str) -> String {
 }
 
 fn named(n: NamedColor) -> Rgb {
+    named_in(n, false)
+}
+
+/// A named colour, from a light theme's sixteen or a dark one's.
+fn named_in(n: NamedColor, light: bool) -> Rgb {
     match n {
         NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::Cursor => Rgb {
             r: 0xd4,
@@ -498,13 +514,32 @@ fn named(n: NamedColor) -> Rgb {
             g: 0x9a,
             b: 0x9a,
         },
-        n if (n as usize) < 16 => indexed(n as u8),
-        n => indexed((n as usize - NamedColor::DimBlack as usize) as u8),
+        n if (n as usize) < 16 => indexed_in(n as u8, light),
+        n => indexed_in((n as usize - NamedColor::DimBlack as usize) as u8, light),
     }
 }
 
-/// xterm's 256 colours: 16 named, a 6x6x6 cube, then 24 greys.
-fn indexed(i: u8) -> Rgb {
+/// xterm's 256 colours: 16 named, from a light theme's or a dark one's
+/// (VS Code's Light+ and Dark+), a 6x6x6 cube, then 24 greys.
+fn indexed_in(i: u8, light: bool) -> Rgb {
+    const LIGHT: [(u8, u8, u8); 16] = [
+        (0x00, 0x00, 0x00),
+        (0xcd, 0x31, 0x31),
+        (0x00, 0xbc, 0x00),
+        (0x94, 0x98, 0x00),
+        (0x04, 0x51, 0xa5),
+        (0xbc, 0x05, 0xbc),
+        (0x05, 0x98, 0xbc),
+        (0x55, 0x55, 0x55),
+        (0x66, 0x66, 0x66),
+        (0xcd, 0x31, 0x31),
+        (0x14, 0xce, 0x14),
+        (0xb5, 0xba, 0x00),
+        (0x04, 0x51, 0xa5),
+        (0xbc, 0x05, 0xbc),
+        (0x05, 0x98, 0xbc),
+        (0xa5, 0xa5, 0xa5),
+    ];
     const ANSI: [(u8, u8, u8); 16] = [
         (0x00, 0x00, 0x00),
         (0xcd, 0x31, 0x31),
@@ -525,7 +560,7 @@ fn indexed(i: u8) -> Rgb {
     ];
     match i {
         0..16 => {
-            let (r, g, b) = ANSI[i as usize];
+            let (r, g, b) = if light { LIGHT } else { ANSI }[i as usize];
             Rgb { r, g, b }
         }
         16..232 => {
