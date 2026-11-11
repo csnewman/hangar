@@ -1,6 +1,7 @@
 //! The editor's tabs: closing as IntelliJ does (Cmd-W, the tab menu's Close
 //! Others and Close to one side), Shift-Cmd-T opening the last closed
-//! again, and the tab shown kept in view however many there are.
+//! again, the tab shown kept in view however many there are, and splitting
+//! the editors in two.
 
 use std::sync::Arc;
 
@@ -163,4 +164,115 @@ fn the_tab_shown_stays_in_view(cx: &mut TestAppContext) {
         in_view(first, cx),
         "shown again, the first is in view: {first:?}"
     );
+}
+
+/// The tab menu's Split and Move Right makes a group on the right, which is
+/// then the one in use; a click in a group uses it, what is opened goes
+/// there, Open in Opposite Group copies a file across, a group closes with
+/// its last tab, and Unsplit gathers both.
+#[gpui::test]
+fn the_editors_split_in_two(cx: &mut TestAppContext) {
+    let (tab, cx) = four(cx);
+    let used = |tab: &Entity<EnvTab>, cx: &mut VisualTestContext| names(tab, cx);
+
+    // Close, Close Others, Close Tabs to the Left and to the Right, Close
+    // All, Reopen Closed Tab, Split Right, Split and Move Right.
+    let b = cx.debug_bounds("file-tab-1").unwrap().center();
+    cx.simulate_mouse_down(b, gpui::MouseButton::Right, gpui::Modifiers::none());
+    cx.simulate_mouse_up(b, gpui::MouseButton::Right, gpui::Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down down down down down down down down enter");
+    cx.run_until_parked();
+    assert!(tab.read_with(cx, |t, _| t.split_in_two()));
+    assert_eq!(used(&tab, cx), ["b.rs"], "moved to the right, in use");
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("right-tab-0").is_some());
+    assert!(
+        cx.debug_bounds("file-tab-2").is_some(),
+        "c.rs and d.rs stay left"
+    );
+    assert!(cx.debug_bounds("file-tab-3").is_none());
+
+    // A click on the left uses it; a file opened goes there.
+    let a = cx.debug_bounds("file-tab-0").unwrap().center();
+    cx.simulate_click(a, gpui::Modifiers::none());
+    assert_eq!(used(&tab, cx), ["a.rs", "c.rs", "d.rs"]);
+    cx.update(|window, cx| tab.update(cx, |t, cx| t.open_file("/home/dev", "e.rs", window, cx)));
+    assert_eq!(used(&tab, cx), ["a.rs", "c.rs", "d.rs", "e.rs"]);
+
+    // A copy of a.rs on the right, which is then in use.
+    cx.update(|window, cx| tab.update(cx, |t, cx| t.split(0, false, window, cx)));
+    assert_eq!(used(&tab, cx), ["b.rs", "a.rs"]);
+    assert_eq!(tab.read_with(cx, |t, cx| t.open_files(cx).1), Some(1));
+
+    // Closing the right's tabs closes the group.
+    cx.update(|_, cx| tab.update(cx, |t, cx| t.close_tabs(|_| false, cx)));
+    assert!(!tab.read_with(cx, |t, _| t.split_in_two()));
+    assert_eq!(used(&tab, cx), ["a.rs", "c.rs", "d.rs", "e.rs"]);
+
+    // Split again, then Unsplit: each file once.
+    cx.update(|window, cx| tab.update(cx, |t, cx| t.split(1, false, window, cx)));
+    assert_eq!(used(&tab, cx), ["c.rs"]);
+    cx.update(|window, cx| tab.update(cx, |t, cx| t.unsplit(window, cx)));
+    assert!(!tab.read_with(cx, |t, _| t.split_in_two()));
+    assert_eq!(used(&tab, cx), ["c.rs", "a.rs", "d.rs", "e.rs"]);
+}
+
+/// Drags a tab from one place to another, the mouse held, stopping on the
+/// way so what shows only while dragging (the zone that splits) is drawn.
+fn drag(
+    cx: &mut VisualTestContext,
+    from: &'static str,
+    to: &dyn Fn(&mut VisualTestContext) -> gpui::Point<gpui::Pixels>,
+) {
+    use gpui::{Modifiers, MouseButton};
+    let start = cx.debug_bounds(from).unwrap().center();
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    for dx in [8., 20., 40.] {
+        cx.simulate_mouse_move(
+            start + gpui::point(px(dx), px(0.)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+    }
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let end = to(cx);
+    cx.simulate_mouse_move(end, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(end, MouseButton::Left, Modifiers::none());
+    cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+}
+
+/// A tab dragged onto the editor's right half splits it; dragged onto a
+/// tab of the other group it moves there, the emptied group going; onto a
+/// tab of its own group it changes places.
+#[gpui::test]
+fn tabs_are_dragged_between_and_within_groups(cx: &mut TestAppContext) {
+    let (tab, cx) = four(cx);
+    drag(cx, "file-tab-0", &|cx| {
+        cx.debug_bounds("split-zone")
+            .expect("the zone that splits, while dragging")
+            .center()
+    });
+    assert!(tab.read_with(cx, |t, _| t.split_in_two()));
+    assert_eq!(names(&tab, cx), ["a.rs"], "a.rs on the right, in use");
+
+    drag(cx, "right-tab-0", &|cx| {
+        cx.debug_bounds("file-tab-1").unwrap().center()
+    });
+    assert!(
+        !tab.read_with(cx, |t, _| t.split_in_two()),
+        "the emptied group goes"
+    );
+    assert_eq!(names(&tab, cx), ["b.rs", "a.rs", "c.rs", "d.rs"]);
+
+    drag(cx, "file-tab-0", &|cx| {
+        cx.debug_bounds("file-tab-3").unwrap().center()
+    });
+    assert_eq!(names(&tab, cx), ["a.rs", "c.rs", "b.rs", "d.rs"]);
 }

@@ -65,6 +65,31 @@ impl Tool {
 #[derive(Clone)]
 pub struct DraggedTool(pub Tool);
 
+/// An editor tab being dragged: its group, its place there, and its name.
+#[derive(Clone)]
+pub struct DraggedTab {
+    right: bool,
+    i: usize,
+    title: String,
+}
+
+impl Render for DraggedTab {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette::of(cx);
+        div()
+            .px(px(12.))
+            .py(px(5.))
+            .rounded(px(4.))
+            .bg(p.surface)
+            .border_1()
+            .border_color(p.border_strong)
+            .shadow_md()
+            .text_size(px(11.5))
+            .text_color(p.text)
+            .child(self.title.clone())
+    }
+}
+
 impl Render for DraggedTool {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
@@ -295,9 +320,17 @@ pub struct EnvTab {
     problems: Option<Entity<ProblemsView>>,
     /// The language servers, made with the workspace.
     languages: Option<Entity<Languages>>,
-    /// The files and diffs open in the editors, and the one shown.
+    /// The files and diffs open in the editor group in use, and the one
+    /// shown; its row of tabs is tab_scroll.
     files: Vec<Tab>,
     file: Option<usize>,
+    /// The editors' other group, split beside the one in use, and whether
+    /// it is on the right. Using it swaps the two.
+    other: Option<EditorGroup>,
+    other_right: bool,
+    /// Whether an editor tab is being dragged, for the drop zone that
+    /// splits.
+    dragging_tab: bool,
     /// The files closed, last last, to open again: each with the root it
     /// was opened from.
     closed: Vec<(String, String)>,
@@ -316,6 +349,35 @@ struct Caret {
 }
 
 /// An editor tab: a file, or a file's diff.
+/// A tab, for its menu: its place in its group, how many the group has,
+/// whether the group is the right one, and whether there are two.
+#[derive(Clone, Copy)]
+struct TabAt {
+    i: usize,
+    count: usize,
+    right: bool,
+    split: bool,
+}
+
+/// An editor group, as it is kept while the other is in use.
+struct EditorGroup {
+    files: Vec<Tab>,
+    file: Option<usize>,
+    tab_scroll: gpui::ScrollHandle,
+    tab_in_view: (Option<usize>, usize),
+}
+
+impl EditorGroup {
+    fn empty() -> Self {
+        EditorGroup {
+            files: vec![],
+            file: None,
+            tab_scroll: gpui::ScrollHandle::new(),
+            tab_in_view: (None, 0),
+        }
+    }
+}
+
 #[derive(Clone)]
 enum Tab {
     Doc(Entity<DocEditor>),
@@ -441,6 +503,9 @@ impl EnvTab {
             files: vec![],
             file: None,
             closed: vec![],
+            other: None,
+            other_right: true,
+            dragging_tab: false,
             pending_reveal: None,
             subs: vec![],
         }
@@ -690,34 +755,259 @@ impl EnvTab {
         }) {
             Some(i) => i,
             None => {
-                let Some(client) = self.client(cx) else {
+                let Some(view) = self.new_doc(root, &abs, window, cx) else {
                     return;
                 };
-                let env = self.env.clone();
-                // Shown to the others by the place's name for this user, in
-                // the colour the web UI gives them.
-                let me = self
-                    .places
-                    .read(cx)
-                    .get(&self.place)
-                    .and_then(|(_, st)| st.me.clone())
-                    .map(|m| {
-                        let colour = crate::presence::colour_for(&m.username).to_string();
-                        let name = if m.display_name.is_empty() {
-                            m.username
-                        } else {
-                            m.display_name
-                        };
-                        (name, colour)
-                    });
-                let view = cx.new(|cx| DocEditor::new(&client, &env, root, &abs, me, window, cx));
-                self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
-                self.attach_language(&view, cx);
                 self.files.push(Tab::Doc(view));
                 self.files.len() - 1
             }
         };
         self.show_file(i, window, cx);
+    }
+
+    /// An editor on a file, opened in its language server.
+    fn new_doc(
+        &mut self,
+        root: &str,
+        abs: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<DocEditor>> {
+        let client = self.client(cx)?;
+        let env = self.env.clone();
+        // Shown to the others by the place's name for this user, in the
+        // colour the web UI gives them.
+        let me = self
+            .places
+            .read(cx)
+            .get(&self.place)
+            .and_then(|(_, st)| st.me.clone())
+            .map(|m| {
+                let colour = crate::presence::colour_for(&m.username).to_string();
+                let name = if m.display_name.is_empty() {
+                    m.username
+                } else {
+                    m.display_name
+                };
+                (name, colour)
+            });
+        let view = cx.new(|cx| DocEditor::new(&client, &env, root, abs, me, window, cx));
+        self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
+        self.attach_language(&view, cx);
+        Some(view)
+    }
+
+    /// Every tab, in both groups.
+    fn all_tabs(&self) -> impl Iterator<Item = &Tab> {
+        self.files
+            .iter()
+            .chain(self.other.iter().flat_map(|g| g.files.iter()))
+    }
+
+    /// Whether the editors are split in two.
+    pub fn split_in_two(&self) -> bool {
+        self.other.is_some()
+    }
+
+    /// Whether the group in use is the right one.
+    fn using_right(&self) -> bool {
+        self.other.is_some() && !self.other_right
+    }
+
+    /// Makes the group on one side the one in use, as a click in it does.
+    pub fn use_side(&mut self, right: bool, cx: &mut Context<Self>) {
+        if self.other.is_some() && self.using_right() != right {
+            self.swap_groups();
+            cx.notify();
+        }
+    }
+
+    fn swap_groups(&mut self) {
+        let Some(other) = self.other.take() else {
+            return;
+        };
+        let was = EditorGroup {
+            files: std::mem::replace(&mut self.files, other.files),
+            file: std::mem::replace(&mut self.file, other.file),
+            tab_scroll: std::mem::replace(&mut self.tab_scroll, other.tab_scroll),
+            tab_in_view: std::mem::replace(&mut self.tab_in_view, other.tab_in_view),
+        };
+        self.other = Some(was);
+        self.other_right = !self.other_right;
+    }
+
+    /// Shows a tab in the other group, as IntelliJ's Split Right does, a
+    /// group being made on the right if there is one; moved there, not
+    /// copied, if asked. The other group is then the one in use.
+    pub fn split(&mut self, i: usize, moved: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.files.get(i).cloned() else {
+            return;
+        };
+        let path = tab.path(cx);
+        let tab = if moved {
+            self.take_tab(i);
+            tab
+        } else {
+            // A copy is an editor of its own on the same shared document,
+            // unless the other group has the file already.
+            match &tab {
+                Tab::Doc(_) => {
+                    let (root, _) = self.place_of(&path, cx);
+                    let open = self.other.as_ref().is_some_and(|g| {
+                        g.files
+                            .iter()
+                            .any(|f| matches!(f, Tab::Doc(_)) && f.path(cx) == path)
+                    });
+                    if open {
+                        tab
+                    } else {
+                        match self.new_doc(&root, &path, window, cx) {
+                            Some(d) => Tab::Doc(d),
+                            None => return,
+                        }
+                    }
+                }
+                Tab::Diff(d) => {
+                    let Some(ws) = self.workspace.clone() else {
+                        return;
+                    };
+                    let spec = d.read(cx).spec().clone();
+                    Tab::Diff(cx.new(|cx| DiffView::new(ws, spec, cx)))
+                }
+            }
+        };
+        if self.other.is_none() {
+            self.other = Some(EditorGroup::empty());
+            self.other_right = true;
+        }
+        let emptied = self.files.is_empty();
+        self.swap_groups();
+        if emptied {
+            // The group it was moved from had nothing else: it goes.
+            self.other = None;
+        }
+        let at = match self.files.iter().position(|f| {
+            f.path(cx) == path && matches!(f, Tab::Doc(_)) == matches!(tab, Tab::Doc(_))
+        }) {
+            Some(at) => {
+                // Shown by a tab there already: this one is let go, unless
+                // it is that very tab.
+                let same = matches!((&tab, &self.files[at]), (Tab::Doc(a), Tab::Doc(b)) if a == b);
+                if !same {
+                    self.drop_tab(tab, cx);
+                }
+                at
+            }
+            None => {
+                self.files.push(tab);
+                self.files.len() - 1
+            }
+        };
+        self.show_file(at, window, cx);
+    }
+
+    /// Gathers both groups' tabs into the one in use, as IntelliJ's Unsplit
+    /// does; a file open in both is kept once.
+    pub fn unsplit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(other) = self.other.take() else {
+            return;
+        };
+        for tab in other.files {
+            let path = tab.path(cx);
+            let twin = self.files.iter().any(|f| {
+                f.path(cx) == path && matches!(f, Tab::Doc(_)) == matches!(tab, Tab::Doc(_))
+            });
+            if twin {
+                self.drop_tab(tab, cx);
+            } else {
+                self.files.push(tab);
+            }
+        }
+        if let Some(i) = self.file {
+            self.show_file(i, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Moves a tab dropped in a group: before the tab at `at` or at the end;
+    /// to its own group, it changes places there; with one group, dropped
+    /// on the right, it splits.
+    pub fn move_tab(
+        &mut self,
+        from: bool,
+        i: usize,
+        to: bool,
+        at: Option<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.dragging_tab = false;
+        if self.other.is_none() {
+            if to && !from {
+                return self.split(i, true, window, cx);
+            }
+            if from != to {
+                return;
+            }
+        }
+        self.use_side(from, cx);
+        let Some(tab) = self.take_tab(i) else {
+            return;
+        };
+        if from == to {
+            let at = at
+                .map(|a| if a > i { a - 1 } else { a })
+                .unwrap_or(self.files.len())
+                .min(self.files.len());
+            self.files.insert(at, tab);
+            return self.show_file(at, window, cx);
+        }
+        if self.files.is_empty() {
+            // The group it left had nothing else: it goes.
+            self.swap_groups();
+            self.other = None;
+        } else {
+            self.use_side(to, cx);
+        }
+        let path = tab.path(cx);
+        let twin = self.files.iter().position(|f| {
+            f.path(cx) == path && matches!(f, Tab::Doc(_)) == matches!(tab, Tab::Doc(_))
+        });
+        let shown = match twin {
+            Some(t) => {
+                self.drop_tab(tab, cx);
+                t
+            }
+            None => {
+                let at = at.unwrap_or(self.files.len()).min(self.files.len());
+                self.files.insert(at, tab);
+                at
+            }
+        };
+        self.show_file(shown, window, cx);
+    }
+
+    /// Takes a tab out of the group in use, as moving it does: not closed.
+    fn take_tab(&mut self, i: usize) -> Option<Tab> {
+        if i >= self.files.len() {
+            return None;
+        }
+        let tab = self.files.remove(i);
+        self.file = match self.file {
+            Some(a) if a == i => (!self.files.is_empty()).then(|| i.min(self.files.len() - 1)),
+            Some(a) if a > i => Some(a - 1),
+            a => a,
+        };
+        Some(tab)
+    }
+
+    /// Lets a tab go that another stands for, its file left open in its
+    /// language server by that other.
+    fn drop_tab(&mut self, tab: Tab, cx: &mut Context<Self>) {
+        if let (Tab::Doc(doc), Some(l)) = (tab, &self.languages) {
+            let asked = doc.read(cx).asked().to_string();
+            l.update(cx, |l, cx| l.close(&asked, cx));
+        }
     }
 
     /// Opens a file in its language server, and gives its editor the
@@ -861,6 +1151,11 @@ impl EnvTab {
             Some(a) if a > i => Some(a - 1),
             a => a,
         };
+        // A group whose last tab closes goes, the other taking its place.
+        if self.files.is_empty() && self.other.is_some() {
+            self.swap_groups();
+            self.other = None;
+        }
         cx.notify();
     }
 
@@ -1160,7 +1455,7 @@ impl EnvTab {
         cx: &mut Context<Self>,
     ) {
         for (abs, edits) in files {
-            let open = self.files.iter().find_map(|f| match f {
+            let open = self.all_tabs().find_map(|f| match f {
                 Tab::Doc(d) if d.read(cx).path() == abs => Some(d.clone()),
                 _ => None,
             });
@@ -1234,19 +1529,28 @@ impl EnvTab {
     /// The menu on an editor tab.
     fn tab_menu(
         menu: gpui_component::menu::PopupMenu,
-        i: usize,
-        count: usize,
+        at: TabAt,
         abs: String,
         rel: String,
         tab: gpui::WeakEntity<Self>,
     ) -> gpui_component::menu::PopupMenu {
         use gpui_component::menu::PopupMenuItem;
         type Act = Rc<dyn Fn(&mut EnvTab, &mut Window, &mut Context<EnvTab>)>;
+        let TabAt {
+            i,
+            count,
+            right,
+            split,
+        } = at;
+        // Each acts in the tab's group, which it makes the one in use.
         let on = |label: &str, f: Act| {
             let tab = tab.clone();
             PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
                 let f = f.clone();
-                let _ = tab.update(cx, |t, cx| f(t, window, cx));
+                let _ = tab.update(cx, |t, cx| {
+                    t.use_side(right, cx);
+                    f(t, window, cx)
+                });
             })
         };
         let copy = |label: &str, text: String| {
@@ -1285,6 +1589,34 @@ impl EnvTab {
                 "Reopen Closed Tab",
                 Rc::new(|t, window, cx| t.reopen_closed(window, cx)),
             ))
+            .separator()
+            // IntelliJ's splitting: to the right while there is one group,
+            // then between the two.
+            .item(on(
+                if split {
+                    "Open in Opposite Group"
+                } else {
+                    "Split Right"
+                },
+                Rc::new(move |t, window, cx| t.split(i, false, window, cx)),
+            ))
+            .item(
+                on(
+                    if split {
+                        "Move to Opposite Group"
+                    } else {
+                        "Split and Move Right"
+                    },
+                    Rc::new(move |t, window, cx| t.split(i, true, window, cx)),
+                )
+                .disabled(!split && count < 2),
+            )
+            .when(split, |m| {
+                m.item(on(
+                    "Unsplit",
+                    Rc::new(|t, window, cx| t.unsplit(window, cx)),
+                ))
+            })
             .separator()
             .item(copy("Copy Path", abs))
             .item(copy("Copy Relative Path", rel))
@@ -1484,7 +1816,7 @@ impl EnvTab {
             .push(cx.subscribe(&langs, |t, l, e: &languages::Event, cx| {
                 if let languages::Event::Diagnostics(abs) = e {
                     let d = l.read(cx).diagnostics_of(abs).to_vec();
-                    for f in &t.files {
+                    for f in t.all_tabs() {
                         if let Tab::Doc(doc) = f
                             && (doc.read(cx).path() == abs || doc.read(cx).asked() == abs)
                         {
@@ -1495,7 +1827,8 @@ impl EnvTab {
             }));
         self.languages = Some(langs);
         // Files opened before there was a workspace.
-        for f in self.files.clone() {
+        let docs: Vec<Tab> = self.all_tabs().cloned().collect();
+        for f in docs {
             if let Tab::Doc(doc) = f {
                 self.attach_language(&doc, cx);
             }
@@ -1687,6 +2020,7 @@ impl Render for EnvTab {
         self.settle(&stripes);
         if !cx.has_active_drag() {
             self.dragging = false;
+            self.dragging_tab = false;
         }
         let left = self.open.get(&Slot::Left).copied();
         let left_below = self.open.get(&Slot::LeftBelow).copied();
@@ -2602,150 +2936,280 @@ impl EnvTab {
         list
     }
 
+    /// The editor area: one group of tabs, or two side by side, the one in
+    /// use taking what is opened.
     fn editors(&mut self, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
-        // The tab of the file shown is scrolled into view whenever it, or
-        // the tabs, change.
-        let shown = (self.file, self.files.len());
-        if self.tab_in_view != shown {
-            self.tab_in_view = shown;
-            if let Some(i) = self.file {
-                self.tab_scroll.scroll_to_item(i);
-            }
+        if self.other.is_none() {
+            return self.group_view(true, false, p, cx);
         }
-        if let Some(active) = self.file.and_then(|i| self.files.get(i)).cloned() {
-            // One row of tabs, scrolled sideways by the wheel when they do
-            // not fit, with a list of them all at its end.
-            let mut tabs = h_flex()
-                .id("file-tabs")
-                .flex_1()
-                .min_w_0()
-                .overflow_x_scroll()
-                .track_scroll(&self.tab_scroll);
-            for (i, f) in self.files.iter().enumerate() {
-                let on = self.file == Some(i);
-                let path = f.path(cx);
-                let name = f.title(cx);
-                let hover = p.surface_2;
-                tabs = tabs.child(
-                    h_flex()
-                        .id(("file-tab", i))
-                        .debug_selector(move || format!("file-tab-{i}"))
-                        .flex_none()
-                        .gap(px(6.))
-                        .px(px(12.))
-                        .py(px(5.))
-                        .border_r_1()
-                        .border_color(p.border)
-                        .cursor_pointer()
-                        .when(on, |d| d.bg(p.bg).text_color(p.text))
-                        .when(!on, move |d| {
-                            d.text_color(p.muted).hover(move |s| s.bg(hover))
-                        })
-                        .child(div().max_w(px(220.)).truncate().child(name))
-                        .child(
-                            div()
-                                .id(("file-close", i))
-                                .text_color(p.muted)
-                                .child("×")
-                                .on_click(cx.listener(move |t, _: &gpui::ClickEvent, _, cx| {
-                                    cx.stop_propagation();
-                                    t.close_file(i, cx);
-                                })),
-                        )
-                        .tooltip({
-                            let path = path.clone();
-                            move |window, cx| {
-                                gpui_component::tooltip::Tooltip::new(path.clone())
-                                    .build(window, cx)
+        let right = self.using_right();
+        let used = self.group_view(true, right, p, cx);
+        let other = self.group_view(false, !right, p, cx);
+        let (l, r) = if right { (other, used) } else { (used, other) };
+        let pane =
+            |side: &'static str, body: gpui::AnyElement, right: bool, cx: &mut Context<Self>| {
+                v_flex()
+                    .id(side)
+                    .debug_selector(move || side.to_string())
+                    .flex_1()
+                    .min_w_0()
+                    .h_full()
+                    // A click anywhere in a group makes it the one in use.
+                    .capture_any_mouse_down(cx.listener(move |t, _, _, cx| t.use_side(right, cx)))
+                    .child(body)
+            };
+        h_flex()
+            .flex_1()
+            .min_h_0()
+            .size_full()
+            .child(pane("editors-left", l, false, cx))
+            .child(div().w(px(1.)).h_full().flex_none().bg(p.border))
+            .child(pane("editors-right", r, true, cx))
+            .into_any_element()
+    }
+
+    /// A group's row of tabs and the tab shown: the group in use, or the
+    /// other; on the right or not.
+    fn group_view(
+        &mut self,
+        used: bool,
+        right: bool,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let split = self.other.is_some();
+        let (files, file, scroll) = {
+            let g = if used { None } else { self.other.as_mut() };
+            // The tab shown is scrolled into view whenever it, or the tabs,
+            // change.
+            let (files, file, scroll, in_view) = match g {
+                Some(g) => (&g.files, g.file, &g.tab_scroll, &mut g.tab_in_view),
+                None => (
+                    &self.files,
+                    self.file,
+                    &self.tab_scroll,
+                    &mut self.tab_in_view,
+                ),
+            };
+            let shown = (file, files.len());
+            if *in_view != shown {
+                *in_view = shown;
+                if let Some(i) = file {
+                    scroll.scroll_to_item(i);
+                }
+            }
+            (files.clone(), file, scroll.clone())
+        };
+        let Some(active) = file.and_then(|i| files.get(i)).cloned() else {
+            return self.no_file(p).into_any_element();
+        };
+        let side = if right { "r" } else { "l" };
+        let selector = if right { "right-tab" } else { "file-tab" };
+        // One row of tabs, scrolled sideways by the wheel when they do not
+        // fit, with a list of them all at its end.
+        let mut tabs = h_flex()
+            .id(SharedString::from(format!("file-tabs-{side}")))
+            .flex_1()
+            .min_w_0()
+            .overflow_x_scroll()
+            .track_scroll(&scroll);
+        for (i, f) in files.iter().enumerate() {
+            let on = file == Some(i);
+            let path = f.path(cx);
+            let name = f.title(cx);
+            let hover = p.surface_2;
+            // The shown tab of the group not in use is drawn quieter.
+            let strong = on && (used || !split);
+            let accent = p.accent;
+            tabs = tabs.child(
+                h_flex()
+                    .id(SharedString::from(format!("file-tab-{side}{i}")))
+                    .debug_selector(move || format!("{selector}-{i}"))
+                    .flex_none()
+                    .gap(px(6.))
+                    .px(px(12.))
+                    .py(px(5.))
+                    .border_r_1()
+                    .border_color(p.border)
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(p.bg))
+                    .when(strong, |d| d.text_color(p.text))
+                    .when(!strong, |d| d.text_color(p.muted))
+                    .when(!on, move |d| d.hover(move |s| s.bg(hover)))
+                    // Dragged, it moves: before the tab it is let go on.
+                    .on_drag(
+                        DraggedTab {
+                            right,
+                            i,
+                            title: name.clone(),
+                        },
+                        {
+                            let tab = cx.entity().downgrade();
+                            move |d, _, _, cx| {
+                                let _ = tab.update(cx, |t, cx| {
+                                    t.dragging_tab = true;
+                                    cx.notify();
+                                });
+                                cx.new(|_| d.clone())
                             }
-                        })
-                        .on_click(cx.listener(move |t, _, window, cx| t.show_file(i, window, cx)))
-                        // As in IntelliJ, the middle button closes a tab.
-                        .on_mouse_down(
-                            gpui::MouseButton::Middle,
-                            cx.listener(move |t, _, _, cx| t.close_file(i, cx)),
-                        )
-                        .context_menu({
-                            let (count, tab) = (self.files.len(), cx.entity().downgrade());
-                            let rel = self
-                                .workspace
-                                .as_ref()
-                                .and_then(|w| {
-                                    let w = w.read(cx);
-                                    let root =
-                                        w.project_of(&path)?.root.trim_end_matches('/').to_string();
-                                    path.strip_prefix(&format!("{root}/")).map(str::to_string)
-                                })
-                                .unwrap_or_else(|| path.clone());
-                            move |menu, _, cx| {
-                                crate::ui::modal(cx);
-                                Self::tab_menu(
-                                    menu,
+                        },
+                    )
+                    .drag_over::<DraggedTab>(move |s, _, _, _| s.border_l_2().border_color(accent))
+                    .on_drop(cx.listener(move |t, d: &DraggedTab, window, cx| {
+                        t.move_tab(d.right, d.i, right, Some(i), window, cx)
+                    }))
+                    .child(div().max_w(px(220.)).truncate().child(name))
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("file-close-{side}{i}")))
+                            .text_color(p.muted)
+                            .child("×")
+                            .on_click(cx.listener(move |t, _: &gpui::ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                t.use_side(right, cx);
+                                t.close_file(i, cx);
+                            })),
+                    )
+                    .tooltip({
+                        let path = path.clone();
+                        move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(path.clone()).build(window, cx)
+                        }
+                    })
+                    .on_click(cx.listener(move |t, _, window, cx| {
+                        t.use_side(right, cx);
+                        t.show_file(i, window, cx)
+                    }))
+                    // As in IntelliJ, the middle button closes a tab.
+                    .on_mouse_down(
+                        gpui::MouseButton::Middle,
+                        cx.listener(move |t, _, _, cx| {
+                            t.use_side(right, cx);
+                            t.close_file(i, cx)
+                        }),
+                    )
+                    .context_menu({
+                        let (count, tab) = (files.len(), cx.entity().downgrade());
+                        let rel = self
+                            .workspace
+                            .as_ref()
+                            .and_then(|w| {
+                                let w = w.read(cx);
+                                let root =
+                                    w.project_of(&path)?.root.trim_end_matches('/').to_string();
+                                path.strip_prefix(&format!("{root}/")).map(str::to_string)
+                            })
+                            .unwrap_or_else(|| path.clone());
+                        move |menu, _, cx| {
+                            crate::ui::modal(cx);
+                            Self::tab_menu(
+                                menu,
+                                TabAt {
                                     i,
                                     count,
-                                    path.clone(),
-                                    rel.clone(),
-                                    tab.clone(),
-                                )
-                            }
-                        }),
-                );
-            }
-            let overflowing = self.tab_scroll.max_offset().x > px(0.);
-            let all: Vec<(usize, String)> = self
-                .files
-                .iter()
-                .enumerate()
-                .map(|(i, f)| (i, f.title(cx).to_string()))
-                .collect();
-            let (shown, tab) = (self.file, cx.entity().downgrade());
-            let bar = h_flex()
-                .flex_none()
-                .border_b_1()
-                .border_color(p.border)
-                .text_size(px(11.5))
-                .child(tabs)
-                .when(overflowing, |d| {
-                    d.child(
-                        div().flex_none().px(px(4.)).child(
-                            gpui_component::button::Button::new("file-tabs-all")
-                                .ghost()
-                                .xsmall()
-                                .icon(
-                                    gpui_component::Icon::empty()
-                                        .path(assets::icon("chevron-down")),
-                                )
-                                .tooltip("Every open file")
-                                .dropdown_menu_with_anchor(
-                                    gpui::Anchor::TopRight,
-                                    move |mut menu, _, cx| {
-                                        crate::ui::modal(cx);
-                                        for (i, title) in &all {
-                                            let (i, tab) = (*i, tab.clone());
-                                            menu = menu.item(
-                                                PopupMenuItem::new(title.clone())
-                                                    .checked(shown == Some(i))
-                                                    .on_click(move |_, window, cx| {
-                                                        let _ = tab.update(cx, |t, cx| {
-                                                            t.show_file(i, window, cx)
-                                                        });
-                                                    }),
-                                            );
-                                        }
-                                        menu
-                                    },
-                                ),
-                        ),
-                    )
-                });
-            return v_flex()
-                .flex_1()
-                .min_h_0()
-                .child(bar)
-                .child(div().flex_1().min_h_0().child(active.element()))
-                .into_any_element();
+                                    right,
+                                    split,
+                                },
+                                path.clone(),
+                                rel.clone(),
+                                tab.clone(),
+                            )
+                        }
+                    }),
+            );
         }
-        self.no_file(p).into_any_element()
+        let overflowing = scroll.max_offset().x > px(0.);
+        let all: Vec<(usize, String)> = files
+            .iter()
+            .enumerate()
+            .map(|(i, f)| (i, f.title(cx).to_string()))
+            .collect();
+        let tab = cx.entity().downgrade();
+        let soft = p.accent_soft;
+        let bar = h_flex()
+            .flex_none()
+            .border_b_1()
+            .border_color(p.border)
+            .text_size(px(11.5))
+            // Let go on the row past the tabs, a tab goes to the end.
+            .on_drop(cx.listener(move |t, d: &DraggedTab, window, cx| {
+                t.move_tab(d.right, d.i, right, None, window, cx)
+            }))
+            .child(tabs)
+            .when(overflowing, |d| {
+                d.child(
+                    div().flex_none().px(px(4.)).child(
+                        gpui_component::button::Button::new(SharedString::from(format!(
+                            "file-tabs-all-{side}"
+                        )))
+                        .ghost()
+                        .xsmall()
+                        .icon(gpui_component::Icon::empty().path(assets::icon("chevron-down")))
+                        .tooltip("Every open file")
+                        .dropdown_menu_with_anchor(
+                            gpui::Anchor::TopRight,
+                            move |mut menu, _, cx| {
+                                crate::ui::modal(cx);
+                                for (i, title) in &all {
+                                    let (i, tab) = (*i, tab.clone());
+                                    menu = menu.item(
+                                        PopupMenuItem::new(title.clone())
+                                            .checked(file == Some(i))
+                                            .on_click(move |_, window, cx| {
+                                                let _ = tab.update(cx, |t, cx| {
+                                                    t.use_side(right, cx);
+                                                    t.show_file(i, window, cx)
+                                                });
+                                            }),
+                                    );
+                                }
+                                menu
+                            },
+                        ),
+                    ),
+                )
+            });
+        let dragging = self.dragging_tab;
+        let body = div()
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(active.element())
+            // While a tab is dragged: on the other group's editor it moves
+            // there; with one group, on the right half it splits right.
+            .when(dragging && split && !used, |d| {
+                d.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(soft))
+                        .on_drop(cx.listener(move |t, d: &DraggedTab, window, cx| {
+                            t.move_tab(d.right, d.i, right, None, window, cx)
+                        })),
+                )
+            })
+            .when(dragging && !split, |d| {
+                d.child(
+                    div()
+                        .id("split-zone")
+                        .debug_selector(|| "split-zone".into())
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .right_0()
+                        .w(gpui::relative(0.5))
+                        .drag_over::<DraggedTab>(move |s, _, _, _| s.bg(soft))
+                        .on_drop(cx.listener(move |t, d: &DraggedTab, window, cx| {
+                            t.move_tab(d.right, d.i, true, None, window, cx)
+                        })),
+                )
+            });
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .child(bar)
+            .child(body)
+            .into_any_element()
     }
 
     fn no_file(&self, p: &Palette) -> impl IntoElement {
