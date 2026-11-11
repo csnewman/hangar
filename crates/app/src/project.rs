@@ -121,6 +121,16 @@ impl Render for DraggedEntry {
     }
 }
 
+/// Whether a click adds a row to those chosen, or takes it away: ⌘ on a
+/// Mac, Ctrl elsewhere.
+fn toggles(m: gpui::Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        m.platform
+    } else {
+        m.control
+    }
+}
+
 /// Whether something may be dropped in a folder: not in the folder it is
 /// in, nor in itself or a folder within it.
 pub fn may_drop(from: &str, dir: bool, into: &str) -> bool {
@@ -163,6 +173,8 @@ actions!(
     [
         SelectUp,
         SelectDown,
+        ExtendUp,
+        ExtendDown,
         SelectFirst,
         SelectLast,
         PageUp,
@@ -209,6 +221,8 @@ pub fn bind_keys(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("up", SelectUp, ctx),
         KeyBinding::new("down", SelectDown, ctx),
+        KeyBinding::new("shift-up", ExtendUp, ctx),
+        KeyBinding::new("shift-down", ExtendDown, ctx),
         KeyBinding::new("home", SelectFirst, ctx),
         KeyBinding::new("end", SelectLast, ctx),
         KeyBinding::new("pageup", PageUp, ctx),
@@ -255,6 +269,10 @@ pub struct ProjectView {
     scope: Scope,
     machine: Tree,
     selected: Option<Selection>,
+    /// The other rows chosen with it, by ⌘-click or ⇧-click, and where a
+    /// ⇧-click's range starts.
+    also: Vec<Selection>,
+    anchor: Option<Selection>,
     /// The tree's scroll, and whether the row selected is still to be
     /// scrolled into view, once it is there.
     scroll: gpui::ScrollHandle,
@@ -285,6 +303,8 @@ impl ProjectView {
             scroll: gpui::ScrollHandle::new(),
             reveal: Rc::new(Cell::new(false)),
             taken: None,
+            also: vec![],
+            anchor: None,
             shown: Shown::of(cx),
             focus: cx.focus_handle(),
             _sub: sub,
@@ -538,9 +558,97 @@ impl ProjectView {
     fn select_at(&mut self, rows: &[Visible], i: usize, cx: &mut Context<Self>) {
         if let Some(r) = rows.get(i) {
             self.selected = Some(r.sel.clone());
+            self.also.clear();
+            self.anchor = Some(r.sel.clone());
             self.reveal.set(true);
             cx.notify();
         }
+    }
+
+    /// Every row chosen: the selected one first.
+    pub fn chosen(&self) -> Vec<Selection> {
+        self.selected.iter().chain(&self.also).cloned().collect()
+    }
+
+    fn is_chosen(&self, sel: &Selection) -> bool {
+        self.selected.as_ref() == Some(sel) || self.also.contains(sel)
+    }
+
+    /// A click on a row: alone, with ⌘ added to or taken from those
+    /// chosen, with ⇧ the rows from the last plain click to it.
+    fn click_select(&mut self, sel: Selection, m: gpui::Modifiers) {
+        if m.shift {
+            let rows = self.visible();
+            let anchor = self.anchor.clone().or_else(|| self.selected.clone());
+            let a = anchor.and_then(|a| rows.iter().position(|r| r.sel == a));
+            let b = rows.iter().position(|r| r.sel == sel);
+            if let (Some(a), Some(b)) = (a, b) {
+                self.also = rows[a.min(b)..=a.max(b)]
+                    .iter()
+                    .map(|r| r.sel.clone())
+                    .filter(|s| s != &sel)
+                    .collect();
+                self.selected = Some(sel);
+                return;
+            }
+        }
+        if toggles(m) {
+            if self.selected.as_ref() == Some(&sel) {
+                self.selected = if self.also.is_empty() {
+                    Some(sel.clone())
+                } else {
+                    Some(self.also.remove(0))
+                };
+            } else if let Some(i) = self.also.iter().position(|s| s == &sel) {
+                self.also.remove(i);
+            } else {
+                if let Some(old) = self.selected.take() {
+                    self.also.push(old);
+                }
+                self.selected = Some(sel.clone());
+            }
+            self.anchor = Some(sel);
+            return;
+        }
+        self.selected = Some(sel.clone());
+        self.also.clear();
+        self.anchor = Some(sel);
+    }
+
+    /// ⇧↑ and ⇧↓: the range from where it started grows or shrinks.
+    fn extend_by(&mut self, by: i64, cx: &mut Context<Self>) {
+        let rows = self.visible();
+        let Some(at) = self.at(&rows) else {
+            return self.select_by(by, cx);
+        };
+        let to = (at as i64 + by).clamp(0, rows.len() as i64 - 1) as usize;
+        let sel = rows[to].sel.clone();
+        if self.anchor.is_none() {
+            self.anchor = self.selected.clone();
+        }
+        self.click_select(sel, gpui::Modifiers::shift());
+        self.reveal.set(true);
+        cx.notify();
+    }
+
+    /// What a menu or key acts on: every row chosen, when the one it is
+    /// about is among them, else that one alone.
+    fn targets_for(&self, t: &Target, cx: &App) -> Vec<Target> {
+        let sel = Selection {
+            root: t.root.clone(),
+            path: t.relative_to_tree(),
+        };
+        if !self.is_chosen(&sel) || self.also.is_empty() {
+            return vec![t.clone()];
+        }
+        let rows = self.visible();
+        self.chosen()
+            .iter()
+            .filter_map(|s| {
+                let dir = rows.iter().find(|r| &r.sel == s).is_some_and(|r| r.dir);
+                self.target(s.root.as_deref(), &s.path, dir, cx)
+            })
+            .collect()
     }
 
     /// Moves the selection by some rows, up for a negative count; with
@@ -763,14 +871,21 @@ impl ProjectView {
         self.target(r.sel.root.as_deref(), &r.sel.path, r.dir, cx)
     }
 
-    /// Cut or Copy of the selected row, to paste.
+    /// Cut or Copy of the rows chosen, to paste.
     fn take(&mut self, cut: bool, cx: &mut Context<Self>) {
-        if let Some(t) = self.selected_target(cx).filter(|t| !(cut && t.is_root())) {
-            self.taken = Some(Taken {
-                code: t.code,
-                paths: vec![t.abs],
-                cut,
-            });
+        if let Some(t) = self.selected_target(cx) {
+            let all: Vec<Target> = self
+                .targets_for(&t, cx)
+                .into_iter()
+                .filter(|t| !(cut && t.is_root()))
+                .collect();
+            if let Some(first) = all.first() {
+                self.taken = Some(Taken {
+                    code: first.code.clone(),
+                    paths: all.iter().map(|t| t.abs.clone()).collect(),
+                    cut,
+                });
+            }
         }
     }
 
@@ -1208,9 +1323,16 @@ impl Render for ProjectView {
             .on_action(cx.listener(|v, _: &Collapse, _, cx| v.collapse_selected(cx)))
             .on_action(cx.listener(|v, _: &Open, _, cx| v.open_selected(cx)))
             .on_action(cx.listener(|_, _: &Escape, _, cx| cx.emit(Leave)))
+            .on_action(cx.listener(|v, _: &ExtendUp, _, cx| v.extend_by(-1, cx)))
+            .on_action(cx.listener(|v, _: &ExtendDown, _, cx| v.extend_by(1, cx)))
             .on_action(cx.listener(|v, _: &Delete, window, cx| {
-                if let Some(t) = v.selected_target(cx).filter(|t| !t.is_root()) {
-                    treeops::trash(&t, window, cx);
+                if let Some(t) = v.selected_target(cx) {
+                    let all: Vec<Target> = v
+                        .targets_for(&t, cx)
+                        .into_iter()
+                        .filter(|t| !t.is_root())
+                        .collect();
+                    treeops::trash_all(&all, window, cx);
                 }
             }))
             .on_action(cx.listener(|v, _: &Rename, window, cx| {
@@ -1344,7 +1466,7 @@ impl ProjectView {
             root: root.clone(),
             path: r.path.clone(),
         };
-        let selected = self.selected.as_ref() == Some(&sel);
+        let selected = self.is_chosen(&sel);
         let right = sel.clone();
         let colour = match r.mark {
             Some('M') => p.busy,
@@ -1414,7 +1536,12 @@ impl ProjectView {
             })
             .on_click(cx.listener(move |v, e: &gpui::ClickEvent, window, cx| {
                 window.focus(&v.focus, cx);
-                v.selected = Some(sel.clone());
+                let m = e.modifiers();
+                v.click_select(sel.clone(), m);
+                if m.shift || toggles(m) {
+                    cx.notify();
+                    return;
+                }
                 if dir {
                     match project {
                         Some(i) => v.toggle(i, &path, cx),
@@ -1433,14 +1560,25 @@ impl ProjectView {
             .on_mouse_down(
                 gpui::MouseButton::Right,
                 cx.listener(move |v, _, _, cx| {
-                    v.selected = Some(right.clone());
+                    // A right-click among the rows chosen keeps them.
+                    if !v.is_chosen(&right) {
+                        v.click_select(right.clone(), gpui::Modifiers::none());
+                    }
                     cx.notify();
                 }),
             )
             .context_menu(move |menu, window, cx| match &target {
                 Some(t) => {
                     crate::ui::modal(cx);
-                    tree_menu(menu, t, &view, window, cx)
+                    let all = view
+                        .upgrade()
+                        .map(|v| v.read(cx).targets_for(t, cx))
+                        .unwrap_or_default();
+                    if all.len() > 1 {
+                        many_menu(menu, &all, &view)
+                    } else {
+                        tree_menu(menu, t, &view, window, cx)
+                    }
                 }
                 None => menu,
             })
@@ -1774,6 +1912,83 @@ fn tree_menu(
         ));
     }
     menu
+}
+
+/// The menu for several rows chosen: what applies to them all, and
+/// Compare Files for two files.
+fn many_menu(menu: PopupMenu, all: &[Target], view: &gpui::WeakEntity<ProjectView>) -> PopupMenu {
+    let movable: Vec<Target> = all.iter().filter(|t| !t.is_root()).cloned().collect();
+    let take = |label: &str, cut: bool| {
+        let (all, view) = (all.to_vec(), view.clone());
+        let list: Vec<Target> = all.into_iter().filter(|t| !(cut && t.is_root())).collect();
+        PopupMenuItem::new(label.to_string())
+            .disabled(list.is_empty())
+            .on_click(move |_, _, cx| {
+                if let Some(first) = list.first() {
+                    let taken = Taken {
+                        code: first.code.clone(),
+                        paths: list.iter().map(|t| t.abs.clone()).collect(),
+                        cut,
+                    };
+                    let _ = view.update(cx, |v, _| v.taken = Some(taken));
+                }
+            })
+    };
+    let paths = all
+        .iter()
+        .map(|t| t.abs.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let files: Vec<&Target> = all.iter().filter(|t| !t.dir).collect();
+    let compare = match files.as_slice() {
+        [a, b] if all.len() == 2 => {
+            let (root, path) = (b.root.clone().unwrap_or_else(|| "/".into()), b.relative());
+            let other = Other::File {
+                root: a.root.clone().unwrap_or_else(|| "/".into()),
+                abs: a.abs.clone(),
+            };
+            let view = view.clone();
+            Some(
+                PopupMenuItem::new("Compare Files").on_click(move |_, _, cx| {
+                    let spec = Spec::compare(&root, &path, other.clone());
+                    let _ = view.update(cx, |_, cx| cx.emit(ShowDiff(spec)));
+                }),
+            )
+        }
+        _ => None,
+    };
+    let down = {
+        let first = all[0].clone();
+        let list: Vec<(String, bool)> = all.iter().map(|t| (t.abs.clone(), t.dir)).collect();
+        let many = first
+            .root
+            .as_deref()
+            .and_then(|r| r.rsplit('/').next())
+            .unwrap_or("files")
+            .to_string();
+        PopupMenuItem::new(format!("Download {} Items", all.len())).on_click(
+            move |_, window, cx| {
+                crate::updown::download(first.code.clone(), list.clone(), &many, window, cx)
+            },
+        )
+    };
+    let mut menu = menu
+        .item(take("Cut", true))
+        .item(take("Copy", false))
+        .item(
+            PopupMenuItem::new("Copy Absolute Paths")
+                .on_click(move |_, _, cx| treeops::copy(paths.clone(), cx)),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new(format!("Delete {} Items…", movable.len()))
+                .disabled(movable.is_empty())
+                .on_click(move |_, window, cx| treeops::trash_all(&movable, window, cx)),
+        );
+    if let Some(c) = compare {
+        menu = menu.separator().item(c);
+    }
+    menu.separator().item(down)
 }
 
 /// IntelliJ's Git submenu for a file or folder: its history, comparing it

@@ -54,6 +54,15 @@ impl Target {
         self.root.as_deref() == Some(self.abs.as_str())
     }
 
+    /// Its path as the tree names its row: from its project's root, or
+    /// absolute for the machine's.
+    pub fn relative_to_tree(&self) -> String {
+        match &self.root {
+            Some(_) => self.relative(),
+            None => self.abs.clone(),
+        }
+    }
+
     /// Its path from its project's root, or from / for the machine's.
     pub fn relative(&self) -> String {
         let root = self.root.as_deref().unwrap_or("/").trim_end_matches('/');
@@ -398,6 +407,27 @@ pub fn trash(t: &Target, window: &mut Window, cx: &mut App) {
         cx,
         move |window, cx| run(&code, "fs.trash", json!({ "paths": [path] }), window, cx),
     );
+}
+
+/// Moves files and folders to the trash, once asked: one by its name,
+/// several by how many.
+pub fn trash_all(all: &[Target], window: &mut Window, cx: &mut App) {
+    match all {
+        [] => {}
+        [one] => trash(one, window, cx),
+        many => {
+            let code = many[0].code.clone();
+            let paths: Vec<String> = many.iter().map(|t| t.abs.clone()).collect();
+            confirm(
+                &format!("Move {} items to the trash?", many.len()),
+                "They go to the environment's trash, from where they can be restored.",
+                "Move to Trash",
+                window,
+                cx,
+                move |window, cx| run(&code, "fs.trash", json!({ "paths": paths }), window, cx),
+            );
+        }
+    }
 }
 
 /// What Cut or Copy took, to paste: the paths, through their connection,

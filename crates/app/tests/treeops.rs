@@ -933,3 +933,99 @@ fn what_may_be_dropped_where() {
     assert!(may_drop("/a/d", true, "/a/de"), "a name it begins");
     assert!(!may_drop("/x", false, "/"), "the root's own");
 }
+
+/// ⌘-click adds a row to those chosen and ⇧-click takes a range; the menu
+/// on them compares two files, and Delete asks about them all.
+#[gpui::test]
+fn several_rows_are_chosen_and_acted_on(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        hangar_app::project::bind_keys(cx);
+    });
+    let (asked_tx, asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (diff_tx, diffs) = mpsc::channel();
+    let mut tree = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        cx.subscribe(&view, move |_, _, e: &hangar_app::diff::ShowDiff, _| {
+            diff_tx.send(e.0.clone()).unwrap();
+        })
+        .detach();
+        tree = Some(view.clone());
+        Root::new(view, window, cx)
+    });
+    let tree = tree.unwrap();
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-note001.md").is_some()
+    });
+    let chosen = |cx: &mut VisualTestContext| {
+        tree.read_with(cx, |t, _| {
+            t.chosen().into_iter().map(|s| s.path).collect::<Vec<_>>()
+        })
+    };
+    let toggle = if cfg!(target_os = "macos") {
+        Modifiers::command()
+    } else {
+        Modifiers::control()
+    };
+    let at = |cx: &mut VisualTestContext, row: &'static str| cx.debug_bounds(row).unwrap().center();
+    let main = at(cx, "tree-row-main.rs");
+    cx.simulate_click(main, Modifiers::none());
+    let note = at(cx, "tree-row-note001.md");
+    cx.simulate_click(note, toggle);
+    assert_eq!(chosen(cx), ["note001.md", "main.rs"]);
+
+    // Their menu: Cut, Copy, Copy Absolute Paths, Delete…, Compare Files.
+    cx.simulate_mouse_down(note, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(note, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    assert_eq!(chosen(cx).len(), 2, "a right-click among them keeps them");
+    cx.simulate_keystrokes("down down down down down enter");
+    cx.run_until_parked();
+    let spec = diffs.try_recv().expect("Compare Files");
+    assert_eq!(spec.path, "main.rs");
+    assert_eq!(
+        spec.other,
+        Some(hangar_app::diff::Other::File {
+            root: "/home/dev/app".into(),
+            abs: "/home/dev/app/note001.md".into(),
+        })
+    );
+
+    // A range, from the last plain click.
+    let (n0, n2) = (at(cx, "tree-row-note000.md"), at(cx, "tree-row-note002.md"));
+    cx.simulate_click(n0, Modifiers::none());
+    cx.simulate_click(n2, Modifiers::shift());
+    assert_eq!(chosen(cx), ["note002.md", "note000.md", "note001.md"]);
+    cx.simulate_keystrokes("shift-up");
+    assert_eq!(chosen(cx), ["note001.md", "note000.md"], "⇧↑ shrinks it");
+
+    // Delete asks about them all, then trashes them together.
+    let delete = if cfg!(target_os = "macos") {
+        "cmd-backspace"
+    } else {
+        "delete"
+    };
+    cx.simulate_keystrokes(delete);
+    cx.run_until_parked();
+    let ok = cx.debug_bounds("dialog-ok").unwrap().center();
+    cx.simulate_click(ok, Modifiers::none());
+    let start = Instant::now();
+    let (m, p) = loop {
+        cx.run_until_parked();
+        if let Ok(m) = asked.try_recv() {
+            break m;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "the trash");
+    };
+    assert_eq!(m, "fs.trash");
+    assert_eq!(
+        p["paths"],
+        json!(["/home/dev/app/note001.md", "/home/dev/app/note000.md"])
+    );
+}
