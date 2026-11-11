@@ -2299,6 +2299,72 @@ impl DocEditor {
         }
     }
 
+    /// The web's trust bar: the file's project is not trusted to run its
+    /// code, so its language server is not started, and a button trusts
+    /// it.
+    fn trust_bar(
+        &self,
+        p: &crate::palette::Palette,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        let l = self.languages.as_ref()?.upgrade()?;
+        let key = l.read(cx).server_of(&self.asked, cx)?;
+        let folder = l.read(cx).untrusted(&key)?.to_string();
+        let name = folder
+            .rsplit('/')
+            .find(|s| !s.is_empty())
+            .unwrap_or(&folder)
+            .to_string();
+        Some(
+            h_flex()
+                .flex_none()
+                .w_full()
+                .gap(px(8.))
+                .px(px(10.))
+                .py(px(4.))
+                .bg(p.busy.opacity(0.12))
+                .border_b_1()
+                .border_color(p.border)
+                .text_size(px(12.))
+                .child(
+                    gpui::svg()
+                        .path(crate::assets::icon("shield-alert"))
+                        .size(px(14.))
+                        .flex_none()
+                        .text_color(p.busy),
+                )
+                .child(div().min_w_0().truncate().child(format!(
+                    "Restricted: no language servers in {name}, since they would run its code."
+                )))
+                .child(div().flex_1())
+                .child({
+                    use gpui_component::Sizable;
+                    gpui_component::button::Button::new("trust-folder")
+                        .xsmall()
+                        .label("Trust This Folder")
+                        .on_click(move |_, window, cx| {
+                            let Some(call) = l.read(cx).trust(&key, cx) else {
+                                return;
+                            };
+                            let handle = window.window_handle();
+                            cx.spawn(async move |cx| {
+                                if let Err(e) = call.await {
+                                    let _ = handle.update(cx, |_, window, cx| {
+                                        use gpui_component::WindowExt;
+                                        window.push_notification(
+                                            gpui_component::notification::Notification::error(e),
+                                            cx,
+                                        )
+                                    });
+                                }
+                            })
+                            .detach();
+                        })
+                })
+                .into_any_element(),
+        )
+    }
+
     /// Puts the cursor at a place, as `go_to`, and lists the server's
     /// actions there, as IntelliJ's Show Quick Fixes.
     pub fn fix_at(&mut self, line: u32, column: u32, window: &mut Window, cx: &mut Context<Self>) {
@@ -2741,7 +2807,7 @@ impl Render for DocEditor {
                 .update(cx, |e, cx| e.set_soft_wrap(wrap, window, cx));
         }
         use crate::lineops;
-        div()
+        v_flex()
             .size_full()
             .relative()
             .key_context("DocEditor")
@@ -2819,7 +2885,8 @@ impl Render for DocEditor {
                 cx.stop_propagation();
                 d.redo(window, cx);
             }))
-            .child({
+            .children(self.trust_bar(&p, cx))
+            .child(div().flex_1().min_h_0().w_full().child({
                 let comment = self.comment().is_some();
                 let blamed = self.blame.is_some();
                 let change = self.change_at_caret(cx).is_some();
@@ -2840,7 +2907,7 @@ impl Render for DocEditor {
                     None => div().size_full().child(editor).into_any_element(),
                     Some(mode) => self.with_preview(mode, editor, &p, cx).into_any_element(),
                 }
-            })
+            }))
             .when(!self.remotes.is_empty(), |d| {
                 // Who else has the file open, in the colours their carets
                 // are drawn in.

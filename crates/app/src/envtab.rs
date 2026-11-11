@@ -3634,6 +3634,38 @@ impl EnvTab {
             })
     }
 
+    /// A small icon button in a tool window's head, with its tip.
+    fn head_button(
+        &self,
+        id: &str,
+        icon: &'static str,
+        tip: &'static str,
+        p: &Palette,
+        _: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let hover = p.surface_2;
+        div()
+            .id(SharedString::from(id.to_string()))
+            .debug_selector({
+                let id = id.to_string();
+                move || id
+            })
+            .size(px(20.))
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(4.))
+            .cursor_pointer()
+            .hover(move |d| d.bg(hover))
+            .child(
+                svg()
+                    .path(assets::icon(icon))
+                    .size(px(14.))
+                    .text_color(p.muted),
+            )
+            .tooltip(move |window, cx| gpui_component::tooltip::Tooltip::new(tip).build(window, cx))
+    }
+
     fn tool_window(
         &self,
         t: Tool,
@@ -3666,6 +3698,42 @@ impl EnvTab {
                 )
             })
             .child(div().flex_1())
+            .when(t == Tool::Project, |d| {
+                d.child(
+                    self.head_button(
+                        "add-folder",
+                        "folder-plus",
+                        "Add Folder to Workspace…",
+                        p,
+                        cx,
+                    )
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if let Some(ws) = this.workspace.clone() {
+                            crate::addfolder::open(ws, window, cx);
+                        }
+                    })),
+                )
+            })
+            .when(trees, |d| {
+                d.child(
+                    self.head_button(
+                        &format!("collapse-all-{}", t.name()),
+                        "list-collapse",
+                        "Collapse All",
+                        p,
+                        cx,
+                    )
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        let view = match t {
+                            Tool::Filesystem => this.filesystem.clone(),
+                            _ => this.project.clone(),
+                        };
+                        if let Some(v) = view {
+                            v.update(cx, |v, cx| v.collapse_all(cx));
+                        }
+                    })),
+                )
+            })
             .when(trees, |d| {
                 d.child(
                     div()

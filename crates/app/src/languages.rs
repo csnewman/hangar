@@ -149,6 +149,9 @@ pub struct Languages {
     signatures: HashMap<Key, (Vec<String>, Vec<String>)>,
     /// Each server's name for itself, from its answer to initialize.
     names: HashMap<Key, String>,
+    /// The servers refused for a folder not trusted to run its code, and
+    /// that folder.
+    untrusted: HashMap<Key, String>,
     _sub: gpui::Subscription,
 }
 
@@ -175,6 +178,7 @@ impl Languages {
             workspace::Event::Heard { event, .. } if event == "trust.changed" => {
                 l.servers
                     .retain(|_, s| !matches!(s, Server::Unavailable(_)));
+                l.untrusted.clear();
                 cx.emit(Event::Servers);
                 l.attach_all(cx);
             }
@@ -191,6 +195,7 @@ impl Languages {
             triggers: HashMap::new(),
             signatures: HashMap::new(),
             names: HashMap::new(),
+            untrusted: HashMap::new(),
             _sub: sub,
         }
     }
@@ -345,6 +350,11 @@ impl Languages {
     }
 
     fn started(&mut self, key: Key, result: Result<Value, String>, cx: &mut Context<Self>) {
+        if let Ok(v) = &result
+            && let Some(folder) = v["untrusted"].as_str()
+        {
+            self.untrusted.insert(key.clone(), folder.to_string());
+        }
         let why = match &result {
             Err(e) => Some(e.clone()),
             Ok(v) if v.get("untrusted").is_some() => Some(format!(
@@ -548,6 +558,22 @@ impl Languages {
         let lang = language_id(abs)?;
         let root = self.workspace.read(cx).project_of(abs)?.root.clone();
         Some((root, server_language(lang).to_string()))
+    }
+
+    /// The folder a server was refused for, not being trusted to run its
+    /// code, as the editor's trust bar says.
+    pub fn untrusted(&self, key: &(String, String)) -> Option<&str> {
+        self.untrusted.get(key).map(String::as_str)
+    }
+
+    /// Trusts the project a server is for to run its code, as the web's
+    /// trust bar does: its servers start, in every tab.
+    pub fn trust(
+        &self,
+        key: &(String, String),
+        cx: &gpui::App,
+    ) -> Option<impl std::future::Future<Output = Result<Value, String>> + use<>> {
+        Some(self.code(key, cx)?.call("trust.grant", json!({})))
     }
 
     /// How a server is: running, starting, or why there is none; None

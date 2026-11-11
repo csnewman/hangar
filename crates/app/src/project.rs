@@ -70,6 +70,11 @@ struct Project {
     /// The git repositories in it, by their paths from its root ("" for
     /// the root's own).
     repos: Vec<String>,
+    /// Its repository's branch, with how far it is ahead and behind.
+    branch: Option<String>,
+    /// Why its folder cannot be listed, as the web's Workspace marks a
+    /// folder that does not exist.
+    missing: Option<String>,
     open: bool,
 }
 
@@ -681,9 +686,12 @@ impl ProjectView {
                 tree: Tree::default(),
                 git: HashMap::new(),
                 repos: vec![],
+                branch: None,
+                missing: None,
                 open: true,
             });
             let i = self.projects.len() - 1;
+            self.check(i, cx);
             self.load(i, "", cx);
             self.git(i, cx);
         }
@@ -731,6 +739,27 @@ impl ProjectView {
         .detach();
     }
 
+    /// Lists a project's folder through the editor folder's connection, to
+    /// say whether it is there: a project's own connection is refused for
+    /// a folder that is not.
+    fn check(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(code) = self.workspace.read(cx).primary() else {
+            return;
+        };
+        let root = self.projects[i].root.clone();
+        let call = code.call("fs.list", json!({ "path": root }));
+        cx.spawn(async move |this, cx| {
+            let missing = call.await.err();
+            let _ = this.update(cx, |v, cx| {
+                if let Some(p) = v.projects.iter_mut().find(|p| p.root == root) {
+                    p.missing = missing;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Reads what git says of a project's files.
     fn git(&mut self, i: usize, cx: &mut Context<Self>) {
         let Some(code) = self.code(i, cx) else {
@@ -743,6 +772,7 @@ impl ProjectView {
             let _ = this.update(cx, |v, cx| {
                 if let Some(p) = v.projects.iter_mut().find(|p| p.root == root) {
                     p.git = marks(&status);
+                    p.branch = branch_label(&status);
                     p.repos = status["repos"]
                         .as_array()
                         .into_iter()
@@ -754,6 +784,20 @@ impl ProjectView {
             });
         })
         .detach();
+    }
+
+    /// IntelliJ's Collapse All: every folder closed, the projects' own
+    /// rows left as they are.
+    pub fn collapse_all(&mut self, cx: &mut Context<Self>) {
+        match self.scope {
+            Scope::Projects => {
+                for p in &mut self.projects {
+                    p.tree.expanded.clear();
+                }
+            }
+            Scope::Filesystem => self.machine.expanded.clear(),
+        }
+        cx.notify();
     }
 
     fn toggle_project(&mut self, i: usize, cx: &mut Context<Self>) {
@@ -1318,6 +1362,28 @@ fn put(tree: &mut Tree, path: &str, result: Result<Value, String>) {
     }
 }
 
+/// A project's branch from git.status, as the web's Workspace shows it:
+/// the repository the folder is in, else its only one, with how many
+/// commits it is ahead and behind its upstream ("main ↑2 ↓1").
+pub fn branch_label(status: &Value) -> Option<String> {
+    let repos = status["repos"].as_array()?;
+    let repo = repos
+        .iter()
+        .find(|r| r["kind"] == "folder")
+        .or(if repos.len() == 1 {
+            repos.first()
+        } else {
+            None
+        })?;
+    let mut out = repo["branch"].as_str()?.to_string();
+    for (key, arrow) in [("ahead", '↑'), ("behind", '↓')] {
+        if let Some(n) = repo[key].as_i64().filter(|n| *n > 0) {
+            out.push_str(&format!(" {arrow}{n}"));
+        }
+    }
+    Some(out)
+}
+
 /// Each changed file's mark from git.status: M modified, A added or new,
 /// D deleted, ! in conflict.
 pub fn marks(status: &Value) -> HashMap<String, char> {
@@ -1522,6 +1588,20 @@ impl Render for ProjectView {
                     let into = self.target(Some(&proj.root), "", true, cx);
                     let (into, into_files) = (into.clone(), into);
                     let soft = p.accent_soft;
+                    // A folder in the workspace that cannot be read, as the
+                    // web's Workspace shows one that does not exist.
+                    let missing = proj.missing.clone();
+                    let gone = missing.as_ref().map(|e| {
+                        let lower = e.to_lowercase();
+                        if lower.contains("no such file")
+                            || lower.contains("not found")
+                            || lower.contains("does not exist")
+                        {
+                            "does not exist".to_string()
+                        } else {
+                            e.clone()
+                        }
+                    });
                     list = list.child(
                         h_flex()
                             .id(("project", i))
@@ -1550,26 +1630,69 @@ impl Render for ProjectView {
                             .cursor_pointer()
                             .when(selected, |d| d.bg(p.selection))
                             .when(!selected, |d| d.hover(|s| s.bg(p.surface_2)))
-                            .child(chevron(proj.open, &p))
+                            .when(missing.is_none(), |d| d.child(chevron(proj.open, &p)))
+                            .when(missing.is_some(), |d| d.child(div().w(px(10.)).flex_none()))
                             .child(
                                 svg()
-                                    .path(assets::icon("folder"))
+                                    .path(assets::icon(if missing.is_some() {
+                                        "folder-x"
+                                    } else {
+                                        "folder"
+                                    }))
                                     .size(px(14.))
                                     .flex_none()
-                                    .text_color(p.accent),
+                                    .text_color(if missing.is_some() { p.bad } else { p.accent }),
                             )
                             .child(
                                 div()
+                                    .flex_none()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .child(names[i].0.clone()),
                             )
-                            .child(
-                                div()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_color(p.muted)
-                                    .child(names[i].1.clone()),
-                            )
+                            .child(div().min_w_0().truncate().text_color(p.muted).child(
+                                match &gone {
+                                    Some(why) => format!("{} {why}", names[i].1),
+                                    None => names[i].1.clone(),
+                                },
+                            ))
+                            .when_some(proj.branch.clone().filter(|_| missing.is_none()), |d, b| {
+                                d.child(
+                                    h_flex()
+                                        .flex_none()
+                                        .gap(px(3.))
+                                        .text_size(px(11.))
+                                        .text_color(p.muted)
+                                        .child(
+                                            svg()
+                                                .path(assets::icon("branch"))
+                                                .size(px(11.))
+                                                .text_color(p.muted),
+                                        )
+                                        .child(b),
+                                )
+                            })
+                            .when_some(missing.clone(), |d, why| {
+                                let (root, ws) = (proj.root.clone(), self.workspace.clone());
+                                d.tooltip(move |window, cx| {
+                                    gpui_component::tooltip::Tooltip::new(why.clone())
+                                        .build(window, cx)
+                                })
+                                .child(div().flex_1())
+                                .child(
+                                    gpui_component::button::Button::new(("remove-missing", i))
+                                        .xsmall()
+                                        .label("Remove")
+                                        .on_click(move |_, window, cx| {
+                                            cx.stop_propagation();
+                                            treeops::change_workspace(
+                                                &ws,
+                                                treeops::Reorder::Remove(root.clone()),
+                                                window,
+                                                cx,
+                                            )
+                                        }),
+                                )
+                            })
                             .on_click(cx.listener(move |v, _, window, cx| {
                                 window.focus(&v.focus, cx);
                                 v.selected = Some(on_click.clone());
@@ -1594,7 +1717,7 @@ impl Render for ProjectView {
                                 }
                             }),
                     );
-                    if proj.open {
+                    if proj.open && missing.is_none() {
                         let mut out = Vec::new();
                         rows(&proj.tree, Some(i), &proj.git, "", 1, self.shown, &mut out);
                         if let Some(e) = proj.tree.errors.get("") {
