@@ -8,11 +8,12 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use gpui::{
-    App, Context, Entity, FocusHandle, Focusable, FontWeight, IntoElement, KeyBinding,
+    AnyElement, App, Context, Entity, FocusHandle, Focusable, FontWeight, IntoElement, KeyBinding,
     ParentElement, Render, SharedString, Styled, Window, actions, div, prelude::*, px, svg,
 };
+use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
-use gpui_component::{Icon, h_flex, v_flex};
+use gpui_component::{Icon, Sizable, WindowExt, h_flex, v_flex};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -295,6 +296,8 @@ pub struct ProjectView {
     /// were last laid out here.
     new_menu: Option<(Entity<PopupMenu>, gpui::Subscription)>,
     new_unmarked: bool,
+    /// A name being typed into the tree.
+    naming: Option<Naming>,
     selected_at: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     _sub: gpui::Subscription,
 }
@@ -324,6 +327,7 @@ impl ProjectView {
             focus: cx.focus_handle(),
             new_menu: None,
             new_unmarked: false,
+            naming: None,
             selected_at: Rc::new(Cell::new(None)),
             _sub: sub,
         };
@@ -1163,6 +1167,7 @@ impl Render for ProjectView {
         // is.
         let mut n = 0usize;
         let mut at = None;
+        let mut naming_at = None;
         let ws = self.workspace.read(cx);
         let state = ws.state().clone();
         let names: Vec<(String, String)> = self
@@ -1283,13 +1288,14 @@ impl Render for ProjectView {
                             n += 1;
                             list = list.child(muted(e.clone(), &p));
                         }
-                        for r in out {
-                            if self.is_selected(&r) {
-                                at = Some(n);
-                            }
-                            n += 1;
-                            list = list.child(self.row(r, &p, cx));
-                        }
+                        list = self.add_rows(
+                            list,
+                            out,
+                            (Some(proj.root.as_str()), "", 1),
+                            (&mut n, &mut at, &mut naming_at),
+                            &p,
+                            cx,
+                        );
                     }
                 }
             }
@@ -1314,15 +1320,18 @@ impl Render for ProjectView {
                         &p,
                     ));
                 }
-                for r in out {
-                    if self.is_selected(&r) {
-                        at = Some(n);
-                    }
-                    n += 1;
-                    list = list.child(self.row(r, &p, cx));
-                }
+                list = self.add_rows(
+                    list,
+                    out,
+                    (None, "/", 0),
+                    (&mut n, &mut at, &mut naming_at),
+                    &p,
+                    cx,
+                );
             }
         }
+        // The row a name is typed in is the one kept in view.
+        let at = naming_at.or(at);
         // A row revealed is scrolled into view once it is laid out, which
         // may be after its folder has been listed.
         let (handle, reveal) = (self.scroll.clone(), self.reveal.clone());
@@ -1361,7 +1370,13 @@ impl Render for ProjectView {
             .size_full()
             .min_h_0()
             .text_size(px(12.))
-            .key_context("ProjectTree")
+            // While a name is typed into it, the tree's keys are the
+            // field's.
+            .key_context(if self.naming.is_some() {
+                "ProjectTreeNaming"
+            } else {
+                "ProjectTree"
+            })
             .track_focus(&self.focus)
             .on_action(cx.listener(|v, _: &SelectUp, _, cx| v.select_by(-1, cx)))
             .on_action(cx.listener(|v, _: &SelectDown, _, cx| v.select_by(1, cx)))
@@ -1387,10 +1402,7 @@ impl Render for ProjectView {
             }))
             .on_action(cx.listener(|v, _: &Rename, window, cx| {
                 if let Some(t) = v.selected_target(cx).filter(|t| !t.is_root()) {
-                    let view = cx.entity().downgrade();
-                    treeops::rename(&t, window, cx, move |abs, _, cx| {
-                        let _ = view.update(cx, |v, cx| v.reveal(&abs, cx));
-                    });
+                    v.start_naming(Kind::Rename, &t, window, cx);
                 }
             }))
             .on_action(cx.listener(|v, _: &MoveTo, window, cx| {
@@ -1634,53 +1646,415 @@ impl ProjectView {
 /// What a menu item has the tree say to the tab.
 type Says = dyn Fn(&mut Context<ProjectView>);
 
-/// What New offers, as IntelliJ's New: a file, opened once made, and a
-/// directory, each selected in the tree.
-fn new_items(menu: PopupMenu, t: &Target, view: &gpui::WeakEntity<ProjectView>) -> PopupMenu {
-    let file = {
-        let (t, view) = (t.clone(), view.clone());
-        PopupMenuItem::new("File")
-            .icon(Icon::empty().path(assets::icon("file")))
-            .on_click(move |_, window, cx| new_file(&t, &view, window, cx))
+/// What a name typed into the tree is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    File,
+    Dir,
+    Rename,
+}
+
+/// A name being typed into the tree, as VS Code's Explorer takes one: for a
+/// file or folder new in a folder, its row among the folder's entries, or
+/// for one renamed, in its place.
+struct Naming {
+    kind: Kind,
+    /// What is renamed: its path as the tree names it, absolute, and
+    /// whether it is a folder.
+    renamed: Option<(String, String, bool)>,
+    code: Code,
+    /// The project it is in, or None for the machine's files.
+    root: Option<String>,
+    /// The folder, as the tree names it and absolute.
+    at: String,
+    folder: String,
+    input: Entity<InputState>,
+    checker: treeops::Checker,
+    wrong: Option<String>,
+    busy: bool,
+    _sub: gpui::Subscription,
+}
+
+/// What a name typed does once taken: the path made, or why not.
+type Making = std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, String>>>>;
+
+/// Where the row a name is typed in goes among a tree's rows: for
+/// something new, among its folder's entries, a folder first and a file
+/// after the folders, as VS Code places them; for a rename, in the place of
+/// what is renamed. Its index, its depth, and whether it stands in for the
+/// row there. root is the folder whose entries are at depth.
+fn naming_place(
+    rows: &[Row],
+    n: &Naming,
+    (root, depth): (&str, usize),
+) -> Option<(usize, usize, bool)> {
+    if let Some((path, _, _)) = &n.renamed {
+        let i = rows.iter().position(|r| &r.path == path)?;
+        return Some((i, rows[i].depth, true));
+    }
+    let (start, depth) = if n.at == root {
+        (0, depth)
+    } else {
+        let i = rows.iter().position(|r| r.path == n.at)?;
+        (i + 1, rows[i].depth + 1)
     };
-    let dir = {
-        let (t, view) = (t.clone(), view.clone());
-        PopupMenuItem::new("Directory")
-            .icon(Icon::empty().path(assets::icon("folder")))
-            .on_click(move |_, window, cx| {
-                let view = view.clone();
-                treeops::new_folder(&t, window, cx, move |abs, _, cx| {
-                    let _ = view.update(cx, |v, cx| v.reveal(&abs, cx));
+    let mut i = start;
+    if n.kind == Kind::File {
+        while rows
+            .get(i)
+            .is_some_and(|r| r.depth > depth || (r.depth == depth && r.dir))
+        {
+            i += 1;
+        }
+    }
+    Some((i, depth, false))
+}
+
+/// What is wrong with a name typed into the tree, under its field as VS
+/// Code shows it, over the rows below and past the tree's edge if need be.
+fn name_message(text: String, p: &Palette) -> impl IntoElement {
+    div().absolute().left(px(-1.)).bottom(px(-1.)).child(
+        gpui::deferred(
+            gpui::anchored().anchor(gpui::Anchor::TopLeft).child(
+                div().bg(p.bg).child(
+                    div()
+                        .debug_selector(|| "name-wrong".into())
+                        .min_w(px(180.))
+                        .max_w(px(360.))
+                        .px(px(6.))
+                        .py(px(4.))
+                        .border_1()
+                        .border_color(p.bad)
+                        .bg(p.bad.opacity(0.08))
+                        .text_size(px(11.5))
+                        .text_color(p.text)
+                        .child(text),
+                ),
+            ),
+        )
+        .with_priority(1),
+    )
+}
+
+impl ProjectView {
+    /// Opens a row in the tree to type a name in: for a file or folder new
+    /// in the target's folder (a file's own), or the target's new name.
+    fn start_naming(
+        &mut self,
+        kind: Kind,
+        t: &Target,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let rename = kind == Kind::Rename;
+        let folder = if rename {
+            treeops::parent_of(&t.abs)
+        } else {
+            t.folder()
+        };
+        let f = Target {
+            dir: true,
+            abs: folder.clone(),
+            ..t.clone()
+        };
+        let at = if f.is_root() {
+            String::new()
+        } else {
+            f.relative_to_tree()
+        };
+        // The folder is opened, so its row of the new one shows.
+        match &t.root {
+            Some(root) => {
+                if let Some(i) = self.projects.iter().position(|p| &p.root == root) {
+                    self.projects[i].open = true;
+                }
+                if !at.is_empty() {
+                    self.expand(root, &at, cx);
+                }
+            }
+            None => {
+                let mut dir = String::new();
+                for part in folder.split('/').filter(|s| !s.is_empty()) {
+                    dir = format!("{dir}/{part}");
+                    if !self.machine.expanded.contains(&dir) {
+                        self.toggle_machine(&dir.clone(), cx);
+                    }
+                }
+            }
+        }
+        let initial = if rename {
+            t.name().to_string()
+        } else {
+            String::new()
+        };
+        let input = cx.new(|cx| {
+            let mut s = InputState::new(window, cx).default_value(initial.clone());
+            s.set_selected_range(0..treeops::stem(&initial), cx);
+            s
+        });
+        let sub = cx.subscribe_in(&input, window, |v, _, e: &InputEvent, window, cx| match e {
+            InputEvent::Change => v.recheck_naming(cx),
+            InputEvent::PressEnter { .. } => v.take_name(false, window, cx),
+            InputEvent::Blur => v.take_name(true, window, cx),
+            _ => {}
+        });
+        window.focus(&input.focus_handle(cx), cx);
+        self.naming = Some(Naming {
+            kind,
+            renamed: rename.then(|| (t.relative_to_tree(), t.abs.clone(), t.dir)),
+            code: t.code.clone(),
+            root: t.root.clone(),
+            at,
+            checker: treeops::Checker::new(
+                t.code.clone(),
+                folder.clone(),
+                rename.then(|| t.abs.clone()),
+                !rename,
+            ),
+            folder,
+            input,
+            wrong: None,
+            busy: false,
+            _sub: sub,
+        });
+        self.reveal.set(true);
+        cx.notify();
+    }
+
+    /// Checks the name typed as it stands.
+    fn recheck_naming(&mut self, cx: &mut Context<Self>) {
+        let Some(n) = &self.naming else {
+            return;
+        };
+        let name = n.input.read(cx).value().trim().to_string();
+        let checker = n.checker.clone();
+        let view = cx.entity().downgrade();
+        let wrong = checker.wrong(&name, cx, move |cx| {
+            let _ = view.update(cx, |v, cx| v.recheck_naming(cx));
+        });
+        if let Some(n) = &mut self.naming {
+            n.wrong = wrong;
+        }
+        cx.notify();
+    }
+
+    /// Lets the name typed go, the tree taking the keys again when asked.
+    fn cancel_naming(&mut self, refocus: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.naming = None;
+        if refocus {
+            window.focus(&self.focus, cx);
+        }
+        cx.notify();
+    }
+
+    /// Takes the name typed, on Enter or as the field is left, as VS Code
+    /// does: a name with nothing in it, or one left that cannot be taken,
+    /// lets the row go; one that can makes the file or folder or renames,
+    /// and what is made is selected, a file opened. Enter on a name that
+    /// cannot be taken leaves it to be changed, as does an answer saying
+    /// why it could not be.
+    fn take_name(&mut self, left: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(n) = &mut self.naming else {
+            return;
+        };
+        if n.busy {
+            return;
+        }
+        let name = n.input.read(cx).value().trim().to_string();
+        if name.is_empty() || (left && n.wrong.is_some()) {
+            self.cancel_naming(!left, window, cx);
+            return;
+        }
+        if n.wrong.is_some() {
+            return;
+        }
+        let (code, folder) = (n.code.clone(), n.folder.clone());
+        let making: Making = match (n.kind, &n.renamed) {
+            (Kind::Rename, Some((_, from, _))) => {
+                let (from, to) = (from.clone(), treeops::join(&folder, &name));
+                if from == to {
+                    self.cancel_naming(!left, window, cx);
+                    return;
+                }
+                Box::pin(async move {
+                    code.call("fs.rename", json!({ "from": from, "to": to }))
+                        .await?;
+                    Ok(to)
                 })
+            }
+            (Kind::Dir, _) => {
+                let path = treeops::place(&folder, &name);
+                Box::pin(async move {
+                    code.call("fs.mkdir", json!({ "path": path })).await?;
+                    Ok(path)
+                })
+            }
+            _ => {
+                let path = treeops::place(&folder, &name);
+                let parent = treeops::parent_of(&path);
+                let way = (parent != treeops::place(&folder, "")).then_some(parent);
+                Box::pin(async move {
+                    if let Some(way) = way {
+                        code.call("fs.mkdir", json!({ "path": way })).await?;
+                    }
+                    code.call("fs.create", json!({ "path": path })).await?;
+                    Ok(path)
+                })
+            }
+        };
+        n.busy = true;
+        let (opens, root) = (n.kind == Kind::File, n.root.clone());
+        cx.spawn_in(window, async move |this, cx| {
+            let made = making.await;
+            let _ = this.update_in(cx, |v, window, cx| {
+                match made {
+                    Ok(path) => {
+                        v.naming = None;
+                        if !left {
+                            window.focus(&v.focus, cx);
+                        }
+                        v.reveal(&path, cx);
+                        if opens {
+                            let within = root.as_deref().and_then(|r| {
+                                path.strip_prefix(&format!("{}/", r.trim_end_matches('/')))
+                                    .map(|p| (r.to_string(), p.to_string()))
+                            });
+                            let (root, path) = within.unwrap_or_else(|| ("/".into(), path));
+                            cx.emit(OpenFile { root, path });
+                        }
+                    }
+                    // Left, the row goes and the notification says why.
+                    Err(e) if left => {
+                        v.naming = None;
+                        window.push_notification(
+                            gpui_component::notification::Notification::error(e),
+                            cx,
+                        );
+                    }
+                    Err(e) => {
+                        if let Some(n) = &mut v.naming {
+                            n.busy = false;
+                            n.wrong = Some(e);
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The rows of one tree into the list, the row a name is typed in among
+    /// them where it goes. tree is the project it is of (None for the
+    /// machine's), its folder's path and its entries' depth; counts are the
+    /// rows so far, where the selected one is, and the named one.
+    fn add_rows(
+        &self,
+        mut list: gpui::Div,
+        out: Vec<Row>,
+        tree: (Option<&str>, &str, usize),
+        counts: (&mut usize, &mut Option<usize>, &mut Option<usize>),
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        let (root, top, depth) = tree;
+        let (n, at, naming_at) = counts;
+        let place = self
+            .naming
+            .as_ref()
+            .filter(|m| m.root.as_deref() == root)
+            .and_then(|m| naming_place(&out, m, (top, depth)));
+        let len = out.len();
+        for (k, r) in out.into_iter().enumerate() {
+            if let Some((i, d, stands)) = place
+                && i == k
+            {
+                *naming_at = Some(*n);
+                *n += 1;
+                list = list.child(self.naming_row(d, p, cx));
+                if stands {
+                    continue;
+                }
+            }
+            if self.is_selected(&r) {
+                *at = Some(*n);
+            }
+            *n += 1;
+            list = list.child(self.row(r, p, cx));
+        }
+        if let Some((i, d, _)) = place
+            && i == len
+        {
+            *naming_at = Some(*n);
+            *n += 1;
+            list = list.child(self.naming_row(d, p, cx));
+        }
+        list
+    }
+
+    /// The row a name is typed in: its icon, the field, and what is wrong
+    /// with the name under it. Escape lets it go.
+    fn naming_row(&self, depth: usize, p: &Palette, cx: &mut Context<Self>) -> AnyElement {
+        let Some(n) = &self.naming else {
+            return div().into_any_element();
+        };
+        let dir = match (n.kind, &n.renamed) {
+            (Kind::Rename, Some((_, _, dir))) => *dir,
+            (kind, _) => kind == Kind::Dir,
+        };
+        h_flex()
+            .id("tree-naming")
+            .debug_selector(|| "tree-naming".into())
+            .h(px(20.))
+            .gap(px(4.))
+            .pl(px(4. + 12. * depth as f32))
+            .pr(px(6.))
+            .capture_key_down(cx.listener(|v, e: &gpui::KeyDownEvent, window, cx| {
+                if e.keystroke.key == "escape" {
+                    cx.stop_propagation();
+                    v.cancel_naming(true, window, cx);
+                }
+            }))
+            .child(div().w(px(10.)).flex_none())
+            .child(kind_icon(dir, false, p))
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(20.))
+                    .flex()
+                    .items_center()
+                    .rounded(px(3.))
+                    .border_1()
+                    .border_color(if n.wrong.is_some() { p.bad } else { p.accent })
+                    .bg(p.bg)
+                    .child(
+                        Input::new(&n.input)
+                            .appearance(false)
+                            .xsmall()
+                            .text_size(px(12.)),
+                    )
+                    .when_some(n.wrong.clone(), |d, e| d.child(name_message(e, p))),
+            )
+            .into_any_element()
+    }
+}
+
+/// What New offers, as IntelliJ's New: a file, opened once made, and a
+/// directory, each named in the tree.
+fn new_items(menu: PopupMenu, t: &Target, view: &gpui::WeakEntity<ProjectView>) -> PopupMenu {
+    let item = |label: &str, icon: &str, kind: Kind| {
+        let (t, view) = (t.clone(), view.clone());
+        PopupMenuItem::new(label.to_string())
+            .icon(Icon::empty().path(assets::icon(icon)))
+            .on_click(move |_, window, cx| {
+                let _ = view.update(cx, |v, cx| v.start_naming(kind, &t, window, cx));
             })
     };
-    menu.item(file).item(dir)
+    menu.item(item("File", "file", Kind::File))
+        .item(item("Directory", "folder", Kind::Dir))
 }
-
-/// Makes a file, asking its name, then selects it and opens it: in its
-/// project, or as the machine's when the name led out of it.
-fn new_file(
-    t: &Target,
-    view: &gpui::WeakEntity<ProjectView>,
-    window: &mut Window,
-    cx: &mut gpui::App,
-) {
-    let (root, view) = (t.root.clone(), view.clone());
-    treeops::new_file(t, window, cx, move |abs, _, cx| {
-        let within = root.as_deref().and_then(|r| {
-            abs.strip_prefix(&format!("{}/", r.trim_end_matches('/')))
-                .map(|p| (r.to_string(), p.to_string()))
-        });
-        let (root, path) = within.unwrap_or_else(|| ("/".into(), abs.clone()));
-        let _ = view.update(cx, |v, cx| {
-            v.reveal(&abs, cx);
-            cx.emit(OpenFile { root, path })
-        });
-    });
-}
-
-/// Selects what was made at a path in the tree.
-type Selects = Box<dyn Fn(String, &mut Window, &mut gpui::App)>;
 
 /// The Project window's menu for a file or folder, as IntelliJ's: making,
 /// clipboard, paths, renaming and the trash, finding in a folder, and git.
@@ -1695,19 +2069,10 @@ fn tree_menu(
         let t = t.clone();
         PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| f(&t, window, cx))
     };
-    // What makes or renames something, then selects it in the tree.
-    let made = |label: &str, f: fn(&Target, &mut Window, &mut gpui::App, Selects)| {
+    let rename = {
         let (t, view) = (t.clone(), view.clone());
-        PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
-            let view = view.clone();
-            f(
-                &t,
-                window,
-                cx,
-                Box::new(move |abs, _, cx| {
-                    let _ = view.update(cx, |v, cx| v.reveal(&abs, cx));
-                }),
-            )
+        PopupMenuItem::new("Rename…").on_click(move |_, window, cx| {
+            let _ = view.update(cx, |v, cx| v.start_naming(Kind::Rename, &t, window, cx));
         })
     };
     // Copy… or Move…, then the thing selected where it went.
@@ -1829,7 +2194,7 @@ fn tree_menu(
         .item(copy_path("Copy Path From Project Root", t.relative()).disabled(!in_project))
         .item(copy_path("Copy File Name", t.name().to_string()))
         .separator()
-        .item(made("Rename…", treeops::rename).disabled(is_root))
+        .item(rename.disabled(is_root))
         .item(sent("Move…", crate::transfer::Op::Move).disabled(is_root))
         .item(sent("Copy…", crate::transfer::Op::Copy).disabled(is_root))
         .item(item("Delete…", t, treeops::trash).disabled(is_root))

@@ -1,18 +1,16 @@
 //! What the Project window's menu does to files, as IntelliJ's Project view
-//! does: making files and folders, renaming, moving to the trash, cutting,
-//! copying and pasting, and copying paths, through the Code service's fs.*
-//! calls. Names are asked for in IntelliJ's small pop-up; the tree follows
-//! the files as they change (fs.changed), so nothing here redraws it.
+//! does: checking names typed for files and folders made or renamed,
+//! moving to the trash, cutting, copying and pasting, and copying paths,
+//! through the Code service's fs.* calls. The tree follows the files as
+//! they change (fs.changed), so nothing here redraws it.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::future::Future;
-use std::pin::Pin;
 use std::rc::Rc;
 
 use gpui::{
-    Anchor, AnyWindowHandle, App, AppContext, ClipboardItem, Entity, Focusable, FontWeight,
-    IntoElement, ParentElement, Styled, Window, anchored, deferred, div, prelude::*, px,
+    App, AppContext, ClipboardItem, Focusable, FontWeight, IntoElement, ParentElement, Styled,
+    Window, div, prelude::*, px,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::notification::Notification;
@@ -79,12 +77,6 @@ impl Target {
 
 /// What is done with a name typed in a dialog.
 type WithName = Rc<dyn Fn(String, &mut Window, &mut App)>;
-/// What a name typed does, answered with the path it made.
-type Doing = Pin<Box<dyn Future<Output = Result<String, String>>>>;
-/// What a name typed is for; None when there is nothing to do.
-type Act = Rc<dyn Fn(&str) -> Option<Doing>>;
-/// What is done with the path made once it is done.
-type Made = Rc<dyn Fn(String, &mut Window, &mut App)>;
 /// What is done once a dialog is confirmed.
 type Then = Rc<dyn Fn(&mut Window, &mut App)>;
 
@@ -129,9 +121,9 @@ pub fn copy(text: String, cx: &mut App) {
     cx.write_to_clipboard(ClipboardItem::new_string(text));
 }
 
-/// Asks for a name in IntelliJ's small pop-up, then does done with it,
-/// trimmed: Enter takes it, Escape or a click elsewhere closes the pop-up.
-/// A name with nothing in it is not taken.
+/// Asks for a name in a small pop-up, then does done with it, trimmed:
+/// Enter takes it, Escape or a click elsewhere closes the pop-up. A name
+/// with nothing in it is not taken.
 pub fn ask_name(
     title: &str,
     initial: &str,
@@ -140,70 +132,77 @@ pub fn ask_name(
     done: impl Fn(String, &mut Window, &mut App) + 'static,
 ) {
     let done: WithName = Rc::new(done);
-    popup(
-        title,
-        initial,
-        None,
-        Rc::new(RefCell::new(Asking::default())),
-        window,
-        cx,
-        Rc::new(move |name, window, cx| {
-            window.close_dialog(cx);
-            done(name, window, cx);
-        }),
-    );
+    let input = cx.new(|cx| {
+        let mut s = InputState::new(window, cx).default_value(initial.to_string());
+        s.set_selected_range(0..stem(initial), cx);
+        s
+    });
+    let handle = window.window_handle();
+    cx.subscribe(&input, move |field, e: &InputEvent, cx| {
+        if let InputEvent::PressEnter { .. } = e {
+            let name = field.read(cx).value().trim().to_string();
+            if name.is_empty() {
+                return;
+            }
+            let done = done.clone();
+            let _ = handle.update(cx, |_, window, cx| {
+                window.close_dialog(cx);
+                done(name, window, cx)
+            });
+        }
+    })
+    .detach();
+    let title = title.to_string();
+    let first = Cell::new(true);
+    window.open_dialog(cx, move |dialog, window, cx| {
+        if first.replace(false) {
+            window.focus(&input.focus_handle(cx), cx);
+        }
+        let p = palette::of(cx);
+        dialog
+            .w(px(360.))
+            .p_0()
+            .min_h(px(0.))
+            .centered()
+            .close_button(false)
+            .overlay(false)
+            // Enter is the name's own: the pop-up closes once it is taken.
+            .on_ok(|_, _, _| false)
+            .child(
+                v_flex()
+                    .pb(px(8.))
+                    .child(
+                        div()
+                            .px(px(12.))
+                            .pt(px(9.))
+                            .pb(px(7.))
+                            .text_size(px(13.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(p.text)
+                            .child(title.clone()),
+                    )
+                    .child(
+                        h_flex()
+                            .h(px(32.))
+                            .pl(px(1.))
+                            .pr(px(4.))
+                            .bg(p.surface)
+                            .border_t_1()
+                            .border_b_1()
+                            .border_color(p.border)
+                            .child(div().flex_1().child(Input::new(&input).appearance(false))),
+                    ),
+            )
+    });
 }
 
-/// Asks for a name as ask_name does, checking it as it is typed, then does
-/// what it is for; the pop-up stays until that is done, saying what went
-/// wrong over the name, so it can be changed and tried again. Once done,
-/// done has the path made.
-fn ask_doing(
-    title: &str,
-    initial: &str,
-    checks: Checks,
-    window: &mut Window,
-    cx: &mut App,
-    act: impl Fn(&str) -> Option<Doing> + 'static,
-    done: impl Fn(String, &mut Window, &mut App) + 'static,
-) {
-    let (act, done): (Act, Made) = (Rc::new(act), Rc::new(done));
-    let state = Rc::new(RefCell::new(Asking::default()));
-    let shown = state.clone();
-    popup(
-        title,
-        initial,
-        Some(checks),
-        shown,
-        window,
-        cx,
-        Rc::new(move |name, window, cx| {
-            let Some(doing) = act(&name) else {
-                window.close_dialog(cx);
-                return;
-            };
-            state.borrow_mut().busy = true;
-            let (state, done) = (state.clone(), done.clone());
-            let handle = window.window_handle();
-            cx.spawn(async move |cx| {
-                let result = doing.await;
-                let _ = handle.update(cx, |_, window, cx| {
-                    state.borrow_mut().busy = false;
-                    match result {
-                        Ok(path) => {
-                            window.close_dialog(cx);
-                            done(path, window, cx);
-                        }
-                        Err(e) => {
-                            state.borrow_mut().wrong = Some(e);
-                            window.refresh();
-                        }
-                    }
-                });
-            })
-            .detach();
-        }),
-    );
+/// How much of a name is selected when it is offered to be changed: up to
+/// its extension, as IntelliJ's and VS Code's Rename select it.
+pub fn stem(name: &str) -> usize {
+    match name.rfind('.') {
+        Some(dot) if dot > 0 => dot,
+        _ => name.len(),
+    }
 }
 
 /// What a name typed would run into, given the folders listed so far.
@@ -216,7 +215,7 @@ pub enum Check {
 }
 
 /// The folder an absolute path is in.
-fn parent_of(path: &str) -> String {
+pub fn parent_of(path: &str) -> String {
     match path.trim_end_matches('/').rsplit_once('/') {
         Some(("", _)) | None => "/".into(),
         Some((parent, _)) => parent.into(),
@@ -298,28 +297,7 @@ pub fn check(
     }
 }
 
-/// How a pop-up checks names as they are typed: against the folder they go
-/// in, through its connection; own is what is renamed, which may keep its
-/// name, and nested whether a name may name folders on the way.
-#[derive(Clone)]
-struct Checks {
-    code: Code,
-    folder: String,
-    own: Option<String>,
-    nested: bool,
-}
-
-/// A pop-up's state: what is wrong with the name as typed, or as last
-/// tried, and whether that try is under way.
-#[derive(Default)]
-struct Asking {
-    wrong: Option<String>,
-    busy: bool,
-}
-
-type AskState = Rc<RefCell<Asking>>;
-
-/// The folders a pop-up has listed, None while asked.
+/// The folders a checker has listed, None while asked.
 type Listed = Rc<RefCell<HashMap<String, Option<Entries>>>>;
 
 /// What fs.list says of an entry, as far as checking a name needs.
@@ -330,193 +308,76 @@ struct Listing {
     dir: bool,
 }
 
-/// Checks the name as it stands, listing a folder it needs and checking
-/// again once it is listed.
-fn recheck(
-    field: &Entity<InputState>,
-    state: &AskState,
-    checks: &Checks,
-    listed: &Listed,
-    handle: AnyWindowHandle,
-    cx: &mut App,
-) {
-    let name = field.read(cx).value().trim().to_string();
-    let found = if !checks.nested && name.contains('/') {
-        Check::Wrong("A name cannot contain “/”".into())
-    } else {
-        let l = listed.borrow();
-        check(&checks.folder, &name, checks.own.as_deref(), &|f| {
-            l.get(f).cloned().flatten()
-        })
-    };
-    let folder = match found {
-        Check::Fine => {
-            state.borrow_mut().wrong = None;
-            return;
-        }
-        Check::Wrong(e) => {
-            state.borrow_mut().wrong = Some(e);
-            return;
-        }
-        Check::List(folder) => folder,
-    };
-    state.borrow_mut().wrong = None;
-    if listed.borrow().contains_key(&folder) {
-        return;
-    }
-    listed.borrow_mut().insert(folder.clone(), None);
-    let call = checks.code.call("fs.list", json!({ "path": folder }));
-    let (field, state, checks, listed) =
-        (field.clone(), state.clone(), checks.clone(), listed.clone());
-    cx.spawn(async move |cx| {
-        // A folder that cannot be listed has nothing in the way.
-        let entries: Entries = call
-            .await
-            .ok()
-            .and_then(|v| serde_json::from_value::<Vec<Listing>>(v).ok())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|e| (e.name, e.dir))
-            .collect();
-        listed.borrow_mut().insert(folder, Some(entries));
-        let _ = handle.update(cx, |_, window, cx| {
-            recheck(&field, &state, &checks, &listed, handle, cx);
-            window.refresh();
-        });
-    })
-    .detach();
+/// Checks names typed for something new, or for something renamed,
+/// against the folder it goes in, listing each folder a name needs as it
+/// is first needed. own is what is renamed, which may keep its name, and
+/// nested whether a name may name folders on the way.
+#[derive(Clone)]
+pub struct Checker {
+    code: Code,
+    folder: String,
+    own: Option<String>,
+    nested: bool,
+    listed: Listed,
 }
 
-/// The pop-up, as IntelliJ's New File: a title, the name in a plain field
-/// across it, and what is wrong with the name in a balloon over it.
-fn popup(
-    title: &str,
-    initial: &str,
-    checks: Option<Checks>,
-    state: AskState,
-    window: &mut Window,
-    cx: &mut App,
-    take: WithName,
-) {
-    // A name given is selected up to its extension, as IntelliJ's Rename
-    // selects it.
-    let stem = match initial.rfind('.') {
-        Some(dot) if dot > 0 => dot,
-        _ => initial.len(),
-    };
-    let input = cx.new(|cx| {
-        let mut s = InputState::new(window, cx).default_value(initial.to_string());
-        s.set_selected_range(0..stem, cx);
-        s
-    });
-    let handle = window.window_handle();
-    let listed: Listed = Rc::default();
-    if let Some(checks) = &checks {
-        // The folder is listed as the pop-up opens, so the first name typed
-        // is checked at once.
-        recheck(&input, &state, checks, &listed, handle, cx);
+impl Checker {
+    pub fn new(code: Code, folder: String, own: Option<String>, nested: bool) -> Self {
+        Checker {
+            code,
+            folder,
+            own,
+            nested,
+            listed: Rc::default(),
+        }
     }
-    {
-        let (take, state) = (take.clone(), state.clone());
-        cx.subscribe(&input, move |field, e: &InputEvent, cx| match e {
-            InputEvent::PressEnter { .. } => {
-                let name = field.read(cx).value().trim().to_string();
-                let s = state.borrow();
-                // A name said to be wrong is not taken, as IntelliJ's is not.
-                if name.is_empty() || s.wrong.is_some() || s.busy {
-                    return;
-                }
-                drop(s);
-                let take = take.clone();
-                let _ = handle.update(cx, |_, window, cx| take(name, window, cx));
-            }
-            InputEvent::Change => {
-                state.borrow_mut().wrong = None;
-                if let Some(checks) = &checks {
-                    recheck(&field, &state, checks, &listed, handle, cx);
-                }
-                let _ = handle.update(cx, |_, window, _| window.refresh());
-            }
-            _ => {}
+
+    /// What is wrong with a name, as far as is known: a folder it needs
+    /// that is not listed yet is asked for, and again called once it is,
+    /// to check the name as it stands then.
+    pub fn wrong(
+        &self,
+        name: &str,
+        cx: &mut App,
+        again: impl FnOnce(&mut App) + 'static,
+    ) -> Option<String> {
+        if !self.nested && name.contains('/') {
+            return Some("A name cannot contain “/”".into());
+        }
+        let found = {
+            let l = self.listed.borrow();
+            check(&self.folder, name, self.own.as_deref(), &|f| {
+                l.get(f).cloned().flatten()
+            })
+        };
+        let folder = match found {
+            Check::Fine => return None,
+            Check::Wrong(e) => return Some(e),
+            Check::List(folder) => folder,
+        };
+        if self.listed.borrow().contains_key(&folder) {
+            return None;
+        }
+        self.listed.borrow_mut().insert(folder.clone(), None);
+        let call = self.code.call("fs.list", json!({ "path": folder }));
+        let listed = self.listed.clone();
+        cx.spawn(async move |cx| {
+            // A folder that cannot be listed has nothing in the way.
+            let entries: Entries = call
+                .await
+                .ok()
+                .and_then(|v| serde_json::from_value::<Vec<Listing>>(v).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|e| (e.name, e.dir))
+                .collect();
+            listed.borrow_mut().insert(folder, Some(entries));
+            cx.update(again);
         })
         .detach();
+        None
     }
-    let title = title.to_string();
-    let first = Cell::new(true);
-    window.open_dialog(cx, move |dialog, window, cx| {
-        if first.replace(false) {
-            window.focus(&input.focus_handle(cx), cx);
-        }
-        let p = palette::of(cx);
-        let wrong = state.borrow().wrong.clone();
-        dialog
-            .w(px(360.))
-            .p_0()
-            .min_h(px(0.))
-            .centered()
-            .close_button(false)
-            .overlay(false)
-            // Enter is the name's own: the pop-up closes once it is taken.
-            .on_ok(|_, _, _| false)
-            .child(
-                v_flex()
-                    .pb(px(8.))
-                    .child(
-                        div()
-                            .px(px(12.))
-                            .pt(px(9.))
-                            .pb(px(7.))
-                            .text_size(px(13.))
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(p.text)
-                            .child(title.clone()),
-                    )
-                    .child(
-                        h_flex()
-                            .relative()
-                            .h(px(32.))
-                            .pl(px(1.))
-                            .pr(px(4.))
-                            .bg(p.surface)
-                            .border_t_1()
-                            .border_b_1()
-                            .border_color(p.border)
-                            .when(wrong.is_some(), |d| d.border_1().border_color(p.bad))
-                            .child(div().flex_1().child(Input::new(&input).appearance(false)))
-                            .when_some(wrong, |d, e| d.child(balloon(e, &p))),
-                    ),
-            )
-    });
 }
-
-/// What is wrong with a name, in a balloon just over its field, as
-/// IntelliJ shows it; drawn over the pop-up's title and past its edge.
-fn balloon(text: String, p: &palette::Palette) -> impl IntoElement {
-    div().absolute().top(px(-5.)).left(px(6.)).child(
-        deferred(
-            anchored().anchor(Anchor::BottomLeft).child(
-                div().rounded(px(5.)).bg(p.bg).child(
-                    div()
-                        .debug_selector(|| "name-wrong".into())
-                        .max_w(px(420.))
-                        .px(px(8.))
-                        .py(px(4.))
-                        .rounded(px(5.))
-                        .border_1()
-                        .border_color(p.bad)
-                        .bg(p.bad.opacity(0.08))
-                        .text_size(px(12.))
-                        .text_color(p.text)
-                        .child(text),
-                ),
-            ),
-        )
-        .with_priority(BALLOON),
-    )
-}
-
-/// Over the dialog the balloon is in, and over the app's menus.
-const BALLOON: usize = 101;
 
 /// Asks to go ahead with something that cannot be taken back here, then
 /// does done.
@@ -563,111 +424,6 @@ fn buttons(
                 .debug_selector(|| "dialog-ok".into())
                 .on_click(move |_, window, cx| on_ok(window, cx)),
         )
-}
-
-/// Makes an empty file, asking its name as IntelliJ's New File does: a
-/// name with slashes makes the folders on the way. opened has its path.
-pub fn new_file(
-    t: &Target,
-    window: &mut Window,
-    cx: &mut App,
-    opened: impl Fn(String, &mut Window, &mut App) + 'static,
-) {
-    let (code, folder) = (t.code.clone(), t.folder());
-    let checks = Checks {
-        code: code.clone(),
-        folder: folder.clone(),
-        own: None,
-        nested: true,
-    };
-    ask_doing(
-        "New File",
-        "",
-        checks,
-        window,
-        cx,
-        move |name| {
-            let (code, path) = (code.clone(), place(&folder, name));
-            let parent = parent_of(&path);
-            let way = (parent != place(&folder, "")).then_some(parent);
-            Some(Box::pin(async move {
-                if let Some(way) = way {
-                    code.call("fs.mkdir", json!({ "path": way })).await?;
-                }
-                code.call("fs.create", json!({ "path": path })).await?;
-                Ok(path)
-            }))
-        },
-        opened,
-    );
-}
-
-/// Makes a directory, asking its name as IntelliJ's New Directory does,
-/// then does made with its path; a name with slashes makes each folder on
-/// the way.
-pub fn new_folder(
-    t: &Target,
-    window: &mut Window,
-    cx: &mut App,
-    made: impl Fn(String, &mut Window, &mut App) + 'static,
-) {
-    let (code, folder) = (t.code.clone(), t.folder());
-    let checks = Checks {
-        code: code.clone(),
-        folder: folder.clone(),
-        own: None,
-        nested: true,
-    };
-    ask_doing(
-        "New Directory",
-        "",
-        checks,
-        window,
-        cx,
-        move |name| {
-            let (code, path) = (code.clone(), place(&folder, name));
-            Some(Box::pin(async move {
-                code.call("fs.mkdir", json!({ "path": path })).await?;
-                Ok(path)
-            }))
-        },
-        made,
-    );
-}
-
-/// Renames, asking the new name, then does renamed with the new path.
-pub fn rename(
-    t: &Target,
-    window: &mut Window,
-    cx: &mut App,
-    renamed: impl Fn(String, &mut Window, &mut App) + 'static,
-) {
-    let (code, from) = (t.code.clone(), t.abs.clone());
-    let parent = parent_of(&from);
-    let checks = Checks {
-        code: code.clone(),
-        folder: parent.clone(),
-        own: Some(from.clone()),
-        nested: false,
-    };
-    ask_doing(
-        "Rename",
-        t.name(),
-        checks,
-        window,
-        cx,
-        move |name| {
-            let (code, from, to) = (code.clone(), from.clone(), join(&parent, name));
-            (to != from).then(|| -> Doing {
-                Box::pin(async move {
-                    code.call("fs.rename", json!({ "from": from, "to": to }))
-                        .await?;
-                    Ok(to)
-                })
-            })
-        },
-        renamed,
-    );
 }
 
 /// Moves to the environment's trash, from where it can be restored.

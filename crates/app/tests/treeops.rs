@@ -1,6 +1,7 @@
 //! The Project window's menu on a file: making a file beside it, through a
-//! stand-in Code service, as a right-click, a name typed and Enter make it;
-//! a name taken is said in the pop-up, and what is made is selected.
+//! stand-in Code service, as a right-click, a name typed into the tree and
+//! Enter make it; a name taken is said under it, and what is made is
+//! selected.
 
 use std::net::TcpListener;
 use std::sync::{Arc, mpsc};
@@ -194,10 +195,10 @@ fn new_file_from_a_files_menu_is_made_beside_it(cx: &mut TestAppContext) {
         (open.root.as_str(), open.path.as_str()),
         ("/home/dev/app", "notes.md")
     );
-    assert!(
-        !cx.update(|window, cx| window.has_active_dialog(cx)),
-        "the pop-up closed"
-    );
+    until(cx, "the row typed in goes", |cx| {
+        cx.update(|window, _| window.refresh());
+        cx.debug_bounds("tree-naming").is_none()
+    });
     tree.read_with(cx, |t, _| {
         let s = t.selected().unwrap();
         assert_eq!(
@@ -208,7 +209,7 @@ fn new_file_from_a_files_menu_is_made_beside_it(cx: &mut TestAppContext) {
     });
 }
 
-/// A name already taken is said over it in the pop-up, which stays; the
+/// A name already taken is said under it in the tree, which keeps it; the
 /// file made with another is selected and scrolled into view, here at the
 /// foot of a long folder.
 #[gpui::test]
@@ -242,27 +243,29 @@ fn a_name_taken_is_said_and_the_file_made_is_shown(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("down down right enter");
     cx.run_until_parked();
     cx.simulate_input("main.rs");
-    // Said as it is typed, before Enter, as IntelliJ says it.
+    // Said as it is typed, before Enter, as VS Code says it.
     until(cx, "the name said to be taken", |cx| {
         cx.update(|window, _| window.refresh());
         cx.debug_bounds("name-wrong").is_some()
     });
     cx.simulate_keystrokes("enter");
-    // Enter takes no name said to be wrong; the pop-up stays, for another.
+    // Enter takes no name said to be wrong; the row stays, for another.
     let asked_at = Instant::now();
     while asked_at.elapsed() < Duration::from_millis(400) {
         cx.run_until_parked();
         thread::sleep(Duration::from_millis(10));
     }
-    assert!(
-        cx.update(|window, cx| window.has_active_dialog(cx)),
-        "the pop-up stays"
-    );
+    cx.update(|window, _| window.refresh());
+    assert!(cx.debug_bounds("tree-naming").is_some(), "the row stays");
     assert!(asked.try_recv().is_err(), "nothing was made");
 
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
-    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
+    cx.update(|window, _| window.refresh());
+    assert!(
+        cx.debug_bounds("tree-naming").is_none(),
+        "Escape lets it go"
+    );
 
     // A project's own row is selected by the right-click that opens its
     // menu, as its files are.
@@ -285,7 +288,6 @@ fn a_name_taken_is_said_and_the_file_made_is_shown(cx: &mut TestAppContext) {
     until(cx, "the file made is selected", |cx| {
         tree.read_with(cx, |t, _| t.selected().map(|s| s.path.clone())) == Some("zz-last.md".into())
     });
-    assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
     until(cx, "it is scrolled into view", |cx| {
         cx.update(|window, _| window.refresh());
         let height = cx.update(|w, _| w.bounds().size.height);
@@ -1159,9 +1161,10 @@ fn new_from_the_keys_makes_folders_on_the_way(cx: &mut TestAppContext) {
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     cx.run_until_parked();
+    cx.update(|window, _| window.refresh());
     assert!(
-        cx.update(|window, cx| window.has_active_dialog(cx)),
-        "File, marked, asks its name"
+        cx.debug_bounds("tree-naming").is_some(),
+        "File, marked, takes its name in the tree"
     );
     cx.simulate_input("docs/today.md");
     cx.run_until_parked();
@@ -1211,5 +1214,92 @@ fn new_from_the_keys_makes_folders_on_the_way(cx: &mut TestAppContext) {
         thread::sleep(Duration::from_millis(10));
     }
     assert!(asked.try_recv().is_err(), "nothing was made");
-    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    cx.update(|window, _| window.refresh());
+    assert!(cx.debug_bounds("tree-naming").is_some());
+}
+
+/// The row a name is typed in sits where VS Code puts it: a new directory
+/// first among its folder's entries, a new file after the folders, and a
+/// rename in the place of what is renamed, its name chosen up to its
+/// extension. Clicking away takes a name that can be taken.
+#[gpui::test]
+fn names_are_typed_where_the_entry_goes(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    hangar_app::project::bind_keys(&mut cx.app.borrow_mut());
+    let (asked_tx, asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        Root::new(view, window, cx)
+    });
+    // Focus leaving the field is told only in the window in front.
+    cx.update(|window, _| window.activate_window());
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-main.rs").is_some()
+    });
+    let new = if cfg!(target_os = "macos") {
+        "cmd-n"
+    } else {
+        "ctrl-n"
+    };
+    let bounds = |cx: &mut VisualTestContext, at: &'static str| {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        cx.debug_bounds(at).unwrap_or_else(|| panic!("{at}"))
+    };
+    let main = bounds(cx, "tree-row-main.rs").center();
+    cx.simulate_click(main, Modifiers::none());
+    cx.simulate_keystrokes(new);
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    let (naming, src, main_row) = (
+        bounds(cx, "tree-naming"),
+        bounds(cx, "tree-row-src"),
+        bounds(cx, "tree-row-main.rs"),
+    );
+    assert_eq!(naming.top(), src.bottom(), "a file after the folders");
+    assert_eq!(main_row.top(), naming.bottom());
+    cx.simulate_keystrokes("escape");
+
+    cx.simulate_keystrokes(new);
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    let (naming, project) = (
+        bounds(cx, "tree-naming"),
+        bounds(cx, "project-row-/home/dev/app"),
+    );
+    assert_eq!(naming.top(), project.bottom(), "a folder first");
+    cx.simulate_keystrokes("escape");
+
+    cx.simulate_keystrokes("shift-f6");
+    let naming = bounds(cx, "tree-naming");
+    cx.update(|window, _| window.refresh());
+    assert!(
+        cx.debug_bounds("tree-row-main.rs").is_none(),
+        "the row renamed is stood in for"
+    );
+    assert_eq!(naming.top(), src.bottom());
+    // "main" is chosen, so what is typed takes its place.
+    cx.simulate_input("app");
+    cx.run_until_parked();
+    let src = bounds(cx, "tree-row-src").center();
+    cx.simulate_click(src, Modifiers::none());
+    let start = Instant::now();
+    let (m, p) = loop {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        if let Ok(got) = asked.recv_timeout(Duration::from_millis(20)) {
+            break got;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "the rename");
+    };
+    assert_eq!(m, "fs.rename");
+    assert_eq!(
+        (p["from"].as_str(), p["to"].as_str()),
+        (Some("/home/dev/app/main.rs"), Some("/home/dev/app/app.rs"))
+    );
 }
