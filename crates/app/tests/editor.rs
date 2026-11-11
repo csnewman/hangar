@@ -387,3 +387,17 @@ fn alt_enter_asks_for_context_actions(cx: &mut TestAppContext) {
         "nothing typed"
     );
 }
+
+/// A place in the text, as others' carets are kept, after an edit: before
+/// it unmoved, after it moved by what it added, within it at its end.
+#[test]
+fn places_move_with_edits() {
+    use hangar_app::docedit::moved;
+    // "hello world": "world" (6..11) becomes "there, world" (6..18).
+    assert_eq!(moved(2, 6, 11, 18), 2);
+    assert_eq!(moved(11, 6, 11, 18), 18);
+    assert_eq!(moved(8, 6, 11, 18), 18);
+    // Text put in at 6: a caret there goes after it, as the typist's does.
+    assert_eq!(moved(6, 6, 6, 9), 9);
+    assert_eq!(moved(5, 6, 6, 9), 5);
+}

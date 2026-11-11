@@ -45,6 +45,8 @@ struct Remote {
     colour: Hsla,
     marks: RangeDecorationCollection,
     gutter: GutterDecorationCollection,
+    /// Where its carets are, in bytes, moved with each edit, for its name.
+    carets: Vec<usize>,
 }
 
 /// Changes typed within this of each other are one step of undo.
@@ -541,6 +543,19 @@ fn editor_menu(
         .separator()
         .menu_with_check("Soft-Wrap", wrap, Box::new(ToggleSoftWrap))
         .menu_with_check("Annotate with Git Blame", blame, Box::new(ToggleBlame))
+}
+
+/// Where a place in the text is after an edit replacing start..old_end
+/// with text ending at new_end: after it, moved by what it added; within
+/// it, at its end.
+pub fn moved(at: usize, start: usize, old_end: usize, new_end: usize) -> usize {
+    if at >= old_end {
+        at - old_end + new_end
+    } else if at > start {
+        new_end
+    } else {
+        at
+    }
 }
 
 pub struct DocEditor {
@@ -1098,9 +1113,10 @@ impl DocEditor {
         let at = |p: usize| sync.place(version, p).unwrap_or(p).min(len16);
         let byte = |p: usize| s.utf16_to_byte_idx(p);
         let colour = parse_colour(&state.color).unwrap_or(palette::of(cx).peer);
-        let (mut marks, mut gutter) = (vec![], vec![]);
+        let (mut marks, mut gutter, mut carets) = (vec![], vec![], vec![]);
         for Sel { anchor, head } in &state.ranges {
             let (a, h) = (at(*anchor), at(*head));
+            carets.push(byte(h));
             if a != h {
                 marks.push(
                     RangeDecoration::new(byte(a.min(h))..byte(a.max(h)))
@@ -1128,6 +1144,7 @@ impl DocEditor {
             Some(r) => {
                 r.name = state.name;
                 r.colour = colour;
+                r.carets = carets;
                 r.marks.set(marks, cx);
                 r.gutter.set(gutter, cx);
             }
@@ -1145,11 +1162,51 @@ impl DocEditor {
                         colour,
                         marks,
                         gutter,
+                        carets,
                     },
                 );
             }
         }
         cx.notify();
+    }
+
+    /// Others' names over their carets, as Code With Me flags them, in
+    /// their colours; only for carets in view.
+    fn names_at_carets(&self, cx: &App) -> Vec<gpui::AnyElement> {
+        let e = self.editor.read(cx);
+        let view = e.input_bounds();
+        let mut out = vec![];
+        for r in self.remotes.values() {
+            let Some(&c) = r.carets.first() else {
+                continue;
+            };
+            let Some(b) = e.range_to_bounds(&(c..c)) else {
+                continue;
+            };
+            if b.top() < view.top() || b.bottom() > view.bottom() {
+                continue;
+            }
+            out.push(
+                gpui::deferred(
+                    gpui::anchored()
+                        .position(gpui::point(b.left(), b.top()))
+                        .anchor(gpui::Anchor::BottomLeft)
+                        .child(
+                            div()
+                                .px(px(4.))
+                                .rounded_t(px(3.))
+                                .rounded_br(px(3.))
+                                .bg(r.colour)
+                                .text_size(px(10.))
+                                .text_color(gpui::white())
+                                .child(r.name.clone()),
+                        ),
+                )
+                .with_priority(1)
+                .into_any_element(),
+            );
+        }
+        out
     }
 
     /// Marks for a moment what others just changed: the text they put in.
@@ -1824,6 +1881,12 @@ impl DocEditor {
         let now = Instant::now();
         let mut inserted = None;
         for (edit, after) in e.edits() {
+            // Others' carets move with the text, whoever made the edit.
+            for r in self.remotes.values_mut() {
+                for c in &mut r.carets {
+                    *c = moved(*c, edit.start_byte, edit.old_end_byte, edit.new_end_byte);
+                }
+            }
             if self.echoes.take(after) {
                 self.shadow = after.clone();
                 continue;
@@ -2268,6 +2331,7 @@ impl Render for DocEditor {
                         })),
                 )
             })
+            .children(self.names_at_carets(cx))
             .children(self.parameter_info(&p, cx))
             .children(self.problem_note(&p, cx))
             .when_some(self.context_menu.as_ref(), |d, (menu, _)| {
