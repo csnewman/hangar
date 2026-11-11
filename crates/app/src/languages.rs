@@ -617,6 +617,8 @@ fn capabilities() -> Value {
             "publishDiagnostics": { "relatedInformation": false, "versionSupport": false },
             "hover": { "contentFormat": ["markdown", "plaintext"] },
             "definition": { "linkSupport": true },
+            "implementation": { "linkSupport": true },
+            "typeDefinition": { "linkSupport": true },
             "completion": {
                 "completionItem": { "snippetSupport": false, "documentationFormat": ["markdown", "plaintext"] },
             },

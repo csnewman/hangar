@@ -13,9 +13,9 @@ use crate::docedit::{
     SelectNextOccurrence, ToggleSoftWrap, UnselectOccurrence,
 };
 use crate::envtab::{
-    CloseTab, FindInFiles, FindUsages, GoToLine, HideAllToolWindows, RenameSymbol, ReopenClosedTab,
-    ReplaceInFiles, ToggleCommit, ToggleDocker, ToggleGit, ToggleProblems, ToggleProject,
-    ToggleStructure, ToggleTerminal,
+    CloseTab, FindInFiles, FindUsages, GoToImplementation, GoToLine, GoToTypeDeclaration,
+    HideAllToolWindows, RenameSymbol, ReopenClosedTab, ReplaceInFiles, ToggleCommit, ToggleDocker,
+    ToggleGit, ToggleProblems, ToggleProject, ToggleStructure, ToggleTerminal,
 };
 use crate::shell::{GoToSymbol, SearchEverywhere};
 
@@ -78,6 +78,8 @@ pub fn init(cx: &mut App) {
             MenuItem::action("Find in Files…", FindInFiles),
             MenuItem::action("Replace in Files…", ReplaceInFiles),
             MenuItem::action("Definition", GoToDefinition),
+            MenuItem::action("Implementation(s)", GoToImplementation),
+            MenuItem::action("Type Declaration", GoToTypeDeclaration),
             MenuItem::action("Find Usages", FindUsages),
             MenuItem::separator(),
             MenuItem::action("Next Highlighted Error", NextProblem),

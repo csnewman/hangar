@@ -141,6 +141,8 @@ actions!(
         GoToLine,
         FindUsages,
         RenameSymbol,
+        GoToImplementation,
+        GoToTypeDeclaration,
         HideAllToolWindows,
         HideActiveToolWindow
     ]
@@ -200,12 +202,21 @@ pub fn bind_keys(cx: &mut App) {
         ("ctrl-f4", "ctrl-shift-t")
     };
     let go_to_line = if mac { "cmd-l" } else { "ctrl-g" };
+    let (implementation, type_declaration) = if mac {
+        ("cmd-alt-b", "cmd-shift-b")
+    } else {
+        ("ctrl-alt-b", "ctrl-shift-b")
+    };
     cx.bind_keys([
         KeyBinding::new(go_to_line, GoToLine, ctx),
         KeyBinding::new("alt-f7", FindUsages, ctx),
         KeyBinding::new("alt-f7", FindUsages, input),
         KeyBinding::new("shift-f6", RenameSymbol, ctx),
         KeyBinding::new("shift-f6", RenameSymbol, input),
+        KeyBinding::new(implementation, GoToImplementation, ctx),
+        KeyBinding::new(implementation, GoToImplementation, input),
+        KeyBinding::new(type_declaration, GoToTypeDeclaration, ctx),
+        KeyBinding::new(type_declaration, GoToTypeDeclaration, input),
         KeyBinding::new(go_to_line, GoToLine, input),
         KeyBinding::new(close, CloseTab, ctx),
         KeyBinding::new(reopen, ReopenClosedTab, ctx),
@@ -1357,8 +1368,101 @@ impl EnvTab {
         let asked = langs.update(cx, |l, cx| {
             l.request(&abs, "textDocument/references", params, cx)
         });
-        // The files open here are read from their editors, the rest from
-        // disk.
+        cx.spawn_in(window, async move |this, cx| {
+            let found = asked.await.and_then(|v| {
+                serde_json::from_value::<Option<Vec<lsp_types::Location>>>(v)
+                    .map_err(|e| e.to_string())
+            });
+            let _ = this.update_in(cx, |t, window, cx| match found {
+                Ok(l) => t.list_places(
+                    format!("Usages of {word}"),
+                    l.unwrap_or_default(),
+                    window,
+                    cx,
+                ),
+                Err(e) => {
+                    use gpui_component::WindowExt;
+                    window.push_notification(
+                        gpui_component::notification::Notification::error(format!(
+                            "Find Usages: {e}"
+                        )),
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// IntelliJ's Go to Implementation (⌥⌘B) and Type Declaration (⇧⌘B):
+    /// asked of the file's server at the caret, one place opened, several
+    /// listed in the Find window under what they are of.
+    pub fn go_to_places(
+        &mut self,
+        method: &'static str,
+        what: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(Caret {
+            langs,
+            abs,
+            word,
+            params,
+        }) = self.at_caret(cx)
+        else {
+            return;
+        };
+        let asked = langs.update(cx, |l, cx| l.request(&abs, method, params, cx));
+        cx.spawn_in(window, async move |this, cx| {
+            let found = asked.await.and_then(|v| {
+                serde_json::from_value::<Option<lsp_types::GotoDefinitionResponse>>(v)
+                    .map_err(|e| e.to_string())
+            });
+            let _ = this.update_in(cx, |t, window, cx| {
+                use gpui_component::WindowExt;
+                use gpui_component::notification::Notification;
+                let places: Vec<lsp_types::Location> = match found {
+                    Ok(r) => crate::lspedit::links(r)
+                        .into_iter()
+                        .map(|l| lsp_types::Location {
+                            uri: l.target_uri,
+                            range: l.target_selection_range,
+                        })
+                        .collect(),
+                    Err(e) => {
+                        window.push_notification(Notification::error(format!("{what}: {e}")), cx);
+                        return;
+                    }
+                };
+                match places.as_slice() {
+                    [] => window.push_notification(
+                        Notification::info(format!("No {} of {word}", what.to_lowercase())),
+                        cx,
+                    ),
+                    [one] => {
+                        if let Some(abs) = languages::uri_path(one.uri.as_str()) {
+                            let (root, path) = t.place_of(&abs, cx);
+                            let at = one.range.start;
+                            t.open_file_at(&root, &path, at.line, at.character, window, cx);
+                        }
+                    }
+                    _ => t.list_places(format!("{what} of {word}"), places, window, cx),
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Lists places in the Find window under a title, each with its line's
+    /// text: from its editor for a file open here, else read from disk.
+    pub fn list_places(
+        &mut self,
+        title: String,
+        found: Vec<lsp_types::Location>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let open: HashMap<String, String> = self
             .files
             .iter()
@@ -1371,24 +1475,6 @@ impl EnvTab {
             })
             .collect();
         cx.spawn_in(window, async move |this, cx| {
-            let found = match asked.await.and_then(|v| {
-                serde_json::from_value::<Option<Vec<lsp_types::Location>>>(v)
-                    .map_err(|e| e.to_string())
-            }) {
-                Ok(l) => l.unwrap_or_default(),
-                Err(e) => {
-                    let _ = cx.update(|window, cx| {
-                        use gpui_component::WindowExt;
-                        window.push_notification(
-                            gpui_component::notification::Notification::error(format!(
-                                "Find Usages: {e}"
-                            )),
-                            cx,
-                        );
-                    });
-                    return;
-                }
-            };
             let mut by_file: std::collections::BTreeMap<String, Vec<lsp_types::Range>> =
                 Default::default();
             for l in found {
@@ -1450,7 +1536,6 @@ impl EnvTab {
                 }
             }
             let _ = this.update(cx, |t, cx| {
-                let title = format!("Usages of {word}");
                 let found = by_root.into_iter().collect();
                 if !t.is_open(Tool::Find) {
                     t.toggle(Tool::Find, cx);
@@ -2431,6 +2516,17 @@ impl Render for EnvTab {
             .on_action(cx.listener(|t, _: &GoToLine, window, cx| t.go_to_line(window, cx)))
             .on_action(cx.listener(|t, _: &FindUsages, window, cx| t.find_usages(window, cx)))
             .on_action(cx.listener(|t, _: &RenameSymbol, window, cx| t.rename_symbol(window, cx)))
+            .on_action(cx.listener(|t, _: &GoToImplementation, window, cx| {
+                t.go_to_places("textDocument/implementation", "Implementations", window, cx)
+            }))
+            .on_action(cx.listener(|t, _: &GoToTypeDeclaration, window, cx| {
+                t.go_to_places(
+                    "textDocument/typeDefinition",
+                    "Type declarations",
+                    window,
+                    cx,
+                )
+            }))
             .on_action(cx.listener(|t, _: &CloseTab, _, cx| {
                 if let Some(i) = t.file {
                     t.close_file(i, cx);
