@@ -727,6 +727,11 @@ impl Connection {
                 }
                 Value::Null
             }
+            "ports.list" => to_value(
+                tokio::task::spawn_blocking(super::ports::list)
+                    .await
+                    .map_err(|e| Error::msg(e.to_string()))?,
+            ),
             "preview.start" => {
                 let (port, secret) = self.s.preview.start().await?;
                 json!({ "port": port, "secret": secret })

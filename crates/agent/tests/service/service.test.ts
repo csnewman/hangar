@@ -1323,6 +1323,26 @@ test('previewing files over HTTP, only under the secret path', async () => {
 	}
 })
 
+test('the ports the machine listens on, each with its program', async () => {
+	const server = createServer()
+	await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
+	const port = (server.address() as import('node:net').AddressInfo).port
+	const a = new Client()
+	try {
+		await a.call('hello')
+		const ports: { port: number; loopback: boolean; pid?: number; command?: string }[] = await a.call('ports.list')
+		const ours = ports.find((p) => p.port === port)
+		assert.ok(ours, `${port} among ${JSON.stringify(ports)}`)
+		assert.equal(ours.loopback, true, 'on 127.0.0.1 alone')
+		assert.equal(ours.pid, process.pid, 'this test listens')
+		assert.match(ours.command ?? '', /node/)
+		assert.deepEqual(ports.map((p) => p.port), [...ports.map((p) => p.port)].sort((x, y) => x - y), 'in order')
+	} finally {
+		a.close()
+		server.close()
+	}
+})
+
 test('the workspace: its projects, shared by every tab, and repositories to add', async () => {
 	const a = new Client()
 	const b = new Client()

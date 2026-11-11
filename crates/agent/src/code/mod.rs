@@ -15,6 +15,7 @@ mod git;
 mod hub;
 mod lsp;
 mod paths;
+mod ports;
 mod preview;
 mod repos;
 mod search;
