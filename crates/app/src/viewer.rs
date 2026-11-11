@@ -26,6 +26,9 @@ pub enum View {
     /// A PDF, sound or video: opened by this computer's own app.
     External,
     Hex,
+    /// An HTML file, as a browser shows it, from the environment's preview
+    /// server.
+    Browser,
 }
 
 impl View {
@@ -36,6 +39,7 @@ impl View {
             View::Image => "Image Viewer",
             View::External => "This Computer's App",
             View::Hex => "Hex Viewer",
+            View::Browser => "Browser",
         }
     }
 }
@@ -105,7 +109,34 @@ pub fn ways(path: &str) -> Vec<View> {
     }
     out.push(View::External);
     out.push(View::Hex);
+    if is_html(path) {
+        out.push(View::Browser);
+    }
     out
+}
+
+/// Whether a file is HTML, which a browser shows.
+pub fn is_html(path: &str) -> bool {
+    matches!(extension(path).as_str(), "html" | "htm")
+}
+
+/// Where the preview server shows a file: its address on the environment's
+/// numbered host, under the secret, each part of the path escaped.
+pub fn preview_url(host: &str, secret: &str, abs: &str) -> String {
+    let path: Vec<String> = abs
+        .split('/')
+        .map(|part| {
+            part.bytes()
+                .map(|b| match b {
+                    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                        (b as char).to_string()
+                    }
+                    b => format!("%{b:02X}"),
+                })
+                .collect()
+        })
+        .collect();
+    format!("{host}{secret}{}", path.join("/"))
 }
 
 /// One row of the bytes: its offset, the bytes as hex, and as characters,

@@ -919,6 +919,9 @@ impl EnvTab {
         } else {
             format!("{}/{path}", root.trim_end_matches('/'))
         };
+        if way == View::Browser {
+            return self.open_in_browser(&abs, window, cx);
+        }
         let at = self.files.iter().position(|f| match (f, way) {
             (Tab::Doc(f), View::Text) => f.read(cx).path() == abs,
             (Tab::View(v), way) => {
@@ -945,6 +948,54 @@ impl EnvTab {
             }
         };
         self.show_file(i, window, cx);
+    }
+
+    /// Shows an HTML file in this computer's browser, as IntelliJ's Open in
+    /// Browser: from the Code service's preview server, on the environment's
+    /// numbered host.
+    pub fn open_in_browser(&mut self, abs: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_component::WindowExt;
+        use gpui_component::notification::Notification;
+        let places = self.places.read(cx);
+        let Some((config, state)) = places.get(&self.place) else {
+            return;
+        };
+        let suffix = state
+            .me
+            .as_ref()
+            .and_then(|m| m.environment_host_suffix.clone());
+        let (server, short) = (
+            config.url.clone(),
+            state
+                .environment(&self.env)
+                .map(|e| e.short_id.clone())
+                .unwrap_or_default(),
+        );
+        let Some(suffix) = suffix else {
+            window.push_notification(
+                Notification::error("This server has no hosts for environments' web servers."),
+                cx,
+            );
+            return;
+        };
+        let Some(code) = self.code_for(abs, cx) else {
+            return;
+        };
+        let call = code.call("preview.start", serde_json::json!({}));
+        let abs = abs.to_string();
+        cx.spawn_in(window, async move |_, cx| {
+            let got = call.await;
+            let _ = cx.update(|window, cx| match got {
+                Ok(v) => {
+                    let port = v["port"].as_u64().unwrap_or(0).to_string();
+                    let secret = v["secret"].as_str().unwrap_or_default();
+                    let host = crate::ports::host_url(&server, Some(&port), &short, &suffix);
+                    cx.open_url(&crate::viewer::preview_url(&host, secret, &abs));
+                }
+                Err(e) => window.push_notification(Notification::error(e), cx),
+            });
+        })
+        .detach();
     }
 
     /// A viewer on a file, through the connection that reaches it.
@@ -1016,6 +1067,11 @@ impl EnvTab {
             .push(cx.subscribe(&view, |t, doc, _: &docedit::NotText, cx| {
                 t.show_as_bytes(&doc, cx)
             }));
+        self.subs.push(cx.subscribe_in(
+            &view,
+            window,
+            |t, _, e: &docedit::OpenInBrowser, window, cx| t.open_in_browser(&e.0, window, cx),
+        ));
         self.subs.push(cx.subscribe_in(
             &view,
             window,

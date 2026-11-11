@@ -27,3 +27,22 @@ fn bytes_are_shown_sixteen_a_row() {
     );
     assert!(hex_row(0, b"ab").starts_with("00000000  61 62    "));
 }
+
+/// An HTML file can open in the browser, from the preview server under its
+/// secret, each part of its path escaped.
+#[test]
+fn html_opens_in_the_browser() {
+    use hangar_app::viewer::preview_url;
+    assert_eq!(
+        ways("/w/index.html"),
+        [View::Text, View::External, View::Hex, View::Browser]
+    );
+    assert_eq!(
+        preview_url(
+            "http://40123-envabc123.hangar.localhost:8080/",
+            "s3cr3t",
+            "/home/dev/my site/index.html"
+        ),
+        "http://40123-envabc123.hangar.localhost:8080/s3cr3t/home/dev/my%20site/index.html"
+    );
+}

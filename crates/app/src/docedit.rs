@@ -20,12 +20,12 @@ use gpui::{
 use std::collections::HashMap;
 
 use gpui::Hsla;
-use gpui_component::h_flex;
 use gpui_component::input::{
     Editor, EditorState, GutterDecoration, GutterDecorationCollection, InputEditsEvent, Position,
     RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Redo, Rope, Undo,
 };
 use gpui_component::menu::PopupMenu;
+use gpui_component::{h_flex, v_flex};
 use hangar_proto::collab::{self, Update};
 use hangar_proto::{Change, ChangeSet, Error, MapMode, Text};
 use serde_json::{Value, json};
@@ -719,7 +719,14 @@ impl DocEditor {
             doc: None,
             epoch: String::new(),
             sync: None,
-            preview: (language(path) == "markdown").then_some(Preview::Both),
+            // Markdown beside its preview; CSV and TSV as a table.
+            preview: if language(path) == "markdown" {
+                Some(Preview::Both)
+            } else if crate::table::separator(path).is_some() {
+                Some(Preview::Rendered)
+            } else {
+                None
+            },
             saved: 0,
             save_error: None,
             editor,
@@ -2059,7 +2066,7 @@ impl DocEditor {
         let e = self.editor.read(cx);
         let at = e.cursor();
         let caret = e.range_to_bounds(&(at..at))?;
-        let mut body = gpui_component::v_flex().gap(px(2.));
+        let mut body = v_flex().gap(px(2.));
         for line in crate::sighelp::lines(help).into_iter().take(8) {
             let colour = if line.active { p.text } else { p.muted };
             let mut text = StyledText::new(line.label);
@@ -2460,10 +2467,14 @@ impl DocEditor {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let text = self.editor.read(cx).text().to_string();
+        let sep = crate::table::separator(&self.path);
         let modes = [
             ("Text", Preview::Text),
             ("Both", Preview::Both),
-            ("Preview", Preview::Rendered),
+            (
+                if sep.is_some() { "Table" } else { "Preview" },
+                Preview::Rendered,
+            ),
         ];
         let switch = h_flex()
             .absolute()
@@ -2485,18 +2496,23 @@ impl DocEditor {
                     .child(label)
                     .on_click(cx.listener(move |d, _, _, cx| d.set_preview(m, cx)))
             }));
-        let rendered = div()
-            .id("md-preview")
-            .flex_1()
-            .min_w_0()
-            .h_full()
-            .overflow_y_scroll()
-            .px(px(20.))
-            .py(px(14.))
-            .bg(p.surface)
-            .child(
-                gpui_component::text::TextView::markdown("md-preview-text", text).selectable(true),
-            );
+        let rendered = match sep {
+            Some(sep) => table_view(&text, sep, p).into_any_element(),
+            None => div()
+                .id("md-preview")
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .overflow_y_scroll()
+                .px(px(20.))
+                .py(px(14.))
+                .bg(p.surface)
+                .child(
+                    gpui_component::text::TextView::markdown("md-preview-text", text)
+                        .selectable(true),
+                )
+                .into_any_element(),
+        };
         h_flex()
             .size_full()
             .relative()
@@ -2511,6 +2527,67 @@ impl DocEditor {
     }
 }
 
+/// CSV or TSV as a table: the first row the header, held while the rest
+/// scroll under it, each column as wide as its longest field (up to 40).
+fn table_view(text: &str, sep: char, p: &palette::Palette) -> impl IntoElement {
+    let rows = crate::table::rows(text, sep);
+    let widths = crate::table::widths(&rows);
+    let cell = |w: usize| px(w as f32 * 7.4 + 16.);
+    let line = {
+        let widths = widths.clone();
+        move |r: &[String], head: bool, p: &palette::Palette| {
+            h_flex()
+                .flex_none()
+                .border_b_1()
+                .border_color(p.border)
+                .when(head, |d| {
+                    d.bg(p.surface_2).font_weight(gpui::FontWeight::SEMIBOLD)
+                })
+                .children(widths.iter().enumerate().map(|(i, w)| {
+                    div()
+                        .w(cell(*w))
+                        .flex_none()
+                        .px(px(8.))
+                        .py(px(2.))
+                        .border_r_1()
+                        .border_color(p.border)
+                        .truncate()
+                        .child(r.get(i).cloned().unwrap_or_default())
+                }))
+        }
+    };
+    let total: f32 = widths.iter().map(|w| f32::from(cell(*w))).sum();
+    let head = rows.first().cloned().unwrap_or_default();
+    let body: std::sync::Arc<Vec<Vec<String>>> =
+        std::sync::Arc::new(rows.into_iter().skip(1).collect());
+    let count = body.len();
+    let pal = *p;
+    let draw = line.clone();
+    div()
+        .id("table-preview")
+        .debug_selector(|| "table-preview".into())
+        .flex_1()
+        .min_w_0()
+        .h_full()
+        .overflow_x_scroll()
+        .bg(p.surface)
+        .font_family(crate::diff::mono())
+        .text_size(px(12.))
+        .text_color(p.text)
+        .child(
+            v_flex()
+                .w(px(total))
+                .h_full()
+                .child(line(&head, true, p))
+                .child(
+                    gpui::uniform_list("table-rows", count, move |range, _, _| {
+                        range.map(|i| draw(&body[i], false, &pal)).collect()
+                    })
+                    .flex_1(),
+                ),
+        )
+}
+
 impl gpui::EventEmitter<crate::blame::ShowCommit> for DocEditor {}
 
 /// Asks for a file's changes in a diff: its absolute path.
@@ -2518,6 +2595,12 @@ impl gpui::EventEmitter<crate::blame::ShowCommit> for DocEditor {}
 pub struct ShowChanges(pub String);
 
 impl gpui::EventEmitter<ShowChanges> for DocEditor {}
+
+/// Asks for an HTML file to be shown in this computer's browser.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenInBrowser(pub String);
+
+impl gpui::EventEmitter<OpenInBrowser> for DocEditor {}
 
 /// Says the file opened is not text, so it is better shown as its bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2692,6 +2775,20 @@ impl Render for DocEditor {
                     d.stage_change(&h, cx)
                 }
             }))
+            // An HTML file's way to a browser, at the editor's top right, as
+            // IntelliJ floats its browser icons there.
+            .when(crate::viewer::is_html(&self.path), |d| {
+                let abs = self.path.clone();
+                d.child(
+                    div().absolute().top(px(6.)).right(px(18.)).child(
+                        crate::ui::button("open-in-browser", "Open in Browser", &p)
+                            .debug_selector(|| "open-in-browser".into())
+                            .on_click(
+                                cx.listener(move |_, _, _, cx| cx.emit(OpenInBrowser(abs.clone()))),
+                            ),
+                    ),
+                )
+            })
             .children(self.names_at_carets(cx))
             .children(self.change_targets(cx))
             .when_some(self.change_menu.as_ref(), |d, (menu, _)| {
