@@ -86,7 +86,7 @@ impl LogsView {
             client,
             env: env.to_string(),
             chosen: LOGS[0].0,
-            pane: cx.new(|_| LogPane::new("env-log", "Reading…")),
+            pane: cx.new(|cx| LogPane::new("env-log", "Reading…", cx)),
             next: None,
             earlier: false,
             error: None,

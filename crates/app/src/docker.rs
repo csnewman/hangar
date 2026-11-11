@@ -383,7 +383,7 @@ impl DockerView {
             images_open: false,
             chosen: None,
             pane: Pane::Log,
-            log: cx.new(|_| LogPane::new("docker-log", "Waiting for output…")),
+            log: cx.new(|cx| LogPane::new("docker-log", "Waiting for output…", cx)),
             follow: None,
             asked: 0,
             early: Vec::new(),
