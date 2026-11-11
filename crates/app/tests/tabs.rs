@@ -184,7 +184,7 @@ fn the_editors_split_in_two(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(b, gpui::MouseButton::Right, gpui::Modifiers::none());
     cx.simulate_mouse_up(b, gpui::MouseButton::Right, gpui::Modifiers::none());
     cx.run_until_parked();
-    let to_move_right = vec!["down"; 11].join(" ");
+    let to_move_right = ["down"; 11].join(" ");
     cx.simulate_keystrokes(&format!("{to_move_right} enter"));
     cx.run_until_parked();
     assert!(tab.read_with(cx, |t, _| t.split_in_two()));
