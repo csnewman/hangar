@@ -23,12 +23,48 @@ use crate::languages::{Languages, file_uri};
 /// Makes a workspace edit, in every file it touches.
 pub type ApplyEdit = Rc<dyn Fn(WorkspaceEdit, &mut Window, &mut App)>;
 
+/// The completions last offered in a file, kept to know which one was
+/// taken.
+pub type Offered = std::sync::Arc<std::sync::Mutex<Vec<lsp_types::CompletionItem>>>;
+
+/// The text an item puts in when it is taken, as the editor puts it.
+pub fn item_text(item: &lsp_types::CompletionItem) -> &str {
+    match &item.text_edit {
+        Some(lsp_types::CompletionTextEdit::Edit(e)) => &e.new_text,
+        Some(lsp_types::CompletionTextEdit::InsertAndReplace(e)) => &e.new_text,
+        None => item.insert_text.as_deref().unwrap_or(&item.label),
+    }
+}
+
+/// The completion offered that text just put in is, if it is one: the one
+/// item putting in that text, which has edits of its own to make or left
+/// for its server to fill in. What was offered is let go once one is
+/// taken.
+pub fn taken(offered: &Offered, inserted: &str) -> Option<lsp_types::CompletionItem> {
+    if inserted.chars().count() < 2 {
+        return None;
+    }
+    let mut items = offered.lock().ok()?;
+    let mut matching = items.iter().filter(|i| item_text(i) == inserted);
+    let item = matching.next()?.clone();
+    if matching.next().is_some() {
+        return None;
+    }
+    items.clear();
+    let more = item
+        .additional_text_edits
+        .as_ref()
+        .is_some_and(|e| !e.is_empty());
+    (more || item.data.is_some()).then_some(item)
+}
+
 /// A file's providers: its server, reached through Languages, by the
 /// file's absolute path, and what makes a code action's edits.
 pub struct Providers {
     pub languages: WeakEntity<Languages>,
     pub abs: String,
     pub apply: ApplyEdit,
+    pub offered: Offered,
 }
 
 impl Providers {
@@ -93,9 +129,18 @@ impl CompletionProvider for Providers {
         more.insert("context".into(), json!(trigger));
         let asked =
             self.ask_with::<CompletionResponse>("textDocument/completion", text, offset, more, cx);
-        cx.background_spawn(
-            async move { Ok(asked.await?.unwrap_or(CompletionResponse::Array(vec![]))) },
-        )
+        let offered = self.offered.clone();
+        cx.background_spawn(async move {
+            let answer = asked.await?.unwrap_or(CompletionResponse::Array(vec![]));
+            let items = match &answer {
+                CompletionResponse::Array(items) => items.clone(),
+                CompletionResponse::List(list) => list.items.clone(),
+            };
+            if let Ok(mut o) = offered.lock() {
+                *o = items;
+            }
+            Ok(answer)
+        })
     }
 
     fn is_completion_trigger(&self, _: usize, new_text: &str, cx: &mut App) -> bool {

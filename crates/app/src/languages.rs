@@ -620,7 +620,11 @@ fn capabilities() -> Value {
             "implementation": { "linkSupport": true },
             "typeDefinition": { "linkSupport": true },
             "completion": {
-                "completionItem": { "snippetSupport": false, "documentationFormat": ["markdown", "plaintext"] },
+                "completionItem": {
+                    "snippetSupport": false,
+                    "documentationFormat": ["markdown", "plaintext"],
+                    "resolveSupport": { "properties": ["additionalTextEdits"] },
+                },
             },
             "codeAction": {
                 "codeActionLiteralSupport": {

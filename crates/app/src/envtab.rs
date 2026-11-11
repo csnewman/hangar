@@ -1089,9 +1089,11 @@ impl EnvTab {
         let abs = doc.read(cx).asked().to_string();
         let d = l.read(cx).diagnostics_of(&abs).to_vec();
         let weak = l.downgrade();
+        let offered = lspedit::Offered::default();
+        let seen = offered.clone();
         doc.update(cx, |v, cx| {
             v.set_diagnostics(d, cx);
-            v.set_languages(weak);
+            v.set_languages(weak, seen);
         });
         l.update(cx, |l, cx| l.open(&abs, cx));
         let tab = cx.entity().downgrade();
@@ -1102,6 +1104,7 @@ impl EnvTab {
             lspedit::Providers {
                 languages: l.downgrade(),
                 abs,
+                offered,
                 apply: std::rc::Rc::new(move |edit, window, cx| {
                     let _ = edits.update(cx, |t, cx| {
                         t.apply_edits(crate::lspops::by_file(edit), window, cx)

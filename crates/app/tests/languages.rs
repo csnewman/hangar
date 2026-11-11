@@ -177,3 +177,48 @@ fn f2_goes_round_the_problems() {
     );
     assert_eq!(next_problem(&[], at(0), false), None);
 }
+
+/// A completion is known to be taken when the text just put in is the one
+/// item offered putting it in, and it has edits of its own to make or left
+/// for its server to fill in; what was offered is let go once one is.
+#[test]
+fn the_completion_taken_is_known_by_its_text() {
+    use hangar_app::lspedit::{Offered, taken};
+    use lsp_types::{CompletionItem, TextEdit};
+    let item = |label: &str| CompletionItem {
+        label: label.into(),
+        ..Default::default()
+    };
+    let offered = Offered::default();
+    let fill = || {
+        *offered.lock().unwrap() = vec![
+            CompletionItem {
+                data: Some(serde_json::json!({ "import": "std::collections::HashMap" })),
+                ..item("HashMap")
+            },
+            item("Hash"),
+            CompletionItem {
+                additional_text_edits: Some(vec![TextEdit {
+                    range: Range::new(Position::new(0, 0), Position::new(0, 0)),
+                    new_text: "use a::Vec;\n".into(),
+                }]),
+                ..item("Vec")
+            },
+            item("dup"),
+            item("dup"),
+        ]
+    };
+    fill();
+    assert!(taken(&offered, "H").is_none(), "a key typed");
+    assert_eq!(
+        taken(&offered, "HashMap").map(|i| i.label),
+        Some("HashMap".into())
+    );
+    assert!(offered.lock().unwrap().is_empty(), "let go once taken");
+    fill();
+    assert!(taken(&offered, "Hash").is_none(), "nothing more to make");
+    fill();
+    assert_eq!(taken(&offered, "Vec").map(|i| i.label), Some("Vec".into()));
+    fill();
+    assert!(taken(&offered, "dup").is_none(), "two put in the same");
+}

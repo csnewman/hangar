@@ -600,6 +600,8 @@ pub struct DocEditor {
     /// the caret is in, with a count of the times asked, so only the last
     /// answer is shown.
     languages: Option<WeakEntity<crate::languages::Languages>>,
+    /// The completions last offered, to know which was taken.
+    offered: Option<crate::lspedit::Offered>,
     signatures: Option<lsp_types::SignatureHelp>,
     signatures_asked: u64,
     /// Where the caret was when they were last asked for.
@@ -642,9 +644,11 @@ impl DocEditor {
                 .line_number(true)
                 .searchable(true)
         });
-        let edits = cx.subscribe_in(&editor, window, |this, _, e: &InputEditsEvent, _, cx| {
-            this.typed(e, cx)
-        });
+        let edits = cx.subscribe_in(
+            &editor,
+            window,
+            |this, _, e: &InputEditsEvent, window, cx| this.typed(e, window, cx),
+        );
         let moved = cx.observe(&editor, |this, _, cx| {
             this.selection_moved(cx);
             this.caret_moved(cx);
@@ -696,6 +700,7 @@ impl DocEditor {
             sent: None,
             sending: false,
             languages: None,
+            offered: None,
             signatures: None,
             signatures_asked: 0,
             sig_caret: None,
@@ -1175,8 +1180,63 @@ impl DocEditor {
     /// only while no change of this user's awaits confirming.
     /// Gives the editor its file's language servers, which Parameter Info
     /// asks.
-    pub fn set_languages(&mut self, languages: WeakEntity<crate::languages::Languages>) {
+    pub fn set_languages(
+        &mut self,
+        languages: WeakEntity<crate::languages::Languages>,
+        offered: crate::lspedit::Offered,
+    ) {
         self.languages = Some(languages);
+        self.offered = Some(offered);
+    }
+
+    /// Makes a completion's other edits once it is taken, as its server
+    /// asks (the import an item from elsewhere needs): asked of the server
+    /// first when it left them to be filled in. The completion taken is
+    /// the one offered whose text was just put in.
+    fn completed(&mut self, inserted: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(offered) = &self.offered else {
+            return;
+        };
+        let Some(item) = crate::lspedit::taken(offered, inserted) else {
+            return;
+        };
+        let edits = item.additional_text_edits.clone().unwrap_or_default();
+        if !edits.is_empty() {
+            self.make_edits(&edits, window, cx);
+            return;
+        }
+        let Some(l) = self.languages.as_ref().and_then(|l| l.upgrade()) else {
+            return;
+        };
+        if item.data.is_none() {
+            return;
+        }
+        let abs = self.asked.clone();
+        let call = l.update(cx, |l, cx| {
+            l.request(&abs, "completionItem/resolve", json!(item), cx)
+        });
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(v) = call.await else { return };
+            let Ok(item) = serde_json::from_value::<lsp_types::CompletionItem>(v) else {
+                return;
+            };
+            let edits = item.additional_text_edits.unwrap_or_default();
+            let _ = this.update_in(cx, |d, window, cx| d.make_edits(&edits, window, cx));
+        })
+        .detach();
+    }
+
+    /// Makes a language server's edits to the file as the user's own.
+    fn make_edits(
+        &mut self,
+        edits: &[lsp_types::TextEdit],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let text = self.editor.read(cx).text().clone();
+        if let Some(change) = crate::lspops::changeset(&text, edits) {
+            self.apply_own(change, window, cx);
+        }
     }
 
     /// The signatures shown of the call the caret is in, if any.
@@ -1728,7 +1788,7 @@ impl DocEditor {
     }
 
     /// Takes what the user typed, to send and to undo.
-    fn typed(&mut self, e: &InputEditsEvent, cx: &mut Context<Self>) {
+    fn typed(&mut self, e: &InputEditsEvent, window: &mut Window, cx: &mut Context<Self>) {
         let now = Instant::now();
         let mut inserted = None;
         for (edit, after) in e.edits() {
@@ -1755,6 +1815,7 @@ impl DocEditor {
             // caret rests.
             self.uses_caret = None;
             self.typed_for_signatures(&inserted, cx);
+            self.completed(&inserted, window, cx);
         }
     }
 
