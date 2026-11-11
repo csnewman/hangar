@@ -248,3 +248,58 @@ pub fn join_lines(text: &str, sel: Range<usize>) -> Option<Change> {
         selection: l.end..l.end,
     })
 }
+
+/// How a file is indented: with tabs, or with so many spaces a level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Indent {
+    Tab,
+    Spaces(usize),
+}
+
+impl std::fmt::Display for Indent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Indent::Tab => write!(f, "Tab"),
+            Indent::Spaces(n) => write!(f, "{n} spaces"),
+        }
+    }
+}
+
+/// How a file is indented, read from its lines as the web editor reads it
+/// with no .editorconfig: tabs if more lines start with one than with
+/// spaces, else the step between one line's indent and the next deeper one
+/// most often seen (2 to 8). None for a file with no indented lines.
+pub fn detect_indent(text: &str) -> Option<Indent> {
+    let (mut tabs, mut spaced) = (0usize, 0usize);
+    let mut steps = std::collections::HashMap::<usize, usize>::new();
+    let mut prev = 0usize;
+    for line in text.lines().take(5000) {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.starts_with('\t') {
+            tabs += 1;
+            prev = 0;
+            continue;
+        }
+        let n = line.len() - line.trim_start_matches(' ').len();
+        if n > 0 {
+            spaced += 1;
+        }
+        if n > prev {
+            *steps.entry(n - prev).or_default() += 1;
+        }
+        prev = n;
+    }
+    if tabs == 0 && spaced == 0 {
+        return None;
+    }
+    if tabs > spaced {
+        return Some(Indent::Tab);
+    }
+    steps
+        .into_iter()
+        .filter(|(s, _)| (2..=8).contains(s))
+        .max_by_key(|(s, n)| (*n, std::cmp::Reverse(*s)))
+        .map(|(s, _)| Indent::Spaces(s))
+}

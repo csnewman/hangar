@@ -602,6 +602,10 @@ pub struct DocEditor {
     languages: Option<WeakEntity<crate::languages::Languages>>,
     /// The completions last offered, to know which was taken.
     offered: Option<crate::lspedit::Offered>,
+    /// The file's line separators and encoding as it was opened, and its
+    /// indentation, for the status bar.
+    props: Option<crate::props::Props>,
+    indent: Option<crate::lineops::Indent>,
     signatures: Option<lsp_types::SignatureHelp>,
     signatures_asked: u64,
     /// Where the caret was when they were last asked for.
@@ -701,6 +705,8 @@ impl DocEditor {
             sending: false,
             languages: None,
             offered: None,
+            props: None,
+            indent: None,
             signatures: None,
             signatures_asked: 0,
             sig_caret: None,
@@ -859,6 +865,30 @@ impl DocEditor {
     }
 
     /// The caret's line and column, from 1.
+    /// The file's line separators and encoding, once read, and its
+    /// indentation, for the status bar.
+    pub fn file_props(&self) -> (Option<&crate::props::Props>, Option<crate::lineops::Indent>) {
+        (self.props.as_ref(), self.indent)
+    }
+
+    /// Reads the file's line separators and encoding from disk.
+    fn read_props(&mut self, cx: &mut Context<Self>) {
+        let call = self.code.call("fs.textProps", json!({ "path": self.path }));
+        cx.spawn(async move |this, cx| {
+            let Ok(Ok(props)) = call
+                .await
+                .map(serde_json::from_value::<crate::props::Props>)
+            else {
+                return;
+            };
+            let _ = this.update(cx, |d, cx| {
+                d.props = Some(props);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
     pub fn position(&self, cx: &App) -> (u32, u32) {
         let p = self.editor.read(cx).cursor_position();
         (p.line + 1, p.character + 1)
@@ -1004,6 +1034,8 @@ impl DocEditor {
         self.shadow = self.editor.read(cx).text().clone();
         self.state = State::Open;
         self.drawn = false;
+        self.indent = crate::lineops::detect_indent(&self.shadow.to_string());
+        self.read_props(cx);
         self.show_diagnostics(cx);
         self.presences(&v, cx);
         cx.notify();

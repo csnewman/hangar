@@ -344,6 +344,8 @@ pub struct EnvTab {
     pending_commit: Option<String>,
     /// Edits a language server asked for, made once a window is to hand.
     pending_edits: Vec<lsp_types::WorkspaceEdit>,
+    /// What language servers had to tell, shown once a window is to hand.
+    pending_messages: Vec<(u8, String)>,
     /// A language server's usages to list in the Find window once it is
     /// made: what of, and each project's lines.
     pending_usages: Option<(String, crate::find::Lines)>,
@@ -534,6 +536,7 @@ impl EnvTab {
             pending_history: None,
             pending_commit: None,
             pending_edits: Vec::new(),
+            pending_messages: Vec::new(),
             pending_usages: None,
             last_search: None,
             problems: None,
@@ -2084,6 +2087,10 @@ impl EnvTab {
                     t.pending_edits.push(edit.clone());
                     cx.notify();
                 }
+                if let languages::Event::Message(kind, text) = e {
+                    t.pending_messages.push((*kind, text.clone()));
+                    cx.notify();
+                }
                 if let languages::Event::Diagnostics(abs) = e {
                     let d = l.read(cx).diagnostics_of(abs).to_vec();
                     for f in t.all_tabs() {
@@ -2271,6 +2278,18 @@ impl Focusable for EnvTab {
 
 impl Render for EnvTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for (kind, text) in std::mem::take(&mut self.pending_messages) {
+            window.defer(cx, move |window, cx| {
+                use gpui_component::WindowExt;
+                use gpui_component::notification::Notification;
+                let n = match kind {
+                    1 => Notification::error(text),
+                    2 => Notification::warning(text),
+                    _ => Notification::info(text),
+                };
+                window.push_notification(n, cx);
+            });
+        }
         for edit in std::mem::take(&mut self.pending_edits) {
             let tab = cx.entity().downgrade();
             window.defer(cx, move |window, cx| {
@@ -3926,7 +3945,27 @@ impl EnvTab {
             let (line, col) = f.position(cx);
             let path = f.path().to_string();
             let crumbs = path.trim_start_matches('/').replace('/', " › ");
-            (crumbs, format!("{line}:{col}"), docedit::language(&path))
+            // Its line separators, encoding and indentation, and its
+            // language server, or its language where it has none.
+            let (props, indent) = f.file_props();
+            let mut about: Vec<String> = vec![format!("{line}:{col}")];
+            if let Some(props) = props {
+                about.extend(props.separator.clone());
+                if let Some(enc) = &props.encoding {
+                    about.push(if props.bom {
+                        format!("{enc} BOM")
+                    } else {
+                        enc.clone()
+                    });
+                }
+            }
+            about.extend(indent.map(|i| i.to_string()));
+            let server = self
+                .languages
+                .as_ref()
+                .and_then(|l| l.read(cx).server_label(f.asked()));
+            about.push(server.unwrap_or_else(|| docedit::language(&path).to_string()));
+            (crumbs, about)
         });
         // Whether the file shown is on disk.
         let saved = self.active_file().and_then(|f| f.read(cx).saved());
@@ -3946,7 +3985,7 @@ impl EnvTab {
             .text_color(p.muted)
             .whitespace_nowrap()
             .child(match &file {
-                Some((crumbs, _, _)) => crumbs.clone(),
+                Some((crumbs, _)) => crumbs.clone(),
                 None => format!("{} › {}", config.name, env.name),
             })
             .child(div().flex_1())
@@ -3961,9 +4000,7 @@ impl EnvTab {
                         .child(format!("Not saved: {e}")),
                 ),
             })
-            .when_some(file, |d, (_, pos, lang)| {
-                d.child(pos).child("LF").child("UTF-8").child(lang)
-            })
+            .when_some(file, |d, (_, about)| d.children(about))
             .when_some(self.latency, |d, ms| {
                 let (t, icon) = crate::latency::rating(ms);
                 d.child(

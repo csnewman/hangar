@@ -112,6 +112,9 @@ pub enum Event {
     Servers,
     /// A server asks for an edit to be made, as a command it ran does.
     ApplyEdit(lsp_types::WorkspaceEdit),
+    /// A server has something to tell the user: how much it matters, as
+    /// window/showMessage's type has it, and what.
+    Message(u8, String),
 }
 
 impl EventEmitter<Event> for Languages {}
@@ -135,6 +138,8 @@ pub struct Languages {
     /// The characters each server starts signature help at, and those it
     /// moves help shown on at; none for a server without it.
     signatures: HashMap<Key, (Vec<String>, Vec<String>)>,
+    /// Each server's name for itself, from its answer to initialize.
+    names: HashMap<Key, String>,
     _sub: gpui::Subscription,
 }
 
@@ -176,6 +181,7 @@ impl Languages {
             next_id: 1,
             triggers: HashMap::new(),
             signatures: HashMap::new(),
+            names: HashMap::new(),
             _sub: sub,
         }
     }
@@ -386,7 +392,12 @@ impl Languages {
                     }
                 };
                 let caps = match result {
-                    Ok(v) => v["capabilities"].clone(),
+                    Ok(v) => {
+                        if let Some(name) = v["serverInfo"]["name"].as_str() {
+                            l.names.insert(key.clone(), name.to_string());
+                        }
+                        v["capabilities"].clone()
+                    }
                     Err(e) => {
                         l.servers.insert(key, Server::Unavailable(e));
                         cx.emit(Event::Servers);
@@ -513,6 +524,21 @@ impl Languages {
             .map_or(&[], |t| t.as_slice())
     }
 
+    /// What the status bar says of an open file's language server: its
+    /// name once it runs, that it is starting, or that there is none.
+    pub fn server_label(&self, abs: &str) -> Option<String> {
+        let key = self.opened.get(abs)?;
+        Some(match self.servers.get(key)? {
+            Server::Ready { .. } => self
+                .names
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| key.1.clone()),
+            Server::Starting { .. } => format!("{} starting…", key.1),
+            Server::Unavailable(_) => format!("No {} server", key.1),
+        })
+    }
+
     /// The characters an open file's server starts signature help at, and
     /// those it moves help shown on at.
     pub fn signature_triggers(&self, abs: &str) -> (&[String], &[String]) {
@@ -531,6 +557,16 @@ impl Languages {
             }
             _ => None,
         })
+    }
+
+    /// Passes on what a server has to tell the user, leaving out what it
+    /// only logs.
+    fn tell(&mut self, m: &Value, cx: &mut Context<Self>) {
+        let kind = m["params"]["type"].as_u64().unwrap_or(3) as u8;
+        let text = m["params"]["message"].as_str().unwrap_or_default();
+        if kind <= 3 && !text.is_empty() {
+            cx.emit(Event::Message(kind, text.to_string()));
+        }
     }
 
     fn heard(&mut self, root: &str, n: u32, m: &Value, cx: &mut Context<Self>) {
@@ -563,6 +599,10 @@ impl Languages {
                         let items = m["params"]["items"].as_array().map_or(0, Vec::len);
                         Value::Array(vec![Value::Null; items])
                     }
+                    "window/showMessageRequest" => {
+                        self.tell(m, cx);
+                        Value::Null
+                    }
                     "workspace/applyEdit" => {
                         match serde_json::from_value(m["params"]["edit"].clone()) {
                             Ok(edit) => {
@@ -578,6 +618,7 @@ impl Languages {
                     code.send_lsp(n, &json!({ "jsonrpc": "2.0", "id": id, "result": result }));
                 }
             }
+            (Some("window/showMessage"), None) => self.tell(m, cx),
             (Some("textDocument/publishDiagnostics"), None) => {
                 let Some(abs) = m["params"]["uri"].as_str().and_then(uri_path) else {
                     return;

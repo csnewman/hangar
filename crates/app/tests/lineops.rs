@@ -95,3 +95,17 @@ fn join_brings_the_next_line_up_with_one_space() {
     let (text, sel) = marked("last|");
     assert!(join_lines(&text, sel).is_none());
 }
+
+/// A file's indentation as the status bar says it: tabs where most indented
+/// lines start with one, else the step most often seen going one deeper.
+#[test]
+fn indentation_is_read_from_the_lines() {
+    use hangar_app::lineops::{Indent, detect_indent};
+    let four = "fn a() {\n    if b {\n        c();\n    }\n}\n";
+    assert_eq!(detect_indent(four), Some(Indent::Spaces(4)));
+    let two = "a:\n  b:\n    c: 1\n  d: 2\n";
+    assert_eq!(detect_indent(two), Some(Indent::Spaces(2)));
+    assert_eq!(detect_indent("func a() {\n\tb()\n}\n"), Some(Indent::Tab));
+    assert_eq!(detect_indent("one\ntwo\n"), None);
+    assert_eq!(Indent::Spaces(4).to_string(), "4 spaces");
+}
