@@ -51,7 +51,13 @@ fn service(asked: mpsc::Sender<(String, Value)>) -> String {
                             { "name": "lib.rs", "dir": false, "size": 3 },
                         ]),
                         "fs.list" => json!([]),
-                        "git.status" => json!({ "changes": [] }),
+                        "git.status" => {
+                            json!({ "repo": true, "changes": [], "repos": [{ "path": "" }] })
+                        }
+                        "git.log" => json!({ "commits": [
+                            { "hash": "a1b2c3d4e5f6", "author": "Ada", "subject": "Fix the rounding" },
+                            { "hash": "0f0f0f0f0f0f", "author": "Ada", "subject": "First" },
+                        ]}),
                         "fs.create"
                             if params["path"]
                                 .as_str()
@@ -139,8 +145,8 @@ fn new_file_from_a_files_menu_is_made_beside_it(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(row.center(), MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(row.center(), MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
-    // New File… is the menu's first item.
-    cx.simulate_keystrokes("down enter");
+    // New File… follows Open, a file's first item.
+    cx.simulate_keystrokes("down down enter");
     cx.run_until_parked();
     cx.simulate_input("notes.md");
     cx.simulate_keystrokes("enter");
@@ -211,7 +217,7 @@ fn a_name_taken_is_said_and_the_file_made_is_shown(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(row.center(), MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(row.center(), MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_keystrokes("down enter");
+    cx.simulate_keystrokes("down down enter");
     cx.run_until_parked();
     cx.simulate_input("main.rs");
     cx.simulate_keystrokes("enter");
@@ -798,4 +804,63 @@ fn a_folder_typed_is_from_the_files_own() {
     assert_eq!(folder_typed(" /tmp/x/ ", "/home/dev/app"), "/tmp/x");
     assert_eq!(folder_typed("/", "/home/dev/app"), "/");
     assert_eq!(folder_typed("", "/home/dev/app"), "/home/dev/app");
+}
+
+/// Git → Compare with Revision…: the commits that changed the file, in a
+/// list; Enter compares it with the first.
+#[gpui::test]
+fn a_file_is_compared_with_a_revision_chosen(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    let (asked_tx, _asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (diff_tx, diffs) = mpsc::channel();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        cx.subscribe(&view, move |_, _, e: &hangar_app::diff::ShowDiff, _| {
+            diff_tx.send(e.0.clone()).unwrap();
+        })
+        .detach();
+        Root::new(view, window, cx)
+    });
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-main.rs").is_some()
+    });
+    // Its status read, so the menu knows it is in a repository.
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(300) {
+        cx.run_until_parked();
+        thread::sleep(Duration::from_millis(10));
+    }
+    let row = cx.debug_bounds("tree-row-main.rs").unwrap();
+    cx.simulate_mouse_down(row.center(), MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(row.center(), MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    // Git is the sixteenth item that can be chosen; its third is Compare
+    // with Revision….
+    let to_git = vec!["down"; 16].join(" ");
+    cx.simulate_keystrokes(&format!("{to_git} right down down enter"));
+    until(cx, "the list of commits", |cx| {
+        cx.debug_bounds("pick-row-1").is_some()
+    });
+    cx.simulate_keystrokes("enter");
+    let start = Instant::now();
+    let spec = loop {
+        cx.run_until_parked();
+        if let Ok(s) = diffs.try_recv() {
+            break s;
+        }
+        assert!(start.elapsed() < Duration::from_secs(5), "a diff asked for");
+    };
+    assert_eq!(
+        (
+            spec.root.as_str(),
+            spec.path.as_str(),
+            spec.against.as_str()
+        ),
+        ("/home/dev/app", "main.rs", "a1b2c3d4e5f6")
+    );
 }

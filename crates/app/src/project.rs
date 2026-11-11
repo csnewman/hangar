@@ -16,6 +16,8 @@ use gpui_component::{h_flex, v_flex};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::diff::{Other, ShowDiff, Spec};
+
 use crate::assets;
 use crate::code::Code;
 use crate::find::Scope as FindScope;
@@ -41,6 +43,8 @@ pub struct Entry {
     pub ignored: bool,
     #[serde(default)]
     pub link: bool,
+    #[serde(default)]
+    pub exec: bool,
 }
 
 /// The folders listed so far, and those open.
@@ -58,6 +62,9 @@ struct Project {
     tree: Tree,
     /// Each changed file's mark, by its path from the root: M, A, D or !.
     git: HashMap<String, char>,
+    /// The git repositories in it, by their paths from its root ("" for
+    /// the root's own).
+    repos: Vec<String>,
     open: bool,
 }
 
@@ -70,6 +77,27 @@ pub struct OpenFile {
 }
 
 impl gpui::EventEmitter<OpenFile> for ProjectView {}
+impl gpui::EventEmitter<crate::diff::ShowDiff> for ProjectView {}
+
+/// Asks for a file to be compared with the file shown in the editor: its
+/// folder's root (a project's, or /) and its absolute path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompareWithEditor {
+    pub root: String,
+    pub abs: String,
+}
+
+impl gpui::EventEmitter<CompareWithEditor> for ProjectView {}
+
+/// Asks for a file's history in the Git window: its project's root and its
+/// path from there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShowHistory {
+    pub root: String,
+    pub path: String,
+}
+
+impl gpui::EventEmitter<ShowHistory> for ProjectView {}
 
 /// Asks for Find in Files on a folder, or Replace in Files.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -311,6 +339,7 @@ impl ProjectView {
                 root,
                 tree: Tree::default(),
                 git: HashMap::new(),
+                repos: vec![],
                 open: true,
             });
             let i = self.projects.len() - 1;
@@ -373,6 +402,12 @@ impl ProjectView {
             let _ = this.update(cx, |v, cx| {
                 if let Some(p) = v.projects.iter_mut().find(|p| p.root == root) {
                     p.git = marks(&status);
+                    p.repos = status["repos"]
+                        .as_array()
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|r| r["path"].as_str().map(str::to_string))
+                        .collect();
                     cx.notify();
                 }
             });
@@ -556,6 +591,43 @@ impl ProjectView {
         crate::transfer::ask(op, &t, window, cx, move |abs, _, cx| {
             let _ = view.update(cx, |v, cx| v.reveal(&abs, cx));
         });
+    }
+
+    /// What the menu says of a file: its git mark, whether it may be run,
+    /// and whether it is in one of its project's repositories.
+    fn about(&self, t: &Target) -> (Option<char>, bool, bool) {
+        let path = t.relative();
+        let (tree, mark, repo) = match &t.root {
+            Some(root) => match self.projects.iter().find(|p| &p.root == root) {
+                Some(p) => (
+                    &p.tree,
+                    p.git.get(&path).copied(),
+                    p.repos
+                        .iter()
+                        .any(|r| r.is_empty() || &path == r || path.starts_with(&format!("{r}/"))),
+                ),
+                None => return (None, false, false),
+            },
+            None => (&self.machine, None, false),
+        };
+        let (dir, name) = match t.abs.rsplit_once('/') {
+            Some((d, n)) => (d.to_string(), n),
+            None => (String::new(), t.abs.as_str()),
+        };
+        let key = match &t.root {
+            Some(root) => dir
+                .strip_prefix(root.trim_end_matches('/'))
+                .map(|r| r.trim_start_matches('/').to_string())
+                .unwrap_or_default(),
+            None if dir.is_empty() => "/".into(),
+            None => dir,
+        };
+        let exec = tree
+            .children
+            .get(&key)
+            .and_then(|es| es.iter().find(|e| e.name == name))
+            .is_some_and(|e| e.exec);
+        (mark, exec, repo)
     }
 
     fn selected_target(&self, cx: &App) -> Option<Target> {
@@ -897,10 +969,10 @@ impl Render for ProjectView {
                             .context_menu({
                                 let t = self.target(Some(&proj.root), "", true, cx);
                                 let view = cx.entity().downgrade();
-                                move |menu, _, cx| match &t {
+                                move |menu, window, cx| match &t {
                                     Some(t) => {
                                         crate::ui::modal(cx);
-                                        tree_menu(menu, t, &view, cx)
+                                        tree_menu(menu, t, &view, window, cx)
                                     }
                                     None => menu,
                                 }
@@ -1202,15 +1274,18 @@ impl ProjectView {
                     cx.notify();
                 }),
             )
-            .context_menu(move |menu, _, cx| match &target {
+            .context_menu(move |menu, window, cx| match &target {
                 Some(t) => {
                     crate::ui::modal(cx);
-                    tree_menu(menu, t, &view, cx)
+                    tree_menu(menu, t, &view, window, cx)
                 }
                 None => menu,
             })
     }
 }
+
+/// What a menu item has the tree say to the tab.
+type Says = dyn Fn(&mut Context<ProjectView>);
 
 /// Selects what was made at a path in the tree.
 type Selects = Box<dyn Fn(String, &mut Window, &mut gpui::App)>;
@@ -1221,7 +1296,8 @@ fn tree_menu(
     menu: PopupMenu,
     t: &Target,
     view: &gpui::WeakEntity<ProjectView>,
-    cx: &gpui::App,
+    window: &mut Window,
+    cx: &mut Context<PopupMenu>,
 ) -> PopupMenu {
     let item = |label: &str, t: &Target, f: fn(&Target, &mut Window, &mut gpui::App)| {
         let t = t.clone();
@@ -1328,6 +1404,42 @@ fn tree_menu(
     };
     let is_root = t.is_root();
     let in_project = t.root.is_some();
+    let (mark, exec, repo) = view
+        .upgrade()
+        .map(|v| v.read(cx).about(t))
+        .unwrap_or_default();
+    // The folder the file's connection is in, and its path from there.
+    let root = t.root.clone().unwrap_or_else(|| "/".into());
+    let path = t.relative();
+    let emit = |label: &str, e: Box<Says>| {
+        let view = view.clone();
+        let e: Rc<Says> = e.into();
+        PopupMenuItem::new(label.to_string()).on_click(move |_, _, cx| {
+            let e = e.clone();
+            let _ = view.update(cx, move |_, cx| e(cx));
+        })
+    };
+    let mut menu = menu;
+    if !t.dir {
+        let (r, p) = (root.clone(), path.clone());
+        menu = menu.item(emit(
+            "Open",
+            Box::new(move |cx| {
+                cx.emit(OpenFile {
+                    root: r.clone(),
+                    path: p.clone(),
+                })
+            }),
+        ));
+        if mark.is_some() {
+            let (r, p) = (root.clone(), path.clone());
+            menu = menu.item(emit(
+                "Show Changes",
+                Box::new(move |cx| cx.emit(ShowDiff(Spec::working(&r, &p)))),
+            ));
+        }
+        menu = menu.separator();
+    }
     let mut menu = menu
         .item(new_file)
         .item(made("New Folder…", treeops::new_folder))
@@ -1347,11 +1459,78 @@ fn tree_menu(
         .separator()
         .item(find("Find in Folder…", false))
         .item(find("Replace in Folder…", true));
-    if in_project {
+    if !t.dir {
+        let (r, abs) = (root.clone(), t.abs.clone());
+        let (cr, cp) = (root.clone(), path.clone());
+        let view_c = view.clone();
+        menu = menu
+            .separator()
+            .submenu("Compare", window, cx, move |menu, _, _| {
+                let (r, abs) = (r.clone(), abs.clone());
+                let (cr, cp, view) = (cr.clone(), cp.clone(), view_c.clone());
+                let editor = view.clone();
+                menu.item(
+                    PopupMenuItem::new("Compare with Editor").on_click(move |_, _, cx| {
+                        let e = CompareWithEditor {
+                            root: r.clone(),
+                            abs: abs.clone(),
+                        };
+                        let _ = editor.update(cx, |_, cx| cx.emit(e));
+                    }),
+                )
+                .item({
+                    let view = view.clone();
+                    PopupMenuItem::new("Compare with Clipboard").on_click(move |_, window, cx| {
+                        let Some(text) = cx.read_from_clipboard().and_then(|c| c.text()) else {
+                            gpui_component::WindowExt::push_notification(
+                                window,
+                                gpui_component::notification::Notification::info(
+                                    "The clipboard holds no text.",
+                                ),
+                                cx,
+                            );
+                            return;
+                        };
+                        let spec = Spec::compare(&cr, &cp, Other::Text(text));
+                        let _ = view.update(cx, |_, cx| cx.emit(ShowDiff(spec)));
+                    })
+                })
+            });
+    }
+    if in_project && repo {
+        let t = t.clone();
+        let view = view.clone();
+        let (root, path) = (root.clone(), path.clone());
+        menu = menu
+            .separator()
+            .submenu("Git", window, cx, move |menu, _, _| {
+                git_menu(menu, &t, &view, &root, &path, mark)
+            });
+    } else if in_project {
         menu = menu
             .separator()
             .item(item("Git: Stage", t, treeops::stage))
             .item(item("Git: Add to .gitignore", t, treeops::ignore).disabled(is_root));
+    }
+    if !t.dir {
+        let code = t.code.clone();
+        let abs = t.abs.clone();
+        menu = menu.item(
+            PopupMenuItem::new(if exec {
+                "Remove Executable Permission"
+            } else {
+                "Make Executable"
+            })
+            .on_click(move |_, window, cx| {
+                treeops::run(
+                    &code,
+                    "fs.setMode",
+                    json!({ "path": abs, "exec": !exec }),
+                    window,
+                    cx,
+                )
+            }),
+        );
     }
     // The workspace's projects: a folder added, a project removed or moved.
     let ws = view.upgrade().map(|v| v.read(cx).workspace.clone());
@@ -1381,6 +1560,144 @@ fn tree_menu(
         ));
     }
     menu
+}
+
+/// IntelliJ's Git submenu for a file or folder: its history, comparing it
+/// with a branch or a commit, ignoring and staging it, and rolling back
+/// its changes.
+fn git_menu(
+    menu: PopupMenu,
+    t: &Target,
+    view: &gpui::WeakEntity<ProjectView>,
+    root: &str,
+    path: &str,
+    mark: Option<char>,
+) -> PopupMenu {
+    let (r, p) = (root.to_string(), path.to_string());
+    let history = {
+        let view = view.clone();
+        PopupMenuItem::new("Show History").on_click(move |_, _, cx| {
+            let e = ShowHistory {
+                root: r.clone(),
+                path: p.clone(),
+            };
+            let _ = view.update(cx, |_, cx| cx.emit(e));
+        })
+    };
+    let mut menu = menu.item(history);
+    if !t.dir {
+        let compare = |label: &str, branches: bool| {
+            let (t, view) = (t.clone(), view.clone());
+            let (root, path) = (root.to_string(), path.to_string());
+            PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
+                let (root, path, view) = (root.clone(), path.clone(), view.clone());
+                let chosen = move |c: crate::pick::Choice, _: &mut Window, cx: &mut App| {
+                    let spec = Spec::against(&root, &path, &c.value);
+                    let _ = view.update(cx, |_, cx| cx.emit(ShowDiff(spec)));
+                };
+                if branches {
+                    let call = t.code.call("git.branches", json!({ "repo": t.folder() }));
+                    crate::pick::pick(
+                        "Compare with Branch",
+                        "No other branches.",
+                        window,
+                        cx,
+                        async move { call.await.map(|b| branch_choices(&b)) },
+                        chosen,
+                    );
+                } else {
+                    let call = t.code.call("git.log", json!({ "path": t.abs, "max": 100 }));
+                    crate::pick::pick(
+                        "Compare with Revision",
+                        "No commit changed it.",
+                        window,
+                        cx,
+                        async move { call.await.map(|l| revision_choices(&l)) },
+                        chosen,
+                    );
+                }
+            })
+        };
+        menu = menu
+            .item(compare("Compare with Branch…", true))
+            .item(compare("Compare with Revision…", false));
+    }
+    let untracked = mark == Some('A');
+    menu = menu.separator().item({
+        let t = t.clone();
+        PopupMenuItem::new("Add to .gitignore")
+            .disabled(t.is_root())
+            .on_click(move |_, window, cx| treeops::ignore(&t, window, cx))
+    });
+    if mark.is_some() {
+        let stage = t.clone();
+        let roll = t.clone();
+        menu = menu
+            .separator()
+            .item(
+                PopupMenuItem::new("Stage")
+                    .on_click(move |_, window, cx| treeops::stage(&stage, window, cx)),
+            )
+            .item(
+                PopupMenuItem::new(if untracked {
+                    "Delete Unversioned File…"
+                } else {
+                    "Rollback…"
+                })
+                .on_click(move |_, window, cx| treeops::rollback(&roll, window, cx)),
+            );
+    }
+    menu
+}
+
+/// The branches a file may be compared with: every one but the current.
+pub fn branch_choices(b: &Value) -> Vec<crate::pick::Choice> {
+    let current = b["current"].as_str();
+    let local = b["local"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|l| l["name"].as_str());
+    let remote = b["remote"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str);
+    local
+        .chain(remote)
+        .filter(|n| Some(*n) != current)
+        .map(|n| crate::pick::Choice {
+            label: n.to_string(),
+            detail: None,
+            value: n.to_string(),
+        })
+        .collect()
+}
+
+/// The commits that changed a file, newest first.
+pub fn revision_choices(l: &Value) -> Vec<crate::pick::Choice> {
+    l["commits"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|c| {
+            let hash = c["hash"].as_str()?;
+            let short: String = hash.chars().take(8).collect();
+            let subject = c["subject"].as_str().unwrap_or_default();
+            Some(crate::pick::Choice {
+                label: if subject.is_empty() {
+                    short.clone()
+                } else {
+                    subject.to_string()
+                },
+                detail: Some(format!(
+                    "{short} · {}",
+                    c["author"].as_str().unwrap_or_default()
+                )),
+                value: hash.to_string(),
+            })
+        })
+        .collect()
 }
 
 /// A box that scrolls its rows, which keep their own size however many

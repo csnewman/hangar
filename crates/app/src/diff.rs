@@ -181,6 +181,18 @@ pub struct Spec {
     pub against: String,
     pub from: Option<String>,
     pub to: Option<String>,
+    /// What the file is compared with when not its history.
+    pub other: Option<Other>,
+}
+
+/// What a file is compared with, outside git: another file, or text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Other {
+    /// A file, by the folder its connection is in (a project's root, or /)
+    /// and its absolute path.
+    File { root: String, abs: String },
+    /// Text, as the clipboard held it.
+    Text(String),
 }
 
 impl Spec {
@@ -192,6 +204,23 @@ impl Spec {
             against: "HEAD".into(),
             from: None,
             to: None,
+            other: None,
+        }
+    }
+
+    /// The working tree's file against a branch or a commit.
+    pub fn against(root: &str, path: &str, rev: &str) -> Spec {
+        Spec {
+            against: rev.into(),
+            ..Spec::working(root, path)
+        }
+    }
+
+    /// A file compared with another, or with text: the other on the left.
+    pub fn compare(root: &str, path: &str, other: Other) -> Spec {
+        Spec {
+            other: Some(other),
+            ..Spec::working(root, path)
         }
     }
 
@@ -226,6 +255,10 @@ pub struct DiffView {
 impl DiffView {
     pub fn new(workspace: Entity<Workspace>, spec: Spec, cx: &mut Context<Self>) -> Self {
         let sub = cx.subscribe(&workspace, |v, _, e: &Event, cx| {
+            // A project connected after the diff was asked for.
+            if matches!(e, Event::Projects) && matches!(v.loaded, Loaded::Failed(_)) {
+                return v.load(cx);
+            }
             let Event::Heard {
                 root,
                 event,
@@ -278,7 +311,63 @@ impl DiffView {
     /// The tab's name.
     pub fn title(&self) -> String {
         let name = self.spec.path.rsplit('/').next().unwrap_or(&self.spec.path);
-        format!("Diff: {name}")
+        match &self.spec.other {
+            None => format!("Diff: {name}"),
+            Some(Other::File { abs, .. }) => {
+                format!("{} vs {name}", abs.rsplit('/').next().unwrap_or(abs))
+            }
+            Some(Other::Text(_)) => format!("Clipboard vs {name}"),
+        }
+    }
+
+    /// A connection that reaches a folder: its project's, or for /, the
+    /// editor folder's, which reaches the whole machine.
+    fn code_for(&self, root: &str, cx: &gpui::App) -> Option<crate::code::Code> {
+        let ws = self.workspace.read(cx);
+        ws.code(root)
+            .or_else(|| (root == "/").then(|| ws.primary()).flatten())
+    }
+
+    /// Compares the file with another or with text: both read as they are.
+    fn load_compared(&mut self, other: Other, cx: &mut Context<Self>) {
+        let Some(code) = self.code_for(&self.spec.root, cx) else {
+            self.loaded = Loaded::Failed("The project is not connected.".into());
+            return;
+        };
+        let right = code.call("fs.read", json!({ "path": self.spec.abs() }));
+        let left = match &other {
+            Other::Text(_) => None,
+            Other::File { root, abs } => match self.code_for(root, cx) {
+                Some(c) => Some(c.call("fs.read", json!({ "path": abs }))),
+                None => {
+                    self.loaded = Loaded::Failed("Its project is not connected.".into());
+                    return;
+                }
+            },
+        };
+        cx.spawn(async move |this, cx| {
+            let right = right.await;
+            let left = match (left, other) {
+                (Some(call), _) => call.await,
+                (None, Other::Text(t)) => Ok(json!({ "text": t })),
+                (None, Other::File { .. }) => Err("nothing to compare with".into()),
+            };
+            let _ = this.update(cx, |v, cx| {
+                v.loaded = match (left, right) {
+                    (Err(e), _) | (_, Err(e)) => Loaded::Failed(e),
+                    (Ok(l), Ok(r)) => match (l["text"].as_str(), r["text"].as_str()) {
+                        (Some(old), Some(new)) => Loaded::Texts {
+                            old: old.to_string(),
+                            new: new.to_string(),
+                        },
+                        _ => Loaded::Binary,
+                    },
+                };
+                v.relayout();
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     pub fn rows(&self) -> &[Row] {
@@ -286,6 +375,9 @@ impl DiffView {
     }
 
     fn load(&mut self, cx: &mut Context<Self>) {
+        if let Some(other) = self.spec.other.clone() {
+            return self.load_compared(other, cx);
+        }
         let Some(code) = self.workspace.read(cx).code(&self.spec.root) else {
             self.loaded = Loaded::Failed("The project is not connected.".into());
             return;
@@ -406,16 +498,22 @@ impl Focusable for DiffView {
 impl Render for DiffView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
-        let (before, after) = match (&self.spec.to, self.spec.against.as_str()) {
-            (Some(to), against) => (short(against), short(to)),
-            (None, "HEAD") => ("HEAD".to_string(), "Working tree".to_string()),
-            (None, against) => (short(against), "Working tree".to_string()),
+        let (before, after) = match (&self.spec.other, &self.spec.to, self.spec.against.as_str()) {
+            (Some(Other::Text(_)), ..) => ("Clipboard".to_string(), String::new()),
+            (Some(Other::File { .. }), ..) => (String::new(), String::new()),
+            (None, Some(to), against) => (short(against), short(to)),
+            (None, None, "HEAD") => ("HEAD".to_string(), "Working tree".to_string()),
+            (None, None, against) => (short(against), "Working tree".to_string()),
         };
-        let left_name = self
-            .spec
-            .from
-            .clone()
-            .unwrap_or_else(|| self.spec.path.clone());
+        let left_name = match &self.spec.other {
+            Some(Other::File { abs, .. }) => abs.clone(),
+            Some(Other::Text(_)) => String::new(),
+            None => self
+                .spec
+                .from
+                .clone()
+                .unwrap_or_else(|| self.spec.path.clone()),
+        };
         let head = h_flex()
             .flex_none()
             .h(px(24.))

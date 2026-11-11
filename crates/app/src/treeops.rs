@@ -427,6 +427,20 @@ pub fn stage(t: &Target, window: &mut Window, cx: &mut App) {
     run(&t.code, "git.stage", json!({ "path": t.abs }), window, cx);
 }
 
+/// Discards a file's changes, or deletes it when git does not know it,
+/// once asked.
+pub fn rollback(t: &Target, window: &mut Window, cx: &mut App) {
+    let (code, path, name) = (t.code.clone(), t.abs.clone(), t.name().to_string());
+    confirm(
+        &format!("Roll back {name}?"),
+        "Its changes since the last commit are discarded; a file git does not know is deleted.",
+        "Roll Back",
+        window,
+        cx,
+        move |window, cx| run(&code, "git.rollback", json!({ "path": path }), window, cx),
+    );
+}
+
 /// Adds it to its repository's .gitignore.
 pub fn ignore(t: &Target, window: &mut Window, cx: &mut App) {
     run(

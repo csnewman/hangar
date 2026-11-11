@@ -120,6 +120,11 @@ mod window {
                                 "repo": true, "changes": [],
                                 "repos": [{"path": "", "name": "app", "kind": "folder", "branch": "main", "changes": []}],
                             }),
+                            "git.log" if params["path"] == "/home/dev/app/src/ledger.rs" => {
+                                json!({ "more": false, "commits": [
+                                    {"hash": "a1b2c3d4e5f6", "parents": ["0f0f0f"], "author": "Ada", "time": 1.7e9, "subject": "Fix the ledger's rounding"},
+                                ]})
+                            }
                             "git.log" => json!({ "more": false, "commits": [
                                 {"hash": "a1b2c3d4e5f6", "parents": ["0f0f0f"], "author": "Ada", "time": 1.7e9, "subject": "Fix the ledger's rounding"},
                                 {"hash": "0f0f0f", "parents": [], "author": "Ada", "time": 1.6e9, "subject": "First"},
@@ -193,5 +198,41 @@ mod window {
             menu(cx, "down down enter").as_deref(),
             Some("Fix the ledger's rounding")
         );
+    }
+
+    #[gpui::test]
+    fn a_files_history_is_shown_until_cleared(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        cx.update(gpui_component::init);
+        let url = service();
+        let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+        let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+        let mut view = None;
+        let (_, cx) = cx.add_window_view(|window, cx| {
+            let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+            let v = cx.new(|cx| GitView::new(ws, cx));
+            view = Some(v.clone());
+            Root::new(v, window, cx)
+        });
+        let view = view.unwrap();
+        until(cx, "the history", |cx| {
+            cx.debug_bounds("commit-1").is_some()
+        });
+        view.update(cx, |v, cx| {
+            v.show_history("/home/dev/app", "src/ledger.rs", cx)
+        });
+        until(cx, "the file's own", |cx| {
+            view.read_with(cx, |v, _| v.commits().len()) == 1
+        });
+        assert_eq!(
+            view.read_with(cx, |v, _| v.history().map(str::to_string)),
+            Some("/home/dev/app/src/ledger.rs".into())
+        );
+        let chip = cx.debug_bounds("git-history").unwrap().center();
+        cx.simulate_click(chip, Modifiers::none());
+        until(cx, "every commit again", |cx| {
+            view.read_with(cx, |v, _| v.commits().len()) == 2
+        });
+        assert!(view.read_with(cx, |v, _| v.history().is_none()));
     }
 }

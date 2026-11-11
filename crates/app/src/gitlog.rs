@@ -248,6 +248,9 @@ pub struct GitView {
     workspace: Entity<Workspace>,
     status: HashMap<String, Vec<Repo>>,
     chosen: Option<Chosen>,
+    /// The file or folder whose history alone is shown, by its absolute
+    /// path.
+    history: Option<String>,
     /// The commits of every branch, or of HEAD's alone.
     current_only: bool,
     commits: Vec<Commit>,
@@ -279,6 +282,7 @@ impl GitView {
             workspace,
             status: HashMap::new(),
             chosen: None,
+            history: None,
             current_only: false,
             commits: vec![],
             graph: vec![],
@@ -334,7 +338,10 @@ impl GitView {
                     .map(|(root, r)| Chosen { root, repo: r.path })
                     .collect();
                 let listed = v.chosen.as_ref().is_some_and(|c| repos.contains(c));
-                if !listed && let Some(first) = repos.into_iter().next() {
+                if !listed
+                    && v.history.is_none()
+                    && let Some(first) = repos.into_iter().next()
+                {
                     v.choose(first, cx);
                 }
                 cx.notify();
@@ -360,14 +367,53 @@ impl GitView {
     }
 
     fn choose(&mut self, c: Chosen, cx: &mut Context<Self>) {
-        if self.chosen.as_ref() == Some(&c) {
+        if self.chosen.as_ref() == Some(&c) && self.history.is_none() {
             return;
         }
+        self.history = None;
         self.chosen = Some(c);
         self.commits.clear();
         self.selected = None;
         self.info = None;
         self.load(false, cx);
+    }
+
+    /// Shows the history of one file or folder of a project's: its path
+    /// from the project's root.
+    pub fn show_history(&mut self, root: &str, path: &str, cx: &mut Context<Self>) {
+        // The repository holding it: the innermost the project has.
+        let repo = self
+            .status
+            .get(root)
+            .into_iter()
+            .flatten()
+            .map(|r| r.path.clone())
+            .filter(|r| r.is_empty() || path == r || path.starts_with(&format!("{r}/")))
+            .max_by_key(String::len)
+            .unwrap_or_default();
+        self.history = Some(format!("{}/{path}", root.trim_end_matches('/')));
+        self.chosen = Some(Chosen {
+            root: root.to_string(),
+            repo,
+        });
+        self.commits.clear();
+        self.selected = None;
+        self.info = None;
+        self.load(false, cx);
+        cx.notify();
+    }
+
+    /// The path whose history alone is shown.
+    pub fn history(&self) -> Option<&str> {
+        self.history.as_deref()
+    }
+
+    fn clear_history(&mut self, cx: &mut Context<Self>) {
+        if self.history.take().is_some() {
+            self.commits.clear();
+            self.load(false, cx);
+            cx.notify();
+        }
     }
 
     fn set_current_only(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -399,6 +445,10 @@ impl GitView {
         if self.current_only {
             params["ref"] = Value::String("HEAD".into());
         }
+        if let Some(h) = &self.history {
+            params["path"] = Value::String(h.clone());
+        }
+        let history = self.history.clone();
         let call = code.call("git.log", params);
         let current_only = self.current_only;
         self.loading = true;
@@ -408,7 +458,10 @@ impl GitView {
                 .and_then(|v| serde_json::from_value::<Log>(v).map_err(|e| e.to_string()));
             let _ = this.update(cx, |v, cx| {
                 v.loading = false;
-                if v.chosen.as_ref() != Some(&c) || v.current_only != current_only {
+                if v.chosen.as_ref() != Some(&c)
+                    || v.current_only != current_only
+                    || v.history != history
+                {
                     return;
                 }
                 match result {
@@ -485,6 +538,7 @@ impl GitView {
             against,
             from: f.from.clone(),
             to: Some(info.hash.clone()),
+            other: None,
         }));
     }
 
@@ -832,6 +886,25 @@ impl Render for GitView {
                 chip("current-branch", format!("⑂ {branch}"), current, &p)
                     .on_click(cx.listener(|v, _, _, cx| v.set_current_only(true, cx))),
             );
+        if let Some(h) = &self.history {
+            let name = h.rsplit('/').next().unwrap_or(h).to_string();
+            bar = bar
+                .child(div().w(px(1.)).h(px(14.)).mx(px(4.)).bg(p.border))
+                .child(
+                    chip("git-history", format!("History of {name}  ×"), true, &p)
+                        .debug_selector(|| "git-history".into())
+                        .tooltip({
+                            let h = h.clone();
+                            move |window, cx| {
+                                gpui_component::tooltip::Tooltip::new(format!(
+                                    "{h}: every commit that changed it. Click to show them all."
+                                ))
+                                .build(window, cx)
+                            }
+                        })
+                        .on_click(cx.listener(|v, _, _, cx| v.clear_history(cx))),
+                );
+        }
 
         let log: gpui::AnyElement = match (&state, &self.error) {
             (State::Connecting, _) => note("Connecting…", &p),

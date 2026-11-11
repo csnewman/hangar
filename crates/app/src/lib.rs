@@ -28,6 +28,7 @@ pub mod menus;
 pub mod model;
 pub mod notices;
 pub mod palette;
+pub mod pick;
 pub mod place;
 pub mod places;
 pub mod ports;

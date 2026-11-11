@@ -415,6 +415,7 @@ impl BranchView {
             against: c.merge_base.clone(),
             from: f.from.clone(),
             to: None,
+            other: None,
         };
         let deleted = f.status == "D";
         let open = OpenFile {

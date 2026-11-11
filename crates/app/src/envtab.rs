@@ -327,6 +327,8 @@ pub struct EnvTab {
     find_sub: Option<gpui::Subscription>,
     /// A search to list in the Find window once it is made.
     pending_find: Option<Search>,
+    /// A file's history asked for before the Git window was made.
+    pending_history: Option<crate::project::ShowHistory>,
     /// A language server's usages to list in the Find window once it is
     /// made: what of, and each project's lines.
     pending_usages: Option<(String, crate::find::Lines)>,
@@ -514,6 +516,7 @@ impl EnvTab {
             find_popup: None,
             find_sub: None,
             pending_find: None,
+            pending_history: None,
             pending_usages: None,
             last_search: None,
             problems: None,
@@ -1813,6 +1816,77 @@ impl EnvTab {
         }
     }
 
+    /// What a Project or Filesystem window asks of the editors and the Git
+    /// window: a diff, a comparison with the file shown, a file's history.
+    fn follow_tree(
+        &mut self,
+        view: &Entity<ProjectView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.subs.push(
+            cx.subscribe_in(view, window, |t, _, e: &ShowDiff, window, cx| {
+                t.open_diff(e.0.clone(), window, cx)
+            }),
+        );
+        self.subs.push(cx.subscribe_in(
+            view,
+            window,
+            |t, _, e: &crate::project::CompareWithEditor, window, cx| {
+                t.compare_with_editor(e, window, cx)
+            },
+        ));
+        self.subs.push(cx.subscribe_in(
+            view,
+            window,
+            |t, _, e: &crate::project::ShowHistory, _, cx| t.show_history(e.clone(), cx),
+        ));
+    }
+
+    /// Compares a file with the one shown in the editor: the file on the
+    /// left, the editor's on the right.
+    fn compare_with_editor(
+        &mut self,
+        e: &crate::project::CompareWithEditor,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(shown) = self.active_file().map(|f| f.read(cx).path().to_string()) else {
+            gpui_component::WindowExt::push_notification(
+                window,
+                gpui_component::notification::Notification::info("No file is open in the editor."),
+                cx,
+            );
+            return;
+        };
+        let root = self
+            .workspace
+            .as_ref()
+            .and_then(|ws| ws.read(cx).project_of(&shown).map(|f| f.root.clone()))
+            .unwrap_or_else(|| "/".into());
+        let path = shown
+            .strip_prefix(&format!("{}/", root.trim_end_matches('/')))
+            .unwrap_or(&shown)
+            .to_string();
+        let other = crate::diff::Other::File {
+            root: e.root.clone(),
+            abs: e.abs.clone(),
+        };
+        self.open_diff(Spec::compare(&root, &path, other), window, cx);
+    }
+
+    /// Shows a file's history in the Git window, opening it.
+    fn show_history(&mut self, h: crate::project::ShowHistory, cx: &mut Context<Self>) {
+        if !self.is_open(Tool::Git) {
+            self.toggle(Tool::Git, cx);
+        }
+        match self.git.clone() {
+            Some(view) => view.update(cx, |v, cx| v.show_history(&h.root, &h.path, cx)),
+            None => self.pending_history = Some(h),
+        }
+        cx.notify();
+    }
+
     /// The Git window's view, once it has been shown.
     pub fn git_view(&self) -> Option<Entity<GitView>> {
         self.git.clone()
@@ -2072,6 +2146,7 @@ impl Render for EnvTab {
             if self.project.is_none() && self.is_open(Tool::Project) {
                 let ws = self.workspace(&env, cx);
                 let view = cx.new(|cx| ProjectView::new(ws, cx));
+                self.follow_tree(&view, window, cx);
                 self.subs.push(
                     cx.subscribe_in(&view, window, |t, _, e: &OpenFile, window, cx| {
                         t.open_file(&e.root, &e.path, window, cx)
@@ -2104,6 +2179,7 @@ impl Render for EnvTab {
             if self.filesystem.is_none() && self.is_open(Tool::Filesystem) {
                 let ws = self.workspace(&env, cx);
                 let view = cx.new(|cx| ProjectView::machine(ws, cx));
+                self.follow_tree(&view, window, cx);
                 self.subs.push(
                     cx.subscribe_in(&view, window, |t, _, e: &OpenFile, window, cx| {
                         t.open_file(&e.root, &e.path, window, cx)
@@ -2226,6 +2302,9 @@ impl Render for EnvTab {
                     }),
                 );
                 self.git = Some(view);
+            }
+            if let (Some(view), Some(h)) = (self.git.clone(), self.pending_history.take()) {
+                view.update(cx, |v, cx| v.show_history(&h.root, &h.path, cx));
             }
         }
         // The worker keeps the logs whatever the environment is doing.
