@@ -22,6 +22,7 @@ use crate::commit::CommitView;
 use crate::diff::{DiffView, ShowDiff, Spec};
 use crate::docedit::{self, DocEditor};
 use crate::docker::{DockerView, RunInTerminal};
+use crate::envlogs::LogsView;
 use crate::find::{FindView, OpenAt, Search};
 use crate::findpop::{Done, FindPopup};
 use crate::gitlog::GitView;
@@ -313,6 +314,7 @@ pub struct EnvTab {
     commit: Option<Entity<CommitView>>,
     git: Option<Entity<GitView>>,
     docker: Option<Entity<DockerView>>,
+    logs: Option<Entity<LogsView>>,
     find: Option<Entity<FindView>>,
     structure: Option<Entity<crate::structure::StructureView>>,
     /// Find in Files' pop-up while it is open.
@@ -500,6 +502,7 @@ impl EnvTab {
             commit: None,
             git: None,
             docker: None,
+            logs: None,
             find: None,
             structure: None,
             find_popup: None,
@@ -2205,6 +2208,20 @@ impl Render for EnvTab {
                 self.git = Some(view);
             }
         }
+        // The worker keeps the logs whatever the environment is doing.
+        let logs_open = self.is_open(Tool::Log);
+        if self.logs.is_none()
+            && logs_open
+            && let Some(client) = self.client(cx)
+        {
+            let env = self.env.clone();
+            self.logs = Some(cx.new(|cx| LogsView::new(client, &env, cx)));
+        }
+        if let Some(v) = &self.logs
+            && v.read(cx).paused() == logs_open
+        {
+            v.update(cx, |v, cx| v.set_paused(!logs_open, cx));
+        }
         let sizes = Layout::sizes(cx);
 
         let find_popup = self.find_popup.clone();
@@ -3320,7 +3337,7 @@ impl EnvTab {
         }
         let view = self.panel_view(t);
         let body = match view {
-            Some(view) if env.phase == "running" => {
+            Some(view) if env.phase == "running" || !t.needs_running() => {
                 div().flex_1().min_h_0().child(view).into_any_element()
             }
             _ if env.phase != "running" && t.needs_running() => div()
@@ -3375,6 +3392,7 @@ impl EnvTab {
             Tool::Find => self.find.clone().map(|v| v.into_any_element()),
             Tool::Problems => self.problems.clone().map(|v| v.into_any_element()),
             Tool::Docker => self.docker.clone().map(|v| v.into_any_element()),
+            Tool::Log => self.logs.clone().map(|v| v.into_any_element()),
             _ => None,
         }
     }

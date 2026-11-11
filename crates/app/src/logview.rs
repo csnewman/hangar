@@ -162,6 +162,11 @@ impl LogPane {
         cx.notify();
     }
 
+    /// What is shown while there are no lines.
+    pub fn empty(&self) -> &str {
+        &self.empty
+    }
+
     pub fn lines(&self) -> &Lines {
         &self.lines
     }

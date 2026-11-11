@@ -11,6 +11,7 @@ pub mod diff;
 pub mod docedit;
 pub mod docker;
 pub mod doubleshift;
+pub mod envlogs;
 pub mod envtab;
 pub mod find;
 pub mod findpop;

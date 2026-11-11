@@ -136,6 +136,21 @@ pub struct TerminalSession {
     pub rows: i64,
 }
 
+/// Part of one of an environment's logs, which only grows: text from
+/// start, of a log size bytes long so far, read on from next.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct LogPart {
+    pub start: i64,
+    pub next: i64,
+    pub size: i64,
+    #[serde(default)]
+    pub text: String,
+    /// There is no such log yet: the machine has not been started, or has
+    /// no GPU.
+    #[serde(default)]
+    pub missing: bool,
+}
+
 /// Why a request failed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Error {
@@ -272,6 +287,20 @@ impl Client {
     /// The environment's terminal sessions.
     pub fn terminals(&self, id: &str) -> Result<Vec<TerminalSession>, Error> {
         self.get(&format!("/environments/{id}/terminals"))
+    }
+
+    /// Part of one of the environment's logs, kept by its worker: what
+    /// follows offset, or the end.
+    pub fn environment_log(
+        &self,
+        id: &str,
+        log: &str,
+        offset: Option<i64>,
+    ) -> Result<LogPart, Error> {
+        match offset {
+            Some(o) => self.get(&format!("/environments/{id}/logs/{log}?offset={o}")),
+            None => self.get(&format!("/environments/{id}/logs/{log}")),
+        }
     }
 
     /// Ends a terminal session, and what runs in it.
