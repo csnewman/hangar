@@ -203,7 +203,17 @@ fn popup(
     cx: &mut App,
     take: WithName,
 ) {
-    let input = cx.new(|cx| InputState::new(window, cx).default_value(initial.to_string()));
+    // A name given is selected up to its extension, as IntelliJ's Rename
+    // selects it.
+    let stem = match initial.rfind('.') {
+        Some(dot) if dot > 0 => dot,
+        _ => initial.len(),
+    };
+    let input = cx.new(|cx| {
+        let mut s = InputState::new(window, cx).default_value(initial.to_string());
+        s.set_selected_range(0..stem, cx);
+        s
+    });
     let handle = window.window_handle();
     {
         let (take, error) = (take.clone(), error.clone());

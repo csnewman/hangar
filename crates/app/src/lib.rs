@@ -44,6 +44,7 @@ pub mod terminal;
 pub mod termkeys;
 pub mod termview;
 pub mod tools;
+pub mod transfer;
 pub mod treeops;
 pub mod ui;
 pub mod wake;

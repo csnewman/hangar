@@ -62,6 +62,17 @@ fn service(asked: mpsc::Sender<(String, Value)>) -> String {
                             send(&mut ws, reply);
                             continue;
                         }
+                        // A name src has is asked about.
+                        "fs.transfer" => {
+                            asked.send(("fs.transfer".into(), params.clone())).unwrap();
+                            let to = params["to"].as_str().unwrap_or_default();
+                            if params["clash"] == "ask" && to == "/home/dev/app/src" {
+                                json!({ "clashes": ["main.rs"], "done": [] })
+                            } else {
+                                let name = params["name"].as_str().unwrap_or("x");
+                                json!({ "clashes": [], "done": [{ "from": params["from"][0], "to": format!("{to}/{name}") }] })
+                            }
+                        }
                         m if m.starts_with("fs.") || m == "workspace.set" => {
                             asked.send((m.to_string(), params.clone())).unwrap();
                             Value::Null
@@ -701,4 +712,90 @@ fn hidden_and_ignored_files_are_shown_as_asked(cx: &mut TestAppContext) {
         cx.debug_bounds("tree-row-src/target").is_none()
             && cx.debug_bounds("tree-row-src/.env").is_some()
     });
+}
+
+/// Move… (F6) and Copy… (F5): a folder typed from the file's own and a
+/// name; a name the folder has is asked about.
+#[gpui::test]
+fn a_file_is_moved_and_copied_to_a_folder_typed(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        hangar_app::project::bind_keys(cx);
+    });
+    let (asked_tx, asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        Root::new(view, window, cx)
+    });
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-main.rs").is_some()
+    });
+    let next = |cx: &mut VisualTestContext| {
+        let start = Instant::now();
+        loop {
+            cx.run_until_parked();
+            if let Ok((m, p)) = asked.recv_timeout(Duration::from_millis(20)) {
+                return (m, p);
+            }
+            assert!(start.elapsed() < Duration::from_secs(5), "a call");
+        }
+    };
+    let main = cx.debug_bounds("tree-row-main.rs").unwrap().center();
+    cx.simulate_click(main, Modifiers::none());
+    cx.run_until_parked();
+
+    // Copy into a folder of its own folder's, under another name.
+    cx.simulate_keystrokes("f5");
+    cx.run_until_parked();
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
+    cx.simulate_input("/docs");
+    cx.simulate_keystrokes("enter");
+    let (m, p) = next(cx);
+    assert_eq!(m, "fs.transfer");
+    assert_eq!(p["op"], "copy");
+    assert_eq!(p["from"], json!(["/home/dev/app/main.rs"]));
+    assert_eq!(p["to"], "/home/dev/app/docs", "typed after its folder");
+    assert_eq!(
+        (p["name"].as_str(), p["clash"].as_str()),
+        (Some("main.rs"), Some("ask"))
+    );
+    until(cx, "the dialog closes", |cx| {
+        !cx.update(|window, cx| window.has_active_dialog(cx))
+    });
+
+    // Moved into src, which has a main.rs: Replace, asked.
+    cx.simulate_click(main, Modifiers::none());
+    cx.simulate_keystrokes("f6");
+    cx.run_until_parked();
+    cx.simulate_input("/src");
+    cx.simulate_keystrokes("enter");
+    let (_, p) = next(cx);
+    assert_eq!(
+        (p["op"].as_str(), p["clash"].as_str()),
+        (Some("move"), Some("ask"))
+    );
+    until(cx, "the clash asked about", |cx| {
+        cx.debug_bounds("clash-replace").is_some()
+    });
+    let replace = cx.debug_bounds("clash-replace").unwrap().center();
+    cx.simulate_click(replace, Modifiers::none());
+    let (_, p) = next(cx);
+    assert_eq!(
+        (p["to"].as_str(), p["clash"].as_str()),
+        (Some("/home/dev/app/src"), Some("replace"))
+    );
+}
+
+#[test]
+fn a_folder_typed_is_from_the_files_own() {
+    use hangar_app::transfer::folder_typed;
+    assert_eq!(folder_typed("src/", "/home/dev/app"), "/home/dev/app/src");
+    assert_eq!(folder_typed(" /tmp/x/ ", "/home/dev/app"), "/tmp/x");
+    assert_eq!(folder_typed("/", "/home/dev/app"), "/");
+    assert_eq!(folder_typed("", "/home/dev/app"), "/home/dev/app");
 }

@@ -107,6 +107,8 @@ actions!(
         Open,
         Delete,
         Rename,
+        MoveTo,
+        CopyTo,
         NewFile,
         Copy,
         Cut,
@@ -152,6 +154,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("delete", Delete, ctx),
         KeyBinding::new(keys[0], Delete, ctx),
         KeyBinding::new("shift-f6", Rename, ctx),
+        KeyBinding::new("f6", MoveTo, ctx),
+        KeyBinding::new("f5", CopyTo, ctx),
         KeyBinding::new(keys[1], NewFile, ctx),
         KeyBinding::new(keys[2], Copy, ctx),
         KeyBinding::new(keys[3], Cut, ctx),
@@ -542,6 +546,18 @@ impl ProjectView {
     }
 
     /// What the selected row is, for the menu's actions run from keys.
+    /// Copy… or Move… of what is selected, which is then selected where it
+    /// went.
+    fn transfer(&mut self, op: crate::transfer::Op, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(t) = self.selected_target(cx).filter(|t| !t.is_root()) else {
+            return;
+        };
+        let view = cx.entity().downgrade();
+        crate::transfer::ask(op, &t, window, cx, move |abs, _, cx| {
+            let _ = view.update(cx, |v, cx| v.reveal(&abs, cx));
+        });
+    }
+
     fn selected_target(&self, cx: &App) -> Option<Target> {
         let rows = self.visible();
         let r = rows.get(self.at(&rows)?)?;
@@ -989,6 +1005,12 @@ impl Render for ProjectView {
                     });
                 }
             }))
+            .on_action(cx.listener(|v, _: &MoveTo, window, cx| {
+                v.transfer(crate::transfer::Op::Move, window, cx)
+            }))
+            .on_action(cx.listener(|v, _: &CopyTo, window, cx| {
+                v.transfer(crate::transfer::Op::Copy, window, cx)
+            }))
             .on_action(cx.listener(|v, _: &NewFile, window, cx| {
                 if let Some(t) = v.selected_target(cx) {
                     let view = cx.entity().downgrade();
@@ -1240,6 +1262,16 @@ fn tree_menu(
             )
         })
     };
+    // Copy… or Move…, then the thing selected where it went.
+    let sent = |label: &str, op: crate::transfer::Op| {
+        let (t, view) = (t.clone(), view.clone());
+        PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
+            let view = view.clone();
+            crate::transfer::ask(op, &t, window, cx, move |abs, _, cx| {
+                let _ = view.update(cx, |v, cx| v.reveal(&abs, cx));
+            })
+        })
+    };
     let take = |label: &str, cut: bool| {
         let (t, view) = (t.clone(), view.clone());
         PopupMenuItem::new(label.to_string()).on_click(move |_, _, cx| {
@@ -1309,6 +1341,8 @@ fn tree_menu(
         .item(copy_path("Copy File Name", t.name().to_string()))
         .separator()
         .item(made("Rename…", treeops::rename).disabled(is_root))
+        .item(sent("Move…", crate::transfer::Op::Move).disabled(is_root))
+        .item(sent("Copy…", crate::transfer::Op::Copy).disabled(is_root))
         .item(item("Delete…", t, treeops::trash).disabled(is_root))
         .separator()
         .item(find("Find in Folder…", false))
