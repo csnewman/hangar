@@ -263,7 +263,7 @@ impl FindPopup {
                                 .into_iter()
                                 .filter_map(|r| match r {
                                     Row::Line { root, m } => Some((root, m)),
-                                    Row::File { .. } => None,
+                                    _ => None,
                                 })
                                 .collect();
                             v.show_selected(cx);

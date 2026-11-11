@@ -183,9 +183,16 @@ struct Found {
     truncated: bool,
 }
 
-/// One row of the results: a file's heading, or one of its lines.
+/// One row of the results: a directory's heading (grouped by directory),
+/// a file's heading, or one of its lines.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Row {
+    Dir {
+        root: String,
+        /// From the project's root, "" for the root itself.
+        dir: String,
+        count: usize,
+    },
     File {
         root: String,
         path: String,
@@ -228,21 +235,91 @@ pub fn rows(projects: &[(String, Vec<Match>)]) -> Vec<Row> {
     out
 }
 
-/// The rows shown, by index: a folded file's row without its lines.
+/// The rows grouped by directory, as IntelliJ's Group by Directory: each
+/// project's directories by name, each heading its files, a file a
+/// project before it found left out as `rows` does.
+pub fn rows_by_dir(projects: &[(String, Vec<Match>)]) -> Vec<Row> {
+    let flat = rows(projects);
+    // Each file's rows, by project and directory.
+    let mut groups: Vec<((String, String), Vec<Row>, usize)> = Vec::new();
+    let mut i = 0;
+    while i < flat.len() {
+        let Row::File {
+            root, path, count, ..
+        } = &flat[i]
+        else {
+            i += 1;
+            continue;
+        };
+        let dir = path.rsplit_once('/').map_or("", |(d, _)| d).to_string();
+        let key = (root.clone(), dir);
+        let n = 1 + flat[i + 1..]
+            .iter()
+            .take_while(|r| matches!(r, Row::Line { .. }))
+            .count();
+        let at = match groups.iter().position(|(k, ..)| *k == key) {
+            Some(at) => at,
+            None => {
+                groups.push((key, vec![], 0));
+                groups.len() - 1
+            }
+        };
+        groups[at].1.extend(flat[i..i + n].iter().cloned());
+        groups[at].2 += count;
+        i += n;
+    }
+    let order: Vec<&String> = projects.iter().map(|(r, _)| r).collect();
+    groups.sort_by(|a, b| {
+        let at = |r: &String| order.iter().position(|o| *o == r);
+        (at(&a.0.0), &a.0.1).cmp(&(at(&b.0.0), &b.0.1))
+    });
+    let mut out = Vec::new();
+    for ((root, dir), rows, count) in groups {
+        out.push(Row::Dir { root, dir, count });
+        out.extend(rows);
+    }
+    out
+}
+
+/// What a row is folded by: a file by its path, a directory by its own
+/// with a slash after, by root. Lines do not fold.
+pub fn fold_key(row: &Row) -> Option<(String, String)> {
+    match row {
+        Row::Dir { root, dir, .. } => Some((root.clone(), format!("{dir}/"))),
+        Row::File { root, path, .. } => Some((root.clone(), path.clone())),
+        Row::Line { .. } => None,
+    }
+}
+
+/// The rows shown, by index: a folded directory's or file's row without
+/// what is under it.
 pub fn visible(rows: &[Row], folded: &HashSet<(String, String)>) -> Vec<usize> {
     let mut out = vec![];
-    let mut hiding = false;
+    let (mut hiding_dir, mut hiding) = (false, false);
     for (i, r) in rows.iter().enumerate() {
+        let shut = fold_key(r).is_some_and(|k| folded.contains(&k));
         match r {
-            Row::File { root, path, .. } => {
-                hiding = folded.contains(&(root.clone(), path.clone()));
+            Row::Dir { .. } => {
+                (hiding_dir, hiding) = (shut, false);
                 out.push(i);
             }
-            Row::Line { .. } if !hiding => out.push(i),
-            Row::Line { .. } => {}
+            Row::File { .. } if !hiding_dir => {
+                hiding = shut;
+                out.push(i);
+            }
+            Row::Line { .. } if !hiding_dir && !hiding => out.push(i),
+            _ => {}
         }
     }
     out
+}
+
+/// The directory row a row is under, when grouped: itself, for a
+/// directory's.
+pub fn dir_of(rows: &[Row], i: usize) -> Option<usize> {
+    (0..=i.min(rows.len().saturating_sub(1)))
+        .rev()
+        .find(|j| matches!(rows[*j], Row::Dir { .. }))
 }
 
 /// The match after a row (the first, after none), or before it (the last,
@@ -259,8 +336,12 @@ pub fn next_match(rows: &[Row], from: Option<usize>, forward: bool) -> Option<us
     }
 }
 
-/// The file row a row is under: itself, for a file's.
+/// The file row a row is under: itself, for a file's; none for a
+/// directory's.
 pub fn file_of(rows: &[Row], i: usize) -> Option<usize> {
+    if matches!(rows.get(i), Some(Row::Dir { .. })) {
+        return None;
+    }
     (0..=i.min(rows.len().saturating_sub(1)))
         .rev()
         .find(|j| matches!(rows[*j], Row::File { .. }))
@@ -303,15 +384,21 @@ pub struct OpenAt {
 
 impl gpui::EventEmitter<OpenAt> for FindView {}
 
-pub struct FindView {
-    workspace: Entity<Workspace>,
+/// One tab of the window: a search's matches or a language server's
+/// usages, with what is folded and chosen in them. A pinned tab is kept
+/// when another search starts, as IntelliJ's pinned Find tabs are.
+#[derive(Default)]
+struct Results {
     /// What the rows are when they are a language server's answer rather
     /// than a search: "Usages of refresh".
     title: Option<String>,
-    query: Entity<InputState>,
-    mask: Entity<InputState>,
-    options: Options,
-    scope: Scope,
+    /// The search the rows answer, for the bar as the tab is shown again.
+    search: Option<Search>,
+    pinned: bool,
+    /// Each project's matching lines, and the rows made of them, grouped
+    /// by directory or not.
+    found: Lines,
+    by_dir: bool,
     rows: Vec<Row>,
     files: usize,
     matches: usize,
@@ -319,18 +406,77 @@ pub struct FindView {
     /// Projects still searching, and the errors of those that failed.
     pending: usize,
     errors: Vec<String>,
-    /// Counts the searches started, so an older one's answer is dropped.
+    /// Which search the tab shows, so an older one's answer is dropped.
     generation: u64,
     selected: Option<usize>,
-    /// The files folded, by root and path, and the rows shown for it.
+    /// The files and directories folded (`fold_key`), and the rows shown
+    /// for it.
     folded: HashSet<(String, String)>,
     shown: Vec<usize>,
+    /// The selected match's file: its root, path, and text once read.
+    preview: Option<(String, String, Option<Read>)>,
+}
+
+impl Results {
+    /// Takes each project's lines as the rows, grouped by directory or not.
+    fn set(&mut self, found: Lines, by_dir: bool) {
+        self.found = found;
+        self.regroup(by_dir);
+    }
+
+    /// Makes the rows again, grouped by directory or not, keeping the match
+    /// chosen.
+    fn regroup(&mut self, by_dir: bool) {
+        let chosen = self.selected.and_then(|i| self.rows.get(i).cloned());
+        self.by_dir = by_dir;
+        self.rows = if by_dir {
+            rows_by_dir(&self.found)
+        } else {
+            rows(&self.found)
+        };
+        self.files = self
+            .rows
+            .iter()
+            .filter(|r| matches!(r, Row::File { .. }))
+            .count();
+        self.matches = self
+            .rows
+            .iter()
+            .filter(|r| matches!(r, Row::Line { .. }))
+            .count();
+        self.selected = chosen.and_then(|c| self.rows.iter().position(|r| *r == c));
+        self.shown = visible(&self.rows, &self.folded);
+    }
+
+    /// What the tab is called: the server's title, else the text searched.
+    fn name(&self) -> String {
+        match (&self.title, &self.search) {
+            (Some(t), _) => t.clone(),
+            (None, Some(s)) if !s.text.is_empty() => format!("'{}'", s.text),
+            _ => "Find".into(),
+        }
+    }
+}
+
+pub struct FindView {
+    workspace: Entity<Workspace>,
+    query: Entity<InputState>,
+    mask: Entity<InputState>,
+    options: Options,
+    scope: Scope,
+    /// The tab shown, the window's tabs (the shown one's place holding an
+    /// empty stand-in while it is here), and which place it is.
+    cur: Results,
+    tabs: Vec<Results>,
+    active: usize,
+    /// Counts the searches started, each tab's latest being its generation.
+    next: u64,
+    /// IntelliJ's Group by Directory.
+    by_dir: bool,
     list: UniformListScrollHandle,
     list_focus: FocusHandle,
-    /// Whether the selected match's file is shown beside the rows, and
-    /// that file: its root, path, and text once read.
+    /// Whether the selected match's file is shown beside the rows.
     previewing: bool,
-    preview: Option<(String, String, Option<Read>)>,
     _subs: Vec<gpui::Subscription>,
 }
 
@@ -351,48 +497,41 @@ impl FindView {
                 _ => {}
             }),
             cx.subscribe(&workspace, |v, _, e: &Event, cx| {
-                if e == &Event::Projects {
+                if e == &Event::Projects && v.cur.title.is_none() && !v.cur.pinned {
                     v.search(cx);
                 }
             }),
         ];
         FindView {
             workspace,
-            title: None,
             query,
             mask,
             options: Options::default(),
             scope: Scope::Projects,
-            rows: vec![],
-            files: 0,
-            matches: 0,
-            truncated: false,
-            pending: 0,
-            errors: vec![],
-            generation: 0,
-            selected: None,
-            folded: HashSet::new(),
-            shown: vec![],
+            cur: Results::default(),
+            tabs: vec![Results::default()],
+            active: 0,
+            next: 0,
+            by_dir: false,
             list: UniformListScrollHandle::new(),
             list_focus: cx.focus_handle(),
             previewing: true,
-            preview: None,
             _subs: subs,
         }
     }
 
     /// The rows shown, for the rows or the folded files having changed.
     fn reshown(&mut self) {
-        self.shown = visible(&self.rows, &self.folded);
+        self.cur.shown = visible(&self.cur.rows, &self.cur.folded);
     }
 
     /// Selects row i: scrolled to, its file previewed.
     pub fn select(&mut self, i: usize, cx: &mut Context<Self>) {
-        if i >= self.rows.len() {
+        if i >= self.cur.rows.len() {
             return;
         }
-        self.selected = Some(i);
-        if let Some(at) = self.shown.iter().position(|r| *r == i) {
+        self.cur.selected = Some(i);
+        if let Some(at) = self.cur.shown.iter().position(|r| *r == i) {
             self.list.scroll_to_item(at, ScrollStrategy::Center);
         }
         self.read_preview(cx);
@@ -401,11 +540,13 @@ impl FindView {
 
     /// Reads the selected match's file for its preview, unless it is shown.
     fn read_preview(&mut self, cx: &mut Context<Self>) {
-        let Some(Row::Line { root, m }) = self.selected.and_then(|i| self.rows.get(i)) else {
+        let Some(Row::Line { root, m }) = self.cur.selected.and_then(|i| self.cur.rows.get(i))
+        else {
             return;
         };
         if !self.previewing
             || self
+                .cur
                 .preview
                 .as_ref()
                 .is_some_and(|(r, p, _)| r == root && p == &m.path)
@@ -413,7 +554,7 @@ impl FindView {
             return;
         }
         let (root, path) = (root.clone(), m.path.clone());
-        self.preview = Some((root.clone(), path.clone(), None));
+        self.cur.preview = Some((root.clone(), path.clone(), None));
         let Some(code) = self.workspace.read(cx).code(&root) else {
             return;
         };
@@ -423,7 +564,7 @@ impl FindView {
                 .await
                 .map(|v| v.get("text").and_then(|t| t.as_str()).map(str::to_string));
             let _ = this.update(cx, |v, cx| {
-                if let Some((r, p, t)) = &mut v.preview
+                if let Some((r, p, t)) = &mut v.cur.preview
                     && *r == root
                     && *p == path
                 {
@@ -435,22 +576,20 @@ impl FindView {
         .detach();
     }
 
-    /// Folds a file's lines away, or shows them.
-    fn fold(&mut self, file: usize, fold: bool, cx: &mut Context<Self>) {
-        let Some(Row::File { root, path, .. }) = self.rows.get(file) else {
+    /// Folds a directory's or file's rows away, or shows them.
+    fn fold(&mut self, at: usize, fold: bool, cx: &mut Context<Self>) {
+        let Some(key) = self.cur.rows.get(at).and_then(fold_key) else {
             return;
         };
-        let key = (root.clone(), path.clone());
         if fold {
-            self.folded.insert(key);
-            if self
-                .selected
-                .is_some_and(|s| file_of(&self.rows, s) == Some(file))
-            {
-                self.selected = Some(file);
+            self.cur.folded.insert(key);
+            let rows = &self.cur.rows;
+            let under = |s: usize| file_of(rows, s) == Some(at) || dir_of(rows, s) == Some(at);
+            if self.cur.selected.is_some_and(under) {
+                self.cur.selected = Some(at);
             }
         } else {
-            self.folded.remove(&key);
+            self.cur.folded.remove(&key);
         }
         self.reshown();
         cx.notify();
@@ -459,11 +598,14 @@ impl FindView {
     /// Opens the next match, or the one before (IntelliJ's Next and
     /// Previous Occurrence), unfolding its file; false when there is none.
     pub fn step(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
-        let Some(i) = next_match(&self.rows, self.selected, forward) else {
+        let Some(i) = next_match(&self.cur.rows, self.cur.selected, forward) else {
             return false;
         };
-        if let Some(f) = file_of(&self.rows, i) {
+        if let Some(f) = file_of(&self.cur.rows, i) {
             self.fold(f, false, cx);
+        }
+        if let Some(d) = dir_of(&self.cur.rows, i) {
+            self.fold(d, false, cx);
         }
         self.open(i, cx);
         true
@@ -473,44 +615,50 @@ impl FindView {
     /// match or folding a file, left folding and right unfolding.
     fn key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
         let at = self
+            .cur
             .selected
-            .and_then(|s| self.shown.iter().position(|r| *r == s));
+            .and_then(|s| self.cur.shown.iter().position(|r| *r == s));
         match e.keystroke.key.as_str() {
             "down" => {
-                let next = at.map_or(0, |a| (a + 1).min(self.shown.len().saturating_sub(1)));
-                if let Some(&i) = self.shown.get(next) {
+                let next = at.map_or(0, |a| (a + 1).min(self.cur.shown.len().saturating_sub(1)));
+                if let Some(&i) = self.cur.shown.get(next) {
                     self.select(i, cx);
                 }
             }
             "up" => {
                 let next = at.map_or(0, |a| a.saturating_sub(1));
-                if let Some(&i) = self.shown.get(next) {
+                if let Some(&i) = self.cur.shown.get(next) {
                     self.select(i, cx);
                 }
             }
-            "enter" => match self.selected.map(|s| (s, self.rows.get(s))) {
+            "enter" => match self.cur.selected.map(|s| (s, self.cur.rows.get(s))) {
                 Some((s, Some(Row::Line { .. }))) => self.open(s, cx),
-                Some((s, Some(Row::File { root, path, .. }))) => {
-                    let folded = self.folded.contains(&(root.clone(), path.clone()));
+                Some((s, Some(row))) => {
+                    let folded = fold_key(row).is_some_and(|k| self.cur.folded.contains(&k));
                     self.fold(s, !folded, cx);
                 }
                 _ => return,
             },
-            "left" => match self.selected {
-                Some(s) if matches!(self.rows.get(s), Some(Row::File { .. })) => {
-                    self.fold(s, true, cx)
-                }
+            // Left folds what is open, else goes up to what holds it.
+            "left" => match self.cur.selected {
                 Some(s) => {
-                    if let Some(f) = file_of(&self.rows, s) {
-                        self.select(f, cx)
+                    let row = &self.cur.rows[s];
+                    let open = fold_key(row).is_some_and(|k| !self.cur.folded.contains(&k));
+                    let up = match row {
+                        Row::Line { .. } => file_of(&self.cur.rows, s),
+                        Row::File { .. } => dir_of(&self.cur.rows, s),
+                        Row::Dir { .. } => None,
+                    };
+                    match (open, up) {
+                        (true, _) => self.fold(s, true, cx),
+                        (false, Some(u)) => self.select(u, cx),
+                        (false, None) => return,
                     }
                 }
                 None => return,
             },
-            "right" => match self.selected {
-                Some(s) if matches!(self.rows.get(s), Some(Row::File { .. })) => {
-                    self.fold(s, false, cx)
-                }
+            "right" => match self.cur.selected {
+                Some(s) if fold_key(&self.cur.rows[s]).is_some() => self.fold(s, false, cx),
                 _ => return,
             },
             _ => return,
@@ -523,37 +671,131 @@ impl FindView {
     }
 
     pub fn rows(&self) -> &[Row] {
-        &self.rows
+        &self.cur.rows
     }
 
     /// Lists a language server's usages of a symbol: each project's lines,
     /// by root, under title.
     pub fn show_usages(&mut self, title: String, found: Lines, cx: &mut Context<Self>) {
-        self.generation += 1;
-        self.title = Some(title);
-        self.rows = rows(&found);
-        self.files = self
-            .rows
-            .iter()
-            .filter(|r| matches!(r, Row::File { .. }))
-            .count();
-        self.matches = self.rows.len() - self.files;
-        self.truncated = false;
-        self.pending = 0;
-        self.errors.clear();
-        self.selected = None;
-        self.folded.clear();
-        self.preview = None;
-        self.reshown();
+        self.fresh();
+        self.renew();
+        self.clear();
+        self.cur.title = Some(title);
+        self.cur.search = None;
+        self.cur.set(found, self.by_dir);
         self.select_first(cx);
+        cx.notify();
+    }
+
+    /// A new generation for the tab shown, so its older search's answers
+    /// are dropped.
+    fn renew(&mut self) -> u64 {
+        self.next += 1;
+        self.cur.generation = self.next;
+        self.next
+    }
+
+    /// Empties the tab shown for a new search.
+    fn clear(&mut self) {
+        let keep = (self.cur.generation, self.cur.pinned);
+        self.cur = Results {
+            generation: keep.0,
+            pinned: keep.1,
+            by_dir: self.by_dir,
+            ..Default::default()
+        };
+    }
+
+    /// Makes the tab shown one a new search may take: itself, unless it is
+    /// pinned; else the tab not pinned, else a new one.
+    fn fresh(&mut self) {
+        if !self.cur.pinned {
+            return;
+        }
+        let free = (0..self.tabs.len()).find(|&j| j != self.active && !self.tabs[j].pinned);
+        let j = free.unwrap_or_else(|| {
+            self.tabs.push(Results::default());
+            self.tabs.len() - 1
+        });
+        self.switch(j);
+    }
+
+    /// Shows tab j, its stand-in taking its place in the list.
+    fn switch(&mut self, j: usize) {
+        if j == self.active || j >= self.tabs.len() {
+            return;
+        }
+        std::mem::swap(&mut self.cur, &mut self.tabs[self.active]);
+        self.active = j;
+        std::mem::swap(&mut self.cur, &mut self.tabs[j]);
+        if self.cur.by_dir != self.by_dir {
+            self.cur.regroup(self.by_dir);
+        }
+    }
+
+    /// Shows tab j, its search back in the bar.
+    fn show_tab(&mut self, j: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.switch(j);
+        if let Some(s) = self.cur.search.clone() {
+            self.options = s.options;
+            self.scope = s.scope;
+            let mask = s.mask.unwrap_or_default();
+            self.query
+                .update(cx, |q, cx| q.set_value(s.text, window, cx));
+            self.mask.update(cx, |m, cx| m.set_value(mask, window, cx));
+        }
+        if let Some(at) = self
+            .cur
+            .selected
+            .and_then(|s| self.cur.shown.iter().position(|r| *r == s))
+        {
+            self.list.scroll_to_item(at, ScrollStrategy::Center);
+        }
+        cx.notify();
+    }
+
+    /// Closes tab j; the last closed leaves an empty one.
+    fn close_tab(&mut self, j: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if j >= self.tabs.len() {
+            return;
+        }
+        if self.tabs.len() == 1 {
+            self.renew();
+            self.clear();
+            self.cur.pinned = false;
+        } else if j == self.active {
+            self.tabs.remove(j);
+            let k = j.min(self.tabs.len() - 1);
+            self.cur = std::mem::take(&mut self.tabs[k]);
+            self.active = k;
+            self.show_tab(k, window, cx);
+        } else {
+            self.tabs.remove(j);
+            if j < self.active {
+                self.active -= 1;
+            }
+        }
+        cx.notify();
+    }
+
+    /// Pins the tab shown, or unpins it.
+    fn pin(&mut self, cx: &mut Context<Self>) {
+        self.cur.pinned = !self.cur.pinned;
+        cx.notify();
+    }
+
+    /// IntelliJ's Group by Directory, for every tab.
+    fn group(&mut self, cx: &mut Context<Self>) {
+        self.by_dir = !self.by_dir;
+        self.cur.regroup(self.by_dir);
         cx.notify();
     }
 
     /// Selects the first match, as IntelliJ does when results come, for
     /// the preview to show it.
     fn select_first(&mut self, cx: &mut Context<Self>) {
-        if self.selected.is_none()
-            && let Some(i) = next_match(&self.rows, None, true)
+        if self.cur.selected.is_none()
+            && let Some(i) = next_match(&self.cur.rows, None, true)
         {
             self.select(i, cx);
         }
@@ -561,7 +803,8 @@ impl FindView {
 
     /// Lists a search's matches here, as the pop-up's Open in Find Window.
     pub fn show(&mut self, s: Search, window: &mut Window, cx: &mut Context<Self>) {
-        self.title = None;
+        self.fresh();
+        self.cur.title = None;
         self.options = s.options;
         self.scope = s.scope;
         let mask = s.mask.unwrap_or_default();
@@ -581,16 +824,20 @@ impl FindView {
         }
     }
 
-    /// Searches once typing pauses.
+    /// Searches once typing pauses, unless the bar holds the tab's own
+    /// search (shown again).
     fn search_soon(&mut self, cx: &mut Context<Self>) {
-        self.generation += 1;
-        let generation = self.generation;
+        if self.cur.title.is_none() && self.cur.search.as_ref() == Some(&self.current(cx)) {
+            return;
+        }
+        self.fresh();
+        let generation = self.renew();
         cx.spawn(async move |this, cx| {
             cx.background_executor()
                 .timer(Duration::from_millis(250))
                 .await;
             let _ = this.update(cx, |v, cx| {
-                if v.generation == generation {
+                if v.cur.generation == generation {
                     v.search(cx);
                 }
             });
@@ -600,25 +847,17 @@ impl FindView {
 
     /// Searches for the query, as it is now.
     pub fn search(&mut self, cx: &mut Context<Self>) {
-        self.generation += 1;
-        let generation = self.generation;
+        self.fresh();
+        let generation = self.renew();
         let search = self.current(cx);
-        self.rows.clear();
-        self.files = 0;
-        self.matches = 0;
-        self.truncated = false;
-        self.errors.clear();
-        self.selected = None;
-        self.folded.clear();
-        self.preview = None;
-        self.reshown();
-        self.pending = 0;
+        self.clear();
+        self.cur.search = Some(search.clone());
         if search.text.is_empty() {
             cx.notify();
             return;
         }
         let calls = search.calls(self.workspace.read(cx).projects());
-        self.pending = calls.len();
+        self.cur.pending = calls.len();
         let calls: Vec<_> = calls
             .into_iter()
             .map(|(root, code, params)| (root, search_text(code, params)))
@@ -628,25 +867,26 @@ impl FindView {
             for (root, call) in calls {
                 let result = call.await;
                 let keep = this.update(cx, |v, cx| {
-                    if v.generation != generation {
+                    // The search's tab may not be the one shown: the user can switch.
+                    let shown = v.cur.generation == generation;
+                    let by_dir = v.by_dir;
+                    let Some(r) = std::iter::once(&mut v.cur)
+                        .chain(v.tabs.iter_mut())
+                        .find(|t| t.generation == generation)
+                    else {
                         return false;
-                    }
-                    v.pending -= 1;
+                    };
+                    r.pending -= 1;
                     match result {
                         Ok((matches, truncated)) => {
-                            v.truncated |= truncated;
+                            r.truncated |= truncated;
                             found.push((root, matches));
-                            v.rows = rows(&found);
-                            v.files = v
-                                .rows
-                                .iter()
-                                .filter(|r| matches!(r, Row::File { .. }))
-                                .count();
-                            v.matches = v.rows.len() - v.files;
-                            v.reshown();
-                            v.select_first(cx);
+                            r.set(found.clone(), by_dir);
+                            if shown {
+                                v.select_first(cx);
+                            }
                         }
-                        Err(e) => v.errors.push(e),
+                        Err(e) => r.errors.push(e),
                     }
                     cx.notify();
                     true
@@ -669,7 +909,7 @@ impl FindView {
     /// Opens the match on row i.
     pub fn open(&mut self, i: usize, cx: &mut Context<Self>) {
         self.select(i, cx);
-        if let Some(Row::Line { root, m }) = self.rows.get(i) {
+        if let Some(Row::Line { root, m }) = self.cur.rows.get(i) {
             cx.emit(OpenAt {
                 root: root.clone(),
                 path: m.path.clone(),
@@ -680,26 +920,30 @@ impl FindView {
         cx.notify();
     }
 
+    /// The project's name, when there are several to tell apart.
+    fn project_name(&self, root: &str, cx: &gpui::App) -> Option<String> {
+        let ws = self.workspace.read(cx);
+        (ws.projects().len() > 1)
+            .then(|| ws.projects().iter().find(|f| f.root == root))
+            .flatten()
+            .map(|f| f.name.clone())
+    }
+
     fn row(&self, i: usize, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
-        match &self.rows[i] {
-            Row::File { root, path, count } => {
-                let (name, dir) = match path.rsplit_once('/') {
-                    Some((d, n)) => (n.to_string(), d.to_string()),
-                    None => (path.clone(), String::new()),
-                };
-                let project = self
-                    .workspace
-                    .read(cx)
-                    .projects()
-                    .iter()
-                    .find(|f| &f.root == root)
-                    .map(|f| f.name.clone())
-                    .unwrap_or_default();
-                let several = self.workspace.read(cx).projects().len() > 1;
-                let folded = self.folded.contains(&(root.clone(), path.clone()));
-                let selected = self.selected == Some(i);
+        let grouped = self.cur.by_dir;
+        match &self.cur.rows[i] {
+            Row::Dir { root, dir, count } => {
+                let folded =
+                    fold_key(&self.cur.rows[i]).is_some_and(|k| self.cur.folded.contains(&k));
+                let selected = self.cur.selected == Some(i);
+                let root = root.trim_end_matches('/');
+                let name = self.workspace.read(cx).shown(&if dir.is_empty() {
+                    root.to_string()
+                } else {
+                    format!("{root}/{dir}")
+                });
                 h_flex()
-                    .id(("find-file", i))
+                    .id(("find-dir", i))
                     .h(px(ROW))
                     .w_full()
                     .gap(px(6.))
@@ -713,9 +957,46 @@ impl FindView {
                         v.fold(i, !folded, cx);
                     }))
                     .child(crate::project::chevron(!folded, p))
+                    .child(
+                        gpui::svg()
+                            .path(crate::assets::icon("folder"))
+                            .size(px(13.))
+                            .flex_none()
+                            .text_color(p.muted),
+                    )
+                    .child(div().min_w_0().truncate().child(name))
+                    .child(div().text_color(p.muted).child(count.to_string()))
+                    .into_any_element()
+            }
+            Row::File { root, path, count } => {
+                let (name, dir) = match path.rsplit_once('/') {
+                    Some((d, n)) => (n.to_string(), d.to_string()),
+                    None => (path.clone(), String::new()),
+                };
+                let project = self.project_name(root, cx).unwrap_or_default();
+                let several = !project.is_empty();
+                let dir = if grouped { String::new() } else { dir };
+                let folded = self.cur.folded.contains(&(root.clone(), path.clone()));
+                let selected = self.cur.selected == Some(i);
+                h_flex()
+                    .id(("find-file", i))
+                    .h(px(ROW))
+                    .w_full()
+                    .gap(px(6.))
+                    .pr(px(8.))
+                    .pl(px(if grouped { 20. } else { 8. }))
+                    .cursor_pointer()
+                    .when(selected, |d| d.bg(p.selection))
+                    .when(!selected, |d| d.hover(|s| s.bg(p.surface_2)))
+                    .on_click(cx.listener(move |v, _, window, cx| {
+                        window.focus(&v.list_focus, cx);
+                        v.select(i, cx);
+                        v.fold(i, !folded, cx);
+                    }))
+                    .child(crate::project::chevron(!folded, p))
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(name))
                     .child(div().min_w_0().truncate().text_color(p.muted).child(
-                        if several && !project.is_empty() {
+                        if several && !grouped {
                             if dir.is_empty() {
                                 project
                             } else {
@@ -729,7 +1010,7 @@ impl FindView {
                     .into_any_element()
             }
             Row::Line { m, .. } => {
-                let selected = self.selected == Some(i);
+                let selected = self.cur.selected == Some(i);
                 let lead = m.text.len() - m.text.trim_start().len();
                 let text = m.text[lead..].trim_end().replace('\t', "    ");
                 let ranges: Vec<Range<usize>> = byte_ranges(&m.text, &m.ranges)
@@ -749,7 +1030,7 @@ impl FindView {
                     .h(px(ROW))
                     .w_full()
                     .gap(px(8.))
-                    .pl(px(20.))
+                    .pl(px(if grouped { 32. } else { 20. }))
                     .pr(px(8.))
                     .cursor_pointer()
                     .when(selected, |d| d.bg(p.selection))
@@ -780,6 +1061,85 @@ impl FindView {
         }
     }
 
+    /// IntelliJ's Group by Directory, as a toggle.
+    fn group_chip(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        chip("find-group", "Folders".into(), self.by_dir, p)
+            .tooltip(|window, cx| {
+                gpui_component::tooltip::Tooltip::new("Group by directory").build(window, cx)
+            })
+            .on_click(cx.listener(|v, _, _, cx| v.group(cx)))
+    }
+
+    /// Pins the tab, as IntelliJ's Pin Tab: a new search then opens a tab
+    /// of its own and these results stay.
+    fn pin_chip(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let pinned = self.cur.pinned;
+        chip("find-pin", "Pin".into(), pinned, p)
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(if pinned {
+                    "Unpin the tab: the next search replaces these results"
+                } else {
+                    "Pin the tab: the next search opens another"
+                })
+                .build(window, cx)
+            })
+            .on_click(cx.listener(|v, _, _, cx| v.pin(cx)))
+    }
+
+    /// The window's tabs, each a search's or the server's results, pinned
+    /// ones marked; a click shows one, its cross closes it.
+    fn tab_strip(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut strip = h_flex()
+            .id("find-tabs")
+            .flex_none()
+            .h(px(26.))
+            .px(px(4.))
+            .gap(px(2.))
+            .overflow_x_scroll()
+            .border_b_1()
+            .border_color(p.border);
+        for j in 0..self.tabs.len() {
+            let on = j == self.active;
+            let tab = if on { &self.cur } else { &self.tabs[j] };
+            strip = strip.child(
+                h_flex()
+                    .id(("find-tab", j))
+                    .debug_selector(move || format!("find-tab-{j}"))
+                    .flex_none()
+                    .h(px(22.))
+                    .px(px(8.))
+                    .gap(px(5.))
+                    .rounded(px(4.))
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(p.selection))
+                    .when(!on, |d| d.hover(|s| s.bg(p.surface_2)))
+                    .when(tab.pinned, |d| {
+                        d.child(
+                            gpui::svg()
+                                .path(crate::assets::icon("pin"))
+                                .size(px(11.))
+                                .text_color(p.muted),
+                        )
+                    })
+                    .child(div().max_w(px(220.)).truncate().child(tab.name()))
+                    .child(
+                        div()
+                            .id(("find-tab-close", j))
+                            .px(px(2.))
+                            .text_color(p.muted)
+                            .hover(|s| s.text_color(p.text))
+                            .child("×")
+                            .on_click(cx.listener(move |v, _, window, cx| {
+                                cx.stop_propagation();
+                                v.close_tab(j, window, cx);
+                            })),
+                    )
+                    .on_click(cx.listener(move |v, _, window, cx| v.show_tab(j, window, cx))),
+            );
+        }
+        strip
+    }
+
     /// The selected match's file around it, beside the rows.
     fn preview_pane(&self, p: &Palette) -> gpui::AnyElement {
         let frame = v_flex()
@@ -789,11 +1149,11 @@ impl FindView {
             .border_l_1()
             .border_color(p.border)
             .bg(p.bg);
-        let selected = self.selected.and_then(|i| match self.rows.get(i) {
+        let selected = self.cur.selected.and_then(|i| match self.cur.rows.get(i) {
             Some(Row::Line { m, .. }) => Some(m),
             _ => None,
         });
-        let (Some((_, path, text)), Some(m)) = (&self.preview, selected) else {
+        let (Some((_, path, text)), Some(m)) = (&self.cur.preview, selected) else {
             return frame
                 .child(note("Select a match to see it in its file.", p))
                 .into_any_element();
@@ -848,17 +1208,20 @@ impl Render for FindView {
         };
         let status = if self.query.read(cx).value().is_empty() {
             String::new()
-        } else if self.pending > 0 && self.rows.is_empty() {
+        } else if self.cur.pending > 0 && self.cur.rows.is_empty() {
             "Searching…".into()
         } else {
-            let files = if self.files == 1 { "file" } else { "files" };
-            let matches = if self.matches == 1 {
+            let files = if self.cur.files == 1 { "file" } else { "files" };
+            let matches = if self.cur.matches == 1 {
                 "match"
             } else {
                 "matches"
             };
-            let mut s = format!("{} {matches} in {} {files}", self.matches, self.files);
-            if self.truncated {
+            let mut s = format!(
+                "{} {matches} in {} {files}",
+                self.cur.matches, self.cur.files
+            );
+            if self.cur.truncated {
                 s.push_str(", the first found");
             }
             s
@@ -914,6 +1277,8 @@ impl Render for FindView {
                     cx.notify();
                 })),
             )
+            .child(self.group_chip(&p, cx))
+            .child(self.pin_chip(&p, cx))
             .child(
                 div()
                     .w(px(190.))
@@ -928,15 +1293,15 @@ impl Render for FindView {
             State::Connecting => note("Connecting…", &p),
             State::Reconnecting(why) => note(State::reconnecting(&why), &p),
             State::Failed(e) => note(format!("Could not reach the Code service: {e}"), &p),
-            State::Ready if !self.errors.is_empty() && self.rows.is_empty() => {
-                note(self.errors.join("\n"), &p)
+            State::Ready if !self.cur.errors.is_empty() && self.cur.rows.is_empty() => {
+                note(self.cur.errors.join("\n"), &p)
             }
-            State::Ready if self.rows.is_empty() => note(
-                if self.title.is_some() {
+            State::Ready if self.cur.rows.is_empty() => note(
+                if self.cur.title.is_some() {
                     "No usages found."
                 } else if self.query.read(cx).value().is_empty() {
                     "Type to search the environment's projects."
-                } else if self.pending > 0 {
+                } else if self.cur.pending > 0 {
                     ""
                 } else {
                     "Nothing found."
@@ -956,11 +1321,11 @@ impl Render for FindView {
                         .child(
                             uniform_list(
                                 "find-results",
-                                self.shown.len(),
+                                self.cur.shown.len(),
                                 cx.processor(|v, range: Range<usize>, _, cx| {
                                     let p = palette::of(cx);
                                     range
-                                        .filter_map(|at| v.shown.get(at).copied())
+                                        .filter_map(|at| v.cur.shown.get(at).copied())
                                         .map(|i| v.row(i, &p, cx))
                                         .collect::<Vec<_>>()
                                 }),
@@ -976,7 +1341,8 @@ impl Render for FindView {
             .size_full()
             .min_h_0()
             .text_size(px(12.))
-            .child(match self.title.clone() {
+            .when(self.tabs.len() > 1, |d| d.child(self.tab_strip(&p, cx)))
+            .child(match self.cur.title.clone() {
                 // A language server's answer: what it is, and the way back
                 // to searching.
                 Some(title) => {
@@ -988,14 +1354,17 @@ impl Render for FindView {
                         .child(div().font_weight(FontWeight::SEMIBOLD).child(title))
                         .child(div().text_color(p.muted).child(format!(
                             "{} in {} file{}",
-                            self.matches,
-                            self.files,
-                            if self.files == 1 { "" } else { "s" }
+                            self.cur.matches,
+                            self.cur.files,
+                            if self.cur.files == 1 { "" } else { "s" }
                         )))
                         .child(div().flex_1())
+                        .child(self.group_chip(&p, cx))
+                        .child(self.pin_chip(&p, cx))
                         .child(chip("find-back", "Search ✕".into(), false, &p).on_click(
                             cx.listener(|v, _, _, cx| {
-                                v.title = None;
+                                v.fresh();
+                                v.cur.title = None;
                                 v.search(cx);
                             }),
                         ))

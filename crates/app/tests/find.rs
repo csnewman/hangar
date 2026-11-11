@@ -1,4 +1,6 @@
-use hangar_app::find::{Match, Row, byte_ranges, file_of, next_match, rows, visible};
+use hangar_app::find::{
+    Match, Row, byte_ranges, dir_of, file_of, fold_key, next_match, rows, rows_by_dir, visible,
+};
 
 fn m(path: &str, line: u32) -> Match {
     Match {
@@ -30,7 +32,7 @@ fn matches_are_grouped_by_file_and_a_nested_projects_found_once() {
         .iter()
         .filter_map(|r| match r {
             Row::File { root, path, count } => Some((root.as_str(), path.as_str(), *count)),
-            Row::Line { .. } => None,
+            _ => None,
         })
         .collect();
     assert_eq!(
@@ -126,4 +128,57 @@ fn folded_files_hide_their_lines_and_occurrences_step_through_every_match() {
     assert_eq!(file_of(&r, 2), Some(0));
     assert_eq!(file_of(&r, 3), Some(3));
     assert_eq!(file_of(&r, 4), Some(3));
+}
+
+#[test]
+fn grouped_by_directory_each_directory_heads_its_files_and_folds_them() {
+    let projects = vec![(
+        "/w".to_string(),
+        vec![
+            m("src/b.rs", 1),
+            m("README.md", 3),
+            m("src/a.rs", 2),
+            m("src/a.rs", 7),
+        ],
+    )];
+    let r = rows_by_dir(&projects);
+    let shape: Vec<String> = r
+        .iter()
+        .map(|row| match row {
+            Row::Dir { dir, count, .. } => format!("dir {dir:?} {count}"),
+            Row::File { path, count, .. } => format!("file {path} {count}"),
+            Row::Line { m, .. } => format!("line {}", m.line),
+        })
+        .collect();
+    // The project's root first, then by name; files as found within each.
+    assert_eq!(
+        shape,
+        [
+            "dir \"\" 1",
+            "file README.md 1",
+            "line 3",
+            "dir \"src\" 3",
+            "file src/b.rs 1",
+            "line 1",
+            "file src/a.rs 2",
+            "line 2",
+            "line 7",
+        ]
+    );
+
+    // A folded directory hides its files and their lines; a folded file
+    // under it, only its lines.
+    let mut folded = std::collections::HashSet::new();
+    folded.insert(fold_key(&r[3]).unwrap());
+    assert_eq!(visible(&r, &folded), [0, 1, 2, 3]);
+    folded.clear();
+    folded.insert(fold_key(&r[6]).unwrap());
+    assert_eq!(visible(&r, &folded), [0, 1, 2, 3, 4, 5, 6]);
+    assert!(fold_key(&r[2]).is_none());
+
+    assert_eq!(dir_of(&r, 8), Some(3));
+    assert_eq!(dir_of(&r, 2), Some(0));
+    assert_eq!(file_of(&r, 8), Some(6));
+    assert_eq!(file_of(&r, 3), None);
+    assert_eq!(next_match(&r, Some(2), true), Some(5));
 }

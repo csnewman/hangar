@@ -35,7 +35,7 @@
 //! SNAPSHOT_DRAG=X1,Y1;X2,Y2 drags from one point to the other;
 //! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would, and
 //! SNAPSHOT_PRESS="down enter |text| enter" then presses keys, typing what
-//! is between bars;
+//! is between bars, and SNAPSHOT_THEN_CLICK="X,Y;..." clicks after;
 //! SNAPSHOT_HOLD=seconds waits before the picture is taken.
 
 use std::time::Duration;
@@ -549,42 +549,7 @@ fn main() {
                     });
                     settle(cx, handle.into(), Duration::from_secs(1)).await;
                 }
-                let clicks: Vec<(f32, f32)> = std::env::var("SNAPSHOT_CLICK")
-                    .unwrap_or_default()
-                    .split(';')
-                    .filter_map(|e| {
-                        let (x, y) = e.split_once(',')?;
-                        Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
-                    })
-                    .collect();
-                for (x, y) in clicks {
-                    use gpui::{
-                        Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput,
-                    };
-                    let position = gpui::point(px(x), px(y));
-                    let _ = cx.update_window(handle.into(), |_, window, cx| {
-                        window.dispatch_event(
-                            PlatformInput::MouseDown(MouseDownEvent {
-                                button: MouseButton::Left,
-                                position,
-                                modifiers: Modifiers::none(),
-                                click_count: 1,
-                                first_mouse: false,
-                            }),
-                            cx,
-                        );
-                        window.dispatch_event(
-                            PlatformInput::MouseUp(MouseUpEvent {
-                                button: MouseButton::Left,
-                                position,
-                                modifiers: Modifiers::none(),
-                                click_count: 1,
-                            }),
-                            cx,
-                        );
-                    });
-                    settle(cx, handle.into(), Duration::from_secs(1)).await;
-                }
+                click_all(cx, handle.into(), "SNAPSHOT_CLICK").await;
                 // A drag with the left button, from one point to another.
                 let drag: Vec<(f32, f32)> = std::env::var("SNAPSHOT_DRAG")
                     .unwrap_or_default()
@@ -694,6 +659,7 @@ fn main() {
                     }
                     settle(cx, handle.into(), Duration::from_secs(1)).await;
                 }
+                click_all(cx, handle.into(), "SNAPSHOT_THEN_CLICK").await;
                 if let Some(hold) = std::env::var("SNAPSHOT_HOLD")
                     .ok()
                     .and_then(|h| h.parse::<f64>().ok())
@@ -725,6 +691,45 @@ fn main() {
 /// Waits, drawing the window every so often meanwhile: a window off the
 /// screen, or on a screen asleep, is not drawn by itself, and what its
 /// views make as they are first drawn would not be made.
+/// Clicks at each "X,Y" of a variable's list, split by semicolons,
+/// letting the window settle after each.
+async fn click_all(cx: &mut gpui::AsyncApp, handle: gpui::AnyWindowHandle, var: &str) {
+    use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput};
+    let clicks: Vec<(f32, f32)> = std::env::var(var)
+        .unwrap_or_default()
+        .split(';')
+        .filter_map(|e| {
+            let (x, y) = e.split_once(',')?;
+            Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+        })
+        .collect();
+    for (x, y) in clicks {
+        let position = gpui::point(px(x), px(y));
+        let _ = cx.update_window(handle, |_, window, cx| {
+            window.dispatch_event(
+                PlatformInput::MouseDown(MouseDownEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Modifiers::none(),
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                PlatformInput::MouseUp(MouseUpEvent {
+                    button: MouseButton::Left,
+                    position,
+                    modifiers: Modifiers::none(),
+                    click_count: 1,
+                }),
+                cx,
+            );
+        });
+        settle(cx, handle, Duration::from_secs(1)).await;
+    }
+}
+
 async fn settle(cx: &mut gpui::AsyncApp, window: gpui::AnyWindowHandle, d: Duration) {
     let until = std::time::Instant::now() + d;
     while std::time::Instant::now() < until {
