@@ -38,6 +38,14 @@ const ICONS: &[(&str, &str)] = &[
     ("more", r#"<path d="M5 12h.01M12 12h.01M19 12h.01"/>"#),
     ("play", r#"<path d="M7 4v16l13-8z"/>"#),
     (
+        "external",
+        r#"<path d="M15 3h6v6M10 14 21 3M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>"#,
+    ),
+    (
+        "copy",
+        r#"<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2"/>"#,
+    ),
+    (
         "stop",
         r#"<rect x="6" y="6" width="12" height="12" rx="1.5"/>"#,
     ),

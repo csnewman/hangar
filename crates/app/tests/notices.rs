@@ -27,6 +27,8 @@ fn env(name: &str, phase: &str, agents: Vec<AgentSession>) -> Environment {
         cpus: None,
         memory_mib: None,
         editor_path: None,
+        ports_public: false,
+        web_names: vec![],
         task: None,
         agents,
         created_at: now() - Duration::days(1),

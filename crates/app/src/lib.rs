@@ -30,6 +30,7 @@ pub mod notices;
 pub mod palette;
 pub mod place;
 pub mod places;
+pub mod ports;
 pub mod presence;
 pub mod problems;
 pub mod project;

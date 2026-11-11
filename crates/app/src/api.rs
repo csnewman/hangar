@@ -35,6 +35,11 @@ pub struct Me {
     /// Where the server's SSH gateway is, if it has one.
     #[serde(default)]
     pub ssh: Option<SshGateway>,
+    /// What follows env<short> in the hosts environments' own web servers
+    /// are reached on: a name and a hyphen before it reach a server by that
+    /// name, a number that port. None when the server has no public URL.
+    #[serde(default)]
+    pub environment_host_suffix: Option<String>,
 }
 
 /// Where environments are reached over SSH: ssh <environment>@<host> -p
@@ -71,6 +76,13 @@ pub struct Environment {
     /// The folder an editor opens in it: its first project.
     #[serde(default)]
     pub editor_path: Option<String>,
+    /// Whether anyone may reach its own web servers without signing in to
+    /// Hangar.
+    #[serde(default)]
+    pub ports_public: bool,
+    /// The names of its own web servers its template lists.
+    #[serde(default)]
+    pub web_names: Vec<String>,
     #[serde(default)]
     pub task: Option<Task>,
     #[serde(default)]
@@ -301,6 +313,20 @@ impl Client {
             Some(o) => self.get(&format!("/environments/{id}/logs/{log}?offset={o}")),
             None => self.get(&format!("/environments/{id}/logs/{log}")),
         }
+    }
+
+    /// Says whether anyone may reach the environment's own web servers
+    /// without signing in to Hangar, answered with the environment.
+    pub fn set_ports_public(&self, id: &str, public: bool) -> Result<Environment, Error> {
+        let req = self
+            .agent
+            .put(format!("{}/environments/{id}/ports", self.base))
+            .header("Authorization", self.auth())
+            .header("Content-Type", "application/json");
+        decode(self.send(
+            req,
+            Some(serde_json::json!({ "public": public }).to_string()),
+        )?)
     }
 
     /// Ends a terminal session, and what runs in it.

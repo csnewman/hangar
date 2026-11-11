@@ -33,6 +33,7 @@ use crate::model::{self, Card, Tone};
 use crate::palette::{self, Palette};
 use crate::place::PlaceConfig;
 use crate::places::Places;
+use crate::ports::PortsView;
 use crate::problems::ProblemsView;
 use crate::project::{OpenFile, ProjectView};
 use crate::termview::{self, TerminalView};
@@ -46,7 +47,10 @@ impl Tool {
     /// Whether it shows what the environment's own services say, and so
     /// nothing while it is not running.
     fn needs_running(self) -> bool {
-        matches!(self, Tool::Git | Tool::Find | Tool::Problems | Tool::Docker)
+        matches!(
+            self,
+            Tool::Git | Tool::Find | Tool::Problems | Tool::Docker | Tool::Ports
+        )
     }
 
     /// What it will hold, while the app cannot reach the environment's own
@@ -315,6 +319,7 @@ pub struct EnvTab {
     git: Option<Entity<GitView>>,
     docker: Option<Entity<DockerView>>,
     logs: Option<Entity<LogsView>>,
+    ports: Option<Entity<PortsView>>,
     find: Option<Entity<FindView>>,
     structure: Option<Entity<crate::structure::StructureView>>,
     /// Find in Files' pop-up while it is open.
@@ -503,6 +508,7 @@ impl EnvTab {
             git: None,
             docker: None,
             logs: None,
+            ports: None,
             find: None,
             structure: None,
             find_popup: None,
@@ -2197,6 +2203,20 @@ impl Render for EnvTab {
                 self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
                 self.docker = Some(view);
             }
+            let ports_open = self.is_open(Tool::Ports);
+            if self.ports.is_none() && ports_open {
+                let ws = self.workspace(&env, cx);
+                let (places, place, id) =
+                    (self.places.clone(), self.place.clone(), self.env.clone());
+                let view = cx.new(|cx| PortsView::new(ws, places, &place, &id, cx));
+                self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
+                self.ports = Some(view);
+            }
+            if let Some(v) = &self.ports
+                && v.read(cx).paused() == ports_open
+            {
+                v.update(cx, |v, cx| v.set_paused(!ports_open, cx));
+            }
             if self.git.is_none() && self.is_open(Tool::Git) {
                 let ws = self.workspace(&env, cx);
                 let view = cx.new(|cx| GitView::new(ws, cx));
@@ -3393,6 +3413,7 @@ impl EnvTab {
             Tool::Problems => self.problems.clone().map(|v| v.into_any_element()),
             Tool::Docker => self.docker.clone().map(|v| v.into_any_element()),
             Tool::Log => self.logs.clone().map(|v| v.into_any_element()),
+            Tool::Ports => self.ports.clone().map(|v| v.into_any_element()),
             _ => None,
         }
     }
@@ -3401,6 +3422,7 @@ impl EnvTab {
     fn summary(&self, t: Tool, cx: &App) -> Option<String> {
         match t {
             Tool::Docker => self.docker.as_ref()?.read(cx).summary(),
+            Tool::Ports => self.ports.as_ref()?.read(cx).summary(),
             _ => None,
         }
     }
