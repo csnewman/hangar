@@ -430,6 +430,9 @@ enum Tab {
     Diff(Entity<DiffView>),
     /// A terminal session moved into the editor area.
     Term(Entity<TerminalView>),
+    /// A file shown other than as text: a picture, its bytes, or a PDF or
+    /// medium this computer's app opens.
+    View(Entity<crate::viewer::FileViewer>),
 }
 
 impl Tab {
@@ -439,6 +442,7 @@ impl Tab {
             Tab::Doc(d) => d.read(cx).path().to_string(),
             Tab::Diff(d) => d.read(cx).spec().abs(),
             Tab::Term(_) => String::new(),
+            Tab::View(v) => v.read(cx).path().to_string(),
         }
     }
 
@@ -457,6 +461,10 @@ impl Tab {
                     title.to_string()
                 }
             }
+            Tab::View(v) => {
+                let path = v.read(cx).path();
+                path.rsplit('/').next().unwrap_or(path).to_string()
+            }
         }
     }
 
@@ -466,6 +474,11 @@ impl Tab {
         match (self, other) {
             (Tab::Term(a), Tab::Term(b)) => a == b,
             (Tab::Term(_), _) | (_, Tab::Term(_)) => false,
+            (Tab::View(a), Tab::View(b)) => {
+                let (a, b) = (a.read(cx), b.read(cx));
+                a.path() == b.path() && a.view() == b.view()
+            }
+            (Tab::View(_), _) | (_, Tab::View(_)) => false,
             (a, b) => a.path(cx) == path && matches!(a, Tab::Doc(_)) == matches!(b, Tab::Doc(_)),
         }
     }
@@ -476,6 +489,7 @@ impl Tab {
             Tab::Doc(d) => d.entity_id(),
             Tab::Diff(d) => d.entity_id(),
             Tab::Term(t) => t.entity_id(),
+            Tab::View(v) => v.entity_id(),
         }
     }
 
@@ -484,6 +498,7 @@ impl Tab {
             Tab::Doc(d) => d.focus_handle(cx),
             Tab::Diff(d) => d.focus_handle(cx),
             Tab::Term(t) => t.focus_handle(cx),
+            Tab::View(v) => v.focus_handle(cx),
         }
     }
 
@@ -492,6 +507,7 @@ impl Tab {
             Tab::Doc(d) => d.clone().into_any_element(),
             Tab::Diff(d) => d.clone().into_any_element(),
             Tab::Term(t) => t.clone().into_any_element(),
+            Tab::View(v) => v.clone().into_any_element(),
         }
     }
 }
@@ -865,18 +881,102 @@ impl EnvTab {
                 let f = f.read(cx);
                 f.path() == abs || f.asked() == abs
             }
+            Tab::View(v) => v.read(cx).path() == abs,
             Tab::Diff(_) | Tab::Term(_) => false,
         }) {
             Some(i) => i,
             None => {
-                let Some(view) = self.new_doc(root, &abs, window, cx) else {
-                    return;
+                let tab = match crate::viewer::opens_as(&abs) {
+                    crate::viewer::View::Text => match self.new_doc(root, &abs, window, cx) {
+                        Some(view) => Tab::Doc(view),
+                        None => return,
+                    },
+                    way => match self.new_viewer(&abs, way, cx) {
+                        Some(v) => Tab::View(v),
+                        None => return,
+                    },
                 };
-                self.files.push(Tab::Doc(view));
+                self.files.push(tab);
                 self.files.len() - 1
             }
         };
         self.show_file(i, window, cx);
+    }
+
+    /// Opens a file in a way chosen, as Open With does: as text, or in a
+    /// viewer, a tab already showing it so used again.
+    pub fn open_with(
+        &mut self,
+        root: &str,
+        path: &str,
+        way: crate::viewer::View,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::viewer::View;
+        let abs = if path.starts_with('/') {
+            path.to_string()
+        } else {
+            format!("{}/{path}", root.trim_end_matches('/'))
+        };
+        let at = self.files.iter().position(|f| match (f, way) {
+            (Tab::Doc(f), View::Text) => f.read(cx).path() == abs,
+            (Tab::View(v), way) => {
+                let v = v.read(cx);
+                v.path() == abs && v.view() == way
+            }
+            _ => false,
+        });
+        let i = match at {
+            Some(i) => i,
+            None => {
+                let tab = match way {
+                    View::Text => match self.new_doc(root, &abs, window, cx) {
+                        Some(view) => Tab::Doc(view),
+                        None => return,
+                    },
+                    way => match self.new_viewer(&abs, way, cx) {
+                        Some(v) => Tab::View(v),
+                        None => return,
+                    },
+                };
+                self.files.push(tab);
+                self.files.len() - 1
+            }
+        };
+        self.show_file(i, window, cx);
+    }
+
+    /// A viewer on a file, through the connection that reaches it.
+    fn new_viewer(
+        &mut self,
+        abs: &str,
+        way: crate::viewer::View,
+        cx: &mut Context<Self>,
+    ) -> Option<Entity<crate::viewer::FileViewer>> {
+        let code = self.code_for(abs, cx)?;
+        let view = cx.new(|cx| crate::viewer::FileViewer::new(code, abs, way, cx));
+        self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
+        Some(view)
+    }
+
+    /// Shows a file opened as text, found not to be, as its bytes in the
+    /// same place.
+    fn show_as_bytes(&mut self, doc: &Entity<DocEditor>, cx: &mut Context<Self>) {
+        let Some(i) = self
+            .files
+            .iter()
+            .position(|f| matches!(f, Tab::Doc(d) if d == doc))
+        else {
+            return;
+        };
+        let abs = doc.read(cx).path().to_string();
+        let Some(view) = self.new_viewer(&abs, crate::viewer::View::Hex, cx) else {
+            return;
+        };
+        let was = std::mem::replace(&mut self.files[i], Tab::View(view));
+        self.drop_tab(was, cx);
+        cx.notify();
     }
 
     /// An editor on a file, opened in its language server.
@@ -912,6 +1012,10 @@ impl EnvTab {
                 t.show_commit(e.0.clone(), cx)
             }),
         );
+        self.subs
+            .push(cx.subscribe(&view, |t, doc, _: &docedit::NotText, cx| {
+                t.show_as_bytes(&doc, cx)
+            }));
         self.subs.push(cx.subscribe_in(
             &view,
             window,
@@ -1013,6 +1117,13 @@ impl EnvTab {
                     let t = t.clone();
                     self.take_tab(i);
                     Tab::Term(t)
+                }
+                Tab::View(v) => {
+                    let (abs, way) = (v.read(cx).path().to_string(), v.read(cx).view());
+                    match self.new_viewer(&abs, way, cx) {
+                        Some(v) => Tab::View(v),
+                        None => return,
+                    }
                 }
             }
         };
@@ -1598,7 +1709,7 @@ impl EnvTab {
                     let d = d.read(cx);
                     Some((d.path().to_string(), d.text_and_caret(cx).0.to_string()))
                 }
-                Tab::Diff(_) | Tab::Term(_) => None,
+                Tab::Diff(_) | Tab::Term(_) | Tab::View(_) => None,
             })
             .collect();
         cx.spawn_in(window, async move |this, cx| {
@@ -2096,6 +2207,13 @@ impl EnvTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.subs.push(cx.subscribe_in(
+            view,
+            window,
+            |t, _, e: &crate::project::OpenWith, window, cx| {
+                t.open_with(&e.root, &e.path, e.way, window, cx)
+            },
+        ));
         self.subs.push(
             cx.subscribe_in(view, window, |t, _, e: &ShowDiff, window, cx| {
                 t.open_diff(e.0.clone(), window, cx)

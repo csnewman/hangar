@@ -57,6 +57,7 @@ pub mod transfer;
 pub mod treeops;
 pub mod ui;
 pub mod updown;
+pub mod viewer;
 pub mod wake;
 pub mod workspace;
 pub mod ws;

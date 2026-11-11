@@ -181,8 +181,9 @@ fn new_file_from_a_files_menu_is_made_beside_it(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(row.center(), MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(row.center(), MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
-    // New follows Open, a file's first item; its File comes first.
-    cx.simulate_keystrokes("down down right enter");
+    // New follows Open and Open With, a file's first items; its File comes
+    // first.
+    cx.simulate_keystrokes("down down down right enter");
     cx.run_until_parked();
     cx.simulate_input("notes.md");
     cx.simulate_keystrokes("enter");
@@ -253,7 +254,7 @@ fn a_name_taken_is_said_and_the_file_made_is_shown(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(row.center(), MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(row.center(), MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_keystrokes("down down right enter");
+    cx.simulate_keystrokes("down down down right enter");
     cx.run_until_parked();
     cx.simulate_input("main.rs");
     // Said as it is typed, before Enter, as VS Code says it.
@@ -884,7 +885,7 @@ fn a_file_is_compared_with_a_revision_chosen(cx: &mut TestAppContext) {
     // Git is the sixteenth item that can be chosen; its fourth is Compare
     // with Revision…, after Show History, Annotate and Compare with
     // Branch….
-    let to_git = vec!["down"; 15].join(" ");
+    let to_git = ["down"; 16].join(" ");
     cx.simulate_keystrokes(&format!("{to_git} right down down down enter"));
     until(cx, "the list of commits", |cx| {
         cx.debug_bounds("pick-row-1").is_some()

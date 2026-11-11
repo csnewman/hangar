@@ -969,13 +969,16 @@ impl DocEditor {
     fn read_props(&mut self, cx: &mut Context<Self>) {
         let call = self.code.call("fs.textProps", json!({ "path": self.path }));
         cx.spawn(async move |this, cx| {
-            let Ok(Ok(props)) = call
-                .await
-                .map(serde_json::from_value::<crate::props::Props>)
-            else {
+            let Ok(v) = call.await else { return };
+            // The service says a file is not text by giving it no encoding.
+            let not_text = v.get("encoding").is_some_and(Value::is_null);
+            let Ok(props) = serde_json::from_value::<crate::props::Props>(v) else {
                 return;
             };
             let _ = this.update(cx, |d, cx| {
+                if not_text {
+                    cx.emit(NotText);
+                }
                 d.props = Some(props);
                 cx.notify();
             });
@@ -1010,6 +1013,9 @@ impl DocEditor {
                         Ok(v) => d.opened(v, window, cx),
                         Err(e) => {
                             d.state = State::Failed(e);
+                            // A file not opened may be one that is not text,
+                            // which its properties say.
+                            d.read_props(cx);
                             cx.notify();
                         }
                     });
@@ -2512,6 +2518,12 @@ impl gpui::EventEmitter<crate::blame::ShowCommit> for DocEditor {}
 pub struct ShowChanges(pub String);
 
 impl gpui::EventEmitter<ShowChanges> for DocEditor {}
+
+/// Says the file opened is not text, so it is better shown as its bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotText;
+
+impl gpui::EventEmitter<NotText> for DocEditor {}
 
 impl Render for DocEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

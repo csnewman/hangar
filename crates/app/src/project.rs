@@ -77,6 +77,16 @@ pub struct OpenFile {
     pub path: String,
 }
 
+/// Asks for a file to be opened a way chosen, as Open With does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenWith {
+    pub root: String,
+    pub path: String,
+    pub way: crate::viewer::View,
+}
+
+impl gpui::EventEmitter<OpenWith> for ProjectView {}
+
 impl gpui::EventEmitter<OpenFile> for ProjectView {}
 impl gpui::EventEmitter<crate::diff::ShowDiff> for ProjectView {}
 
@@ -2249,6 +2259,33 @@ fn tree_menu(
                 })
             }),
         ));
+        // Open With: each way the file could be shown, the one it opens in
+        // without asking marked.
+        let (r, p, v, first) = (
+            root.clone(),
+            path.clone(),
+            view.clone(),
+            crate::viewer::opens_as(&t.abs),
+        );
+        let ways = crate::viewer::ways(&t.abs);
+        menu = menu.submenu("Open With", window, cx, move |mut menu, _, _| {
+            for way in ways.clone() {
+                let (r, p, v) = (r.clone(), p.clone(), v.clone());
+                menu = menu.item(
+                    PopupMenuItem::new(way.name())
+                        .checked(way == first)
+                        .on_click(move |_, _, cx| {
+                            let e = OpenWith {
+                                root: r.clone(),
+                                path: p.clone(),
+                                way,
+                            };
+                            let _ = v.update(cx, |_, cx| cx.emit(e));
+                        }),
+                );
+            }
+            menu
+        });
         if mark.is_some() {
             let (r, p) = (root.clone(), path.clone());
             menu = menu.item(emit(
