@@ -12,7 +12,7 @@ use gpui_component::{Root, WindowExt};
 use hangar_app::places::Places;
 use hangar_app::project::{OpenFile, ProjectView};
 use hangar_app::store::MemoryTokens;
-use hangar_app::treeops::{Target, join};
+use hangar_app::treeops::{Check, Target, check, join, place};
 use hangar_app::workspace::Workspace;
 use serde_json::{Value, json};
 use tungstenite::Message;
@@ -22,9 +22,11 @@ use tungstenite::Message;
 fn service(asked: mpsc::Sender<(String, Value)>) -> String {
     let ln = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", ln.local_addr().unwrap());
+    // The files made in the project's root, listed after its own.
+    let made = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     thread::spawn(move || {
         for tcp in ln.incoming() {
-            let asked = asked.clone();
+            let (asked, made) = (asked.clone(), made.clone());
             thread::spawn(move || {
                 let mut ws = tungstenite::accept(tcp.unwrap()).unwrap();
                 while let Ok(Message::Binary(b)) = ws.read() {
@@ -33,7 +35,7 @@ fn service(asked: mpsc::Sender<(String, Value)>) -> String {
                     let result = match method {
                         "hello" => json!({ "root": params["root"], "home": "/home/dev" }),
                         "workspace.get" => json!({ "folders": ["/home/dev/app"] }),
-                        "fs.list" if params["path"] == "" => {
+                        "fs.list" if params["path"] == "" || params["path"] == "/home/dev/app" => {
                             let mut entries = vec![
                                 json!({ "name": "src", "dir": true, "size": 0 }),
                                 json!({ "name": "main.rs", "dir": false, "size": 10 }),
@@ -43,13 +45,20 @@ fn service(asked: mpsc::Sender<(String, Value)>) -> String {
                             for i in 0..120 {
                                 entries.push(json!({ "name": format!("note{i:03}.md"), "dir": false, "size": 1 }));
                             }
+                            for name in made.lock().unwrap().iter() {
+                                entries.push(json!({ "name": name, "dir": false, "size": 0 }));
+                            }
                             Value::Array(entries)
                         }
-                        "fs.list" if params["path"] == "src" => json!([
+                        "fs.list"
+                            if params["path"] == "src" || params["path"] == "/home/dev/app/src" =>
+                        {
+                            json!([
                             { "name": ".env", "dir": false, "size": 3 },
                             { "name": "target", "dir": true, "size": 0, "ignored": true },
                             { "name": "lib.rs", "dir": false, "size": 3 },
-                        ]),
+                            ])
+                        }
                         "fs.list" => json!([]),
                         "git.status" => {
                             json!({ "repo": true, "changes": [], "repos": [{ "path": "" }] })
@@ -66,6 +75,19 @@ fn service(asked: mpsc::Sender<(String, Value)>) -> String {
                             let reply =
                                 json!({ "id": req["id"], "error": "main.rs already exists" });
                             send(&mut ws, reply);
+                            continue;
+                        }
+                        // A file made in the root is listed there, and the
+                        // folder said to have changed, as the watcher says.
+                        "fs.create" => {
+                            asked.send(("fs.create".into(), params.clone())).unwrap();
+                            let path = params["path"].as_str().unwrap_or_default();
+                            if let Some(name) = path.strip_prefix("/home/dev/app/") {
+                                made.lock().unwrap().push(name.to_string());
+                            }
+                            send(&mut ws, json!({ "id": req["id"], "result": null }));
+                            let changed = json!({ "event": "fs.changed", "params": { "dirs": ["/home/dev/app"] } });
+                            send(&mut ws, changed);
                             continue;
                         }
                         // A name src has is asked about.
@@ -145,8 +167,8 @@ fn new_file_from_a_files_menu_is_made_beside_it(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(row.center(), MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(row.center(), MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
-    // New File… follows Open, a file's first item.
-    cx.simulate_keystrokes("down down enter");
+    // New follows Open, a file's first item; its File comes first.
+    cx.simulate_keystrokes("down down right enter");
     cx.run_until_parked();
     cx.simulate_input("notes.md");
     cx.simulate_keystrokes("enter");
@@ -186,7 +208,7 @@ fn new_file_from_a_files_menu_is_made_beside_it(cx: &mut TestAppContext) {
     });
 }
 
-/// A name already taken is said under it in the pop-up, which stays; the
+/// A name already taken is said over it in the pop-up, which stays; the
 /// file made with another is selected and scrolled into view, here at the
 /// foot of a long folder.
 #[gpui::test]
@@ -217,11 +239,16 @@ fn a_name_taken_is_said_and_the_file_made_is_shown(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(row.center(), MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(row.center(), MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_keystrokes("down down enter");
+    cx.simulate_keystrokes("down down right enter");
     cx.run_until_parked();
     cx.simulate_input("main.rs");
+    // Said as it is typed, before Enter, as IntelliJ says it.
+    until(cx, "the name said to be taken", |cx| {
+        cx.update(|window, _| window.refresh());
+        cx.debug_bounds("name-wrong").is_some()
+    });
     cx.simulate_keystrokes("enter");
-    // The service refuses; the pop-up stays, for another name.
+    // Enter takes no name said to be wrong; the pop-up stays, for another.
     let asked_at = Instant::now();
     while asked_at.elapsed() < Duration::from_millis(400) {
         cx.run_until_parked();
@@ -250,19 +277,19 @@ fn a_name_taken_is_said_and_the_file_made_is_shown(cx: &mut TestAppContext) {
             (Some("/home/dev/app"), "")
         );
     });
-    // Its New File… makes the file in the project's root.
-    cx.simulate_keystrokes("down enter");
+    // Its New, File makes the file in the project's root.
+    cx.simulate_keystrokes("down right enter");
     cx.run_until_parked();
-    cx.simulate_input("note119.md");
+    cx.simulate_input("zz-last.md");
     cx.simulate_keystrokes("enter");
     until(cx, "the file made is selected", |cx| {
-        tree.read_with(cx, |t, _| t.selected().map(|s| s.path.clone())) == Some("note119.md".into())
+        tree.read_with(cx, |t, _| t.selected().map(|s| s.path.clone())) == Some("zz-last.md".into())
     });
     assert!(!cx.update(|window, cx| window.has_active_dialog(cx)));
     until(cx, "it is scrolled into view", |cx| {
         cx.update(|window, _| window.refresh());
         let height = cx.update(|w, _| w.bounds().size.height);
-        cx.debug_bounds("tree-row-note119.md")
+        cx.debug_bounds("tree-row-zz-last.md")
             .is_some_and(|b| b.top() >= gpui::px(0.) && b.bottom() <= height)
     });
 }
@@ -842,7 +869,7 @@ fn a_file_is_compared_with_a_revision_chosen(cx: &mut TestAppContext) {
     // Git is the sixteenth item that can be chosen; its fourth is Compare
     // with Revision…, after Show History, Annotate and Compare with
     // Branch….
-    let to_git = vec!["down"; 16].join(" ");
+    let to_git = vec!["down"; 15].join(" ");
     cx.simulate_keystrokes(&format!("{to_git} right down down down enter"));
     until(cx, "the list of commits", |cx| {
         cx.debug_bounds("pick-row-1").is_some()
@@ -1029,4 +1056,160 @@ fn several_rows_are_chosen_and_acted_on(cx: &mut TestAppContext) {
         p["paths"],
         json!(["/home/dev/app/note001.md", "/home/dev/app/note000.md"])
     );
+}
+
+#[test]
+fn names_are_read_and_checked_as_intellij_reads_them() {
+    assert_eq!(place("/home/dev/app", "notes.md"), "/home/dev/app/notes.md");
+    assert_eq!(
+        place("/home/dev/app", "docs/a/b.md"),
+        "/home/dev/app/docs/a/b.md"
+    );
+    assert_eq!(place("/home/dev/app", "./x/../y.md"), "/home/dev/app/y.md");
+    assert_eq!(place("/home/dev/app", "../../z"), "/home/z");
+    assert_eq!(place("/", "../a"), "/a");
+
+    let listed = |f: &str| -> Option<Vec<(String, bool)>> {
+        match f {
+            "/home/dev/app" => Some(vec![("src".into(), true), ("main.rs".into(), false)]),
+            "/home/dev/app/src" => Some(vec![("lib.rs".into(), false)]),
+            _ => None,
+        }
+    };
+    let at = |name: &str| check("/home/dev/app", name, None, &listed);
+    assert_eq!(at(""), Check::Fine, "nothing typed, nothing said");
+    assert_eq!(at("notes.md"), Check::Fine);
+    assert_eq!(
+        at("main.rs"),
+        Check::Wrong("A file named “main.rs” already exists".into())
+    );
+    assert_eq!(
+        at("src"),
+        Check::Wrong("A directory named “src” already exists".into())
+    );
+    assert_eq!(
+        at("src/lib.rs"),
+        Check::Wrong("A file named “lib.rs” already exists".into())
+    );
+    assert_eq!(at("src/new.rs"), Check::Fine);
+    assert_eq!(
+        at("main.rs/x"),
+        Check::Wrong("“main.rs” is a file, not a directory".into())
+    );
+    assert_eq!(
+        at("docs/main.rs"),
+        Check::Fine,
+        "made on the way: nothing there"
+    );
+    assert_eq!(at("x/.."), Check::Wrong("“..” is not a name".into()));
+    assert_eq!(
+        at("../a"),
+        Check::List("/home/dev".into()),
+        "its folder listed first"
+    );
+    assert_eq!(
+        check("/", "../a", None, &listed),
+        Check::Wrong("There is nothing above /".into())
+    );
+    assert_eq!(
+        check(
+            "/home/dev/app",
+            "main.rs",
+            Some("/home/dev/app/main.rs"),
+            &listed
+        ),
+        Check::Fine,
+        "what is renamed may keep its name"
+    );
+}
+
+/// ⌘N opens New's list under the row, File marked: Enter asks its name,
+/// and a name with folders in it makes them on the way. Directory's name is
+/// checked as File's is.
+#[gpui::test]
+fn new_from_the_keys_makes_folders_on_the_way(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    hangar_app::project::bind_keys(&mut cx.app.borrow_mut());
+    let (asked_tx, asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (opened_tx, opened) = mpsc::channel();
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        cx.subscribe(&view, move |_, _, e: &OpenFile, _| {
+            opened_tx.send(e.clone()).unwrap();
+        })
+        .detach();
+        Root::new(view, window, cx)
+    });
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-main.rs").is_some()
+    });
+    let row = cx.debug_bounds("tree-row-main.rs").unwrap();
+    cx.simulate_click(row.center(), Modifiers::none());
+    let new = if cfg!(target_os = "macos") {
+        "cmd-n"
+    } else {
+        "ctrl-n"
+    };
+    cx.simulate_keystrokes(new);
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(
+        cx.update(|window, cx| window.has_active_dialog(cx)),
+        "File, marked, asks its name"
+    );
+    cx.simulate_input("docs/today.md");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    let next = |cx: &mut VisualTestContext| {
+        let got = std::cell::RefCell::new(None);
+        until(cx, "a call", |_| {
+            if let Ok(m) = asked.try_recv() {
+                *got.borrow_mut() = Some(m);
+            }
+            got.borrow().is_some()
+        });
+        got.into_inner().unwrap()
+    };
+    let (m, p) = next(cx);
+    assert_eq!(
+        (m.as_str(), &p["path"]),
+        ("fs.mkdir", &json!("/home/dev/app/docs"))
+    );
+    let (m, p) = next(cx);
+    assert_eq!(
+        (m.as_str(), &p["path"]),
+        ("fs.create", &json!("/home/dev/app/docs/today.md"))
+    );
+    until(cx, "the file opened", |_| {
+        opened
+            .try_recv()
+            .is_ok_and(|o| o.root == "/home/dev/app" && o.path == "docs/today.md")
+    });
+
+    // Directory, the list's second item: a file on the way is said.
+    let row = cx.debug_bounds("tree-row-main.rs").unwrap();
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.simulate_keystrokes(new);
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+    cx.simulate_input("src/lib.rs/x");
+    until(cx, "the file on the way said", |cx| {
+        cx.update(|window, _| window.refresh());
+        cx.debug_bounds("name-wrong").is_some()
+    });
+    cx.simulate_keystrokes("enter");
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_millis(200) {
+        cx.run_until_parked();
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(asked.try_recv().is_err(), "nothing was made");
+    assert!(cx.update(|window, cx| window.has_active_dialog(cx)));
 }

@@ -12,7 +12,7 @@ use gpui::{
     ParentElement, Render, SharedString, Styled, Window, actions, div, prelude::*, px, svg,
 };
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
-use gpui_component::{h_flex, v_flex};
+use gpui_component::{Icon, h_flex, v_flex};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -196,7 +196,7 @@ actions!(
         Rename,
         MoveTo,
         CopyTo,
-        NewFile,
+        New,
         Copy,
         Cut,
         Paste,
@@ -209,7 +209,7 @@ actions!(
 /// keyboard.
 pub fn bind_keys(cx: &mut App) {
     let ctx = Some("ProjectTree");
-    // Delete, New File, Copy, Cut, Paste, Copy Path.
+    // Delete, New, Copy, Cut, Paste, Copy Path.
     #[cfg(target_os = "macos")]
     let keys = [
         "cmd-backspace",
@@ -245,7 +245,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("shift-f6", Rename, ctx),
         KeyBinding::new("f6", MoveTo, ctx),
         KeyBinding::new("f5", CopyTo, ctx),
-        KeyBinding::new(keys[1], NewFile, ctx),
+        KeyBinding::new(keys[1], New, ctx),
         KeyBinding::new(keys[2], Copy, ctx),
         KeyBinding::new(keys[3], Cut, ctx),
         KeyBinding::new(keys[4], Paste, ctx),
@@ -291,6 +291,11 @@ pub struct ProjectView {
     taken: Option<Taken>,
     shown: Shown,
     focus: FocusHandle,
+    /// New's list as ⌘N opens it, under the row selected, whose bounds
+    /// were last laid out here.
+    new_menu: Option<(Entity<PopupMenu>, gpui::Subscription)>,
+    new_unmarked: bool,
+    selected_at: Rc<Cell<Option<gpui::Bounds<gpui::Pixels>>>>,
     _sub: gpui::Subscription,
 }
 
@@ -317,10 +322,34 @@ impl ProjectView {
             anchor: None,
             shown: Shown::of(cx),
             focus: cx.focus_handle(),
+            new_menu: None,
+            new_unmarked: false,
+            selected_at: Rc::new(Cell::new(None)),
             _sub: sub,
         };
         view.sync(cx);
         view
+    }
+
+    /// Opens New's list under the row selected, as IntelliJ's ⌘N does in
+    /// its Project view, its first item marked for Enter.
+    fn open_new(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(t) = self.selected_target(cx) else {
+            return;
+        };
+        let (view, focus) = (cx.entity().downgrade(), self.focus.clone());
+        let menu = PopupMenu::build(window, cx, move |menu, _, cx| {
+            crate::ui::modal(cx);
+            new_items(menu.action_context(focus), &t, &view)
+        });
+        window.focus(&menu.focus_handle(cx), cx);
+        self.new_unmarked = true;
+        let sub = cx.subscribe(&menu, |v, _, _: &gpui::DismissEvent, cx| {
+            v.new_menu = None;
+            cx.notify();
+        });
+        self.new_menu = Some((menu, sub));
+        cx.notify();
     }
 
     /// The machine's files alone, from /: the Filesystem tool window.
@@ -1125,7 +1154,7 @@ fn rows(
 }
 
 impl Render for ProjectView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
         self.shown = Shown::of(cx);
         let scope = self.scope;
@@ -1297,7 +1326,18 @@ impl Render for ProjectView {
         // A row revealed is scrolled into view once it is laid out, which
         // may be after its folder has been listed.
         let (handle, reveal) = (self.scroll.clone(), self.reveal.clone());
+        // New's list marks a row only by its keys, which reach it once it
+        // is drawn: its first item, for Enter.
+        if std::mem::take(&mut self.new_unmarked) {
+            window.defer(cx, |window, cx| {
+                if let Ok(down) = cx.build_action("ui::SelectDown", None) {
+                    window.dispatch_action(down, cx);
+                }
+            });
+        }
+        let selected_at = self.selected_at.clone();
         let list = list.on_children_prepainted(move |rows, window, _| {
+            selected_at.set(at.and_then(|i| rows.get(i).copied()));
             let (Some(i), true) = (at, reveal.get()) else {
                 return;
             };
@@ -1359,26 +1399,7 @@ impl Render for ProjectView {
             .on_action(cx.listener(|v, _: &CopyTo, window, cx| {
                 v.transfer(crate::transfer::Op::Copy, window, cx)
             }))
-            .on_action(cx.listener(|v, _: &NewFile, window, cx| {
-                if let Some(t) = v.selected_target(cx) {
-                    let view = cx.entity().downgrade();
-                    let root = t.root.clone();
-                    treeops::new_file(&t, window, cx, move |abs, _, cx| {
-                        let path = match &root {
-                            Some(r) => abs
-                                .strip_prefix(&format!("{}/", r.trim_end_matches('/')))
-                                .unwrap_or(&abs)
-                                .to_string(),
-                            None => abs.clone(),
-                        };
-                        let root = root.clone().unwrap_or_else(|| "/".into());
-                        let _ = view.update(cx, |v, cx| {
-                            v.reveal(&abs, cx);
-                            cx.emit(OpenFile { root, path })
-                        });
-                    });
-                }
-            }))
+            .on_action(cx.listener(|v, _: &New, window, cx| v.open_new(window, cx)))
             .on_action(cx.listener(|v, _: &Copy, _, cx| v.take(false, cx)))
             .on_action(cx.listener(|v, _: &Cut, _, cx| v.take(true, cx)))
             .on_action(cx.listener(|v, _: &Paste, window, cx| {
@@ -1400,6 +1421,21 @@ impl Render for ProjectView {
                     .flex_1()
                     .min_h_0(),
             )
+            .when_some(self.new_menu.as_ref(), |d, (menu, _)| {
+                let at = self
+                    .selected_at
+                    .get()
+                    .map(|b| b.bottom_left() + gpui::point(px(22.), px(2.)));
+                d.child(
+                    gpui::deferred(
+                        gpui::anchored()
+                            .when_some(at, |a, at| a.position(at))
+                            .snap_to_window_with_margin(px(8.))
+                            .child(menu.clone()),
+                    )
+                    .with_priority(100),
+                )
+            })
     }
 }
 
@@ -1598,6 +1634,51 @@ impl ProjectView {
 /// What a menu item has the tree say to the tab.
 type Says = dyn Fn(&mut Context<ProjectView>);
 
+/// What New offers, as IntelliJ's New: a file, opened once made, and a
+/// directory, each selected in the tree.
+fn new_items(menu: PopupMenu, t: &Target, view: &gpui::WeakEntity<ProjectView>) -> PopupMenu {
+    let file = {
+        let (t, view) = (t.clone(), view.clone());
+        PopupMenuItem::new("File")
+            .icon(Icon::empty().path(assets::icon("file")))
+            .on_click(move |_, window, cx| new_file(&t, &view, window, cx))
+    };
+    let dir = {
+        let (t, view) = (t.clone(), view.clone());
+        PopupMenuItem::new("Directory")
+            .icon(Icon::empty().path(assets::icon("folder")))
+            .on_click(move |_, window, cx| {
+                let view = view.clone();
+                treeops::new_folder(&t, window, cx, move |abs, _, cx| {
+                    let _ = view.update(cx, |v, cx| v.reveal(&abs, cx));
+                })
+            })
+    };
+    menu.item(file).item(dir)
+}
+
+/// Makes a file, asking its name, then selects it and opens it: in its
+/// project, or as the machine's when the name led out of it.
+fn new_file(
+    t: &Target,
+    view: &gpui::WeakEntity<ProjectView>,
+    window: &mut Window,
+    cx: &mut gpui::App,
+) {
+    let (root, view) = (t.root.clone(), view.clone());
+    treeops::new_file(t, window, cx, move |abs, _, cx| {
+        let within = root.as_deref().and_then(|r| {
+            abs.strip_prefix(&format!("{}/", r.trim_end_matches('/')))
+                .map(|p| (r.to_string(), p.to_string()))
+        });
+        let (root, path) = within.unwrap_or_else(|| ("/".into(), abs.clone()));
+        let _ = view.update(cx, |v, cx| {
+            v.reveal(&abs, cx);
+            cx.emit(OpenFile { root, path })
+        });
+    });
+}
+
 /// Selects what was made at a path in the tree.
 type Selects = Box<dyn Fn(String, &mut Window, &mut gpui::App)>;
 
@@ -1613,26 +1694,6 @@ fn tree_menu(
     let item = |label: &str, t: &Target, f: fn(&Target, &mut Window, &mut gpui::App)| {
         let t = t.clone();
         PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| f(&t, window, cx))
-    };
-    let new_file = {
-        let (t, view) = (t.clone(), view.clone());
-        PopupMenuItem::new("New File…").on_click(move |_, window, cx| {
-            let (root, view) = (t.root.clone(), view.clone());
-            treeops::new_file(&t, window, cx, move |abs, _, cx| {
-                let path = match &root {
-                    Some(r) => abs
-                        .strip_prefix(&format!("{}/", r.trim_end_matches('/')))
-                        .unwrap_or(&abs)
-                        .to_string(),
-                    None => abs.clone(),
-                };
-                let root = root.clone().unwrap_or_else(|| "/".into());
-                let _ = view.update(cx, |v, cx| {
-                    v.reveal(&abs, cx);
-                    cx.emit(OpenFile { root, path })
-                });
-            });
-        })
     };
     // What makes or renames something, then selects it in the tree.
     let made = |label: &str, f: fn(&Target, &mut Window, &mut gpui::App, Selects)| {
@@ -1751,9 +1812,14 @@ fn tree_menu(
         }
         menu = menu.separator();
     }
+    let new = {
+        let (t, view) = (t.clone(), view.clone());
+        move |menu: PopupMenu, _: &mut Window, _: &mut Context<PopupMenu>| {
+            new_items(menu, &t, &view)
+        }
+    };
     let mut menu = menu
-        .item(new_file)
-        .item(made("New Folder…", treeops::new_folder))
+        .submenu("New", window, cx, new)
         .separator()
         .item(take("Cut", true).disabled(is_root))
         .item(take("Copy", false))
