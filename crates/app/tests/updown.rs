@@ -164,6 +164,14 @@ fn files_are_uploaded_and_a_folder_downloaded(cx: &mut TestAppContext) {
         (m.as_str(), p["path"].as_str()),
         ("fs.uploadStart", Some("/home/dev/app/a copy.txt"))
     );
+    // Under way, the upload says which file of how many and of how much.
+    let under_way = cx.update(|_, cx| hangar_app::updown::uploads(cx));
+    assert_eq!(under_way.len(), 1);
+    assert_eq!(
+        (under_way[0].file, under_way[0].files, under_way[0].total),
+        (1, 2, 8),
+        "hello and # b"
+    );
     let (m, p) = next(cx, &asked);
     assert_eq!(m, "fs.uploadWrite");
     assert_eq!(p["data"], BASE64.encode("hello"));
@@ -180,6 +188,11 @@ fn files_are_uploaded_and_a_folder_downloaded(cx: &mut TestAppContext) {
     assert_eq!(
         *made.borrow(),
         ["/home/dev/app/a copy.txt", "/home/dev/app/b.md"]
+    );
+    assert!(
+        cx.update(|_, cx| hangar_app::updown::uploads(cx))
+            .is_empty(),
+        "done, it goes"
     );
 
     // A folder downloads as a zip, removed from the environment after.

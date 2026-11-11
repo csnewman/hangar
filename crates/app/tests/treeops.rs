@@ -91,6 +91,19 @@ fn service(asked: mpsc::Sender<(String, Value)>) -> String {
                             send(&mut ws, changed);
                             continue;
                         }
+                        // What goes to the trash is answered with the
+                        // id that brings it back.
+                        "fs.trash" => {
+                            asked.send(("fs.trash".into(), params.clone())).unwrap();
+                            let items: Vec<Value> = params["paths"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .enumerate()
+                                .map(|(i, p)| json!({ "path": p, "id": format!("t{i}") }))
+                                .collect();
+                            Value::Array(items)
+                        }
                         // A name src has is asked about.
                         "fs.transfer" => {
                             asked.send(("fs.transfer".into(), params.clone())).unwrap();
@@ -1301,5 +1314,110 @@ fn names_are_typed_where_the_entry_goes(cx: &mut TestAppContext) {
     assert_eq!(
         (p["from"].as_str(), p["to"].as_str()),
         (Some("/home/dev/app/main.rs"), Some("/home/dev/app/app.rs"))
+    );
+}
+
+/// ⌘Z in the tree undoes what it did to files, as IntelliJ's does: a file
+/// deleted comes back out of the trash, ⇧⌘Z deletes it again, and a rename
+/// is renamed back.
+#[gpui::test]
+fn file_changes_are_undone_and_redone(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    hangar_app::project::bind_keys(&mut cx.app.borrow_mut());
+    let (asked_tx, asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        Root::new(view, window, cx)
+    });
+    cx.update(|window, _| window.activate_window());
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-main.rs").is_some()
+    });
+    let mac = cfg!(target_os = "macos");
+    let (delete, undo, redo) = if mac {
+        ("cmd-backspace", "cmd-z", "cmd-shift-z")
+    } else {
+        ("delete", "ctrl-z", "ctrl-shift-z")
+    };
+    let next = |cx: &mut VisualTestContext| {
+        let got = std::cell::RefCell::new(None);
+        until(cx, "a call", |_| {
+            if let Ok(m) = asked.try_recv() {
+                *got.borrow_mut() = Some(m);
+            }
+            got.borrow().is_some()
+        });
+        let got = got.into_inner().unwrap();
+        // Its answer is taken before the next key is pressed.
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(150) {
+            cx.run_until_parked();
+            thread::sleep(Duration::from_millis(10));
+        }
+        got
+    };
+    let row = cx.debug_bounds("tree-row-main.rs").unwrap();
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.simulate_keystrokes(delete);
+    until(cx, "Delete asks", |cx| {
+        cx.update(|window, _| window.refresh());
+        cx.debug_bounds("dialog-ok").is_some()
+    });
+    let ok = cx.debug_bounds("dialog-ok").unwrap().center();
+    cx.simulate_click(ok, Modifiers::none());
+    let (m, p) = next(cx);
+    assert_eq!(
+        (m.as_str(), &p["paths"]),
+        ("fs.trash", &json!(["/home/dev/app/main.rs"]))
+    );
+
+    let row = cx.debug_bounds("tree-row-src").unwrap();
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.simulate_keystrokes(undo);
+    let (m, p) = next(cx);
+    assert_eq!(m, "fs.restore");
+    assert_eq!(
+        p["items"],
+        json!([{ "path": "/home/dev/app/main.rs", "id": "t0" }])
+    );
+    cx.simulate_keystrokes(redo);
+    let (m, p) = next(cx);
+    assert_eq!(
+        (m.as_str(), &p["paths"]),
+        ("fs.trash", &json!(["/home/dev/app/main.rs"]))
+    );
+    cx.simulate_keystrokes(undo);
+    assert_eq!(next(cx).0, "fs.restore");
+
+    // A rename, undone by renaming back.
+    let row = cx.debug_bounds("tree-row-main.rs").unwrap();
+    cx.simulate_click(row.center(), Modifiers::none());
+    cx.simulate_keystrokes("shift-f6");
+    cx.run_until_parked();
+    cx.simulate_input("app");
+    cx.simulate_keystrokes("enter");
+    let (m, p) = next(cx);
+    assert_eq!(
+        (m.as_str(), p["to"].as_str()),
+        ("fs.rename", Some("/home/dev/app/app.rs"))
+    );
+    until(cx, "the row typed in goes", |cx| {
+        cx.update(|window, _| window.refresh());
+        cx.debug_bounds("tree-naming").is_none()
+    });
+    cx.simulate_keystrokes(undo);
+    let (m, p) = next(cx);
+    assert_eq!(
+        (m.as_str(), p["from"].as_str(), p["to"].as_str()),
+        (
+            "fs.rename",
+            Some("/home/dev/app/app.rs"),
+            Some("/home/dev/app/main.rs")
+        )
     );
 }

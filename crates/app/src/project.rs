@@ -229,6 +229,10 @@ pub fn bind_keys(cx: &mut App) {
         "ctrl-v",
         "ctrl-shift-c",
     ];
+    #[cfg(target_os = "macos")]
+    let undo = ["cmd-z", "cmd-shift-z"];
+    #[cfg(not(target_os = "macos"))]
+    let undo = ["ctrl-z", "ctrl-shift-z"];
     cx.bind_keys([
         KeyBinding::new("up", SelectUp, ctx),
         KeyBinding::new("down", SelectDown, ctx),
@@ -251,6 +255,9 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(keys[3], Cut, ctx),
         KeyBinding::new(keys[4], Paste, ctx),
         KeyBinding::new(keys[5], CopyPath, ctx),
+        // Undo and redo of what the tree did to files, as IntelliJ's.
+        KeyBinding::new(undo[0], gpui_component::input::Undo, ctx),
+        KeyBinding::new(undo[1], gpui_component::input::Redo, ctx),
         KeyBinding::new("escape", Escape, ctx),
     ]);
 }
@@ -832,6 +839,10 @@ impl ProjectView {
             }
             let _ = handle.update(cx, |_, window, cx| match result {
                 Ok(r) => {
+                    let done = crate::filehistory::Done::of_transfer(&from.code, op == "move", &r);
+                    if let Some(done) = done {
+                        crate::filehistory::record(done, cx);
+                    }
                     if let Some(went) = r["done"][0]["to"].as_str() {
                         let went = went.to_string();
                         let _ = this.update(cx, |v, cx| v.reveal(&went, cx));
@@ -1406,6 +1417,16 @@ impl Render for ProjectView {
                 v.transfer(crate::transfer::Op::Copy, window, cx)
             }))
             .on_action(cx.listener(|v, _: &New, window, cx| v.open_new(window, cx)))
+            .on_action(
+                cx.listener(|_, _: &gpui_component::input::Undo, window, cx| {
+                    crate::filehistory::undo(window, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|_, _: &gpui_component::input::Redo, window, cx| {
+                    crate::filehistory::redo(window, cx)
+                }),
+            )
             .on_action(cx.listener(|v, _: &Copy, _, cx| v.take(false, cx)))
             .on_action(cx.listener(|v, _: &Cut, _, cx| v.take(true, cx)))
             .on_action(cx.listener(|v, _: &Paste, window, cx| {
@@ -1427,6 +1448,7 @@ impl Render for ProjectView {
                     .flex_1()
                     .min_h_0(),
             )
+            .children(upload_strips(&p, cx))
             .when_some(self.new_menu.as_ref(), |d, (menu, _)| {
                 let at = self
                     .selected_at
@@ -1443,6 +1465,57 @@ impl Render for ProjectView {
                 )
             })
     }
+}
+
+/// The uploads under way, at the window's foot: into which folder, which
+/// file of how many, and how much has gone, with a bar.
+fn upload_strips(p: &Palette, cx: &App) -> Vec<AnyElement> {
+    crate::updown::uploads(cx)
+        .into_iter()
+        .map(|u| {
+            let done = if u.total > 0 {
+                (u.sent as f32 / u.total as f32).clamp(0., 1.)
+            } else {
+                0.
+            };
+            let folder = u.to.rsplit('/').find(|s| !s.is_empty()).unwrap_or("/");
+            let which = if u.files > 1 {
+                format!("Uploading file {} of {} to {folder}", u.file, u.files)
+            } else {
+                format!("Uploading to {folder}")
+            };
+            let (sent, total) = (
+                crate::docker::bytes(u.sent as f64),
+                crate::docker::bytes(u.total as f64),
+            );
+            v_flex()
+                .debug_selector(|| "upload-progress".into())
+                .flex_none()
+                .px(px(8.))
+                .py(px(5.))
+                .gap(px(4.))
+                .border_t_1()
+                .border_color(p.border)
+                .text_size(px(11.))
+                .text_color(p.muted)
+                .child(format!("{which} · {sent} of {total}"))
+                .child(
+                    div()
+                        .h(px(3.))
+                        .w_full()
+                        .rounded(px(1.5))
+                        .bg(p.surface_2)
+                        .child(
+                            div()
+                                .h_full()
+                                .rounded(px(1.5))
+                                .bg(p.accent)
+                                .w(gpui::relative(done)),
+                        ),
+                )
+                .into_any_element()
+        })
+        .collect()
 }
 
 fn muted(text: impl Into<SharedString>, p: &Palette) -> impl IntoElement {
@@ -1898,12 +1971,26 @@ impl ProjectView {
         };
         n.busy = true;
         let (opens, root) = (n.kind == Kind::File, n.root.clone());
+        let (code, renamed) = (n.code.clone(), n.renamed.as_ref().map(|r| r.1.clone()));
         cx.spawn_in(window, async move |this, cx| {
             let made = making.await;
             let _ = this.update_in(cx, |v, window, cx| {
                 match made {
                     Ok(path) => {
                         v.naming = None;
+                        crate::filehistory::record(
+                            match renamed {
+                                Some(from) => crate::filehistory::Done::Moved {
+                                    code,
+                                    pairs: vec![(from, path.clone())],
+                                },
+                                None => crate::filehistory::Done::Made {
+                                    code,
+                                    paths: vec![path.clone()],
+                                },
+                            },
+                            cx,
+                        );
                         if !left {
                             window.focus(&v.focus, cx);
                         }

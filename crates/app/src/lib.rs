@@ -15,6 +15,7 @@ pub mod docker;
 pub mod doubleshift;
 pub mod envlogs;
 pub mod envtab;
+pub mod filehistory;
 pub mod find;
 pub mod findpop;
 pub mod fuzzy;

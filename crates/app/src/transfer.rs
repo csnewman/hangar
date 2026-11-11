@@ -227,6 +227,12 @@ fn go(asked: &Rc<Asked>, clash: &str, window: &mut Window, cx: &mut App) {
                 }
                 Ok(r) => {
                     window.close_dialog(cx);
+                    let moved = matches!(asked.op, Op::Move);
+                    if let Some(done) =
+                        crate::filehistory::Done::of_transfer(&asked.target.code, moved, &r)
+                    {
+                        crate::filehistory::record(done, cx);
+                    }
                     if let Some(went) = r["done"][0]["to"].as_str() {
                         (asked.went)(went.to_string(), window, cx);
                     }

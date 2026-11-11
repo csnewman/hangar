@@ -436,7 +436,24 @@ pub fn trash(t: &Target, window: &mut Window, cx: &mut App) {
         "Move to Trash",
         window,
         cx,
-        move |window, cx| run(&code, "fs.trash", json!({ "paths": [path] }), window, cx),
+        move |window, cx| trash_paths(&code, vec![path.clone()], window, cx),
+    );
+}
+
+/// Moves paths to the trash, kept to be undone.
+fn trash_paths(code: &Code, paths: Vec<String>, window: &mut Window, cx: &mut App) {
+    let c = code.clone();
+    run_then(
+        code,
+        "fs.trash",
+        json!({ "paths": paths }),
+        window,
+        cx,
+        move |v, _, cx| {
+            if let Some(done) = crate::filehistory::Done::of_trash(&c, &v) {
+                crate::filehistory::record(done, cx);
+            }
+        },
     );
 }
 
@@ -455,7 +472,7 @@ pub fn trash_all(all: &[Target], window: &mut Window, cx: &mut App) {
                 "Move to Trash",
                 window,
                 cx,
-                move |window, cx| run(&code, "fs.trash", json!({ "paths": paths }), window, cx),
+                move |window, cx| trash_paths(&code, paths.clone(), window, cx),
             );
         }
     }
@@ -474,12 +491,18 @@ pub struct Taken {
 /// is given a new one rather than written over.
 pub fn paste(taken: &Taken, t: &Target, window: &mut Window, cx: &mut App) {
     let op = if taken.cut { "move" } else { "copy" };
-    run(
+    let (code, cut) = (taken.code.clone(), taken.cut);
+    run_then(
         &taken.code,
         "fs.transfer",
         json!({ "op": op, "from": taken.paths, "to": t.folder(), "clash": "rename" }),
         window,
         cx,
+        move |v, _, cx| {
+            if let Some(done) = crate::filehistory::Done::of_transfer(&code, cut, &v) {
+                crate::filehistory::record(done, cx);
+            }
+        },
     );
 }
 

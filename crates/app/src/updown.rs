@@ -23,6 +23,52 @@ const CHUNK: usize = 4 << 20;
 /// The most read in one message.
 const READ: u64 = 8 << 20;
 
+/// An upload under way, as the Project window shows it: into which
+/// folder, how many files and which is being sent, and how much of all of
+/// them has gone.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Uploading {
+    pub to: String,
+    pub files: usize,
+    pub file: usize,
+    pub sent: u64,
+    pub total: u64,
+}
+
+/// The uploads under way, by a number each.
+#[derive(Default)]
+struct Uploads {
+    next: u64,
+    under_way: Vec<(u64, Uploading)>,
+}
+
+impl gpui::Global for Uploads {}
+
+/// The uploads under way.
+pub fn uploads(cx: &App) -> Vec<Uploading> {
+    cx.try_global::<Uploads>()
+        .map(|u| u.under_way.iter().map(|(_, u)| u.clone()).collect())
+        .unwrap_or_default()
+}
+
+/// Changes an upload's progress and redraws, so the Project window shows
+/// it; None takes it away.
+fn progress(id: u64, change: impl FnOnce(&mut Option<Uploading>), cx: &mut App) {
+    let u = cx.default_global::<Uploads>();
+    let at = u.under_way.iter().position(|(i, _)| *i == id);
+    let mut it = at.map(|i| u.under_way[i].1.clone());
+    change(&mut it);
+    match (at, it) {
+        (Some(i), Some(it)) => u.under_way[i].1 = it,
+        (Some(i), None) => {
+            u.under_way.remove(i);
+        }
+        (None, Some(it)) => u.under_way.push((id, it)),
+        (None, None) => {}
+    }
+    cx.refresh_windows();
+}
+
 /// A file of this computer's to upload, and where it goes under the
 /// folder: its name, or its path within a folder chosen.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -159,10 +205,24 @@ pub fn upload(
         return;
     }
     let handle = window.window_handle();
-    cx.spawn(
-        async move |cx| match send(&code, uploads, &to, handle, cx).await {
+    let id = {
+        let u = cx.default_global::<Uploads>();
+        u.next += 1;
+        u.next
+    };
+    cx.spawn(async move |cx| {
+        let sent = send(&code, uploads, &to, handle, id, cx).await;
+        cx.update(|cx| progress(id, |u| *u = None, cx));
+        match sent {
             Ok(Some(made)) => {
                 let _ = handle.update(cx, |_, window, cx| {
+                    crate::filehistory::record(
+                        crate::filehistory::Done::Made {
+                            code: code.clone(),
+                            paths: made.clone(),
+                        },
+                        cx,
+                    );
                     let what = match made.as_slice() {
                         [one] => one.rsplit('/').next().unwrap_or(one).to_string(),
                         many => format!("{} items", many.len()),
@@ -180,8 +240,8 @@ pub fn upload(
                     window.push_notification(Notification::error(format!("Upload: {e}")), cx)
                 });
             }
-        },
-    )
+        }
+    })
     .detach();
 }
 
@@ -191,6 +251,7 @@ async fn send(
     mut uploads: Vec<Upload>,
     to: &str,
     handle: AnyWindowHandle,
+    id: u64,
     cx: &mut AsyncApp,
 ) -> Result<Option<Vec<String>>, String> {
     let listed = code.call("fs.list", json!({ "path": to })).await?;
@@ -229,7 +290,34 @@ async fn send(
         }
     }
     let mut made = Vec::new();
-    for u in uploads {
+    let sizes: Vec<PathBuf> = uploads.iter().map(|u| u.local.clone()).collect();
+    let total: u64 = cx
+        .background_spawn(async move {
+            sizes
+                .iter()
+                .filter_map(|p| std::fs::metadata(p).ok())
+                .map(|m| m.len())
+                .sum()
+        })
+        .await;
+    let files = uploads.len();
+    cx.update(|cx| {
+        progress(
+            id,
+            |u| {
+                *u = Some(Uploading {
+                    to: to.to_string(),
+                    files,
+                    file: 1,
+                    sent: 0,
+                    total,
+                })
+            },
+            cx,
+        )
+    });
+    for (n, u) in uploads.into_iter().enumerate() {
+        cx.update(|cx| progress(id, |p| p.iter_mut().for_each(|p| p.file = n + 1), cx));
         let mut parts: Vec<String> = u.rel.split('/').map(str::to_string).collect();
         if let Some(n) = rename.get(&parts[0]) {
             parts[0] = n.clone();
@@ -237,7 +325,7 @@ async fn send(
         let path = join(to, &parts.join("/"));
         let token = code.call("fs.uploadStart", json!({ "path": path })).await?;
         let token = token.as_str().unwrap_or_default().to_string();
-        let sent = write_all(code, &token, &u.local, cx).await;
+        let sent = write_all(code, &token, &u.local, id, cx).await;
         if let Err(e) = sent {
             let _ = code.call("fs.uploadAbort", json!({ "token": token })).await;
             return Err(e);
@@ -256,11 +344,13 @@ fn top(u: &Upload) -> &str {
     u.rel.split('/').next().unwrap_or(&u.rel)
 }
 
-/// A file's contents, a part at a time.
+/// A file's contents, a part at a time, each counted in the upload's
+/// progress.
 async fn write_all(
     code: &Code,
     token: &str,
     local: &Path,
+    id: u64,
     cx: &mut AsyncApp,
 ) -> Result<(), String> {
     let mut at = 0u64;
@@ -283,6 +373,8 @@ async fn write_all(
         let data = BASE64.encode(&part);
         code.call("fs.uploadWrite", json!({ "token": token, "data": data }))
             .await?;
+        let n = part.len() as u64;
+        cx.update(|cx| progress(id, |p| p.iter_mut().for_each(|p| p.sent += n), cx));
         if part.len() < CHUNK {
             return Ok(());
         }
