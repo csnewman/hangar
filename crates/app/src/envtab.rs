@@ -329,6 +329,8 @@ pub struct EnvTab {
     pending_find: Option<Search>,
     /// A file's history asked for before the Git window was made.
     pending_history: Option<crate::project::ShowHistory>,
+    /// A commit asked for before the Git window was made.
+    pending_commit: Option<String>,
     /// A language server's usages to list in the Find window once it is
     /// made: what of, and each project's lines.
     pending_usages: Option<(String, crate::find::Lines)>,
@@ -517,6 +519,7 @@ impl EnvTab {
             find_sub: None,
             pending_find: None,
             pending_history: None,
+            pending_commit: None,
             pending_usages: None,
             last_search: None,
             problems: None,
@@ -841,6 +844,11 @@ impl EnvTab {
             });
         let view = cx.new(|cx| DocEditor::new(&client, &env, root, abs, me, window, cx));
         self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
+        self.subs.push(
+            cx.subscribe(&view, |t, _, e: &crate::blame::ShowCommit, cx| {
+                t.show_commit(e.0.clone(), cx)
+            }),
+        );
         self.attach_language(&view, cx);
         Some(view)
     }
@@ -1849,6 +1857,11 @@ impl EnvTab {
         self.subs.push(cx.subscribe_in(
             view,
             window,
+            |t, _, e: &crate::project::Annotate, window, cx| t.annotate(e, window, cx),
+        ));
+        self.subs.push(cx.subscribe_in(
+            view,
+            window,
             |t, _, e: &crate::project::OpenInTerminal, window, cx| {
                 t.new_session(Some(e.0.clone()), None, window, cx)
             },
@@ -1885,6 +1898,32 @@ impl EnvTab {
             abs: e.abs.clone(),
         };
         self.open_diff(Spec::compare(&root, &path, other), window, cx);
+    }
+
+    /// Shows a commit in the Git window, opening it: one an annotation
+    /// names.
+    fn show_commit(&mut self, hash: String, cx: &mut Context<Self>) {
+        if !self.is_open(Tool::Git) {
+            self.toggle(Tool::Git, cx);
+        }
+        match self.git.clone() {
+            Some(view) => view.update(cx, |v, cx| v.select(hash, cx)),
+            None => self.pending_commit = Some(hash),
+        }
+        cx.notify();
+    }
+
+    /// Opens a file annotated with git blame.
+    fn annotate(
+        &mut self,
+        e: &crate::project::Annotate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_file(&e.root, &e.path, window, cx);
+        if let Some(f) = self.active_file() {
+            f.update(cx, |f, cx| f.set_blame(true, cx));
+        }
     }
 
     /// Shows a file's history in the Git window, opening it.
@@ -2317,6 +2356,9 @@ impl Render for EnvTab {
             }
             if let (Some(view), Some(h)) = (self.git.clone(), self.pending_history.take()) {
                 view.update(cx, |v, cx| v.show_history(&h.root, &h.path, cx));
+            }
+            if let (Some(view), Some(hash)) = (self.git.clone(), self.pending_commit.take()) {
+                view.update(cx, |v, cx| v.select(hash, cx));
             }
         }
         // The worker keeps the logs whatever the environment is doing.

@@ -839,10 +839,11 @@ fn a_file_is_compared_with_a_revision_chosen(cx: &mut TestAppContext) {
     cx.simulate_mouse_down(row.center(), MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(row.center(), MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
-    // Git is the sixteenth item that can be chosen; its third is Compare
-    // with Revision….
+    // Git is the sixteenth item that can be chosen; its fourth is Compare
+    // with Revision…, after Show History, Annotate and Compare with
+    // Branch….
     let to_git = vec!["down"; 16].join(" ");
-    cx.simulate_keystrokes(&format!("{to_git} right down down enter"));
+    cx.simulate_keystrokes(&format!("{to_git} right down down down enter"));
     until(cx, "the list of commits", |cx| {
         cx.debug_bounds("pick-row-1").is_some()
     });

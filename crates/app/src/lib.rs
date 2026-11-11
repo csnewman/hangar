@@ -3,6 +3,7 @@
 
 pub mod api;
 pub mod assets;
+pub mod blame;
 pub mod branch;
 pub mod branches;
 pub mod code;

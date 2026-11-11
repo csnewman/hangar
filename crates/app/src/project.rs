@@ -140,6 +140,16 @@ pub fn may_drop(from: &str, dir: bool, into: &str) -> bool {
     into != parent && !(dir && (into == from || into.starts_with(&format!("{from}/"))))
 }
 
+/// Asks for a file to be opened annotated with git blame: its project's
+/// root and its path from there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Annotate {
+    pub root: String,
+    pub path: String,
+}
+
+impl gpui::EventEmitter<Annotate> for ProjectView {}
+
 /// Asks for a terminal session in a folder, by its absolute path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenInTerminal(pub String);
@@ -2047,7 +2057,19 @@ fn git_menu(
                 }
             })
         };
+        let annotate = {
+            let view = view.clone();
+            let (root, path) = (root.to_string(), path.to_string());
+            PopupMenuItem::new("Annotate with Git Blame").on_click(move |_, _, cx| {
+                let e = Annotate {
+                    root: root.clone(),
+                    path: path.clone(),
+                };
+                let _ = view.update(cx, |_, cx| cx.emit(e));
+            })
+        };
         menu = menu
+            .item(annotate)
             .item(compare("Compare with Branch…", true))
             .item(compare("Compare with Revision…", false));
     }

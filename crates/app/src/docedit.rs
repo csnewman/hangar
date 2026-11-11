@@ -375,6 +375,7 @@ gpui::actions!(
         JoinLines,
         Reformat,
         ToggleSoftWrap,
+        ToggleBlame,
     ]
 );
 
@@ -476,6 +477,7 @@ fn editor_menu(
     menu: gpui_component::native_menu::NativeMenu,
     comment: bool,
     wrap: bool,
+    blame: bool,
     _: &App,
 ) -> gpui_component::native_menu::NativeMenu {
     use gpui_component::input::{Copy, Cut, GoToDefinition, Paste, SelectAll};
@@ -493,6 +495,7 @@ fn editor_menu(
         .menu("Select All", Box::new(SelectAll))
         .separator()
         .menu_with_check("Soft-Wrap", wrap, Box::new(ToggleSoftWrap))
+        .menu_with_check("Annotate with Git Blame", blame, Box::new(ToggleBlame))
 }
 
 pub struct DocEditor {
@@ -531,6 +534,10 @@ pub struct DocEditor {
     wrapped: Option<bool>,
     /// The language server's diagnostics for the file, drawn in it.
     diagnostics: Vec<lsp_types::Diagnostic>,
+    /// Who last changed each line, while it is annotated; why it could
+    /// not be.
+    blame: Option<crate::blame::Blame>,
+    blame_note: Option<String>,
     /// Who this app's user is to the others: a name and a colour.
     me: Option<(String, String)>,
     /// The other tabs in the document, and those whose presence came from
@@ -568,7 +575,13 @@ impl DocEditor {
         let edits = cx.subscribe_in(&editor, window, |this, _, e: &InputEditsEvent, _, cx| {
             this.typed(e, cx)
         });
-        let moved = cx.observe(&editor, |this, _, cx| this.selection_moved(cx));
+        let moved = cx.observe(&editor, |this, _, cx| {
+            this.selection_moved(cx);
+            // The annotations follow the lines as they scroll.
+            if this.blame.is_some() {
+                cx.notify();
+            }
+        });
         let (tx, rx) = async_channel::unbounded::<Notice>();
         let code = Code::connect(client, env, root, move |n| tx.send_blocking(n).is_ok());
         cx.spawn_in(window, async move |this: WeakEntity<Self>, cx| {
@@ -602,6 +615,8 @@ impl DocEditor {
             drawn: false,
             wrapped: None,
             diagnostics: vec![],
+            blame: None,
+            blame_note: None,
             me,
             remotes: HashMap::new(),
             early: HashMap::new(),
@@ -615,6 +630,117 @@ impl DocEditor {
 
     pub fn path(&self) -> &str {
         &self.path
+    }
+
+    pub fn blame(&self) -> Option<&crate::blame::Blame> {
+        self.blame.as_ref()
+    }
+
+    /// Annotate with Git Blame, or the annotations taken away.
+    pub fn set_blame(&mut self, on: bool, cx: &mut Context<Self>) {
+        if !on {
+            self.blame = None;
+            self.blame_note = None;
+            cx.notify();
+            return;
+        }
+        if self.blame.is_none() {
+            self.read_blame(cx);
+        }
+    }
+
+    fn read_blame(&mut self, cx: &mut Context<Self>) {
+        let call = self
+            .code
+            .call("git.blame", serde_json::json!({ "path": self.path }));
+        cx.spawn(async move |this, cx| {
+            let got = call.await.and_then(|v| {
+                serde_json::from_value::<crate::blame::Blame>(v).map_err(|e| e.to_string())
+            });
+            let _ = this.update(cx, |d, cx| {
+                match got {
+                    Ok(b) => {
+                        d.blame = Some(b);
+                        d.blame_note = None;
+                    }
+                    Err(e) => d.blame_note = Some(format!("No annotations: {e}")),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The column of annotations beside the editor: each line shown, its
+    /// commit's date and author, at the line's height.
+    fn blame_column(
+        &self,
+        p: &crate::palette::Palette,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        use gpui_component::RopeExt;
+        let Some(blame) = &self.blame else {
+            return div().into_any_element();
+        };
+        let e = self.editor.read(cx);
+        let top = e.input_bounds().origin.y;
+        let height = e.line_height().unwrap_or(px(18.));
+        let text = e.text();
+        let now = chrono::Local::now();
+        let mut col = div()
+            .id("blame")
+            .relative()
+            .w(px(180.))
+            .h_full()
+            .flex_none()
+            .overflow_hidden()
+            .border_r_1()
+            .border_color(p.border)
+            .bg(p.surface);
+        let mut last: Option<&str> = None;
+        for line in 0..text.lines_len().min(blame.lines.len()) {
+            let at = text.line_start_offset(line);
+            let Some(b) = e.range_to_bounds(&(at..at)) else {
+                last = None;
+                continue;
+            };
+            let hash = blame.lines[line].as_str();
+            // A run of lines from one commit is labelled once.
+            let first = last != Some(hash);
+            last = Some(hash);
+            let (label, about) = (
+                blame.label(line, now).unwrap_or_default(),
+                blame.about(line).unwrap_or_default(),
+            );
+            let show = hash.to_string();
+            col = col.child(
+                div()
+                    .id(("blame-line", line))
+                    .debug_selector(move || format!("blame-{line}"))
+                    .absolute()
+                    .top(b.top() - top)
+                    .left_0()
+                    .w_full()
+                    .h(height)
+                    .px(px(6.))
+                    .flex()
+                    .items_center()
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .truncate()
+                    .when(first, |d| d.child(label))
+                    .hover(|s| s.bg(p.surface_2))
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(about.clone()).build(window, cx)
+                    })
+                    .when(show != crate::blame::UNCOMMITTED, |d| {
+                        d.cursor_pointer().on_click(cx.listener(move |_, _, _, cx| {
+                            cx.emit(crate::blame::ShowCommit(show.clone()))
+                        }))
+                    }),
+            );
+        }
+        col.into_any_element()
     }
 
     /// The path asked for when it was opened.
@@ -701,6 +827,9 @@ impl DocEditor {
                         self.save_error = p["error"].as_str().map(str::to_string);
                         if let Some(v) = p["version"].as_u64() {
                             self.saved = v;
+                        }
+                        if self.blame.is_some() {
+                            self.read_blame(cx);
                         }
                         cx.notify();
                     }
@@ -1342,6 +1471,8 @@ impl DocEditor {
     }
 }
 
+impl gpui::EventEmitter<crate::blame::ShowCommit> for DocEditor {}
+
 impl Render for DocEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
@@ -1365,6 +1496,7 @@ impl Render for DocEditor {
             State::Open if self.save_error.is_some() => {
                 self.save_error.as_ref().map(|e| format!("Not saved: {e}"))
             }
+            State::Open if self.blame_note.is_some() => self.blame_note.clone(),
             State::Open if !self.writable => Some("Read-only".to_string()),
             State::Open => None,
         };
@@ -1406,6 +1538,10 @@ impl Render for DocEditor {
             .on_action(cx.listener(|_, _: &ToggleSoftWrap, _, cx| {
                 crate::settings::Settings::update(cx, |s| s.soft_wrap = !s.soft_wrap)
             }))
+            .on_action(cx.listener(|d, _: &ToggleBlame, _, cx| {
+                let on = d.blame.is_none();
+                d.set_blame(on, cx)
+            }))
             .capture_action(cx.listener(|d, _: &Undo, window, cx| {
                 cx.stop_propagation();
                 d.undo(window, cx);
@@ -1416,13 +1552,19 @@ impl Render for DocEditor {
             }))
             .child({
                 let comment = self.comment().is_some();
+                let blamed = self.blame.is_some();
                 let editor = code_editor(&self.editor)
                     .readonly(
                         !self.writable
                             || !matches!(self.state, State::Open | State::Reconnecting(_)),
                     )
-                    .context_menu(move |menu, _, cx| editor_menu(menu, comment, wrap, cx));
+                    .context_menu(move |menu, _, cx| editor_menu(menu, comment, wrap, blamed, cx));
                 match self.preview {
+                    None if blamed => h_flex()
+                        .size_full()
+                        .child(self.blame_column(&p, cx))
+                        .child(div().flex_1().min_w_0().h_full().child(editor))
+                        .into_any_element(),
                     None => div().size_full().child(editor).into_any_element(),
                     Some(mode) => self.with_preview(mode, editor, &p, cx).into_any_element(),
                 }
