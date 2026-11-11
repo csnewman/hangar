@@ -35,6 +35,7 @@ pub mod ports;
 pub mod presence;
 pub mod problems;
 pub mod project;
+pub mod props;
 pub mod search;
 pub mod settings;
 pub mod shell;

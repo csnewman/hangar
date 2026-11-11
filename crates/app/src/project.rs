@@ -1669,11 +1669,6 @@ fn tree_menu(
             .submenu("Git", window, cx, move |menu, _, _| {
                 git_menu(menu, &t, &view, &root, &path, mark)
             });
-    } else if in_project {
-        menu = menu
-            .separator()
-            .item(item("Git: Stage", t, treeops::stage))
-            .item(item("Git: Add to .gitignore", t, treeops::ignore).disabled(is_root));
     }
     if !t.dir {
         let code = t.code.clone();
@@ -1692,6 +1687,12 @@ fn tree_menu(
                     window,
                     cx,
                 )
+            }),
+        );
+        let (code, abs) = (t.code.clone(), t.abs.clone());
+        menu = menu.item(
+            PopupMenuItem::new("File Properties…").on_click(move |_, window, cx| {
+                crate::props::show(code.clone(), abs.clone(), window, cx)
             }),
         );
     }
