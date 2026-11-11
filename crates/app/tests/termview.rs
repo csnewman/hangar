@@ -520,6 +520,7 @@ fn a_command_is_typed_once_a_new_session_starts(cx: &mut TestAppContext) {
 /// Once the shell exits the terminal says the session has ended and offers
 /// another, as the web terminal does; Enter starts it, a new session.
 #[gpui::test]
+#[allow(clippy::result_large_err)]
 fn another_session_starts_once_the_shell_exits(cx: &mut TestAppContext) {
     use tungstenite::Message;
     let ln = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
