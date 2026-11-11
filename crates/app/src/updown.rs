@@ -106,6 +106,17 @@ pub enum Clash {
     KeepBoth,
 }
 
+impl Clash {
+    /// fs.transfer's word for it.
+    pub fn param(self) -> &'static str {
+        match self {
+            Clash::Replace => "replace",
+            Clash::Skip => "skip",
+            Clash::KeepBoth => "rename",
+        }
+    }
+}
+
 /// Asks this computer for files, or a folder, and uploads them into to;
 /// done has what was made there.
 pub fn choose_and_upload(
@@ -196,7 +207,9 @@ async fn send(
         let (tx, rx) = async_channel::bounded(1);
         let (names, at) = (clashes.clone(), to.to_string());
         handle
-            .update(cx, move |_, window, cx| ask(&names, &at, tx, window, cx))
+            .update(cx, move |_, window, cx| {
+                ask_clash(&names, &at, "Uploading", tx, window, cx)
+            })
             .map_err(|e| e.to_string())?;
         match rx.recv().await.ok().flatten() {
             None => return Ok(None),
@@ -281,10 +294,12 @@ fn join(folder: &str, rel: &str) -> String {
     format!("{}/{rel}", folder.trim_end_matches('/'))
 }
 
-/// Asks what to do with names the folder has.
-fn ask(
+/// Asks what to do with names a folder has, saying what is being done
+/// ("Uploading", "Moving"); None calls it off.
+pub fn ask_clash(
     names: &[String],
     to: &str,
+    doing: &'static str,
     answer: async_channel::Sender<Option<Clash>>,
     window: &mut Window,
     cx: &mut App,
@@ -317,11 +332,11 @@ fn ask(
                 })
         };
         let off = off.clone();
-        let mut body = v_flex().gap(px(10.)).child(
-            div()
-                .text_color(p.muted)
-                .child("Uploading would put another there. What is replaced goes to the trash."),
-        );
+        let mut body = v_flex()
+            .gap(px(10.))
+            .child(div().text_color(p.muted).child(format!(
+                "{doing} would put another there. What is replaced goes to the trash."
+            )));
         for n in &listed {
             body = body.child(div().text_size(px(11.5)).child(format!("· {n}")));
         }

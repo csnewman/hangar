@@ -864,3 +864,72 @@ fn a_file_is_compared_with_a_revision_chosen(cx: &mut TestAppContext) {
         ("/home/dev/app", "main.rs", "a1b2c3d4e5f6")
     );
 }
+
+/// A file dragged onto a folder is moved there; src has a main.rs, asked
+/// about first.
+#[gpui::test]
+fn a_file_dragged_onto_a_folder_is_moved_there(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    let (asked_tx, asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        Root::new(view, window, cx)
+    });
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-main.rs").is_some()
+    });
+    let next = |cx: &mut VisualTestContext| {
+        let start = Instant::now();
+        loop {
+            cx.run_until_parked();
+            if let Ok(m) = asked.recv_timeout(Duration::from_millis(20)) {
+                return m;
+            }
+            assert!(start.elapsed() < Duration::from_secs(5), "a call");
+        }
+    };
+    let start = cx.debug_bounds("tree-row-main.rs").unwrap().center();
+    cx.simulate_mouse_move(start, None, Modifiers::none());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::none());
+    for dy in [-4., -10., -16.] {
+        cx.simulate_mouse_move(
+            start + gpui::point(gpui::px(0.), gpui::px(dy)),
+            MouseButton::Left,
+            Modifiers::none(),
+        );
+    }
+    cx.run_until_parked();
+    let src = cx.debug_bounds("tree-row-src").unwrap().center();
+    cx.simulate_mouse_move(src, MouseButton::Left, Modifiers::none());
+    cx.simulate_mouse_up(src, MouseButton::Left, Modifiers::none());
+    let (m, p) = next(cx);
+    assert_eq!(m, "fs.transfer");
+    assert_eq!(
+        (p["op"].as_str(), p["to"].as_str(), p["clash"].as_str()),
+        (Some("move"), Some("/home/dev/app/src"), Some("ask"))
+    );
+    assert_eq!(p["from"], json!(["/home/dev/app/main.rs"]));
+    until(cx, "the question", |cx| {
+        cx.debug_bounds("clash-replace").is_some()
+    });
+    let replace = cx.debug_bounds("clash-replace").unwrap().center();
+    cx.simulate_click(replace, Modifiers::none());
+    let (_, p) = next(cx);
+    assert_eq!(p["clash"], "replace");
+}
+
+#[test]
+fn what_may_be_dropped_where() {
+    use hangar_app::project::may_drop;
+    assert!(may_drop("/a/b.txt", false, "/a/c"));
+    assert!(!may_drop("/a/b.txt", false, "/a"), "its own folder");
+    assert!(!may_drop("/a/d", true, "/a/d"), "itself");
+    assert!(!may_drop("/a/d", true, "/a/d/e"), "a folder in it");
+    assert!(may_drop("/a/d", true, "/a/de"), "a name it begins");
+    assert!(!may_drop("/x", false, "/"), "the root's own");
+}

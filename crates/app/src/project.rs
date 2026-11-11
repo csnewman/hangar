@@ -99,6 +99,37 @@ pub struct ShowHistory {
 
 impl gpui::EventEmitter<ShowHistory> for ProjectView {}
 
+/// A file or folder dragged in the tree: dropped on a folder (or a file
+/// in it) it is moved there, or copied with Option held.
+#[derive(Clone)]
+pub struct DraggedEntry(pub Target);
+
+impl Render for DraggedEntry {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette::of(cx);
+        div()
+            .px(px(10.))
+            .py(px(4.))
+            .rounded(px(4.))
+            .bg(p.surface)
+            .border_1()
+            .border_color(p.border_strong)
+            .shadow_md()
+            .text_size(px(12.))
+            .text_color(p.text)
+            .child(self.0.name().to_string())
+    }
+}
+
+/// Whether something may be dropped in a folder: not in the folder it is
+/// in, nor in itself or a folder within it.
+pub fn may_drop(from: &str, dir: bool, into: &str) -> bool {
+    let parent = from
+        .rsplit_once('/')
+        .map_or("/", |(p, _)| if p.is_empty() { "/" } else { p });
+    into != parent && !(dir && (into == from || into.starts_with(&format!("{from}/"))))
+}
+
 /// Asks for a terminal session in a folder, by its absolute path.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OpenInTerminal(pub String);
@@ -599,6 +630,96 @@ impl ProjectView {
         });
     }
 
+    /// Moves what was dragged into a folder, or copies it with Option held;
+    /// a name the folder has is asked about. What went is selected.
+    fn drop_entry(
+        &mut self,
+        d: &DraggedEntry,
+        into: &Target,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let to = into.folder();
+        let from = d.0.clone();
+        if !may_drop(&from.abs, from.dir, &to) {
+            return;
+        }
+        let op = if window.modifiers().alt {
+            "copy"
+        } else {
+            "move"
+        };
+        let doing = if op == "copy" { "Copying" } else { "Moving" };
+        let handle = window.window_handle();
+        cx.spawn(async move |this, cx| {
+            let transfer = |clash: &str| {
+                from.code.call(
+                    "fs.transfer",
+                    json!({ "op": op, "from": [from.abs], "to": to, "clash": clash }),
+                )
+            };
+            let mut result = transfer("ask").await;
+            let clashes: Vec<String> = match &result {
+                Ok(r) => r["clashes"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|c| c.as_str().map(str::to_string))
+                    .collect(),
+                Err(_) => vec![],
+            };
+            if !clashes.is_empty() {
+                let (tx, rx) = async_channel::bounded(1);
+                let at = to.clone();
+                let _ = handle.update(cx, move |_, window, cx| {
+                    crate::updown::ask_clash(&clashes, &at, doing, tx, window, cx)
+                });
+                let Some(choice) = rx.recv().await.ok().flatten() else {
+                    return;
+                };
+                result = transfer(choice.param()).await;
+            }
+            let _ = handle.update(cx, |_, window, cx| match result {
+                Ok(r) => {
+                    if let Some(went) = r["done"][0]["to"].as_str() {
+                        let went = went.to_string();
+                        let _ = this.update(cx, |v, cx| v.reveal(&went, cx));
+                    }
+                }
+                Err(e) => gpui_component::WindowExt::push_notification(
+                    window,
+                    gpui_component::notification::Notification::error(e),
+                    cx,
+                ),
+            });
+        })
+        .detach();
+    }
+
+    /// Uploads files dropped from this computer into a folder.
+    fn upload_dropped(
+        &mut self,
+        paths: &[std::path::PathBuf],
+        into: &Target,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let uploads = crate::updown::uploads_of(paths);
+        let view = cx.entity().downgrade();
+        crate::updown::upload(
+            into.code.clone(),
+            uploads,
+            into.folder(),
+            window,
+            cx,
+            move |made, _, cx| {
+                if let Some(first) = made.first() {
+                    let _ = view.update(cx, |v, cx| v.reveal(first, cx));
+                }
+            },
+        );
+    }
+
     /// What the menu says of a file: its git mark, whether it may be run,
     /// and whether it is in one of its project's repositories.
     fn about(&self, t: &Target) -> (Option<char>, bool, bool) {
@@ -926,6 +1047,9 @@ impl Render for ProjectView {
                     }
                     n += 1;
                     let (on_click, on_right) = (me.clone(), me);
+                    let into = self.target(Some(&proj.root), "", true, cx);
+                    let (into, into_files) = (into.clone(), into);
+                    let soft = p.accent_soft;
                     list = list.child(
                         h_flex()
                             .id(("project", i))
@@ -933,6 +1057,20 @@ impl Render for ProjectView {
                                 let root = proj.root.clone();
                                 move || format!("project-row-{root}")
                             })
+                            .drag_over::<DraggedEntry>(move |s, _, _, _| s.bg(soft))
+                            .drag_over::<gpui::ExternalPaths>(move |s, _, _, _| s.bg(soft))
+                            .on_drop(cx.listener(move |v, d: &DraggedEntry, window, cx| {
+                                if let Some(into) = &into {
+                                    v.drop_entry(d, into, window, cx)
+                                }
+                            }))
+                            .on_drop(cx.listener(
+                                move |v, paths: &gpui::ExternalPaths, window, cx| {
+                                    if let Some(into) = &into_files {
+                                        v.upload_dropped(paths.paths(), into, window, cx)
+                                    }
+                                },
+                            ))
                             .h(px(22.))
                             .gap(px(4.))
                             .px(px(4.))
@@ -1219,8 +1357,27 @@ impl ProjectView {
         let target = self.target(root.as_deref(), &r.path, r.dir, cx);
         let view = cx.entity().downgrade();
         let id = SharedString::from(format!("row-{}-{}", root.as_deref().unwrap_or("/"), r.path));
+        let (dragged, into, into_files) = (target.clone(), target.clone(), target.clone());
+        let soft = p.accent_soft;
         h_flex()
             .id(id)
+            .when_some(dragged.filter(|t| !t.is_root()), |d, t| {
+                d.on_drag(DraggedEntry(t), |d, _, _, cx| cx.new(|_| d.clone()))
+            })
+            .drag_over::<DraggedEntry>(move |s, _, _, _| s.bg(soft))
+            .drag_over::<gpui::ExternalPaths>(move |s, _, _, _| s.bg(soft))
+            .on_drop(cx.listener(move |v, d: &DraggedEntry, window, cx| {
+                if let Some(into) = &into {
+                    v.drop_entry(d, into, window, cx)
+                }
+            }))
+            .on_drop(
+                cx.listener(move |v, paths: &gpui::ExternalPaths, window, cx| {
+                    if let Some(into) = &into_files {
+                        v.upload_dropped(paths.paths(), into, window, cx)
+                    }
+                }),
+            )
             .h(px(20.))
             .gap(px(4.))
             .pl(px(4. + 12. * r.depth as f32))
