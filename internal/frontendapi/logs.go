@@ -1,9 +1,7 @@
 package frontendapi
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
@@ -27,21 +25,11 @@ func (h *handler) readLog(workerID string, req logs.Request) (LogPart, error) {
 	}
 	defer stream.Close()
 	stream.SetDeadline(time.Now().Add(15 * time.Second))
-	b, _ := json.Marshal(req)
-	if _, err := stream.Write(append(b, '\n')); err != nil {
+	reply, err := logs.Ask(stream, req)
+	if errors.Is(err, logs.ErrNoReply) {
 		return LogPart{}, errUnreachable
-	}
-	line, err := bufio.NewReader(stream).ReadBytes('\n')
-	if err != nil {
-		// A worker that serves no logs closes the stream unanswered.
-		return LogPart{}, errUnreachable
-	}
-	var reply logs.Reply
-	if err := json.Unmarshal(line, &reply); err != nil {
+	} else if err != nil {
 		return LogPart{}, err
-	}
-	if reply.Error != "" {
-		return LogPart{}, errors.New(reply.Error)
 	}
 	return LogPart{Start: reply.Start, Next: reply.Start + int64(len(reply.Data)), Size: reply.Size,
 		Text: string(reply.Data), Missing: optionalBool(reply.Missing)}, nil

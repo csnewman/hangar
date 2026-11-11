@@ -1,9 +1,13 @@
 package logs_test
 
 import (
+	"bufio"
 	"bytes"
+	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,5 +141,36 @@ func TestCombined(t *testing.T) {
 	c.Poll()
 	if got := text(); !strings.HasSuffix(got, "monitor │ monitor up again, with more to say\n") {
 		t.Errorf("after the monitor's log was made anew:\n%s", got)
+	}
+}
+
+// Ask sends one line and reads one back; a worker's error is an error, and
+// a stream closed unanswered says so.
+func TestAsk(t *testing.T) {
+	answer := func(reply string) io.ReadWriter {
+		server, client := net.Pipe()
+		go func() {
+			defer server.Close()
+			line, _ := bufio.NewReader(server).ReadBytes('\n')
+			var req logs.Request
+			if json.Unmarshal(line, &req) != nil || req.Log != logs.Console || req.Offset != 5 {
+				return
+			}
+			if reply != "" {
+				server.Write([]byte(reply + "\n"))
+			}
+		}()
+		return client
+	}
+	req := logs.Request{Environment: "e1", Log: logs.Console, Offset: 5}
+	r, err := logs.Ask(answer(`{"start":5,"size":9,"data":"Ym9vdA=="}`), req)
+	if err != nil || r.Start != 5 || string(r.Data) != "boot" {
+		t.Fatalf("a part: %+v, %v", r, err)
+	}
+	if _, err := logs.Ask(answer(`{"error":"no such environment"}`), req); err == nil || err.Error() != "no such environment" {
+		t.Fatalf("the worker's error: %v", err)
+	}
+	if _, err := logs.Ask(answer(""), req); !errors.Is(err, logs.ErrNoReply) {
+		t.Fatalf("no answer: %v", err)
 	}
 }

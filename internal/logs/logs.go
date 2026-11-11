@@ -9,6 +9,8 @@
 package logs
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -53,6 +55,35 @@ type Reply struct {
 	// started here, or has no GPU.
 	Missing bool   `json:"missing,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+// ErrNoReply is a stream closed without a reply, as by a worker that
+// serves no logs.
+var ErrNoReply = errors.New("the worker did not answer")
+
+// Ask sends a request down a stream to a worker and reads its reply: one
+// line of JSON each way. A reply saying why it could not be read is an
+// error.
+func Ask(stream io.ReadWriter, req Request) (Reply, error) {
+	b, err := json.Marshal(req)
+	if err != nil {
+		return Reply{}, err
+	}
+	if _, err := stream.Write(append(b, '\n')); err != nil {
+		return Reply{}, err
+	}
+	line, err := bufio.NewReader(stream).ReadBytes('\n')
+	if err != nil {
+		return Reply{}, ErrNoReply
+	}
+	var reply Reply
+	if err := json.Unmarshal(line, &reply); err != nil {
+		return Reply{}, err
+	}
+	if reply.Error != "" {
+		return Reply{}, errors.New(reply.Error)
+	}
+	return reply, nil
 }
 
 // clamp is the window a request reads of a log size bytes long, of which

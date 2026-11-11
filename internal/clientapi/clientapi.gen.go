@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,33 @@ import (
 
 	"github.com/oapi-codegen/runtime"
 )
+
+// Defines values for EnvironmentLogName.
+const (
+	Combined EnvironmentLogName = "combined"
+	Console  EnvironmentLogName = "console"
+	Gpu      EnvironmentLogName = "gpu"
+	Monitor  EnvironmentLogName = "monitor"
+	Worker   EnvironmentLogName = "worker"
+)
+
+// Valid indicates whether the value is a known member of the EnvironmentLogName enum.
+func (e EnvironmentLogName) Valid() bool {
+	switch e {
+	case Combined:
+		return true
+	case Console:
+		return true
+	case Gpu:
+		return true
+	case Monitor:
+		return true
+	case Worker:
+		return true
+	default:
+		return false
+	}
+}
 
 // AddLoginKey defines model for AddLoginKey.
 type AddLoginKey struct {
@@ -105,9 +133,28 @@ type Environment struct {
 	WorkspaceFile *string `json:"workspace_file,omitempty"`
 }
 
+// EnvironmentLogName combined is the others as one, each line marked with the log it is from, in the order the worker saw them written; console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor the virtual machine's monitor's; gpu the virtual GPU's backend.
+type EnvironmentLogName string
+
 // Error defines model for Error.
 type Error struct {
 	Error string `json:"error"`
+}
+
+// LogPart defines model for LogPart.
+type LogPart struct {
+	// Missing There is no such log yet, such as for a machine not started, or without a GPU.
+	Missing *bool `json:"missing,omitempty"`
+
+	// Next The offset to ask for next, to read on from here.
+	Next int64 `json:"next"`
+
+	// Size How long the log is so far.
+	Size int64 `json:"size"`
+
+	// Start Where in the log the text begins. The oldest of a long log may be gone.
+	Start int64  `json:"start"`
+	Text  string `json:"text"`
 }
 
 // LoginKey defines model for LoginKey.
@@ -208,6 +255,11 @@ type Unauthorized = Error
 // Unavailable defines model for Unavailable.
 type Unavailable = Error
 
+// GetEnvironmentLogParams defines parameters for GetEnvironmentLog.
+type GetEnvironmentLogParams struct {
+	Offset *int64 `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
 // SetTaskJSONRequestBody defines body for SetTask for application/json ContentType.
 type SetTaskJSONRequestBody = SetTask
 
@@ -228,6 +280,9 @@ type ServerInterface interface {
 	// SeeAgent Say the user has looked at an agent's session
 	// (POST /environments/{id}/agents/{session}/seen)
 	SeeAgent(w http.ResponseWriter, r *http.Request, id ID, session string)
+	// GetEnvironmentLog Part of one of the environment's logs, from its worker
+	// (GET /environments/{id}/logs/{log})
+	GetEnvironmentLog(w http.ResponseWriter, r *http.Request, id ID, log EnvironmentLogName, params GetEnvironmentLogParams)
 	// ResetEnvironment Give a stopped environment its template's current settings
 	// (POST /environments/{id}/reset)
 	ResetEnvironment(w http.ResponseWriter, r *http.Request, id ID)
@@ -373,6 +428,57 @@ func (siw *ServerInterfaceWrapper) SeeAgent(w http.ResponseWriter, r *http.Reque
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SeeAgent(w, r, id, session)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetEnvironmentLog operation middleware
+func (siw *ServerInterfaceWrapper) GetEnvironmentLog(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "log" -------------
+	var log EnvironmentLogName
+
+	err = runtime.BindStyledParameterWithOptions("simple", "log", r.PathValue("log"), &log, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "log", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetEnvironmentLogParams
+
+	// ------------- Optional query parameter "offset" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "offset", r.URL.Query(), &params.Offset, runtime.BindQueryParameterOptions{Type: "integer", Format: "int64"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "offset"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "offset", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetEnvironmentLog(w, r, id, log, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -832,6 +938,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/agents/{session}/seen", wrapper.SeeAgent)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}/terminals", wrapper.ListTerminals)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/environments/{id}/terminals/{session}", wrapper.CloseTerminal)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}/logs/{log}", wrapper.GetEnvironmentLog)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/events", wrapper.StreamEvents)
 
 	return m
@@ -1033,6 +1140,86 @@ func (response SeeAgent404JSONResponse) VisitSeeAgentResponse(w http.ResponseWri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentLogRequestObject struct {
+	ID     ID                 `json:"id"`
+	Log    EnvironmentLogName `json:"log"`
+	Params GetEnvironmentLogParams
+}
+
+type GetEnvironmentLogResponseObject interface {
+	VisitGetEnvironmentLogResponse(w http.ResponseWriter) error
+}
+
+type GetEnvironmentLog200JSONResponse LogPart
+
+func (response GetEnvironmentLog200JSONResponse) VisitGetEnvironmentLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentLog401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetEnvironmentLog401JSONResponse) VisitGetEnvironmentLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentLog404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetEnvironmentLog404JSONResponse) VisitGetEnvironmentLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentLog409JSONResponse struct{ ConflictJSONResponse }
+
+func (response GetEnvironmentLog409JSONResponse) VisitGetEnvironmentLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetEnvironmentLog503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response GetEnvironmentLog503JSONResponse) VisitGetEnvironmentLogResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -1836,6 +2023,9 @@ type StrictServerInterface interface {
 	// SeeAgent Say the user has looked at an agent's session
 	// (POST /environments/{id}/agents/{session}/seen)
 	SeeAgent(ctx context.Context, request SeeAgentRequestObject) (SeeAgentResponseObject, error)
+	// GetEnvironmentLog Part of one of the environment's logs, from its worker
+	// (GET /environments/{id}/logs/{log})
+	GetEnvironmentLog(ctx context.Context, request GetEnvironmentLogRequestObject) (GetEnvironmentLogResponseObject, error)
 	// ResetEnvironment Give a stopped environment its template's current settings
 	// (POST /environments/{id}/reset)
 	ResetEnvironment(ctx context.Context, request ResetEnvironmentRequestObject) (ResetEnvironmentResponseObject, error)
@@ -2015,6 +2205,34 @@ func (sh *strictHandler) SeeAgent(w http.ResponseWriter, r *http.Request, id ID,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SeeAgentResponseObject); ok {
 		if err := validResponse.VisitSeeAgentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetEnvironmentLog operation middleware
+func (sh *strictHandler) GetEnvironmentLog(w http.ResponseWriter, r *http.Request, id ID, log EnvironmentLogName, params GetEnvironmentLogParams) {
+	var request GetEnvironmentLogRequestObject
+
+	request.ID = id
+	request.Log = log
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetEnvironmentLog(ctx, request.(GetEnvironmentLogRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetEnvironmentLog")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetEnvironmentLogResponseObject); ok {
+		if err := validResponse.VisitGetEnvironmentLogResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

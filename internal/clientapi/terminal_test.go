@@ -22,6 +22,7 @@ import (
 	"github.com/csnewman/hangar/internal/db"
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
+	"github.com/csnewman/hangar/internal/logs"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/terminal"
@@ -30,17 +31,41 @@ import (
 )
 
 // guest stands in for a worker: each terminal stream is a pipe to one
-// terminal manager, whose shell echoes what it is sent.
+// terminal manager, whose shell echoes what it is sent; its logs are the
+// console's one line.
 type guest struct{ m *terminal.Manager }
 
 func (g guest) Open(_ string, h tunnel.Header) (net.Conn, error) {
 	server, client := net.Pipe()
-	if h.Kind == tunnel.KindCode {
+	switch h.Kind {
+	case tunnel.KindCode:
 		go codeService(server)
-	} else {
+	case tunnel.KindLogs:
+		go logService(server)
+	default:
 		go g.m.Serve(server)
 	}
 	return client, nil
+}
+
+// logService answers a logs request: the console has one line, from the
+// offset asked for; there is no GPU log.
+func logService(c net.Conn) {
+	defer c.Close()
+	line, err := bufio.NewReader(c).ReadBytes('\n')
+	if err != nil {
+		return
+	}
+	var req logs.Request
+	json.Unmarshal(line, &req)
+	text := "booted " + req.Environment + "\n"
+	reply := logs.Reply{Missing: req.Log == logs.GPU}
+	if !reply.Missing {
+		start := max(req.Offset, 0)
+		reply = logs.Reply{Start: start, Size: int64(len(text)), Data: []byte(text[min(start, int64(len(text))):])}
+	}
+	b, _ := json.Marshal(reply)
+	c.Write(append(b, '\n'))
 }
 
 // codeService stands in for the Code service: after the request line, it
@@ -75,8 +100,8 @@ func codeService(c net.Conn) {
 	}
 }
 
-// A client lists an environment's terminals, attaches to a new one over a
-// WebSocket, types into it and reads it back, and ends it.
+// A client reads an environment's logs, lists its terminals, attaches to a
+// new one over a WebSocket, types into it and reads it back, and ends it.
 func TestTerminals(t *testing.T) {
 	d := dbtest.Open(t)
 	um := users.NewManager(d)
@@ -118,6 +143,9 @@ func TestTerminals(t *testing.T) {
 	if status, _ := f.call("GET", "/api/v1/environments/"+env.ID+"/terminals", "", bearer); status != 409 {
 		t.Fatalf("terminals of an environment not running: %d", status)
 	}
+	if status, _ := f.call("GET", "/api/v1/environments/"+env.ID+"/logs/console", "", bearer); status != 409 {
+		t.Fatalf("logs of an environment on no worker: %d", status)
+	}
 	// Running, on a worker.
 	err = d.Transact(ctx, func(tx db.Tx) error {
 		var worker string
@@ -130,6 +158,24 @@ func TestTerminals(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// Its logs, from its worker: the end, then on from an offset.
+	status, body := f.call("GET", "/api/v1/environments/"+env.ID+"/logs/console", "", bearer)
+	part, _ := body.(map[string]any)
+	if status != 200 || part["text"] != "booted "+env.ID+"\n" || part["start"] != 0.0 || part["next"] != part["size"] {
+		t.Fatalf("the console: %d %v", status, body)
+	}
+	status, body = f.call("GET", "/api/v1/environments/"+env.ID+"/logs/console?offset=7", "", bearer)
+	if part, _ := body.(map[string]any); status != 200 || part["text"] != env.ID+"\n" || part["start"] != 7.0 {
+		t.Fatalf("on from 7: %d %v", status, body)
+	}
+	status, body = f.call("GET", "/api/v1/environments/"+env.ID+"/logs/gpu", "", bearer)
+	if part, _ := body.(map[string]any); status != 200 || part["missing"] != true {
+		t.Fatalf("no GPU log: %d %v", status, body)
+	}
+	if status, _ := f.call("GET", "/api/v1/environments/"+env.ID+"/logs/console", ""); status != 401 {
+		t.Fatalf("logs with nobody signed in: %d", status)
 	}
 
 	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/api/v1/environments/" + env.ID + "/terminal?cols=80&rows=24"
@@ -167,7 +213,7 @@ func TestTerminals(t *testing.T) {
 		}
 	}
 
-	status, body := f.call("GET", "/api/v1/environments/"+env.ID+"/terminals", "", bearer)
+	status, body = f.call("GET", "/api/v1/environments/"+env.ID+"/terminals", "", bearer)
 	if list, _ := body.([]any); status != 200 || len(list) != 1 || list[0].(map[string]any)["id"] != reply.Session.ID {
 		t.Fatalf("terminals: %d %v", status, body)
 	}
