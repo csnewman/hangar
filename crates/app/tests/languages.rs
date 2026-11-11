@@ -1,5 +1,5 @@
 use hangar_app::languages::{file_uri, language_id, server_language, uri_path};
-use hangar_app::problems::{Row, rows};
+use hangar_app::problems::{Row, Shown, rows, totals};
 use lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 #[test]
@@ -48,30 +48,57 @@ fn problems_are_listed_by_file_errors_first() {
         ),
         ("/w/clean.rs".to_string(), vec![]),
     ]);
-    let r = rows(&files);
-    let summary: Vec<String> = r
-        .iter()
-        .map(|row| match row {
-            Row::File {
-                abs,
-                errors,
-                warnings,
-                count,
-            } => format!("{abs} {errors}/{warnings}/{count}"),
-            Row::Problem { d, .. } => d.message.clone(),
-        })
-        .collect();
+    let summary = |r: &[Row]| -> Vec<String> {
+        r.iter()
+            .map(|row| match row {
+                Row::File {
+                    abs,
+                    errors,
+                    warnings,
+                    count,
+                } => format!("{abs} {errors}/{warnings}/{count}"),
+                Row::Problem { d, .. } => d.message.clone(),
+            })
+            .collect()
+    };
+    // Hints shown: the file with errors first, whatever its name.
+    let mut shown = Shown {
+        hints: true,
+        ..Default::default()
+    };
+    let r = rows(&files, &shown);
     assert_eq!(
-        summary,
+        summary(&r),
         [
-            "/w/a.rs 0/0/1",
-            "at 2",
             "/w/b.rs 2/1/3",
             "at 1",
             "at 4",
-            "at 9"
+            "at 9",
+            "/w/a.rs 0/0/1",
+            "at 2",
         ]
     );
+    assert_eq!(totals(&r), (2, 1, 2));
+
+    // A folded file is its row alone.
+    shown.folded.insert("/w/b.rs".into());
+    assert_eq!(
+        summary(&rows(&files, &shown)),
+        ["/w/b.rs 2/1/3", "/w/a.rs 0/0/1", "at 2"]
+    );
+
+    // Hints hidden: a file with only hints is left out.
+    shown.hints = false;
+    shown.folded.clear();
+    assert_eq!(
+        summary(&rows(&files, &shown)),
+        ["/w/b.rs 2/1/3", "at 1", "at 4", "at 9"]
+    );
+
+    // The Current File tab: that file alone.
+    shown.hints = true;
+    shown.only = Some("/w/a.rs".into());
+    assert_eq!(summary(&rows(&files, &shown)), ["/w/a.rs 0/0/1", "at 2"]);
 }
 
 #[test]

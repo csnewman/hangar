@@ -86,7 +86,7 @@ const SHOWN: usize = 8;
 
 /// The results for a query: each group's best, in the groups' order, an
 /// empty query showing environments and actions as they are.
-fn rank(query: &str, candidates: &[Candidate], groups: &[&'static str]) -> Vec<Item> {
+fn rank(query: &str, candidates: &[Candidate], groups: &[&'static str], shown: usize) -> Vec<Item> {
     let mut out = vec![];
     for g in groups {
         let mut hits: Vec<(i64, usize, Vec<usize>)> = candidates
@@ -112,7 +112,7 @@ fn rank(query: &str, candidates: &[Candidate], groups: &[&'static str]) -> Vec<I
         if !query.trim().is_empty() {
             hits.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
         }
-        for (_, i, at) in hits.into_iter().take(SHOWN) {
+        for (_, i, at) in hits.into_iter().take(shown) {
             let c = &candidates[i];
             out.push(Item {
                 group: c.group,
@@ -140,12 +140,19 @@ pub struct SearchView {
     /// what they last answered: name, where it is in, and its place.
     languages: Option<Entity<crate::languages::Languages>>,
     symbols: Vec<(String, String, Target)>,
+    /// The file's outline, for File Structure: name, what it is in, and
+    /// its place.
+    structure: Vec<(String, String, Target)>,
     /// Counts the symbol requests made, so an older answer is dropped.
     asked: u64,
     /// Only one group, as Go to Symbol shows only symbols.
     only: Option<&'static str>,
     items: Vec<Item>,
     selected: usize,
+    /// The list's scrolling, and whether the selected row is to be brought
+    /// into view, as the arrows move it.
+    scroll: gpui::ScrollHandle,
+    reveal: bool,
     _subs: Vec<gpui::Subscription>,
 }
 
@@ -161,6 +168,7 @@ impl SearchView {
     ) -> Self {
         let placeholder = match only {
             Some("Symbols") => "Go to Symbol",
+            Some("Structure") => "File Structure: type to narrow",
             _ => "Search Everywhere",
         };
         let query = cx.new(|cx| InputState::new(window, cx).placeholder(placeholder));
@@ -180,10 +188,13 @@ impl SearchView {
             files: vec![],
             languages,
             symbols: vec![],
+            structure: vec![],
             asked: 0,
             only,
             items: vec![],
             selected: 0,
+            scroll: gpui::ScrollHandle::new(),
+            reveal: false,
             _subs: subs,
         };
         v.list_files(cx);
@@ -201,6 +212,22 @@ impl SearchView {
         self.query
             .update(cx, |q, cx| q.set_value(text.to_string(), window, cx));
         self.selected = 0;
+        self.refresh(cx);
+    }
+
+    /// How many of each group are listed: every symbol of File Structure's
+    /// outline, the best few of anything else.
+    fn shown(&self) -> usize {
+        if self.only == Some("Structure") {
+            1000
+        } else {
+            SHOWN
+        }
+    }
+
+    /// Lists the file's outline, for File Structure.
+    pub fn set_structure(&mut self, items: Vec<(String, String, Target)>, cx: &mut Context<Self>) {
+        self.structure = items;
         self.refresh(cx);
     }
 
@@ -380,7 +407,26 @@ impl SearchView {
                 target: target.clone(),
             });
         }
-        (out, vec!["Environments", files_group, "Symbols", "Actions"])
+        for (name, within, target) in &self.structure {
+            out.push(Candidate {
+                group: "Structure",
+                label: name.clone(),
+                also: String::new(),
+                detail: within.clone(),
+                mark: None,
+                target: target.clone(),
+            });
+        }
+        (
+            out,
+            vec![
+                "Structure",
+                "Environments",
+                files_group,
+                "Symbols",
+                "Actions",
+            ],
+        )
     }
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
@@ -393,7 +439,7 @@ impl SearchView {
             .filter(|c| !matches!(c.group, "Files" | "Symbols") || !query.trim().is_empty())
             .filter(|c| self.only.is_none_or(|g| c.group == g))
             .collect();
-        self.items = rank(&query, &candidates, &groups);
+        self.items = rank(&query, &candidates, &groups, self.shown());
         self.selected = self.selected.min(self.items.len().saturating_sub(1));
         cx.notify();
     }
@@ -404,7 +450,7 @@ impl SearchView {
         self.asked += 1;
         let asked = self.asked;
         let query = query.trim().to_string();
-        if query.is_empty() {
+        if query.is_empty() || self.only == Some("Structure") {
             self.symbols.clear();
             return;
         }
@@ -439,7 +485,7 @@ impl SearchView {
                         .filter(|c| !matches!(c.group, "Files" | "Symbols") || !q.trim().is_empty())
                         .filter(|c| v.only.is_none_or(|g| c.group == g))
                         .collect();
-                    v.items = rank(&q, &candidates, &groups);
+                    v.items = rank(&q, &candidates, &groups, v.shown());
                     v.selected = v.selected.min(v.items.len().saturating_sub(1));
                     cx.notify();
                 }
@@ -469,6 +515,7 @@ impl SearchView {
             "escape" => cx.emit(Chose(None)),
             _ => return,
         }
+        self.reveal = true;
         cx.stop_propagation();
         cx.notify();
     }
@@ -483,10 +530,22 @@ impl Focusable for SearchView {
 impl Render for SearchView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
-        let mut list = v_flex().px(px(4.)).pb(px(6.));
+        let mut list = v_flex()
+            .id("search-results")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .px(px(4.))
+            .pb(px(6.));
         let mut group = "";
+        // The selected row's place among the list's children, headings
+        // counted.
+        let mut child = 0;
+        let mut selected_child = None;
         for (i, item) in self.items.iter().enumerate() {
             if item.group != group {
+                child += 1;
                 group = item.group;
                 let heading = if group == "Files" {
                     let name = self
@@ -513,7 +572,16 @@ impl Render for SearchView {
                         .child(heading),
                 );
             }
+            if i == self.selected {
+                selected_child = Some(child);
+            }
+            child += 1;
             list = list.child(self.row(i, item, &p, cx));
+        }
+        if std::mem::take(&mut self.reveal)
+            && let Some(c) = selected_child
+        {
+            self.scroll.scroll_to_item(c);
         }
         if self.items.is_empty() {
             list = list.child(
@@ -546,14 +614,7 @@ impl Render for SearchView {
                     .border_color(p.border)
                     .child(Input::new(&self.query).appearance(false)),
             )
-            .child(
-                div()
-                    .id("search-results")
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .child(list),
-            )
+            .child(list)
     }
 }
 

@@ -239,3 +239,41 @@ fn the_ports_are_listed_and_made_public(cx: &mut TestAppContext) {
     };
     assert_eq!(got, json!({ "public": true }));
 }
+
+#[test]
+fn a_port_a_running_container_publishes_is_said_to_be_its() {
+    use hangar_app::docker::Container;
+    let c = |name: &str, state: &str, ports: &[&str]| Container {
+        name: name.into(),
+        state: state.into(),
+        ports: ports.iter().map(|p| p.to_string()).collect(),
+        ..Default::default()
+    };
+    let found = hangar_app::ports::publishers(&[
+        c("db", "running", &["5432→5432/tcp"]),
+        c("web", "running", &["8080→80/tcp", "9000/tcp"]),
+        c("old", "exited", &["3000→3000/tcp"]),
+    ]);
+    assert_eq!(found.get(&5432).map(String::as_str), Some("db (5432/tcp)"));
+    assert_eq!(found.get(&8080).map(String::as_str), Some("web (80/tcp)"));
+    assert_eq!(found.len(), 2);
+}
+
+#[test]
+fn the_toolbar_chips_are_the_ports_its_network_reaches() {
+    use hangar_app::ports::{Port, chips};
+    let p = |port: u16, loopback: bool, pid: Option<u32>| Port {
+        port,
+        loopback,
+        pid,
+        command: None,
+    };
+    let ports = [
+        p(8080, false, Some(1)),
+        p(5173, false, Some(2)),
+        p(5173, false, Some(2)),
+        p(53, true, None),
+        p(6060, true, Some(3)),
+    ];
+    assert_eq!(chips(&ports), [5173, 8080]);
+}

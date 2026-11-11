@@ -2056,6 +2056,78 @@ impl DocEditor {
         cx.notify();
     }
 
+    /// Places in a pop-up at the caret, as IntelliJ's Show Usages: each
+    /// line's text and its file and line; choosing one opens it there, and
+    /// the last item lists them all in the Find window.
+    pub fn show_places(
+        &mut self,
+        title: String,
+        found: crate::find::Lines,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_component::menu::PopupMenuItem;
+        let at = self.editor.read(cx).cursor();
+        self.context_at = self.editor.read(cx).range_to_bounds(&(at..at));
+        let me = cx.entity().downgrade();
+        let count: usize = found.iter().map(|(_, m)| m.len()).sum();
+        let focus = self.editor.focus_handle(cx);
+        let menu = PopupMenu::build(window, cx, move |mut menu, _, cx| {
+            crate::ui::modal(cx);
+            menu = menu
+                .action_context(focus)
+                .max_h(px(420.))
+                .scrollable(true)
+                .label(format!(
+                    "{title}: {count} usage{}",
+                    if count == 1 { "" } else { "s" }
+                ));
+            if count == 0 {
+                return menu.item(PopupMenuItem::new("None found").disabled(true));
+            }
+            for (root, matches) in &found {
+                for m in matches {
+                    let name = m.path.rsplit('/').next().unwrap_or(&m.path);
+                    let mut text: String = m.text.trim().chars().take(70).collect();
+                    if m.text.trim().chars().count() > 70 {
+                        text.push('…');
+                    }
+                    let open = crate::find::OpenAt {
+                        root: root.clone(),
+                        path: m.path.clone(),
+                        line: m.line.saturating_sub(1),
+                        column: m.ranges.first().map_or(0, |r| r[0] as u32),
+                    };
+                    let me = me.clone();
+                    menu = menu.item(
+                        PopupMenuItem::new(format!("{text}    {name}:{}", m.line)).on_click(
+                            move |_, _, cx| {
+                                let _ = me.update(cx, |_, cx| cx.emit(open.clone()));
+                            },
+                        ),
+                    );
+                }
+            }
+            let me = me.clone();
+            let (title, found) = (title.clone(), found.clone());
+            menu.separator()
+                .item(
+                    PopupMenuItem::new("Open in Find Window").on_click(move |_, _, cx| {
+                        let (title, found) = (title.clone(), found.clone());
+                        let _ = me.update(cx, |_, cx| cx.emit(ShowInFind(title, found)));
+                    }),
+                )
+        });
+        window.focus(&menu.focus_handle(cx), cx);
+        let sub = cx.subscribe(&menu, |d, _, _: &gpui::DismissEvent, cx| {
+            d.context_menu = None;
+            cx.notify();
+        });
+        self.context_menu = Some((menu, sub));
+        self.context_unmarked = true;
+        cx.notify();
+    }
+
     /// Parameter Info as it is drawn: over the caret's line, each signature
     /// in the server's order, the one it takes the call for in full colour,
     /// the parameter the caret is at in bold, and what the server says of it
@@ -2601,6 +2673,14 @@ impl gpui::EventEmitter<ShowChanges> for DocEditor {}
 pub struct OpenInBrowser(pub String);
 
 impl gpui::EventEmitter<OpenInBrowser> for DocEditor {}
+
+/// Asks for places to be listed in the Find window, under a title: Show
+/// Usages' last item.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShowInFind(pub String, pub crate::find::Lines);
+
+impl gpui::EventEmitter<ShowInFind> for DocEditor {}
+impl gpui::EventEmitter<crate::find::OpenAt> for DocEditor {}
 
 /// Says the file opened is not text, so it is better shown as its bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]

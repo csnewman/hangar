@@ -103,6 +103,15 @@ enum Server {
     Unavailable(String),
 }
 
+/// How a language server is, for the status bar's panel.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ServerState {
+    Starting,
+    Ready,
+    /// Not to be had, and why.
+    Unavailable(String),
+}
+
 /// What the language servers tell the app's views.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
@@ -346,7 +355,7 @@ impl Languages {
                 let install = v["install"]
                     .as_array()
                     .and_then(|a| a.first())
-                    .and_then(Value::as_str)
+                    .and_then(|i| i["install"].as_str())
                     .map(|i| format!(" Install it with: {i}"))
                     .unwrap_or_default();
                 Some(format!(
@@ -524,19 +533,71 @@ impl Languages {
             .map_or(&[], |t| t.as_slice())
     }
 
-    /// What the status bar says of an open file's language server: its
-    /// name once it runs, that it is starting, or that there is none.
-    pub fn server_label(&self, abs: &str) -> Option<String> {
-        let key = self.opened.get(abs)?;
+    /// A server's name for itself, from its answer to initialize, else
+    /// its language's.
+    pub fn server_name(&self, key: &(String, String)) -> String {
+        self.names
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| key.1.clone())
+    }
+
+    /// The server a file's language goes to: its project's folder and the
+    /// language; None for a file of no language or no project.
+    pub fn server_of(&self, abs: &str, cx: &gpui::App) -> Option<(String, String)> {
+        let lang = language_id(abs)?;
+        let root = self.workspace.read(cx).project_of(abs)?.root.clone();
+        Some((root, server_language(lang).to_string()))
+    }
+
+    /// How a server is: running, starting, or why there is none; None
+    /// when nothing has asked for it.
+    pub fn state(&self, key: &(String, String)) -> Option<ServerState> {
         Some(match self.servers.get(key)? {
-            Server::Ready { .. } => self
-                .names
-                .get(key)
-                .cloned()
-                .unwrap_or_else(|| key.1.clone()),
-            Server::Starting { .. } => format!("{} starting…", key.1),
-            Server::Unavailable(_) => format!("No {} server", key.1),
+            Server::Ready { .. } => ServerState::Ready,
+            Server::Starting { .. } => ServerState::Starting,
+            Server::Unavailable(why) => ServerState::Unavailable(why.clone()),
         })
+    }
+
+    /// What the service knows of a server (lsp.info): one running, with its
+    /// command, log and the messages passed; one installed and not running;
+    /// or why there is none and how to install one.
+    pub fn info(
+        &self,
+        key: &(String, String),
+        cx: &gpui::App,
+    ) -> Option<impl std::future::Future<Output = Result<Value, String>> + use<>> {
+        Some(
+            self.code(key, cx)?
+                .call("lsp.info", json!({ "language": key.1 })),
+        )
+    }
+
+    /// Restarts a running server: the service stops it, telling everything
+    /// using it, each of which starts it again.
+    pub fn restart(&mut self, key: &(String, String), cx: &mut Context<Self>) {
+        let Some(code) = self.code(key, cx) else {
+            return;
+        };
+        let call = code.call("lsp.restart", json!({ "language": key.1 }));
+        cx.spawn(async move |this, cx| {
+            if let Err(e) = call.await {
+                let _ = this.update(cx, |_, cx| cx.emit(Event::Message(1, e)));
+            }
+        })
+        .detach();
+    }
+
+    /// Tries a server there is none of again: one installed, named in the
+    /// settings, or trusted since.
+    pub fn retry(&mut self, key: &(String, String), cx: &mut Context<Self>) {
+        if matches!(self.servers.get(key), Some(Server::Unavailable(_))) {
+            self.servers.remove(key);
+        }
+        cx.emit(Event::Servers);
+        self.attach_all(cx);
+        cx.notify();
     }
 
     /// The characters an open file's server starts signature help at, and
@@ -641,9 +702,17 @@ impl Languages {
         let Some(key) = n.and_then(|n| self.key_of(root, n)) else {
             return;
         };
-        self.servers.insert(key.clone(), Server::Unavailable(why));
         self.opened.retain(|_, k| k != &key);
         self.pending.retain(|(k, _), _| k != &key);
+        // Restarted: started again, and its files opened in it.
+        if why == "restarted" {
+            self.servers.remove(&key);
+            cx.emit(Event::Servers);
+            self.attach_all(cx);
+            cx.notify();
+            return;
+        }
+        self.servers.insert(key.clone(), Server::Unavailable(why));
         cx.emit(Event::Servers);
         cx.notify();
     }
@@ -657,6 +726,7 @@ fn capabilities() -> Value {
             "synchronization": { "didSave": false, "dynamicRegistration": false },
             "publishDiagnostics": { "relatedInformation": false, "versionSupport": false },
             "hover": { "contentFormat": ["markdown", "plaintext"] },
+            "documentSymbol": { "hierarchicalDocumentSymbolSupport": true },
             "definition": { "linkSupport": true },
             "implementation": { "linkSupport": true },
             "typeDefinition": { "linkSupport": true },

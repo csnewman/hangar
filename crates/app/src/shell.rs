@@ -77,19 +77,21 @@ pub struct Shell {
     notices_open: bool,
 }
 
-gpui::actions!(shell, [SearchEverywhere, GoToSymbol]);
+gpui::actions!(shell, [SearchEverywhere, GoToSymbol, FileStructure]);
 
 /// Binds the shell's keys: ⌘K (Ctrl+K elsewhere) for Search Everywhere,
-/// and IntelliJ's ⌥⌘O (Ctrl+Alt+Shift+N elsewhere) for Go to Symbol.
+/// and IntelliJ's ⌥⌘O (Ctrl+Alt+Shift+N elsewhere) for Go to Symbol and
+/// ⌘F12 (Ctrl+F12) for File Structure.
 pub fn bind_keys(cx: &mut gpui::App) {
-    let (key, symbol) = if cfg!(target_os = "macos") {
-        ("cmd-k", "alt-cmd-o")
+    let (key, symbol, structure) = if cfg!(target_os = "macos") {
+        ("cmd-k", "alt-cmd-o", "cmd-f12")
     } else {
-        ("ctrl-k", "ctrl-alt-shift-n")
+        ("ctrl-k", "ctrl-alt-shift-n", "ctrl-f12")
     };
     cx.bind_keys([
         gpui::KeyBinding::new(key, SearchEverywhere, Some("Shell")),
         gpui::KeyBinding::new(symbol, GoToSymbol, Some("Shell")),
+        gpui::KeyBinding::new(structure, FileStructure, Some("Shell")),
     ]);
 }
 
@@ -305,6 +307,69 @@ impl Shell {
         self.open_search(Some("Symbols"), window, cx);
     }
 
+    /// Opens the search on the file shown's outline alone, as IntelliJ's
+    /// File Structure (⌘F12): its server's symbols, or a Markdown file's
+    /// headings.
+    pub fn file_structure(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.active_view() else {
+            return;
+        };
+        let (doc, languages) = {
+            let t = tab.read(cx);
+            (t.active_file(), t.languages())
+        };
+        let Some(doc) = doc else {
+            return;
+        };
+        self.open_search(Some("Structure"), window, cx);
+        let Some((view, _)) = self.search.as_ref() else {
+            return;
+        };
+        let view = view.downgrade();
+        let abs = doc.read(cx).path().to_string();
+        let items = |symbols: Vec<crate::structure::Symbol>, abs: &str| {
+            crate::structure::places(&symbols)
+                .into_iter()
+                .map(|(name, what, line, column)| {
+                    (
+                        name,
+                        what,
+                        Target::At {
+                            root: "/".into(),
+                            path: abs.to_string(),
+                            line,
+                            column,
+                        },
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        if crate::structure::is_markdown(&abs) {
+            let text = doc.read(cx).text_and_caret(cx).0.to_string();
+            let found = items(crate::structure::markdown(&text), &abs);
+            let _ = view.update(cx, |v, cx| v.set_structure(found, cx));
+            return;
+        }
+        let Some(languages) = languages else {
+            return;
+        };
+        let asked = languages.update(cx, |l, cx| {
+            l.request(
+                &abs,
+                "textDocument/documentSymbol",
+                serde_json::json!({ "textDocument": { "uri": crate::languages::file_uri(&abs) } }),
+                cx,
+            )
+        });
+        cx.spawn(async move |_, cx| {
+            if let Ok(answer) = asked.await {
+                let found = items(crate::structure::outline(&answer), &abs);
+                let _ = view.update(cx, |v, cx| v.set_structure(found, cx));
+            }
+        })
+        .detach();
+    }
+
     fn open_search(
         &mut self,
         only: Option<&'static str>,
@@ -473,6 +538,7 @@ impl Render for Shell {
                 cx.listener(|s, _: &SearchEverywhere, window, cx| s.search_everywhere(window, cx)),
             )
             .on_action(cx.listener(|s, _: &GoToSymbol, window, cx| s.go_to_symbol(window, cx)))
+            .on_action(cx.listener(|s, _: &FileStructure, window, cx| s.file_structure(window, cx)))
             .on_modifiers_changed(
                 cx.listener(|s, e: &gpui::ModifiersChangedEvent, window, cx| {
                     let pressed = s

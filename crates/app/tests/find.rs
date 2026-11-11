@@ -1,4 +1,4 @@
-use hangar_app::find::{Match, Row, byte_ranges, rows};
+use hangar_app::find::{Match, Row, byte_ranges, file_of, next_match, rows, visible};
 
 fn m(path: &str, line: u32) -> Match {
     Match {
@@ -99,4 +99,31 @@ fn a_folder_typed_is_read_within_its_project() {
     );
     assert!(Scope::folder("/etc", &roots, None).is_err());
     assert!(Scope::folder(" ", &roots, None).is_err());
+}
+
+#[test]
+fn folded_files_hide_their_lines_and_occurrences_step_through_every_match() {
+    let r = rows(&[(
+        "/w".to_string(),
+        vec![m("a.rs", 1), m("a.rs", 5), m("b.rs", 2)],
+    )]);
+    // a.rs, its two lines, b.rs, its line.
+    assert_eq!(r.len(), 5);
+    let mut folded = std::collections::HashSet::new();
+    assert_eq!(visible(&r, &folded), [0, 1, 2, 3, 4]);
+    folded.insert(("/w".to_string(), "a.rs".to_string()));
+    assert_eq!(visible(&r, &folded), [0, 3, 4]);
+
+    // From nothing, the first match; past the last, none; back from none,
+    // the last.
+    assert_eq!(next_match(&r, None, true), Some(1));
+    assert_eq!(next_match(&r, Some(2), true), Some(4));
+    assert_eq!(next_match(&r, Some(4), true), None);
+    assert_eq!(next_match(&r, None, false), Some(4));
+    assert_eq!(next_match(&r, Some(4), false), Some(2));
+    assert_eq!(next_match(&r, Some(1), false), None);
+
+    assert_eq!(file_of(&r, 2), Some(0));
+    assert_eq!(file_of(&r, 3), Some(3));
+    assert_eq!(file_of(&r, 4), Some(3));
 }

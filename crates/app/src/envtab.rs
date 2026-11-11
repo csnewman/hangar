@@ -140,6 +140,9 @@ actions!(
         ReopenClosedTab,
         GoToLine,
         FindUsages,
+        ShowUsages,
+        NextOccurrence,
+        PreviousOccurrence,
         RenameSymbol,
         GoToImplementation,
         GoToTypeDeclaration,
@@ -202,6 +205,11 @@ pub fn bind_keys(cx: &mut App) {
         ("ctrl-f4", "ctrl-shift-t")
     };
     let go_to_line = if mac { "cmd-l" } else { "ctrl-g" };
+    let (show_usages, next, previous) = if mac {
+        ("cmd-alt-f7", "cmd-alt-down", "cmd-alt-up")
+    } else {
+        ("ctrl-alt-f7", "ctrl-alt-down", "ctrl-alt-up")
+    };
     let (implementation, type_declaration) = if mac {
         ("cmd-alt-b", "cmd-shift-b")
     } else {
@@ -211,6 +219,12 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(go_to_line, GoToLine, ctx),
         KeyBinding::new("alt-f7", FindUsages, ctx),
         KeyBinding::new("alt-f7", FindUsages, input),
+        KeyBinding::new(show_usages, ShowUsages, ctx),
+        KeyBinding::new(show_usages, ShowUsages, input),
+        KeyBinding::new(next, NextOccurrence, ctx),
+        KeyBinding::new(next, NextOccurrence, input),
+        KeyBinding::new(previous, PreviousOccurrence, ctx),
+        KeyBinding::new(previous, PreviousOccurrence, input),
         KeyBinding::new("shift-f6", RenameSymbol, ctx),
         KeyBinding::new("shift-f6", RenameSymbol, input),
         KeyBinding::new(implementation, GoToImplementation, ctx),
@@ -351,6 +365,9 @@ pub struct EnvTab {
     pending_edits: Vec<lsp_types::WorkspaceEdit>,
     /// What language servers had to tell, shown once a window is to hand.
     pending_messages: Vec<(u8, String)>,
+    /// The status bar's language server chip, and what its panel asked.
+    server_chip: Option<Entity<crate::lsppanel::ServerChip>>,
+    pending_asks: Vec<crate::lsppanel::Ask>,
     /// A language server's usages to list in the Find window once it is
     /// made: what of, and each project's lines.
     pending_usages: Option<(String, crate::find::Lines)>,
@@ -381,6 +398,8 @@ pub struct EnvTab {
     closed: Vec<(String, String)>,
     /// A file to show in the Project window once it is made.
     pending_reveal: Option<String>,
+    /// A path to show in the Filesystem window once it is made.
+    pending_reveal_fs: Option<String>,
     subs: Vec<gpui::Subscription>,
 }
 
@@ -597,6 +616,8 @@ impl EnvTab {
             pending_commit: None,
             pending_edits: Vec::new(),
             pending_messages: Vec::new(),
+            server_chip: None,
+            pending_asks: Vec::new(),
             pending_usages: None,
             last_search: None,
             problems: None,
@@ -610,6 +631,7 @@ impl EnvTab {
             pinned: Default::default(),
             dragging_tab: false,
             pending_reveal: None,
+            pending_reveal_fs: None,
             subs: vec![],
         }
     }
@@ -1072,6 +1094,17 @@ impl EnvTab {
             window,
             |t, _, e: &docedit::OpenInBrowser, window, cx| t.open_in_browser(&e.0, window, cx),
         ));
+        self.subs.push(cx.subscribe_in(
+            &view,
+            window,
+            |t, _, e: &crate::find::OpenAt, window, cx| {
+                t.open_file_at(&e.root, &e.path, e.line, e.column, window, cx)
+            },
+        ));
+        self.subs
+            .push(cx.subscribe(&view, |t, _, e: &docedit::ShowInFind, cx| {
+                t.show_in_find(e.0.clone(), e.1.clone(), cx)
+            }));
         self.subs.push(cx.subscribe_in(
             &view,
             window,
@@ -1646,9 +1679,10 @@ impl EnvTab {
         .detach();
     }
 
-    /// Lists every use of the symbol at the caret in the Find window, as
-    /// its language server finds them (IntelliJ's Find Usages, Alt-F7).
-    pub fn find_usages(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Lists every use of the symbol at the caret, as its language server
+    /// finds them: in the Find window (IntelliJ's Find Usages, ⌥F7), or in
+    /// a pop-up at the caret (Show Usages, ⌥⌘F7).
+    pub fn find_usages(&mut self, popup: bool, window: &mut Window, cx: &mut Context<Self>) {
         let Some(Caret {
             langs,
             abs,
@@ -1671,6 +1705,7 @@ impl EnvTab {
                 Ok(l) => t.list_places(
                     format!("Usages of {word}"),
                     l.unwrap_or_default(),
+                    popup,
                     window,
                     cx,
                 ),
@@ -1741,19 +1776,21 @@ impl EnvTab {
                             t.open_file_at(&root, &path, at.line, at.character, window, cx);
                         }
                     }
-                    _ => t.list_places(format!("{what} of {word}"), places, window, cx),
+                    _ => t.list_places(format!("{what} of {word}"), places, false, window, cx),
                 }
             });
         })
         .detach();
     }
 
-    /// Lists places in the Find window under a title, each with its line's
-    /// text: from its editor for a file open here, else read from disk.
+    /// Lists places under a title, each with its line's text: from its
+    /// editor for a file open here, else read from disk. They go in the
+    /// Find window, or in a pop-up at the caret.
     pub fn list_places(
         &mut self,
         title: String,
         found: Vec<lsp_types::Location>,
+        popup: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1829,19 +1866,47 @@ impl EnvTab {
                         });
                 }
             }
-            let _ = this.update(cx, |t, cx| {
-                let found = by_root.into_iter().collect();
-                if !t.is_open(Tool::Find) {
-                    t.toggle(Tool::Find, cx);
+            let _ = this.update_in(cx, |t, window, cx| {
+                let found: crate::find::Lines = by_root.into_iter().collect();
+                if popup && let Some(doc) = t.active_file() {
+                    doc.update(cx, |d, cx| d.show_places(title, found, window, cx));
+                    return;
                 }
-                match &t.find {
-                    Some(f) => f.update(cx, |f, cx| f.show_usages(title, found, cx)),
-                    None => t.pending_usages = Some((title, found)),
-                }
-                cx.notify();
+                t.show_in_find(title, found, cx);
             });
         })
         .detach();
+    }
+
+    /// Lists places in the Find window under a title.
+    fn show_in_find(&mut self, title: String, found: crate::find::Lines, cx: &mut Context<Self>) {
+        if !self.is_open(Tool::Find) {
+            self.toggle(Tool::Find, cx);
+        }
+        match &self.find {
+            Some(f) => f.update(cx, |f, cx| f.show_usages(title, found, cx)),
+            None => self.pending_usages = Some((title, found)),
+        }
+        cx.notify();
+    }
+
+    /// Opens the next match in the Find window, or the one before, as
+    /// IntelliJ's Next and Previous Occurrence.
+    fn occurrence(&mut self, forward: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(find) = self.find.clone() else {
+            return;
+        };
+        if !find.update(cx, |f, cx| f.step(forward, cx)) {
+            use gpui_component::WindowExt;
+            window.push_notification(
+                gpui_component::notification::Notification::info(if forward {
+                    "No more matches after this one"
+                } else {
+                    "No matches before this one"
+                }),
+                cx,
+            );
+        }
     }
 
     /// Renames the symbol at the caret everywhere its language server finds
@@ -1974,6 +2039,20 @@ impl EnvTab {
         cx.notify();
     }
 
+    /// Shows a file or folder in the Filesystem window, opening it.
+    pub fn reveal_in_filesystem(&mut self, abs: &str, cx: &mut Context<Self>) {
+        if !self.is_open(Tool::Filesystem) {
+            self.toggle(Tool::Filesystem, cx);
+        }
+        match &self.filesystem {
+            Some(v) => {
+                v.update(cx, |v, cx| v.reveal(abs, cx));
+            }
+            None => self.pending_reveal_fs = Some(abs.to_string()),
+        }
+        cx.notify();
+    }
+
     /// The menu on an editor tab.
     fn tab_menu(
         menu: gpui_component::menu::PopupMenu,
@@ -2007,6 +2086,7 @@ impl EnvTab {
                 .on_click(move |_, _, cx| crate::treeops::copy(text.clone(), cx))
         };
         let reveal = abs.clone();
+        let reveal_fs = abs.clone();
         menu.item(on("Close", Rc::new(move |t, _, cx| t.close_file(i, cx))))
             .item(
                 on(
@@ -2104,6 +2184,10 @@ impl EnvTab {
                     .item(on(
                         "Reveal in Project",
                         Rc::new(move |t, _, cx| t.reveal_in_project(&reveal, cx)),
+                    ))
+                    .item(on(
+                        "Reveal in Filesystem",
+                        Rc::new(move |t, _, cx| t.reveal_in_filesystem(&reveal_fs, cx)),
                     ))
             })
     }
@@ -2431,6 +2515,13 @@ impl EnvTab {
                     }
                 }
             }));
+        let chip = cx.new(|cx| crate::lsppanel::ServerChip::new(langs.clone(), ws.clone(), cx));
+        self.subs
+            .push(cx.subscribe(&chip, |t, _, ask: &crate::lsppanel::Ask, cx| {
+                t.pending_asks.push(ask.clone());
+                cx.notify();
+            }));
+        self.server_chip = Some(chip);
         self.languages = Some(langs);
         // Files opened before there was a workspace.
         let docs: Vec<Tab> = self.all_tabs().cloned().collect();
@@ -2684,6 +2775,14 @@ impl Focusable for EnvTab {
 
 impl Render for EnvTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for ask in std::mem::take(&mut self.pending_asks) {
+            match ask {
+                crate::lsppanel::Ask::Run(command) => {
+                    self.new_session(None, Some(command), window, cx)
+                }
+                crate::lsppanel::Ask::Open(path) => self.open_file("/", &path, window, cx),
+            }
+        }
         for (kind, text) in std::mem::take(&mut self.pending_messages) {
             window.defer(cx, move |window, cx| {
                 use gpui_component::WindowExt;
@@ -2731,6 +2830,17 @@ impl Render for EnvTab {
         let right_below = self.open.get(&Slot::RightBelow).copied();
         let bottom = self.open.get(&Slot::Bottom).copied();
         let waiting = env.agents.iter().filter(|a| a.needs_you).count();
+        let errors = self.languages.as_ref().map_or(0, |l| {
+            crate::problems::errors_in(l.read(cx).diagnostics().values())
+        });
+        let shown = self.active_file().map(|d| d.read(cx).asked().to_string());
+        if let Some(view) = self.problems.clone() {
+            let shown = shown.clone();
+            view.update(cx, |v, cx| v.set_current(shown, cx));
+        }
+        if let Some(chip) = self.server_chip.clone() {
+            chip.update(cx, |c, cx| c.set_file(shown, cx));
+        }
         if env.phase == "running" {
             if self.project.is_none() && self.is_open(Tool::Project) {
                 let ws = self.workspace(&env, cx);
@@ -2752,6 +2862,12 @@ impl Render for EnvTab {
                     &view,
                     window,
                     |t, _, _: &crate::project::Leave, window, cx| t.focus_editor(window, cx),
+                ));
+                self.subs.push(cx.subscribe(
+                    &view,
+                    |t, _, e: &crate::project::ShowInFilesystem, cx| {
+                        t.reveal_in_filesystem(&e.0, cx)
+                    },
                 ));
                 self.project = Some(view);
             }
@@ -2780,6 +2896,11 @@ impl Render for EnvTab {
                     |t, _, _: &crate::project::Leave, window, cx| t.focus_editor(window, cx),
                 ));
                 self.filesystem = Some(view);
+            }
+            if let (Some(abs), Some(fs)) = (self.pending_reveal_fs.clone(), self.filesystem.clone())
+            {
+                self.pending_reveal_fs = None;
+                fs.update(cx, |v, cx| v.reveal(&abs, cx));
             }
             if let Some(abs) = self.pending_reveal.take() {
                 let shown = [self.project.clone(), self.filesystem.clone()]
@@ -2868,19 +2989,15 @@ impl Render for EnvTab {
                 self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
                 self.docker = Some(view);
             }
-            let ports_open = self.is_open(Tool::Ports);
-            if self.ports.is_none() && ports_open {
+            // Read whether its window is open or not: the toolbar's chips
+            // are its ports.
+            if self.ports.is_none() {
                 let ws = self.workspace(&env, cx);
                 let (places, place, id) =
                     (self.places.clone(), self.place.clone(), self.env.clone());
                 let view = cx.new(|cx| PortsView::new(ws, places, &place, &id, cx));
                 self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
                 self.ports = Some(view);
-            }
-            if let Some(v) = &self.ports
-                && v.read(cx).paused() == ports_open
-            {
-                v.update(cx, |v, cx| v.set_paused(!ports_open, cx));
             }
             if self.git.is_none() && self.is_open(Tool::Git) {
                 let ws = self.workspace(&env, cx);
@@ -2942,7 +3059,18 @@ impl Render for EnvTab {
             .on_action(cx.listener(|t, _: &ToggleDocker, _, cx| t.toggle(Tool::Docker, cx)))
             .on_action(cx.listener(|t, _: &FindInFiles, window, cx| t.find_in_files(window, cx)))
             .on_action(cx.listener(|t, _: &GoToLine, window, cx| t.go_to_line(window, cx)))
-            .on_action(cx.listener(|t, _: &FindUsages, window, cx| t.find_usages(window, cx)))
+            .on_action(
+                cx.listener(|t, _: &FindUsages, window, cx| t.find_usages(false, window, cx)),
+            )
+            .on_action(cx.listener(|t, _: &ShowUsages, window, cx| t.find_usages(true, window, cx)))
+            .on_action(
+                cx.listener(|t, _: &NextOccurrence, window, cx| t.occurrence(true, window, cx)),
+            )
+            .on_action(
+                cx.listener(|t, _: &PreviousOccurrence, window, cx| {
+                    t.occurrence(false, window, cx)
+                }),
+            )
             .on_action(cx.listener(|t, _: &RenameSymbol, window, cx| t.rename_symbol(window, cx)))
             .on_action(cx.listener(|t, _: &GoToImplementation, window, cx| {
                 t.go_to_places("textDocument/implementation", "Implementations", window, cx)
@@ -2975,7 +3103,7 @@ impl Render for EnvTab {
                     .flex_1()
                     .min_h_0()
                     .items_stretch()
-                    .child(self.stripe(&stripes, true, waiting, &p, cx))
+                    .child(self.stripe(&stripes, true, (waiting, errors), &p, cx))
                     .child(
                         // As IntelliJ: the side windows end above the bottom
                         // one, which takes the width between the stripes.
@@ -3023,7 +3151,7 @@ impl Render for EnvTab {
                             }),
                     )
                     .when(!stripes.side_empty(false) || self.dragging, |d| {
-                        d.child(self.stripe(&stripes, false, waiting, &p, cx))
+                        d.child(self.stripe(&stripes, false, (waiting, errors), &p, cx))
                     }),
             )
             .child(self.status_bar(&config, &env, &p, cx))
@@ -3252,6 +3380,9 @@ impl EnvTab {
             .when(env.phase == "running", |d| {
                 d.when_some(self.branches.clone(), |d, b| d.child(b))
             })
+            .when(env.phase == "running", |d| {
+                d.children(self.port_chips(p, cx))
+            })
             .child(div().flex_1())
             .when_some(lifecycle, |d, (label, action)| {
                 let (place, id) = (place.clone(), id.clone());
@@ -3265,11 +3396,55 @@ impl EnvTab {
             .child(self.env_menu(env, web, cx))
     }
 
+    /// The ports the environment's network reaches, as the toolbar's
+    /// chips: each opens in the browser.
+    fn port_chips(&self, p: &Palette, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let Some(view) = &self.ports else {
+            return vec![];
+        };
+        let view = view.read(cx);
+        let Some(ports) = view.ports() else {
+            return vec![];
+        };
+        crate::ports::chips(ports)
+            .into_iter()
+            .map(|port| {
+                let url = view.url(port, cx);
+                let hover = p.surface_2;
+                h_flex()
+                    .id(SharedString::from(format!("port-chip-{port}")))
+                    .debug_selector(move || format!("port-chip-{port}"))
+                    .px(px(8.))
+                    .py(px(1.))
+                    .rounded(px(10.))
+                    .border_1()
+                    .border_color(p.border)
+                    .text_size(px(10.5))
+                    .text_color(p.muted)
+                    .child(format!(":{port} ↗"))
+                    .when_some(url, |d, url| {
+                        let tip = url.clone();
+                        d.cursor_pointer()
+                            .hover(move |s| s.bg(hover))
+                            .tooltip(move |window, cx| {
+                                gpui_component::tooltip::Tooltip::new(format!(
+                                    "Open {} in the browser",
+                                    tip.trim_end_matches('/')
+                                ))
+                                .build(window, cx)
+                            })
+                            .on_click(move |_, _, cx| cx.open_url(&url))
+                    })
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     fn stripe(
         &self,
         stripes: &Stripes,
         left: bool,
-        waiting: usize,
+        (waiting, errors): (usize, usize),
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -3281,7 +3456,12 @@ impl EnvTab {
         // it meanwhile.
         let icon = |t: Tool, group: Group, cx: &mut Context<Self>| {
             let on = self.is_open(t);
-            let badge = (t == Tool::Agents && waiting > 0).then(|| waiting.to_string());
+            // Agents waiting on the person, or errors the servers report.
+            let badge = match t {
+                Tool::Agents if waiting > 0 => Some((waiting.to_string(), p.accent)),
+                Tool::Problems if errors > 0 => Some((errors.min(99).to_string(), p.bad)),
+                _ => None,
+            };
             let hover = p.surface_2;
             let tab = tab.clone();
             div()
@@ -3312,7 +3492,7 @@ impl EnvTab {
                                 .size(px(16.))
                                 .text_color(if on { p.accent } else { p.muted }),
                         )
-                        .when_some(badge, |d, b| {
+                        .when_some(badge, |d, (b, bg)| {
                             d.child(
                                 div()
                                     .absolute()
@@ -3320,7 +3500,7 @@ impl EnvTab {
                                     .top(px(-3.))
                                     .px(px(4.))
                                     .rounded(px(7.))
-                                    .bg(p.accent)
+                                    .bg(bg)
                                     .text_color(p.on_accent)
                                     .text_size(px(9.))
                                     .line_height(px(14.))
@@ -4414,11 +4594,10 @@ impl EnvTab {
                 }
             }
             about.extend(indent.map(|i| i.to_string()));
-            let server = self
-                .languages
-                .as_ref()
-                .and_then(|l| l.read(cx).server_label(f.asked()));
-            about.push(server.unwrap_or_else(|| docedit::language(&path).to_string()));
+            // The chip says the language, where there is no server.
+            if self.server_chip.is_none() {
+                about.push(docedit::language(&path).to_string());
+            }
             (crumbs, about)
         });
         // Whether the file shown is on disk.
@@ -4455,6 +4634,12 @@ impl EnvTab {
                 ),
             })
             .when_some(file, |d, (_, about)| d.children(about))
+            .when_some(
+                self.server_chip
+                    .clone()
+                    .filter(|_| self.active_file().is_some()),
+                |d, c| d.child(c),
+            )
             .when_some(self.latency, |d, ms| {
                 let (t, icon) = crate::latency::rating(ms);
                 d.child(

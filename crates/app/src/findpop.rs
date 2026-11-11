@@ -539,49 +539,52 @@ impl FindPopup {
             None => note("Reading…", p),
             Some(Err(e)) => note(e.clone(), p),
             Some(Ok(None)) => note("The file cannot be shown.", p),
-            Some(Ok(Some(text))) => {
-                let lines: Vec<&str> = text.lines().collect();
-                let at = m.line as usize;
-                let half = PREVIEW_LINES / 2;
-                let start = at.saturating_sub(half).max(1);
-                let end = (start + PREVIEW_LINES - 1).min(lines.len());
-                let mut col = v_flex().font_family(MONO).text_size(px(11.));
-                for n in start..=end {
-                    let line = lines[n - 1];
-                    let here = n == at;
-                    let styled = if here && line == m.text && !line.contains('\t') {
-                        StyledText::new(SharedString::from(line.to_string())).with_highlights(
-                            byte_ranges(line, &m.ranges)
-                                .into_iter()
-                                .map(|r| (r, hit(p))),
-                        )
-                    } else {
-                        StyledText::new(SharedString::from(line.replace('\t', "    ")))
-                    };
-                    col = col.child(
-                        h_flex()
-                            .h(px(PREVIEW_ROW))
-                            .when(here, |d| d.bg(p.busy.opacity(0.12)))
-                            .child(
-                                div()
-                                    .w(px(40.))
-                                    .flex_none()
-                                    .pr(px(10.))
-                                    .text_right()
-                                    .text_color(p.idle)
-                                    .child(n.to_string()),
-                            )
-                            .child(div().whitespace_nowrap().child(styled)),
-                    );
-                }
-                col.into_any_element()
-            }
+            Some(Ok(Some(text))) => lines_around(text, m, PREVIEW_LINES, p),
         };
         frame
             .child(head)
             .child(div().flex_1().min_h_0().overflow_hidden().child(body))
             .into_any_element()
     }
+}
+
+/// The lines of a file around a match, it marked, as many as asked for:
+/// for the pop-up's preview and the Find window's.
+pub(crate) fn lines_around(text: &str, m: &Match, count: usize, p: &Palette) -> gpui::AnyElement {
+    let lines: Vec<&str> = text.lines().collect();
+    let at = m.line as usize;
+    let start = at.saturating_sub(count / 2).max(1);
+    let end = (start + count - 1).min(lines.len());
+    let mut col = v_flex().font_family(MONO).text_size(px(11.));
+    for n in start..=end {
+        let line = lines[n - 1];
+        let here = n == at;
+        let styled = if here && line == m.text && !line.contains('\t') {
+            StyledText::new(SharedString::from(line.to_string())).with_highlights(
+                byte_ranges(line, &m.ranges)
+                    .into_iter()
+                    .map(|r| (r, hit(p))),
+            )
+        } else {
+            StyledText::new(SharedString::from(line.replace('\t', "    ")))
+        };
+        col = col.child(
+            h_flex()
+                .h(px(PREVIEW_ROW))
+                .when(here, |d| d.bg(p.busy.opacity(0.12)))
+                .child(
+                    div()
+                        .w(px(40.))
+                        .flex_none()
+                        .pr(px(10.))
+                        .text_right()
+                        .text_color(p.idle)
+                        .child(n.to_string()),
+                )
+                .child(div().whitespace_nowrap().child(styled)),
+        );
+    }
+    col.into_any_element()
 }
 
 const ROW: f32 = 22.;

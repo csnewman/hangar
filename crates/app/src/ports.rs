@@ -1,9 +1,11 @@
 //! The Ports tool window: the TCP ports the environment listens on, read
-//! from its Code service every few seconds while shown, each with the
-//! program listening and the address it is reached on from here,
-//! <port>-env<short> on the server's host; its web servers by name, which
-//! reach port 80; and who may reach them, public or private.
+//! from its Code service every few seconds, each with the program listening
+//! (or the container publishing it) and the address it is reached on from
+//! here, <port>-env<short> on the server's host; its web servers by name,
+//! which reach port 80; and who may reach them, public or private. The
+//! toolbar's port chips are its ports too.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use gpui::{
@@ -53,6 +55,37 @@ impl Port {
     }
 }
 
+/// The containers publishing ports on the machine, by the machine's port:
+/// each container's name and its own port, from Docker's "8080→80/tcp".
+pub fn publishers(containers: &[crate::docker::Container]) -> HashMap<u16, String> {
+    let mut out = HashMap::new();
+    for c in containers.iter().filter(|c| c.running()) {
+        for p in &c.ports {
+            let Some((public, private)) = p.split_once('→') else {
+                continue;
+            };
+            if let Ok(port) = public.parse::<u16>() {
+                out.insert(port, format!("{} ({private})", c.name));
+            }
+        }
+    }
+    out
+}
+
+/// The ports a toolbar shows as chips: those its network reaches, by
+/// number, at most a few.
+pub fn chips(ports: &[Port]) -> Vec<u16> {
+    let mut out: Vec<u16> = shown(ports)
+        .iter()
+        .filter(|p| !p.loopback)
+        .map(|p| p.port)
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out.truncate(4);
+    out
+}
+
 /// The ports a list shows: the system's own left out.
 pub fn shown(ports: &[Port]) -> Vec<Port> {
     ports.iter().filter(|p| !p.system()).cloned().collect()
@@ -76,6 +109,8 @@ pub struct PortsView {
     place: String,
     env: String,
     ports: Option<Vec<Port>>,
+    /// The containers publishing ports, by the machine's port.
+    published: HashMap<u16, String>,
     error: Option<String>,
     reading: bool,
     paused: bool,
@@ -112,6 +147,7 @@ impl PortsView {
             place: place.to_string(),
             env: env.to_string(),
             ports: None,
+            published: HashMap::new(),
             error: None,
             reading: false,
             paused: false,
@@ -123,6 +159,18 @@ impl PortsView {
 
     pub fn ports(&self) -> Option<&[Port]> {
         self.ports.as_deref()
+    }
+
+    /// Where a port is reached from here, when the server gives the
+    /// environment's web servers addresses.
+    pub fn url(&self, port: u16, cx: &App) -> Option<String> {
+        let (env, server, suffix) = self.about(cx)?;
+        Some(host_url(
+            &server,
+            Some(&port.to_string()),
+            &env.short_id,
+            &suffix?,
+        ))
     }
 
     pub fn paused(&self) -> bool {
@@ -166,11 +214,35 @@ impl PortsView {
                 v.reading = false;
                 match got {
                     Ok(ports) => {
+                        // A port whose program cannot be seen may be a
+                        // container's, which Docker says.
+                        if ports.iter().any(|p| !p.system() && p.pid.is_none()) {
+                            v.read_published(cx);
+                        }
                         v.ports = Some(ports);
                         v.error = None;
                     }
                     Err(e) => v.error = Some(e),
                 }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Asks Docker which containers publish ports.
+    fn read_published(&mut self, cx: &mut Context<Self>) {
+        let Some(code) = self.workspace.read(cx).primary() else {
+            return;
+        };
+        let call = code.call("docker.overview", json!({}));
+        cx.spawn(async move |this, cx| {
+            let got = call
+                .await
+                .ok()
+                .and_then(|v| serde_json::from_value::<crate::docker::Overview>(v).ok());
+            let _ = this.update(cx, |v, cx| {
+                v.published = got.map(|o| publishers(&o.containers)).unwrap_or_default();
                 cx.notify();
             });
         })
@@ -422,10 +494,15 @@ impl Render for PortsView {
                             suffix,
                         ))
                     });
+                    let about = port.program().or_else(|| {
+                        self.published
+                            .get(&port.port)
+                            .map(|c| format!("container {c}"))
+                    });
                     body = body.child(self.address(
                         format!("port-{}", port.port),
                         port.port.to_string(),
-                        port.program(),
+                        about,
                         url,
                         &p,
                     ));

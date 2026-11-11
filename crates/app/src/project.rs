@@ -46,6 +46,10 @@ pub struct Entry {
     pub link: bool,
     #[serde(default)]
     pub exec: bool,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub readonly: bool,
 }
 
 /// The folders listed so far, and those open.
@@ -183,6 +187,13 @@ pub struct Reveal {
     pub abs: String,
 }
 
+/// Asks for a file or folder to be shown in the Filesystem window, by its
+/// absolute path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShowInFilesystem(pub String);
+
+impl gpui::EventEmitter<ShowInFilesystem> for ProjectView {}
+
 /// Asks for the keyboard to go back to the editor: Escape in the tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Leave;
@@ -296,6 +307,14 @@ pub struct ProjectView {
     projects: Vec<Project>,
     scope: Scope,
     machine: Tree,
+    /// The folder the Filesystem window shows from: / until the home
+    /// folder is known, then that, unless another has been chosen.
+    machine_root: String,
+    root_chosen: bool,
+    /// Its path field, made when first drawn, and the folders pinned to
+    /// its places (the Code settings' places, shared with the web).
+    path_field: Option<(Entity<InputState>, gpui::Subscription)>,
+    pinned: Vec<String>,
     selected: Option<Selection>,
     /// The other rows chosen with it, by ⌘-click or ⇧-click, and where a
     /// ⇧-click's range starts.
@@ -334,6 +353,10 @@ impl ProjectView {
             projects: vec![],
             scope: Scope::Projects,
             machine: Tree::default(),
+            machine_root: "/".into(),
+            root_chosen: false,
+            path_field: None,
+            pinned: vec![],
             selected: None,
             scroll: gpui::ScrollHandle::new(),
             reveal: Rc::new(Cell::new(false)),
@@ -373,11 +396,193 @@ impl ProjectView {
         cx.notify();
     }
 
-    /// The machine's files alone, from /: the Filesystem tool window.
+    /// The machine's files alone, from the home folder: the Filesystem
+    /// tool window.
     pub fn machine(workspace: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
         let mut view = ProjectView::new(workspace, cx);
+        view.go_home(cx);
         view.set_scope(Scope::Filesystem, cx);
+        view.read_pinned(cx);
         view
+    }
+
+    /// The folder the Filesystem window shows from.
+    pub fn machine_at(&self) -> String {
+        self.machine_root.clone()
+    }
+
+    /// Starts at the home folder once it is known, unless another folder
+    /// has been chosen.
+    fn go_home(&mut self, cx: &mut Context<Self>) {
+        if self.root_chosen {
+            return;
+        }
+        if let Some(home) = self.workspace.read(cx).home() {
+            self.machine_root = home.to_string();
+        }
+    }
+
+    /// Shows the machine's files from a folder.
+    pub fn show_here(&mut self, dir: &str, window: Option<&mut Window>, cx: &mut Context<Self>) {
+        let dir = match dir.trim_end_matches('/') {
+            "" => "/".to_string(),
+            d => d.to_string(),
+        };
+        if !self.machine.children.contains_key(&dir) {
+            self.load_machine(&dir, cx);
+        }
+        if let (Some((field, _)), Some(window)) = (&self.path_field, window) {
+            let shown = dir.clone();
+            field.update(cx, |f, cx| f.set_value(shown, window, cx));
+        }
+        self.machine_root = dir;
+        self.root_chosen = true;
+        self.selected = None;
+        cx.notify();
+    }
+
+    /// Reads every folder listed again: the Filesystem window is not
+    /// watched beyond the folders the service tells of.
+    pub fn reload_machine(&mut self, cx: &mut Context<Self>) {
+        let dirs: Vec<String> = self.machine.children.keys().cloned().collect();
+        for d in dirs {
+            self.load_machine(&d, cx);
+        }
+    }
+
+    /// The folders pinned to the Filesystem window's places, read from the
+    /// Code settings.
+    fn read_pinned(&mut self, cx: &mut Context<Self>) {
+        let Some(code) = self.workspace.read(cx).primary() else {
+            return;
+        };
+        let call = code.call("settings.get", json!({}));
+        cx.spawn(async move |this, cx| {
+            let Ok(settings) = call.await else { return };
+            let _ = this.update(cx, |v, cx| {
+                v.pinned = settings["places"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|p| p.as_str().map(str::to_string))
+                    .collect();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Pins a folder to the places, or unpins it, in the Code settings.
+    pub fn pin(&mut self, dir: &str, on: bool, cx: &mut Context<Self>) {
+        let Some(code) = self.workspace.read(cx).primary() else {
+            return;
+        };
+        let dir = dir.to_string();
+        let get = code.call("settings.get", json!({}));
+        cx.spawn(async move |this, cx| {
+            let Ok(mut settings) = get.await else { return };
+            let mut places: Vec<String> = settings["places"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|p| p.as_str().map(str::to_string))
+                .filter(|p| *p != dir)
+                .collect();
+            if on {
+                places.push(dir);
+            }
+            settings["places"] = json!(places);
+            let set = code.call("settings.set", json!({ "settings": settings }));
+            if set.await.is_ok() {
+                let _ = this.update(cx, |v, cx| {
+                    v.pinned = places;
+                    cx.notify();
+                });
+            }
+        })
+        .detach();
+    }
+
+    /// Goes to a path typed: a folder is shown, a file shown in its folder
+    /// and opened; ~ is the home folder, and a path not from / is from the
+    /// folder shown.
+    fn go(&mut self, typed: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let at = self.machine_at();
+        let home = self.workspace.read(cx).home().unwrap_or("/").to_string();
+        let p = resolve(typed, &at, &home);
+        let Some(code) = self.workspace.read(cx).primary() else {
+            return;
+        };
+        let list = code.call("fs.list", json!({ "path": p }));
+        let probe = code.call("fs.probe", json!({ "path": p }));
+        cx.spawn_in(window, async move |this, cx| {
+            let is_dir = list.await.is_ok();
+            let is_file = !is_dir && probe.await.is_ok();
+            let _ = this.update_in(cx, |v, window, cx| {
+                if is_dir {
+                    v.show_here(&p, Some(window), cx);
+                } else if is_file {
+                    let parent = parent_of(&p);
+                    v.show_here(&parent, Some(window), cx);
+                    v.selected = Some(Selection {
+                        root: None,
+                        path: p.clone(),
+                    });
+                    cx.emit(OpenFile {
+                        root: "/".into(),
+                        path: p.clone(),
+                    });
+                } else {
+                    window.push_notification(
+                        gpui_component::notification::Notification::error(format!(
+                            "{p} does not exist."
+                        )),
+                        cx,
+                    );
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Fills in the rest of a folder's name being typed, as far as the
+    /// folders it could be agree.
+    fn complete(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((field, _)) = &self.path_field else {
+            return;
+        };
+        let field = field.clone();
+        let typed = field.read(cx).value().to_string();
+        let home = self.workspace.read(cx).home().unwrap_or("/").to_string();
+        let full = match typed.strip_prefix('~') {
+            Some(rest) => format!("{home}{rest}"),
+            None => typed.clone(),
+        };
+        let (dir, part) = match full.rsplit_once('/') {
+            Some(("", part)) => ("/".to_string(), part.to_string()),
+            Some((d, part)) => (d.to_string(), part.to_string()),
+            None => return,
+        };
+        let Some(code) = self.workspace.read(cx).primary() else {
+            return;
+        };
+        let call = code.call("fs.list", json!({ "path": dir }));
+        cx.spawn_in(window, async move |_, cx| {
+            let Ok(list) = call.await else { return };
+            let names: Vec<String> = serde_json::from_value::<Vec<Entry>>(list)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|e| e.dir)
+                .map(|e| e.name)
+                .collect();
+            let Some(done) = completion(&dir, &part, &names) else {
+                return;
+            };
+            let _ = cx.update(|window, cx| {
+                field.update(cx, |f, cx| f.set_value(done, window, cx));
+            });
+        })
+        .detach();
     }
 
     pub fn scope(&self) -> Scope {
@@ -386,15 +591,34 @@ impl ProjectView {
 
     pub fn set_scope(&mut self, scope: Scope, cx: &mut Context<Self>) {
         self.scope = scope;
-        if scope == Scope::Filesystem && !self.machine.children.contains_key("/") {
-            self.load_machine("/", cx);
+        let at = self.machine_at();
+        if scope == Scope::Filesystem && !self.machine.children.contains_key(&at) {
+            self.load_machine(&at, cx);
         }
         cx.notify();
     }
 
     fn heard(&mut self, e: &Event, cx: &mut Context<Self>) {
         match e {
+            // The home folder is known once connected, and is where the
+            // Filesystem window starts.
+            Event::Projects if self.scope == Scope::Filesystem => {
+                self.sync(cx);
+                self.go_home(cx);
+                let at = self.machine_at();
+                if !self.machine.children.contains_key(&at) {
+                    self.load_machine(&at, cx);
+                }
+                if self.pinned.is_empty() {
+                    self.read_pinned(cx);
+                }
+            }
             Event::Projects => self.sync(cx),
+            Event::Heard { event, .. }
+                if event == "settings.changed" && self.scope == Scope::Filesystem =>
+            {
+                self.read_pinned(cx)
+            }
             Event::Heard {
                 root,
                 event,
@@ -603,7 +827,7 @@ impl ProjectView {
                     &self.machine,
                     None,
                     &HashMap::new(),
-                    "/",
+                    &self.machine_at(),
                     0,
                     self.shown,
                     &mut rs,
@@ -997,9 +1221,20 @@ impl ProjectView {
                 });
             }
             (Scope::Filesystem, _) => {
-                let mut dir = String::new();
-                for part in abs
-                    .trim_start_matches('/')
+                // A path outside the folder shown is shown from its own.
+                let at = self.machine_at();
+                let inside = at == "/" || abs.starts_with(&format!("{at}/"));
+                if !inside {
+                    self.show_here(&parent_of(abs), None, cx);
+                }
+                let at = self.machine_at();
+                let below = if at == "/" {
+                    abs.trim_start_matches('/')
+                } else {
+                    abs.strip_prefix(&format!("{at}/")).unwrap_or(abs)
+                };
+                let mut dir = if at == "/" { String::new() } else { at.clone() };
+                for part in below
                     .split('/')
                     .collect::<Vec<_>>()
                     .split_last()
@@ -1109,6 +1344,57 @@ pub fn marks(status: &Value) -> HashMap<String, char> {
     out
 }
 
+/// The folder a path is in; / for / and what is in it.
+pub fn parent_of(path: &str) -> String {
+    match path.trim_end_matches('/').rsplit_once('/') {
+        Some(("", _)) | None => "/".into(),
+        Some((d, _)) => d.into(),
+    }
+}
+
+/// A path typed in the Filesystem window as an absolute one: ~ is the home
+/// folder, and a path not from / is from the folder shown.
+pub fn resolve(typed: &str, at: &str, home: &str) -> String {
+    let t = typed.trim();
+    let p = if t == "~" {
+        home.to_string()
+    } else if let Some(rest) = t.strip_prefix("~/") {
+        format!("{}/{rest}", home.trim_end_matches('/'))
+    } else if t.starts_with('/') {
+        t.to_string()
+    } else {
+        format!("{}/{t}", at.trim_end_matches('/'))
+    };
+    match p.trim_end_matches('/') {
+        "" => "/".into(),
+        p => p.into(),
+    }
+}
+
+/// What Tab makes of a folder's name being typed: the rest of it as far as
+/// the folders it could be agree, a slash after a name that is whole; None
+/// when no folder starts so. Hidden folders count only for a name typed
+/// with its dot.
+pub fn completion(dir: &str, part: &str, folders: &[String]) -> Option<String> {
+    let names: Vec<&String> = folders
+        .iter()
+        .filter(|n| n.starts_with(part) && (part.starts_with('.') || !n.starts_with('.')))
+        .collect();
+    let first = names.first()?;
+    let mut common: String = first.to_string();
+    for n in &names {
+        while !n.starts_with(&common) {
+            common.pop();
+        }
+    }
+    let dir = dir.trim_end_matches('/');
+    Some(if names.len() == 1 {
+        format!("{dir}/{common}/")
+    } else {
+        format!("{dir}/{common}")
+    })
+}
+
 /// One row of the tree as drawn.
 struct Row {
     depth: usize,
@@ -1120,6 +1406,10 @@ struct Row {
     /// The project's index, or None for the machine's.
     project: Option<usize>,
     path: String,
+    /// A file's size, shown in the Filesystem window; whether the user
+    /// may not write it.
+    size: Option<u64>,
+    readonly: bool,
 }
 
 /// Which files the tree shows, as the window's options say.
@@ -1171,6 +1461,8 @@ fn rows(
             mark: git.get(&path).copied(),
             project,
             path: path.clone(),
+            size: (project.is_none() && !e.dir).then_some(e.size),
+            readonly: e.readonly,
         });
         if open {
             rows(tree, project, git, &path, depth + 1, shown, out);
@@ -1321,30 +1613,36 @@ impl Render for ProjectView {
                 }
             }
             (State::Ready, Scope::Filesystem) => {
+                let root = self.machine_at();
                 let mut out = Vec::new();
                 rows(
                     &self.machine,
                     None,
                     &HashMap::new(),
-                    "/",
+                    &root,
                     0,
                     self.shown,
                     &mut out,
                 );
                 if out.is_empty() {
+                    let listed = self.machine.children.contains_key(&root);
                     list = list.child(muted(
                         self.machine
                             .errors
-                            .get("/")
+                            .get(&root)
                             .cloned()
-                            .unwrap_or("Reading /…".into()),
+                            .unwrap_or(if listed {
+                                "Empty".into()
+                            } else {
+                                format!("Reading {root}…")
+                            }),
                         &p,
                     ));
                 }
                 list = self.add_rows(
                     list,
                     out,
-                    (None, "/", 0),
+                    (None, &root, 0),
                     (&mut n, &mut at, &mut naming_at),
                     &p,
                     cx,
@@ -1452,6 +1750,9 @@ impl Render for ProjectView {
                     treeops::copy(t.abs.clone(), cx);
                 }
             }))
+            .when(scope == Scope::Filesystem, |d| {
+                d.child(self.filesystem_header(window, &p, cx))
+            })
             .child(
                 scroll("project-tree", list)
                     .track_scroll(&self.scroll)
@@ -1474,6 +1775,176 @@ impl Render for ProjectView {
                     .with_priority(100),
                 )
             })
+    }
+}
+
+impl ProjectView {
+    /// The Filesystem window's head: the folder shown as a path to type
+    /// (Tab completes a folder's name, Enter goes), the places to go to
+    /// (home, /, the projects and the folders pinned), and the folder
+    /// shown, with the way up and Reload.
+    fn filesystem_header(
+        &mut self,
+        window: &mut Window,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let at = self.machine_at();
+        if self.path_field.is_none() {
+            let field = cx.new(|cx| {
+                InputState::new(window, cx)
+                    .placeholder("/ or ~/ and a path")
+                    .default_value(at.clone())
+            });
+            let sub = cx.subscribe_in(&field, window, |v, f, e: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { .. } = e {
+                    let typed = f.read(cx).value().to_string();
+                    v.go(&typed, window, cx);
+                }
+            });
+            self.path_field = Some((field, sub));
+        }
+        let field = self.path_field.as_ref().map(|(f, _)| f.clone());
+        // The field says the folder shown, but for while it is typed in.
+        if let Some(f) = &field
+            && !f.read(cx).focus_handle(cx).is_focused(window)
+            && f.read(cx).value() != at.as_str()
+        {
+            let at = at.clone();
+            f.update(cx, |f, cx| f.set_value(at, window, cx));
+        }
+        let ws = self.workspace.read(cx);
+        let home = ws.home().map(str::to_string);
+        let mut places: Vec<(&'static str, String, String)> = vec![];
+        if let Some(h) = &home {
+            places.push(("home", "Home".into(), h.clone()));
+        }
+        places.push(("hard-drive", "/".into(), "/".into()));
+        for f in ws.projects() {
+            places.push(("folder", f.name.clone(), f.root.clone()));
+        }
+        for pin in &self.pinned {
+            let name = pin.rsplit('/').find(|s| !s.is_empty()).unwrap_or("/");
+            places.push(("pin", name.to_string(), pin.clone()));
+        }
+        let mut seen = HashSet::new();
+        places.retain(|(_, _, path)| seen.insert(path.clone()));
+        let hover = p.surface_2;
+        let chips = places
+            .into_iter()
+            .enumerate()
+            .map(|(i, (icon, name, path))| {
+                let on = path == at;
+                let tip = path.clone();
+                h_flex()
+                    .id(("fs-place", i))
+                    .flex_none()
+                    .gap(px(4.))
+                    .px(px(6.))
+                    .py(px(1.))
+                    .rounded(px(4.))
+                    .text_size(px(11.))
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(p.accent_soft).text_color(p.accent))
+                    .when(!on, |d| d.text_color(p.muted).hover(move |s| s.bg(hover)))
+                    .child(
+                        svg()
+                            .path(assets::icon(icon))
+                            .size(px(11.))
+                            .text_color(if on { p.accent } else { p.muted }),
+                    )
+                    .child(name)
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+                    })
+                    .on_click(
+                        cx.listener(move |v, _, window, cx| v.show_here(&path, Some(window), cx)),
+                    )
+            });
+        let name = if at == "/" {
+            "/".to_string()
+        } else {
+            at.rsplit('/').next().unwrap_or(&at).to_string()
+        };
+        let up = parent_of(&at);
+        let icon_button = |id: &'static str, icon: &'static str, tip: &'static str| {
+            div()
+                .id(id)
+                .flex_none()
+                .p(px(3.))
+                .rounded(px(4.))
+                .cursor_pointer()
+                .hover(move |s| s.bg(hover))
+                .child(
+                    svg()
+                        .path(assets::icon(icon))
+                        .size(px(12.))
+                        .text_color(p.muted),
+                )
+                .tooltip(move |window, cx| {
+                    gpui_component::tooltip::Tooltip::new(tip).build(window, cx)
+                })
+        };
+        v_flex()
+            .flex_none()
+            .gap(px(4.))
+            .px(px(6.))
+            .pb(px(4.))
+            .when_some(field, |d, field| {
+                d.child(
+                    div()
+                        // Tab completes the folder's name rather than
+                        // leaving the field; Escape puts back the folder
+                        // shown.
+                        .capture_key_down(cx.listener(|v, e: &gpui::KeyDownEvent, window, cx| {
+                            match e.keystroke.key.as_str() {
+                                "tab" if !e.keystroke.modifiers.shift => {
+                                    cx.stop_propagation();
+                                    v.complete(window, cx);
+                                }
+                                "escape" => {
+                                    cx.stop_propagation();
+                                    let at = v.machine_at();
+                                    if let Some((f, _)) = &v.path_field {
+                                        f.update(cx, |f, cx| f.set_value(at, window, cx));
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }))
+                        .child(Input::new(&field).small()),
+                )
+            })
+            .child(h_flex().flex_wrap().gap(px(2.)).children(chips))
+            .child(
+                h_flex()
+                    .gap(px(5.))
+                    .pt(px(2.))
+                    .child(
+                        svg()
+                            .path(assets::icon("folder-open"))
+                            .size(px(14.))
+                            .text_color(p.folder),
+                    )
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(name),
+                    )
+                    .child(div().flex_1())
+                    .when(at != "/", |d| {
+                        d.child(icon_button("fs-up", "arrow-up", "Up a folder").on_click(
+                            cx.listener(move |v, _, window, cx| v.show_here(&up, Some(window), cx)),
+                        ))
+                    })
+                    .child(
+                        icon_button("fs-reload", "refresh", "Reload")
+                            .on_click(cx.listener(|v, _, _, cx| v.reload_machine(cx))),
+                    ),
+            )
+            .into_any_element()
     }
 }
 
@@ -1537,7 +2008,7 @@ fn muted(text: impl Into<SharedString>, p: &Palette) -> impl IntoElement {
         .child(text.into())
 }
 
-fn chevron(open: bool, p: &Palette) -> impl IntoElement {
+pub(crate) fn chevron(open: bool, p: &Palette) -> impl IntoElement {
     svg()
         .path(assets::icon(if open {
             "chevron-down"
@@ -1663,6 +2134,24 @@ impl ProjectView {
                         .text_size(px(10.5))
                         .text_color(colour)
                         .child(m.to_string()),
+                )
+            })
+            .when(r.readonly, |d| {
+                d.child(
+                    svg()
+                        .path(assets::icon("lock"))
+                        .size(px(11.))
+                        .flex_none()
+                        .text_color(p.muted),
+                )
+            })
+            .when_some(r.size, |d, n| {
+                d.child(
+                    div()
+                        .flex_none()
+                        .text_size(px(10.5))
+                        .text_color(p.muted)
+                        .child(crate::docker::bytes(n as f64)),
                 )
             })
             .debug_selector({
@@ -2248,6 +2737,31 @@ fn tree_menu(
         })
     };
     let mut menu = menu;
+    // The machine's folders: shown from, and pinned to the places.
+    if t.dir && !in_project {
+        let pinned = view
+            .upgrade()
+            .is_some_and(|v| v.read(cx).pinned.contains(&t.abs));
+        let (here, pin) = (t.abs.clone(), t.abs.clone());
+        let (v1, v2) = (view.clone(), view.clone());
+        menu = menu
+            .item(
+                PopupMenuItem::new("Show Here").on_click(move |_, window, cx| {
+                    let _ = v1.update(cx, |v, cx| v.show_here(&here, Some(window), cx));
+                }),
+            )
+            .item(
+                PopupMenuItem::new(if pinned {
+                    "Unpin from Places"
+                } else {
+                    "Pin to Places"
+                })
+                .on_click(move |_, _, cx| {
+                    let _ = v2.update(cx, |v, cx| v.pin(&pin, !pinned, cx));
+                }),
+            )
+            .separator();
+    }
     if !t.dir {
         let (r, p) = (root.clone(), path.clone());
         menu = menu.item(emit(
@@ -2319,6 +2833,13 @@ fn tree_menu(
         .separator()
         .item(find("Find in Folder…", false))
         .item(find("Replace in Folder…", true));
+    if in_project {
+        let abs = t.abs.clone();
+        menu = menu.item(emit(
+            "Reveal in Filesystem",
+            Box::new(move |cx| cx.emit(ShowInFilesystem(abs.clone()))),
+        ));
+    }
     if !t.dir {
         let (r, abs) = (root.clone(), t.abs.clone());
         let (cr, cp) = (root.clone(), path.clone());

@@ -24,13 +24,15 @@
 //! and SNAPSHOT_FIND_WINDOW=1 keeps the matches in the Find window;
 //! SNAPSHOT_REPLACE=1 shows the pop-up as Replace in Files;
 //! SNAPSHOT_CARET=LINE:COL puts the open file's caret there, then
-//! SNAPSHOT_USAGES=1 finds its usages, SNAPSHOT_RENAME=name renames it, and
+//! SNAPSHOT_USAGES=1 finds its usages (=popup: in Show Usages' pop-up),
+//! SNAPSHOT_RENAME=name renames it, and
 //! SNAPSHOT_SYMBOL=text goes to a symbol;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
 //! SNAPSHOT_HOVER=X,Y rests the pointer there; SNAPSHOT_CLICK=X,Y clicks there
 //! (X,Y;X,Y... in turn);
 //! SNAPSHOT_DRAG=X1,Y1,X2,Y2 drags from one place to the other;
+//! SNAPSHOT_DRAG=X1,Y1;X2,Y2 drags from one point to the other;
 //! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would, and
 //! SNAPSHOT_PRESS="down enter |text| enter" then presses keys, typing what
 //! is between bars;
@@ -332,10 +334,11 @@ fn main() {
                     });
                     settle(cx, handle.into(), Duration::from_secs(1)).await;
                 }
-                if std::env::var("SNAPSHOT_USAGES").is_ok() {
+                if let Ok(how) = std::env::var("SNAPSHOT_USAGES") {
+                    let popup = how == "popup";
                     let _ = handle.update(cx, |_, window, cx| {
                         if let Some(tab) = shell.read(cx).active_view() {
-                            tab.update(cx, |t, cx| t.find_usages(window, cx));
+                            tab.update(cx, |t, cx| t.find_usages(popup, window, cx));
                         }
                     });
                     settle(cx, handle.into(), Duration::from_secs(5)).await;
@@ -574,6 +577,52 @@ fn main() {
                             PlatformInput::MouseUp(MouseUpEvent {
                                 button: MouseButton::Left,
                                 position,
+                                modifiers: Modifiers::none(),
+                                click_count: 1,
+                            }),
+                            cx,
+                        );
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(1)).await;
+                }
+                // A drag with the left button, from one point to another.
+                let drag: Vec<(f32, f32)> = std::env::var("SNAPSHOT_DRAG")
+                    .unwrap_or_default()
+                    .split(';')
+                    .filter_map(|e| {
+                        let (x, y) = e.split_once(',')?;
+                        Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+                    })
+                    .collect();
+                if let [(x1, y1), (x2, y2)] = drag[..] {
+                    use gpui::{
+                        Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+                        PlatformInput,
+                    };
+                    let (from, to) = (gpui::point(px(x1), px(y1)), gpui::point(px(x2), px(y2)));
+                    let _ = cx.update_window(handle.into(), |_, window, cx| {
+                        window.dispatch_event(
+                            PlatformInput::MouseDown(MouseDownEvent {
+                                button: MouseButton::Left,
+                                position: from,
+                                modifiers: Modifiers::none(),
+                                click_count: 1,
+                                first_mouse: false,
+                            }),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            PlatformInput::MouseMove(MouseMoveEvent {
+                                position: to,
+                                pressed_button: Some(MouseButton::Left),
+                                modifiers: Modifiers::none(),
+                            }),
+                            cx,
+                        );
+                        window.dispatch_event(
+                            PlatformInput::MouseUp(MouseUpEvent {
+                                button: MouseButton::Left,
+                                position: to,
                                 modifiers: Modifiers::none(),
                                 click_count: 1,
                             }),

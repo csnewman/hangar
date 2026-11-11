@@ -29,6 +29,7 @@ pub mod lineops;
 pub mod logview;
 pub mod lspedit;
 pub mod lspops;
+pub mod lsppanel;
 pub mod menus;
 pub mod model;
 pub mod notices;

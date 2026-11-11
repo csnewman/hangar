@@ -10,9 +10,9 @@ use std::ops::Range;
 use std::time::Duration;
 
 use gpui::{
-    Context, Entity, FocusHandle, Focusable, FontWeight, HighlightStyle, IntoElement,
-    ParentElement, Render, SharedString, Styled, StyledText, Window, div, prelude::*, px,
-    uniform_list,
+    Context, Entity, FocusHandle, Focusable, FontWeight, HighlightStyle, IntoElement, KeyDownEvent,
+    ParentElement, Render, ScrollStrategy, SharedString, Styled, StyledText,
+    UniformListScrollHandle, Window, div, prelude::*, px, relative, uniform_list,
 };
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::{h_flex, v_flex};
@@ -228,6 +228,44 @@ pub fn rows(projects: &[(String, Vec<Match>)]) -> Vec<Row> {
     out
 }
 
+/// The rows shown, by index: a folded file's row without its lines.
+pub fn visible(rows: &[Row], folded: &HashSet<(String, String)>) -> Vec<usize> {
+    let mut out = vec![];
+    let mut hiding = false;
+    for (i, r) in rows.iter().enumerate() {
+        match r {
+            Row::File { root, path, .. } => {
+                hiding = folded.contains(&(root.clone(), path.clone()));
+                out.push(i);
+            }
+            Row::Line { .. } if !hiding => out.push(i),
+            Row::Line { .. } => {}
+        }
+    }
+    out
+}
+
+/// The match after a row (the first, after none), or before it (the last,
+/// before none); None past the end. Folded files' matches count: IntelliJ's
+/// Next Occurrence goes through every one.
+pub fn next_match(rows: &[Row], from: Option<usize>, forward: bool) -> Option<usize> {
+    let is_line = |i: &usize| matches!(rows[*i], Row::Line { .. });
+    if forward {
+        (from.map_or(0, |f| f + 1)..rows.len()).find(is_line)
+    } else {
+        (0..from.unwrap_or(rows.len()).min(rows.len()))
+            .rev()
+            .find(is_line)
+    }
+}
+
+/// The file row a row is under: itself, for a file's.
+pub fn file_of(rows: &[Row], i: usize) -> Option<usize> {
+    (0..=i.min(rows.len().saturating_sub(1)))
+        .rev()
+        .find(|j| matches!(rows[*j], Row::File { .. }))
+}
+
 /// UTF-16 ranges in text as byte ranges, for highlighting.
 pub fn byte_ranges(text: &str, ranges: &[[usize; 2]]) -> Vec<Range<usize>> {
     let to_byte = |unit: usize| {
@@ -246,6 +284,9 @@ pub fn byte_ranges(text: &str, ranges: &[[usize; 2]]) -> Vec<Range<usize>> {
         .filter(|r| r.start < r.end)
         .collect()
 }
+
+/// A file's text as fs.read gives it: none for a file that is not text.
+type Read = Result<Option<String>, String>;
 
 /// Each project's matching lines, by its root.
 pub type Lines = Vec<(String, Vec<Match>)>;
@@ -281,6 +322,15 @@ pub struct FindView {
     /// Counts the searches started, so an older one's answer is dropped.
     generation: u64,
     selected: Option<usize>,
+    /// The files folded, by root and path, and the rows shown for it.
+    folded: HashSet<(String, String)>,
+    shown: Vec<usize>,
+    list: UniformListScrollHandle,
+    list_focus: FocusHandle,
+    /// Whether the selected match's file is shown beside the rows, and
+    /// that file: its root, path, and text once read.
+    previewing: bool,
+    preview: Option<(String, String, Option<Read>)>,
     _subs: Vec<gpui::Subscription>,
 }
 
@@ -321,8 +371,151 @@ impl FindView {
             errors: vec![],
             generation: 0,
             selected: None,
+            folded: HashSet::new(),
+            shown: vec![],
+            list: UniformListScrollHandle::new(),
+            list_focus: cx.focus_handle(),
+            previewing: true,
+            preview: None,
             _subs: subs,
         }
+    }
+
+    /// The rows shown, for the rows or the folded files having changed.
+    fn reshown(&mut self) {
+        self.shown = visible(&self.rows, &self.folded);
+    }
+
+    /// Selects row i: scrolled to, its file previewed.
+    pub fn select(&mut self, i: usize, cx: &mut Context<Self>) {
+        if i >= self.rows.len() {
+            return;
+        }
+        self.selected = Some(i);
+        if let Some(at) = self.shown.iter().position(|r| *r == i) {
+            self.list.scroll_to_item(at, ScrollStrategy::Center);
+        }
+        self.read_preview(cx);
+        cx.notify();
+    }
+
+    /// Reads the selected match's file for its preview, unless it is shown.
+    fn read_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(Row::Line { root, m }) = self.selected.and_then(|i| self.rows.get(i)) else {
+            return;
+        };
+        if !self.previewing
+            || self
+                .preview
+                .as_ref()
+                .is_some_and(|(r, p, _)| r == root && p == &m.path)
+        {
+            return;
+        }
+        let (root, path) = (root.clone(), m.path.clone());
+        self.preview = Some((root.clone(), path.clone(), None));
+        let Some(code) = self.workspace.read(cx).code(&root) else {
+            return;
+        };
+        let call = code.call("fs.read", json!({ "path": path }));
+        cx.spawn(async move |this, cx| {
+            let text = call
+                .await
+                .map(|v| v.get("text").and_then(|t| t.as_str()).map(str::to_string));
+            let _ = this.update(cx, |v, cx| {
+                if let Some((r, p, t)) = &mut v.preview
+                    && *r == root
+                    && *p == path
+                {
+                    *t = Some(text);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Folds a file's lines away, or shows them.
+    fn fold(&mut self, file: usize, fold: bool, cx: &mut Context<Self>) {
+        let Some(Row::File { root, path, .. }) = self.rows.get(file) else {
+            return;
+        };
+        let key = (root.clone(), path.clone());
+        if fold {
+            self.folded.insert(key);
+            if self
+                .selected
+                .is_some_and(|s| file_of(&self.rows, s) == Some(file))
+            {
+                self.selected = Some(file);
+            }
+        } else {
+            self.folded.remove(&key);
+        }
+        self.reshown();
+        cx.notify();
+    }
+
+    /// Opens the next match, or the one before (IntelliJ's Next and
+    /// Previous Occurrence), unfolding its file; false when there is none.
+    pub fn step(&mut self, forward: bool, cx: &mut Context<Self>) -> bool {
+        let Some(i) = next_match(&self.rows, self.selected, forward) else {
+            return false;
+        };
+        if let Some(f) = file_of(&self.rows, i) {
+            self.fold(f, false, cx);
+        }
+        self.open(i, cx);
+        true
+    }
+
+    /// The list's keys: up and down through the rows shown, Enter opening a
+    /// match or folding a file, left folding and right unfolding.
+    fn key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
+        let at = self
+            .selected
+            .and_then(|s| self.shown.iter().position(|r| *r == s));
+        match e.keystroke.key.as_str() {
+            "down" => {
+                let next = at.map_or(0, |a| (a + 1).min(self.shown.len().saturating_sub(1)));
+                if let Some(&i) = self.shown.get(next) {
+                    self.select(i, cx);
+                }
+            }
+            "up" => {
+                let next = at.map_or(0, |a| a.saturating_sub(1));
+                if let Some(&i) = self.shown.get(next) {
+                    self.select(i, cx);
+                }
+            }
+            "enter" => match self.selected.map(|s| (s, self.rows.get(s))) {
+                Some((s, Some(Row::Line { .. }))) => self.open(s, cx),
+                Some((s, Some(Row::File { root, path, .. }))) => {
+                    let folded = self.folded.contains(&(root.clone(), path.clone()));
+                    self.fold(s, !folded, cx);
+                }
+                _ => return,
+            },
+            "left" => match self.selected {
+                Some(s) if matches!(self.rows.get(s), Some(Row::File { .. })) => {
+                    self.fold(s, true, cx)
+                }
+                Some(s) => {
+                    if let Some(f) = file_of(&self.rows, s) {
+                        self.select(f, cx)
+                    }
+                }
+                None => return,
+            },
+            "right" => match self.selected {
+                Some(s) if matches!(self.rows.get(s), Some(Row::File { .. })) => {
+                    self.fold(s, false, cx)
+                }
+                _ => return,
+            },
+            _ => return,
+        }
+        cx.stop_propagation();
     }
 
     pub fn query(&self) -> &Entity<InputState> {
@@ -349,7 +542,21 @@ impl FindView {
         self.pending = 0;
         self.errors.clear();
         self.selected = None;
+        self.folded.clear();
+        self.preview = None;
+        self.reshown();
+        self.select_first(cx);
         cx.notify();
+    }
+
+    /// Selects the first match, as IntelliJ does when results come, for
+    /// the preview to show it.
+    fn select_first(&mut self, cx: &mut Context<Self>) {
+        if self.selected.is_none()
+            && let Some(i) = next_match(&self.rows, None, true)
+        {
+            self.select(i, cx);
+        }
     }
 
     /// Lists a search's matches here, as the pop-up's Open in Find Window.
@@ -402,6 +609,9 @@ impl FindView {
         self.truncated = false;
         self.errors.clear();
         self.selected = None;
+        self.folded.clear();
+        self.preview = None;
+        self.reshown();
         self.pending = 0;
         if search.text.is_empty() {
             cx.notify();
@@ -433,6 +643,8 @@ impl FindView {
                                 .filter(|r| matches!(r, Row::File { .. }))
                                 .count();
                             v.matches = v.rows.len() - v.files;
+                            v.reshown();
+                            v.select_first(cx);
                         }
                         Err(e) => v.errors.push(e),
                     }
@@ -456,7 +668,7 @@ impl FindView {
 
     /// Opens the match on row i.
     pub fn open(&mut self, i: usize, cx: &mut Context<Self>) {
-        self.selected = Some(i);
+        self.select(i, cx);
         if let Some(Row::Line { root, m }) = self.rows.get(i) {
             cx.emit(OpenAt {
                 root: root.clone(),
@@ -484,12 +696,23 @@ impl FindView {
                     .map(|f| f.name.clone())
                     .unwrap_or_default();
                 let several = self.workspace.read(cx).projects().len() > 1;
+                let folded = self.folded.contains(&(root.clone(), path.clone()));
+                let selected = self.selected == Some(i);
                 h_flex()
+                    .id(("find-file", i))
                     .h(px(ROW))
                     .w_full()
                     .gap(px(6.))
                     .px(px(8.))
-                    .mt(px(2.))
+                    .cursor_pointer()
+                    .when(selected, |d| d.bg(p.selection))
+                    .when(!selected, |d| d.hover(|s| s.bg(p.surface_2)))
+                    .on_click(cx.listener(move |v, _, window, cx| {
+                        window.focus(&v.list_focus, cx);
+                        v.select(i, cx);
+                        v.fold(i, !folded, cx);
+                    }))
+                    .child(crate::project::chevron(!folded, p))
                     .child(div().font_weight(FontWeight::SEMIBOLD).child(name))
                     .child(div().min_w_0().truncate().text_color(p.muted).child(
                         if several && !project.is_empty() {
@@ -548,10 +771,51 @@ impl FindView {
                             .text_size(px(11.5))
                             .child(styled),
                     )
-                    .on_click(cx.listener(move |v, _, _, cx| v.open(i, cx)))
+                    .on_click(cx.listener(move |v, _, window, cx| {
+                        window.focus(&v.list_focus, cx);
+                        v.open(i, cx)
+                    }))
                     .into_any_element()
             }
         }
+    }
+
+    /// The selected match's file around it, beside the rows.
+    fn preview_pane(&self, p: &Palette) -> gpui::AnyElement {
+        let frame = v_flex()
+            .w(relative(0.45))
+            .flex_none()
+            .h_full()
+            .border_l_1()
+            .border_color(p.border)
+            .bg(p.bg);
+        let selected = self.selected.and_then(|i| match self.rows.get(i) {
+            Some(Row::Line { m, .. }) => Some(m),
+            _ => None,
+        });
+        let (Some((_, path, text)), Some(m)) = (&self.preview, selected) else {
+            return frame
+                .child(note("Select a match to see it in its file.", p))
+                .into_any_element();
+        };
+        let body = match text {
+            None => note("Reading…", p),
+            Some(Err(e)) => note(e.clone(), p),
+            Some(Ok(None)) => note("The file cannot be shown.", p),
+            Some(Ok(Some(text))) => crate::findpop::lines_around(text, m, 41, p),
+        };
+        frame
+            .child(
+                div()
+                    .px(px(10.))
+                    .py(px(4.))
+                    .text_size(px(11.))
+                    .text_color(p.muted)
+                    .truncate()
+                    .child(path.clone()),
+            )
+            .child(div().flex_1().min_h_0().overflow_hidden().child(body))
+            .into_any_element()
     }
 }
 
@@ -638,6 +902,19 @@ impl Render for FindView {
             })
             .child(div().w(px(200.)).flex_none().child(Input::new(&self.mask)))
             .child(
+                toggle(
+                    "find-preview",
+                    "Preview",
+                    self.previewing,
+                    "Show the match in its file",
+                )
+                .on_click(cx.listener(|v, _, _, cx| {
+                    v.previewing = !v.previewing;
+                    v.read_preview(cx);
+                    cx.notify();
+                })),
+            )
+            .child(
                 div()
                     .w(px(190.))
                     .flex_none()
@@ -666,16 +943,34 @@ impl Render for FindView {
                 },
                 &p,
             ),
-            State::Ready => uniform_list(
-                "find-results",
-                self.rows.len(),
-                cx.processor(|v, range: Range<usize>, _, cx| {
-                    let p = palette::of(cx);
-                    range.map(|i| v.row(i, &p, cx)).collect::<Vec<_>>()
-                }),
-            )
-            .flex_1()
-            .into_any_element(),
+            State::Ready => h_flex()
+                .flex_1()
+                .min_h_0()
+                .items_stretch()
+                .child(
+                    v_flex()
+                        .flex_1()
+                        .min_w_0()
+                        .track_focus(&self.list_focus)
+                        .on_key_down(cx.listener(|v, e: &KeyDownEvent, _, cx| v.key(e, cx)))
+                        .child(
+                            uniform_list(
+                                "find-results",
+                                self.shown.len(),
+                                cx.processor(|v, range: Range<usize>, _, cx| {
+                                    let p = palette::of(cx);
+                                    range
+                                        .filter_map(|at| v.shown.get(at).copied())
+                                        .map(|i| v.row(i, &p, cx))
+                                        .collect::<Vec<_>>()
+                                }),
+                            )
+                            .track_scroll(&self.list)
+                            .flex_1(),
+                        ),
+                )
+                .when(self.previewing, |d| d.child(self.preview_pane(&p)))
+                .into_any_element(),
         };
         v_flex()
             .size_full()

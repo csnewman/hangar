@@ -72,6 +72,8 @@ pub struct Workspace {
     state: State,
     primary: Option<Code>,
     home: String,
+    /// The Code settings file, as the service says at hello.
+    settings: String,
     projects: Vec<Folder>,
     /// The connections lost and not yet made again, by key.
     lost: std::collections::HashSet<String>,
@@ -103,6 +105,7 @@ impl Workspace {
             state: State::Connecting,
             primary: None,
             home: String::new(),
+            settings: String::new(),
             projects: vec![],
             lost: Default::default(),
             notices: tx,
@@ -175,6 +178,16 @@ impl Workspace {
             .max_by_key(|f| f.root.len())
     }
 
+    /// The user's home folder, once connected.
+    pub fn home(&self) -> Option<&str> {
+        Some(self.home.as_str()).filter(|h| !h.is_empty())
+    }
+
+    /// The Code settings file, once connected.
+    pub fn settings_path(&self) -> Option<&str> {
+        Some(self.settings.as_str()).filter(|s| !s.is_empty())
+    }
+
     /// The path shown for a folder: under the home folder as ~.
     pub fn shown(&self, root: &str) -> String {
         match root.strip_prefix(&self.home) {
@@ -188,6 +201,7 @@ impl Workspace {
             Notice::Ready(hello) if key == PRIMARY => {
                 self.lost.remove(&key);
                 self.home = hello["home"].as_str().unwrap_or_default().to_string();
+                self.settings = hello["settings"].as_str().unwrap_or_default().to_string();
                 let root = hello["root"].as_str().unwrap_or_default().to_string();
                 self.read(&root, cx);
             }
