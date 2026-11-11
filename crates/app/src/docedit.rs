@@ -376,6 +376,7 @@ gpui::actions!(
         Reformat,
         ToggleSoftWrap,
         ToggleBlame,
+        ParameterInfo,
     ]
 );
 
@@ -386,9 +387,9 @@ pub fn bind_keys(cx: &mut App) {
     use gpui::KeyBinding;
     let ctx = Some("DocEditor > Input");
     #[cfg(target_os = "macos")]
-    let keys = ["cmd-d", "cmd-backspace", "cmd-/", "cmd-alt-l"];
+    let keys = ["cmd-d", "cmd-backspace", "cmd-/", "cmd-alt-l", "cmd-p"];
     #[cfg(not(target_os = "macos"))]
-    let keys = ["ctrl-d", "ctrl-y", "ctrl-/", "ctrl-alt-l"];
+    let keys = ["ctrl-d", "ctrl-y", "ctrl-/", "ctrl-alt-l", "ctrl-p"];
     cx.bind_keys([
         KeyBinding::new(keys[0], DuplicateLine, ctx),
         KeyBinding::new(keys[1], DeleteLine, ctx),
@@ -397,6 +398,7 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(keys[2], CommentLine, ctx),
         KeyBinding::new("ctrl-shift-j", JoinLines, ctx),
         KeyBinding::new(keys[3], Reformat, ctx),
+        KeyBinding::new(keys[4], ParameterInfo, ctx),
     ]);
 }
 
@@ -551,6 +553,14 @@ pub struct DocEditor {
     /// The selection last told to the others, and whether telling is due.
     sent: Option<(usize, usize)>,
     sending: bool,
+    /// The file's language servers, and the signatures shown of the call
+    /// the caret is in, with a count of the times asked, so only the last
+    /// answer is shown.
+    languages: Option<WeakEntity<crate::languages::Languages>>,
+    signatures: Option<lsp_types::SignatureHelp>,
+    signatures_asked: u64,
+    /// Where the caret was when they were last asked for.
+    sig_caret: Option<usize>,
     _subs: Vec<Subscription>,
 }
 
@@ -577,6 +587,7 @@ impl DocEditor {
         });
         let moved = cx.observe(&editor, |this, _, cx| {
             this.selection_moved(cx);
+            this.caret_moved(cx);
             // The annotations follow the lines as they scroll.
             if this.blame.is_some() {
                 cx.notify();
@@ -624,6 +635,10 @@ impl DocEditor {
             edited_gen: 0,
             sent: None,
             sending: false,
+            languages: None,
+            signatures: None,
+            signatures_asked: 0,
+            sig_caret: None,
             _subs: vec![edits, moved],
         }
     }
@@ -1089,6 +1104,155 @@ impl DocEditor {
     /// Tells the others where this user's caret and selection are, shortly
     /// after they move. Told at the version the authority confirmed, so
     /// only while no change of this user's awaits confirming.
+    /// Gives the editor its file's language servers, which Parameter Info
+    /// asks.
+    pub fn set_languages(&mut self, languages: WeakEntity<crate::languages::Languages>) {
+        self.languages = Some(languages);
+    }
+
+    /// The signatures shown of the call the caret is in, if any.
+    pub fn signatures(&self) -> Option<&lsp_types::SignatureHelp> {
+        self.signatures.as_ref()
+    }
+
+    /// Asks for Parameter Info after text typed: a character the server
+    /// names, or any change while it is shown. It waits a moment, so the
+    /// change reaches the server first and a run of keys asks once.
+    fn typed_for_signatures(&mut self, inserted: &str, cx: &mut Context<Self>) {
+        let Some(l) = self.languages.as_ref().and_then(|l| l.upgrade()) else {
+            return;
+        };
+        let (triggers, retriggers) = l.read(cx).signature_triggers(&self.asked);
+        let shown = self.signatures.is_some();
+        if let Some(ask) = crate::sighelp::asks(inserted, triggers, retriggers, shown) {
+            self.ask_signatures(ask, Duration::from_millis(40), cx);
+        }
+    }
+
+    /// Asks again as the caret moves while signatures are shown: within the
+    /// call the parameter moves on, and out of it they go.
+    fn caret_moved(&mut self, cx: &mut Context<Self>) {
+        let at = self.editor.read(cx).cursor();
+        if self.signatures.is_none() || self.sig_caret == Some(at) {
+            return;
+        }
+        self.sig_caret = Some(at);
+        self.ask_signatures(crate::sighelp::Ask::Again, Duration::from_millis(40), cx);
+    }
+
+    /// Asks the file's server for the signatures of the call at the caret,
+    /// after a wait; only the last answer asked for is shown, and none
+    /// takes them away.
+    fn ask_signatures(
+        &mut self,
+        ask: crate::sighelp::Ask,
+        after: Duration,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_component::RopeExt;
+        self.signatures_asked += 1;
+        let asked = self.signatures_asked;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(after).await;
+            let call = this.update(cx, |d, cx| {
+                if d.signatures_asked != asked {
+                    return None;
+                }
+                let l = d.languages.as_ref()?.upgrade()?;
+                let e = d.editor.read(cx);
+                let at = e.cursor();
+                d.sig_caret = Some(at);
+                let params = json!({
+                    "textDocument": { "uri": crate::languages::file_uri(&d.asked) },
+                    "position": e.text().offset_to_position(at),
+                    "context": ask.context(d.signatures.as_ref()),
+                });
+                let abs = d.asked.clone();
+                Some(l.update(cx, |l, cx| {
+                    l.request(&abs, "textDocument/signatureHelp", params, cx)
+                }))
+            });
+            let Ok(Some(call)) = call else { return };
+            let got = call
+                .await
+                .ok()
+                .and_then(|v| serde_json::from_value::<Option<lsp_types::SignatureHelp>>(v).ok())
+                .flatten()
+                .filter(|h| !h.signatures.is_empty());
+            let _ = this.update(cx, |d, cx| {
+                if d.signatures_asked == asked {
+                    d.signatures = got;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Parameter Info as it is drawn: over the caret's line, each signature
+    /// in the server's order, the one it takes the call for in full colour,
+    /// the parameter the caret is at in bold, and what the server says of it
+    /// under them.
+    fn parameter_info(&self, p: &palette::Palette, cx: &App) -> Option<gpui::AnyElement> {
+        use gpui::{FontWeight, HighlightStyle, StyledText};
+        let help = self.signatures.as_ref()?;
+        let e = self.editor.read(cx);
+        let at = e.cursor();
+        let caret = e.range_to_bounds(&(at..at))?;
+        let mut body = gpui_component::v_flex().gap(px(2.));
+        for line in crate::sighelp::lines(help).into_iter().take(8) {
+            let colour = if line.active { p.text } else { p.muted };
+            let mut text = StyledText::new(line.label);
+            if let Some(r) = line.param {
+                text = text.with_highlights([(
+                    r,
+                    HighlightStyle {
+                        font_weight: Some(FontWeight::BOLD),
+                        color: Some(p.text),
+                        ..Default::default()
+                    },
+                )]);
+            }
+            body = body.child(div().text_color(colour).child(text));
+        }
+        let about = crate::sighelp::about(help);
+        Some(
+            gpui::deferred(
+                gpui::anchored()
+                    .position(gpui::point(caret.left() - px(8.), caret.top() - px(3.)))
+                    .anchor(gpui::Anchor::BottomLeft)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(
+                        div()
+                            .debug_selector(|| "parameter-info".into())
+                            .max_w(px(640.))
+                            .px(px(8.))
+                            .py(px(5.))
+                            .rounded(px(5.))
+                            .border_1()
+                            .border_color(p.border_strong)
+                            .bg(p.surface)
+                            .shadow_md()
+                            .child(body.font_family(crate::diff::mono()).text_size(px(12.)))
+                            .when_some(about, |d, a| {
+                                d.child(
+                                    div()
+                                        .mt(px(4.))
+                                        .pt(px(4.))
+                                        .border_t_1()
+                                        .border_color(p.border)
+                                        .text_size(px(11.5))
+                                        .text_color(p.muted)
+                                        .child(a),
+                                )
+                            }),
+                    ),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
+    }
+
     fn selection_moved(&mut self, cx: &mut Context<Self>) {
         if self.sending || self.me.is_none() || self.doc.is_none() || self.state != State::Open {
             return;
@@ -1190,11 +1354,13 @@ impl DocEditor {
     /// Takes what the user typed, to send and to undo.
     fn typed(&mut self, e: &InputEditsEvent, cx: &mut Context<Self>) {
         let now = Instant::now();
+        let mut inserted = None;
         for (edit, after) in e.edits() {
             if self.echoes.take(after) {
                 self.shadow = after.clone();
                 continue;
             }
+            inserted = Some(after.slice(edit.start_byte..edit.new_end_byte).to_string());
             if let Some(sync) = &mut self.sync {
                 sync.typed(
                     &self.shadow,
@@ -1208,6 +1374,9 @@ impl DocEditor {
             self.shadow = after.clone();
         }
         self.push(cx);
+        if let Some(inserted) = inserted {
+            self.typed_for_signatures(&inserted, cx);
+        }
     }
 
     /// Sends the changes not yet confirmed, one push at a time.
@@ -1542,6 +1711,18 @@ impl Render for DocEditor {
                 let on = d.blame.is_none();
                 d.set_blame(on, cx)
             }))
+            .on_action(cx.listener(|d, _: &ParameterInfo, _, cx| {
+                d.ask_signatures(crate::sighelp::Ask::Invoked, Duration::ZERO, cx)
+            }))
+            // Escape takes Parameter Info away, and does what it does in the
+            // editor besides.
+            .capture_key_down(cx.listener(|d, e: &gpui::KeyDownEvent, _, cx| {
+                if e.keystroke.key == "escape" && d.signatures.is_some() {
+                    d.signatures = None;
+                    d.signatures_asked += 1;
+                    cx.notify();
+                }
+            }))
             .capture_action(cx.listener(|d, _: &Undo, window, cx| {
                 cx.stop_propagation();
                 d.undo(window, cx);
@@ -1589,6 +1770,7 @@ impl Render for DocEditor {
                         })),
                 )
             })
+            .children(self.parameter_info(&p, cx))
             .when_some(notice, |d, n| {
                 d.child(
                     div()

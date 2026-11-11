@@ -130,6 +130,9 @@ pub struct Languages {
     /// The characters each server asks to be shown completions after,
     /// from its answer to initialize.
     triggers: HashMap<Key, Vec<String>>,
+    /// The characters each server starts signature help at, and those it
+    /// moves help shown on at; none for a server without it.
+    signatures: HashMap<Key, (Vec<String>, Vec<String>)>,
     _sub: gpui::Subscription,
 }
 
@@ -170,6 +173,7 @@ impl Languages {
             pending: HashMap::new(),
             next_id: 1,
             triggers: HashMap::new(),
+            signatures: HashMap::new(),
             _sub: sub,
         }
     }
@@ -387,15 +391,29 @@ impl Languages {
                         return;
                     }
                 };
-                let triggers = caps["completionProvider"]["triggerCharacters"]
-                    .as_array()
-                    .map(|a| {
-                        a.iter()
-                            .filter_map(|c| c.as_str().map(str::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                l.triggers.insert(key.clone(), triggers);
+                let chars = |v: &Value| -> Vec<String> {
+                    v.as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|c| c.as_str().map(str::to_string))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                };
+                l.triggers.insert(
+                    key.clone(),
+                    chars(&caps["completionProvider"]["triggerCharacters"]),
+                );
+                let sig = &caps["signatureHelpProvider"];
+                if sig.is_object() {
+                    l.signatures.insert(
+                        key.clone(),
+                        (
+                            chars(&sig["triggerCharacters"]),
+                            chars(&sig["retriggerCharacters"]),
+                        ),
+                    );
+                }
                 l.servers.insert(key.clone(), Server::Ready { n });
                 l.notify(&key, "initialized", json!({}), cx);
                 for abs in waiting {
@@ -493,6 +511,15 @@ impl Languages {
             .map_or(&[], |t| t.as_slice())
     }
 
+    /// The characters an open file's server starts signature help at, and
+    /// those it moves help shown on at.
+    pub fn signature_triggers(&self, abs: &str) -> (&[String], &[String]) {
+        self.opened
+            .get(abs)
+            .and_then(|k| self.signatures.get(k))
+            .map_or((&[], &[]), |(t, r)| (t.as_slice(), r.as_slice()))
+    }
+
     fn key_of(&self, root: &str, n: u32) -> Option<Key> {
         self.servers.iter().find_map(|(k, s)| match s {
             Server::Ready { n: m } | Server::Starting { n: Some(m), .. }
@@ -580,6 +607,14 @@ fn capabilities() -> Value {
             "definition": { "linkSupport": true },
             "completion": {
                 "completionItem": { "snippetSupport": false, "documentationFormat": ["markdown", "plaintext"] },
+            },
+            "signatureHelp": {
+                "signatureInformation": {
+                    "documentationFormat": ["markdown", "plaintext"],
+                    "parameterInformation": { "labelOffsetSupport": true },
+                    "activeParameterSupport": true,
+                },
+                "contextSupport": true,
             },
         },
         "workspace": { "configuration": true, "workspaceFolders": true },

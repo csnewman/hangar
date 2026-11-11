@@ -1074,7 +1074,11 @@ impl EnvTab {
         };
         let abs = doc.read(cx).asked().to_string();
         let d = l.read(cx).diagnostics_of(&abs).to_vec();
-        doc.update(cx, |v, cx| v.set_diagnostics(d, cx));
+        let weak = l.downgrade();
+        doc.update(cx, |v, cx| {
+            v.set_diagnostics(d, cx);
+            v.set_languages(weak);
+        });
         l.update(cx, |l, cx| l.open(&abs, cx));
         let tab = cx.entity().downgrade();
         let editor = doc.read(cx).editor().clone();
