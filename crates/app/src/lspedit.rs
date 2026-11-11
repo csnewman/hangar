@@ -1,23 +1,34 @@
-//! What a file's language server gives its editor: completions, hover, and
-//! Go to Definition (Cmd-click, or F12), asked through Languages. A
-//! definition in another file opens it in the editors.
+//! What a file's language server gives its editor: completions, hover, Go
+//! to Definition (Cmd-click, or F12), and quick fixes and the server's other
+//! code actions (⌥↩, as IntelliJ's context actions), asked through
+//! Languages. A definition in another file opens it in the editors; an
+//! action's edits are made wherever they fall.
 
+use std::ops::Range;
 use std::rc::Rc;
 
-use gpui::{App, AppContext, Task, WeakEntity, Window};
-use gpui_component::input::{CompletionProvider, DefinitionProvider, HoverProvider, Rope, RopeExt};
+use gpui::{App, AppContext, Entity, SharedString, Task, WeakEntity, Window};
+use gpui_component::input::{
+    CodeActionProvider, CompletionProvider, DefinitionProvider, EditorState, HoverProvider, Rope,
+    RopeExt,
+};
 use lsp_types::{
-    CompletionContext, CompletionResponse, GotoDefinitionResponse, Hover, LocationLink,
+    CodeAction, CodeActionKind, CodeActionOrCommand, CompletionContext, CompletionResponse,
+    GotoDefinitionResponse, Hover, LocationLink, WorkspaceEdit,
 };
 use serde_json::json;
 
 use crate::languages::{Languages, file_uri};
 
+/// Makes a workspace edit, in every file it touches.
+pub type ApplyEdit = Rc<dyn Fn(WorkspaceEdit, &mut Window, &mut App)>;
+
 /// A file's providers: its server, reached through Languages, by the
-/// file's absolute path.
+/// file's absolute path, and what makes a code action's edits.
 pub struct Providers {
     pub languages: WeakEntity<Languages>,
     pub abs: String,
+    pub apply: ApplyEdit,
 }
 
 impl Providers {
@@ -116,6 +127,128 @@ impl DefinitionProvider for Providers {
     }
 }
 
+impl CodeActionProvider for Providers {
+    fn id(&self) -> SharedString {
+        "language-server".into()
+    }
+
+    /// Asks the server what it can do at the selection, telling it the
+    /// problems there, so its fixes for them come first.
+    fn code_actions(
+        &self,
+        state: Entity<EditorState>,
+        range: Range<usize>,
+        _: &mut Window,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<Vec<CodeAction>>> {
+        let Some(l) = self.languages.upgrade() else {
+            return Task::ready(Ok(vec![]));
+        };
+        let text = state.read(cx).text().clone();
+        let range = lsp_types::Range {
+            start: text.offset_to_position(range.start),
+            end: text.offset_to_position(range.end),
+        };
+        let problems: Vec<lsp_types::Diagnostic> = l
+            .read(cx)
+            .diagnostics_of(&self.abs)
+            .iter()
+            .filter(|d| d.range.start <= range.end && range.start <= d.range.end)
+            .cloned()
+            .collect();
+        let params = json!({
+            "textDocument": { "uri": file_uri(&self.abs) },
+            "range": range,
+            "context": { "diagnostics": problems, "triggerKind": 1 },
+        });
+        let answer = l.update(cx, |l, cx| {
+            l.request(&self.abs, "textDocument/codeAction", params, cx)
+        });
+        cx.background_spawn(async move {
+            let v = answer.await.map_err(anyhow::Error::msg)?;
+            let list: Option<Vec<CodeActionOrCommand>> = serde_json::from_value(v)?;
+            Ok(actions(list.unwrap_or_default()))
+        })
+    }
+
+    /// Does an action: its edits made, asked of the server first when it
+    /// left them to be filled in, then its command run by the server.
+    fn perform_code_action(
+        &self,
+        _: Entity<EditorState>,
+        action: CodeAction,
+        _: bool,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Task<anyhow::Result<()>> {
+        let Some(l) = self.languages.upgrade() else {
+            return Task::ready(Ok(()));
+        };
+        let (abs, apply) = (self.abs.clone(), self.apply.clone());
+        let resolve = (action.edit.is_none() && action.data.is_some()).then(|| {
+            l.update(cx, |l, cx| {
+                l.request(&abs, "codeAction/resolve", json!(action), cx)
+            })
+        });
+        window.spawn(cx, async move |cx| {
+            let action = match resolve {
+                Some(r) => {
+                    serde_json::from_value::<CodeAction>(r.await.map_err(anyhow::Error::msg)?)?
+                }
+                None => action,
+            };
+            if let Some(edit) = action.edit {
+                cx.update(|window, cx| apply(edit, window, cx))?;
+            }
+            if let Some(c) = action.command {
+                let params = json!({ "command": c.command, "arguments": c.arguments });
+                let run = cx.update(|_, cx| {
+                    l.update(cx, |l, cx| {
+                        l.request(&abs, "workspace/executeCommand", params, cx)
+                    })
+                })?;
+                run.await.map_err(anyhow::Error::msg)?;
+            }
+            Ok(())
+        })
+    }
+}
+
+/// A server's code actions as the menu lists them: a bare command as an
+/// action that runs it, those the server says cannot be done left out,
+/// and its preferred fixes first, then the other quick fixes, then the
+/// rest, each in the server's order.
+pub fn actions(list: Vec<CodeActionOrCommand>) -> Vec<CodeAction> {
+    let mut out: Vec<CodeAction> = list
+        .into_iter()
+        .map(|a| match a {
+            CodeActionOrCommand::CodeAction(a) => a,
+            CodeActionOrCommand::Command(c) => CodeAction {
+                title: c.title.clone(),
+                command: Some(c),
+                ..Default::default()
+            },
+        })
+        .filter(|a| a.disabled.is_none())
+        .collect();
+    let rank = |a: &CodeAction| match (a.is_preferred == Some(true), is_fix(a)) {
+        (true, _) => 0,
+        (false, true) => 1,
+        _ => 2,
+    };
+    out.sort_by_key(rank);
+    out
+}
+
+/// Whether an action fixes a problem, as IntelliJ's quick fixes do, rather
+/// than changing code that has none.
+pub fn is_fix(a: &CodeAction) -> bool {
+    a.is_preferred == Some(true)
+        || a.kind
+            .as_ref()
+            .is_some_and(|k| k.as_str().starts_with(CodeActionKind::QUICKFIX.as_str()))
+}
+
 /// A definition answer as links, whichever form the server gave it in.
 pub fn links(r: Option<GotoDefinitionResponse>) -> Vec<LocationLink> {
     let link = |l: lsp_types::Location| LocationLink {
@@ -148,6 +281,7 @@ pub fn attach(
         let lsp = e.lsp_mut();
         lsp.completion_provider = Some(p.clone());
         lsp.hover_provider = Some(p.clone());
+        lsp.code_action_providers = vec![p.clone()];
         lsp.definition_provider = Some(p);
         lsp.show_document = Some(Rc::new(move |params, window, cx| {
             let Some(abs) = crate::languages::uri_path(params.uri.as_str()) else {

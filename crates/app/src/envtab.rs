@@ -331,6 +331,8 @@ pub struct EnvTab {
     pending_history: Option<crate::project::ShowHistory>,
     /// A commit asked for before the Git window was made.
     pending_commit: Option<String>,
+    /// Edits a language server asked for, made once a window is to hand.
+    pending_edits: Vec<lsp_types::WorkspaceEdit>,
     /// A language server's usages to list in the Find window once it is
     /// made: what of, and each project's lines.
     pending_usages: Option<(String, crate::find::Lines)>,
@@ -520,6 +522,7 @@ impl EnvTab {
             pending_find: None,
             pending_history: None,
             pending_commit: None,
+            pending_edits: Vec::new(),
             pending_usages: None,
             last_search: None,
             problems: None,
@@ -1082,11 +1085,17 @@ impl EnvTab {
         l.update(cx, |l, cx| l.open(&abs, cx));
         let tab = cx.entity().downgrade();
         let editor = doc.read(cx).editor().clone();
+        let edits = tab.clone();
         lspedit::attach(
             &editor,
             lspedit::Providers {
                 languages: l.downgrade(),
                 abs,
+                apply: std::rc::Rc::new(move |edit, window, cx| {
+                    let _ = edits.update(cx, |t, cx| {
+                        t.apply_edits(crate::lspops::by_file(edit), window, cx)
+                    });
+                }),
             },
             move |abs, line, column, window, cx| {
                 let _ = tab.update(cx, |t, cx| {
@@ -1983,6 +1992,10 @@ impl EnvTab {
         let langs = cx.new(|cx| Languages::new(ws.clone(), cx));
         self.subs
             .push(cx.subscribe(&langs, |t, l, e: &languages::Event, cx| {
+                if let languages::Event::ApplyEdit(edit) = e {
+                    t.pending_edits.push(edit.clone());
+                    cx.notify();
+                }
                 if let languages::Event::Diagnostics(abs) = e {
                     let d = l.read(cx).diagnostics_of(abs).to_vec();
                     for f in t.all_tabs() {
@@ -2170,6 +2183,14 @@ impl Focusable for EnvTab {
 
 impl Render for EnvTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for edit in std::mem::take(&mut self.pending_edits) {
+            let tab = cx.entity().downgrade();
+            window.defer(cx, move |window, cx| {
+                let _ = tab.update(cx, |t, cx| {
+                    t.apply_edits(crate::lspops::by_file(edit), window, cx)
+                });
+            });
+        }
         let p = palette::of(cx);
         let places = self.places.read(cx);
         let Some((config, state)) = places.get(&self.place) else {

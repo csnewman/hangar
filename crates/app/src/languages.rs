@@ -110,6 +110,8 @@ pub enum Event {
     Diagnostics(String),
     /// A server started, could not, or stopped.
     Servers,
+    /// A server asks for an edit to be made, as a command it ran does.
+    ApplyEdit(lsp_types::WorkspaceEdit),
 }
 
 impl EventEmitter<Event> for Languages {}
@@ -556,11 +558,21 @@ impl Languages {
             // set), or to register or report progress, which needs no
             // more than an answer.
             (Some(method), Some(id)) => {
-                let result = if method == "workspace/configuration" {
-                    let items = m["params"]["items"].as_array().map_or(0, Vec::len);
-                    Value::Array(vec![Value::Null; items])
-                } else {
-                    Value::Null
+                let result = match method {
+                    "workspace/configuration" => {
+                        let items = m["params"]["items"].as_array().map_or(0, Vec::len);
+                        Value::Array(vec![Value::Null; items])
+                    }
+                    "workspace/applyEdit" => {
+                        match serde_json::from_value(m["params"]["edit"].clone()) {
+                            Ok(edit) => {
+                                cx.emit(Event::ApplyEdit(edit));
+                                json!({ "applied": true })
+                            }
+                            Err(e) => json!({ "applied": false, "failureReason": e.to_string() }),
+                        }
+                    }
+                    _ => Value::Null,
                 };
                 if let Some(code) = self.code(&key, cx) {
                     code.send_lsp(n, &json!({ "jsonrpc": "2.0", "id": id, "result": result }));
@@ -608,6 +620,20 @@ fn capabilities() -> Value {
             "completion": {
                 "completionItem": { "snippetSupport": false, "documentationFormat": ["markdown", "plaintext"] },
             },
+            "codeAction": {
+                "codeActionLiteralSupport": {
+                    "codeActionKind": {
+                        "valueSet": [
+                            "", "quickfix", "refactor", "refactor.extract", "refactor.inline",
+                            "refactor.rewrite", "source", "source.organizeImports",
+                        ],
+                    },
+                },
+                "isPreferredSupport": true,
+                "disabledSupport": true,
+                "dataSupport": true,
+                "resolveSupport": { "properties": ["edit"] },
+            },
             "signatureHelp": {
                 "signatureInformation": {
                     "documentationFormat": ["markdown", "plaintext"],
@@ -617,7 +643,13 @@ fn capabilities() -> Value {
                 "contextSupport": true,
             },
         },
-        "workspace": { "configuration": true, "workspaceFolders": true },
+        "workspace": {
+            "configuration": true,
+            "workspaceFolders": true,
+            "applyEdit": true,
+            "workspaceEdit": { "documentChanges": true },
+            "executeCommand": { "dynamicRegistration": false },
+        },
         "window": { "workDoneProgress": false },
     })
 }

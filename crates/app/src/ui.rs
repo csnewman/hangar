@@ -176,3 +176,14 @@ pub fn shield(cx: &gpui::App) -> Option<gpui::AnyElement> {
         .into_any_element()
     })
 }
+
+/// Marks a menu's first item, for Enter, as IntelliJ's pop-up lists open:
+/// the menu marks a row only by its keys, which reach it once it is drawn,
+/// so this is called as the frame drawing it is made.
+pub fn mark_first(window: &mut gpui::Window, cx: &mut gpui::App) {
+    window.defer(cx, |window, cx| {
+        if let Ok(down) = cx.build_action("ui::SelectDown", None) {
+            window.dispatch_action(down, cx);
+        }
+    });
+}

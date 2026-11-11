@@ -104,3 +104,44 @@ fn a_definition_in_any_form_is_a_list_of_links() {
     );
     assert!(links(None).is_empty());
 }
+
+/// A server's code actions as ⌥↩ lists them: a bare command as an action
+/// running it, those it cannot do left out, its preferred fix first, then
+/// the other fixes, then the rest.
+#[test]
+fn code_actions_are_listed_fixes_first() {
+    use hangar_app::lspedit::{actions, is_fix};
+    use lsp_types::{CodeAction, CodeActionDisabled, CodeActionKind, CodeActionOrCommand, Command};
+    let action = |title: &str, kind: Option<CodeActionKind>| CodeAction {
+        title: title.into(),
+        kind,
+        ..Default::default()
+    };
+    let list = vec![
+        CodeActionOrCommand::CodeAction(action("Extract", Some(CodeActionKind::REFACTOR_EXTRACT))),
+        CodeActionOrCommand::Command(Command {
+            title: "Organise".into(),
+            command: "organise".into(),
+            arguments: None,
+        }),
+        CodeActionOrCommand::CodeAction(action("Import it", Some(CodeActionKind::QUICKFIX))),
+        CodeActionOrCommand::CodeAction(CodeAction {
+            is_preferred: Some(true),
+            ..action("Add the semicolon", Some(CodeActionKind::QUICKFIX))
+        }),
+        CodeActionOrCommand::CodeAction(CodeAction {
+            disabled: Some(CodeActionDisabled {
+                reason: "no selection".into(),
+            }),
+            ..action("Inline", Some(CodeActionKind::REFACTOR_INLINE))
+        }),
+    ];
+    let listed = actions(list);
+    let titles: Vec<&str> = listed.iter().map(|a| a.title.as_str()).collect();
+    assert_eq!(
+        titles,
+        ["Add the semicolon", "Import it", "Extract", "Organise"]
+    );
+    assert_eq!(listed[3].command.as_ref().unwrap().command, "organise");
+    assert_eq!(listed.iter().filter(|a| is_fix(a)).count(), 2);
+}

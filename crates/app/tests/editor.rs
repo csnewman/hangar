@@ -319,3 +319,71 @@ fn a_hover_leaves_the_text_its_width(cx: &mut TestAppContext) {
     );
     assert_eq!(width(cx), before, "the text's width");
 }
+
+struct InDocEditor {
+    state: gpui::Entity<EditorState>,
+    asked: Rc<std::cell::Cell<usize>>,
+}
+
+impl gpui::Render for InDocEditor {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        use gpui::{InteractiveElement, ParentElement, Styled};
+        let asked = self.asked.clone();
+        gpui::div()
+            .key_context("DocEditor")
+            .size_full()
+            .on_action(move |_: &hangar_app::docedit::ContextActions, _, _| {
+                asked.set(asked.get() + 1)
+            })
+            .child(hangar_app::docedit::code_editor(&self.state))
+    }
+}
+
+/// ⌥↩ in a file's editor asks for its context actions, as IntelliJ's Show
+/// Context Actions does, and so does the editor's own ⌘. ; neither types
+/// anything.
+#[gpui::test]
+fn alt_enter_asks_for_context_actions(cx: &mut TestAppContext) {
+    use gpui::{AppContext, Focusable};
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        hangar_app::docedit::bind_keys(cx);
+    });
+    let asked = Rc::new(std::cell::Cell::new(0));
+    let mut state = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let s = cx.new(|cx| EditorState::new(window, cx).language("rust"));
+        state = Some(s.clone());
+        let view = InDocEditor {
+            state: s,
+            asked: asked.clone(),
+        };
+        gpui_component::Root::new(cx.new(|_| view), window, cx)
+    });
+    let state = state.unwrap();
+    cx.update(|window, cx| {
+        state.update(cx, |e, cx| e.set_value("struct Ledger {}", window, cx));
+        window.focus(&state.focus_handle(cx), cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("alt-enter");
+    cx.run_until_parked();
+    assert_eq!(asked.get(), 1, "⌥↩");
+    let dot = if cfg!(target_os = "macos") {
+        "cmd-."
+    } else {
+        "ctrl-."
+    };
+    cx.simulate_keystrokes(dot);
+    cx.run_until_parked();
+    assert_eq!(asked.get(), 2);
+    assert_eq!(
+        cx.update(|_, cx| state.read(cx).value().to_string()),
+        "struct Ledger {}",
+        "nothing typed"
+    );
+}

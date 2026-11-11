@@ -25,6 +25,7 @@ use gpui_component::input::{
     Editor, EditorState, GutterDecoration, GutterDecorationCollection, InputEditsEvent, Position,
     RangeDecoration, RangeDecorationCollection, RangeDecorationStyle, Redo, Rope, Undo,
 };
+use gpui_component::menu::PopupMenu;
 use hangar_proto::collab::{self, Update};
 use hangar_proto::{Change, ChangeSet, Error, MapMode, Text};
 use serde_json::{Value, json};
@@ -377,6 +378,7 @@ gpui::actions!(
         ToggleSoftWrap,
         ToggleBlame,
         ParameterInfo,
+        ContextActions,
     ]
 );
 
@@ -387,9 +389,23 @@ pub fn bind_keys(cx: &mut App) {
     use gpui::KeyBinding;
     let ctx = Some("DocEditor > Input");
     #[cfg(target_os = "macos")]
-    let keys = ["cmd-d", "cmd-backspace", "cmd-/", "cmd-alt-l", "cmd-p"];
+    let keys = [
+        "cmd-d",
+        "cmd-backspace",
+        "cmd-/",
+        "cmd-alt-l",
+        "cmd-p",
+        "cmd-.",
+    ];
     #[cfg(not(target_os = "macos"))]
-    let keys = ["ctrl-d", "ctrl-y", "ctrl-/", "ctrl-alt-l", "ctrl-p"];
+    let keys = [
+        "ctrl-d",
+        "ctrl-y",
+        "ctrl-/",
+        "ctrl-alt-l",
+        "ctrl-p",
+        "ctrl-.",
+    ];
     cx.bind_keys([
         KeyBinding::new(keys[0], DuplicateLine, ctx),
         KeyBinding::new(keys[1], DeleteLine, ctx),
@@ -399,6 +415,10 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new("ctrl-shift-j", JoinLines, ctx),
         KeyBinding::new(keys[3], Reformat, ctx),
         KeyBinding::new(keys[4], ParameterInfo, ctx),
+        // IntelliJ's Show Context Actions: the server's quick fixes and
+        // other code actions; the editor's own key for them opens the same.
+        KeyBinding::new("alt-enter", ContextActions, ctx),
+        KeyBinding::new(keys[5], ContextActions, ctx),
     ]);
 }
 
@@ -561,6 +581,11 @@ pub struct DocEditor {
     signatures_asked: u64,
     /// Where the caret was when they were last asked for.
     sig_caret: Option<usize>,
+    /// The code actions at the caret as ⌥↩ lists them, where the caret
+    /// was, and whether the list's first item is still to be marked.
+    context_menu: Option<(Entity<PopupMenu>, Subscription)>,
+    context_at: Option<gpui::Bounds<gpui::Pixels>>,
+    context_unmarked: bool,
     _subs: Vec<Subscription>,
 }
 
@@ -639,6 +664,9 @@ impl DocEditor {
             signatures: None,
             signatures_asked: 0,
             sig_caret: None,
+            context_menu: None,
+            context_at: None,
+            context_unmarked: false,
             _subs: vec![edits, moved],
         }
     }
@@ -1189,6 +1217,99 @@ impl DocEditor {
         .detach();
     }
 
+    /// Asks the language server what it can do at the selection, as
+    /// IntelliJ's Show Context Actions (⌥↩), and lists it at the caret.
+    fn context_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(provider) = self
+            .editor
+            .read(cx)
+            .lsp()
+            .code_action_providers
+            .first()
+            .cloned()
+        else {
+            return;
+        };
+        let range = self.editor.read(cx).selected_range();
+        let task = provider.code_actions(self.editor.clone(), range, window, cx);
+        cx.spawn_in(window, async move |this, cx| {
+            let actions = task.await.unwrap_or_default();
+            let _ = this.update_in(cx, |d, window, cx| {
+                d.list_context_actions(provider, actions, window, cx)
+            });
+        })
+        .detach();
+    }
+
+    /// The actions as a menu under the caret: the fixes first, by a light
+    /// bulb, then the rest, by a wrench; choosing one does it, saying in a
+    /// notification what went wrong.
+    fn list_context_actions(
+        &mut self,
+        provider: std::rc::Rc<dyn gpui_component::input::CodeActionProvider>,
+        actions: Vec<lsp_types::CodeAction>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_component::Icon;
+        use gpui_component::menu::PopupMenuItem;
+        let at = self.editor.read(cx).cursor();
+        self.context_at = self.editor.read(cx).range_to_bounds(&(at..at));
+        let (editor, focus) = (self.editor.clone(), self.editor.focus_handle(cx));
+        let menu = PopupMenu::build(window, cx, move |mut menu, _, cx| {
+            crate::ui::modal(cx);
+            menu = menu.action_context(focus).max_h(px(420.)).scrollable(true);
+            if actions.is_empty() {
+                return menu.item(PopupMenuItem::new("No actions here").disabled(true));
+            }
+            let fixes = actions.iter().filter(|a| crate::lspedit::is_fix(a)).count();
+            for (i, a) in actions.into_iter().enumerate() {
+                if i == fixes && i > 0 {
+                    menu = menu.separator();
+                }
+                let icon = if i < fixes { "bulb" } else { "wrench" };
+                let (provider, editor) = (provider.clone(), editor.clone());
+                menu = menu.item(
+                    PopupMenuItem::new(a.title.clone())
+                        .icon(Icon::empty().path(crate::assets::icon(icon)))
+                        .on_click(move |_, window, cx| {
+                            let task = provider.perform_code_action(
+                                editor.clone(),
+                                a.clone(),
+                                true,
+                                window,
+                                cx,
+                            );
+                            window
+                                .spawn(cx, async move |cx| {
+                                    if let Err(e) = task.await {
+                                        let _ = cx.update(|window, cx| {
+                                            use gpui_component::WindowExt;
+                                            window.push_notification(
+                                                gpui_component::notification::Notification::error(
+                                                    e.to_string(),
+                                                ),
+                                                cx,
+                                            );
+                                        });
+                                    }
+                                })
+                                .detach();
+                        }),
+                );
+            }
+            menu
+        });
+        window.focus(&menu.focus_handle(cx), cx);
+        let sub = cx.subscribe(&menu, |d, _, _: &gpui::DismissEvent, cx| {
+            d.context_menu = None;
+            cx.notify();
+        });
+        self.context_menu = Some((menu, sub));
+        self.context_unmarked = true;
+        cx.notify();
+    }
+
     /// Parameter Info as it is drawn: over the caret's line, each signature
     /// in the server's order, the one it takes the call for in full colour,
     /// the parameter the caret is at in bold, and what the server says of it
@@ -1669,6 +1790,9 @@ impl Render for DocEditor {
             State::Open if !self.writable => Some("Read-only".to_string()),
             State::Open => None,
         };
+        if std::mem::take(&mut self.context_unmarked) {
+            crate::ui::mark_first(window, cx);
+        }
         let wrap = crate::settings::Settings::get(cx).soft_wrap;
         if self.wrapped != Some(wrap) {
             self.wrapped = Some(wrap);
@@ -1714,6 +1838,9 @@ impl Render for DocEditor {
             .on_action(cx.listener(|d, _: &ParameterInfo, _, cx| {
                 d.ask_signatures(crate::sighelp::Ask::Invoked, Duration::ZERO, cx)
             }))
+            .on_action(
+                cx.listener(|d, _: &ContextActions, window, cx| d.context_actions(window, cx)),
+            )
             // Escape takes Parameter Info away, and does what it does in the
             // editor besides.
             .capture_key_down(cx.listener(|d, e: &gpui::KeyDownEvent, _, cx| {
@@ -1771,6 +1898,18 @@ impl Render for DocEditor {
                 )
             })
             .children(self.parameter_info(&p, cx))
+            .when_some(self.context_menu.as_ref(), |d, (menu, _)| {
+                let at = self.context_at.map(|b| b.bottom_left());
+                d.child(
+                    gpui::deferred(
+                        gpui::anchored()
+                            .when_some(at, |a, at| a.position(at))
+                            .snap_to_window_with_margin(px(8.))
+                            .child(menu.clone()),
+                    )
+                    .with_priority(100),
+                )
+            })
             .when_some(notice, |d, n| {
                 d.child(
                     div()

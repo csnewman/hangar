@@ -1335,14 +1335,8 @@ impl Render for ProjectView {
         // A row revealed is scrolled into view once it is laid out, which
         // may be after its folder has been listed.
         let (handle, reveal) = (self.scroll.clone(), self.reveal.clone());
-        // New's list marks a row only by its keys, which reach it once it
-        // is drawn: its first item, for Enter.
         if std::mem::take(&mut self.new_unmarked) {
-            window.defer(cx, |window, cx| {
-                if let Ok(down) = cx.build_action("ui::SelectDown", None) {
-                    window.dispatch_action(down, cx);
-                }
-            });
+            crate::ui::mark_first(window, cx);
         }
         let selected_at = self.selected_at.clone();
         let list = list.on_children_prepainted(move |rows, window, _| {
