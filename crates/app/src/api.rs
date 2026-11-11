@@ -350,6 +350,18 @@ impl Client {
         cols: u16,
         rows: u16,
     ) -> (String, String) {
+        self.terminal_socket_in(id, session, cols, rows, None)
+    }
+
+    /// As terminal_socket, a new session starting in dir.
+    pub fn terminal_socket_in(
+        &self,
+        id: &str,
+        session: Option<&str>,
+        cols: u16,
+        rows: u16,
+        dir: Option<&str>,
+    ) -> (String, String) {
         let base = match self.base.split_once("://") {
             Some(("https", rest)) => format!("wss://{rest}"),
             Some((_, rest)) => format!("ws://{rest}"),
@@ -359,6 +371,10 @@ impl Client {
         if let Some(s) = session {
             url.push_str("&session=");
             url.push_str(s);
+        }
+        if let Some(d) = dir {
+            url.push_str("&dir=");
+            url.push_str(&encode(d));
         }
         (url, self.auth())
     }

@@ -99,6 +99,12 @@ pub struct ShowHistory {
 
 impl gpui::EventEmitter<ShowHistory> for ProjectView {}
 
+/// Asks for a terminal session in a folder, by its absolute path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenInTerminal(pub String);
+
+impl gpui::EventEmitter<OpenInTerminal> for ProjectView {}
+
 /// Asks for Find in Files on a folder, or Replace in Files.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FindIn {
@@ -1531,6 +1537,56 @@ fn tree_menu(
                 )
             }),
         );
+    }
+    // This computer's files, up and down, and a terminal in the folder.
+    {
+        let upload = |label: &str, folder: bool| {
+            let (t, view) = (t.clone(), view.clone());
+            PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
+                let view = view.clone();
+                crate::updown::choose_and_upload(
+                    t.code.clone(),
+                    t.folder(),
+                    folder,
+                    window,
+                    cx,
+                    move |made, _, cx| {
+                        if let Some(first) = made.first() {
+                            let _ = view.update(cx, |v, cx| v.reveal(first, cx));
+                        }
+                    },
+                )
+            })
+        };
+        let down = {
+            let t = t.clone();
+            let many = t
+                .root
+                .as_deref()
+                .and_then(|r| r.rsplit('/').next())
+                .unwrap_or("files")
+                .to_string();
+            PopupMenuItem::new(format!("Download {}", t.name())).on_click(move |_, window, cx| {
+                crate::updown::download(
+                    t.code.clone(),
+                    vec![(t.abs.clone(), t.dir)],
+                    &many,
+                    window,
+                    cx,
+                )
+            })
+        };
+        let folder = t.folder();
+        menu = menu
+            .separator()
+            .item(upload("Upload Files…", false))
+            .item(upload("Upload Folder…", true))
+            .item(down)
+            .separator()
+            .item(emit(
+                "Open in Terminal",
+                Box::new(move |cx| cx.emit(OpenInTerminal(folder.clone()))),
+            ));
     }
     // The workspace's projects: a folder added, a project removed or moved.
     let ws = view.upgrade().map(|v| v.read(cx).workspace.clone());

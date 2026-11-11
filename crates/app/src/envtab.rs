@@ -673,13 +673,15 @@ impl EnvTab {
 
     /// Starts a new session in a tab of its own.
     pub fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.new_terminal_running(None, window, cx)
+        self.new_session(None, None, window, cx)
     }
 
     /// Starts a new session in a tab of its own, in the Terminal window,
-    /// typing a command into it once it has started.
-    pub fn new_terminal_running(
+    /// in a folder or the environment's own, typing a command into it once
+    /// it has started.
+    pub fn new_session(
         &mut self,
+        dir: Option<String>,
         run: Option<String>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -691,7 +693,10 @@ impl EnvTab {
             .insert(Layout::slot(Tool::Terminal, cx), Tool::Terminal);
         let env = self.env.clone();
         let view = cx.new(|cx| {
-            let mut v = TerminalView::new(&client, &env, None, cx);
+            let mut v = match &dir {
+                Some(dir) => TerminalView::starting_in(&client, &env, dir, cx),
+                None => TerminalView::new(&client, &env, None, cx),
+            };
             if let Some(run) = run {
                 v.run_once_started(run);
             }
@@ -1841,6 +1846,13 @@ impl EnvTab {
             window,
             |t, _, e: &crate::project::ShowHistory, _, cx| t.show_history(e.clone(), cx),
         ));
+        self.subs.push(cx.subscribe_in(
+            view,
+            window,
+            |t, _, e: &crate::project::OpenInTerminal, window, cx| {
+                t.new_session(Some(e.0.clone()), None, window, cx)
+            },
+        ));
     }
 
     /// Compares a file with the one shown in the editor: the file on the
@@ -2273,7 +2285,7 @@ impl Render for EnvTab {
                     &view,
                     window,
                     |t, _, e: &RunInTerminal, window, cx| {
-                        t.new_terminal_running(Some(e.0.clone()), window, cx)
+                        t.new_session(None, Some(e.0.clone()), window, cx)
                     },
                 ));
                 self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));

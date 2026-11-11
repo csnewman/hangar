@@ -99,7 +99,21 @@ pub fn attach(
     rows: u16,
     events: impl Fn(Event) -> bool + Send + 'static,
 ) -> Connection {
+    attach_in(client, env, session, None, cols, rows, events)
+}
+
+/// As attach, a new session starting in dir.
+pub fn attach_in(
+    client: &Client,
+    env: &str,
+    session: Option<&str>,
+    dir: Option<&str>,
+    cols: u16,
+    rows: u16,
+    events: impl Fn(Event) -> bool + Send + 'static,
+) -> Connection {
     let (client, env) = (client.clone(), env.to_string());
+    let dir = dir.map(str::to_string);
     let mut session = session.map(str::to_string);
     let (tx, rx) = mpsc::channel();
     thread::Builder::new()
@@ -108,7 +122,11 @@ pub fn attach(
             let mut size = (cols, rows);
             let mut wait = RETRY_FIRST;
             loop {
-                let (url, auth) = client.terminal_socket(&env, session.as_deref(), size.0, size.1);
+                // The folder is the new session's; attached again, it is
+                // the session's own.
+                let dir = dir.as_deref().filter(|_| session.is_none());
+                let (url, auth) =
+                    client.terminal_socket_in(&env, session.as_deref(), size.0, size.1, dir);
                 let why = match run(&url, &auth, &rx, &events, &mut session, &mut size) {
                     Ok(End::Done) => return,
                     Ok(End::Lost { attached, why }) => {

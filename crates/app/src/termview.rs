@@ -176,6 +176,21 @@ impl TerminalView {
     /// Attaches to an environment's session, or a new one when session is
     /// None.
     pub fn new(client: &Client, env: &str, session: Option<&str>, cx: &mut Context<Self>) -> Self {
+        Self::attached(client, env, session, None, cx)
+    }
+
+    /// A new session, starting in a folder.
+    pub fn starting_in(client: &Client, env: &str, dir: &str, cx: &mut Context<Self>) -> Self {
+        Self::attached(client, env, None, Some(dir), cx)
+    }
+
+    fn attached(
+        client: &Client,
+        env: &str,
+        session: Option<&str>,
+        dir: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let (cols, rows) = (80, 24);
         let replies = Replies::default();
         let p = palette::of(cx);
@@ -183,7 +198,7 @@ impl TerminalView {
         let mut screen = Screen::with_listener(cols as usize, rows as usize, replies.clone());
         screen.set_default_colours(colours.0, colours.1);
         let (tx, rx) = async_channel::unbounded();
-        let conn = termconn::attach(client, env, session, cols, rows, move |e| {
+        let conn = termconn::attach_in(client, env, session, dir, cols, rows, move |e| {
             tx.send_blocking(e).is_ok()
         });
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
