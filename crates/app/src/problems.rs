@@ -61,6 +61,42 @@ pub fn rows<'a>(files: impl IntoIterator<Item = (&'a String, &'a Vec<Diagnostic>
     out
 }
 
+/// The problem F2 goes to from a place in a file, as IntelliJ's Next
+/// Highlighted Error does: the first that starts after it, round to the
+/// top; with back (⇧F2) the last that starts before it, round to the
+/// bottom. Hints are passed over.
+pub fn next_problem(
+    list: &[Diagnostic],
+    at: lsp_types::Position,
+    back: bool,
+) -> Option<&Diagnostic> {
+    let mut shown: Vec<&Diagnostic> = list
+        .iter()
+        .filter(|d| d.severity != Some(DiagnosticSeverity::HINT))
+        .collect();
+    shown.sort_by_key(|d| (d.range.start.line, d.range.start.character));
+    let start = |d: &&Diagnostic| d.range.start;
+    if back {
+        shown
+            .iter()
+            .rev()
+            .find(|d| start(d) < at)
+            .or(shown.last())
+            .copied()
+    } else {
+        shown
+            .iter()
+            .find(|d| start(d) > at)
+            .or(shown.first())
+            .copied()
+    }
+}
+
+/// The colour a problem of a severity is shown in.
+pub fn severity_colour(s: Option<DiagnosticSeverity>, p: &Palette) -> Hsla {
+    colour(s, p)
+}
+
 /// A severity's order: errors, warnings, information, hints. A server
 /// giving none means an error.
 fn rank(s: Option<DiagnosticSeverity>) -> u8 {

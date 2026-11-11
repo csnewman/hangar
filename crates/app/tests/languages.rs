@@ -145,3 +145,35 @@ fn code_actions_are_listed_fixes_first() {
     assert_eq!(listed[3].command.as_ref().unwrap().command, "organise");
     assert_eq!(listed.iter().filter(|a| is_fix(a)).count(), 2);
 }
+
+/// F2 goes to the next problem after the caret, round to the top, and ⇧F2
+/// to the one before, round to the bottom; hints are passed over.
+#[test]
+fn f2_goes_round_the_problems() {
+    use hangar_app::problems::next_problem;
+    let list = vec![
+        d(9, Some(DiagnosticSeverity::WARNING)),
+        d(2, Some(DiagnosticSeverity::ERROR)),
+        d(5, Some(DiagnosticSeverity::HINT)),
+    ];
+    let at = |line| Position::new(line, 0);
+    let line = |x: Option<&Diagnostic>| x.map(|d| d.range.start.line);
+    assert_eq!(line(next_problem(&list, at(0), false)), Some(2));
+    assert_eq!(
+        line(next_problem(&list, at(2), false)),
+        Some(9),
+        "past the one at the caret"
+    );
+    assert_eq!(
+        line(next_problem(&list, at(9), false)),
+        Some(2),
+        "round to the top"
+    );
+    assert_eq!(line(next_problem(&list, at(9), true)), Some(2));
+    assert_eq!(
+        line(next_problem(&list, at(1), true)),
+        Some(9),
+        "round to the bottom"
+    );
+    assert_eq!(next_problem(&[], at(0), false), None);
+}

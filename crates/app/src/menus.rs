@@ -9,8 +9,8 @@ use gpui_component::input::{
 
 use crate::docedit::{
     CommentLine, ContextActions, DeleteLine, DuplicateLine, JoinLines, MoveLineDown, MoveLineUp,
-    ParameterInfo, Reformat, SelectAllOccurrences, SelectNextOccurrence, ToggleSoftWrap,
-    UnselectOccurrence,
+    NextProblem, ParameterInfo, PreviousProblem, Reformat, SelectAllOccurrences,
+    SelectNextOccurrence, ToggleSoftWrap, UnselectOccurrence,
 };
 use crate::envtab::{
     CloseTab, FindInFiles, FindUsages, GoToLine, HideAllToolWindows, RenameSymbol, ReopenClosedTab,
@@ -79,6 +79,9 @@ pub fn init(cx: &mut App) {
             MenuItem::action("Replace in Files…", ReplaceInFiles),
             MenuItem::action("Definition", GoToDefinition),
             MenuItem::action("Find Usages", FindUsages),
+            MenuItem::separator(),
+            MenuItem::action("Next Highlighted Error", NextProblem),
+            MenuItem::action("Previous Highlighted Error", PreviousProblem),
         ]),
         Menu::new("Code").items([
             MenuItem::action("Code Completion", ShowCompletions),

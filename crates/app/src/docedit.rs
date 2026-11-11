@@ -382,6 +382,8 @@ gpui::actions!(
         SelectNextOccurrence,
         UnselectOccurrence,
         SelectAllOccurrences,
+        NextProblem,
+        PreviousProblem,
     ]
 );
 
@@ -438,6 +440,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(occurrences[0], SelectNextOccurrence, ctx),
         KeyBinding::new(occurrences[1], UnselectOccurrence, ctx),
         KeyBinding::new(occurrences[2], SelectAllOccurrences, ctx),
+        KeyBinding::new("f2", NextProblem, ctx),
+        KeyBinding::new("shift-f2", PreviousProblem, ctx),
     ]);
 }
 
@@ -612,6 +616,11 @@ pub struct DocEditor {
     uses_asked: u64,
     /// The selections ⌃G has made.
     occurrences: crate::occur::Occurrences,
+    /// The problem F2 went to, said over the caret until it moves: where
+    /// the caret was put, and the problem.
+    problem_shown: Option<(usize, lsp_types::Diagnostic)>,
+    /// The bracket at the caret and its partner, framed.
+    brackets: Option<RangeDecorationCollection>,
     _subs: Vec<Subscription>,
 }
 
@@ -697,6 +706,8 @@ impl DocEditor {
             uses_caret: None,
             uses_asked: 0,
             occurrences: Default::default(),
+            problem_shown: None,
+            brackets: None,
             _subs: vec![edits, moved],
         }
     }
@@ -1191,15 +1202,108 @@ impl DocEditor {
     /// call the parameter moves on, and out of it they go.
     fn caret_moved(&mut self, cx: &mut Context<Self>) {
         let at = self.editor.read(cx).cursor();
+        if self.problem_shown.as_ref().is_some_and(|(p, _)| *p != at) {
+            self.problem_shown = None;
+            cx.notify();
+        }
         if self.uses_caret != Some(at) {
             self.uses_caret = Some(at);
             self.ask_uses(cx);
+            self.frame_brackets(at, cx);
         }
         if self.signatures.is_none() || self.sig_caret == Some(at) {
             return;
         }
         self.sig_caret = Some(at);
         self.ask_signatures(crate::sighelp::Ask::Again, Duration::from_millis(40), cx);
+    }
+
+    /// Frames the bracket at the caret and its partner, as IntelliJ does.
+    fn frame_brackets(&mut self, at: usize, cx: &mut Context<Self>) {
+        let found = crate::brackets::matching(&self.editor.read(cx).text().to_string(), at);
+        let colour = palette::of(cx).muted;
+        let marks: Vec<_> = found
+            .into_iter()
+            .flat_map(|(a, b)| [a, b])
+            .map(|r| {
+                RangeDecoration::new(r)
+                    .with_style(RangeDecorationStyle::Frame)
+                    .with_color(colour)
+            })
+            .collect();
+        match &self.brackets {
+            Some(b) => b.set(marks, cx),
+            None if marks.is_empty() => {}
+            None => {
+                self.brackets = Some(
+                    self.editor
+                        .update(cx, |e, cx| e.create_range_decorations_collection(marks, cx)),
+                )
+            }
+        }
+    }
+
+    /// IntelliJ's Next and Previous Highlighted Error (F2, ⇧F2): the caret
+    /// put at the next problem in the file, round to the top, and what it
+    /// says shown over it.
+    fn go_to_problem(&mut self, back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_component::RopeExt;
+        let e = self.editor.read(cx);
+        let at = e.text().offset_to_position(e.cursor());
+        let Some(d) = crate::problems::next_problem(&self.diagnostics, at, back).cloned() else {
+            return;
+        };
+        let start = d.range.start;
+        self.editor.update(cx, |e, cx| {
+            e.set_cursor_position(
+                Position {
+                    line: start.line,
+                    character: start.character,
+                },
+                window,
+                cx,
+            )
+        });
+        let put = self.editor.read(cx).cursor();
+        self.problem_shown = Some((put, d));
+        cx.notify();
+    }
+
+    /// The problem F2 went to, over the caret: a mark in its severity's
+    /// colour and what the server says, first line in full.
+    fn problem_note(&self, p: &palette::Palette, cx: &App) -> Option<gpui::AnyElement> {
+        let (_, d) = self.problem_shown.as_ref()?;
+        let e = self.editor.read(cx);
+        let at = e.cursor();
+        let caret = e.range_to_bounds(&(at..at))?;
+        let colour = crate::problems::severity_colour(d.severity, p);
+        Some(
+            gpui::deferred(
+                gpui::anchored()
+                    .position(gpui::point(caret.left() - px(8.), caret.top() - px(3.)))
+                    .anchor(gpui::Anchor::BottomLeft)
+                    .snap_to_window_with_margin(px(8.))
+                    .child(
+                        h_flex()
+                            .debug_selector(|| "problem-note".into())
+                            .max_w(px(560.))
+                            .items_start()
+                            .gap(px(6.))
+                            .px(px(8.))
+                            .py(px(5.))
+                            .rounded(px(5.))
+                            .border_1()
+                            .border_color(p.border_strong)
+                            .bg(p.surface)
+                            .shadow_md()
+                            .text_size(px(12.))
+                            .child(div().w(px(3.)).h(px(14.)).rounded(px(1.5)).bg(colour))
+                            .child(div().text_color(p.text).child(d.message.clone())),
+                    ),
+            )
+            .with_priority(1)
+            .into_any_element(),
+        )
     }
 
     /// IntelliJ's occurrence commands: what each does to the selections
@@ -1995,6 +2099,12 @@ impl Render for DocEditor {
             .on_action(
                 cx.listener(|d, _: &ContextActions, window, cx| d.context_actions(window, cx)),
             )
+            .on_action(
+                cx.listener(|d, _: &NextProblem, window, cx| d.go_to_problem(false, window, cx)),
+            )
+            .on_action(
+                cx.listener(|d, _: &PreviousProblem, window, cx| d.go_to_problem(true, window, cx)),
+            )
             .on_action(cx.listener(|d, _: &SelectNextOccurrence, _, cx| {
                 d.occurrence(|o, text, active| o.next(text, active), cx)
             }))
@@ -2007,10 +2117,15 @@ impl Render for DocEditor {
             // Escape takes Parameter Info away, and does what it does in the
             // editor besides.
             .capture_key_down(cx.listener(|d, e: &gpui::KeyDownEvent, _, cx| {
-                if e.keystroke.key == "escape" && d.signatures.is_some() {
-                    d.signatures = None;
-                    d.signatures_asked += 1;
-                    cx.notify();
+                if e.keystroke.key == "escape" {
+                    if d.signatures.is_some() {
+                        d.signatures = None;
+                        d.signatures_asked += 1;
+                        cx.notify();
+                    }
+                    if d.problem_shown.take().is_some() {
+                        cx.notify();
+                    }
                 }
             }))
             .capture_action(cx.listener(|d, _: &Undo, window, cx| {
@@ -2061,6 +2176,7 @@ impl Render for DocEditor {
                 )
             })
             .children(self.parameter_info(&p, cx))
+            .children(self.problem_note(&p, cx))
             .when_some(self.context_menu.as_ref(), |d, (menu, _)| {
                 let at = self.context_at.map(|b| b.bottom_left());
                 d.child(
