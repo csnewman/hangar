@@ -36,6 +36,19 @@ const ICONS: &[(&str, &str)] = &[
         r#"<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/>"#,
     ),
     ("more", r#"<path d="M5 12h.01M12 12h.01M19 12h.01"/>"#),
+    ("play", r#"<path d="M7 4v16l13-8z"/>"#),
+    (
+        "stop",
+        r#"<rect x="6" y="6" width="12" height="12" rx="1.5"/>"#,
+    ),
+    (
+        "trash",
+        r#"<path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>"#,
+    ),
+    (
+        "layers",
+        r#"<path d="m12 2 10 5-10 5L2 7z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>"#,
+    ),
     (
         "branch",
         r#"<path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>"#,

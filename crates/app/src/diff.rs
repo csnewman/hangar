@@ -495,7 +495,8 @@ fn short(rev: &str) -> String {
     }
 }
 
-fn mono() -> &'static str {
+/// The monospace face: the platform's own.
+pub fn mono() -> &'static str {
     if cfg!(target_os = "macos") {
         "Menlo"
     } else if cfg!(target_os = "windows") {

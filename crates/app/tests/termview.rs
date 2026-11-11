@@ -488,3 +488,31 @@ fn the_size_another_window_holds_is_said(cx: &mut TestAppContext) {
     assert_eq!(from.recv_timeout(wait).unwrap(), claim, "the size first");
     assert_eq!(from.recv_timeout(wait).unwrap(), b"ia", "then the key");
 }
+
+#[gpui::test]
+fn a_command_is_typed_once_a_new_session_starts(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    let (url, typed) = recording(b"$ ");
+    let client = Client::new(&url, "hgr_t");
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let t = cx.new(|cx| {
+            let mut t = TerminalView::new(&client, "env1", None, cx);
+            t.run_once_started("docker exec -it web sh");
+            t
+        });
+        Root::new(t, window, cx)
+    });
+    let start = std::time::Instant::now();
+    let got = loop {
+        cx.run_until_parked();
+        if let Ok(b) = typed.recv_timeout(std::time::Duration::from_millis(50)) {
+            break b;
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "typed"
+        );
+    };
+    assert_eq!(got, b"docker exec -it web sh\r");
+}

@@ -28,7 +28,8 @@
 //! SNAPSHOT_SYMBOL=text goes to a symbol;
 //! SNAPSHOT_DIFF=ROOT:PATH shows a file's changes; SNAPSHOT_GIT=N chooses the
 //! Git window's Nth commit and SNAPSHOT_GIT_FILE=N shows its Nth file's diff;
-//! SNAPSHOT_HOVER=X,Y rests the pointer there; SNAPSHOT_CLICK=X,Y clicks there;
+//! SNAPSHOT_HOVER=X,Y rests the pointer there; SNAPSHOT_CLICK=X,Y clicks there
+//! (X,Y;X,Y... in turn);
 //! SNAPSHOT_DRAG=X1,Y1,X2,Y2 drags from one place to the other;
 //! SNAPSHOT_RIGHT_CLICK=X,Y right-clicks there, as the pointer would, and
 //! SNAPSHOT_PRESS="down enter |text| enter" then presses keys, typing what
@@ -545,10 +546,15 @@ fn main() {
                     });
                     settle(cx, handle.into(), Duration::from_secs(1)).await;
                 }
-                if let Some((x, y)) = std::env::var("SNAPSHOT_CLICK").ok().and_then(|e| {
-                    let (x, y) = e.split_once(',')?;
-                    Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
-                }) {
+                let clicks: Vec<(f32, f32)> = std::env::var("SNAPSHOT_CLICK")
+                    .unwrap_or_default()
+                    .split(';')
+                    .filter_map(|e| {
+                        let (x, y) = e.split_once(',')?;
+                        Some((x.trim().parse::<f32>().ok()?, y.trim().parse::<f32>().ok()?))
+                    })
+                    .collect();
+                for (x, y) in clicks {
                     use gpui::{
                         Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput,
                     };

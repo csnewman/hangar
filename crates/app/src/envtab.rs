@@ -21,6 +21,7 @@ use crate::assets;
 use crate::commit::CommitView;
 use crate::diff::{DiffView, ShowDiff, Spec};
 use crate::docedit::{self, DocEditor};
+use crate::docker::{DockerView, RunInTerminal};
 use crate::find::{FindView, OpenAt, Search};
 use crate::findpop::{Done, FindPopup};
 use crate::gitlog::GitView;
@@ -41,6 +42,12 @@ use crate::workspace::Workspace;
 pub use crate::tools::{Group, Slot, Tool};
 
 impl Tool {
+    /// Whether it shows what the environment's own services say, and so
+    /// nothing while it is not running.
+    fn needs_running(self) -> bool {
+        matches!(self, Tool::Git | Tool::Find | Tool::Problems | Tool::Docker)
+    }
+
     /// What it will hold, while the app cannot reach the environment's own
     /// services.
     fn waiting(self) -> &'static str {
@@ -305,6 +312,7 @@ pub struct EnvTab {
     filesystem: Option<Entity<ProjectView>>,
     commit: Option<Entity<CommitView>>,
     git: Option<Entity<GitView>>,
+    docker: Option<Entity<DockerView>>,
     find: Option<Entity<FindView>>,
     structure: Option<Entity<crate::structure::StructureView>>,
     /// Find in Files' pop-up while it is open.
@@ -491,6 +499,7 @@ impl EnvTab {
             filesystem: None,
             commit: None,
             git: None,
+            docker: None,
             find: None,
             structure: None,
             find_popup: None,
@@ -622,11 +631,13 @@ impl EnvTab {
             let _ = this.update_in(cx, |t, window, cx| match list {
                 Ok(list) if !list.is_empty() => {
                     for s in list {
+                        // A session started here may be listed once it
+                        // has attached.
                         if !t
                             .terms
                             .tabs
                             .iter()
-                            .any(|x| x.session.as_deref() == Some(s.id.as_str()))
+                            .any(|x| x.id(cx).as_deref() == Some(s.id.as_str()))
                         {
                             t.terms.tabs.push(TermTab {
                                 session: Some(s.id),
@@ -640,7 +651,8 @@ impl EnvTab {
                     }
                     cx.notify();
                 }
-                Ok(_) => t.new_terminal(window, cx),
+                Ok(_) if t.terms.tabs.is_empty() => t.new_terminal(window, cx),
+                Ok(_) => {}
                 Err(_) => t.terms.listed = false,
             });
         })
@@ -649,11 +661,30 @@ impl EnvTab {
 
     /// Starts a new session in a tab of its own.
     pub fn new_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_terminal_running(None, window, cx)
+    }
+
+    /// Starts a new session in a tab of its own, in the Terminal window,
+    /// typing a command into it once it has started.
+    pub fn new_terminal_running(
+        &mut self,
+        run: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(client) = self.client(cx) else {
             return;
         };
+        self.open
+            .insert(Layout::slot(Tool::Terminal, cx), Tool::Terminal);
         let env = self.env.clone();
-        let view = cx.new(|cx| TerminalView::new(&client, &env, None, cx));
+        let view = cx.new(|cx| {
+            let mut v = TerminalView::new(&client, &env, None, cx);
+            if let Some(run) = run {
+                v.run_once_started(run);
+            }
+            v
+        });
         cx.observe(&view, |_, _, cx| cx.notify()).detach();
         self.terms.tabs.push(TermTab {
             session: None,
@@ -2145,6 +2176,24 @@ impl Render for EnvTab {
                     self.problems = Some(view);
                 }
             }
+            if self.docker.is_none() && self.is_open(Tool::Docker) {
+                let ws = self.workspace(&env, cx);
+                let view = cx.new(|cx| DockerView::new(ws, cx));
+                self.subs.push(
+                    cx.subscribe_in(&view, window, |t, _, e: &OpenFile, window, cx| {
+                        t.open_file(&e.root, &e.path, window, cx)
+                    }),
+                );
+                self.subs.push(cx.subscribe_in(
+                    &view,
+                    window,
+                    |t, _, e: &RunInTerminal, window, cx| {
+                        t.new_terminal_running(Some(e.0.clone()), window, cx)
+                    },
+                ));
+                self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
+                self.docker = Some(view);
+            }
             if self.git.is_none() && self.is_open(Tool::Git) {
                 let ws = self.workspace(&env, cx);
                 let view = cx.new(|cx| GitView::new(ws, cx));
@@ -2693,6 +2742,14 @@ impl EnvTab {
             .mb(px(8.))
             .font_weight(FontWeight::SEMIBOLD)
             .child(t.name())
+            .when_some(self.summary(t, cx), |d, about| {
+                d.child(
+                    div()
+                        .font_weight(FontWeight::NORMAL)
+                        .text_color(p.muted)
+                        .child(about),
+                )
+            })
             .child(div().flex_1())
             .when(trees, |d| {
                 d.child(
@@ -2781,6 +2838,14 @@ impl EnvTab {
                 .structure
                 .clone()
                 .map(|v| v.into_any_element())
+                .unwrap_or_else(|| div().into_any_element()),
+            t if t.needs_running() && env.phase != "running" => div()
+                .text_size(px(11.5))
+                .text_color(p.muted)
+                .child("The environment is not running.")
+                .into_any_element(),
+            t if self.panel_view(t).is_some() => self
+                .panel_view(t)
                 .unwrap_or_else(|| div().into_any_element()),
             t => div()
                 .text_size(px(11.5))
@@ -3253,25 +3318,18 @@ impl EnvTab {
                 .terminal_window(height, env, p, window, cx)
                 .into_any_element();
         }
-        let view = match t {
-            Tool::Git => self.git.clone().map(|v| v.into_any_element()),
-            Tool::Find => self.find.clone().map(|v| v.into_any_element()),
-            Tool::Problems => self.problems.clone().map(|v| v.into_any_element()),
-            _ => None,
-        };
+        let view = self.panel_view(t);
         let body = match view {
             Some(view) if env.phase == "running" => {
                 div().flex_1().min_h_0().child(view).into_any_element()
             }
-            _ if env.phase != "running" && matches!(t, Tool::Git | Tool::Find | Tool::Problems) => {
-                div()
-                    .px(px(10.))
-                    .py(px(6.))
-                    .text_size(px(11.))
-                    .text_color(p.muted)
-                    .child("The environment is not running.")
-                    .into_any_element()
-            }
+            _ if env.phase != "running" && t.needs_running() => div()
+                .px(px(10.))
+                .py(px(6.))
+                .text_size(px(11.))
+                .text_color(p.muted)
+                .child("The environment is not running.")
+                .into_any_element(),
             _ => div()
                 .px(px(10.))
                 .py(px(6.))
@@ -3296,10 +3354,37 @@ impl EnvTab {
                     .text_color(p.text)
                     .border_b_1()
                     .border_color(p.border)
-                    .child(t.name()),
+                    .child(t.name())
+                    .when_some(self.summary(t, cx), |d, about| {
+                        d.child(
+                            div()
+                                .font_weight(FontWeight::NORMAL)
+                                .text_color(p.muted)
+                                .child(about),
+                        )
+                    }),
             )
             .child(body)
             .into_any_element()
+    }
+
+    /// The view a tool window shows that is the same wherever it docks.
+    fn panel_view(&self, t: Tool) -> Option<gpui::AnyElement> {
+        match t {
+            Tool::Git => self.git.clone().map(|v| v.into_any_element()),
+            Tool::Find => self.find.clone().map(|v| v.into_any_element()),
+            Tool::Problems => self.problems.clone().map(|v| v.into_any_element()),
+            Tool::Docker => self.docker.clone().map(|v| v.into_any_element()),
+            _ => None,
+        }
+    }
+
+    /// What a tool window's title says beside its name.
+    fn summary(&self, t: Tool, cx: &App) -> Option<String> {
+        match t {
+            Tool::Docker => self.docker.as_ref()?.read(cx).summary(),
+            _ => None,
+        }
     }
 
     /// The Terminal tool window: a tab per session, then the one shown.

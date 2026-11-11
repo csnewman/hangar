@@ -138,6 +138,8 @@ pub struct TerminalView {
     /// Find's query, while it is open, and whether its text is nowhere.
     find: Option<Entity<InputState>>,
     missing: bool,
+    /// A command typed into a new session once it starts.
+    run: Option<String>,
     _find: Option<Subscription>,
 }
 
@@ -223,8 +225,15 @@ impl TerminalView {
             sizing: None,
             find: None,
             missing: false,
+            run: None,
             _find: None,
         }
+    }
+
+    /// Types a command into the new session once it has started, as
+    /// Open Shell in a container does.
+    pub fn run_once_started(&mut self, command: impl Into<String>) {
+        self.run = Some(command.into());
     }
 
     pub fn session(&self) -> Option<&str> {
@@ -307,6 +316,9 @@ impl TerminalView {
                 // The size this window would have: the session's, if it
                 // holds the size.
                 self.send(Command::Prefer(self.cols, self.rows));
+                if let Some(run) = self.run.take() {
+                    self.send(Command::Input(format!("{run}\r").into_bytes()));
+                }
             }
             Event::Output(b) => {
                 self.screen.feed(&b);
