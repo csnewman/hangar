@@ -912,6 +912,14 @@ impl EnvTab {
                 t.show_commit(e.0.clone(), cx)
             }),
         );
+        self.subs.push(cx.subscribe_in(
+            &view,
+            window,
+            |t, _, e: &docedit::ShowChanges, window, cx| {
+                let (root, path) = t.place_of(&e.0, cx);
+                t.open_diff(Spec::working(&root, &path), window, cx)
+            },
+        ));
         self.attach_language(&view, cx);
         Some(view)
     }

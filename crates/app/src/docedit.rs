@@ -386,6 +386,8 @@ gpui::actions!(
         SelectAllOccurrences,
         NextProblem,
         PreviousProblem,
+        RollbackChange,
+        StageChange,
     ]
 );
 
@@ -415,6 +417,11 @@ pub fn bind_keys(cx: &mut App) {
         "ctrl-.",
         "ctrl-b",
     ];
+    let rollback_key = if cfg!(target_os = "macos") {
+        "cmd-alt-z"
+    } else {
+        "ctrl-alt-z"
+    };
     // IntelliJ's Add Selection for Next Occurrence, Unselect Occurrence and
     // Select All Occurrences.
     #[cfg(target_os = "macos")]
@@ -443,6 +450,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(occurrences[1], UnselectOccurrence, ctx),
         KeyBinding::new(occurrences[2], SelectAllOccurrences, ctx),
         KeyBinding::new("f2", NextProblem, ctx),
+        // IntelliJ's Rollback Lines.
+        KeyBinding::new(rollback_key, RollbackChange, ctx),
         KeyBinding::new("shift-f2", PreviousProblem, ctx),
     ]);
 }
@@ -525,6 +534,7 @@ fn editor_menu(
     comment: bool,
     wrap: bool,
     blame: bool,
+    change: bool,
     _: &App,
 ) -> gpui_component::native_menu::NativeMenu {
     use gpui_component::input::{Copy, Cut, GoToDefinition, Paste, SelectAll};
@@ -543,6 +553,9 @@ fn editor_menu(
         .separator()
         .menu_with_check("Soft-Wrap", wrap, Box::new(ToggleSoftWrap))
         .menu_with_check("Annotate with Git Blame", blame, Box::new(ToggleBlame))
+        .separator()
+        .menu_with_disabled("Rollback Change", !change, Box::new(RollbackChange))
+        .menu_with_disabled("Stage Change", !change, Box::new(StageChange))
 }
 
 /// Where a place in the text is after an edit replacing start..old_end
@@ -642,6 +655,16 @@ pub struct DocEditor {
     problem_shown: Option<(usize, lsp_types::Diagnostic)>,
     /// The bracket at the caret and its partner, framed.
     brackets: Option<RangeDecorationCollection>,
+    /// git's index copy of the file (None when it has none), the changes
+    /// from it marked in the gutter, and a count of the times they were
+    /// asked for, so only the last is kept.
+    base: Option<String>,
+    hunks: Vec<crate::changes::Hunk>,
+    change_marks: Option<GutterDecorationCollection>,
+    changes_asked: u64,
+    /// A change's menu, from a click on its mark, and where.
+    change_menu: Option<(Entity<PopupMenu>, Subscription)>,
+    change_menu_at: Option<gpui::Point<gpui::Pixels>>,
     _subs: Vec<Subscription>,
 }
 
@@ -734,6 +757,12 @@ impl DocEditor {
             occurrences: Default::default(),
             problem_shown: None,
             brackets: None,
+            base: None,
+            hunks: Vec::new(),
+            change_marks: None,
+            changes_asked: 0,
+            change_menu: None,
+            change_menu_at: None,
             _subs: vec![edits, moved],
         }
     }
@@ -945,6 +974,10 @@ impl DocEditor {
                     cx.notify();
                 }
             }
+            // git's index may have moved: the changes are read again.
+            Notice::Event(e, _) if e == "git.changed" => {
+                self.read_base(Duration::from_millis(150), cx)
+            }
             Notice::Event(e, p) if self.doc.is_some() && p["doc"].as_u64() == self.doc => {
                 match e.as_str() {
                     "doc.changes" => {
@@ -1051,6 +1084,7 @@ impl DocEditor {
         self.drawn = false;
         self.indent = crate::lineops::detect_indent(&self.shadow.to_string());
         self.read_props(cx);
+        self.read_base(Duration::ZERO, cx);
         self.show_diagnostics(cx);
         self.presences(&v, cx);
         cx.notify();
@@ -1365,6 +1399,249 @@ impl DocEditor {
         }
         self.sig_caret = Some(at);
         self.ask_signatures(crate::sighelp::Ask::Again, Duration::from_millis(40), cx);
+    }
+
+    /// Reads git's index copy of the file, after a wait, and marks the
+    /// changes from it.
+    fn read_base(&mut self, after: Duration, cx: &mut Context<Self>) {
+        self.changes_asked += 1;
+        let asked = self.changes_asked;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(after).await;
+            let call = this.update(cx, |d, _| {
+                (d.changes_asked == asked)
+                    .then(|| d.code.call("git.show", json!({ "path": d.path })))
+            });
+            let Ok(Some(call)) = call else { return };
+            let base = call
+                .await
+                .ok()
+                .and_then(|v| v["text"].as_str().map(str::to_string));
+            let _ = this.update(cx, |d, cx| {
+                d.base = base;
+                d.mark_changes(Duration::ZERO, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Finds the changes from git's index copy, after a wait, and marks
+    /// them in the gutter: added in green, changed in the accent, and where
+    /// lines were taken away in red.
+    fn mark_changes(&mut self, after: Duration, cx: &mut Context<Self>) {
+        self.changes_asked += 1;
+        let asked = self.changes_asked;
+        cx.spawn(async move |this, cx| {
+            if !after.is_zero() {
+                cx.background_executor().timer(after).await;
+            }
+            let _ = this.update(cx, |d, cx| {
+                if d.changes_asked == asked {
+                    d.draw_changes(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn draw_changes(&mut self, cx: &mut Context<Self>) {
+        use crate::changes::Kind;
+        use gpui_component::RopeExt;
+        let text = self.editor.read(cx).text().clone();
+        self.hunks = match &self.base {
+            Some(base) => crate::changes::hunks(base, &text.to_string()),
+            None => Vec::new(),
+        };
+        let p = palette::of(cx);
+        let lines = text.lines_len();
+        let start = |l: usize| {
+            if l >= lines {
+                text.len()
+            } else {
+                text.line_start_offset(l)
+            }
+        };
+        let marks: Vec<_> = self
+            .hunks
+            .iter()
+            .map(|h| {
+                let colour = match h.kind() {
+                    Kind::Added => p.good,
+                    Kind::Modified => p.accent,
+                    Kind::Deleted => p.bad,
+                };
+                let range = if h.new.is_empty() {
+                    let at = start(h.new.start.min(lines.saturating_sub(1)));
+                    at..at
+                } else {
+                    start(h.new.start)..start(h.new.end).max(start(h.new.start))
+                };
+                GutterDecoration::new(range).with_color(colour)
+            })
+            .collect();
+        match &self.change_marks {
+            Some(m) => m.set(marks, cx),
+            None => {
+                self.change_marks = Some(self.editor.update(cx, |e, cx| {
+                    e.create_gutter_decorations_collection(marks, cx)
+                }))
+            }
+        }
+        cx.notify();
+    }
+
+    /// The change on the caret's line, if any.
+    fn change_at_caret(&self, cx: &App) -> Option<crate::changes::Hunk> {
+        let line = self.editor.read(cx).cursor_position().line as usize;
+        self.hunks.iter().find(|h| h.covers(line)).cloned()
+    }
+
+    /// Rolls a change back, as IntelliJ's Rollback Lines: the index's lines
+    /// put back in its place, as an edit of the user's own.
+    fn rollback_change(
+        &mut self,
+        h: &crate::changes::Hunk,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(base) = &self.base else {
+            return;
+        };
+        let text = self.editor.read(cx).text().to_string();
+        let back = crate::changes::rolled_back(base, &text, h);
+        if let Some(change) = difference(&text, &back) {
+            self.apply_own(change, window, cx);
+        }
+    }
+
+    /// Stages a change alone: git's index takes the file's lines in its
+    /// place and nothing else.
+    fn stage_change(&mut self, h: &crate::changes::Hunk, cx: &mut Context<Self>) {
+        let Some(base) = &self.base else {
+            return;
+        };
+        let text = self.editor.read(cx).text().to_string();
+        let content = crate::changes::staged(base, &text, h);
+        let call = self.code.call(
+            "git.setIndex",
+            json!({ "path": self.path, "content": content }),
+        );
+        cx.spawn(async move |this, cx| {
+            let _ = call.await;
+            let _ = this.update(cx, |d, cx| d.read_base(Duration::ZERO, cx));
+        })
+        .detach();
+    }
+
+    /// A change's menu, from a click on its mark: what it replaced, then
+    /// Rollback, Stage and Show Diff.
+    fn open_change_menu(
+        &mut self,
+        h: crate::changes::Hunk,
+        at: gpui::Point<gpui::Pixels>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use gpui_component::menu::PopupMenuItem;
+        type Act = std::rc::Rc<dyn Fn(&mut DocEditor, &mut Window, &mut Context<DocEditor>)>;
+        let me = cx.entity().downgrade();
+        let was = self
+            .base
+            .as_deref()
+            .map(|b| crate::changes::before(b, &h))
+            .unwrap_or_default();
+        let (rollback, stage, diff) = (h.clone(), h.clone(), self.path.clone());
+        let menu = PopupMenu::build(window, cx, move |mut menu, _, cx| {
+            crate::ui::modal(cx);
+            let first = was.lines().next().unwrap_or_default().trim().to_string();
+            if !first.is_empty() {
+                let more = was.lines().count() > 1;
+                menu = menu
+                    .label(format!("Was: {first}{}", if more { " …" } else { "" }))
+                    .separator();
+            }
+            let on = |label: &str, f: Act| {
+                let me = me.clone();
+                PopupMenuItem::new(label.to_string()).on_click(move |_, window, cx| {
+                    let f = f.clone();
+                    let _ = me.update(cx, |d, cx| f(d, window, cx));
+                })
+            };
+            let (rollback, stage, diff) = (rollback.clone(), stage.clone(), diff.clone());
+            menu.item(on(
+                "Rollback Change",
+                std::rc::Rc::new(move |d, window, cx| d.rollback_change(&rollback, window, cx)),
+            ))
+            .item(on(
+                "Stage Change",
+                std::rc::Rc::new(move |d, _, cx| d.stage_change(&stage, cx)),
+            ))
+            .item(on(
+                "Show Diff",
+                std::rc::Rc::new(move |_, _, cx| cx.emit(ShowChanges(diff.clone()))),
+            ))
+        });
+        window.focus(&menu.focus_handle(cx), cx);
+        let sub = cx.subscribe(&menu, |d, _, _: &gpui::DismissEvent, cx| {
+            d.change_menu = None;
+            cx.notify();
+        });
+        self.change_menu = Some((menu, sub));
+        self.change_menu_at = Some(at);
+        cx.notify();
+    }
+
+    /// Click targets over the changes' marks, which open a change's menu;
+    /// only for changes in view.
+    fn change_targets(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        use gpui_component::RopeExt;
+        let e = self.editor.read(cx);
+        let (Some(text_at), view) = (e.text_bounds(), e.input_bounds()) else {
+            return vec![];
+        };
+        let text = e.text();
+        let lines = text.lines_len();
+        let mut found = vec![];
+        for (n, h) in self.hunks.iter().enumerate() {
+            let first = h.new.start.min(lines.saturating_sub(1));
+            let last = if h.new.is_empty() {
+                first
+            } else {
+                (h.new.end - 1).min(lines.saturating_sub(1))
+            };
+            let (a, b) = (text.line_start_offset(first), text.line_start_offset(last));
+            let (Some(top), Some(bottom)) =
+                (e.range_to_bounds(&(a..a)), e.range_to_bounds(&(b..b)))
+            else {
+                continue;
+            };
+            if bottom.bottom() < view.top() || top.top() > view.bottom() {
+                continue;
+            }
+            found.push((n, h.clone(), top.top(), bottom.bottom()));
+        }
+        // The marks are at the gutter's left edge.
+        let left = view.left().max(text_at.left() - px(60.));
+        found
+            .into_iter()
+            .map(|(n, h, top, bottom)| {
+                gpui::deferred(
+                    gpui::anchored().position(gpui::point(left, top)).child(
+                        div()
+                            .id(("change-mark", n))
+                            .debug_selector(move || format!("change-mark-{n}"))
+                            .w(px(10.))
+                            .h((bottom - top).max(px(6.)))
+                            .cursor_pointer()
+                            .on_click(cx.listener(move |d, e: &gpui::ClickEvent, window, cx| {
+                                d.open_change_menu(h.clone(), e.position(), window, cx)
+                            })),
+                    ),
+                )
+                .with_priority(1)
+                .into_any_element()
+            })
+            .collect()
     }
 
     /// Frames the bracket at the caret and its partner, as IntelliJ does.
@@ -1909,6 +2186,7 @@ impl DocEditor {
             // What was shaded may have moved; it is asked for again once the
             // caret rests.
             self.uses_caret = None;
+            self.mark_changes(Duration::from_millis(150), cx);
             self.typed_for_signatures(&inserted, cx);
             self.completed(&inserted, window, cx);
         }
@@ -2177,6 +2455,12 @@ impl DocEditor {
 
 impl gpui::EventEmitter<crate::blame::ShowCommit> for DocEditor {}
 
+/// Asks for a file's changes in a diff: its absolute path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShowChanges(pub String);
+
+impl gpui::EventEmitter<ShowChanges> for DocEditor {}
+
 impl Render for DocEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
@@ -2295,12 +2579,15 @@ impl Render for DocEditor {
             .child({
                 let comment = self.comment().is_some();
                 let blamed = self.blame.is_some();
+                let change = self.change_at_caret(cx).is_some();
                 let editor = code_editor(&self.editor)
                     .readonly(
                         !self.writable
                             || !matches!(self.state, State::Open | State::Reconnecting(_)),
                     )
-                    .context_menu(move |menu, _, cx| editor_menu(menu, comment, wrap, blamed, cx));
+                    .context_menu(move |menu, _, cx| {
+                        editor_menu(menu, comment, wrap, blamed, change, cx)
+                    });
                 match self.preview {
                     None if blamed => h_flex()
                         .size_full()
@@ -2331,7 +2618,30 @@ impl Render for DocEditor {
                         })),
                 )
             })
+            .on_action(cx.listener(|d, _: &RollbackChange, window, cx| {
+                if let Some(h) = d.change_at_caret(cx) {
+                    d.rollback_change(&h, window, cx)
+                }
+            }))
+            .on_action(cx.listener(|d, _: &StageChange, _, cx| {
+                if let Some(h) = d.change_at_caret(cx) {
+                    d.stage_change(&h, cx)
+                }
+            }))
             .children(self.names_at_carets(cx))
+            .children(self.change_targets(cx))
+            .when_some(self.change_menu.as_ref(), |d, (menu, _)| {
+                let at = self.change_menu_at;
+                d.child(
+                    gpui::deferred(
+                        gpui::anchored()
+                            .when_some(at, |a, at| a.position(at))
+                            .snap_to_window_with_margin(px(8.))
+                            .child(menu.clone()),
+                    )
+                    .with_priority(100),
+                )
+            })
             .children(self.parameter_info(&p, cx))
             .children(self.problem_note(&p, cx))
             .when_some(self.context_menu.as_ref(), |d, (menu, _)| {

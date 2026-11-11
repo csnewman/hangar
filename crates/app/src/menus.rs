@@ -9,8 +9,8 @@ use gpui_component::input::{
 
 use crate::docedit::{
     CommentLine, ContextActions, DeleteLine, DuplicateLine, JoinLines, MoveLineDown, MoveLineUp,
-    NextProblem, ParameterInfo, PreviousProblem, Reformat, SelectAllOccurrences,
-    SelectNextOccurrence, ToggleSoftWrap, UnselectOccurrence,
+    NextProblem, ParameterInfo, PreviousProblem, Reformat, RollbackChange, SelectAllOccurrences,
+    SelectNextOccurrence, StageChange, ToggleSoftWrap, UnselectOccurrence,
 };
 use crate::envtab::{
     CloseTab, FindInFiles, FindUsages, GoToImplementation, GoToLine, GoToTypeDeclaration,
@@ -98,6 +98,9 @@ pub fn init(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Move Line Up", MoveLineUp),
             MenuItem::action("Move Line Down", MoveLineDown),
+            MenuItem::separator(),
+            MenuItem::action("Rollback Change", RollbackChange),
+            MenuItem::action("Stage Change", StageChange),
         ]),
         Menu::new("Refactor").items([MenuItem::action("Rename…", RenameSymbol)]),
         Menu::new("View").items([

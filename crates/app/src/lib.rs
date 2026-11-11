@@ -7,6 +7,7 @@ pub mod blame;
 pub mod brackets;
 pub mod branch;
 pub mod branches;
+pub mod changes;
 pub mod code;
 pub mod commit;
 pub mod diff;
