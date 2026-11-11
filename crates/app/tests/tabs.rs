@@ -178,12 +178,14 @@ fn the_editors_split_in_two(cx: &mut TestAppContext) {
     let used = |tab: &Entity<EnvTab>, cx: &mut VisualTestContext| names(tab, cx);
 
     // Close, Close Others, Close Tabs to the Left and to the Right, Close
-    // All, Reopen Closed Tab, Split Right, Split and Move Right.
+    // All, Close All but Pinned, Pin Tab, Reopen Closed Tab, Split Right,
+    // Split Down, Split and Move Right.
     let b = cx.debug_bounds("file-tab-1").unwrap().center();
     cx.simulate_mouse_down(b, gpui::MouseButton::Right, gpui::Modifiers::none());
     cx.simulate_mouse_up(b, gpui::MouseButton::Right, gpui::Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_keystrokes("down down down down down down down down enter");
+    let to_move_right = vec!["down"; 11].join(" ");
+    cx.simulate_keystrokes(&format!("{to_move_right} enter"));
     cx.run_until_parked();
     assert!(tab.read_with(cx, |t, _| t.split_in_two()));
     assert_eq!(used(&tab, cx), ["b.rs"], "moved to the right, in use");
@@ -204,7 +206,7 @@ fn the_editors_split_in_two(cx: &mut TestAppContext) {
     assert_eq!(used(&tab, cx), ["a.rs", "c.rs", "d.rs", "e.rs"]);
 
     // A copy of a.rs on the right, which is then in use.
-    cx.update(|window, cx| tab.update(cx, |t, cx| t.split(0, false, window, cx)));
+    cx.update(|window, cx| tab.update(cx, |t, cx| t.split(0, false, false, window, cx)));
     assert_eq!(used(&tab, cx), ["b.rs", "a.rs"]);
     assert_eq!(tab.read_with(cx, |t, cx| t.open_files(cx).1), Some(1));
 
@@ -214,7 +216,7 @@ fn the_editors_split_in_two(cx: &mut TestAppContext) {
     assert_eq!(used(&tab, cx), ["a.rs", "c.rs", "d.rs", "e.rs"]);
 
     // Split again, then Unsplit: each file once.
-    cx.update(|window, cx| tab.update(cx, |t, cx| t.split(1, false, window, cx)));
+    cx.update(|window, cx| tab.update(cx, |t, cx| t.split(1, false, false, window, cx)));
     assert_eq!(used(&tab, cx), ["c.rs"]);
     cx.update(|window, cx| tab.update(cx, |t, cx| t.unsplit(window, cx)));
     assert!(!tab.read_with(cx, |t, _| t.split_in_two()));
@@ -277,4 +279,41 @@ fn tabs_are_dragged_between_and_within_groups(cx: &mut TestAppContext) {
         cx.debug_bounds("file-tab-3").unwrap().center()
     });
     assert_eq!(names(&tab, cx), ["a.rs", "c.rs", "b.rs", "d.rs"]);
+}
+
+/// Split Down puts the second group under the first.
+#[gpui::test]
+fn the_editors_split_down(cx: &mut TestAppContext) {
+    let (tab, cx) = four(cx);
+    cx.update(|window, cx| tab.update(cx, |t, cx| t.split(1, true, true, window, cx)));
+    cx.run_until_parked();
+    assert!(tab.read_with(cx, |t, _| t.split_in_two()));
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    let (top, bottom) = (
+        cx.debug_bounds("editors-left").unwrap(),
+        cx.debug_bounds("editors-right").unwrap(),
+    );
+    assert!(bottom.top() >= top.bottom(), "one under the other");
+    assert_eq!(top.left(), bottom.left());
+}
+
+/// A pinned tab goes first and shows its pin; Close Others and Close All
+/// but Pinned leave it, and unpinned it can be closed.
+#[gpui::test]
+fn pinned_tabs_stay(cx: &mut TestAppContext) {
+    let (tab, cx) = four(cx);
+    cx.update(|_, cx| tab.update(cx, |t, cx| t.pin_tab(2, true, cx)));
+    assert_eq!(names(&tab, cx), ["c.rs", "a.rs", "b.rs", "d.rs"]);
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("file-pin-0").is_some(), "its pin");
+    // Close Others on b.rs.
+    cx.update(|_, cx| tab.update(cx, |t, cx| t.close_unpinned(|j| j == 2, cx)));
+    assert_eq!(names(&tab, cx), ["c.rs", "b.rs"]);
+    cx.update(|_, cx| tab.update(cx, |t, cx| t.close_unpinned(|_| false, cx)));
+    assert_eq!(names(&tab, cx), ["c.rs"], "Close All but Pinned");
+    cx.update(|_, cx| tab.update(cx, |t, cx| t.pin_tab(0, false, cx)));
+    cx.update(|_, cx| tab.update(cx, |t, cx| t.close_unpinned(|_| false, cx)));
+    assert!(names(&tab, cx).is_empty(), "unpinned, it goes");
 }

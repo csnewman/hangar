@@ -367,6 +367,12 @@ pub struct EnvTab {
     /// it is on the right. Using it swaps the two.
     other: Option<EditorGroup>,
     other_right: bool,
+    /// Whether the two groups are one over the other (Split Down) rather
+    /// than side by side; the second is then the lower.
+    split_down: bool,
+    /// The tabs pinned, which stay first in their group and are left by
+    /// Close Others and Close All but Pinned.
+    pinned: std::collections::HashSet<gpui::EntityId>,
     /// Whether an editor tab is being dragged, for the drop zone that
     /// splits.
     dragging_tab: bool,
@@ -396,6 +402,7 @@ struct TabAt {
     count: usize,
     right: bool,
     split: bool,
+    pinned: bool,
 }
 
 /// An editor group, as it is kept while the other is in use.
@@ -460,6 +467,15 @@ impl Tab {
             (Tab::Term(a), Tab::Term(b)) => a == b,
             (Tab::Term(_), _) | (_, Tab::Term(_)) => false,
             (a, b) => a.path(cx) == path && matches!(a, Tab::Doc(_)) == matches!(b, Tab::Doc(_)),
+        }
+    }
+
+    /// What the tab shows, as pinning knows it.
+    fn entity_id(&self) -> gpui::EntityId {
+        match self {
+            Tab::Doc(d) => d.entity_id(),
+            Tab::Diff(d) => d.entity_id(),
+            Tab::Term(t) => t.entity_id(),
         }
     }
 
@@ -574,6 +590,8 @@ impl EnvTab {
             closed: vec![],
             other: None,
             other_right: true,
+            split_down: false,
+            pinned: Default::default(),
             dragging_tab: false,
             pending_reveal: None,
             subs: vec![],
@@ -940,7 +958,14 @@ impl EnvTab {
     /// Shows a tab in the other group, as IntelliJ's Split Right does, a
     /// group being made on the right if there is one; moved there, not
     /// copied, if asked. The other group is then the one in use.
-    pub fn split(&mut self, i: usize, moved: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn split(
+        &mut self,
+        i: usize,
+        moved: bool,
+        down: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(tab) = self.files.get(i).cloned() else {
             return;
         };
@@ -986,6 +1011,7 @@ impl EnvTab {
         if self.other.is_none() {
             self.other = Some(EditorGroup::empty());
             self.other_right = true;
+            self.split_down = down;
         }
         let emptied = self.files.is_empty();
         self.swap_groups();
@@ -1054,7 +1080,7 @@ impl EnvTab {
         self.dragging_tab = false;
         if self.other.is_none() {
             if to && !from {
-                return self.split(i, true, window, cx);
+                return self.split(i, true, false, window, cx);
             }
             if from != to {
                 return;
@@ -1253,6 +1279,15 @@ impl EnvTab {
         if i >= self.files.len() {
             return;
         }
+        let id = self.files[i].entity_id();
+        let elsewhere = self
+            .other
+            .iter()
+            .flat_map(|g| g.files.iter())
+            .any(|f| f.entity_id() == id);
+        if !elsewhere {
+            self.pinned.remove(&id);
+        }
         if let Tab::Doc(doc) = self.files.remove(i) {
             let abs = doc.read(cx).path().to_string();
             if let Some(l) = &self.languages {
@@ -1291,6 +1326,46 @@ impl EnvTab {
                 self.close_file(i, cx);
             }
         }
+    }
+
+    /// Closes the tabs of the group in use not kept, the pinned ones kept
+    /// too.
+    pub fn close_unpinned(&mut self, keep: impl Fn(usize) -> bool, cx: &mut Context<Self>) {
+        let pinned: Vec<bool> = (0..self.files.len()).map(|j| self.is_pinned(j)).collect();
+        self.close_tabs(|j| keep(j) || pinned[j], cx);
+    }
+
+    /// Whether a tab of the group in use is pinned.
+    fn is_pinned(&self, i: usize) -> bool {
+        self.files
+            .get(i)
+            .is_some_and(|f| self.pinned.contains(&f.entity_id()))
+    }
+
+    /// Pins a tab of the group in use, as IntelliJ's Pin Tab: it goes after
+    /// the pinned tabs before it; unpinned, after those that stay pinned.
+    pub fn pin_tab(&mut self, i: usize, pin: bool, cx: &mut Context<Self>) {
+        let Some(id) = self.files.get(i).map(Tab::entity_id) else {
+            return;
+        };
+        if pin {
+            self.pinned.insert(id);
+        } else {
+            self.pinned.remove(&id);
+        }
+        let shown = self
+            .file
+            .and_then(|f| self.files.get(f))
+            .map(Tab::entity_id);
+        let tab = self.files.remove(i);
+        let to = self
+            .files
+            .iter()
+            .take_while(|f| self.pinned.contains(&f.entity_id()))
+            .count();
+        self.files.insert(to, tab);
+        self.file = shown.and_then(|id| self.files.iter().position(|f| f.entity_id() == id));
+        cx.notify();
     }
 
     /// Asks for a line, and a column after a colon, and puts the caret of
@@ -1739,6 +1814,7 @@ impl EnvTab {
             count,
             right,
             split,
+            pinned,
         } = at;
         // Each acts in the tab's group, which it makes the one in use.
         let on = |label: &str, f: Act| {
@@ -1760,27 +1836,36 @@ impl EnvTab {
             .item(
                 on(
                     "Close Others",
-                    Rc::new(move |t, _, cx| t.close_tabs(|j| j == i, cx)),
+                    Rc::new(move |t, _, cx| t.close_unpinned(|j| j == i, cx)),
                 )
                 .disabled(count < 2),
             )
             .item(
                 on(
                     "Close Tabs to the Left",
-                    Rc::new(move |t, _, cx| t.close_tabs(|j| j >= i, cx)),
+                    Rc::new(move |t, _, cx| t.close_unpinned(|j| j >= i, cx)),
                 )
                 .disabled(i == 0),
             )
             .item(
                 on(
                     "Close Tabs to the Right",
-                    Rc::new(move |t, _, cx| t.close_tabs(|j| j <= i, cx)),
+                    Rc::new(move |t, _, cx| t.close_unpinned(|j| j <= i, cx)),
                 )
                 .disabled(i + 1 >= count),
             )
             .item(on(
                 "Close All",
                 Rc::new(|t, _, cx| t.close_tabs(|_| false, cx)),
+            ))
+            .item(on(
+                "Close All but Pinned",
+                Rc::new(|t, _, cx| t.close_unpinned(|_| false, cx)),
+            ))
+            .separator()
+            .item(on(
+                if pinned { "Unpin Tab" } else { "Pin Tab" },
+                Rc::new(move |t, _, cx| t.pin_tab(i, !pinned, cx)),
             ))
             .separator()
             .item(on(
@@ -1796,8 +1881,14 @@ impl EnvTab {
                 } else {
                     "Split Right"
                 },
-                Rc::new(move |t, window, cx| t.split(i, false, window, cx)),
+                Rc::new(move |t, window, cx| t.split(i, false, false, window, cx)),
             ))
+            .when(!split, |m| {
+                m.item(on(
+                    "Split Down",
+                    Rc::new(move |t, window, cx| t.split(i, false, true, window, cx)),
+                ))
+            })
             .item(
                 on(
                     if split {
@@ -1805,10 +1896,19 @@ impl EnvTab {
                     } else {
                         "Split and Move Right"
                     },
-                    Rc::new(move |t, window, cx| t.split(i, true, window, cx)),
+                    Rc::new(move |t, window, cx| t.split(i, true, false, window, cx)),
                 )
                 .disabled(!split && count < 2),
             )
+            .when(!split, |m| {
+                m.item(
+                    on(
+                        "Split and Move Down",
+                        Rc::new(move |t, window, cx| t.split(i, true, true, window, cx)),
+                    )
+                    .disabled(count < 2),
+                )
+            })
             .when(split, |m| {
                 m.item(on(
                     "Unsplit",
@@ -3472,6 +3572,7 @@ impl EnvTab {
         let used = self.group_view(true, right, p, cx);
         let other = self.group_view(false, !right, p, cx);
         let (l, r) = if right { (other, used) } else { (used, other) };
+        let down = self.split_down;
         let pane =
             |side: &'static str, body: gpui::AnyElement, right: bool, cx: &mut Context<Self>| {
                 v_flex()
@@ -3479,18 +3580,33 @@ impl EnvTab {
                     .debug_selector(move || side.to_string())
                     .flex_1()
                     .min_w_0()
-                    .h_full()
+                    .min_h_0()
+                    .when(down, |d| d.w_full())
+                    .when(!down, |d| d.h_full())
                     // A click anywhere in a group makes it the one in use.
                     .capture_any_mouse_down(cx.listener(move |t, _, _, cx| t.use_side(right, cx)))
                     .child(body)
             };
+        let first = pane("editors-left", l, false, cx);
+        let second = pane("editors-right", r, true, cx);
+        // Split Down: the second group under the first.
+        if down {
+            return v_flex()
+                .flex_1()
+                .min_h_0()
+                .size_full()
+                .child(first)
+                .child(div().h(px(1.)).w_full().flex_none().bg(p.border))
+                .child(second)
+                .into_any_element();
+        }
         h_flex()
             .flex_1()
             .min_h_0()
             .size_full()
-            .child(pane("editors-left", l, false, cx))
+            .child(first)
             .child(div().w(px(1.)).h_full().flex_none().bg(p.border))
-            .child(pane("editors-right", r, true, cx))
+            .child(second)
             .into_any_element()
     }
 
@@ -3543,6 +3659,7 @@ impl EnvTab {
             let on = file == Some(i);
             let path = f.path(cx);
             let name = f.title(cx);
+            let pinned = self.pinned.contains(&f.entity_id());
             let hover = p.surface_2;
             // The shown tab of the group not in use is drawn quieter.
             let strong = on && (used || !split);
@@ -3585,7 +3702,24 @@ impl EnvTab {
                         t.move_tab(d.right, d.i, right, Some(i), window, cx)
                     }))
                     .child(div().max_w(px(220.)).truncate().child(name))
-                    .child(
+                    .child(if pinned {
+                        // A pinned tab shows its pin, which unpins it.
+                        div()
+                            .id(SharedString::from(format!("file-pin-{side}{i}")))
+                            .debug_selector(move || format!("file-pin-{i}"))
+                            .child(
+                                svg()
+                                    .path(assets::icon("pin"))
+                                    .size(px(11.))
+                                    .text_color(p.muted),
+                            )
+                            .on_click(cx.listener(move |t, _: &gpui::ClickEvent, _, cx| {
+                                cx.stop_propagation();
+                                t.use_side(right, cx);
+                                t.pin_tab(i, false, cx);
+                            }))
+                            .into_any_element()
+                    } else {
                         div()
                             .id(SharedString::from(format!("file-close-{side}{i}")))
                             .text_color(p.muted)
@@ -3594,8 +3728,9 @@ impl EnvTab {
                                 cx.stop_propagation();
                                 t.use_side(right, cx);
                                 t.close_file(i, cx);
-                            })),
-                    )
+                            }))
+                            .into_any_element()
+                    })
                     .tooltip({
                         let path = path.clone();
                         move |window, cx| {
@@ -3635,6 +3770,7 @@ impl EnvTab {
                                     count,
                                     right,
                                     split,
+                                    pinned,
                                 },
                                 path.clone(),
                                 rel.clone(),
