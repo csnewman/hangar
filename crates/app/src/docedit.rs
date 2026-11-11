@@ -599,6 +599,9 @@ pub struct DocEditor {
     /// Where to put the cursor once the file is open: 0-based line and
     /// UTF-16 column.
     go_to: Option<(u32, u32)>,
+    /// Whether the server's actions are listed once the cursor is put
+    /// there, for the Problems window's Show Quick Fixes.
+    fix: bool,
     /// Whether the editor has been drawn with the file's text: opening
     /// puts it back at the top as it is next drawn, so the cursor is moved
     /// (and scrolled to) only after.
@@ -736,6 +739,7 @@ impl DocEditor {
             writable: false,
             state: State::Opening,
             go_to: None,
+            fix: false,
             drawn: false,
             wrapped: None,
             diagnostics: vec![],
@@ -2288,6 +2292,18 @@ impl DocEditor {
                 cx,
             )
         });
+        if std::mem::take(&mut self.fix) {
+            let focus = self.editor.read(cx).focus_handle(cx);
+            window.focus(&focus, cx);
+            self.context_actions(window, cx);
+        }
+    }
+
+    /// Puts the cursor at a place, as `go_to`, and lists the server's
+    /// actions there, as IntelliJ's Show Quick Fixes.
+    pub fn fix_at(&mut self, line: u32, column: u32, window: &mut Window, cx: &mut Context<Self>) {
+        self.fix = true;
+        self.go_to(line, column, window, cx);
     }
 
     /// Takes what the user typed, to send and to undo.

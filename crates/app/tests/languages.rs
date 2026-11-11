@@ -1,5 +1,5 @@
 use hangar_app::languages::{file_uri, language_id, server_language, uri_path};
-use hangar_app::problems::{Row, Shown, rows, totals};
+use hangar_app::problems::{Row, Shown, foldable, rows, totals};
 use lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
 
 #[test]
@@ -51,11 +51,13 @@ fn problems_are_listed_by_file_errors_first() {
     let summary = |r: &[Row]| -> Vec<String> {
         r.iter()
             .map(|row| match row {
+                Row::Severity { rank, count } => format!("{rank}: {count}"),
                 Row::File {
                     abs,
                     errors,
                     warnings,
                     count,
+                    ..
                 } => format!("{abs} {errors}/{warnings}/{count}"),
                 Row::Problem { d, .. } => d.message.clone(),
             })
@@ -78,7 +80,7 @@ fn problems_are_listed_by_file_errors_first() {
             "at 2",
         ]
     );
-    assert_eq!(totals(&r), (2, 1, 2));
+    assert_eq!(totals(&files, &shown), (2, 1, 2));
 
     // A folded file is its row alone.
     shown.folded.insert("/w/b.rs".into());
@@ -99,6 +101,77 @@ fn problems_are_listed_by_file_errors_first() {
     shown.hints = true;
     shown.only = Some("/w/a.rs".into());
     assert_eq!(summary(&rows(&files, &shown)), ["/w/a.rs 0/0/1", "at 2"]);
+
+    // Sorted by name, whatever is worst.
+    shown.only = None;
+    shown.by_name = true;
+    assert_eq!(
+        summary(&rows(&files, &shown)),
+        [
+            "/w/a.rs 0/0/1",
+            "at 2",
+            "/w/b.rs 2/1/3",
+            "at 1",
+            "at 4",
+            "at 9"
+        ]
+    );
+
+    // Grouped by severity: each severity heads its files, each file its
+    // problems of that severity.
+    shown.by_name = false;
+    shown.by_severity = true;
+    let r = rows(&files, &shown);
+    assert_eq!(
+        summary(&r),
+        [
+            "0: 2",
+            "/w/b.rs 2/0/2",
+            "at 1",
+            "at 4",
+            "1: 1",
+            "/w/b.rs 0/1/1",
+            "at 9",
+            "3: 1",
+            "/w/a.rs 0/0/1",
+            "at 2",
+        ]
+    );
+    assert_eq!(totals(&files, &shown), (2, 1, 2));
+
+    // A file folds under one severity alone, and a severity folds whole.
+    shown.folded = r
+        .iter()
+        .filter_map(|row| match row {
+            Row::File { abs, group, .. } if abs == "/w/b.rs" && *group == Some(0) => row.key(),
+            Row::Severity { rank: 3, .. } => row.key(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        summary(&rows(&files, &shown)),
+        [
+            "0: 2",
+            "/w/b.rs 2/0/2",
+            "1: 1",
+            "/w/b.rs 0/1/1",
+            "at 9",
+            "3: 1"
+        ]
+    );
+
+    // Collapse All folds every heading.
+    shown.folded = foldable(&files, &shown);
+    assert_eq!(summary(&rows(&files, &shown)), ["0: 2", "1: 1", "3: 1"]);
+
+    // The Current File tab grouped: its problems straight under each
+    // severity.
+    shown.folded.clear();
+    shown.only = Some("/w/b.rs".into());
+    assert_eq!(
+        summary(&rows(&files, &shown)),
+        ["0: 2", "at 1", "at 4", "1: 1", "at 9"]
+    );
 }
 
 #[test]

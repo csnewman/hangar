@@ -2968,6 +2968,17 @@ impl Render for EnvTab {
                             t.open_file_at(&e.root, &e.path, e.line, e.column, window, cx)
                         },
                     ));
+                    self.subs.push(cx.subscribe_in(
+                        &view,
+                        window,
+                        |t, _, e: &crate::problems::QuickFix, window, cx| {
+                            let e = &e.0;
+                            t.open_file(&e.root, &e.path, window, cx);
+                            if let Some(f) = t.active_file() {
+                                f.update(cx, |f, cx| f.fix_at(e.line, e.column, window, cx));
+                            }
+                        },
+                    ));
                     self.problems = Some(view);
                 }
             }

@@ -1385,7 +1385,7 @@ const SINCE: [(&str, &str); 4] = [
 ];
 
 /// A filter's button, its menu built as it opens.
-fn filter_button(
+pub(crate) fn filter_button(
     id: &'static str,
     label: String,
     menu: impl Fn(
