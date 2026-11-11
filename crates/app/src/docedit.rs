@@ -915,6 +915,56 @@ impl DocEditor {
         (self.props.as_ref(), self.indent)
     }
 
+    /// Reads the .editorconfig files above the file, which say how it is
+    /// indented where they say anything, over what its lines suggest.
+    fn read_editorconfig(&mut self, cx: &mut Context<Self>) {
+        let (code, abs) = (self.code.clone(), self.path.clone());
+        cx.spawn(async move |this, cx| {
+            let mut files = vec![];
+            for dir in crate::editorconfig::folders(&abs) {
+                let at = format!("{}/.editorconfig", dir.trim_end_matches('/'));
+                let parsed = code
+                    .call("fs.read", json!({ "path": at }))
+                    .await
+                    .ok()
+                    .and_then(|v| v["text"].as_str().map(crate::editorconfig::parse));
+                let root = parsed.as_ref().is_some_and(|p| p.root);
+                files.push((dir, parsed));
+                if root {
+                    break;
+                }
+            }
+            let Some(indent) = crate::editorconfig::indent(&abs, &files) else {
+                return;
+            };
+            let _ = this.update(cx, |d, cx| {
+                d.indent = Some(indent);
+                d.use_indent(cx);
+            });
+        })
+        .detach();
+    }
+
+    /// Gives the editor the file's indentation, for Tab and new lines.
+    fn use_indent(&mut self, cx: &mut Context<Self>) {
+        use crate::lineops::Indent;
+        let Some(indent) = self.indent else {
+            return;
+        };
+        let tab = match indent {
+            Indent::Tab => gpui_component::input::TabSize {
+                tab_size: 4,
+                hard_tabs: true,
+            },
+            Indent::Spaces(n) => gpui_component::input::TabSize {
+                tab_size: n,
+                hard_tabs: false,
+            },
+        };
+        self.editor.update(cx, |e, cx| e.set_tab_size(tab, cx));
+        cx.notify();
+    }
+
     /// Reads the file's line separators and encoding from disk.
     fn read_props(&mut self, cx: &mut Context<Self>) {
         let call = self.code.call("fs.textProps", json!({ "path": self.path }));
@@ -1083,6 +1133,8 @@ impl DocEditor {
         self.state = State::Open;
         self.drawn = false;
         self.indent = crate::lineops::detect_indent(&self.shadow.to_string());
+        self.use_indent(cx);
+        self.read_editorconfig(cx);
         self.read_props(cx);
         self.read_base(Duration::ZERO, cx);
         self.show_diagnostics(cx);

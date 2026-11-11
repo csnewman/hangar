@@ -14,6 +14,7 @@ pub mod diff;
 pub mod docedit;
 pub mod docker;
 pub mod doubleshift;
+pub mod editorconfig;
 pub mod envlogs;
 pub mod envtab;
 pub mod filehistory;
