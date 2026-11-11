@@ -220,6 +220,9 @@ func New(cfg Config) (*Server, error) {
 	if gw := cfgAPI.SSH; gw != nil {
 		client.SSH = &clientapi.SSHGateway{Host: gw.Host, Port: gw.Port, HostKey: gw.HostKey}
 	}
+	if envHosts != nil {
+		client.HostSuffix = strings.TrimPrefix(envHosts.PortHost(""), "env")
+	}
 	frontend, err := frontendapi.New(cfgAPI)
 	if err != nil {
 		return nil, err

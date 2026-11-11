@@ -49,7 +49,10 @@ type Config struct {
 	Audit   *audit.Log
 	// SSH is where the SSH gateway is reached. Nil when there is none.
 	SSH *SSHGateway
-	Log *slog.Logger
+	// HostSuffix is what follows env<short> in the hosts environments' own
+	// web servers are reached on. Empty when the server has no public URL.
+	HostSuffix string
+	Log        *slog.Logger
 }
 
 type handler struct {
@@ -60,6 +63,7 @@ type handler struct {
 	tunnels  Tunnels
 	audit    *audit.Log
 	ssh      *SSHGateway
+	suffix   string
 	log      *slog.Logger
 }
 
@@ -76,7 +80,7 @@ type principalKey struct{}
 // their full /api/v1 paths.
 func New(cfg Config) http.Handler {
 	h := &handler{envs: cfg.Environments, users: cfg.Users, profiles: cfg.Profiles, changes: cfg.Changes, ssh: cfg.SSH,
-		tunnels: cfg.Tunnels, audit: cfg.Audit,
+		tunnels: cfg.Tunnels, audit: cfg.Audit, suffix: cfg.HostSuffix,
 		log: cfg.Log}
 	if h.changes == nil {
 		h.changes = environments.NewChanges()
@@ -230,7 +234,11 @@ func (h *handler) GetMe(ctx context.Context, _ GetMeRequestObject) (GetMeRespons
 	if err != nil {
 		return nil, err
 	}
-	return GetMe200JSONResponse{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, Admin: u.Admin, SSH: h.ssh}, nil
+	me := GetMe200JSONResponse{ID: u.ID, Username: u.Username, DisplayName: u.DisplayName, Admin: u.Admin, SSH: h.ssh}
+	if h.suffix != "" {
+		me.EnvironmentHostSuffix = &h.suffix
+	}
+	return me, nil
 }
 
 func (h *handler) ListLoginKeys(ctx context.Context, _ ListLoginKeysRequestObject) (ListLoginKeysResponseObject, error) {
@@ -392,6 +400,12 @@ func environment(e api.Environment) Environment {
 	cpus, mem, display := e.CPUs, e.MemoryMiB, string(e.Spec.Display)
 	out.CPUs, out.MemoryMiB, out.Display = &cpus, &mem, optional(display)
 	out.EditorPath = optional(e.Spec.EditorPath)
+	public := e.PortsPublic
+	out.PortsPublic = &public
+	if len(e.Spec.WebNames) > 0 {
+		names := e.Spec.WebNames
+		out.WebNames = &names
+	}
 	if len(e.Spec.Projects) > 1 {
 		out.WorkspaceFile = optional(api.WorkspaceFile)
 	}

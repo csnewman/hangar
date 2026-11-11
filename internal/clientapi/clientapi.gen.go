@@ -107,6 +107,9 @@ type Environment struct {
 	// Phase What it is doing, as its worker last reported: pending, starting, running, stopping, stopped, suspending, suspended, failed, deleting. More may come; treat one you do not know as busy.
 	Phase string `json:"phase"`
 
+	// PortsPublic Whether anyone may reach its own web servers without signing in to Hangar.
+	PortsPublic *bool `json:"ports_public,omitempty"`
+
 	// Progress How far a start has got: its step -- download, unpack, disks, boot, network, profile, workspace, in that order, more may come -- and, where the step can be measured, done of total in unit (bytes or objects), at rate a second lately.
 	Progress *StartProgress `json:"progress,omitempty"`
 
@@ -122,6 +125,9 @@ type Environment struct {
 
 	// UpdatedAt When its phase last changed.
 	UpdatedAt time.Time `json:"updated_at"`
+
+	// WebNames The names of its own web servers its template lists.
+	WebNames *[]string `json:"web_names,omitempty"`
 
 	// Worker The worker it runs on, once placed.
 	Worker *string `json:"worker,omitempty"`
@@ -171,7 +177,10 @@ type LoginKey struct {
 type Me struct {
 	Admin       bool   `json:"admin"`
 	DisplayName string `json:"display_name"`
-	ID          string `json:"id"`
+
+	// EnvironmentHostSuffix What follows env<short> in the host an environment's own web servers are reached on, such as .hangar.example.com: a name and a hyphen before it reach a server by that name on port 80, a number that port. Absent when the server has no public URL.
+	EnvironmentHostSuffix *string `json:"environment_host_suffix,omitempty"`
+	ID                    string  `json:"id"`
 
 	// SSH Where the SSH gateway is: ssh <environment>@<host> -p <port>, or <owner>/<environment> for someone else's. Absent when the server runs none.
 	SSH      *SSHGateway `json:"ssh,omitempty"`
@@ -260,6 +269,14 @@ type GetEnvironmentLogParams struct {
 	Offset *int64 `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// SetEnvironmentPortsJSONBody defines parameters for SetEnvironmentPorts.
+type SetEnvironmentPortsJSONBody struct {
+	Public bool `json:"public"`
+}
+
+// SetEnvironmentPortsJSONRequestBody defines body for SetEnvironmentPorts for application/json ContentType.
+type SetEnvironmentPortsJSONRequestBody SetEnvironmentPortsJSONBody
+
 // SetTaskJSONRequestBody defines body for SetTask for application/json ContentType.
 type SetTaskJSONRequestBody = SetTask
 
@@ -283,6 +300,9 @@ type ServerInterface interface {
 	// GetEnvironmentLog Part of one of the environment's logs, from its worker
 	// (GET /environments/{id}/logs/{log})
 	GetEnvironmentLog(w http.ResponseWriter, r *http.Request, id ID, log EnvironmentLogName, params GetEnvironmentLogParams)
+	// SetEnvironmentPorts Say who may reach the environment's own web servers
+	// (PUT /environments/{id}/ports)
+	SetEnvironmentPorts(w http.ResponseWriter, r *http.Request, id ID)
 	// ResetEnvironment Give a stopped environment its template's current settings
 	// (POST /environments/{id}/reset)
 	ResetEnvironment(w http.ResponseWriter, r *http.Request, id ID)
@@ -479,6 +499,32 @@ func (siw *ServerInterfaceWrapper) GetEnvironmentLog(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetEnvironmentLog(w, r, id, log, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetEnvironmentPorts operation middleware
+func (siw *ServerInterfaceWrapper) SetEnvironmentPorts(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetEnvironmentPorts(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -932,6 +978,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/start", wrapper.StartEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/stop", wrapper.StopEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/suspend", wrapper.SuspendEnvironment)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/environments/{id}/ports", wrapper.SetEnvironmentPorts)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/environments/{id}/task", wrapper.EndTask)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/environments/{id}/task", wrapper.SetTask)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}/tasks", wrapper.ListTasks)
@@ -1220,6 +1267,57 @@ func (response GetEnvironmentLog503JSONResponse) VisitGetEnvironmentLogResponse(
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetEnvironmentPortsRequestObject struct {
+	ID   ID `json:"id"`
+	Body *SetEnvironmentPortsJSONRequestBody
+}
+
+type SetEnvironmentPortsResponseObject interface {
+	VisitSetEnvironmentPortsResponse(w http.ResponseWriter) error
+}
+
+type SetEnvironmentPorts200JSONResponse struct{ EnvironmentJSONResponse }
+
+func (response SetEnvironmentPorts200JSONResponse) VisitSetEnvironmentPortsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetEnvironmentPorts401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response SetEnvironmentPorts401JSONResponse) VisitSetEnvironmentPortsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetEnvironmentPorts404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetEnvironmentPorts404JSONResponse) VisitSetEnvironmentPortsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2026,6 +2124,9 @@ type StrictServerInterface interface {
 	// GetEnvironmentLog Part of one of the environment's logs, from its worker
 	// (GET /environments/{id}/logs/{log})
 	GetEnvironmentLog(ctx context.Context, request GetEnvironmentLogRequestObject) (GetEnvironmentLogResponseObject, error)
+	// SetEnvironmentPorts Say who may reach the environment's own web servers
+	// (PUT /environments/{id}/ports)
+	SetEnvironmentPorts(ctx context.Context, request SetEnvironmentPortsRequestObject) (SetEnvironmentPortsResponseObject, error)
 	// ResetEnvironment Give a stopped environment its template's current settings
 	// (POST /environments/{id}/reset)
 	ResetEnvironment(ctx context.Context, request ResetEnvironmentRequestObject) (ResetEnvironmentResponseObject, error)
@@ -2233,6 +2334,39 @@ func (sh *strictHandler) GetEnvironmentLog(w http.ResponseWriter, r *http.Reques
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetEnvironmentLogResponseObject); ok {
 		if err := validResponse.VisitGetEnvironmentLogResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetEnvironmentPorts operation middleware
+func (sh *strictHandler) SetEnvironmentPorts(w http.ResponseWriter, r *http.Request, id ID) {
+	var request SetEnvironmentPortsRequestObject
+
+	request.ID = id
+
+	var body SetEnvironmentPortsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetEnvironmentPorts(ctx, request.(SetEnvironmentPortsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetEnvironmentPorts")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetEnvironmentPortsResponseObject); ok {
+		if err := validResponse.VisitSetEnvironmentPortsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

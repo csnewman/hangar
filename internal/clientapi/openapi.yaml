@@ -211,6 +211,31 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
 
+  /environments/{id}/ports:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: setEnvironmentPorts
+      summary: Say who may reach the environment's own web servers
+      description: >-
+        Public: anyone, without signing in to Hangar, on its
+        <anything>-env<short> hosts. Private: only those who may reach the
+        environment. A port reached by its number is always private.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [public]
+              additionalProperties: false
+              properties:
+                public: { type: boolean }
+      responses:
+        "200": { $ref: "#/components/responses/Environment" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /environments/{id}/task:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -448,6 +473,13 @@ components:
         display_name: { type: string }
         admin: { type: boolean }
         ssh: { $ref: "#/components/schemas/SSHGateway" }
+        environment_host_suffix:
+          type: string
+          description: >-
+            What follows env<short> in the host an environment's own web
+            servers are reached on, such as .hangar.example.com: a name and a
+            hyphen before it reach a server by that name on port 80, a number
+            that port. Absent when the server has no public URL.
 
     SSHGateway:
       type: object
@@ -540,6 +572,15 @@ components:
           description: Its display -- none or desktop. More may come.
         cpus: { type: integer }
         memory_mib: { type: integer }
+        ports_public:
+          type: boolean
+          description: >-
+            Whether anyone may reach its own web servers without signing in
+            to Hangar.
+        web_names:
+          type: array
+          description: The names of its own web servers its template lists.
+          items: { type: string }
         task: { $ref: "#/components/schemas/Task" }
         agents:
           type: array

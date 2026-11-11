@@ -60,6 +60,7 @@ func TestClientAPI(t *testing.T) {
 		Users:        um,
 		Profiles:     profiles,
 		SSH:          &clientapi.SSHGateway{Host: "hangar.example.com", Port: 2222, HostKey: "ssh-ed25519 AAAA"},
+		HostSuffix:   ".hangar.example.com",
 		Log:          slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}))
 	t.Cleanup(srv.Close)
@@ -97,7 +98,8 @@ func TestClientAPI(t *testing.T) {
 		status, body := f.call("GET", "/api/v1/me", "", auth)
 		me, _ := body.(map[string]any)
 		ssh, _ := me["ssh"].(map[string]any)
-		if status != 200 || me["username"] != "alice" || ssh["port"] != 2222.0 {
+		if status != 200 || me["username"] != "alice" || ssh["port"] != 2222.0 ||
+			me["environment_host_suffix"] != ".hangar.example.com" {
 			t.Fatalf("me by %q: %d %v", auth[:12], status, body)
 		}
 	}
@@ -118,8 +120,22 @@ func TestClientAPI(t *testing.T) {
 		list[0].(map[string]any)["short_id"] != env.ShortID {
 		t.Fatalf("environments: %d %v", status, body)
 	}
-	if status, _ := f.call("GET", "/api/v1/environments/"+env.ID, "", bearer); status != 200 {
-		t.Fatalf("an environment: %d", status)
+	status, body = f.call("GET", "/api/v1/environments/"+env.ID, "", bearer)
+	if e, _ := body.(map[string]any); status != 200 || e["ports_public"] != false {
+		t.Fatalf("an environment: %d %v", status, body)
+	}
+
+	// Its web servers made public, and private again.
+	status, body = f.call("PUT", "/api/v1/environments/"+env.ID+"/ports", `{"public":true}`, bearer)
+	if e, _ := body.(map[string]any); status != 200 || e["ports_public"] != true {
+		t.Fatalf("public: %d %v", status, body)
+	}
+	status, body = f.call("PUT", "/api/v1/environments/"+env.ID+"/ports", `{"public":false}`, bearer)
+	if e, _ := body.(map[string]any); status != 200 || e["ports_public"] != false {
+		t.Fatalf("private: %d %v", status, body)
+	}
+	if status, _ := f.call("PUT", "/api/v1/environments/00000000-0000-4000-8000-00000000abcd/ports", `{"public":true}`, bearer); status != 404 {
+		t.Fatalf("a missing environment's ports: %d", status)
 	}
 	if status, _ := f.call("GET", "/api/v1/environments/00000000-0000-4000-8000-00000000abcd", "", bearer); status != 404 {
 		t.Fatalf("a missing environment: %d", status)
