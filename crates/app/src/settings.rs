@@ -16,6 +16,10 @@ pub struct Values {
     pub select_opened: bool,
     /// Whether long lines wrap at the editor's edge.
     pub soft_wrap: bool,
+    /// Whether the Project and Filesystem windows show files whose names
+    /// start with a dot, and those git ignores.
+    pub show_hidden: bool,
+    pub show_ignored: bool,
 }
 
 impl Default for Values {
@@ -24,6 +28,8 @@ impl Default for Values {
             double_shift: true,
             select_opened: true,
             soft_wrap: true,
+            show_hidden: true,
+            show_ignored: true,
         }
     }
 }

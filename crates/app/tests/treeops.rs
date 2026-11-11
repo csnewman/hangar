@@ -45,6 +45,11 @@ fn service(asked: mpsc::Sender<(String, Value)>) -> String {
                             }
                             Value::Array(entries)
                         }
+                        "fs.list" if params["path"] == "src" => json!([
+                            { "name": ".env", "dir": false, "size": 3 },
+                            { "name": "target", "dir": true, "size": 0, "ignored": true },
+                            { "name": "lib.rs", "dir": false, "size": 3 },
+                        ]),
                         "fs.list" => json!([]),
                         "git.status" => json!({ "changes": [] }),
                         "fs.create"
@@ -648,4 +653,52 @@ fn the_file_shown_is_selected_in_the_tree(cx: &mut TestAppContext) {
         "note090.md",
         "turned off, the tree is left be"
     );
+}
+
+#[gpui::test]
+fn hidden_and_ignored_files_are_shown_as_asked(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    let (asked_tx, _asked) = mpsc::channel();
+    let url = service(asked_tx);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| p.add_server(&url, "hgr_t", cx).unwrap());
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let ws = cx.new(|cx| Workspace::new(places.clone(), &id, "e1", "/home/dev", cx));
+        let view = cx.new(|cx| ProjectView::new(ws, cx));
+        Root::new(view, window, cx)
+    });
+    until(cx, "the project's files", |cx| {
+        cx.debug_bounds("tree-row-src").is_some()
+    });
+    let src = cx.debug_bounds("tree-row-src").unwrap().center();
+    cx.simulate_click(src, Modifiers::none());
+    until(cx, "src's files", |cx| {
+        cx.debug_bounds("tree-row-src/lib.rs").is_some()
+    });
+    assert!(
+        cx.debug_bounds("tree-row-src/.env").is_some(),
+        "shown at first"
+    );
+    assert!(cx.debug_bounds("tree-row-src/target").is_some());
+
+    cx.update(|_, cx| hangar_app::settings::Settings::update(cx, |s| s.show_hidden = false));
+    until(cx, "the hidden file gone", |cx| {
+        cx.debug_bounds("tree-row-src/.env").is_none()
+    });
+    assert!(
+        cx.debug_bounds("tree-row-src/target").is_some(),
+        "ignored still shown"
+    );
+
+    cx.update(|_, cx| {
+        hangar_app::settings::Settings::update(cx, |s| {
+            s.show_hidden = true;
+            s.show_ignored = false;
+        })
+    });
+    until(cx, "the ignored folder gone", |cx| {
+        cx.debug_bounds("tree-row-src/target").is_none()
+            && cx.debug_bounds("tree-row-src/.env").is_some()
+    });
 }

@@ -2770,7 +2770,12 @@ impl EnvTab {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let trees = matches!(t, Tool::Project | Tool::Filesystem);
-        let always = crate::settings::Settings::get(cx).select_opened;
+        let settings = crate::settings::Settings::get(cx);
+        let (always, hidden, ignored) = (
+            settings.select_opened,
+            settings.show_hidden,
+            settings.show_ignored,
+        );
         let hover = p.surface_2;
         let head = h_flex()
             .h(px(20.))
@@ -2829,6 +2834,25 @@ impl EnvTab {
                                     .on_click(|_, _, cx| {
                                         crate::settings::Settings::update(cx, |s| {
                                             s.select_opened = !s.select_opened
+                                        })
+                                    }),
+                            )
+                            .separator()
+                            .item(
+                                PopupMenuItem::new("Show Hidden Files")
+                                    .checked(hidden)
+                                    .on_click(|_, _, cx| {
+                                        crate::settings::Settings::update(cx, |s| {
+                                            s.show_hidden = !s.show_hidden
+                                        })
+                                    }),
+                            )
+                            .item(
+                                PopupMenuItem::new("Show Ignored Files")
+                                    .checked(ignored)
+                                    .on_click(|_, _, cx| {
+                                        crate::settings::Settings::update(cx, |s| {
+                                            s.show_ignored = !s.show_ignored
                                         })
                                     }),
                             )

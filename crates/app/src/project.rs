@@ -192,6 +192,7 @@ pub struct ProjectView {
     reveal: Rc<Cell<bool>>,
     /// What Cut or Copy took, to paste.
     taken: Option<Taken>,
+    shown: Shown,
     focus: FocusHandle,
     _sub: gpui::Subscription,
 }
@@ -215,6 +216,7 @@ impl ProjectView {
             scroll: gpui::ScrollHandle::new(),
             reveal: Rc::new(Cell::new(false)),
             taken: None,
+            shown: Shown::of(cx),
             focus: cx.focus_handle(),
             _sub: sub,
         };
@@ -434,14 +436,22 @@ impl ProjectView {
                     });
                     if proj.open {
                         let mut rs = vec![];
-                        rows(&proj.tree, Some(i), &proj.git, "", 1, &mut rs);
+                        rows(&proj.tree, Some(i), &proj.git, "", 1, self.shown, &mut rs);
                         out.extend(rs.into_iter().map(|r| row(r, Some(proj.root.clone()))));
                     }
                 }
             }
             Scope::Filesystem => {
                 let mut rs = vec![];
-                rows(&self.machine, None, &HashMap::new(), "/", 0, &mut rs);
+                rows(
+                    &self.machine,
+                    None,
+                    &HashMap::new(),
+                    "/",
+                    0,
+                    self.shown,
+                    &mut rs,
+                );
                 out.extend(rs.into_iter().map(|r| row(r, None)));
             }
         }
@@ -718,18 +728,40 @@ struct Row {
     path: String,
 }
 
+/// Which files the tree shows, as the window's options say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Shown {
+    hidden: bool,
+    ignored: bool,
+}
+
+impl Shown {
+    fn of(cx: &gpui::App) -> Shown {
+        let s = crate::settings::Settings::get(cx);
+        Shown {
+            hidden: s.show_hidden,
+            ignored: s.show_ignored,
+        }
+    }
+
+    fn shows(self, e: &Entry) -> bool {
+        (self.hidden || !e.name.starts_with('.')) && (self.ignored || !e.ignored)
+    }
+}
+
 fn rows(
     tree: &Tree,
     project: Option<usize>,
     git: &HashMap<String, char>,
     at: &str,
     depth: usize,
+    shown: Shown,
     out: &mut Vec<Row>,
 ) {
     let Some(entries) = tree.children.get(at) else {
         return;
     };
-    for e in entries {
+    for e in entries.iter().filter(|e| shown.shows(e)) {
         let path = match (project, at) {
             (Some(_), "") => e.name.clone(),
             (None, "/") => format!("/{}", e.name),
@@ -747,7 +779,7 @@ fn rows(
             path: path.clone(),
         });
         if open {
-            rows(tree, project, git, &path, depth + 1, out);
+            rows(tree, project, git, &path, depth + 1, shown, out);
         }
     }
 }
@@ -755,6 +787,7 @@ fn rows(
 impl Render for ProjectView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
+        self.shown = Shown::of(cx);
         let scope = self.scope;
         let mut list = v_flex();
         // How many rows are in the list so far, and where the selected one
@@ -859,7 +892,7 @@ impl Render for ProjectView {
                     );
                     if proj.open {
                         let mut out = Vec::new();
-                        rows(&proj.tree, Some(i), &proj.git, "", 1, &mut out);
+                        rows(&proj.tree, Some(i), &proj.git, "", 1, self.shown, &mut out);
                         if let Some(e) = proj.tree.errors.get("") {
                             n += 1;
                             list = list.child(muted(e.clone(), &p));
@@ -876,7 +909,15 @@ impl Render for ProjectView {
             }
             (State::Ready, Scope::Filesystem) => {
                 let mut out = Vec::new();
-                rows(&self.machine, None, &HashMap::new(), "/", 0, &mut out);
+                rows(
+                    &self.machine,
+                    None,
+                    &HashMap::new(),
+                    "/",
+                    0,
+                    self.shown,
+                    &mut out,
+                );
                 if out.is_empty() {
                     list = list.child(muted(
                         self.machine
