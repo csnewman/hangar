@@ -516,3 +516,90 @@ fn a_command_is_typed_once_a_new_session_starts(cx: &mut TestAppContext) {
     };
     assert_eq!(got, b"docker exec -it web sh\r");
 }
+
+/// Once the shell exits the terminal says the session has ended and offers
+/// another, as the web terminal does; Enter starts it, a new session.
+#[gpui::test]
+fn another_session_starts_once_the_shell_exits(cx: &mut TestAppContext) {
+    use tungstenite::Message;
+    let ln = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", ln.local_addr().unwrap());
+    let (paths_tx, paths) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for (n, tcp) in ln.incoming().enumerate() {
+            let paths_tx = paths_tx.clone();
+            std::thread::spawn(move || {
+                let mut path = String::new();
+                let mut ws = tungstenite::accept_hdr(
+                    tcp.unwrap(),
+                    |req: &tungstenite::handshake::server::Request, resp| {
+                        path = req.uri().to_string();
+                        Ok(resp)
+                    },
+                )
+                .unwrap();
+                paths_tx.send(path).unwrap();
+                let id = format!("s{}", n + 1);
+                ws.send(Message::text(format!(
+                    r#"{{"session":{{"id":"{id}","title":"zsh","created":"2026-11-07T10:00:00Z","clients":1,"cols":80,"rows":24}},"history":0}}"#
+                )))
+                .unwrap();
+                ws.send(Message::binary(b"o$ ".to_vec())).unwrap();
+                // The first shell exits at once.
+                if n == 0 {
+                    ws.send(Message::binary(vec![b'x', 0, 0, 0, 0])).unwrap();
+                }
+                while ws.read().is_ok() {}
+            });
+        }
+    });
+    let (term, cx) = attached_any(cx, &url);
+    let wait = std::time::Duration::from_secs(10);
+    assert!(!paths.recv_timeout(wait).unwrap().contains("session="));
+    let start = std::time::Instant::now();
+    while !matches!(
+        term.read_with(cx, |t, _| t.state().clone()),
+        hangar_app::termview::State::Exited(_)
+    ) {
+        assert!(start.elapsed() < wait, "the shell exits");
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    cx.update(|window, _| window.refresh());
+    cx.run_until_parked();
+    assert!(
+        cx.debug_bounds("start-another").is_some(),
+        "another offered"
+    );
+    cx.simulate_keystrokes("enter");
+    let second = paths.recv_timeout(wait).unwrap();
+    assert!(!second.contains("session="), "a new session: {second}");
+    let start = std::time::Instant::now();
+    while term.read_with(cx, |t, _| t.session().map(str::to_string)) != Some("s2".into()) {
+        assert!(start.elapsed() < wait, "attached to it");
+        cx.run_until_parked();
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// A terminal in a window on a server at url, focused, in whatever state
+/// it reaches.
+fn attached_any<'a>(
+    cx: &'a mut TestAppContext,
+    url: &str,
+) -> (Entity<TerminalView>, &'a mut VisualTestContext) {
+    cx.executor().allow_parking();
+    cx.update(gpui_component::init);
+    cx.update(hangar_app::termview::bind_keys);
+    let client = Client::new(url, "hgr_t");
+    let mut term = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let t = cx.new(|cx| TerminalView::new(&client, "env1", None, cx));
+        term = Some(t.clone());
+        Root::new(t, window, cx)
+    });
+    let term = term.unwrap();
+    cx.simulate_resize(gpui::size(gpui::px(800.), gpui::px(400.)));
+    cx.update(|window, cx| window.focus(&term.focus_handle(cx), cx));
+    (term, cx)
+}

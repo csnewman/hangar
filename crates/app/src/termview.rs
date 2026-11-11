@@ -140,6 +140,11 @@ pub struct TerminalView {
     missing: bool,
     /// A command typed into a new session once it starts.
     run: Option<String>,
+    /// Where sessions come from, and the folder a new one starts in, for
+    /// starting another once the shell exits.
+    client: Client,
+    env: String,
+    dir: Option<String>,
     _find: Option<Subscription>,
 }
 
@@ -197,32 +202,11 @@ impl TerminalView {
         let colours = (rgb(p.term_fg), rgb(p.term_tab));
         let mut screen = Screen::with_listener(cols as usize, rows as usize, replies.clone());
         screen.set_default_colours(colours.0, colours.1);
-        let (tx, rx) = async_channel::unbounded();
-        let conn = termconn::attach_in(client, env, session, dir, cols, rows, move |e| {
-            tx.send_blocking(e).is_ok()
-        });
-        cx.spawn(async move |this: WeakEntity<Self>, cx| {
-            while let Ok(first) = rx.recv().await {
-                let alive = this.update(cx, |t, cx| {
-                    let start = Instant::now();
-                    t.take(first);
-                    while start.elapsed() < FEED_BUDGET {
-                        let Ok(more) = rx.try_recv() else { break };
-                        t.take(more);
-                    }
-                    cx.notify();
-                });
-                if alive.is_err() {
-                    return;
-                }
-            }
-        })
-        .detach();
-        TerminalView {
+        let mut view = TerminalView {
             screen,
             replies,
             colours,
-            conn: Some(conn),
+            conn: None,
             focus: cx.focus_handle(),
             state: State::Connecting,
             session: session.map(str::to_string),
@@ -241,8 +225,65 @@ impl TerminalView {
             find: None,
             missing: false,
             run: None,
+            client: client.clone(),
+            env: env.to_string(),
+            dir: dir.map(str::to_string),
             _find: None,
+        };
+        view.connect(session, cx);
+        view
+    }
+
+    /// Attaches to a session, or starts one in the view's folder, reading
+    /// what it sends.
+    fn connect(&mut self, session: Option<&str>, cx: &mut Context<Self>) {
+        let (tx, rx) = async_channel::unbounded();
+        let conn = termconn::attach_in(
+            &self.client,
+            &self.env,
+            session,
+            self.dir.as_deref(),
+            self.cols,
+            self.rows,
+            move |e| tx.send_blocking(e).is_ok(),
+        );
+        cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            while let Ok(first) = rx.recv().await {
+                let alive = this.update(cx, |t, cx| {
+                    let start = Instant::now();
+                    t.take(first);
+                    while start.elapsed() < FEED_BUDGET {
+                        let Ok(more) = rx.try_recv() else { break };
+                        t.take(more);
+                    }
+                    cx.notify();
+                });
+                if alive.is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
+        self.conn = Some(conn);
+    }
+
+    /// Starts another session in the view once its shell has exited, as
+    /// the web terminal's Start another does: a clean screen, a new shell.
+    pub fn start_another(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.state, State::Exited(_) | State::Failed(_)) {
+            return;
         }
+        let mut screen =
+            Screen::with_listener(self.cols as usize, self.rows as usize, self.replies.clone());
+        screen.set_default_colours(self.colours.0, self.colours.1);
+        self.screen = screen;
+        self.state = State::Connecting;
+        self.session = None;
+        self.title.clear();
+        self.history = 0;
+        self.sizing = None;
+        self.connect(None, cx);
+        cx.notify();
     }
 
     /// Types a command into the new session once it has started, as
@@ -416,6 +457,10 @@ impl TerminalView {
 
     fn key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
         let k = &e.keystroke;
+        if k.key == "enter" && matches!(self.state, State::Exited(_)) {
+            self.start_another(cx);
+            return;
+        }
         if k.modifiers.platform {
             return;
         }
@@ -925,12 +970,13 @@ impl Render for TerminalView {
         let me = cx.entity().downgrade();
         let notice = match &self.state {
             State::Connecting => Some("Connecting…".to_string()),
-            State::Exited(code) => Some(format!("The shell exited ({code}).")),
+            State::Exited(code) => Some(format!("The session has ended ({code}).")),
             State::Failed(e) => Some(format!("Could not connect: {e}")),
             State::Reconnecting(why) => Some(format!("Reconnecting: {why}")),
             State::Live => None,
         };
         let reconnecting = matches!(self.state, State::Reconnecting(_));
+        let ended = matches!(self.state, State::Exited(_));
         div()
             .id("terminal")
             .debug_selector(|| "terminal".into())
@@ -1065,13 +1111,24 @@ impl Render for TerminalView {
             .when_some(self.size_bar(&p, cx), |d, bar| d.child(bar))
             .when_some(notice, |d, n| {
                 d.child(
-                    div()
+                    gpui_component::h_flex()
                         .absolute()
                         .bottom(px(6.))
                         .right(px(10.))
+                        .gap(px(8.))
                         .text_size(px(11.))
                         .text_color(if reconnecting { p.busy } else { p.idle })
-                        .child(n),
+                        .child(n)
+                        .when(ended, |d| {
+                            d.child(
+                                crate::ui::button("start-another", "Start another", &p)
+                                    .debug_selector(|| "start-another".into())
+                                    .on_click(cx.listener(|t, _, window, cx| {
+                                        window.focus(&t.focus, cx);
+                                        t.start_another(cx)
+                                    })),
+                            )
+                        }),
                 )
             })
     }

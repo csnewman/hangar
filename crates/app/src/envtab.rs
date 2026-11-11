@@ -257,6 +257,11 @@ fn terminal_tab_menu(
         PopupMenuItem::new("End Session…")
             .on_click(on(|t, i, window, cx| t.end_terminal(i, window, cx))),
     )
+    .separator()
+    .item(
+        PopupMenuItem::new("Move to Editor")
+            .on_click(on(|t, i, window, cx| t.terminal_to_editor(i, window, cx))),
+    )
 }
 
 fn shortcut(t: Tool) -> Option<String> {
@@ -416,6 +421,8 @@ impl EditorGroup {
 enum Tab {
     Doc(Entity<DocEditor>),
     Diff(Entity<DiffView>),
+    /// A terminal session moved into the editor area.
+    Term(Entity<TerminalView>),
 }
 
 impl Tab {
@@ -424,6 +431,7 @@ impl Tab {
         match self {
             Tab::Doc(d) => d.read(cx).path().to_string(),
             Tab::Diff(d) => d.read(cx).spec().abs(),
+            Tab::Term(_) => String::new(),
         }
     }
 
@@ -434,6 +442,24 @@ impl Tab {
                 path.rsplit('/').next().unwrap_or(path).to_string()
             }
             Tab::Diff(d) => d.read(cx).title(),
+            Tab::Term(t) => {
+                let title = t.read(cx).title();
+                if title.is_empty() {
+                    "Terminal".into()
+                } else {
+                    title.to_string()
+                }
+            }
+        }
+    }
+
+    /// Whether this shows what another tab at path does: the same file, or
+    /// the same file's diff, or the very same terminal.
+    fn twin_of(&self, other: &Tab, path: &str, cx: &App) -> bool {
+        match (self, other) {
+            (Tab::Term(a), Tab::Term(b)) => a == b,
+            (Tab::Term(_), _) | (_, Tab::Term(_)) => false,
+            (a, b) => a.path(cx) == path && matches!(a, Tab::Doc(_)) == matches!(b, Tab::Doc(_)),
         }
     }
 
@@ -441,6 +467,7 @@ impl Tab {
         match self {
             Tab::Doc(d) => d.focus_handle(cx),
             Tab::Diff(d) => d.focus_handle(cx),
+            Tab::Term(t) => t.focus_handle(cx),
         }
     }
 
@@ -448,6 +475,7 @@ impl Tab {
         match self {
             Tab::Doc(d) => d.clone().into_any_element(),
             Tab::Diff(d) => d.clone().into_any_element(),
+            Tab::Term(t) => t.clone().into_any_element(),
         }
     }
 }
@@ -819,7 +847,7 @@ impl EnvTab {
                 let f = f.read(cx);
                 f.path() == abs || f.asked() == abs
             }
-            Tab::Diff(_) => false,
+            Tab::Diff(_) | Tab::Term(_) => false,
         }) {
             Some(i) => i,
             None => {
@@ -947,6 +975,12 @@ impl EnvTab {
                     let spec = d.read(cx).spec().clone();
                     Tab::Diff(cx.new(|cx| DiffView::new(ws, spec, cx)))
                 }
+                // A session is shown once: it moves.
+                Tab::Term(t) => {
+                    let t = t.clone();
+                    self.take_tab(i);
+                    Tab::Term(t)
+                }
             }
         };
         if self.other.is_none() {
@@ -959,9 +993,11 @@ impl EnvTab {
             // The group it was moved from had nothing else: it goes.
             self.other = None;
         }
-        let at = match self.files.iter().position(|f| {
-            f.path(cx) == path && matches!(f, Tab::Doc(_)) == matches!(tab, Tab::Doc(_))
-        }) {
+        let at = match self
+            .files
+            .iter()
+            .position(|f| f.twin_of(&tab, path.as_str(), cx))
+        {
             Some(at) => {
                 // Shown by a tab there already: this one is let go, unless
                 // it is that very tab.
@@ -987,9 +1023,10 @@ impl EnvTab {
         };
         for tab in other.files {
             let path = tab.path(cx);
-            let twin = self.files.iter().any(|f| {
-                f.path(cx) == path && matches!(f, Tab::Doc(_)) == matches!(tab, Tab::Doc(_))
-            });
+            let twin = self
+                .files
+                .iter()
+                .any(|f| f.twin_of(&tab, path.as_str(), cx));
             if twin {
                 self.drop_tab(tab, cx);
             } else {
@@ -1043,9 +1080,10 @@ impl EnvTab {
             self.use_side(to, cx);
         }
         let path = tab.path(cx);
-        let twin = self.files.iter().position(|f| {
-            f.path(cx) == path && matches!(f, Tab::Doc(_)) == matches!(tab, Tab::Doc(_))
-        });
+        let twin = self
+            .files
+            .iter()
+            .position(|f| f.twin_of(&tab, path.as_str(), cx));
         let shown = match twin {
             Some(t) => {
                 self.drop_tab(tab, cx);
@@ -1477,7 +1515,7 @@ impl EnvTab {
                     let d = d.read(cx);
                     Some((d.path().to_string(), d.text_and_caret(cx).0.to_string()))
                 }
-                Tab::Diff(_) => None,
+                Tab::Diff(_) | Tab::Term(_) => None,
             })
             .collect();
         cx.spawn_in(window, async move |this, cx| {
@@ -1778,12 +1816,21 @@ impl EnvTab {
                 ))
             })
             .separator()
-            .item(copy("Copy Path", abs))
-            .item(copy("Copy Relative Path", rel))
-            .item(on(
-                "Reveal in Project",
-                Rc::new(move |t, _, cx| t.reveal_in_project(&reveal, cx)),
-            ))
+            // A terminal has no path; it can go back to the Terminal window.
+            .map(|m| {
+                if abs.is_empty() {
+                    return m.item(on(
+                        "Move to Terminal",
+                        Rc::new(move |t, window, cx| t.terminal_to_window(i, window, cx)),
+                    ));
+                }
+                m.item(copy("Copy Path", abs))
+                    .item(copy("Copy Relative Path", rel))
+                    .item(on(
+                        "Reveal in Project",
+                        Rc::new(move |t, _, cx| t.reveal_in_project(&reveal, cx)),
+                    ))
+            })
     }
 
     /// The files open, by absolute path, and the one shown.
@@ -2156,6 +2203,83 @@ impl EnvTab {
             a => a,
         };
         cx.notify();
+    }
+
+    /// Moves a session from the Terminal window into the editor area, as
+    /// IntelliJ's Move to Editor does: a tab of its own beside the files.
+    fn terminal_to_editor(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.select_terminal(i, false, window, cx);
+        let Some(view) = self.terms.tabs.get(i).and_then(|t| t.view.clone()) else {
+            return;
+        };
+        self.close_terminal_tab(i, cx);
+        self.files.push(Tab::Term(view.clone()));
+        self.show_file(self.files.len() - 1, window, cx);
+        window.focus(&view.focus_handle(cx), cx);
+    }
+
+    /// Moves a session from the editor area back to the Terminal window,
+    /// shown there.
+    fn terminal_to_window(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Tab::Term(view)) = self.files.get(i).cloned() else {
+            return;
+        };
+        self.close_file(i, cx);
+        self.open
+            .insert(Layout::slot(Tool::Terminal, cx), Tool::Terminal);
+        self.terms.listed = true;
+        self.terms.tabs.push(TermTab {
+            session: view.read(cx).session().map(str::to_string),
+            title: view.read(cx).title().to_string(),
+            view: Some(view),
+        });
+        let at = self.terms.tabs.len() - 1;
+        self.select_terminal(at, true, window, cx);
+    }
+
+    /// The tab in the editor area holding the terminal with the keyboard.
+    fn focused_editor_terminal(&self, window: &Window, cx: &App) -> Option<usize> {
+        self.files.iter().position(|f| match f {
+            Tab::Term(t) => t.focus_handle(cx).contains_focused(window, cx),
+            _ => false,
+        })
+    }
+
+    /// Ends the session of a terminal in the editor area, once asked, and
+    /// closes its tab.
+    fn end_editor_terminal(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Tab::Term(view)) = self.files.get(i).cloned() else {
+            return;
+        };
+        let label = self.files[i].title(cx);
+        let session = view.read(cx).session().map(str::to_string);
+        let me = cx.entity().downgrade();
+        crate::treeops::confirm(
+            &format!("End {label}?"),
+            "The session ends, and what runs in it.",
+            "End Session",
+            window,
+            cx,
+            move |_, cx| {
+                let session = session.clone();
+                let view = view.clone();
+                let _ = me.update(cx, |t, cx| {
+                    let at = t
+                        .files
+                        .iter()
+                        .position(|f| matches!(f, Tab::Term(v) if v == &view));
+                    if let Some(at) = at {
+                        t.close_file(at, cx);
+                    }
+                    let (Some(session), Some(client)) = (session, t.client(cx)) else {
+                        return;
+                    };
+                    let env = t.env.clone();
+                    cx.background_spawn(async move { client.close_terminal(&env, &session) })
+                        .detach();
+                });
+            },
+        );
     }
 
     /// Closes the tab shown, as Close Tab in its terminal does, and gives
@@ -3576,6 +3700,18 @@ impl EnvTab {
             .relative()
             .flex_1()
             .min_h_0()
+            // A terminal moved here: its Close Tab and End Session are this
+            // tab's.
+            .on_action(cx.listener(|t, _: &termview::CloseSession, window, cx| {
+                if let Some(i) = t.focused_editor_terminal(window, cx) {
+                    t.close_file(i, cx);
+                }
+            }))
+            .on_action(cx.listener(|t, _: &termview::EndSession, window, cx| {
+                if let Some(i) = t.focused_editor_terminal(window, cx) {
+                    t.end_editor_terminal(i, window, cx);
+                }
+            }))
             .child(active.element())
             // While a tab is dragged: on the other group's editor it moves
             // there; with one group, on the right half it splits right.

@@ -201,3 +201,67 @@ fn a_session_is_ended_once_asked_and_a_tab_closed_leaves_it(cx: &mut TestAppCont
     std::thread::sleep(Duration::from_millis(200));
     assert!(ended.try_recv().is_err(), "the session is left running");
 }
+
+/// Move to Editor puts a session in the editor area, out of the Terminal
+/// window; there Close Tab's key closes its tab and leaves it running.
+#[gpui::test]
+fn a_session_moves_to_the_editor_area(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(|cx| {
+        gpui_component::init(cx);
+        hangar_app::envtab::bind_keys(cx);
+        hangar_app::termview::bind_keys(cx);
+    });
+    let (url, ended) = server();
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let id = places.update(cx, |p, cx| {
+        let id = p.add_server(&url, "hgr_t", cx).unwrap();
+        p.apply(&id, Update::Snapshot(vec![running()]), cx);
+        id
+    });
+    let mut shell = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let s = cx.new(|cx| Shell::new(places.clone(), window, cx));
+        shell = Some(s.clone());
+        gpui_component::Root::new(s, window, cx)
+    });
+    let shell = shell.unwrap();
+    cx.simulate_resize(gpui::size(gpui::px(1200.), gpui::px(800.)));
+    cx.update(|window, cx| shell.update(cx, |s, cx| s.open(&id, "e1", window, cx)));
+    let tab = shell.read_with(cx, |s, _| s.active_view()).unwrap();
+    tab.update(cx, |t, cx| {
+        if !t.is_open(Tool::Terminal) {
+            t.toggle(Tool::Terminal, cx)
+        }
+    });
+    until(cx, "both sessions' tabs", |cx| {
+        cx.debug_bounds("term-tab-1").is_some()
+    });
+    // The first tab's menu: New Session, Close Tab, Close Other Tabs, End
+    // Session, Move to Editor.
+    let first = cx.debug_bounds("term-tab-0").unwrap().center();
+    cx.simulate_mouse_down(first, MouseButton::Right, Modifiers::none());
+    cx.simulate_mouse_up(first, MouseButton::Right, Modifiers::none());
+    cx.run_until_parked();
+    cx.simulate_keystrokes("down down down down down enter");
+    until(cx, "one tab left in the Terminal window", |cx| {
+        cx.debug_bounds("term-tab-1").is_none()
+    });
+    let open = |cx: &mut VisualTestContext| tab.read_with(cx, |t, cx| t.open_files(cx));
+    assert_eq!(
+        open(cx),
+        (vec![String::new()], Some(0)),
+        "a tab in the editor area"
+    );
+
+    let close = if cfg!(target_os = "macos") {
+        "cmd-w"
+    } else {
+        "ctrl-shift-w"
+    };
+    cx.simulate_keystrokes(close);
+    until(cx, "its tab closes", |cx| open(cx).0.is_empty());
+    assert!(cx.debug_bounds("term-tab-0").is_some(), "the other stays");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(ended.try_recv().is_err(), "the session is left running");
+}
