@@ -3,11 +3,14 @@
 //! and Window. Each item shows the key it is bound to.
 
 use gpui::{App, KeyBinding, Menu, MenuItem, OsAction, actions};
-use gpui_component::input::{Copy, Cut, Paste, Redo, Replace, Search, SelectAll, Undo};
+use gpui_component::input::{
+    Copy, Cut, GoToDefinition, Paste, Redo, Replace, Search, SelectAll, ShowCompletions, Undo,
+};
 
 use crate::docedit::{
-    CommentLine, DeleteLine, DuplicateLine, JoinLines, MoveLineDown, MoveLineUp, Reformat,
-    ToggleSoftWrap,
+    CommentLine, ContextActions, DeleteLine, DuplicateLine, JoinLines, MoveLineDown, MoveLineUp,
+    ParameterInfo, Reformat, SelectAllOccurrences, SelectNextOccurrence, ToggleSoftWrap,
+    UnselectOccurrence,
 };
 use crate::envtab::{
     CloseTab, FindInFiles, FindUsages, GoToLine, HideAllToolWindows, RenameSymbol, ReopenClosedTab,
@@ -63,6 +66,10 @@ pub fn init(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Find…", Search),
             MenuItem::action("Replace…", Replace),
+            MenuItem::separator(),
+            MenuItem::action("Add Selection for Next Occurrence", SelectNextOccurrence),
+            MenuItem::action("Unselect Occurrence", UnselectOccurrence),
+            MenuItem::action("Select All Occurrences", SelectAllOccurrences),
         ]),
         Menu::new("Go").items([
             MenuItem::action("Search Everywhere…", SearchEverywhere),
@@ -70,9 +77,13 @@ pub fn init(cx: &mut App) {
             MenuItem::action("Line…", GoToLine),
             MenuItem::action("Find in Files…", FindInFiles),
             MenuItem::action("Replace in Files…", ReplaceInFiles),
+            MenuItem::action("Definition", GoToDefinition),
             MenuItem::action("Find Usages", FindUsages),
         ]),
         Menu::new("Code").items([
+            MenuItem::action("Code Completion", ShowCompletions),
+            MenuItem::action("Show Context Actions", ContextActions),
+            MenuItem::separator(),
             MenuItem::action("Reformat Code", Reformat),
             MenuItem::separator(),
             MenuItem::action("Comment with Line Comment", CommentLine),
@@ -96,6 +107,7 @@ pub fn init(cx: &mut App) {
             MenuItem::separator(),
             MenuItem::action("Hide All Tool Windows", HideAllToolWindows),
             MenuItem::separator(),
+            MenuItem::action("Parameter Info", ParameterInfo),
             MenuItem::action("Soft-Wrap", ToggleSoftWrap),
         ]),
         Menu::new("Window").items([

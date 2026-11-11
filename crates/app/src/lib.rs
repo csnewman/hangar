@@ -28,6 +28,7 @@ pub mod lspops;
 pub mod menus;
 pub mod model;
 pub mod notices;
+pub mod occur;
 pub mod palette;
 pub mod pick;
 pub mod place;

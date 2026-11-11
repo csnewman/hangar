@@ -379,6 +379,9 @@ gpui::actions!(
         ToggleBlame,
         ParameterInfo,
         ContextActions,
+        SelectNextOccurrence,
+        UnselectOccurrence,
+        SelectAllOccurrences,
     ]
 );
 
@@ -396,6 +399,7 @@ pub fn bind_keys(cx: &mut App) {
         "cmd-alt-l",
         "cmd-p",
         "cmd-.",
+        "cmd-b",
     ];
     #[cfg(not(target_os = "macos"))]
     let keys = [
@@ -405,7 +409,14 @@ pub fn bind_keys(cx: &mut App) {
         "ctrl-alt-l",
         "ctrl-p",
         "ctrl-.",
+        "ctrl-b",
     ];
+    // IntelliJ's Add Selection for Next Occurrence, Unselect Occurrence and
+    // Select All Occurrences.
+    #[cfg(target_os = "macos")]
+    let occurrences = ["ctrl-g", "ctrl-shift-g", "ctrl-cmd-g"];
+    #[cfg(not(target_os = "macos"))]
+    let occurrences = ["alt-j", "alt-shift-j", "ctrl-alt-shift-j"];
     cx.bind_keys([
         KeyBinding::new(keys[0], DuplicateLine, ctx),
         KeyBinding::new(keys[1], DeleteLine, ctx),
@@ -419,6 +430,14 @@ pub fn bind_keys(cx: &mut App) {
         // other code actions; the editor's own key for them opens the same.
         KeyBinding::new("alt-enter", ContextActions, ctx),
         KeyBinding::new(keys[5], ContextActions, ctx),
+        // IntelliJ's Basic Completion and Go to Declaration; F12 as VS Code
+        // has it.
+        KeyBinding::new("ctrl-space", gpui_component::input::ShowCompletions, ctx),
+        KeyBinding::new(keys[6], gpui_component::input::GoToDefinition, ctx),
+        KeyBinding::new("f12", gpui_component::input::GoToDefinition, ctx),
+        KeyBinding::new(occurrences[0], SelectNextOccurrence, ctx),
+        KeyBinding::new(occurrences[1], UnselectOccurrence, ctx),
+        KeyBinding::new(occurrences[2], SelectAllOccurrences, ctx),
     ]);
 }
 
@@ -586,6 +605,13 @@ pub struct DocEditor {
     context_menu: Option<(Entity<PopupMenu>, Subscription)>,
     context_at: Option<gpui::Bounds<gpui::Pixels>>,
     context_unmarked: bool,
+    /// The other uses of the symbol at the caret, shaded, where the caret
+    /// was when they were asked for, and a count of the times asked.
+    uses: Option<RangeDecorationCollection>,
+    uses_caret: Option<usize>,
+    uses_asked: u64,
+    /// The selections ⌃G has made.
+    occurrences: crate::occur::Occurrences,
     _subs: Vec<Subscription>,
 }
 
@@ -667,6 +693,10 @@ impl DocEditor {
             context_menu: None,
             context_at: None,
             context_unmarked: false,
+            uses: None,
+            uses_caret: None,
+            uses_asked: 0,
+            occurrences: Default::default(),
             _subs: vec![edits, moved],
         }
     }
@@ -1161,11 +1191,132 @@ impl DocEditor {
     /// call the parameter moves on, and out of it they go.
     fn caret_moved(&mut self, cx: &mut Context<Self>) {
         let at = self.editor.read(cx).cursor();
+        if self.uses_caret != Some(at) {
+            self.uses_caret = Some(at);
+            self.ask_uses(cx);
+        }
         if self.signatures.is_none() || self.sig_caret == Some(at) {
             return;
         }
         self.sig_caret = Some(at);
         self.ask_signatures(crate::sighelp::Ask::Again, Duration::from_millis(40), cx);
+    }
+
+    /// IntelliJ's occurrence commands: what each does to the selections
+    /// (occur::Occurrences), done to the editor's.
+    fn occurrence(
+        &mut self,
+        step: impl FnOnce(
+            &mut crate::occur::Occurrences,
+            &str,
+            Range<usize>,
+        ) -> Option<crate::occur::Step>,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::occur::Step;
+        let e = self.editor.read(cx);
+        let (text, active) = (e.text().to_string(), e.selected_range());
+        let Some(step) = step(&mut self.occurrences, &text, active) else {
+            return;
+        };
+        self.editor.update(cx, |e, cx| match step {
+            Step::Select(r) => e.set_selected_range(r, cx),
+            Step::Add(r) => e.add_selection(r, cx),
+            Step::Set(all) => {
+                let mut all = all.into_iter();
+                if let Some(first) = all.next() {
+                    e.set_selected_range(first, cx);
+                }
+                for r in all {
+                    e.add_selection(r, cx);
+                }
+            }
+        });
+    }
+
+    /// Shades the other uses of the symbol at the caret once it rests, as
+    /// IntelliJ highlights usages of the element at the caret: from the
+    /// server's textDocument/documentHighlight, where it is written in
+    /// amber and read in the accent. The shading goes as the caret moves.
+    fn ask_uses(&mut self, cx: &mut Context<Self>) {
+        self.uses_asked += 1;
+        let asked = self.uses_asked;
+        if let Some(u) = &self.uses {
+            u.clear(cx);
+        }
+        let Some(l) = self.languages.as_ref().and_then(|l| l.upgrade()) else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(250))
+                .await;
+            let call = this.update(cx, |d, cx| {
+                use gpui_component::RopeExt;
+                if d.uses_asked != asked || d.state != State::Open {
+                    return None;
+                }
+                let e = d.editor.read(cx);
+                let params = json!({
+                    "textDocument": { "uri": crate::languages::file_uri(&d.asked) },
+                    "position": e.text().offset_to_position(e.cursor()),
+                });
+                let abs = d.asked.clone();
+                Some(l.update(cx, |l, cx| {
+                    l.request(&abs, "textDocument/documentHighlight", params, cx)
+                }))
+            });
+            let Ok(Some(call)) = call else { return };
+            let found = call
+                .await
+                .ok()
+                .and_then(|v| {
+                    serde_json::from_value::<Option<Vec<lsp_types::DocumentHighlight>>>(v).ok()
+                })
+                .flatten()
+                .unwrap_or_default();
+            let _ = this.update(cx, |d, cx| {
+                if d.uses_asked == asked {
+                    d.shade_uses(found, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn shade_uses(&mut self, found: Vec<lsp_types::DocumentHighlight>, cx: &mut Context<Self>) {
+        use gpui_component::RopeExt;
+        let p = palette::of(cx);
+        let text = self.editor.read(cx).text().clone();
+        let marks: Vec<_> = found
+            .iter()
+            .filter_map(|h| {
+                let (a, b) = (
+                    text.position_to_offset(&h.range.start),
+                    text.position_to_offset(&h.range.end),
+                );
+                (a < b && b <= text.len()).then_some((a..b, h.kind))
+            })
+            .map(|(r, kind)| {
+                let colour = if kind == Some(lsp_types::DocumentHighlightKind::WRITE) {
+                    p.busy.opacity(0.22)
+                } else {
+                    p.accent.opacity(0.16)
+                };
+                RangeDecoration::new(r)
+                    .with_style(RangeDecorationStyle::Fill)
+                    .with_color(colour)
+            })
+            .collect();
+        match &self.uses {
+            Some(u) => u.set(marks, cx),
+            None => {
+                self.uses = Some(
+                    self.editor
+                        .update(cx, |e, cx| e.create_range_decorations_collection(marks, cx)),
+                )
+            }
+        }
     }
 
     /// Asks the file's server for the signatures of the call at the caret,
@@ -1496,6 +1647,9 @@ impl DocEditor {
         }
         self.push(cx);
         if let Some(inserted) = inserted {
+            // What was shaded may have moved; it is asked for again once the
+            // caret rests.
+            self.uses_caret = None;
             self.typed_for_signatures(&inserted, cx);
         }
     }
@@ -1841,6 +1995,15 @@ impl Render for DocEditor {
             .on_action(
                 cx.listener(|d, _: &ContextActions, window, cx| d.context_actions(window, cx)),
             )
+            .on_action(cx.listener(|d, _: &SelectNextOccurrence, _, cx| {
+                d.occurrence(|o, text, active| o.next(text, active), cx)
+            }))
+            .on_action(cx.listener(|d, _: &UnselectOccurrence, _, cx| {
+                d.occurrence(|o, _, active| o.unselect(active), cx)
+            }))
+            .on_action(cx.listener(|d, _: &SelectAllOccurrences, _, cx| {
+                d.occurrence(|o, text, active| o.all(text, active), cx)
+            }))
             // Escape takes Parameter Info away, and does what it does in the
             // editor besides.
             .capture_key_down(cx.listener(|d, e: &gpui::KeyDownEvent, _, cx| {
