@@ -190,6 +190,38 @@ pub struct ImageUpdate {
     pub digest: String,
 }
 
+/// A server's grant for an app signing in through the browser.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SignInGrant {
+    /// The app's secret, to collect the token with.
+    pub device_code: String,
+    /// XXXX-XXXX, for the person to compare in the browser.
+    pub user_code: String,
+    /// Where on the server the person approves it.
+    pub verification_path: String,
+    pub expires_at: DateTime<Utc>,
+    /// Seconds between asks for the token.
+    pub interval: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SignInToken {
+    token: String,
+}
+
+/// Where a sign-in through the browser stands.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SignedIn {
+    /// Approved: the access token, made for the app.
+    Token(String),
+    /// Not yet approved.
+    Waiting,
+    /// The person refused it.
+    Refused,
+    /// It expired or was collected.
+    Gone,
+}
+
 /// A public key that signs the user in to the place's SSH gateway.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LoginKey {
@@ -365,6 +397,37 @@ impl Client {
 
     pub fn me(&self) -> Result<Me, Error> {
         self.get("/me")
+    }
+
+    /// Asks the server to let an app that calls itself name sign in
+    /// through the browser. Needs no token.
+    pub fn start_sign_in(&self, name: &str) -> Result<SignInGrant, Error> {
+        let body = serde_json::json!({ "name": name });
+        let req = self
+            .agent
+            .post(format!("{}/sign-in", self.base))
+            .header("Content-Type", "application/json");
+        decode(self.send(req, Some(body.to_string()))?)
+    }
+
+    /// Asks whether a grant is approved, collecting its token once it is.
+    /// Needs no token.
+    pub fn finish_sign_in(&self, device_code: &str) -> Result<SignedIn, Error> {
+        let body = serde_json::json!({ "device_code": device_code });
+        let req = self
+            .agent
+            .post(format!("{}/sign-in/token", self.base))
+            .header("Content-Type", "application/json");
+        let resp = self.send(req, Some(body.to_string()))?;
+        match resp.status().as_u16() {
+            202 => Ok(SignedIn::Waiting),
+            403 => Ok(SignedIn::Refused),
+            404 => Ok(SignedIn::Gone),
+            _ => {
+                let t: SignInToken = decode(resp)?;
+                Ok(SignedIn::Token(t.token))
+            }
+        }
     }
 
     pub fn login_keys(&self) -> Result<Vec<LoginKey>, Error> {

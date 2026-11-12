@@ -230,6 +230,18 @@ impl Places {
         Ok(id)
     }
 
+    /// Names a place as the user would have it.
+    pub fn rename(&mut self, id: &str, name: &str, cx: &mut Context<Self>) {
+        let name = name.trim();
+        if let Some((c, _)) = self.places.iter_mut().find(|(c, _)| c.id == id)
+            && !name.is_empty()
+        {
+            c.name = name.to_string();
+            self.save_list();
+            cx.notify();
+        }
+    }
+
     /// Takes the places' list as the Settings window leaves it: each
     /// place's ID and name, in order. A name left empty keeps the one it
     /// had; a place not listed is forgotten, its token and what was known

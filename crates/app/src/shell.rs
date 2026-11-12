@@ -12,10 +12,10 @@ use gpui::{
     ParentElement, Pixels, Render, SharedString, Styled, Window, div, prelude::*, px, relative,
     svg,
 };
-use gpui_component::input::{Input, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::{TitleBar, h_flex, v_flex};
 
+use crate::addplace::{AddPlaceEvent, AddPlaceView};
 use crate::assets;
 use crate::doubleshift::DoubleShift;
 use crate::envtab::{EnvTab, Tool};
@@ -62,8 +62,8 @@ pub struct Shell {
     home_mode: HomeMode,
     /// The places whose environments the sidebar hides.
     collapsed: HashSet<String>,
-    /// The form adding a server, while it is open.
-    adding: Option<AddServer>,
+    /// Add a Place, while it is open.
+    adding: Option<(Entity<AddPlaceView>, gpui::Subscription)>,
     /// The sessions said to be seen, so each is said once.
     told_seen: Vec<(String, String, chrono::DateTime<chrono::Utc>)>,
     /// Search Everywhere, while it is open.
@@ -110,12 +110,6 @@ pub fn bind_keys(cx: &mut gpui::App) {
         gpui::KeyBinding::new(symbol, GoToSymbol, Some("Shell")),
         gpui::KeyBinding::new(structure, FileStructure, Some("Shell")),
     ]);
-}
-
-struct AddServer {
-    url: Entity<InputState>,
-    token: Entity<InputState>,
-    error: Option<String>,
 }
 
 impl Shell {
@@ -246,37 +240,27 @@ impl Shell {
         cx.notify();
     }
 
-    fn open_add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let url = cx.new(|cx| InputState::new(window, cx).placeholder("hangar.example.com"));
-        let token = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("hgr_…")
-                .masked(true)
+    /// Opens Add a Place, at its kinds of place.
+    pub fn open_add(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let places = self.places.clone();
+        let view = cx.new(|cx| AddPlaceView::new(places, window, cx));
+        let sub = cx.subscribe_in(&view, window, |this, _, e: &AddPlaceEvent, window, cx| {
+            let AddPlaceEvent::Done(added) = e;
+            if added.is_some() || !this.places.read(cx).list().is_empty() {
+                this.adding = None;
+                window.focus(&this.focus, cx);
+                cx.notify();
+            }
         });
-        self.adding = Some(AddServer {
-            url,
-            token,
-            error: None,
-        });
+        self.adding = Some((view, sub));
         cx.notify();
     }
 
-    fn submit_add(&mut self, cx: &mut Context<Self>) {
-        let Some(add) = &mut self.adding else { return };
-        let url = add.url.read(cx).value().to_string();
-        let token = add.token.read(cx).value().to_string();
-        match self
-            .places
-            .update(cx, |p, cx| p.add_server(&url, &token, cx))
-        {
-            Ok(_) => self.adding = None,
-            Err(e) => add.error = Some(e),
-        }
-        cx.notify();
+    /// Add a Place, while it is open.
+    pub fn adding(&self) -> Option<Entity<AddPlaceView>> {
+        self.adding.as_ref().map(|(v, _)| v.clone())
     }
 
-    /// Says the sessions in front of the user are seen: those of the
-    /// environment shown, while the window is focused.
     fn tell_seen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !window.is_window_active() || self.adding.is_some() {
             return;
@@ -464,8 +448,8 @@ impl Shell {
     pub fn sign_in_again(&mut self, place: &str, window: &mut Window, cx: &mut Context<Self>) {
         let url = self.places.read(cx).get(place).map(|(c, _)| c.url.clone());
         self.open_add(window, cx);
-        if let (Some(add), Some(url)) = (&self.adding, url) {
-            add.url.update(cx, |s, cx| s.set_value(url, window, cx));
+        if let (Some(view), Some(url)) = (self.adding(), url) {
+            view.update(cx, |v, cx| v.sign_in(&url, window, cx));
         }
     }
 
@@ -686,7 +670,7 @@ impl Render for Shell {
         let width = window.viewport_size().width;
 
         let page = match (&self.adding, self.active) {
-            (Some(_), _) => self.add_page(&p, cx).into_any_element(),
+            (Some((view, _)), _) => view.clone().into_any_element(),
             (None, None) => self
                 .home(&cards, by_place, width, &p, cx)
                 .into_any_element(),
@@ -1447,76 +1431,6 @@ impl Shell {
                     }),
             )
             .on_click(cx.listener(move |this, _, window, cx| this.open(&place, &env, window, cx)))
-    }
-
-    fn add_page(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
-        let Some(add) = &self.adding else {
-            return v_flex();
-        };
-        let first = self.places.read(cx).list().is_empty();
-        v_flex().size_full().items_center().justify_center().child(
-            v_flex()
-                .w(px(440.))
-                .gap(px(12.))
-                .p(px(18.))
-                .rounded(px(10.))
-                .bg(p.surface)
-                .border_1()
-                .border_color(p.border)
-                .child(
-                    div()
-                        .text_size(px(16.))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child("Add a Hangar server"),
-                )
-                .child(
-                    div()
-                        .text_color(p.muted)
-                        .child("Its address, and an access token made on its Account page."),
-                )
-                .child(
-                    v_flex()
-                        .gap(px(4.))
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .text_color(p.muted)
-                                .child("Address"),
-                        )
-                        .child(Input::new(&add.url)),
-                )
-                .child(
-                    v_flex()
-                        .gap(px(4.))
-                        .child(
-                            div()
-                                .text_size(px(11.5))
-                                .text_color(p.muted)
-                                .child("Access token"),
-                        )
-                        .child(Input::new(&add.token)),
-                )
-                .when_some(add.error.clone(), |d, e| {
-                    d.child(div().text_color(p.bad).child(e))
-                })
-                .child(
-                    h_flex()
-                        .gap(px(8.))
-                        .justify_end()
-                        .when(!first, |d| {
-                            d.child(button("add-cancel", "Cancel", p).on_click(cx.listener(
-                                |this, _, _, cx| {
-                                    this.adding = None;
-                                    cx.notify();
-                                },
-                            )))
-                        })
-                        .child(
-                            primary("add-submit", "Add", p)
-                                .on_click(cx.listener(|this, _, _, cx| this.submit_add(cx))),
-                        ),
-                ),
-        )
     }
 }
 

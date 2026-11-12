@@ -3,6 +3,7 @@
 
 pub mod account;
 pub mod addfolder;
+pub mod addplace;
 pub mod api;
 pub mod assets;
 pub mod blame;

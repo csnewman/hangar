@@ -17,6 +17,7 @@
 //! SNAPSHOT_BRANCH=1 shows the Commit window's Branch view;
 //! SNAPSHOT_SEARCH=text opens Search Everywhere and types it;
 //! SNAPSHOT_NOTICES=1 opens the bell's notifications;
+//! SNAPSHOT_ADD=kinds (or address) opens Add a Place at that step;
 //! SNAPSHOT_SETTINGS=page opens Settings at a page (appearance, keymap,
 //! editor, terminal, notifications, places, or account and browser for the
 //! first place);
@@ -131,6 +132,16 @@ fn main() {
                         });
                         if let Some((p, e)) = found {
                             shell.update(cx, |s, cx| s.open(&p, &e, window, cx));
+                        }
+                    });
+                }
+                if let Ok(step) = std::env::var("SNAPSHOT_ADD") {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        shell.update(cx, |s, cx| s.open_add(window, cx));
+                        if step == "address"
+                            && let Some(v) = shell.read(cx).adding()
+                        {
+                            v.update(cx, |v, cx| v.go(hangar_app::addplace::Step::Address, cx));
                         }
                     });
                 }
