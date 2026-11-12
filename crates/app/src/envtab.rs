@@ -3368,7 +3368,9 @@ impl Render for EnvTab {
                             .child(
                                 h_flex()
                                     .flex_1()
-                                    .min_h_0()
+                                    // Room for a few lines of the editor
+                                    // however tall the bottom window is.
+                                    .min_h(px(120.))
                                     .items_stretch()
                                     .when(left.is_some() || left_below.is_some(), |d| {
                                         d.child(
@@ -4680,7 +4682,10 @@ impl EnvTab {
         v_flex()
             .relative()
             .h(height)
-            .flex_none()
+            // Shorter when the window has less room than the size kept,
+            // so it never runs under the status bar.
+            .flex_shrink(1.)
+            .min_h_0()
             .bg(p.surface)
             .child(layout::handle("bottom-edge", Edge::Bottom))
             .child(
@@ -4821,7 +4826,10 @@ impl EnvTab {
         v_flex()
             .relative()
             .h(height)
-            .flex_none()
+            // Shorter when the window has less room than the size kept,
+            // so it never runs under the status bar.
+            .flex_shrink(1.)
+            .min_h_0()
             .bg(p.term_bg)
             // The session commands from a terminal's menu and keys.
             .on_action(
