@@ -68,6 +68,9 @@ fi
 stop
 # Copied, not linked: macOS reads the bundle's own executable.
 cp "$repo/crates/target/$profile/hangar-app" "$app/Contents/MacOS/hangar-app"
+# Signed with a stable identity, so the Keychain's answer about the
+# places' tokens holds across builds (dev/codesign.sh).
+"$repo/dev/codesign.sh" io.github.csnewman.hangar "$app"
 set --
 [ -n "${HANGAR_URL:-}" ] && set -- "$@" --env "HANGAR_URL=$HANGAR_URL"
 [ -n "${HANGAR_TOKEN:-}" ] && set -- "$@" --env "HANGAR_TOKEN=$HANGAR_TOKEN"
