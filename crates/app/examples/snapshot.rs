@@ -17,6 +17,9 @@
 //! SNAPSHOT_BRANCH=1 shows the Commit window's Branch view;
 //! SNAPSHOT_SEARCH=text opens Search Everywhere and types it;
 //! SNAPSHOT_NOTICES=1 opens the bell's notifications;
+//! SNAPSHOT_SETTINGS=page opens Settings at a page (appearance, keymap,
+//! editor, terminal, notifications, places, or account and browser for the
+//! first place);
 //! SNAPSHOT_ASK=METHOD:LINE:COLUMN asks the open file's language server
 //! (textDocument/hover, textDocument/definition) and prints its answer;
 //! SNAPSHOT_FIND=text searches in files in Find in Files' pop-up,
@@ -64,6 +67,7 @@ fn main() {
             hangar_app::project::bind_keys(cx);
             hangar_app::docedit::bind_keys(cx);
             hangar_app::shell::bind_keys(cx);
+            hangar_app::prefs::bind_keys(cx);
             hangar_app::termview::bind_keys(cx);
             // A picture, not an app to switch to: no Dock icon or menu bar.
             cx.set_activation_policy(gpui::ActivationPolicy::Accessory);
@@ -128,6 +132,28 @@ fn main() {
                         if let Some((p, e)) = found {
                             shell.update(cx, |s, cx| s.open(&p, &e, window, cx));
                         }
+                    });
+                }
+                if let Ok(page) = std::env::var("SNAPSHOT_SETTINGS") {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        use hangar_app::prefs::Page;
+                        let first = places
+                            .read(cx)
+                            .list()
+                            .first()
+                            .map(|(c, _)| c.id.clone())
+                            .unwrap_or_default();
+                        let page = match page.as_str() {
+                            "keymap" => Page::Keymap,
+                            "editor" => Page::Editor,
+                            "terminal" => Page::Terminal,
+                            "notifications" => Page::Notifications,
+                            "places" => Page::Places,
+                            "account" => Page::Account(first),
+                            "browser" => Page::Browser(first),
+                            _ => Page::Appearance,
+                        };
+                        shell.update(cx, |s, cx| s.open_settings(Some(page), window, cx));
                     });
                 }
                 if let Ok(tools) = std::env::var("SNAPSHOT_TOOLS") {

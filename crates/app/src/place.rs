@@ -99,6 +99,11 @@ impl PlaceState {
         serde_json::from_slice(&b).ok()
     }
 
+    /// Forgets what was known of a place.
+    pub fn forget(dir: &Path, id: &str) {
+        let _ = std::fs::remove_file(cache_file(dir, id));
+    }
+
     /// Keeps what is known of a place in dir.
     pub fn save(&self, dir: &Path, id: &str) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;

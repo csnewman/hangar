@@ -5,6 +5,8 @@
 use gpui::{App, Hsla, Window, rgb, rgba};
 use gpui_component::{ActiveTheme, Theme};
 
+use crate::settings::ThemeChoice;
+
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub bg: Hsla,
@@ -115,15 +117,25 @@ pub fn of(cx: &App) -> Palette {
     }
 }
 
-/// Follows the system's appearance, with the palette's colours in
-/// gpui-component's theme.
+/// Follows the system's appearance, or the theme the settings choose,
+/// with the palette's colours in gpui-component's theme.
 pub fn sync(window: Option<&mut Window>, cx: &mut App) {
-    if let Some(Forced(mode)) = cx.try_global::<Forced>() {
-        Theme::change(*mode, window, cx);
-    } else {
-        Theme::sync_system_appearance(window, cx);
+    let chosen = match crate::settings::Settings::get(cx).theme {
+        ThemeChoice::System => None,
+        ThemeChoice::Light => Some(gpui_component::ThemeMode::Light),
+        ThemeChoice::Dark => Some(gpui_component::ThemeMode::Dark),
+    };
+    match cx.try_global::<Forced>().map(|f| f.0).or(chosen) {
+        Some(mode) => Theme::change(mode, window, cx),
+        None => Theme::sync_system_appearance(window, cx),
     }
     apply(cx);
+}
+
+/// Takes up a change to the settings: the theme chosen and the editor's
+/// font size.
+pub fn follow_settings(cx: &mut App) {
+    sync(None, cx);
 }
 
 /// A mode kept whatever the system's appearance.
@@ -142,8 +154,10 @@ pub fn force(mode: gpui_component::ThemeMode, cx: &mut App) {
 /// is in.
 pub fn apply(cx: &mut App) {
     let p = of(cx);
+    let editor_font = crate::settings::Settings::get(cx).editor_font();
     Theme::update(cx, |t| {
         t.font_size = gpui::px(13.);
+        t.mono_font_size = gpui::px(editor_font);
         t.radius = gpui::px(6.);
         let k = &mut t.colors;
         k.background = p.surface;

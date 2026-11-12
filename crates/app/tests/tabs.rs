@@ -32,6 +32,7 @@ fn running() -> Environment {
         editor_path: Some("/home/dev".into()),
         ports_public: false,
         display: None,
+        image_update: None,
         web_names: vec![],
         task: None,
         agents: vec![],

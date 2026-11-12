@@ -2,10 +2,11 @@
 //! were last seen.
 
 use chrono::{DateTime, Duration, Utc};
-use hangar_app::api::{AgentSession, Environment};
+use hangar_app::api::{AgentSession, Environment, ImageUpdate};
 use hangar_app::model::Tone;
 use hangar_app::notices::Notices;
 use hangar_app::place::{Connection, PlaceConfig, PlaceState};
+use hangar_app::settings::Event;
 
 fn now() -> DateTime<Utc> {
     "2026-11-07T12:00:00Z".parse().unwrap()
@@ -29,6 +30,7 @@ fn env(name: &str, phase: &str, agents: Vec<AgentSession>) -> Environment {
         editor_path: None,
         ports_public: false,
         display: None,
+        image_update: None,
         web_names: vec![],
         task: None,
         agents,
@@ -130,5 +132,70 @@ fn a_place_asking_to_be_signed_in_is_news() {
     assert!(
         n.observe(&places(Connection::SignIn, vec![]), now())
             .is_empty()
+    );
+}
+
+#[test]
+fn an_environment_coming_up_is_news_of_its_own_kind() {
+    let mut n = Notices::default();
+    n.observe(
+        &places(Connection::Online, vec![env("a", "starting", vec![])]),
+        now(),
+    );
+    let news = n.observe(
+        &places(Connection::Online, vec![env("a", "running", vec![])]),
+        now(),
+    );
+    assert_eq!(news.len(), 1);
+    assert_eq!(news[0].event, Event::Ready);
+    assert_eq!(news[0].what, "is ready");
+    // Running from the start is not news, nor stopping.
+    let mut n = Notices::default();
+    n.observe(
+        &places(Connection::Online, vec![env("a", "running", vec![])]),
+        now(),
+    );
+    assert!(
+        n.observe(
+            &places(Connection::Online, vec![env("a", "stopped", vec![])]),
+            now()
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn a_newer_image_is_news_once_and_keeps_what_needs_you() {
+    let mut n = Notices::default();
+    n.observe(
+        &places(Connection::Online, vec![env("a", "running", vec![])]),
+        now(),
+    );
+    let mut e = env("a", "running", vec![asking()]);
+    let news = n.observe(&places(Connection::Online, vec![e.clone()]), now());
+    assert_eq!(news[0].event, Event::Asking);
+    e.image_update = Some(ImageUpdate {
+        digest: "sha256:2".into(),
+    });
+    let news = n.observe(&places(Connection::Online, vec![e.clone()]), now());
+    assert_eq!(news.len(), 1);
+    assert_eq!(news[0].event, Event::Image);
+    assert!(
+        n.observe(&places(Connection::Online, vec![e.clone()]), now())
+            .is_empty()
+    );
+    let kinds: Vec<Event> = n.list().iter().map(|x| x.event).collect();
+    assert_eq!(
+        kinds,
+        [Event::Image, Event::Asking],
+        "the question kept beside it"
+    );
+    // A newer one again is news again.
+    e.image_update = Some(ImageUpdate {
+        digest: "sha256:3".into(),
+    });
+    assert_eq!(
+        n.observe(&places(Connection::Online, vec![e]), now()).len(),
+        1
     );
 }

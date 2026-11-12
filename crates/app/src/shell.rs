@@ -8,10 +8,12 @@ use std::time::Duration;
 use gpui::Focusable;
 
 use gpui::{
-    AnyElement, ClickEvent, Context, DragMoveEvent, Entity, FontWeight, IntoElement, ParentElement,
-    Pixels, Render, SharedString, Styled, Window, div, prelude::*, px, relative, svg,
+    AnyElement, App, ClickEvent, Context, DragMoveEvent, Entity, FontWeight, IntoElement,
+    ParentElement, Pixels, Render, SharedString, Styled, Window, div, prelude::*, px, relative,
+    svg,
 };
 use gpui_component::input::{Input, InputState};
+use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
 use gpui_component::{TitleBar, h_flex, v_flex};
 
 use crate::assets;
@@ -22,6 +24,7 @@ use crate::model::{self, Action, Card, LineKind};
 use crate::notices::Notices;
 use crate::palette::{self, Palette};
 use crate::places::Places;
+use crate::prefs::{Page, SettingsEvent, SettingsView};
 use crate::search::{Chose, SearchView, Target};
 use crate::settings::Settings;
 use crate::ui::{button, chip, dot, mark, primary, spark};
@@ -75,11 +78,19 @@ pub struct Shell {
     notices: Notices,
     /// Whether the bell's list is open.
     notices_open: bool,
+    /// The Settings window, while it is open.
+    settings: Option<(Entity<SettingsView>, gpui::Subscription)>,
+    /// The count on the Dock icon, as last set.
+    badge_shown: Option<usize>,
 }
 
-gpui::actions!(shell, [SearchEverywhere, GoToSymbol, FileStructure]);
+gpui::actions!(
+    shell,
+    [SearchEverywhere, GoToSymbol, FileStructure, OpenSettings]
+);
 
-/// Binds the shell's keys: ⌘K (Ctrl+K elsewhere) for Search Everywhere,
+/// Binds the shell's keys: ⌘, (IntelliJ's Ctrl+Alt+S elsewhere) for
+/// Settings, ⌘K (Ctrl+K elsewhere) for Search Everywhere,
 /// and IntelliJ's ⌥⌘O (Ctrl+Alt+Shift+N elsewhere) for Go to Symbol and
 /// ⌘F12 (Ctrl+F12) for File Structure.
 pub fn bind_keys(cx: &mut gpui::App) {
@@ -88,7 +99,13 @@ pub fn bind_keys(cx: &mut gpui::App) {
     } else {
         ("ctrl-k", "ctrl-alt-shift-n", "ctrl-f12")
     };
+    let settings = if cfg!(target_os = "macos") {
+        "cmd-,"
+    } else {
+        "ctrl-alt-s"
+    };
     cx.bind_keys([
+        gpui::KeyBinding::new(settings, OpenSettings, None),
         gpui::KeyBinding::new(key, SearchEverywhere, Some("Shell")),
         gpui::KeyBinding::new(symbol, GoToSymbol, Some("Shell")),
         gpui::KeyBinding::new(structure, FileStructure, Some("Shell")),
@@ -107,6 +124,7 @@ impl Shell {
         cx.observe_global::<crate::ui::OpenMenus>(|_, cx| cx.notify())
             .detach();
         cx.observe_in(&places, window, |this, _, window, cx| {
+            this.drop_gone(cx);
             this.tell_seen(window, cx);
             this.observe_notices(window, cx);
             cx.notify();
@@ -155,6 +173,8 @@ impl Shell {
             focus: cx.focus_handle(),
             notices: Notices::default(),
             notices_open: false,
+            settings: None,
+            badge_shown: None,
         };
         shell.observe_notices(window, cx);
         window.focus(&shell.focus, cx);
@@ -402,16 +422,106 @@ impl Shell {
         cx.notify();
     }
 
+    /// Opens Settings at a page, or at the one it was on; again closes it.
+    pub fn open_settings(
+        &mut self,
+        page: Option<Page>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((view, _)) = &self.settings {
+            match page {
+                Some(page) => view.update(cx, |v, cx| v.show(page, cx)),
+                None => self.close_settings(window, cx),
+            }
+            return;
+        }
+        let places = self.places.clone();
+        let page = page.unwrap_or(Page::Appearance);
+        let view = cx.new(|cx| SettingsView::new(places, page, window, cx));
+        let sub = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, e: &SettingsEvent, window, cx| match e {
+                SettingsEvent::Close => this.close_settings(window, cx),
+                SettingsEvent::SignIn(place) => {
+                    this.close_settings(window, cx);
+                    this.sign_in_again(&place.clone(), window, cx);
+                }
+                SettingsEvent::AddPlace => {
+                    this.close_settings(window, cx);
+                    this.open_add(window, cx);
+                }
+            },
+        );
+        window.focus(&view.focus_handle(cx), cx);
+        self.settings = Some((view, sub));
+        cx.notify();
+    }
+
+    /// Opens the form adding a place, at a place's address, to sign it in
+    /// again.
+    pub fn sign_in_again(&mut self, place: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let url = self.places.read(cx).get(place).map(|(c, _)| c.url.clone());
+        self.open_add(window, cx);
+        if let (Some(add), Some(url)) = (&self.adding, url) {
+            add.url.update(cx, |s, cx| s.set_value(url, window, cx));
+        }
+    }
+
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings = None;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// The Settings window, while it is open.
+    pub fn settings(&self) -> Option<Entity<SettingsView>> {
+        self.settings.as_ref().map(|(v, _)| v.clone())
+    }
+
+    /// Closes the tabs of places the list does not have.
+    fn drop_gone(&mut self, cx: &mut Context<Self>) {
+        let places = self.places.read(cx);
+        let gone: Vec<usize> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| places.get(&o.place).is_none())
+            .map(|(i, _)| i)
+            .collect();
+        for i in gone.into_iter().rev() {
+            self.close(i, cx);
+        }
+    }
+
     /// Notes what has come to need the user since the places were last
-    /// seen, and tells the system of it while the window is behind others.
+    /// seen, and tells them of it as the settings say: the system's own
+    /// notification (not for the environment in front of them, unless
+    /// asked), a sound, and the count on the Dock icon.
     fn observe_notices(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let news = self
             .notices
             .observe(self.places.read(cx).list(), chrono::Utc::now());
-        if window.is_window_active() {
-            return;
-        }
+        let notify = Settings::get(cx).notify;
+        let front = self
+            .active
+            .filter(|_| window.is_window_active() && self.adding.is_none())
+            .and_then(|i| self.tabs.get(i))
+            .cloned();
+        let mut chime = false;
         for n in news {
+            let ways = notify.ways(n.event);
+            if !notify.from(&n.place) {
+                continue;
+            }
+            chime |= ways.sound;
+            let in_front = front
+                .as_ref()
+                .is_some_and(|o| o.place == n.place && Some(&o.env) == n.env.as_ref());
+            if !ways.system || (in_front && notify.while_looking) {
+                continue;
+            }
             let tag = match &n.env {
                 Some(env) => format!("{}\u{1f}{env}", n.place),
                 None => n.place.clone(),
@@ -428,6 +538,59 @@ impl Shell {
                 actions: vec![],
             });
         }
+        if chime {
+            crate::dock::chime();
+        }
+        self.show_badge(cx);
+    }
+
+    /// Sets the Dock icon's count, when it has changed.
+    fn show_badge(&mut self, cx: &App) {
+        let count = self.badge(cx);
+        if self.badge_shown != Some(count) {
+            self.badge_shown = Some(count);
+            crate::dock::set_badge(count);
+        }
+    }
+
+    /// What the Dock icon counts: the environments that need the user and
+    /// the places asking to be signed in, of the kinds the settings badge,
+    /// from places not kept quiet.
+    fn badge(&self, cx: &App) -> usize {
+        let notify = Settings::get(cx).notify;
+        let now = chrono::Utc::now();
+        let mut count = 0;
+        for (config, state) in self.places.read(cx).list() {
+            if !notify.from(&config.id) {
+                continue;
+            }
+            if state.connection == crate::place::Connection::SignIn && notify.sign_in.badge {
+                count += 1;
+            }
+            for e in &state.environments {
+                let event = match model::card(config, e, now).rank {
+                    model::Rank::Asking => crate::settings::Event::Asking,
+                    model::Rank::Finished => crate::settings::Event::Finished,
+                    model::Rank::Failed => crate::settings::Event::Failed,
+                    _ => continue,
+                };
+                if notify.ways(event).badge {
+                    count += 1;
+                }
+            }
+        }
+        count
+    }
+
+    /// The notices the settings show in the bell's list, newest first.
+    pub fn shown_notices(&self, cx: &App) -> Vec<crate::notices::Notice> {
+        let notify = Settings::get(cx).notify;
+        self.notices
+            .list()
+            .iter()
+            .filter(|n| notify.ways(n.event).app)
+            .cloned()
+            .collect()
     }
 
     pub fn notices(&self) -> &Notices {
@@ -511,6 +674,8 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // The settings may have changed what the Dock icon counts.
+        self.show_badge(cx);
         let p = palette::of(cx);
         let now = chrono::Utc::now();
         let places = self.places.read(cx);
@@ -538,6 +703,9 @@ impl Render for Shell {
                 cx.listener(|s, _: &SearchEverywhere, window, cx| s.search_everywhere(window, cx)),
             )
             .on_action(cx.listener(|s, _: &GoToSymbol, window, cx| s.go_to_symbol(window, cx)))
+            .on_action(
+                cx.listener(|s, _: &OpenSettings, window, cx| s.open_settings(None, window, cx)),
+            )
             .on_action(cx.listener(|s, _: &FileStructure, window, cx| s.file_structure(window, cx)))
             .on_modifiers_changed(
                 cx.listener(|s, e: &gpui::ModifiersChangedEvent, window, cx| {
@@ -601,6 +769,24 @@ impl Render for Shell {
                         .top(px(38.))
                         .right(px(10.))
                         .child(self.notices_list(&p, cx)),
+                )
+            })
+            .when_some(self.settings(), |this, view| {
+                this.child(
+                    div()
+                        .id("settings-scrim")
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui::black().opacity(0.25)),
+                )
+                .child(
+                    h_flex()
+                        .absolute()
+                        .top(px(36.))
+                        .left_0()
+                        .right_0()
+                        .justify_center()
+                        .child(view),
                 )
             })
             .children(crate::ui::shield(cx))
@@ -687,7 +873,7 @@ impl Shell {
                     .on_click(cx.listener(move |this, _, window, cx| this.show(i, window, cx))),
             );
         }
-        let waiting = self.notices.unread();
+        let waiting = self.shown_notices(cx).iter().filter(|n| !n.read).count();
         TitleBar::new().bg(p.sidebar).border_color(p.border).child(
             h_flex()
                 .size_full()
@@ -742,6 +928,21 @@ impl Shell {
                             )
                         })
                         .on_click(cx.listener(|this, _, _, cx| this.toggle_notices(cx))),
+                )
+                .child(
+                    div()
+                        .id("settings")
+                        .ml(px(6.))
+                        .cursor_pointer()
+                        .child(
+                            svg()
+                                .path(assets::icon("settings"))
+                                .size(px(16.))
+                                .text_color(p.muted),
+                        )
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.open_settings(None, window, cx)),
+                        ),
                 ),
         )
     }
@@ -750,7 +951,8 @@ impl Shell {
     fn notices_list(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let now = chrono::Utc::now();
         let mut list = v_flex().px(px(4.)).pb(px(6.));
-        if self.notices.list().is_empty() {
+        let shown = self.shown_notices(cx);
+        if shown.is_empty() {
             list = list.child(
                 div()
                     .px(px(10.))
@@ -759,7 +961,7 @@ impl Shell {
                     .child("Nothing needs you. Agents asking or finishing, and environments failing, show here."),
             );
         }
-        for (i, n) in self.notices.list().iter().enumerate() {
+        for (i, n) in shown.iter().enumerate() {
             let target = n.env.clone().map(|e| (n.place.clone(), e));
             list = list.child(
                 h_flex()
@@ -897,7 +1099,21 @@ impl Shell {
                             this.collapsed.insert(id.clone());
                         }
                         cx.notify();
-                    })),
+                    }))
+                    .context_menu({
+                        let me = cx.entity().downgrade();
+                        let place = g.place.clone();
+                        let url = self
+                            .places
+                            .read(cx)
+                            .get(&g.place)
+                            .map(|(c, _)| c.url.clone())
+                            .unwrap_or_default();
+                        move |menu, _, cx| {
+                            crate::ui::modal(cx);
+                            place_menu(menu, me.clone(), place.clone(), url.clone())
+                        }
+                    }),
             );
             if open {
                 if g.rows.is_empty() {
@@ -1302,4 +1518,30 @@ impl Shell {
                 ),
         )
     }
+}
+
+/// A place's menu in the sidebar.
+fn place_menu(
+    menu: PopupMenu,
+    me: gpui::WeakEntity<Shell>,
+    place: String,
+    url: String,
+) -> PopupMenu {
+    let settings = |page: Page| {
+        let me = me.clone();
+        move |_: &ClickEvent, window: &mut Window, cx: &mut gpui::App| {
+            let _ = me.update(cx, |s, cx| s.open_settings(Some(page.clone()), window, cx));
+        }
+    };
+    let sign_in = {
+        let (me, place) = (me.clone(), place.clone());
+        move |_: &ClickEvent, window: &mut Window, cx: &mut gpui::App| {
+            let _ = me.update(cx, |s, cx| s.sign_in_again(&place, window, cx));
+        }
+    };
+    menu.item(PopupMenuItem::new("Open in Browser").on_click(move |_, _, cx| cx.open_url(&url)))
+        .item(PopupMenuItem::new("Sign In Again…").on_click(sign_in))
+        .separator()
+        .item(PopupMenuItem::new("Account…").on_click(settings(Page::Account(place.clone()))))
+        .item(PopupMenuItem::new("Rename or Remove…").on_click(settings(Page::Places)))
 }

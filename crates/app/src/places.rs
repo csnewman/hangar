@@ -230,6 +230,45 @@ impl Places {
         Ok(id)
     }
 
+    /// Takes the places' list as the Settings window leaves it: each
+    /// place's ID and name, in order. A name left empty keeps the one it
+    /// had; a place not listed is forgotten, its token and what was known
+    /// of it with it. Places added meanwhile keep their place at the end.
+    pub fn arrange(&mut self, list: &[(String, String)], cx: &mut Context<Self>) {
+        let gone: Vec<String> = self
+            .places
+            .iter()
+            .map(|(c, _)| c.id.clone())
+            .filter(|id| !list.iter().any(|(l, _)| l == id))
+            .collect();
+        for id in &gone {
+            self.tokens.delete(id);
+            if let Some(d) = &self.dirs {
+                PlaceState::forget(&d.cache, id);
+            }
+        }
+        let mut pairs: Vec<((PlaceConfig, PlaceState), Link)> = std::mem::take(&mut self.places)
+            .into_iter()
+            .zip(std::mem::take(&mut self.links))
+            .filter(|((c, _), _)| !gone.contains(&c.id))
+            .collect();
+        let mut out = Vec::with_capacity(pairs.len());
+        for (id, name) in list {
+            if let Some(i) = pairs.iter().position(|((c, _), _)| &c.id == id) {
+                let ((mut c, s), l) = pairs.remove(i);
+                if !name.trim().is_empty() {
+                    c.name = name.trim().to_string();
+                }
+                out.push(((c, s), l));
+            }
+        }
+        out.extend(pairs);
+        (self.places, self.links) = out.into_iter().unzip();
+        self.transient.retain(|t| !gone.contains(t));
+        self.save_list();
+        cx.notify();
+    }
+
     fn save_list(&self) {
         let Some(dirs) = &self.dirs else { return };
         let listed: Vec<PlaceConfig> = self

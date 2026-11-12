@@ -1,6 +1,7 @@
 //! hangar-app: Hangar's desktop app, on gpui through gpui-component.
 //! docs/native-app.md has its plan.
 
+pub mod account;
 pub mod addfolder;
 pub mod api;
 pub mod assets;
@@ -14,6 +15,7 @@ pub mod commit;
 pub mod deskview;
 pub mod diff;
 pub mod docedit;
+pub mod dock;
 pub mod docker;
 pub mod dockerlog;
 pub mod doubleshift;
@@ -43,6 +45,7 @@ pub mod pick;
 pub mod place;
 pub mod places;
 pub mod ports;
+pub mod prefs;
 pub mod presence;
 pub mod problems;
 pub mod project;

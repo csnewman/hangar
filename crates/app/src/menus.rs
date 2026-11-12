@@ -17,7 +17,7 @@ use crate::envtab::{
     HideAllToolWindows, RenameSymbol, ReopenClosedTab, ReplaceInFiles, ToggleCommit, ToggleDocker,
     ToggleGit, ToggleProblems, ToggleProject, ToggleStructure, ToggleTerminal,
 };
-use crate::shell::{GoToSymbol, SearchEverywhere};
+use crate::shell::{GoToSymbol, OpenSettings, SearchEverywhere};
 
 actions!(app, [Quit, Hide, HideOthers, ShowAll, Minimize, Zoom]);
 
@@ -45,6 +45,8 @@ pub fn init(cx: &mut App) {
     });
     cx.set_menus([
         Menu::new("Hangar").items([
+            MenuItem::action("Settings…", OpenSettings),
+            MenuItem::separator(),
             MenuItem::action("Hide Hangar", Hide),
             MenuItem::action("Hide Others", HideOthers),
             MenuItem::action("Show All", ShowAll),

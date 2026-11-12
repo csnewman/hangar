@@ -88,6 +88,9 @@ pub struct Environment {
     pub web_names: Vec<String>,
     #[serde(default)]
     pub task: Option<Task>,
+    /// A newer copy of its image, which its worker holds.
+    #[serde(default)]
+    pub image_update: Option<ImageUpdate>,
     #[serde(default)]
     pub agents: Vec<AgentSession>,
     pub created_at: DateTime<Utc>,
@@ -180,6 +183,46 @@ pub struct StartProgress {
     pub total: Option<i64>,
     #[serde(default)]
     pub unit: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageUpdate {
+    pub digest: String,
+}
+
+/// A public key that signs the user in to the place's SSH gateway.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LoginKey {
+    pub id: String,
+    pub name: String,
+    pub fingerprint: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One of the user's access tokens: what is shown of it after it is made.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AccessToken {
+    pub id: String,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    #[serde(default)]
+    pub last_used_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub expires_at: Option<DateTime<Utc>>,
+    /// Whether the request listing it came with it: the app's own.
+    #[serde(default)]
+    pub current: bool,
+}
+
+/// An SSH key the place signs with for the user, its private half kept
+/// there.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SshKey {
+    pub id: String,
+    pub name: String,
+    pub public_key: String,
+    pub fingerprint: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -324,6 +367,42 @@ impl Client {
         self.get("/me")
     }
 
+    pub fn login_keys(&self) -> Result<Vec<LoginKey>, Error> {
+        self.get("/me/login-keys")
+    }
+
+    /// Adds a public key, in authorized_keys form, that signs the user in
+    /// over SSH; its comment names it.
+    pub fn add_login_key(&self, public_key: &str) -> Result<LoginKey, Error> {
+        let body = serde_json::json!({ "public_key": public_key.trim() });
+        self.post("/me/login-keys", Some(body.to_string()))
+    }
+
+    pub fn delete_login_key(&self, id: &str) -> Result<(), Error> {
+        self.delete_path(&format!("/me/login-keys/{id}"))
+    }
+
+    pub fn tokens(&self) -> Result<Vec<AccessToken>, Error> {
+        self.get("/me/tokens")
+    }
+
+    pub fn revoke_token(&self, id: &str) -> Result<(), Error> {
+        self.delete_path(&format!("/me/tokens/{id}"))
+    }
+
+    pub fn ssh_keys(&self) -> Result<Vec<SshKey>, Error> {
+        self.get("/me/ssh-keys")
+    }
+
+    pub fn generate_ssh_key(&self, name: &str) -> Result<SshKey, Error> {
+        let body = serde_json::json!({ "name": name.trim() });
+        self.post("/me/ssh-keys", Some(body.to_string()))
+    }
+
+    pub fn delete_ssh_key(&self, id: &str) -> Result<(), Error> {
+        self.delete_path(&format!("/me/ssh-keys/{id}"))
+    }
+
     pub fn environments(&self) -> Result<Vec<Environment>, Error> {
         self.get("/environments")
     }
@@ -349,11 +428,7 @@ impl Client {
     /// Deletes an environment and its disks: at once if it is stopped, else
     /// once it has stopped.
     pub fn delete(&self, id: &str) -> Result<(), Error> {
-        let req = self
-            .agent
-            .delete(format!("{}/environments/{id}", self.base))
-            .header("Authorization", self.auth());
-        check(req.call().map_err(transport)?).map(|_| ())
+        self.delete_path(&format!("/environments/{id}"))
     }
 
     pub fn set_task(&self, id: &str, text: &str) -> Result<Task, Error> {
@@ -584,6 +659,14 @@ impl Client {
             .header("Authorization", self.auth())
             .header("Content-Type", "application/json");
         decode(self.send(req, body)?)
+    }
+
+    fn delete_path(&self, path: &str) -> Result<(), Error> {
+        let req = self
+            .agent
+            .delete(format!("{}{path}", self.base))
+            .header("Authorization", self.auth());
+        check(req.call().map_err(transport)?).map(|_| ())
     }
 
     fn post_empty(&self, path: &str) -> Result<(), Error> {

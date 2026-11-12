@@ -23,9 +23,14 @@ use crate::palette;
 use crate::termconn::{self, Command, Connection, Event};
 use crate::terminal::{Mark, Replies, Screen, Select};
 
-/// The text's size, and the height of a line.
-const FONT_SIZE: Pixels = px(12.5);
-const LINE_HEIGHT: Pixels = px(17.);
+/// A line's height for each point of the text's size.
+const LINE_SPACING: f32 = 1.36;
+
+/// The text's size the settings choose, and the height of a line.
+fn metrics(cx: &App) -> (Pixels, Pixels) {
+    let size = crate::settings::Settings::get(cx).terminal_font();
+    (px(size), px((size * LINE_SPACING).round()))
+}
 
 /// How long a burst of output is taken in before a frame is drawn.
 const FEED_BUDGET: Duration = Duration::from_millis(4);
@@ -122,6 +127,8 @@ pub struct TerminalView {
     cols: u16,
     rows: u16,
     font: Font,
+    font_size: Pixels,
+    line_height: Pixels,
     /// A cell's width, once measured.
     cell: Option<Pixels>,
     /// Scrolling, in pixels, not yet a whole line.
@@ -235,6 +242,8 @@ impl TerminalView {
             cols,
             rows,
             font: mono(),
+            font_size: metrics(cx).0,
+            line_height: metrics(cx).1,
             cell: None,
             scroll_left: 0.,
             origin: Point::default(),
@@ -381,7 +390,7 @@ impl TerminalView {
             h *= room / w;
             w = room;
         }
-        let rows = (h / f32::from(LINE_HEIGHT)).ceil().max(1.) as usize;
+        let rows = (h / f32::from(self.line_height)).ceil().max(1.) as usize;
         let id = self.next_picture;
         self.next_picture += 1;
         self.pictures.insert(
@@ -503,14 +512,14 @@ impl TerminalView {
             let id = window.text_system().resolve_font(&self.font);
             window
                 .text_system()
-                .advance(id, FONT_SIZE, 'm')
+                .advance(id, self.font_size, 'm')
                 .map(|s| s.width)
                 .unwrap_or(px(7.5))
         });
         let cols = (f32::from(bounds.size.width) / f32::from(cell))
             .floor()
             .max(2.) as u16;
-        let rows = (f32::from(bounds.size.height) / f32::from(LINE_HEIGHT))
+        let rows = (f32::from(bounds.size.height) / f32::from(self.line_height))
             .floor()
             .max(1.) as u16;
         self.origin = bounds.origin;
@@ -562,12 +571,12 @@ impl TerminalView {
     /// scrollback.
     fn scroll(&mut self, e: &ScrollEvent, cx: &mut Context<Self>) {
         use crate::termkeys::{Button, Press};
-        self.scroll_left += f32::from(e.delta.pixel_delta(LINE_HEIGHT).y);
-        let lines = (self.scroll_left / f32::from(LINE_HEIGHT)).trunc();
+        self.scroll_left += f32::from(e.delta.pixel_delta(self.line_height).y);
+        let lines = (self.scroll_left / f32::from(self.line_height)).trunc();
         if lines == 0. {
             return;
         }
-        self.scroll_left -= lines * f32::from(LINE_HEIGHT);
+        self.scroll_left -= lines * f32::from(self.line_height);
         let up = lines > 0.;
         let mouse = self.screen.mouse_modes();
         if mouse.any() || self.screen.wheel_is_arrows() {
@@ -701,7 +710,7 @@ impl TerminalView {
     fn cell_at(&self, at: Point<Pixels>) -> (usize, usize, bool) {
         let cell = f32::from(self.cell.unwrap_or(px(7.5)));
         let x = (f32::from(at.x - self.origin.x) / cell).max(0.);
-        let y = (f32::from(at.y - self.origin.y) / f32::from(LINE_HEIGHT)).max(0.);
+        let y = (f32::from(at.y - self.origin.y) / f32::from(self.line_height)).max(0.);
         (y as usize, x as usize, x.fract() >= 0.5)
     }
 
@@ -977,6 +986,13 @@ impl Render for TerminalView {
         let p = palette::of(cx);
         self.screen
             .set_default_colours(rgb(p.term_fg), rgb(p.term_tab));
+        // A size chosen in the settings: the cell is measured again, and
+        // the next fit tells the session how many rows and columns fit.
+        let (size, line) = metrics(cx);
+        if (size, line) != (self.font_size, self.line_height) {
+            (self.font_size, self.line_height) = (size, line);
+            self.cell = None;
+        }
         let focused = self.focus.is_focused(window);
         // The selection in the accent, Find's matches in amber, the one it
         // is on in solid amber.
@@ -1043,7 +1059,7 @@ impl Render for TerminalView {
         let tallest = self
             .pictures
             .values()
-            .map(|s| (f32::from(s.height) / f32::from(LINE_HEIGHT)).ceil() as usize)
+            .map(|s| (f32::from(s.height) / f32::from(self.line_height)).ceil() as usize)
             .max()
             .unwrap_or(0);
         let pictures: Vec<gpui::AnyElement> = if self.pictures.is_empty() {
@@ -1058,7 +1074,7 @@ impl Render for TerminalView {
                         gpui::img(shown.image.clone())
                             .absolute()
                             .left(cell * col as f32)
-                            .top(LINE_HEIGHT * row as f32)
+                            .top(self.line_height * row as f32)
                             .w(shown.width)
                             .h(shown.height)
                             .into_any_element(),
@@ -1162,8 +1178,8 @@ impl Render for TerminalView {
                     .size_full()
                     .relative()
                     .font(self.font.clone())
-                    .text_size(FONT_SIZE)
-                    .line_height(LINE_HEIGHT)
+                    .text_size(self.font_size)
+                    .line_height(self.line_height)
                     .children(rows)
                     .children(pictures)
                     .child(

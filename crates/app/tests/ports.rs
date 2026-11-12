@@ -80,6 +80,7 @@ fn environment(public: bool) -> Environment {
         editor_path: Some("/home/dev".into()),
         ports_public: public,
         display: None,
+        image_update: None,
         web_names: vec!["docs".into()],
         task: None,
         agents: vec![],
