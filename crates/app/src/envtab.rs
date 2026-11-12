@@ -454,6 +454,8 @@ enum Tab {
     /// A file shown other than as text: a picture, its bytes, or a PDF or
     /// medium this computer's app opens.
     View(Entity<crate::viewer::FileViewer>),
+    /// A container's log, followed, as the web's Show Logs opens it.
+    Log(Entity<crate::dockerlog::ContainerLog>),
 }
 
 impl Tab {
@@ -462,7 +464,7 @@ impl Tab {
         match self {
             Tab::Doc(d) => d.read(cx).path().to_string(),
             Tab::Diff(d) => d.read(cx).spec().abs(),
-            Tab::Term(_) => String::new(),
+            Tab::Term(_) | Tab::Log(_) => String::new(),
             Tab::View(v) => v.read(cx).path().to_string(),
         }
     }
@@ -486,6 +488,7 @@ impl Tab {
                 let path = v.read(cx).path();
                 path.rsplit('/').next().unwrap_or(path).to_string()
             }
+            Tab::Log(l) => format!("Log: {}", l.read(cx).name()),
         }
     }
 
@@ -495,6 +498,8 @@ impl Tab {
         match (self, other) {
             (Tab::Term(a), Tab::Term(b)) => a == b,
             (Tab::Term(_), _) | (_, Tab::Term(_)) => false,
+            (Tab::Log(a), Tab::Log(b)) => a == b,
+            (Tab::Log(_), _) | (_, Tab::Log(_)) => false,
             (Tab::View(a), Tab::View(b)) => {
                 let (a, b) = (a.read(cx), b.read(cx));
                 a.path() == b.path() && a.view() == b.view()
@@ -511,6 +516,7 @@ impl Tab {
             Tab::Diff(d) => d.entity_id(),
             Tab::Term(t) => t.entity_id(),
             Tab::View(v) => v.entity_id(),
+            Tab::Log(l) => l.entity_id(),
         }
     }
 
@@ -520,6 +526,7 @@ impl Tab {
             Tab::Diff(d) => d.focus_handle(cx),
             Tab::Term(t) => t.focus_handle(cx),
             Tab::View(v) => v.focus_handle(cx),
+            Tab::Log(l) => l.focus_handle(cx),
         }
     }
 
@@ -529,6 +536,7 @@ impl Tab {
             Tab::Diff(d) => d.clone().into_any_element(),
             Tab::Term(t) => t.clone().into_any_element(),
             Tab::View(v) => v.clone().into_any_element(),
+            Tab::Log(l) => l.clone().into_any_element(),
         }
     }
 }
@@ -907,7 +915,7 @@ impl EnvTab {
                 f.path() == abs || f.asked() == abs
             }
             Tab::View(v) => v.read(cx).path() == abs,
-            Tab::Diff(_) | Tab::Term(_) => false,
+            Tab::Diff(_) | Tab::Term(_) | Tab::Log(_) => false,
         }) {
             Some(i) => i,
             None => {
@@ -1210,6 +1218,11 @@ impl EnvTab {
                     self.take_tab(i);
                     Tab::Term(t)
                 }
+                Tab::Log(l) => {
+                    let l = l.clone();
+                    self.take_tab(i);
+                    Tab::Log(l)
+                }
                 Tab::View(v) => {
                     let (abs, way) = (v.read(cx).path().to_string(), v.read(cx).view());
                     match self.new_viewer(&abs, way, cx) {
@@ -1440,6 +1453,36 @@ impl EnvTab {
                 self.files.len() - 1
             }
         };
+        self.show_file(i, window, cx);
+    }
+
+    /// Follows a container's log in an editor tab, the one it has if it
+    /// has one.
+    pub fn open_log(
+        &mut self,
+        id: String,
+        name: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let at = self
+            .files
+            .iter()
+            .position(|f| matches!(f, Tab::Log(l) if l.read(cx).following() == Some(id.as_str())));
+        if let Some(i) = at {
+            self.show_file(i, window, cx);
+            return;
+        }
+        let Some(ws) = self.workspace.clone() else {
+            return;
+        };
+        let log = cx.new(|cx| {
+            let mut l = crate::dockerlog::ContainerLog::new(ws, "docker-log-tab", cx);
+            l.follow(id, name, cx);
+            l
+        });
+        self.files.push(Tab::Log(log));
+        let i = self.files.len() - 1;
         self.show_file(i, window, cx);
     }
 
@@ -1805,7 +1848,7 @@ impl EnvTab {
                     let d = d.read(cx);
                     Some((d.path().to_string(), d.text_and_caret(cx).0.to_string()))
                 }
-                Tab::Diff(_) | Tab::Term(_) | Tab::View(_) => None,
+                Tab::Diff(_) | Tab::Term(_) | Tab::View(_) | Tab::Log(_) => None,
             })
             .collect();
         cx.spawn_in(window, async move |this, cx| {
@@ -3012,6 +3055,20 @@ impl Render for EnvTab {
                         t.new_session(None, Some(e.0.clone()), window, cx)
                     },
                 ));
+                self.subs.push(cx.subscribe_in(
+                    &view,
+                    window,
+                    |t, _, e: &crate::docker::OpenLog, window, cx| {
+                        t.open_log(e.id.clone(), e.name.clone(), window, cx)
+                    },
+                ));
+                self.subs.push(
+                    cx.subscribe(&view, |t, _, e: &crate::docker::OpenPort, cx| {
+                        if let Some(url) = t.ports.as_ref().and_then(|v| v.read(cx).url(e.0, cx)) {
+                            cx.open_url(&url);
+                        }
+                    }),
+                );
                 self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
                 self.docker = Some(view);
             }

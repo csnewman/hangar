@@ -19,6 +19,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::assets;
+use crate::dockerlog::ContainerLog;
 use crate::gitlog::{chip, when};
 use crate::logview::LogPane;
 use crate::model::Tone;
@@ -134,6 +135,40 @@ impl Image {
     }
 }
 
+/// A volume, and the containers that mount it, by name.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default)]
+pub struct Volume {
+    pub name: String,
+    pub driver: String,
+    pub mountpoint: String,
+    pub created: String,
+    pub project: Option<String>,
+    pub containers: Vec<String>,
+}
+
+/// A network, and the containers attached to it, by name.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default)]
+pub struct Network {
+    pub id: String,
+    pub name: String,
+    pub driver: String,
+    pub scope: String,
+    pub project: Option<String>,
+    pub containers: Vec<String>,
+    /// One of Docker's own, which it does not let go.
+    pub builtin: bool,
+}
+
+/// What a list of containers using something says.
+fn used_by(names: &[String]) -> String {
+    match names {
+        [] => "no container".into(),
+        names => names.join(", "),
+    }
+}
+
 /// The environment's Docker: whether it can be reached, why not, and what
 /// it holds.
 #[derive(Debug, Clone, PartialEq, Default, Deserialize)]
@@ -143,6 +178,8 @@ pub struct Overview {
     pub why: Option<String>,
     pub containers: Vec<Container>,
     pub images: Vec<Image>,
+    pub volumes: Vec<Volume>,
+    pub networks: Vec<Network>,
 }
 
 impl Overview {
@@ -167,6 +204,23 @@ impl Overview {
     pub fn image(&self, id: &str) -> Option<&Image> {
         self.images.iter().find(|i| i.id == id)
     }
+
+    pub fn volume(&self, name: &str) -> Option<&Volume> {
+        self.volumes.iter().find(|v| v.name == name)
+    }
+
+    pub fn network(&self, id: &str) -> Option<&Network> {
+        self.networks.iter().find(|n| n.id == id)
+    }
+}
+
+/// Which of the list's sections are open: the images, the volumes and the
+/// networks, as IntelliJ's Services window has them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Sections {
+    pub images: bool,
+    pub volumes: bool,
+    pub networks: bool,
 }
 
 /// A row of the list.
@@ -195,12 +249,39 @@ pub enum Row {
     Image {
         id: String,
     },
+    /// The volumes' and the networks' headings, shown when there are any.
+    Volumes {
+        count: usize,
+        open: bool,
+    },
+    Volume {
+        name: String,
+    },
+    Networks {
+        count: usize,
+        open: bool,
+    },
+    Network {
+        id: String,
+    },
+}
+
+impl Row {
+    /// Whether the row heads a section rather than standing for a thing.
+    pub fn heading(&self) -> bool {
+        matches!(
+            self,
+            Row::Images { .. } | Row::Volumes { .. } | Row::Networks { .. }
+        )
+    }
 }
 
 /// The rows: each Compose project, by name, with its containers by
 /// service, those of none after them, then the images, tagged ones first,
-/// closed projects and images showing their heading alone.
-pub fn rows(o: &Overview, closed: &HashSet<String>, images_open: bool) -> Vec<Row> {
+/// then the volumes and the networks where there are any, closed projects
+/// and sections showing their heading alone.
+pub fn rows(o: &Overview, closed: &HashSet<String>, open: Sections) -> Vec<Row> {
+    let images_open = open.images;
     let mut out = Vec::new();
     if !o.available {
         return out;
@@ -249,6 +330,26 @@ pub fn rows(o: &Overview, closed: &HashSet<String>, images_open: bool) -> Vec<Ro
         images.sort_by_key(|i| (i.tags.is_empty(), i.name()));
         out.extend(images.into_iter().map(|i| Row::Image { id: i.id.clone() }));
     }
+    if !o.volumes.is_empty() {
+        out.push(Row::Volumes {
+            count: o.volumes.len(),
+            open: open.volumes,
+        });
+        if open.volumes {
+            out.extend(o.volumes.iter().map(|v| Row::Volume {
+                name: v.name.clone(),
+            }));
+        }
+    }
+    if !o.networks.is_empty() {
+        out.push(Row::Networks {
+            count: o.networks.len(),
+            open: open.networks,
+        });
+        if open.networks {
+            out.extend(o.networks.iter().map(|n| Row::Network { id: n.id.clone() }));
+        }
+    }
     out
 }
 
@@ -278,6 +379,8 @@ pub enum Chosen {
     Container(String),
     Project(String),
     Image(String),
+    Volume(String),
+    Network(String),
 }
 
 /// A container's two views.
@@ -291,29 +394,33 @@ pub enum Pane {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunInTerminal(pub String);
 
+/// Asks for a container's log followed in an editor tab: its ID and name.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OpenLog {
+    pub id: String,
+    pub name: String,
+}
+
+/// Asks for a port the environment publishes opened in the browser.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OpenPort(pub u16);
+
+/// The host ports a container publishes, from its ports as the service
+/// gives them ("8080→80/tcp"), each once, in order.
+pub fn published(ports: &[String]) -> Vec<u16> {
+    let mut out: Vec<u16> = ports
+        .iter()
+        .filter_map(|p| p.split_once('→')?.0.rsplit(':').next()?.parse().ok())
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 impl gpui::EventEmitter<RunInTerminal> for DockerView {}
+impl gpui::EventEmitter<OpenLog> for DockerView {}
+impl gpui::EventEmitter<OpenPort> for DockerView {}
 impl gpui::EventEmitter<OpenFile> for DockerView {}
-
-/// The container whose log is followed.
-struct Follow {
-    id: String,
-    /// The connection it is followed on, which stops it.
-    code: crate::code::Code,
-    /// The stream docker.logs gave, once it has answered.
-    stream: Option<u64>,
-    /// Why it stopped following.
-    ended: Option<String>,
-}
-
-/// What a container's log said before docker.logs answered with its
-/// stream's number.
-enum Early {
-    Text(u64, String),
-    End(u64, String),
-}
-
-/// What a log said when the connection carrying it was lost.
-const LOST: &str = "the connection was lost";
 
 pub struct DockerView {
     workspace: Entity<Workspace>,
@@ -323,15 +430,10 @@ pub struct DockerView {
     /// images as image:ID.
     busy: HashSet<String>,
     closed: HashSet<String>,
-    images_open: bool,
+    open: Sections,
     chosen: Option<Chosen>,
     pane: Pane,
-    log: Entity<LogPane>,
-    follow: Option<Follow>,
-    /// Each docker.logs asked counts; an answer to an older one is
-    /// stopped, not shown.
-    asked: u64,
-    early: Vec<Early>,
+    log: Entity<ContainerLog>,
     loading: bool,
     again: bool,
     focus: FocusHandle,
@@ -346,25 +448,13 @@ impl DockerView {
     pub fn new(workspace: Entity<Workspace>, cx: &mut Context<Self>) -> Self {
         let subs = vec![cx.subscribe(&workspace, |v, _, e: &Event, cx| match e {
             Event::Projects => v.load(cx),
-            Event::Heard {
-                root,
-                event,
-                params,
-            } if root == PRIMARY => match event.as_str() {
-                "docker.changed" => v.load(cx),
-                "docker.log" => v.heard_log(params, cx),
-                "docker.logEnd" => v.heard_end(params, cx),
-                _ => {}
-            },
-            Event::Lost { root } if root == PRIMARY => {
-                if let Some(f) = &mut v.follow {
-                    f.stream = None;
-                    f.ended = Some(LOST.into());
-                }
-                cx.notify();
+            Event::Heard { root, event, .. } if root == PRIMARY && event == "docker.changed" => {
+                v.load(cx)
             }
             _ => {}
         })];
+        let log = cx.new(|cx| ContainerLog::new(workspace.clone(), "docker-log", cx));
+        let log_sub = cx.observe(&log, |_, _, cx| cx.notify());
         cx.spawn(async move |this: WeakEntity<Self>, cx| {
             loop {
                 cx.background_executor().timer(TICK).await;
@@ -380,17 +470,14 @@ impl DockerView {
             error: None,
             busy: HashSet::new(),
             closed: HashSet::new(),
-            images_open: false,
+            open: Sections::default(),
             chosen: None,
             pane: Pane::Log,
-            log: cx.new(|cx| LogPane::new("docker-log", "Waiting for output…", cx)),
-            follow: None,
-            asked: 0,
-            early: Vec::new(),
+            log,
             loading: false,
             again: false,
             focus: cx.focus_handle(),
-            _subs: subs,
+            _subs: subs.into_iter().chain([log_sub]).collect(),
         };
         v.load(cx);
         v
@@ -404,8 +491,9 @@ impl DockerView {
         self.chosen.as_ref()
     }
 
-    pub fn log(&self) -> &Entity<LogPane> {
-        &self.log
+    /// The log shown: the chosen container's, followed.
+    pub fn log<'a>(&self, cx: &'a App) -> &'a Entity<LogPane> {
+        self.log.read(cx).pane()
     }
 
     /// What the window's title says beside its name.
@@ -462,6 +550,8 @@ impl DockerView {
             Some(Chosen::Container(id)) => o.container(id).is_none(),
             Some(Chosen::Project(name)) => o.project(name).is_empty(),
             Some(Chosen::Image(id)) => o.image(id).is_none(),
+            Some(Chosen::Volume(name)) => o.volume(name).is_none(),
+            Some(Chosen::Network(id)) => o.network(id).is_none(),
             None => false,
         };
         if gone {
@@ -469,9 +559,10 @@ impl DockerView {
             self.stop_following(cx);
             return;
         }
-        let again = self.follow.as_ref().and_then(|f| {
-            let c = o.container(&f.id)?;
-            (f.ended.is_some() && c.running()).then(|| f.id.clone())
+        let l = self.log.read(cx);
+        let again = l.following().and_then(|id| {
+            let c = o.container(id)?;
+            (l.ended().is_some() && c.running()).then(|| id.to_string())
         });
         if let Some(id) = again
             && self.pane == Pane::Log
@@ -497,10 +588,8 @@ impl DockerView {
         self.pane = pane;
         match (&self.chosen, pane) {
             (Some(Chosen::Container(id)), Pane::Log)
-                if self
-                    .follow
-                    .as_ref()
-                    .is_none_or(|f| &f.id != id || f.ended.is_some()) =>
+                if self.log.read(cx).following() != Some(id.as_str())
+                    || self.log.read(cx).ended().is_some() =>
             {
                 let id = id.clone();
                 self.start_following(id, cx)
@@ -511,113 +600,24 @@ impl DockerView {
         cx.notify();
     }
 
-    /// Follows a container's output: its last thousand lines, then what it
-    /// writes.
+    /// Follows a container's output in the log beside the list.
     fn start_following(&mut self, id: String, cx: &mut Context<Self>) {
-        self.stop_following(cx);
-        let Some(code) = self.code(cx) else { return };
-        self.asked += 1;
-        let asked = self.asked;
-        self.early.clear();
-        self.log.update(cx, |l, cx| {
-            l.clear(cx);
-            l.set_empty("Waiting for output…", cx);
-        });
-        self.follow = Some(Follow {
-            id: id.clone(),
-            code: code.clone(),
-            stream: None,
-            ended: None,
-        });
-        let call = code.call("docker.logs", json!({ "id": id, "tail": 1000 }));
-        cx.spawn(async move |this, cx| {
-            let got = call.await;
-            let _ = this.update(cx, |v, cx| {
-                let stream = got.as_ref().ok().and_then(|r| r["stream"].as_u64());
-                if v.asked != asked {
-                    if let (Some(s), Some(code)) = (stream, v.code(cx)) {
-                        drop(code.call("docker.logsStop", json!({ "stream": s })));
-                    }
-                    return;
-                }
-                let Some(f) = &mut v.follow else { return };
-                match (got, stream) {
-                    (Ok(_), Some(s)) => {
-                        f.stream = Some(s);
-                        for e in std::mem::take(&mut v.early) {
-                            match e {
-                                Early::Text(n, text) if n == s => {
-                                    v.log.update(cx, |l, cx| l.push(&text, cx))
-                                }
-                                Early::End(n, why) if n == s => v.ended(why, cx),
-                                _ => {}
-                            }
-                        }
-                    }
-                    (Err(e), _) => v.ended(e, cx),
-                    (Ok(_), None) => v.ended("Docker gave no log".into(), cx),
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-        cx.notify();
+        let name = self
+            .overview
+            .as_ref()
+            .and_then(|o| o.container(&id))
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        self.log.update(cx, |l, cx| l.follow(id, name, cx));
     }
 
-    fn stop_following(&mut self, _: &mut Context<Self>) {
-        self.asked += 1;
-        if let Some(Follow {
-            stream: Some(s),
-            code,
-            ..
-        }) = self.follow.take()
-        {
-            drop(code.call("docker.logsStop", json!({ "stream": s })));
-        }
-    }
-
-    fn ended(&mut self, why: String, cx: &mut Context<Self>) {
-        if let Some(f) = &mut self.follow {
-            f.stream = None;
-            f.ended = Some(why.clone());
-        }
-        if self.log.read(cx).lines().is_empty() {
-            self.log
-                .update(cx, |l, cx| l.set_empty(format!("No output: {why}."), cx));
-        }
-        cx.notify();
-    }
-
-    fn heard_log(&mut self, params: &Value, cx: &mut Context<Self>) {
-        let (Some(n), Some(text)) = (params["stream"].as_u64(), params["text"].as_str()) else {
-            return;
-        };
-        match &self.follow {
-            Some(f) if f.stream == Some(n) => self.log.update(cx, |l, cx| l.push(text, cx)),
-            Some(f) if f.stream.is_none() && f.ended.is_none() => {
-                self.early.push(Early::Text(n, text.to_string()))
-            }
-            _ => {}
-        }
-    }
-
-    fn heard_end(&mut self, params: &Value, cx: &mut Context<Self>) {
-        let Some(n) = params["stream"].as_u64() else {
-            return;
-        };
-        let why = params["why"].as_str().unwrap_or("it ended").to_string();
-        match &self.follow {
-            Some(f) if f.stream == Some(n) => self.ended(why, cx),
-            Some(f) if f.stream.is_none() && f.ended.is_none() => {
-                self.early.push(Early::End(n, why))
-            }
-            _ => {}
-        }
+    fn stop_following(&mut self, cx: &mut Context<Self>) {
+        self.log.update(cx, |l, cx| l.stop(cx));
     }
 
     /// Why the log shown is not being followed.
-    pub fn not_following(&self) -> Option<&str> {
-        self.follow.as_ref().and_then(|f| f.ended.as_deref())
+    pub fn not_following(&self, cx: &App) -> Option<String> {
+        self.log.read(cx).ended().map(str::to_string)
     }
 
     /// Does something to a container: start, stop, restart, pause,
@@ -658,6 +658,34 @@ impl DockerView {
             format!("image:{id}"),
             name,
             "docker.removeImage",
+            params,
+            cx,
+        );
+    }
+
+    pub fn remove_volume(&mut self, name: String, cx: &mut Context<Self>) {
+        let params = json!({ "name": name });
+        self.call(
+            format!("volume:{name}"),
+            name,
+            "docker.removeVolume",
+            params,
+            cx,
+        );
+    }
+
+    pub fn remove_network(&mut self, id: String, cx: &mut Context<Self>) {
+        let name = self
+            .overview
+            .as_ref()
+            .and_then(|o| o.network(&id))
+            .map(|n| n.name.clone())
+            .unwrap_or_else(|| id.clone());
+        let params = json!({ "id": id });
+        self.call(
+            format!("network:{id}"),
+            name,
+            "docker.removeNetwork",
             params,
             cx,
         );
@@ -713,7 +741,7 @@ impl DockerView {
     fn rows(&self) -> Vec<Row> {
         self.overview
             .as_ref()
-            .map(|o| rows(o, &self.closed, self.images_open))
+            .map(|o| rows(o, &self.closed, self.open))
             .unwrap_or_default()
     }
 
@@ -723,6 +751,8 @@ impl DockerView {
             (Row::Project { name, .. }, Some(Chosen::Project(n))) => name == n,
             (Row::Container { id, .. }, Some(Chosen::Container(c))) => id == c,
             (Row::Image { id }, Some(Chosen::Image(i))) => id == i,
+            (Row::Volume { name }, Some(Chosen::Volume(n))) => name == n,
+            (Row::Network { id }, Some(Chosen::Network(i))) => id == i,
             _ => false,
         })
     }
@@ -732,18 +762,16 @@ impl DockerView {
             Row::Project { name, .. } => self.choose(Chosen::Project(name.clone()), cx),
             Row::Container { id, .. } => self.choose(Chosen::Container(id.clone()), cx),
             Row::Image { id } => self.choose(Chosen::Image(id.clone()), cx),
-            Row::Images { .. } => {}
+            Row::Volume { name } => self.choose(Chosen::Volume(name.clone()), cx),
+            Row::Network { id } => self.choose(Chosen::Network(id.clone()), cx),
+            Row::Images { .. } | Row::Volumes { .. } | Row::Networks { .. } => {}
         }
     }
 
     /// The list's keys: up and down move, left and right close and open a
     /// project or the images.
     fn key(&mut self, e: &KeyDownEvent, cx: &mut Context<Self>) {
-        let rows: Vec<Row> = self
-            .rows()
-            .into_iter()
-            .filter(|r| !matches!(r, Row::Images { .. }))
-            .collect();
+        let rows: Vec<Row> = self.rows().into_iter().filter(|r| !r.heading()).collect();
         let at = self.chosen_row(&rows);
         match e.keystroke.key.as_str() {
             "down" => {
@@ -953,9 +981,20 @@ impl DockerView {
                 .child(div().flex_none().child("Images"))
                 .child(meta(format!("{count} · {}", bytes(size))))
                 .on_click(cx.listener(|v, _, _, cx| {
-                    v.images_open = !v.images_open;
+                    v.open.images = !v.open.images;
                     cx.notify();
                 }))
+                .context_menu({
+                    let me = cx.entity().downgrade();
+                    move |menu, _, cx| {
+                        crate::ui::modal(cx);
+                        let me = me.clone();
+                        menu.item(
+                            PopupMenuItem::new("Pull Image…")
+                                .on_click(move |_, window, cx| ask_pull(me.clone(), window, cx)),
+                        )
+                    }
+                })
                 .into_any_element(),
             Row::Image { id } => {
                 let Some(img) = o.image(&id).cloned() else {
@@ -981,6 +1020,90 @@ impl DockerView {
                     })
                     .into_any_element()
             }
+            Row::Volumes { count, open } => base
+                .debug_selector(|| "docker-volumes".into())
+                .child(icon(if open {
+                    "chevron-down"
+                } else {
+                    "chevron-right"
+                }))
+                .child(dot(Tone::Idle, p))
+                .child(div().flex_none().child("Volumes"))
+                .child(meta(count.to_string()))
+                .on_click(cx.listener(|v, _, _, cx| {
+                    v.open.volumes = !v.open.volumes;
+                    cx.notify();
+                }))
+                .into_any_element(),
+            Row::Volume { name } => {
+                let Some(vol) = o.volume(&name).cloned() else {
+                    return div().into_any_element();
+                };
+                let at = format!("docker-volume-{name}");
+                let (choose, right) = (name.clone(), name.clone());
+                base.debug_selector(move || at)
+                    .pl(px(24.))
+                    .child(div().min_w_0().truncate().child(vol.name.clone()))
+                    .child(meta(if vol.containers.is_empty() {
+                        "unused".to_string()
+                    } else {
+                        vol.containers.join(", ")
+                    }))
+                    .on_click(cx.listener(move |v, _, window, cx| {
+                        window.focus(&v.focus, cx);
+                        v.choose(Chosen::Volume(choose.clone()), cx)
+                    }))
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |v, _, _, cx| v.choose(Chosen::Volume(right.clone()), cx)),
+                    )
+                    .context_menu(move |menu, _, cx| {
+                        crate::ui::modal(cx);
+                        volume_menu(menu, me.clone(), &vol)
+                    })
+                    .into_any_element()
+            }
+            Row::Networks { count, open } => base
+                .debug_selector(|| "docker-networks".into())
+                .child(icon(if open {
+                    "chevron-down"
+                } else {
+                    "chevron-right"
+                }))
+                .child(dot(Tone::Idle, p))
+                .child(div().flex_none().child("Networks"))
+                .child(meta(count.to_string()))
+                .on_click(cx.listener(|v, _, _, cx| {
+                    v.open.networks = !v.open.networks;
+                    cx.notify();
+                }))
+                .into_any_element(),
+            Row::Network { id } => {
+                let Some(net) = o.network(&id).cloned() else {
+                    return div().into_any_element();
+                };
+                let at = format!("docker-network-{}", net.name);
+                let (choose, right) = (id.clone(), id.clone());
+                base.debug_selector(move || at)
+                    .pl(px(24.))
+                    .child(div().min_w_0().truncate().child(net.name.clone()))
+                    .child(meta(net.driver.clone()))
+                    .on_click(cx.listener(move |v, _, window, cx| {
+                        window.focus(&v.focus, cx);
+                        v.choose(Chosen::Network(choose.clone()), cx)
+                    }))
+                    .on_mouse_down(
+                        gpui::MouseButton::Right,
+                        cx.listener(move |v, _, _, cx| {
+                            v.choose(Chosen::Network(right.clone()), cx)
+                        }),
+                    )
+                    .context_menu(move |menu, _, cx| {
+                        crate::ui::modal(cx);
+                        network_menu(menu, me.clone(), &net)
+                    })
+                    .into_any_element()
+            }
         }
     }
 
@@ -1002,7 +1125,85 @@ impl DockerView {
                 Some(img) => self.image_details(img, p, cx),
                 None => div().into_any_element(),
             },
+            Some(Chosen::Volume(name)) => match o.volume(&name).cloned() {
+                Some(vol) => self.volume_details(vol, p, cx),
+                None => div().into_any_element(),
+            },
+            Some(Chosen::Network(id)) => match o.network(&id).cloned() {
+                Some(net) => self.network_details(net, p, cx),
+                None => div().into_any_element(),
+            },
         }
+    }
+
+    fn volume_details(&self, vol: Volume, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let busy = self.busy.contains(&format!("volume:{}", vol.name));
+        let me = cx.entity().downgrade();
+        let name = vol.name.clone();
+        let mut grid = grid(p)
+            .child(detail("Driver", vol.driver.clone(), p))
+            .child(detail("Mountpoint", vol.mountpoint.clone(), p))
+            .child(detail("Created", vol.created.clone(), p));
+        if let Some(project) = &vol.project {
+            grid = grid.child(detail("Project", project.clone(), p));
+        }
+        grid = grid.child(detail("Used by", used_by(&vol.containers), p));
+        let in_use = !vol.containers.is_empty();
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .child(header(
+                "hard-drive",
+                vol.name.clone(),
+                vol.driver.clone(),
+                p,
+            ))
+            .child(h_flex().px(px(8.)).py(px(6.)).child(tool(
+                "docker-remove-volume",
+                "trash",
+                "Remove…",
+                !busy && !in_use,
+                p,
+                move |_, window, cx| confirm_remove_volume(me.clone(), name.clone(), window, cx),
+            )))
+            .child(grid)
+            .into_any_element()
+    }
+
+    fn network_details(
+        &self,
+        net: Network,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let busy = self.busy.contains(&format!("network:{}", net.id));
+        let me = cx.entity().downgrade();
+        let (id, name) = (net.id.clone(), net.name.clone());
+        let mut grid = grid(p)
+            .child(detail("ID", net.id.clone(), p))
+            .child(detail("Driver", net.driver.clone(), p))
+            .child(detail("Scope", net.scope.clone(), p));
+        if let Some(project) = &net.project {
+            grid = grid.child(detail("Project", project.clone(), p));
+        }
+        grid = grid.child(detail("Attached", used_by(&net.containers), p));
+        let removable = !net.builtin && net.containers.is_empty();
+        v_flex()
+            .size_full()
+            .min_h_0()
+            .child(header("ports", net.name.clone(), net.driver.clone(), p))
+            .child(h_flex().px(px(8.)).py(px(6.)).child(tool(
+                "docker-remove-network",
+                "trash",
+                "Remove…",
+                !busy && removable,
+                p,
+                move |_, window, cx| {
+                    confirm_remove_network(me.clone(), id.clone(), name.clone(), window, cx)
+                },
+            )))
+            .child(grid)
+            .into_any_element()
     }
 
     fn container_details(
@@ -1036,7 +1237,7 @@ impl DockerView {
                 .on_click(cx.listener(|v, _, _, cx| v.show_pane(Pane::Inspect, cx))),
             );
         if self.pane == Pane::Log
-            && let Some(why) = self.not_following()
+            && let Some(why) = self.not_following(cx)
         {
             let again = id.clone();
             bar = bar
@@ -1060,6 +1261,25 @@ impl DockerView {
                             cx.listener(move |v, _, _, cx| v.start_following(again.clone(), cx)),
                         ),
                 );
+        }
+        if self.pane == Pane::Log {
+            let (id, name) = (id.clone(), c.name.clone());
+            bar = bar.child(
+                div()
+                    .id("docker-log-editor")
+                    .debug_selector(|| "docker-log-editor".into())
+                    .ml(px(6.))
+                    .text_size(px(11.))
+                    .text_color(p.accent)
+                    .cursor_pointer()
+                    .child("Open in Editor")
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(OpenLog {
+                            id: id.clone(),
+                            name: name.clone(),
+                        })
+                    })),
+            );
         }
         bar = bar.child(div().flex_1());
         bar = if c.up() {
@@ -1106,7 +1326,7 @@ impl DockerView {
             Pane::Log => div()
                 .flex_1()
                 .min_h_0()
-                .child(self.log.clone())
+                .child(self.log.read(cx).pane().clone())
                 .into_any_element(),
             Pane::Inspect => {
                 let mut grid = grid(p)
@@ -1327,20 +1547,6 @@ impl DockerView {
     }
 }
 
-impl Drop for DockerView {
-    fn drop(&mut self) {
-        // The request goes as it is made; its answer is not waited for.
-        if let Some(Follow {
-            stream: Some(s),
-            code,
-            ..
-        }) = &self.follow
-        {
-            drop(code.call("docker.logsStop", json!({ "stream": s })));
-        }
-    }
-}
-
 impl Focusable for DockerView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -1402,6 +1608,7 @@ fn container_menu(menu: PopupMenu, view: WeakEntity<DockerView>, c: &Container) 
             confirm_remove(view.clone(), id.clone(), name.clone(), running, window, cx)
         }
     };
+    let (tab_id, tab_name) = (id.clone(), name.clone());
     let menu = menu
         .item(
             PopupMenuItem::new("Show Log").on_click(on(Box::new(move |v, _, cx| {
@@ -1410,11 +1617,27 @@ fn container_menu(menu: PopupMenu, view: WeakEntity<DockerView>, c: &Container) 
             }))),
         )
         .item(
+            PopupMenuItem::new("Open Log in Editor").on_click(on(Box::new(move |_, _, cx| {
+                cx.emit(OpenLog {
+                    id: tab_id.clone(),
+                    name: tab_name.clone(),
+                })
+            }))),
+        )
+        .item(
             PopupMenuItem::new("Open Shell")
                 .disabled(!c.running())
                 .on_click(on(Box::new(move |v, _, cx| v.shell(shell.clone(), cx)))),
-        )
-        .separator();
+        );
+    let mut menu = menu;
+    for port in published(&c.ports) {
+        menu = menu.item(
+            PopupMenuItem::new(format!("Open :{port} in Browser"))
+                .disabled(!c.running())
+                .on_click(on(Box::new(move |_, _, cx| cx.emit(OpenPort(port))))),
+        );
+    }
+    let menu = menu.separator();
     let menu = if c.up() {
         menu.item(PopupMenuItem::new("Stop").on_click(act("stop")))
     } else {
@@ -1508,21 +1731,65 @@ fn project_menu(
     .item(PopupMenuItem::new("Down…").on_click(down))
 }
 
+/// The command Run… offers for an image: a container of it, removed when
+/// it stops, attached to the terminal.
+pub fn run_command(image: &str) -> String {
+    format!("docker run --rm -it {image}")
+}
+
+/// Asks which image to pull, and pulls it in a terminal tab, where its
+/// progress shows, as IntelliJ's Pull Image does.
+fn ask_pull(view: WeakEntity<DockerView>, window: &mut Window, cx: &mut App) {
+    crate::treeops::ask_text("Pull Image", "", 0..0, window, cx, move |name, _, cx| {
+        let cmd = format!("docker pull {name}");
+        let _ = view.update(cx, |_, cx| cx.emit(RunInTerminal(cmd)));
+    });
+}
+
 fn image_menu(menu: PopupMenu, view: WeakEntity<DockerView>, img: &Image) -> PopupMenu {
     let copy = img.id.clone();
     let (id, name) = (img.id.clone(), img.name());
-    menu.item(
-        PopupMenuItem::new("Copy ID")
-            .on_click(move |_, _, cx| crate::treeops::copy(copy.clone(), cx)),
-    )
-    .separator()
-    .item(
-        PopupMenuItem::new("Remove…")
-            .disabled(img.in_use())
-            .on_click(move |_, window, cx| {
-                confirm_remove_image(view.clone(), id.clone(), name.clone(), window, cx)
-            }),
-    )
+    let run = {
+        let (view, command) = (view.clone(), run_command(&name));
+        move |_: &gpui::ClickEvent, window: &mut Window, cx: &mut App| {
+            let view = view.clone();
+            let end = command.len();
+            crate::treeops::ask_text("Run", &command, end..end, window, cx, move |cmd, _, cx| {
+                let _ = view.update(cx, |_, cx| cx.emit(RunInTerminal(cmd)));
+            });
+        }
+    };
+    let pull = {
+        let (view, name) = (view.clone(), name.clone());
+        move |_: &gpui::ClickEvent, _: &mut Window, cx: &mut App| {
+            let cmd = format!("docker pull {name}");
+            let _ = view.update(cx, |_, cx| cx.emit(RunInTerminal(cmd)));
+        }
+    };
+    menu.item(PopupMenuItem::new("Run…").on_click(run))
+        .item(
+            PopupMenuItem::new("Pull Again")
+                .disabled(img.tags.is_empty())
+                .on_click(pull),
+        )
+        .item({
+            let view = view.clone();
+            PopupMenuItem::new("Pull Image…")
+                .on_click(move |_, window, cx| ask_pull(view.clone(), window, cx))
+        })
+        .separator()
+        .item(
+            PopupMenuItem::new("Copy ID")
+                .on_click(move |_, _, cx| crate::treeops::copy(copy.clone(), cx)),
+        )
+        .separator()
+        .item(
+            PopupMenuItem::new("Remove…")
+                .disabled(img.in_use())
+                .on_click(move |_, window, cx| {
+                    confirm_remove_image(view.clone(), id.clone(), name.clone(), window, cx)
+                }),
+        )
 }
 
 fn confirm_remove(
@@ -1580,6 +1847,84 @@ fn confirm_remove_image(
             let _ = view.update(cx, |v, cx| v.remove_image(id.clone(), cx));
         },
     );
+}
+
+fn confirm_remove_volume(
+    view: WeakEntity<DockerView>,
+    name: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    crate::treeops::confirm(
+        &format!("Remove {name}?"),
+        "The volume and everything in it are deleted.",
+        "Remove",
+        window,
+        cx,
+        move |_, cx| {
+            let _ = view.update(cx, |v, cx| v.remove_volume(name.clone(), cx));
+        },
+    );
+}
+
+fn confirm_remove_network(
+    view: WeakEntity<DockerView>,
+    id: String,
+    name: String,
+    window: &mut Window,
+    cx: &mut App,
+) {
+    crate::treeops::confirm(
+        &format!("Remove {name}?"),
+        "The network is deleted; Compose makes its own again when its project starts.",
+        "Remove",
+        window,
+        cx,
+        move |_, cx| {
+            let _ = view.update(cx, |v, cx| v.remove_network(id.clone(), cx));
+        },
+    );
+}
+
+fn volume_menu(menu: PopupMenu, view: WeakEntity<DockerView>, vol: &Volume) -> PopupMenu {
+    let (copy, mount, name) = (vol.name.clone(), vol.mountpoint.clone(), vol.name.clone());
+    menu.item(
+        PopupMenuItem::new("Copy Name")
+            .on_click(move |_, _, cx| crate::treeops::copy(copy.clone(), cx)),
+    )
+    .item(
+        PopupMenuItem::new("Copy Mountpoint")
+            .on_click(move |_, _, cx| crate::treeops::copy(mount.clone(), cx)),
+    )
+    .separator()
+    .item(
+        PopupMenuItem::new("Remove…")
+            .disabled(!vol.containers.is_empty())
+            .on_click(move |_, window, cx| {
+                confirm_remove_volume(view.clone(), name.clone(), window, cx)
+            }),
+    )
+}
+
+fn network_menu(menu: PopupMenu, view: WeakEntity<DockerView>, net: &Network) -> PopupMenu {
+    let (copy_name, copy_id) = (net.name.clone(), net.id.clone());
+    let (id, name) = (net.id.clone(), net.name.clone());
+    menu.item(
+        PopupMenuItem::new("Copy Name")
+            .on_click(move |_, _, cx| crate::treeops::copy(copy_name.clone(), cx)),
+    )
+    .item(
+        PopupMenuItem::new("Copy ID")
+            .on_click(move |_, _, cx| crate::treeops::copy(copy_id.clone(), cx)),
+    )
+    .separator()
+    .item(
+        PopupMenuItem::new("Remove…")
+            .disabled(net.builtin || !net.containers.is_empty())
+            .on_click(move |_, window, cx| {
+                confirm_remove_network(view.clone(), id.clone(), name.clone(), window, cx)
+            }),
+    )
 }
 
 /// A button of the details' bar: an icon and a word, greyed when it cannot

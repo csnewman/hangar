@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 use gpui::{AppContext, Modifiers, MouseButton, TestAppContext, VisualTestContext};
 use gpui_component::{Root, WindowExt};
 use hangar_app::docker::{
-    Chosen, Container, DockerView, Overview, Row, RunInTerminal, bytes, rows, shell_command,
+    Chosen, Container, DockerView, Network, Overview, Row, RunInTerminal, Sections, Volume, bytes,
+    published, rows, run_command, shell_command,
 };
 use hangar_app::logview::{Lines, strip_ansi};
 use hangar_app::model::Tone;
@@ -51,7 +52,7 @@ fn overview() -> Value {
 fn projects_then_lone_containers_then_images() {
     let o: Overview = serde_json::from_value(overview()).unwrap();
     assert_eq!(o.summary(), "2 of 3 running");
-    let r = rows(&o, &HashSet::new(), false);
+    let r = rows(&o, &HashSet::new(), Sections::default());
     assert_eq!(
         r,
         [
@@ -81,7 +82,14 @@ fn projects_then_lone_containers_then_images() {
         ]
     );
     let closed = HashSet::from(["shop".to_string()]);
-    let r = rows(&o, &closed, true);
+    let r = rows(
+        &o,
+        &closed,
+        Sections {
+            images: true,
+            ..Default::default()
+        },
+    );
     assert_eq!(
         r.len(),
         5,
@@ -106,7 +114,17 @@ fn projects_then_lone_containers_then_images() {
         why: Some("Docker is not installed".into()),
         ..Default::default()
     };
-    assert!(rows(&unavailable, &HashSet::new(), true).is_empty());
+    assert!(
+        rows(
+            &unavailable,
+            &HashSet::new(),
+            Sections {
+                images: true,
+                ..Default::default()
+            }
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -284,7 +302,7 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
     click(cx, "docker-row-shop-web-1");
     assert_eq!(next("docker.logs")["id"], "aaaaaaaaaaaa");
     until(cx, "the log", |cx| {
-        docker.read_with(cx, |d, cx| d.log().read(cx).lines().text())
+        docker.read_with(cx, |d, cx| d.log(cx).read(cx).lines().text())
             == "aaaaaaaaaaaa says\nhello world\n"
     });
 
@@ -293,7 +311,7 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
     assert_eq!(next("docker.logsStop")["stream"], 7);
     assert_eq!(next("docker.logs")["id"], "bbbbbbbbbbbb");
     until(cx, "its log alone", |cx| {
-        docker.read_with(cx, |d, cx| d.log().read(cx).lines().text())
+        docker.read_with(cx, |d, cx| d.log(cx).read(cx).lines().text())
             == "bbbbbbbbbbbb says\nhello world\n"
     });
 
@@ -325,13 +343,13 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
         cx.debug_bounds("docker-copy-id").is_some()
     });
 
-    // The menu: Pause, the fifth item, after Show Log, Open Shell, Stop and
-    // Restart.
+    // The menu: Pause, the seventh item, after Show Log, Open Log in
+    // Editor, Open Shell, Open :8080 in Browser, Stop and Restart.
     let row = cx.debug_bounds("docker-row-shop-web-1").unwrap().center();
     cx.simulate_mouse_down(row, MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(row, MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_keystrokes("down down down down down enter");
+    cx.simulate_keystrokes("down down down down down down down enter");
     let p = next("docker.act");
     assert_eq!(p["action"], "pause");
 
@@ -371,5 +389,87 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
     assert!(
         !cx.update(|window, cx| window.has_active_dialog(cx)),
         "alpine is in use"
+    );
+}
+
+#[test]
+fn volumes_and_networks_have_sections_of_their_own() {
+    let o = Overview {
+        available: true,
+        volumes: vec![Volume {
+            name: "shop_data".into(),
+            containers: vec!["web-1".into()],
+            ..Default::default()
+        }],
+        networks: vec![Network {
+            id: "c".repeat(64),
+            name: "bridge".into(),
+            builtin: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let shut = rows(&o, &HashSet::new(), Sections::default());
+    assert_eq!(
+        shut,
+        [
+            Row::Images {
+                count: 0,
+                size: 0.,
+                open: false
+            },
+            Row::Volumes {
+                count: 1,
+                open: false
+            },
+            Row::Networks {
+                count: 1,
+                open: false
+            },
+        ]
+    );
+    assert!(shut.iter().all(Row::heading));
+    let open = rows(
+        &o,
+        &HashSet::new(),
+        Sections {
+            volumes: true,
+            networks: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        open[2..],
+        [
+            Row::Volume {
+                name: "shop_data".into()
+            },
+            Row::Networks {
+                count: 1,
+                open: true
+            },
+            Row::Network { id: "c".repeat(64) },
+        ]
+    );
+    // None of either: no heading for it.
+    let bare = Overview {
+        available: true,
+        ..Default::default()
+    };
+    assert_eq!(rows(&bare, &HashSet::new(), Sections::default()).len(), 1);
+}
+
+#[test]
+fn a_containers_published_ports_are_its_host_ports() {
+    let ports = [
+        "8080→80/tcp".to_string(),
+        "127.0.0.1:5432→5432/tcp".to_string(),
+        "6379/tcp".to_string(),
+        "8080→80/tcp".to_string(),
+    ];
+    assert_eq!(published(&ports), [5432, 8080]);
+    assert_eq!(
+        run_command("nginx:latest"),
+        "docker run --rm -it nginx:latest"
     );
 }

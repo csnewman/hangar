@@ -131,10 +131,23 @@ pub fn ask_name(
     cx: &mut App,
     done: impl Fn(String, &mut Window, &mut App) + 'static,
 ) {
+    ask_text(title, initial, 0..stem(initial), window, cx, done)
+}
+
+/// Asks for text as `ask_name` does, the part of what is offered given
+/// chosen: a command offered to be run, its caret at its end.
+pub fn ask_text(
+    title: &str,
+    initial: &str,
+    chosen: std::ops::Range<usize>,
+    window: &mut Window,
+    cx: &mut App,
+    done: impl Fn(String, &mut Window, &mut App) + 'static,
+) {
     let done: WithName = Rc::new(done);
     let input = cx.new(|cx| {
         let mut s = InputState::new(window, cx).default_value(initial.to_string());
-        s.set_selected_range(0..stem(initial), cx);
+        s.set_selected_range(chosen, cx);
         s
     });
     let handle = window.window_handle();

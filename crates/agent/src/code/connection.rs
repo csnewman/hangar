@@ -697,6 +697,14 @@ impl Connection {
                 self.s.docker.remove_image(p.str("id")?).await?;
                 Value::Null
             }
+            "docker.removeVolume" => {
+                self.s.docker.remove_volume(p.str("name")?).await?;
+                Value::Null
+            }
+            "docker.removeNetwork" => {
+                self.s.docker.remove_network(p.str("id")?).await?;
+                Value::Null
+            }
             "docker.logs" => {
                 let n = {
                     let mut st = self.state.lock().unwrap();

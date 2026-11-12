@@ -14,6 +14,7 @@ pub mod commit;
 pub mod diff;
 pub mod docedit;
 pub mod docker;
+pub mod dockerlog;
 pub mod doubleshift;
 pub mod editorconfig;
 pub mod envlogs;

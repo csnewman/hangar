@@ -821,9 +821,25 @@ test('docker: containers, actions, logs and changes', async () => {
 		if (url.startsWith('/v1.41/containers/json')) {
 			send([{ Id: id, Names: ['/web-1'], Image: 'nginx', State: 'running', Status: 'Up 2 minutes', Created: 1, Command: 'nginx -g daemon off;',
 				Ports: [{ IP: '0.0.0.0', PrivatePort: 80, PublicPort: 8080, Type: 'tcp' }, { IP: '::', PrivatePort: 80, PublicPort: 8080, Type: 'tcp' }],
+				Mounts: [{ Type: 'volume', Name: 'shop_data', Destination: '/data' }],
+				NetworkSettings: { Networks: { shop_default: {} } },
 				Labels: { 'com.docker.compose.project': 'shop', 'com.docker.compose.service': 'web',
 					'com.docker.compose.project.working_dir': '/home/dev/shop',
 					'com.docker.compose.project.config_files': '/home/dev/shop/compose.yaml,/home/dev/shop/compose.dev.yaml' } }])
+		} else if (url.startsWith('/v1.41/volumes') && req.method === 'GET') {
+			send({ Volumes: [
+				{ Name: 'shop_data', Driver: 'local', Mountpoint: '/var/lib/docker/volumes/shop_data/_data', CreatedAt: '2026-11-01T10:00:00Z',
+					Labels: { 'com.docker.compose.project': 'shop' } },
+				{ Name: 'cache', Driver: 'local', Mountpoint: '/var/lib/docker/volumes/cache/_data', CreatedAt: '2026-11-02T10:00:00Z', Labels: null },
+			] })
+		} else if (url.startsWith('/v1.41/networks') && req.method === 'GET') {
+			send([
+				{ Id: 'c'.repeat(64), Name: 'shop_default', Driver: 'bridge', Scope: 'local', Labels: { 'com.docker.compose.project': 'shop' } },
+				{ Id: 'd'.repeat(64), Name: 'bridge', Driver: 'bridge', Scope: 'local', Labels: {} },
+			])
+		} else if (req.method === 'DELETE' && (url === '/v1.41/volumes/cache' || url === `/v1.41/networks/${'c'.repeat(64)}`)) {
+			res.statusCode = 204
+			res.end()
 		} else if (url.startsWith('/v1.41/images/json')) {
 			send([{ Id: 'sha256:' + 'b'.repeat(64), RepoTags: ['nginx:latest'], Size: 1000, Created: 2, Containers: 1 }])
 		} else if (url === `/v1.41/containers/${id}/restart`) {
@@ -855,6 +871,23 @@ test('docker: containers, actions, logs and changes', async () => {
 				configFiles: ['/home/dev/shop/compose.yaml', '/home/dev/shop/compose.dev.yaml'] },
 		])
 		assert.deepEqual(o.images.map((i: any) => i.tags), [['nginx:latest']])
+		// Volumes and networks, with the containers using each; Docker's
+		// own networks first.
+		assert.deepEqual(o.volumes, [
+			{ name: 'cache', driver: 'local', mountpoint: '/var/lib/docker/volumes/cache/_data', created: '2026-11-02T10:00:00Z', containers: [] },
+			{ name: 'shop_data', driver: 'local', mountpoint: '/var/lib/docker/volumes/shop_data/_data', created: '2026-11-01T10:00:00Z',
+				project: 'shop', containers: ['web-1'] },
+		])
+		assert.deepEqual(o.networks, [
+			{ id: 'd'.repeat(64), name: 'bridge', driver: 'bridge', scope: 'local', containers: [], builtin: true },
+			{ id: 'c'.repeat(64), name: 'shop_default', driver: 'bridge', scope: 'local', project: 'shop', containers: ['web-1'], builtin: false },
+		])
+		await a.call('docker.removeVolume', { name: 'cache' })
+		await a.call('docker.removeNetwork', { id: 'c'.repeat(64) })
+		assert.ok(asked.includes('DELETE /v1.41/volumes/cache'))
+		assert.ok(asked.includes(`DELETE /v1.41/networks/${'c'.repeat(64)}`))
+		await assert.rejects(a.call('docker.removeVolume', { name: '../x' }), /not a volume/)
+		await assert.rejects(a.call('docker.removeNetwork', { id: 'bridge' }), /not a network/)
 
 		await until('events watched', () => events !== undefined)
 		await a.call('docker.act', { id, action: 'restart' })

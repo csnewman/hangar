@@ -221,6 +221,34 @@ pub struct Image {
     containers: f64,
 }
 
+/// A volume, and the containers that mount it, by name.
+#[derive(Serialize)]
+pub struct Volume {
+    name: String,
+    driver: String,
+    mountpoint: String,
+    /// When it was made, as Docker says it (RFC 3339).
+    created: String,
+    /// The Compose project it belongs to.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<String>,
+    containers: Vec<String>,
+}
+
+/// A network, and the containers attached to it, by name.
+#[derive(Serialize)]
+pub struct Network {
+    id: String,
+    name: String,
+    driver: String,
+    scope: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    project: Option<String>,
+    containers: Vec<String>,
+    /// One of Docker's own (bridge, host, none), which it does not let go.
+    builtin: bool,
+}
+
 #[derive(Serialize)]
 pub struct Overview {
     available: bool,
@@ -228,6 +256,90 @@ pub struct Overview {
     why: Option<String>,
     containers: Vec<Container>,
     images: Vec<Image>,
+    volumes: Vec<Volume>,
+    networks: Vec<Network>,
+}
+
+/// Docker's own networks.
+const BUILTIN_NETWORKS: [&str; 3] = ["bridge", "host", "none"];
+
+/// The volumes, each with the containers mounting it, by name.
+fn volumes(vs: &Value, cs: &Value) -> Vec<Volume> {
+    let mut out: Vec<Volume> = vs
+        .get("Volumes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .map(|v| {
+            let name = s(v, "Name");
+            Volume {
+                containers: users(cs, |c| {
+                    c.get("Mounts")
+                        .and_then(Value::as_array)
+                        .is_some_and(|ms| ms.iter().any(|m| s(m, "Name") == name))
+                }),
+                driver: s(v, "Driver"),
+                mountpoint: s(v, "Mountpoint"),
+                created: s(v, "CreatedAt"),
+                project: label(v, "com.docker.compose.project"),
+                name,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| collate(&a.name, &b.name));
+    out
+}
+
+/// The networks, each with the containers attached, by name.
+fn networks(ns: &Value, cs: &Value) -> Vec<Network> {
+    let mut out: Vec<Network> = ns
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|n| {
+            let name = s(n, "Name");
+            Network {
+                id: s(n, "Id"),
+                containers: users(cs, |c| {
+                    c.pointer("/NetworkSettings/Networks")
+                        .and_then(Value::as_object)
+                        .is_some_and(|ns| ns.contains_key(&name))
+                }),
+                driver: s(n, "Driver"),
+                scope: s(n, "Scope"),
+                project: label(n, "com.docker.compose.project"),
+                builtin: BUILTIN_NETWORKS.contains(&name.as_str()),
+                name,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.builtin
+            .cmp(&a.builtin)
+            .then_with(|| collate(&a.name, &b.name))
+    });
+    out
+}
+
+/// The names of the containers for which `uses` holds.
+fn users(cs: &Value, uses: impl Fn(&Value) -> bool) -> Vec<String> {
+    let mut out: Vec<String> = cs
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| uses(c))
+        .filter_map(|c| {
+            let name = c.get("Names")?.as_array()?.first()?.as_str()?;
+            Some(name.trim_start_matches('/').to_owned())
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// One of an object's labels.
+fn label(v: &Value, key: &str) -> Option<String> {
+    v.get("Labels")?.get(key)?.as_str().map(str::to_owned)
 }
 
 fn s(v: &Value, k: &str) -> String {
@@ -373,9 +485,11 @@ impl Docker {
     }
 
     pub async fn overview(&self) -> Overview {
-        let (cs, is) = tokio::join!(
+        let (cs, is, vs, ns) = tokio::join!(
             json("GET", "/containers/json?all=1"),
-            json("GET", "/images/json")
+            json("GET", "/images/json"),
+            json("GET", "/volumes"),
+            json("GET", "/networks")
         );
         let (cs, is) = match (cs, is) {
             (Ok(cs), Ok(is)) => (cs, is),
@@ -385,9 +499,14 @@ impl Docker {
                     why: Some(e.why()),
                     containers: Vec::new(),
                     images: Vec::new(),
+                    volumes: Vec::new(),
+                    networks: Vec::new(),
                 };
             }
         };
+        // What lists volumes and networks failing leaves them out alone.
+        let volumes = vs.map(|v| volumes(&v, &cs)).unwrap_or_default();
+        let networks = ns.map(|n| networks(&n, &cs)).unwrap_or_default();
         let mut containers: Vec<Container> =
             cs.as_array().into_iter().flatten().map(container).collect();
         containers.sort_by(|a, b| {
@@ -423,6 +542,8 @@ impl Docker {
             why: None,
             containers,
             images,
+            volumes,
+            networks,
         }
     }
 
@@ -511,6 +632,39 @@ impl Docker {
             return Err(Error::msg("not an image"));
         }
         let (status, body) = call("DELETE", &format!("/images/{id}"))
+            .await
+            .map_err(|e| Error::msg(why(&e)))?;
+        if status >= 300 {
+            return Err(Error::msg(engine_error(status, &body)));
+        }
+        Ok(())
+    }
+
+    /// Removes a volume, by name; Docker refuses one a container mounts.
+    pub async fn remove_volume(&self, name: &str) -> Result<()> {
+        let ok = name
+            .bytes()
+            .next()
+            .is_some_and(|b| b.is_ascii_alphanumeric())
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'-'));
+        if !ok {
+            return Err(Error::msg("not a volume"));
+        }
+        self.delete(&format!("/volumes/{name}")).await
+    }
+
+    /// Removes a network, by ID; Docker refuses its own and one in use.
+    pub async fn remove_network(&self, id: &str) -> Result<()> {
+        if !is_container_id(id) {
+            return Err(Error::msg("not a network"));
+        }
+        self.delete(&format!("/networks/{id}")).await
+    }
+
+    async fn delete(&self, path: &str) -> Result<()> {
+        let (status, body) = call("DELETE", path)
             .await
             .map_err(|e| Error::msg(why(&e)))?;
         if status >= 300 {
