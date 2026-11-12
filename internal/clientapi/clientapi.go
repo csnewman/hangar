@@ -23,9 +23,11 @@ import (
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/audit"
 	"github.com/csnewman/hangar/internal/environments"
+	"github.com/csnewman/hangar/internal/packs"
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/version"
+	"github.com/csnewman/hangar/internal/workers"
 )
 
 // Versions are the versions of this API the server serves, oldest first.
@@ -40,6 +42,11 @@ type Config struct {
 	Environments *environments.Manager
 	Users        *users.Manager
 	Profiles     *profile.Store
+	// Packs are the shared files' packs, for an environment's choice of
+	// copies; nil lists none. Workers says how big an environment may be;
+	// nil says nothing.
+	Packs   *packs.Store
+	Workers *workers.Manager
 	// Changes are the environments' changes, for the event stream. Nil
 	// streams only what is there when it opens.
 	Changes *environments.Changes
@@ -59,6 +66,8 @@ type handler struct {
 	envs     *environments.Manager
 	users    *users.Manager
 	profiles *profile.Store
+	packs    *packs.Store
+	workers  *workers.Manager
 	changes  *environments.Changes
 	tunnels  Tunnels
 	audit    *audit.Log
@@ -79,7 +88,8 @@ type principalKey struct{}
 // New returns the API, to be mounted at the root of a mux: its routes carry
 // their full /api/v1 paths.
 func New(cfg Config) http.Handler {
-	h := &handler{envs: cfg.Environments, users: cfg.Users, profiles: cfg.Profiles, changes: cfg.Changes, ssh: cfg.SSH,
+	h := &handler{envs: cfg.Environments, users: cfg.Users, profiles: cfg.Profiles, packs: cfg.Packs,
+		workers: cfg.Workers, changes: cfg.Changes, ssh: cfg.SSH,
 		tunnels: cfg.Tunnels, audit: cfg.Audit, suffix: cfg.HostSuffix,
 		log: cfg.Log}
 	if h.changes == nil {
@@ -401,6 +411,28 @@ func environment(e api.Environment) Environment {
 	}
 	cpus, mem, display := e.CPUs, e.MemoryMiB, string(e.Spec.Display)
 	out.CPUs, out.MemoryMiB, out.Display = &cpus, &mem, optional(display)
+	out.Gpu = optional(string(e.Spec.GPU))
+	if e.Spec.DAX {
+		dax := true
+		out.Dax = &dax
+	}
+	out.SwapMiB = e.Spec.SwapMiB
+	out.Access = access(e.Spec.Access)
+	if len(e.Spec.Placement) > 0 {
+		placement := e.Spec.Placement
+		out.Placement = &placement
+	}
+	out.TemplateID = optional(e.TemplateID)
+	if len(e.TemplateChanges) > 0 {
+		changes := e.TemplateChanges
+		out.TemplateChanges = &changes
+	}
+	out.Image = optional(e.Image)
+	out.ImageDigest = optional(e.ImageDigest)
+	out.ImageChange = optional(e.ImageChange)
+	if r := e.ImageRollback; r != nil {
+		out.ImageRollback = &ImageRollback{Digest: r.Digest, At: r.At, SizeBytes: r.SizeBytes}
+	}
 	out.EditorPath = optional(e.Spec.EditorPath)
 	public := e.PortsPublic
 	out.PortsPublic = &public
@@ -419,7 +451,19 @@ func environment(e api.Environment) Environment {
 		out.Task = &task
 	}
 	if u := e.ImageUpdate; u != nil {
-		out.ImageUpdate = &ImageUpdate{Digest: u.Digest}
+		up := &ImageUpdate{Digest: u.Digest, Checked: u.Checked, Error: optional(u.Error)}
+		if u.Packages {
+			up.Packages = &u.Packages
+		}
+		if len(u.Conflicts) > 0 {
+			c := u.Conflicts
+			up.Conflicts = &c
+		}
+		if u.MoreConflicts > 0 {
+			n := u.MoreConflicts
+			up.MoreConflicts = &n
+		}
+		out.ImageUpdate = up
 	}
 	if len(e.Agents) > 0 {
 		agents := make([]AgentSession, len(e.Agents))
@@ -496,4 +540,20 @@ func (h *handler) SeeAgent(ctx context.Context, req SeeAgentRequestObject) (SeeA
 		return nil, err
 	}
 	return SeeAgent204Response{}, nil
+}
+
+// access is what an environment is kept from, or nothing when it is given
+// everything.
+func access(a api.Access) *Access {
+	if a == (api.Access{}) {
+		return nil
+	}
+	set := func(b bool) *bool {
+		if !b {
+			return nil
+		}
+		return &b
+	}
+	return &Access{NoSelfAttached: set(a.NoSelfAttached), NoSensitiveFiles: set(a.NoSensitiveFiles),
+		NoSSHKeys: set(a.NoSSHKeys), NoRegistry: set(a.NoRegistry), NoEditorTrust: set(a.NoEditorTrust)}
 }

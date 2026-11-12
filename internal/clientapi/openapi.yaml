@@ -376,6 +376,131 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /environments/{id}/settings:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    put:
+      operationId: updateEnvironmentSettings
+      summary: Change the environment's machine
+      description: >-
+        A stopped environment's size, display, GPU, image mapping and swap,
+        which take effect when it next starts; or a running one's memory
+        alone, which its machine is resized to as it runs, between
+        stats.machine_memory_min_mib, what its programs use plus 512 MiB, and
+        stats.machine_memory_max_mib.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnvironmentSettings" }
+      responses:
+        "200": { $ref: "#/components/responses/Environment" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /environments/{id}/packs:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listEnvironmentPacks
+      summary: The packs of shared files the environment has, and the copy of each it uses
+      responses:
+        "200":
+          description: Its packs, in the order a path two of them name goes to the first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EnvironmentPack" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /environments/{id}/packs/{pack}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: pack
+        in: path
+        required: true
+        schema: { type: string }
+    put:
+      operationId: chooseEnvironmentCopy
+      summary: Choose which copy of a pack the environment uses
+      description: >-
+        A running environment changes over as it runs. Without copy_id, the
+        choice is undone: the template's pin, the one it was first given, or
+        its owner's default.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                copy_id: { type: string }
+      responses:
+        "204":
+          description: Chosen.
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /environments/{id}/image/{change}:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: change
+        in: path
+        required: true
+        description: >-
+          upgrade moves it to image_update's copy at its next start (at once, if
+          it is stopped), its writable disk copied aside first; rollback puts
+          that copy back and returns to the copy it had; keep deletes the
+          copy kept aside; cancel undoes an upgrade or rollback not yet
+          made.
+        schema:
+          type: string
+          enum: [upgrade, rollback, keep, cancel]
+    post:
+      operationId: changeEnvironmentImage
+      summary: Upgrade the environment's image, roll it back, or keep the upgrade
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                force:
+                  type: boolean
+                  description: Upgrade though image_update's conflicts have not been checked.
+      responses:
+        "200": { $ref: "#/components/responses/Environment" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /worker-sizes:
+    get:
+      operationId: listWorkerSizes
+      summary: How big an environment may be
+      description: >-
+        The capacity of each worker online, largest first, without saying
+        which is which: how big an environment can be and still find a
+        worker that could hold it, whatever each is running.
+      responses:
+        "200":
+          description: The sizes.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Resources" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /environments/{id}/task:
     parameters:
       - $ref: "#/components/parameters/ID"
@@ -664,6 +789,11 @@ components:
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Environment" }
+    Forbidden:
+      description: Not something the user may do.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     Unauthorized:
       description: Not signed in.
       content:
@@ -806,11 +936,130 @@ components:
     ImageUpdate:
       type: object
       description: >-
-        A newer copy of the environment's image, which its worker holds. The
-        environment's page in the browser upgrades to it.
-      required: [digest]
+        A newer copy of the environment's image its worker holds, and what
+        upgrading to it would hide: files the environment has changed that
+        the newer copy also changes keep the environment's version.
+      required: [digest, checked]
       properties:
         digest: { type: string }
+        checked:
+          type: boolean
+          description: Whether its writable disk has been compared with the newer copy, which happens while it is stopped.
+        conflicts:
+          type: array
+          items: { type: string }
+        more_conflicts:
+          type: integer
+          description: How many more there are than conflicts lists.
+        packages:
+          type: boolean
+          description: The package manager's database is among them.
+        error:
+          type: string
+          description: Why the comparison failed.
+
+    ImageRollback:
+      type: object
+      description: The copy of its writable disk kept from before its last upgrade, which a rollback restores.
+      required: [digest, at, size_bytes]
+      properties:
+        digest: { type: string }
+        at: { type: string, format: date-time }
+        size_bytes: { type: integer, format: int64 }
+
+    Access:
+      type: object
+      description: >-
+        What of its owner's the environment is kept from, for code they do
+        not trust, as its template says. Each is false, giving it
+        everything, when left out.
+      properties:
+        no_self_attached:
+          type: boolean
+          description: >-
+            Only the packs the template lists: none of those attaching
+            themselves to environments, the profile among them.
+        no_sensitive_files:
+          type: boolean
+          description: None of the sensitive files -- credentials, such as Claude's sign-in -- of its packs.
+        no_ssh_keys:
+          type: boolean
+          description: No signatures from the owner's SSH keys.
+        no_registry:
+          type: boolean
+          description: No credential for Hangar's registry.
+        no_editor_trust:
+          type: boolean
+          description: The editor trusts no folder to run its code (its language servers) until the person trusts it.
+
+    EnvironmentSettings:
+      type: object
+      required: [cpus, memory_mib, display, gpu]
+      additionalProperties: false
+      properties:
+        cpus: { type: integer, minimum: 1 }
+        memory_mib: { type: integer, minimum: 1 }
+        display:
+          type: string
+          enum: [none, desktop]
+        gpu:
+          type: string
+          enum: [none, virtual, passthrough]
+        dax:
+          type: boolean
+          description: Map the image's files from the worker's memory rather than read them into the environment's own.
+        swap_mib:
+          type: integer
+          minimum: 0
+          maximum: 262144
+          description: Its swap, in MiB. Absent is its worker's default; 0 is none.
+
+    Resources:
+      type: object
+      required: [cpus, memory_mib]
+      properties:
+        cpus: { type: integer }
+        memory_mib: { type: integer }
+
+    EnvironmentPack:
+      type: object
+      required: [id, name, description, builtin, copy, from, listed, copies]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        owner: { type: string, description: Its owner's username, for a person's pack. }
+        team: { type: string, description: Its team's slug, for a team's pack. }
+        builtin:
+          type: boolean
+          description: The server's own, such as the profile.
+        copy: { $ref: "#/components/schemas/PackCopy" }
+        from:
+          type: string
+          description: >-
+            How the copy was chosen -- environment (chosen on it), template
+            (its template's pin), kept (the one it was first given) or
+            default (its owner's). More may come.
+        listed:
+          type: boolean
+          description: Its template lists it, rather than its attaching itself.
+        copies:
+          type: array
+          description: The copies of it the user may choose from.
+          items: { $ref: "#/components/schemas/PackCopy" }
+
+    PackCopy:
+      type: object
+      description: One set of a pack's files.
+      required: [id, name, personal]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        owner: { type: string, description: Its owner's username, for a person's copy. }
+        team: { type: string, description: Its team's slug, for a team's copy. }
+        personal:
+          type: boolean
+          description: A person's own copy, one each.
 
     AccessToken:
       type: object
@@ -907,8 +1156,45 @@ components:
           type: array
           description: The names of its own web servers its template lists.
           items: { type: string }
+        gpu:
+          type: string
+          description: >-
+            none; virtual, rendering through a GPU shared with other
+            environments; or passthrough, a whole physical GPU. More may come.
+        dax:
+          type: boolean
+          description: Its image's files are mapped from its worker's memory rather than read into its own.
+        swap_mib:
+          type: integer
+          description: >-
+            Its swap, in MiB. Absent is its worker's default (as much as its
+            memory, unless the worker is set otherwise); 0 is none.
+        access: { $ref: "#/components/schemas/Access" }
+        placement:
+          type: object
+          description: What a worker's labels must say for it to run there, from its template.
+          additionalProperties: { type: string }
+        template_id: { type: string }
+        template_changes:
+          type: array
+          description: >-
+            The settings it has that its template has since changed, which a
+            reset to the template gives it: image, cpus, memory, display, gpu,
+            dax, swap, repos, projects, access, trusted_folders, web_names,
+            packs, placement, name. More may come.
+          items: { type: string }
+        image:
+          type: string
+          description: The image it runs, as its template names it.
+        image_digest:
+          type: string
+          description: The copy of the image it runs.
         task: { $ref: "#/components/schemas/Task" }
         image_update: { $ref: "#/components/schemas/ImageUpdate" }
+        image_rollback: { $ref: "#/components/schemas/ImageRollback" }
+        image_change:
+          type: string
+          description: What its next start does to its image -- upgrade or rollback.
         stats: { $ref: "#/components/schemas/EnvironmentStats" }
         agents:
           type: array
@@ -1025,6 +1311,17 @@ components:
         host_memory_mib:
           type: integer
           description: The worker's memory its RAM takes up.
+        machine_memory_mib:
+          type: integer
+          description: The memory its machine has, as its monitor says.
+        machine_memory_min_mib:
+          type: integer
+          description: >-
+            What its memory can be resized down to as it runs: the size it
+            booted with. Absent for a machine that cannot be resized.
+        machine_memory_max_mib:
+          type: integer
+          description: What its memory can be resized up to as it runs.
         swap_total_mib: { type: integer }
         swap_used_mib: { type: integer }
         disk_used_bytes: { type: integer, format: int64 }

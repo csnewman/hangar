@@ -154,7 +154,7 @@ func stats(s *api.EnvironmentStats) *EnvironmentStats {
 	f := func(v float64) *float32 { x := float32(v); return &x }
 	i := func(v int) *int { return &v }
 	disk := s.DiskUsedBytes
-	return &EnvironmentStats{
+	out := &EnvironmentStats{
 		CPUPercent:      float32(s.CPUPercent),
 		MemoryUsedMiB:   s.MemoryUsedMiB,
 		MemoryTotalMiB:  s.MemoryTotalMiB,
@@ -168,4 +168,11 @@ func stats(s *api.EnvironmentStats) *EnvironmentStats {
 		NetRxBps:        f(s.NetRxBps),
 		NetTxBps:        f(s.NetTxBps),
 	}
+	if s.MachineMemoryMiB > 0 {
+		out.MachineMemoryMiB = i(s.MachineMemoryMiB)
+	}
+	if s.MachineMemoryMaxMiB > 0 {
+		out.MachineMemoryMinMiB, out.MachineMemoryMaxMiB = i(s.MachineMemoryMinMiB), i(s.MachineMemoryMaxMiB)
+	}
+	return out
 }

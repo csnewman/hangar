@@ -45,6 +45,45 @@ func (e EnvironmentLogName) Valid() bool {
 	}
 }
 
+// Defines values for EnvironmentSettingsDisplay.
+const (
+	EnvironmentSettingsDisplayDesktop EnvironmentSettingsDisplay = "desktop"
+	EnvironmentSettingsDisplayNone    EnvironmentSettingsDisplay = "none"
+)
+
+// Valid indicates whether the value is a known member of the EnvironmentSettingsDisplay enum.
+func (e EnvironmentSettingsDisplay) Valid() bool {
+	switch e {
+	case EnvironmentSettingsDisplayDesktop:
+		return true
+	case EnvironmentSettingsDisplayNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EnvironmentSettingsGpu.
+const (
+	EnvironmentSettingsGpuNone        EnvironmentSettingsGpu = "none"
+	EnvironmentSettingsGpuPassthrough EnvironmentSettingsGpu = "passthrough"
+	EnvironmentSettingsGpuVirtual     EnvironmentSettingsGpu = "virtual"
+)
+
+// Valid indicates whether the value is a known member of the EnvironmentSettingsGpu enum.
+func (e EnvironmentSettingsGpu) Valid() bool {
+	switch e {
+	case EnvironmentSettingsGpuNone:
+		return true
+	case EnvironmentSettingsGpuPassthrough:
+		return true
+	case EnvironmentSettingsGpuVirtual:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SignalProcessJSONBodySignal.
 const (
 	KILL SignalProcessJSONBodySignal = "KILL"
@@ -61,6 +100,24 @@ func (e SignalProcessJSONBodySignal) Valid() bool {
 	default:
 		return false
 	}
+}
+
+// Access What of its owner's the environment is kept from, for code they do not trust, as its template says. Each is false, giving it everything, when left out.
+type Access struct {
+	// NoEditorTrust The editor trusts no folder to run its code (its language servers) until the person trusts it.
+	NoEditorTrust *bool `json:"no_editor_trust,omitempty"`
+
+	// NoRegistry No credential for Hangar's registry.
+	NoRegistry *bool `json:"no_registry,omitempty"`
+
+	// NoSelfAttached Only the packs the template lists: none of those attaching themselves to environments, the profile among them.
+	NoSelfAttached *bool `json:"no_self_attached,omitempty"`
+
+	// NoSensitiveFiles None of the sensitive files -- credentials, such as Claude's sign-in -- of its packs.
+	NoSensitiveFiles *bool `json:"no_sensitive_files,omitempty"`
+
+	// NoSSHKeys No signatures from the owner's SSH keys.
+	NoSSHKeys *bool `json:"no_ssh_keys,omitempty"`
 }
 
 // AccessToken defines model for AccessToken.
@@ -134,10 +191,16 @@ type AgentSession struct {
 
 // Environment defines model for Environment.
 type Environment struct {
+	// Access What of its owner's the environment is kept from, for code they do not trust, as its template says. Each is false, giving it everything, when left out.
+	Access *Access `json:"access,omitempty"`
+
 	// Agents The coding agents' sessions in it, oldest first.
 	Agents    *[]AgentSession `json:"agents,omitempty"`
 	CPUs      *int            `json:"cpus,omitempty"`
 	CreatedAt time.Time       `json:"created_at"`
+
+	// Dax Its image's files are mapped from its worker's memory rather than read into its own.
+	Dax *bool `json:"dax,omitempty"`
 
 	// Desired What its owner asked for -- running, stopped, suspended or deleted. More may come.
 	Desired string `json:"desired"`
@@ -147,9 +210,24 @@ type Environment struct {
 
 	// EditorPath The folder an editor opens in it: its first project.
 	EditorPath *string `json:"editor_path,omitempty"`
-	ID         string  `json:"id"`
 
-	// ImageUpdate A newer copy of the environment's image, which its worker holds. The environment's page in the browser upgrades to it.
+	// Gpu none; virtual, rendering through a GPU shared with other environments; or passthrough, a whole physical GPU. More may come.
+	Gpu *string `json:"gpu,omitempty"`
+	ID  string  `json:"id"`
+
+	// Image The image it runs, as its template names it.
+	Image *string `json:"image,omitempty"`
+
+	// ImageChange What its next start does to its image -- upgrade or rollback.
+	ImageChange *string `json:"image_change,omitempty"`
+
+	// ImageDigest The copy of the image it runs.
+	ImageDigest *string `json:"image_digest,omitempty"`
+
+	// ImageRollback The copy of its writable disk kept from before its last upgrade, which a rollback restores.
+	ImageRollback *ImageRollback `json:"image_rollback,omitempty"`
+
+	// ImageUpdate A newer copy of the environment's image its worker holds, and what upgrading to it would hide: files the environment has changed that the newer copy also changes keep the environment's version.
 	ImageUpdate *ImageUpdate `json:"image_update,omitempty"`
 	MemoryMiB   *int         `json:"memory_mib,omitempty"`
 	Name        string       `json:"name"`
@@ -160,6 +238,9 @@ type Environment struct {
 
 	// Phase What it is doing, as its worker last reported: pending, starting, running, stopping, stopped, suspending, suspended, failed, deleting. More may come; treat one you do not know as busy.
 	Phase string `json:"phase"`
+
+	// Placement What a worker's labels must say for it to run there, from its template.
+	Placement *map[string]string `json:"placement,omitempty"`
 
 	// PortsPublic Whether anyone may reach its own web servers without signing in to Hangar.
 	PortsPublic *bool `json:"ports_public,omitempty"`
@@ -176,9 +257,16 @@ type Environment struct {
 	// Stats What a running environment is using, as its worker last measured.
 	Stats *EnvironmentStats `json:"stats,omitempty"`
 
+	// SwapMiB Its swap, in MiB. Absent is its worker's default (as much as its memory, unless the worker is set otherwise); 0 is none.
+	SwapMiB *int `json:"swap_mib,omitempty"`
+
 	// Task What an environment is for: a line its coding agent sets as it works, or its owner does.
 	Task     *Task  `json:"task,omitempty"`
 	Template string `json:"template"`
+
+	// TemplateChanges The settings it has that its template has since changed, which a reset to the template gives it: image, cpus, memory, display, gpu, dax, swap, repos, projects, access, trusted_folders, web_names, packs, placement, name. More may come.
+	TemplateChanges *[]string `json:"template_changes,omitempty"`
+	TemplateID      *string   `json:"template_id,omitempty"`
 
 	// UpdatedAt When its phase last changed.
 	UpdatedAt time.Time `json:"updated_at"`
@@ -199,6 +287,53 @@ type Environment struct {
 // EnvironmentLogName combined is the others as one, each line marked with the log it is from, in the order the worker saw them written; console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor the virtual machine's monitor's; gpu the virtual GPU's backend.
 type EnvironmentLogName string
 
+// EnvironmentPack defines model for EnvironmentPack.
+type EnvironmentPack struct {
+	// Builtin The server's own, such as the profile.
+	Builtin bool `json:"builtin"`
+
+	// Copies The copies of it the user may choose from.
+	Copies []PackCopy `json:"copies"`
+
+	// Copy One set of a pack's files.
+	Copy        PackCopy `json:"copy"`
+	Description string   `json:"description"`
+
+	// From How the copy was chosen -- environment (chosen on it), template (its template's pin), kept (the one it was first given) or default (its owner's). More may come.
+	From string `json:"from"`
+	ID   string `json:"id"`
+
+	// Listed Its template lists it, rather than its attaching itself.
+	Listed bool   `json:"listed"`
+	Name   string `json:"name"`
+
+	// Owner Its owner's username
+	Owner *string `json:"owner,omitempty"`
+
+	// Team Its team's slug
+	Team *string `json:"team,omitempty"`
+}
+
+// EnvironmentSettings defines model for EnvironmentSettings.
+type EnvironmentSettings struct {
+	CPUs int `json:"cpus"`
+
+	// Dax Map the image's files from the worker's memory rather than read them into the environment's own.
+	Dax       *bool                      `json:"dax,omitempty"`
+	Display   EnvironmentSettingsDisplay `json:"display"`
+	Gpu       EnvironmentSettingsGpu     `json:"gpu"`
+	MemoryMiB int                        `json:"memory_mib"`
+
+	// SwapMiB Its swap, in MiB. Absent is its worker's default; 0 is none.
+	SwapMiB *int `json:"swap_mib,omitempty"`
+}
+
+// EnvironmentSettingsDisplay defines model for EnvironmentSettings.Display.
+type EnvironmentSettingsDisplay string
+
+// EnvironmentSettingsGpu defines model for EnvironmentSettings.Gpu.
+type EnvironmentSettingsGpu string
+
 // EnvironmentStats What a running environment is using, as its worker last measured.
 type EnvironmentStats struct {
 	// CPUPercent Of its own vCPUs; 100 is all of them busy.
@@ -209,6 +344,15 @@ type EnvironmentStats struct {
 
 	// HostMemoryMiB The worker's memory its RAM takes up.
 	HostMemoryMiB *int `json:"host_memory_mib,omitempty"`
+
+	// MachineMemoryMaxMiB What its memory can be resized up to as it runs.
+	MachineMemoryMaxMiB *int `json:"machine_memory_max_mib,omitempty"`
+
+	// MachineMemoryMiB The memory its machine has, as its monitor says.
+	MachineMemoryMiB *int `json:"machine_memory_mib,omitempty"`
+
+	// MachineMemoryMinMiB What its memory can be resized down to as it runs: the size it booted with. Absent for a machine that cannot be resized.
+	MachineMemoryMinMiB *int `json:"machine_memory_min_mib,omitempty"`
 
 	// MemoryCachedMiB Its cache of files, which it would give up for its programs.
 	MemoryCachedMiB *int `json:"memory_cached_mib,omitempty"`
@@ -237,9 +381,28 @@ type GenerateSSHKey struct {
 	Name string `json:"name"`
 }
 
-// ImageUpdate A newer copy of the environment's image, which its worker holds. The environment's page in the browser upgrades to it.
+// ImageRollback The copy of its writable disk kept from before its last upgrade, which a rollback restores.
+type ImageRollback struct {
+	At        time.Time `json:"at"`
+	Digest    string    `json:"digest"`
+	SizeBytes int64     `json:"size_bytes"`
+}
+
+// ImageUpdate A newer copy of the environment's image its worker holds, and what upgrading to it would hide: files the environment has changed that the newer copy also changes keep the environment's version.
 type ImageUpdate struct {
-	Digest string `json:"digest"`
+	// Checked Whether its writable disk has been compared with the newer copy, which happens while it is stopped.
+	Checked   bool      `json:"checked"`
+	Conflicts *[]string `json:"conflicts,omitempty"`
+	Digest    string    `json:"digest"`
+
+	// Error Why the comparison failed.
+	Error *string `json:"error,omitempty"`
+
+	// MoreConflicts How many more there are than conflicts lists.
+	MoreConflicts *int `json:"more_conflicts,omitempty"`
+
+	// Packages The package manager's database is among them.
+	Packages *bool `json:"packages,omitempty"`
 }
 
 // LogPart defines model for LogPart.
@@ -282,6 +445,21 @@ type Me struct {
 	Username string      `json:"username"`
 }
 
+// PackCopy One set of a pack's files.
+type PackCopy struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+
+	// Owner Its owner's username
+	Owner *string `json:"owner,omitempty"`
+
+	// Personal A person's own copy, one each.
+	Personal bool `json:"personal"`
+
+	// Team Its team's slug
+	Team *string `json:"team,omitempty"`
+}
+
 // Process defines model for Process.
 type Process struct {
 	Command    string  `json:"command"`
@@ -306,6 +484,12 @@ type ProcessList struct {
 	CPUs        int       `json:"cpus"`
 	MemoryBytes int64     `json:"memory_bytes"`
 	Processes   []Process `json:"processes"`
+}
+
+// Resources defines model for Resources.
+type Resources struct {
+	CPUs      int `json:"cpus"`
+	MemoryMiB int `json:"memory_mib"`
 }
 
 // SSHGateway Where the SSH gateway is: ssh <environment>@<host> -p <port>, or <owner>/<environment> for someone else's. Absent when the server runs none.
@@ -412,6 +596,9 @@ type ID = string
 // Conflict defines model for Conflict.
 type Conflict = Error
 
+// Forbidden defines model for Forbidden.
+type Forbidden = Error
+
 // Invalid defines model for Invalid.
 type Invalid = Error
 
@@ -436,9 +623,20 @@ type ResizeDesktopJSONBody struct {
 	Width  int `json:"width"`
 }
 
+// ChangeEnvironmentImageJSONBody defines parameters for ChangeEnvironmentImage.
+type ChangeEnvironmentImageJSONBody struct {
+	// Force Upgrade though image_update's conflicts have not been checked.
+	Force *bool `json:"force,omitempty"`
+}
+
 // GetEnvironmentLogParams defines parameters for GetEnvironmentLog.
 type GetEnvironmentLogParams struct {
 	Offset *int64 `form:"offset,omitempty" json:"offset,omitempty"`
+}
+
+// ChooseEnvironmentCopyJSONBody defines parameters for ChooseEnvironmentCopy.
+type ChooseEnvironmentCopyJSONBody struct {
+	CopyID *string `json:"copy_id,omitempty"`
 }
 
 // SetEnvironmentPortsJSONBody defines parameters for SetEnvironmentPorts.
@@ -457,11 +655,20 @@ type SignalProcessJSONBodySignal string
 // ResizeDesktopJSONRequestBody defines body for ResizeDesktop for application/json ContentType.
 type ResizeDesktopJSONRequestBody ResizeDesktopJSONBody
 
+// ChangeEnvironmentImageJSONRequestBody defines body for ChangeEnvironmentImage for application/json ContentType.
+type ChangeEnvironmentImageJSONRequestBody ChangeEnvironmentImageJSONBody
+
+// ChooseEnvironmentCopyJSONRequestBody defines body for ChooseEnvironmentCopy for application/json ContentType.
+type ChooseEnvironmentCopyJSONRequestBody ChooseEnvironmentCopyJSONBody
+
 // SetEnvironmentPortsJSONRequestBody defines body for SetEnvironmentPorts for application/json ContentType.
 type SetEnvironmentPortsJSONRequestBody SetEnvironmentPortsJSONBody
 
 // SignalProcessJSONRequestBody defines body for SignalProcess for application/json ContentType.
 type SignalProcessJSONRequestBody SignalProcessJSONBody
+
+// UpdateEnvironmentSettingsJSONRequestBody defines body for UpdateEnvironmentSettings for application/json ContentType.
+type UpdateEnvironmentSettingsJSONRequestBody = EnvironmentSettings
 
 // SetTaskJSONRequestBody defines body for SetTask for application/json ContentType.
 type SetTaskJSONRequestBody = SetTask
@@ -498,9 +705,18 @@ type ServerInterface interface {
 	// ResizeDesktop Sets the size of the environment's desktop
 	// (POST /environments/{id}/desktop/size)
 	ResizeDesktop(w http.ResponseWriter, r *http.Request, id ID)
+	// ChangeEnvironmentImage Upgrade the environment's image, roll it back, or keep the upgrade
+	// (POST /environments/{id}/image/{change})
+	ChangeEnvironmentImage(w http.ResponseWriter, r *http.Request, id ID, change string)
 	// GetEnvironmentLog Part of one of the environment's logs, from its worker
 	// (GET /environments/{id}/logs/{log})
 	GetEnvironmentLog(w http.ResponseWriter, r *http.Request, id ID, log EnvironmentLogName, params GetEnvironmentLogParams)
+	// ListEnvironmentPacks The packs of shared files the environment has, and the copy of each it uses
+	// (GET /environments/{id}/packs)
+	ListEnvironmentPacks(w http.ResponseWriter, r *http.Request, id ID)
+	// ChooseEnvironmentCopy Choose which copy of a pack the environment uses
+	// (PUT /environments/{id}/packs/{pack})
+	ChooseEnvironmentCopy(w http.ResponseWriter, r *http.Request, id ID, pack string)
 	// SetEnvironmentPorts Say who may reach the environment's own web servers
 	// (PUT /environments/{id}/ports)
 	SetEnvironmentPorts(w http.ResponseWriter, r *http.Request, id ID)
@@ -513,6 +729,9 @@ type ServerInterface interface {
 	// ResetEnvironment Give a stopped environment its template's current settings
 	// (POST /environments/{id}/reset)
 	ResetEnvironment(w http.ResponseWriter, r *http.Request, id ID)
+	// UpdateEnvironmentSettings Change the environment's machine
+	// (PUT /environments/{id}/settings)
+	UpdateEnvironmentSettings(w http.ResponseWriter, r *http.Request, id ID)
 	// StartEnvironment Ask for an environment to run
 	// (POST /environments/{id}/start)
 	StartEnvironment(w http.ResponseWriter, r *http.Request, id ID)
@@ -576,6 +795,9 @@ type ServerInterface interface {
 	// GetVersion Which versions of this API the server serves, and its build
 	// (GET /version)
 	GetVersion(w http.ResponseWriter, r *http.Request)
+	// ListWorkerSizes How big an environment may be
+	// (GET /worker-sizes)
+	ListWorkerSizes(w http.ResponseWriter, r *http.Request)
 }
 
 // ServerInterfaceWrapper converts contexts to parameters.
@@ -769,6 +991,41 @@ func (siw *ServerInterfaceWrapper) ResizeDesktop(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// ChangeEnvironmentImage operation middleware
+func (siw *ServerInterfaceWrapper) ChangeEnvironmentImage(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "change" -------------
+	var change string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "change", r.PathValue("change"), &change, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "change", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ChangeEnvironmentImage(w, r, id, change)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetEnvironmentLog operation middleware
 func (siw *ServerInterfaceWrapper) GetEnvironmentLog(w http.ResponseWriter, r *http.Request) {
 
@@ -811,6 +1068,67 @@ func (siw *ServerInterfaceWrapper) GetEnvironmentLog(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetEnvironmentLog(w, r, id, log, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListEnvironmentPacks operation middleware
+func (siw *ServerInterfaceWrapper) ListEnvironmentPacks(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListEnvironmentPacks(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ChooseEnvironmentCopy operation middleware
+func (siw *ServerInterfaceWrapper) ChooseEnvironmentCopy(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pack" -------------
+	var pack string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pack", r.PathValue("pack"), &pack, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pack", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ChooseEnvironmentCopy(w, r, id, pack)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -924,6 +1242,32 @@ func (siw *ServerInterfaceWrapper) ResetEnvironment(w http.ResponseWriter, r *ht
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ResetEnvironment(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// UpdateEnvironmentSettings operation middleware
+func (siw *ServerInterfaceWrapper) UpdateEnvironmentSettings(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.UpdateEnvironmentSettings(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1368,6 +1712,20 @@ func (siw *ServerInterfaceWrapper) GetVersion(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// ListWorkerSizes operation middleware
+func (siw *ServerInterfaceWrapper) ListWorkerSizes(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListWorkerSizes(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 type UnescapedCookieParamError struct {
 	ParamName string
 	Err       error
@@ -1508,6 +1866,11 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/stop", wrapper.StopEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/suspend", wrapper.SuspendEnvironment)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/environments/{id}/ports", wrapper.SetEnvironmentPorts)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/environments/{id}/settings", wrapper.UpdateEnvironmentSettings)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}/packs", wrapper.ListEnvironmentPacks)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/environments/{id}/packs/{pack}", wrapper.ChooseEnvironmentCopy)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/image/{change}", wrapper.ChangeEnvironmentImage)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/worker-sizes", wrapper.ListWorkerSizes)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/environments/{id}/task", wrapper.EndTask)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/environments/{id}/task", wrapper.SetTask)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}/tasks", wrapper.ListTasks)
@@ -1527,6 +1890,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 type ConflictJSONResponse Error
 
 type EnvironmentJSONResponse Environment
+
+type ForbiddenJSONResponse Error
 
 type InvalidJSONResponse Error
 
@@ -1848,6 +2213,86 @@ func (response ResizeDesktop503JSONResponse) VisitResizeDesktopResponse(w http.R
 	return err
 }
 
+type ChangeEnvironmentImageRequestObject struct {
+	ID     ID     `json:"id"`
+	Change string `json:"change"`
+	Body   *ChangeEnvironmentImageJSONRequestBody
+}
+
+type ChangeEnvironmentImageResponseObject interface {
+	VisitChangeEnvironmentImageResponse(w http.ResponseWriter) error
+}
+
+type ChangeEnvironmentImage200JSONResponse struct{ EnvironmentJSONResponse }
+
+func (response ChangeEnvironmentImage200JSONResponse) VisitChangeEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeEnvironmentImage400JSONResponse struct{ InvalidJSONResponse }
+
+func (response ChangeEnvironmentImage400JSONResponse) VisitChangeEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeEnvironmentImage401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ChangeEnvironmentImage401JSONResponse) VisitChangeEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeEnvironmentImage404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ChangeEnvironmentImage404JSONResponse) VisitChangeEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeEnvironmentImage409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ChangeEnvironmentImage409JSONResponse) VisitChangeEnvironmentImageResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetEnvironmentLogRequestObject struct {
 	ID     ID                 `json:"id"`
 	Log    EnvironmentLogName `json:"log"`
@@ -1924,6 +2369,130 @@ func (response GetEnvironmentLog503JSONResponse) VisitGetEnvironmentLogResponse(
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(503)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnvironmentPacksRequestObject struct {
+	ID ID `json:"id"`
+}
+
+type ListEnvironmentPacksResponseObject interface {
+	VisitListEnvironmentPacksResponse(w http.ResponseWriter) error
+}
+
+type ListEnvironmentPacks200JSONResponse []EnvironmentPack
+
+func (response ListEnvironmentPacks200JSONResponse) VisitListEnvironmentPacksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnvironmentPacks401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListEnvironmentPacks401JSONResponse) VisitListEnvironmentPacksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListEnvironmentPacks404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListEnvironmentPacks404JSONResponse) VisitListEnvironmentPacksResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChooseEnvironmentCopyRequestObject struct {
+	ID   ID     `json:"id"`
+	Pack string `json:"pack"`
+	Body *ChooseEnvironmentCopyJSONRequestBody
+}
+
+type ChooseEnvironmentCopyResponseObject interface {
+	VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error
+}
+
+type ChooseEnvironmentCopy204Response struct {
+}
+
+func (response ChooseEnvironmentCopy204Response) VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type ChooseEnvironmentCopy400JSONResponse struct{ InvalidJSONResponse }
+
+func (response ChooseEnvironmentCopy400JSONResponse) VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChooseEnvironmentCopy401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ChooseEnvironmentCopy401JSONResponse) VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChooseEnvironmentCopy403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ChooseEnvironmentCopy403JSONResponse) VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChooseEnvironmentCopy404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ChooseEnvironmentCopy404JSONResponse) VisitChooseEnvironmentCopyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2212,6 +2781,85 @@ func (response ResetEnvironment404JSONResponse) VisitResetEnvironmentResponse(w 
 type ResetEnvironment409JSONResponse struct{ ConflictJSONResponse }
 
 func (response ResetEnvironment409JSONResponse) VisitResetEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEnvironmentSettingsRequestObject struct {
+	ID   ID `json:"id"`
+	Body *UpdateEnvironmentSettingsJSONRequestBody
+}
+
+type UpdateEnvironmentSettingsResponseObject interface {
+	VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error
+}
+
+type UpdateEnvironmentSettings200JSONResponse struct{ EnvironmentJSONResponse }
+
+func (response UpdateEnvironmentSettings200JSONResponse) VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEnvironmentSettings400JSONResponse struct{ InvalidJSONResponse }
+
+func (response UpdateEnvironmentSettings400JSONResponse) VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEnvironmentSettings401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response UpdateEnvironmentSettings401JSONResponse) VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEnvironmentSettings404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response UpdateEnvironmentSettings404JSONResponse) VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type UpdateEnvironmentSettings409JSONResponse struct{ ConflictJSONResponse }
+
+func (response UpdateEnvironmentSettings409JSONResponse) VisitUpdateEnvironmentSettingsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response); err != nil {
@@ -3282,6 +3930,41 @@ func (response GetVersion200JSONResponse) VisitGetVersionResponse(w http.Respons
 	return err
 }
 
+type ListWorkerSizesRequestObject struct {
+}
+
+type ListWorkerSizesResponseObject interface {
+	VisitListWorkerSizesResponse(w http.ResponseWriter) error
+}
+
+type ListWorkerSizes200JSONResponse []Resources
+
+func (response ListWorkerSizes200JSONResponse) VisitListWorkerSizesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListWorkerSizes401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListWorkerSizes401JSONResponse) VisitListWorkerSizesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 // StrictServerInterface represents all server handlers.
 type StrictServerInterface interface {
 	// ListEnvironments Every environment the user can reach, oldest first
@@ -3302,9 +3985,18 @@ type StrictServerInterface interface {
 	// ResizeDesktop Sets the size of the environment's desktop
 	// (POST /environments/{id}/desktop/size)
 	ResizeDesktop(ctx context.Context, request ResizeDesktopRequestObject) (ResizeDesktopResponseObject, error)
+	// ChangeEnvironmentImage Upgrade the environment's image, roll it back, or keep the upgrade
+	// (POST /environments/{id}/image/{change})
+	ChangeEnvironmentImage(ctx context.Context, request ChangeEnvironmentImageRequestObject) (ChangeEnvironmentImageResponseObject, error)
 	// GetEnvironmentLog Part of one of the environment's logs, from its worker
 	// (GET /environments/{id}/logs/{log})
 	GetEnvironmentLog(ctx context.Context, request GetEnvironmentLogRequestObject) (GetEnvironmentLogResponseObject, error)
+	// ListEnvironmentPacks The packs of shared files the environment has, and the copy of each it uses
+	// (GET /environments/{id}/packs)
+	ListEnvironmentPacks(ctx context.Context, request ListEnvironmentPacksRequestObject) (ListEnvironmentPacksResponseObject, error)
+	// ChooseEnvironmentCopy Choose which copy of a pack the environment uses
+	// (PUT /environments/{id}/packs/{pack})
+	ChooseEnvironmentCopy(ctx context.Context, request ChooseEnvironmentCopyRequestObject) (ChooseEnvironmentCopyResponseObject, error)
 	// SetEnvironmentPorts Say who may reach the environment's own web servers
 	// (PUT /environments/{id}/ports)
 	SetEnvironmentPorts(ctx context.Context, request SetEnvironmentPortsRequestObject) (SetEnvironmentPortsResponseObject, error)
@@ -3317,6 +4009,9 @@ type StrictServerInterface interface {
 	// ResetEnvironment Give a stopped environment its template's current settings
 	// (POST /environments/{id}/reset)
 	ResetEnvironment(ctx context.Context, request ResetEnvironmentRequestObject) (ResetEnvironmentResponseObject, error)
+	// UpdateEnvironmentSettings Change the environment's machine
+	// (PUT /environments/{id}/settings)
+	UpdateEnvironmentSettings(ctx context.Context, request UpdateEnvironmentSettingsRequestObject) (UpdateEnvironmentSettingsResponseObject, error)
 	// StartEnvironment Ask for an environment to run
 	// (POST /environments/{id}/start)
 	StartEnvironment(ctx context.Context, request StartEnvironmentRequestObject) (StartEnvironmentResponseObject, error)
@@ -3380,6 +4075,9 @@ type StrictServerInterface interface {
 	// GetVersion Which versions of this API the server serves, and its build
 	// (GET /version)
 	GetVersion(ctx context.Context, request GetVersionRequestObject) (GetVersionResponseObject, error)
+	// ListWorkerSizes How big an environment may be
+	// (GET /worker-sizes)
+	ListWorkerSizes(ctx context.Context, request ListWorkerSizesRequestObject) (ListWorkerSizesResponseObject, error)
 }
 
 type StrictHandlerFunc func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error)
@@ -3584,6 +4282,43 @@ func (sh *strictHandler) ResizeDesktop(w http.ResponseWriter, r *http.Request, i
 	}
 }
 
+// ChangeEnvironmentImage operation middleware
+func (sh *strictHandler) ChangeEnvironmentImage(w http.ResponseWriter, r *http.Request, id ID, change string) {
+	var request ChangeEnvironmentImageRequestObject
+
+	request.ID = id
+	request.Change = change
+
+	var body ChangeEnvironmentImageJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if !errors.Is(err, io.EOF) {
+			sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+			return
+		}
+	} else {
+		request.Body = &body
+	}
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ChangeEnvironmentImage(ctx, request.(ChangeEnvironmentImageRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ChangeEnvironmentImage")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ChangeEnvironmentImageResponseObject); ok {
+		if err := validResponse.VisitChangeEnvironmentImageResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetEnvironmentLog operation middleware
 func (sh *strictHandler) GetEnvironmentLog(w http.ResponseWriter, r *http.Request, id ID, log EnvironmentLogName, params GetEnvironmentLogParams) {
 	var request GetEnvironmentLogRequestObject
@@ -3605,6 +4340,66 @@ func (sh *strictHandler) GetEnvironmentLog(w http.ResponseWriter, r *http.Reques
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetEnvironmentLogResponseObject); ok {
 		if err := validResponse.VisitGetEnvironmentLogResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListEnvironmentPacks operation middleware
+func (sh *strictHandler) ListEnvironmentPacks(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ListEnvironmentPacksRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListEnvironmentPacks(ctx, request.(ListEnvironmentPacksRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListEnvironmentPacks")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListEnvironmentPacksResponseObject); ok {
+		if err := validResponse.VisitListEnvironmentPacksResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ChooseEnvironmentCopy operation middleware
+func (sh *strictHandler) ChooseEnvironmentCopy(w http.ResponseWriter, r *http.Request, id ID, pack string) {
+	var request ChooseEnvironmentCopyRequestObject
+
+	request.ID = id
+	request.Pack = pack
+
+	var body ChooseEnvironmentCopyJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ChooseEnvironmentCopy(ctx, request.(ChooseEnvironmentCopyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ChooseEnvironmentCopy")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ChooseEnvironmentCopyResponseObject); ok {
+		if err := validResponse.VisitChooseEnvironmentCopyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -3724,6 +4519,39 @@ func (sh *strictHandler) ResetEnvironment(w http.ResponseWriter, r *http.Request
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ResetEnvironmentResponseObject); ok {
 		if err := validResponse.VisitResetEnvironmentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// UpdateEnvironmentSettings operation middleware
+func (sh *strictHandler) UpdateEnvironmentSettings(w http.ResponseWriter, r *http.Request, id ID) {
+	var request UpdateEnvironmentSettingsRequestObject
+
+	request.ID = id
+
+	var body UpdateEnvironmentSettingsJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.UpdateEnvironmentSettings(ctx, request.(UpdateEnvironmentSettingsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "UpdateEnvironmentSettings")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(UpdateEnvironmentSettingsResponseObject); ok {
+		if err := validResponse.VisitUpdateEnvironmentSettingsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -4286,6 +5114,30 @@ func (sh *strictHandler) GetVersion(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetVersionResponseObject); ok {
 		if err := validResponse.VisitGetVersionResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListWorkerSizes operation middleware
+func (sh *strictHandler) ListWorkerSizes(w http.ResponseWriter, r *http.Request) {
+	var request ListWorkerSizesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListWorkerSizes(ctx, request.(ListWorkerSizesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListWorkerSizes")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListWorkerSizesResponseObject); ok {
+		if err := validResponse.VisitListWorkerSizesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
