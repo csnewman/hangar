@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Font, Hsla, IntoElement,
-    KeyBinding, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    KeyBinding, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, Point, Render, Rgba, ScrollEvent, Styled, StyledText, Subscription,
     TextRun, UnderlineStyle, WeakEntity, Window, actions, canvas, div, font, prelude::*, px,
 };
@@ -21,7 +21,7 @@ use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 use crate::api::Client;
 use crate::palette;
 use crate::termconn::{self, Command, Connection, Event};
-use crate::terminal::{Mark, Replies, Screen, Select};
+use crate::terminal::{Link, LinkKind, Mark, Replies, Screen, Select};
 
 /// A line's height for each point of the text's size.
 const LINE_SPACING: f32 = 1.36;
@@ -140,7 +140,16 @@ pub struct TerminalView {
     /// The button held, while the program is told of the mouse.
     reporting: Option<crate::termkeys::Button>,
     /// The link under the last right-click, for the menu to open or copy.
-    menu_link: Option<String>,
+    menu_link: Option<LinkKind>,
+    /// The link the pointer is on, and where the pointer is from the
+    /// text's top left, for the hint beside it.
+    hover: Option<(Link, Point<Pixels>)>,
+    /// Whether the key that makes a click open a link is held: ⌘, else
+    /// Ctrl.
+    opens: bool,
+    /// The directory the shell last said it is in, which a path in the
+    /// output is from.
+    cwd: Option<String>,
     /// The size as the session has it, once it says.
     sizing: Option<Sizing>,
     /// Find's query, while it is open, and whether its text is nowhere.
@@ -250,6 +259,9 @@ impl TerminalView {
             selecting: false,
             reporting: None,
             menu_link: None,
+            hover: None,
+            opens: false,
+            cwd: None,
             sizing: None,
             find: None,
             missing: false,
@@ -444,6 +456,11 @@ impl TerminalView {
                 }
             }
             Event::Output(b) => {
+                // What was under the pointer may have moved; the next move
+                // finds it again.
+                if self.hover.take().is_some() {
+                    self.screen.set_hover(None);
+                }
                 let replayed = self.history.min(b.len());
                 self.history -= replayed;
                 let mut extra = Vec::new();
@@ -455,6 +472,7 @@ impl TerminalView {
                         }
                         crate::termimage::Piece::Picture(p) => self.place(p),
                         crate::termimage::Piece::Reply(r) => extra.extend(r),
+                        crate::termimage::Piece::Directory(d) => self.cwd = Some(d),
                     }
                 }
                 let (mut replies, title) = self.replies.take();
@@ -702,7 +720,44 @@ impl TerminalView {
             return;
         }
         let (row, col, _) = self.cell_at(e.position);
-        self.menu_link = self.screen.link_at(row, col);
+        self.menu_link = self.screen.link_at(row, col).map(|l| l.kind);
+    }
+
+    /// Asks the tab around the terminal to open a link: it knows the
+    /// environment's files, and its ports' addresses.
+    fn open_link(&mut self, link: LinkKind, cx: &mut Context<Self>) {
+        let dir = self.cwd.clone().or_else(|| self.dir.clone());
+        cx.emit(OpenLink { link, dir });
+    }
+
+    /// Underlines the link under the pointer, if any, and keeps it for the
+    /// hint.
+    fn hover_at(&mut self, at: Point<Pixels>, m: &Modifiers, cx: &mut Context<Self>) {
+        let (row, col, _) = self.cell_at(at);
+        let link = self.screen.link_at(row, col);
+        let opens = opens_link(m);
+        let changed = match (&self.hover, &link) {
+            (Some((was, _)), Some(now)) => !was.same_place(now),
+            (None, None) => false,
+            _ => true,
+        };
+        if changed {
+            self.screen.set_hover(link.as_ref());
+        }
+        let moved = link.is_some();
+        self.hover = link.map(|l| (l, at - self.origin));
+        if changed || moved || opens != self.opens {
+            self.opens = opens;
+            cx.notify();
+        }
+    }
+
+    /// The pointer left the terminal: no link is under it.
+    fn leave(&mut self, cx: &mut Context<Self>) {
+        if self.hover.take().is_some() {
+            self.screen.set_hover(None);
+            cx.notify();
+        }
     }
 
     /// The cell under the pointer: its row, its column, and whether the
@@ -725,16 +780,11 @@ impl TerminalView {
             MouseButton::Right => Button::Right,
             _ => return,
         };
-        // Cmd-click (Ctrl-click elsewhere) opens a link.
-        let opens = if cfg!(target_os = "macos") {
-            e.modifiers.platform
-        } else {
-            e.modifiers.control
-        };
-        if opens && button == Button::Left {
+        // ⌘-click (Ctrl-click elsewhere) opens a link.
+        if opens_link(&e.modifiers) && button == Button::Left {
             let (row, col, _) = self.cell_at(e.position);
-            if let Some(url) = self.screen.link_at(row, col) {
-                cx.open_url(&url);
+            if let Some(link) = self.screen.link_at(row, col) {
+                self.open_link(link.kind, cx);
             }
             return;
         }
@@ -762,6 +812,9 @@ impl TerminalView {
 
     fn drag(&mut self, e: &MouseMoveEvent, cx: &mut Context<Self>) {
         use crate::termkeys::{Button, Press};
+        if e.pressed_button.is_none() {
+            self.hover_at(e.position, &e.modifiers, cx);
+        }
         let held = self.reporting.unwrap_or(Button::None);
         if (self.reporting.is_some() || !self.selecting)
             && self.report(held, Press::Moved, e.position, &e.modifiers)
@@ -850,6 +903,48 @@ impl TerminalView {
 }
 
 impl TerminalView {
+    /// Says what a click on the link under the pointer does, just below
+    /// its line (above it on the last rows), as VS Code's terminal does.
+    fn link_hint(&self, p: &palette::Palette) -> Option<gpui::AnyElement> {
+        let (link, at) = self.hover.as_ref()?;
+        let line = f32::from(self.line_height);
+        let row = (f32::from(at.y) / line).max(0.).floor();
+        // The text's padding: 8 at the sides, 4 above.
+        let below = row + 2. < self.rows as f32;
+        let top = if below {
+            4. + (row + 1.) * line + 2.
+        } else {
+            4. + row * line - 24.
+        };
+        // Toward the middle from the pointer, so it stays in the view.
+        let width = self.cols as f32 * f32::from(self.cell.unwrap_or(px(7.5)));
+        let x = f32::from(at.x);
+        Some(
+            div()
+                .debug_selector(|| "term-link-hint".into())
+                .absolute()
+                .top(px(top.max(0.)))
+                .map(|d| {
+                    if x < width / 2. {
+                        d.left(px(8. + x))
+                    } else {
+                        d.right(px((width - x).max(0.) + 8.))
+                    }
+                })
+                .px(px(6.))
+                .py(px(2.))
+                .rounded(px(4.))
+                .bg(p.surface)
+                .border_1()
+                .border_color(p.border)
+                .shadow_md()
+                .text_size(px(11.))
+                .text_color(if self.opens { p.text } else { p.muted })
+                .child(hint(&link.kind))
+                .into_any_element(),
+        )
+    }
+
     /// Says when the terminal is drawn at another window's size, with
     /// fitting it to this one, and how many windows have it open, as the
     /// web's terminal does; None when there is nothing to say.
@@ -917,13 +1012,23 @@ impl TerminalView {
 /// text; then the session.
 fn terminal_menu(
     mut menu: gpui_component::menu::PopupMenu,
-    link: Option<String>,
+    link: Option<LinkKind>,
+    me: gpui::WeakEntity<TerminalView>,
     selected: bool,
 ) -> gpui_component::menu::PopupMenu {
-    if let Some(url) = link {
-        let copied = url.clone();
+    if let Some(link) = link {
+        let copied = match &link {
+            LinkKind::Url(url) => url.clone(),
+            LinkKind::Embedded { uri, .. } => uri.clone(),
+            LinkKind::Path { path, line, column } if *column > 0 => {
+                format!("{path}:{line}:{column}")
+            }
+            LinkKind::Path { path, line, .. } => format!("{path}:{line}"),
+        };
         menu = menu
-            .item(PopupMenuItem::new("Open Link").on_click(move |_, _, cx| cx.open_url(&url)))
+            .item(PopupMenuItem::new("Open Link").on_click(move |_, _, cx| {
+                let _ = me.update(cx, |t, cx| t.open_link(link.clone(), cx));
+            }))
             .item(
                 PopupMenuItem::new("Copy Link")
                     .on_click(move |_, _, cx| crate::treeops::copy(copied.clone(), cx)),
@@ -941,6 +1046,64 @@ fn terminal_menu(
         .menu("Close Tab", Box::new(CloseSession))
         .menu("End Session…", Box::new(EndSession))
 }
+
+/// Whether a click with these keys opens a link: ⌘ on a Mac, Ctrl
+/// elsewhere, as IntelliJ's terminal and VS Code's have it.
+fn opens_link(m: &Modifiers) -> bool {
+    if cfg!(target_os = "macos") {
+        m.platform
+    } else {
+        m.control
+    }
+}
+
+/// What the hint beside a link says a click does.
+fn hint(link: &LinkKind) -> String {
+    let key = if cfg!(target_os = "macos") {
+        "⌘-click"
+    } else {
+        "Ctrl-click"
+    };
+    match link {
+        LinkKind::Url(url) => match local_port(url) {
+            Some((port, _)) => format!("{key} to open port {port} of this environment"),
+            None => format!("{key} to open {url}"),
+        },
+        LinkKind::Embedded { uri, .. } => format!("{key} to open {uri}"),
+        LinkKind::Path { path, line, .. } => format!("{key} to open {path} at line {line}"),
+    }
+}
+
+/// An address on the machine itself -- localhost, 127.0.0.1, 0.0.0.0 or
+/// [::1] -- which in a terminal of the environment's is the environment:
+/// its port (the scheme's own when none is given), and the rest of the
+/// address after it, from its path on.
+pub fn local_port(url: &str) -> Option<(u16, String)> {
+    let (scheme, rest) = url.split_once("://")?;
+    let default = match scheme {
+        "http" => 80,
+        "https" => 443,
+        _ => return None,
+    };
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) if !h.ends_with(':') && !p.contains(']') => (h, p.parse().ok()?),
+        _ => (authority, default),
+    };
+    matches!(host, "localhost" | "127.0.0.1" | "0.0.0.0" | "[::1]")
+        .then(|| (port, tail.to_string()))
+}
+
+/// A link opened in a terminal, by ⌘-click or its menu, for the tab around
+/// it to follow. `dir` is where a relative path is from: the directory the
+/// shell last said it was in, else the one the session started in.
+pub struct OpenLink {
+    pub link: LinkKind,
+    pub dir: Option<String>,
+}
+
+impl gpui::EventEmitter<OpenLink> for TerminalView {}
 
 /// Splits the runs at the cursor's cell and swaps that cell's colours.
 fn cursor_runs(runs: Vec<TextRun>, at: usize, len: usize) -> Vec<TextRun> {
@@ -1135,6 +1298,22 @@ impl Render for TerminalView {
                 cx.listener(|this, e: &MouseUpEvent, _, cx| this.release(e, cx)),
             )
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| this.drag(e, cx)))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !*hovered {
+                    this.leave(cx)
+                }
+            }))
+            .on_modifiers_changed(cx.listener(|this, e: &gpui::ModifiersChangedEvent, _, cx| {
+                let opens = opens_link(&e.modifiers);
+                if opens != this.opens {
+                    this.opens = opens;
+                    if this.hover.is_some() {
+                        cx.notify();
+                    }
+                }
+            }))
+            // With the key that opens one held, a link is a link.
+            .when(self.opens && self.hover.is_some(), |d| d.cursor_pointer())
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseUpEvent, _, cx| this.release(e, cx)),
@@ -1164,7 +1343,12 @@ impl Render for TerminalView {
                             (t.menu_link.clone(), t.screen.selection().is_some())
                         })
                         .unwrap_or_default();
-                    terminal_menu(menu.action_context(focus.clone()), link, selected)
+                    terminal_menu(
+                        menu.action_context(focus.clone()),
+                        link,
+                        me.clone(),
+                        selected,
+                    )
                 }
             })
             .relative()
@@ -1258,6 +1442,7 @@ impl Render for TerminalView {
                 )
             })
             .when_some(self.size_bar(&p, cx), |d, bar| d.child(bar))
+            .when_some(self.link_hint(&p), |d, hint| d.child(hint))
             .when_some(notice, |d, n| {
                 d.child(
                     gpui_component::h_flex()

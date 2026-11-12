@@ -122,6 +122,43 @@ pub struct Screen<L: EventListener = Quiet> {
     /// What Find looks for, and the match it is on.
     search: Option<(String, RegexSearch)>,
     found: Option<Match>,
+    /// The link the pointer is on, underlined.
+    hover: Option<Match>,
+    /// The patterns links are found by, made once: the pointer asks at
+    /// every move.
+    links: Option<(RegexSearch, RegexSearch)>,
+}
+
+/// A link in the terminal's text, and the cells it takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Link {
+    pub kind: LinkKind,
+    range: Match,
+}
+
+/// What a link opens.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinkKind {
+    /// An address in the text.
+    Url(String),
+    /// A file and a place in it, as compilers and test runners write them
+    /// (src/store/redis.rs:31:9): its path as written, its line and column
+    /// from 1, or 0 when not given.
+    Path {
+        path: String,
+        line: u32,
+        column: u32,
+    },
+    /// A link a program wrote around text (OSC 8): where it goes need not
+    /// be what it shows.
+    Embedded { uri: String, text: String },
+}
+
+impl Link {
+    /// Whether two links take the same cells.
+    pub fn same_place(&self, other: &Link) -> bool {
+        self.range == other.range
+    }
 }
 
 impl Screen<Quiet> {
@@ -148,7 +185,14 @@ impl<L: EventListener> Screen<L> {
             bg: named(NamedColor::Background),
             search: None,
             found: None,
+            hover: None,
+            links: None,
         }
+    }
+
+    /// Underlines the link given, the one the pointer is on.
+    pub fn set_hover(&mut self, link: Option<&Link>) {
+        self.hover = link.map(|l| l.range.clone());
     }
 
     /// Sets the colours text and background take when the shell names none;
@@ -348,30 +392,65 @@ impl<L: EventListener> Screen<L> {
         self.found.is_some()
     }
 
-    /// The link at a cell of the screen: one the program wrote (OSC 8), or
-    /// a URL in the text, which may wrap onto the lines either side.
-    pub fn link_at(&mut self, row: usize, col: usize) -> Option<String> {
+    /// The link on a cell: one a program wrote around the text (OSC 8),
+    /// else an address, else a file with a line, as the text says it.
+    pub fn link_at(&mut self, row: usize, col: usize) -> Option<Link> {
         let point = self.point(row, col);
         if let Some(link) = self.term.grid()[point].hyperlink()
             && !link.uri().starts_with(ANCHOR)
         {
-            return Some(link.uri().to_string());
+            let range = self.hyperlink_range(point);
+            let text = self
+                .term
+                .bounds_to_string(*range.start(), *range.end())
+                .replace('\n', "");
+            return Some(Link {
+                kind: LinkKind::Embedded {
+                    uri: link.uri().to_string(),
+                    text,
+                },
+                range,
+            });
         }
-        let mut regex = RegexSearch::new(URL).ok()?;
-        let columns = self.term.grid().columns();
-        let (start, end) = (
-            Point::new(point.line - 1, Column(0)),
-            Point::new(point.line + 1, Column(columns - 1)),
-        );
-        let start = start.grid_clamp(&self.term, alacritty_terminal::index::Boundary::Grid);
-        let end = end.grid_clamp(&self.term, alacritty_terminal::index::Boundary::Grid);
-        let found = RegexIter::new(start, end, Direction::Right, &self.term, &mut regex)
-            .find(|m| m.contains(&point))?;
-        Some(
-            self.term
-                .bounds_to_string(*found.start(), *found.end())
-                .replace('\n', ""),
-        )
+        if self.links.is_none() {
+            self.links = Some((RegexSearch::new(URL).ok()?, RegexSearch::new(PATH).ok()?));
+        }
+        let (url, path) = self.links.as_mut()?;
+        if let Some((range, text)) = match_at(&self.term, url, point) {
+            return Some(Link {
+                kind: LinkKind::Url(text),
+                range,
+            });
+        }
+        let (range, text) = match_at(&self.term, path, point)?;
+        let (path, line, column) = path_and_place(&text)?;
+        Some(Link {
+            kind: LinkKind::Path { path, line, column },
+            range,
+        })
+    }
+
+    /// The cells around a point that carry the same link it does.
+    fn hyperlink_range(&self, point: Point) -> Match {
+        use alacritty_terminal::index::Boundary;
+        let grid = self.term.grid();
+        let link = grid[point].hyperlink();
+        let (mut start, mut end) = (point, point);
+        for _ in 0..4096 {
+            let before = start.sub(&self.term, Boundary::Grid, 1);
+            if before == start || grid[before].hyperlink() != link {
+                break;
+            }
+            start = before;
+        }
+        for _ in 0..4096 {
+            let after = end.add(&self.term, Boundary::Grid, 1);
+            if after == end || grid[after].hyperlink() != link {
+                break;
+            }
+            end = after;
+        }
+        start..=end
     }
 
     /// The cells on the screen, and in the lines above it given, that
@@ -434,6 +513,7 @@ impl<L: EventListener> Screen<L> {
         };
         let grid = self.term.grid();
         let found = self.found.clone();
+        let hover = self.hover.clone();
         (0..grid.screen_lines() as i32)
             .map(|row| {
                 let line_at = GridLine(row - offset);
@@ -464,7 +544,8 @@ impl<L: EventListener> Screen<L> {
                         bg,
                         bold: cell.flags.contains(Flags::BOLD),
                         italic: cell.flags.contains(Flags::ITALIC),
-                        underline: cell.flags.intersects(Flags::ALL_UNDERLINES),
+                        underline: cell.flags.intersects(Flags::ALL_UNDERLINES)
+                            || hover.as_ref().is_some_and(|h| h.contains(&point)),
                         mark,
                     };
                     let start = line.text.len();
@@ -509,6 +590,41 @@ impl<L: EventListener> Screen<L> {
 /// A URL in a terminal's text: a scheme a browser or the system opens,
 /// then anything up to a space, a quote or an angle bracket.
 const URL: &str = r#"(https?|file|ftp)://[^\s<>"'`\x00-\x1f\x7f]+"#;
+
+/// The text a pattern matches across a point, from the line above it to
+/// the line below: an address wraps.
+fn match_at<L: EventListener>(
+    term: &Term<L>,
+    regex: &mut RegexSearch,
+    point: Point,
+) -> Option<(Match, String)> {
+    use alacritty_terminal::index::Boundary;
+    let columns = term.grid().columns();
+    let start = Point::new(point.line - 1, Column(0)).grid_clamp(term, Boundary::Grid);
+    let end = Point::new(point.line + 1, Column(columns - 1)).grid_clamp(term, Boundary::Grid);
+    let found =
+        RegexIter::new(start, end, Direction::Right, term, regex).find(|m| m.contains(&point))?;
+    let text = term
+        .bounds_to_string(*found.start(), *found.end())
+        .replace('\n', "");
+    Some((found, text))
+}
+
+/// A file and a place in it, as compilers, linters and test runners write
+/// them: a path ending in a name with an extension, then a line, and maybe
+/// a column (src/store/redis.rs:31:9, ./main.go:12, /srv/app/x.ts:3:1).
+const PATH: &str = r"(\.{1,2}/|/)?([A-Za-z0-9_@+-][A-Za-z0-9_.@+-]*/)*[A-Za-z0-9_@+-][A-Za-z0-9_.@+-]*\.[A-Za-z0-9]+:[0-9]+(:[0-9]+)?";
+
+/// A path match's path, line and column (0 when not given).
+fn path_and_place(text: &str) -> Option<(String, u32, u32)> {
+    let mut parts = text.rsplitn(3, ':');
+    let last = parts.next()?;
+    let middle = parts.next()?;
+    match parts.next() {
+        Some(path) => Some((path.to_string(), middle.parse().ok()?, last.parse().ok()?)),
+        None => Some((middle.to_string(), last.parse().ok()?, 0)),
+    }
+}
 
 /// Text as a pattern that matches it and nothing else.
 fn literal(text: &str) -> String {

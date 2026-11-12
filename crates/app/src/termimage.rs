@@ -1,6 +1,7 @@
 //! What programs write to a terminal besides text, which alacritty_terminal
 //! does not keep: the progress they report (OSC 9;4, as Windows Terminal,
-//! iTerm2 and the web's terminals show it) and the pictures they draw, in
+//! iTerm2 and the web's terminals show it), the directory the shell is in
+//! (OSC 7, and systemd's OSC 3008 context), and the pictures they draw, in
 //! sixel (DCS ... q), iTerm2's inline images (OSC 1337;File=) and the kitty
 //! graphics protocol (APC G). `Extract` takes them out of the output as it
 //! arrives, in order with the text around them, and passes everything else
@@ -44,6 +45,8 @@ pub enum Piece {
     Picture(Picture),
     /// What the terminal answers the program: kitty's replies.
     Reply(Vec<u8>),
+    /// The directory the shell says it is in.
+    Directory(String),
 }
 
 /// Where the scanner is.
@@ -142,6 +145,22 @@ impl Extract {
             b']' => {
                 if let Some(rest) = body.strip_prefix(b"9;4;") {
                     return Some(progress(rest).map(Piece::Progress).into_iter().collect());
+                }
+                if let Some(rest) = body.strip_prefix(b"7;") {
+                    return Some(
+                        file_url_path(rest)
+                            .map(Piece::Directory)
+                            .into_iter()
+                            .collect(),
+                    );
+                }
+                if let Some(rest) = body.strip_prefix(b"3008;") {
+                    return Some(
+                        context_cwd(rest)
+                            .map(Piece::Directory)
+                            .into_iter()
+                            .collect(),
+                    );
                 }
                 let rest = body.strip_prefix(b"1337;File=")?;
                 Some(iterm(rest).map(Piece::Picture).into_iter().collect())
@@ -254,6 +273,42 @@ impl Extract {
             _ => answer(Err("EINVAL:unknown action")),
         }
     }
+}
+
+/// OSC 7's directory: the path of a file:// URL, its %-escapes decoded.
+fn file_url_path(b: &[u8]) -> Option<String> {
+    let url = std::str::from_utf8(b).ok()?.strip_prefix("file://")?;
+    let path = &url[url.find('/')?..];
+    unescape(path, b'%', 1)
+}
+
+/// The cwd field of systemd's OSC 3008 context, whose fields are key=value
+/// pairs between semicolons, a value's own special bytes as \xNN.
+fn context_cwd(b: &[u8]) -> Option<String> {
+    let fields = std::str::from_utf8(b).ok()?;
+    let cwd = fields.split(';').find_map(|f| f.strip_prefix("cwd="))?;
+    unescape(cwd, b'\\', 2)
+}
+
+/// Text with each escaped byte -- `lead`, `skip` bytes of its own, then two
+/// hex digits -- put back.
+fn unescape(s: &str, lead: u8, skip: usize) -> Option<String> {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == lead
+            && let Some(hex) = s.get(i + skip..i + skip + 2)
+            && let Ok(v) = u8::from_str_radix(hex, 16)
+        {
+            out.push(v);
+            i += skip + 2;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// OSC 9;4's state and value: "1;40", "3", "0".

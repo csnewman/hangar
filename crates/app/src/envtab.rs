@@ -837,6 +837,7 @@ impl EnvTab {
             v
         });
         cx.observe(&view, |_, _, cx| cx.notify()).detach();
+        self.follow_terminal(&view, window, cx);
         self.terms.tabs.push(TermTab {
             session: None,
             title: String::new(),
@@ -858,20 +859,125 @@ impl EnvTab {
         let Some(client) = self.client(cx) else {
             return;
         };
-        let Some(tab) = self.terms.tabs.get_mut(i) else {
+        let Some(tab) = self.terms.tabs.get(i) else {
             return;
         };
         if tab.view.is_none() {
             let (env, session) = (self.env.clone(), tab.session.clone());
             let view = cx.new(|cx| TerminalView::new(&client, &env, session.as_deref(), cx));
             cx.observe(&view, |_, _, cx| cx.notify()).detach();
-            tab.view = Some(view);
+            self.follow_terminal(&view, window, cx);
+            self.terms.tabs[i].view = Some(view);
         }
         self.terms.active = Some(i);
-        if focus && let Some(v) = &tab.view {
+        if focus && let Some(v) = &self.terms.tabs[i].view {
             window.focus(&v.focus_handle(cx), cx);
         }
         cx.notify();
+    }
+
+    /// Follows the links a terminal opens.
+    fn follow_terminal(
+        &mut self,
+        view: &Entity<TerminalView>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.subscribe_in(
+            view,
+            window,
+            |t, _, e: &crate::termview::OpenLink, window, cx| t.follow_link(e, window, cx),
+        )
+        .detach();
+    }
+
+    /// Follows a link opened in a terminal: a path into the editors at its
+    /// line, an address on the machine itself to the environment's host for
+    /// that port, and any other address in this computer's browser. A link
+    /// whose text says something other than where it goes asks first.
+    fn follow_link(
+        &mut self,
+        e: &crate::termview::OpenLink,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::terminal::LinkKind;
+        match &e.link {
+            LinkKind::Path { path, line, column } => {
+                let ws = self.workspace.as_ref().map(|w| w.read(cx));
+                let first = ws.and_then(|w| w.roots().into_iter().next());
+                let home = ws.and_then(|w| w.home().map(str::to_string));
+                let Some(abs) =
+                    terminal_path(path, e.dir.as_deref().or(first.as_deref()), home.as_deref())
+                else {
+                    return;
+                };
+                let root = ws
+                    .and_then(|w| w.project_of(&abs).map(|f| f.root.clone()))
+                    .unwrap_or_else(|| "/".into());
+                self.open_file_at(
+                    &root,
+                    &abs,
+                    line.saturating_sub(1),
+                    column.saturating_sub(1),
+                    window,
+                    cx,
+                );
+            }
+            LinkKind::Url(url) => self.open_address(url, window, cx),
+            LinkKind::Embedded { uri, text } if text.trim() == uri => {
+                self.open_address(uri, window, cx)
+            }
+            LinkKind::Embedded { uri, text } => {
+                let me = cx.entity().downgrade();
+                let uri = uri.clone();
+                crate::treeops::confirm(
+                    &format!("Open {uri}?"),
+                    &format!("The terminal showed this link as “{}”.", text.trim()),
+                    "Open",
+                    window,
+                    cx,
+                    move |window, cx| {
+                        let _ = me.update(cx, |t, cx| t.open_address(&uri, window, cx));
+                    },
+                );
+            }
+        }
+    }
+
+    /// Opens an address in this computer's browser. One on the machine
+    /// itself (localhost and the like) is the environment's, so it goes to
+    /// the environment's host for its port.
+    fn open_address(&mut self, url: &str, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_component::WindowExt;
+        use gpui_component::notification::Notification;
+        let Some((port, rest)) = crate::termview::local_port(url) else {
+            cx.open_url(url);
+            return;
+        };
+        let Some((server, short, suffix)) = self.hosts(cx) else {
+            window.push_notification(
+                Notification::error("This server has no hosts for environments' web servers."),
+                cx,
+            );
+            return;
+        };
+        let label = (port != 80).then(|| port.to_string());
+        let host = crate::ports::host_url(&server, label.as_deref(), &short, &suffix);
+        cx.open_url(&format!("{host}{}", rest.trim_start_matches('/')));
+    }
+
+    /// What the environment's web servers' hosts are made of: the server's
+    /// address, the environment's short ID and the server's suffix for
+    /// them; None when the server has no such hosts.
+    fn hosts(&self, cx: &App) -> Option<(String, String, String)> {
+        let (config, state) = self.places.read(cx).get(&self.place)?;
+        let suffix = state.me.as_ref()?.environment_host_suffix.clone()?;
+        let short = state
+            .environment(&self.env)
+            .map(|e| e.short_id.clone())
+            .unwrap_or_default();
+        Some((config.url.clone(), short, suffix))
     }
 
     /// Opens a session's tab in the Terminal window, adding it if it is not
@@ -1008,22 +1114,7 @@ impl EnvTab {
     pub fn open_in_browser(&mut self, abs: &str, window: &mut Window, cx: &mut Context<Self>) {
         use gpui_component::WindowExt;
         use gpui_component::notification::Notification;
-        let places = self.places.read(cx);
-        let Some((config, state)) = places.get(&self.place) else {
-            return;
-        };
-        let suffix = state
-            .me
-            .as_ref()
-            .and_then(|m| m.environment_host_suffix.clone());
-        let (server, short) = (
-            config.url.clone(),
-            state
-                .environment(&self.env)
-                .map(|e| e.short_id.clone())
-                .unwrap_or_default(),
-        );
-        let Some(suffix) = suffix else {
+        let Some((server, short, suffix)) = self.hosts(cx) else {
             window.push_notification(
                 Notification::error("This server has no hosts for environments' web servers."),
                 cx,
@@ -4970,4 +5061,27 @@ fn agent_tone(a: &AgentSession) -> Tone {
         "working" => Tone::Busy,
         _ => Tone::Idle,
     }
+}
+
+/// A path a terminal showed, as an absolute one: from `dir` when relative,
+/// from the home folder after `~/`, with `.` and `..` worked out.
+pub fn terminal_path(path: &str, dir: Option<&str>, home: Option<&str>) -> Option<String> {
+    let joined = if path.starts_with('/') {
+        path.to_string()
+    } else if let Some(rest) = path.strip_prefix("~/") {
+        format!("{}/{rest}", home?)
+    } else {
+        format!("{}/{path}", dir?)
+    };
+    let mut parts: Vec<&str> = vec![];
+    for part in joined.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            p => parts.push(p),
+        }
+    }
+    Some(format!("/{}", parts.join("/")))
 }

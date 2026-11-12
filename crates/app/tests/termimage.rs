@@ -160,3 +160,31 @@ fn an_anchor_is_found_where_it_was_written_and_moves_with_the_text() {
     // It is not a link to follow.
     assert_eq!(s.link_at(0, 0), None);
 }
+
+/// The directory the shell says it is in, by OSC 7 or OSC 3008's context,
+/// is taken out of the text.
+#[test]
+fn the_shells_directory_is_read() {
+    let dirs = |b: &[u8]| -> Vec<String> {
+        Extract::default()
+            .split(b)
+            .into_iter()
+            .filter_map(|p| match p {
+                Piece::Directory(d) => Some(d),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(
+        dirs(b"\x1b]7;file://host/home/dev/my%20app\x07$ "),
+        ["/home/dev/my app"]
+    );
+    assert_eq!(
+        dirs(b"\x1b]3008;start=1;type=shell;cwd=/srv/a\\x3bb\x1b\\"),
+        ["/srv/a;b"]
+    );
+    assert_eq!(
+        text(&Extract::default().split(b"\x1b]7;file:///tmp\x07x")),
+        b"x"
+    );
+}

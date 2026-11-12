@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use hangar_app::terminal::{Mark, Screen, Select};
+use hangar_app::terminal::{LinkKind, Mark, Screen, Select};
 
 #[test]
 fn colours_and_attributes_become_spans() {
@@ -190,30 +190,76 @@ fn a_programs_asks_are_kept() {
     );
 }
 
-/// A link is found where it is clicked: one the program wrote (OSC 8), or
-/// a URL in the text, whole when it wraps onto the next line.
+/// A link is found where it is clicked: one the program wrote (OSC 8), with
+/// the text it showed; an address in the text, whole when it wraps onto the
+/// next line; or a file with a line, as compilers write them.
 #[test]
 fn links_are_found_where_they_are() {
+    let url = |s: &str| Some(LinkKind::Url(s.to_string()));
+    let kind = |s: &mut Screen, row, col| s.link_at(row, col).map(|l| l.kind);
     let mut s = Screen::new(30, 4);
     s.feed(b"see https://example.com/a?b=1 now\r\n");
-    assert_eq!(
-        s.link_at(0, 8).as_deref(),
-        Some("https://example.com/a?b=1")
-    );
-    assert_eq!(s.link_at(0, 1), None, "not on the link");
+    assert_eq!(kind(&mut s, 0, 8), url("https://example.com/a?b=1"));
+    assert_eq!(kind(&mut s, 0, 1), None, "not on the link");
     s.feed(b"\x1b]8;;https://hangar.dev/docs\x1b\\the docs\x1b]8;;\x1b\\ here");
-    assert_eq!(s.link_at(2, 2).as_deref(), Some("https://hangar.dev/docs"));
-    assert_eq!(s.link_at(2, 10), None, "after the link");
+    assert_eq!(
+        kind(&mut s, 2, 2),
+        Some(LinkKind::Embedded {
+            uri: "https://hangar.dev/docs".into(),
+            text: "the docs".into()
+        })
+    );
+    assert_eq!(kind(&mut s, 2, 10), None, "after the link");
 
     let mut s = Screen::new(20, 3);
     s.feed(b"go to https://example.com/a/long/path ok");
-    let url = "https://example.com/a/long/path";
-    assert_eq!(s.link_at(0, 10).as_deref(), Some(url));
+    let long = "https://example.com/a/long/path";
+    assert_eq!(kind(&mut s, 0, 10), url(long));
+    assert_eq!(kind(&mut s, 1, 3), url(long), "from its wrapped half");
+
+    let mut s = Screen::new(60, 3);
+    s.feed(b"error at src/store/redis.rs:31:9: no\r\n  --> ../lib.rs:4\r\n");
     assert_eq!(
-        s.link_at(1, 3).as_deref(),
-        Some(url),
-        "from its wrapped half"
+        kind(&mut s, 0, 12),
+        Some(LinkKind::Path {
+            path: "src/store/redis.rs".into(),
+            line: 31,
+            column: 9
+        })
     );
+    assert_eq!(
+        kind(&mut s, 1, 8),
+        Some(LinkKind::Path {
+            path: "../lib.rs".into(),
+            line: 4,
+            column: 0
+        })
+    );
+    assert_eq!(kind(&mut s, 0, 2), None, "a word is not a path");
+}
+
+/// The link under the pointer is underlined, and only it.
+#[test]
+fn the_hovered_link_is_underlined() {
+    let mut s = Screen::new(40, 2);
+    s.feed(b"open http://localhost:5173/ now");
+    let underlined = |s: &mut Screen| -> String {
+        let line = s.lines().remove(0);
+        let (mut at, mut out) = (0, String::new());
+        for sp in &line.spans {
+            if sp.underline {
+                out += &line.text[at..at + sp.len];
+            }
+            at += sp.len;
+        }
+        out
+    };
+    assert_eq!(underlined(&mut s), "");
+    let link = s.link_at(0, 10);
+    s.set_hover(link.as_ref());
+    assert_eq!(underlined(&mut s), "http://localhost:5173/");
+    s.set_hover(None);
+    assert_eq!(underlined(&mut s), "");
 }
 
 /// Select All takes the scrollback and the screen; Clear Buffer leaves the
