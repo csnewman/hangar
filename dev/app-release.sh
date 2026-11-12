@@ -27,18 +27,36 @@ targets=${HANGAR_RELEASE_TARGETS:-aarch64-apple-darwin x86_64-apple-darwin}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
+# Runs a step, its errors kept: in CI a failed one leaves them as an
+# annotation, which can be read where the job's log cannot.
+run() {
+    step=$1
+    shift
+    if "$@" 2> "$work/errors"; then
+        cat "$work/errors" >&2
+        return 0
+    fi
+    cat "$work/errors" >&2
+    if [ -n "${GITHUB_ACTIONS:-}" ]; then
+        printf '::error title=app-release.sh failed %s::%s\n' "$step" \
+            "$(tail -n 25 "$work/errors" | tr '\n' ' ' | cut -c1-2000)"
+    fi
+    exit 1
+}
+
 set --
 for t in $targets; do
-    (cd "$repo/crates" && HANGAR_CHANNEL=$channel cargo build -q --release --locked -p hangar-app --target "$t")
+    run "building for $t" sh -c 'cd "$1/crates" && HANGAR_CHANNEL=$2 cargo build -q --release --locked -p hangar-app --target "$3"' \
+        _ "$repo" "$channel" "$t"
     set -- "$@" "$repo/crates/target/$t/release/hangar-app"
 done
-lipo -create -output "$work/hangar-app" "$@"
+run "joining the architectures" lipo -create -output "$work/hangar-app" "$@"
 
-app=$("$repo/dev/app-bundle.sh" "$channel" "$work/hangar-app" "$work" "$version")
-"$repo/dev/codesign.sh" "$app" >&2
-codesign --verify --strict "$app"
+app=$(run "bundling" "$repo/dev/app-bundle.sh" "$channel" "$work/hangar-app" "$work" "$version")
+run "signing" "$repo/dev/codesign.sh" "$app"
+run "checking the signature" codesign --verify --strict "$app"
 mkdir -p "$out"
 zip=$(cd "$out" && pwd)/$(basename "$app" .app | tr ' ' -)-$version-mac.zip
 rm -f "$zip"
-ditto -c -k --keepParent "$app" "$zip"
+run "zipping" ditto -c -k --keepParent "$app" "$zip"
 echo "$zip"
