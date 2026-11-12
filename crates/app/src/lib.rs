@@ -11,6 +11,7 @@ pub mod brackets;
 pub mod branch;
 pub mod branches;
 pub mod changes;
+pub mod channel;
 pub mod code;
 pub mod commit;
 pub mod deskview;

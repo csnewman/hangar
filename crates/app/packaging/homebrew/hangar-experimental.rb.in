@@ -1,0 +1,36 @@
+# The Homebrew cask for the native desktop app's experimental release. CI
+# fills in the version and checksum for each release (app-v*), attaches the
+# result to it as hangar-experimental.rb, and writes it into the tap,
+# csnewman/homebrew-hangar:
+#
+#   brew tap csnewman/hangar
+#   brew trust --cask csnewman/hangar/hangar-experimental
+#   brew install --cask hangar-experimental
+cask "hangar-experimental" do
+  version "@VERSION@"
+  sha256 "@SHA@"
+
+  url "https://github.com/csnewman/hangar/releases/download/app-v#{version}/Hangar-Experimental-#{version}-mac.zip"
+  name "Hangar Experimental"
+  desc "Native desktop app for Hangar development environments (experimental)"
+  homepage "https://github.com/csnewman/hangar"
+
+  depends_on macos: :ventura
+
+  app "Hangar Experimental.app"
+
+  # The app is signed with Hangar's own certificate, not notarized, so macOS
+  # would refuse to open it from a download; the flag that makes it do so is
+  # cleared here.
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{appdir}}/Hangar Experimental.app"]
+  end
+
+  # Its own, by its name: the Electron app's are Hangar's.
+  zap trash: [
+    "~/Library/Application Support/Hangar Experimental",
+    "~/Library/Caches/Hangar Experimental",
+    "~/Library/Preferences/io.github.csnewman.hangar.experimental.plist",
+    "~/Library/Saved Application State/io.github.csnewman.hangar.experimental.savedState",
+  ]
+end

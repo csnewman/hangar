@@ -1,0 +1,113 @@
+name: app
+
+# The native desktop app's experimental release, for a tag app-v<version>:
+# a universal macOS build, signed with Hangar's own certificate
+# (dev/release-cert.sh), attached to a pre-release, and written into the
+# tap as the hangar-experimental cask.
+on:
+  push:
+    tags: ['app-v*']
+
+jobs:
+  package:
+    runs-on: macos-15
+    # The release certificate and its password, APP_SIGNING_P12 and
+    # APP_SIGNING_PASSWORD, are this environment's secrets, given only to a
+    # job naming it from an app-v* tag.
+    environment: app-signing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+      # The tag names the version, app-v1.2.3 being 1.2.3, which
+      # crates/app/Cargo.toml has to say too.
+      - name: Version
+        run: |
+          version="${GITHUB_REF_NAME#app-v}"
+          have=$(sed -n 's/^version = "\(.*\)"/\1/p' crates/app/Cargo.toml | head -1)
+          if [ "$version" != "$have" ]; then
+            echo "the tag says $version, crates/app/Cargo.toml $have" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      # The certificate, in a keychain of the job's own, which codesign
+      # alone may use without asking.
+      - name: Signing certificate
+        env:
+          APP_SIGNING_P12: ${{ secrets.APP_SIGNING_P12 }}
+          APP_SIGNING_PASSWORD: ${{ secrets.APP_SIGNING_PASSWORD }}
+        run: |
+          set -eu
+          kc="$RUNNER_TEMP/release.keychain-db"
+          pass=$(openssl rand -hex 24)
+          security create-keychain -p "$pass" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$pass" "$kc"
+          printf '%s' "$APP_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/release.p12"
+          security import "$RUNNER_TEMP/release.p12" -k "$kc" -P "$APP_SIGNING_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/release.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pass" "$kc" > /dev/null
+          echo "HANGAR_SIGN_KEYCHAIN=$kc" >> "$GITHUB_ENV"
+          echo "HANGAR_SIGN_IDENTITY=Hangar Release" >> "$GITHUB_ENV"
+      - run: dev/app-release.sh experimental "$VERSION" out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-macos
+          path: out/*.zip
+
+  release:
+    needs: package
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: app-macos
+          path: out
+      # The Homebrew cask for this release, with its checksum.
+      - run: |
+          version="${GITHUB_REF_NAME#app-v}"
+          sed -e "s/@VERSION@/$version/" \
+              -e "s/@SHA@/$(sha256sum out/Hangar-Experimental-$version-mac.zip | cut -d' ' -f1)/" \
+              crates/app/packaging/homebrew/hangar-experimental.rb.in > out/hangar-experimental.rb
+      # A pre-release, so the Electron app's stays the latest.
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Hangar Experimental ${{ github.ref_name }}
+          prerelease: true
+          files: out/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cask
+          path: out/hangar-experimental.rb
+
+  # The release's cask, into the tap (csnewman/homebrew-hangar), as
+  # desktop.yml writes the Electron app's.
+  tap:
+    needs: release
+    runs-on: ubuntu-26.04
+    environment: homebrew
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cask
+      - env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -eu
+          path=repos/csnewman/homebrew-hangar/contents/Casks/hangar-experimental.rb
+          # Updating a file names the blob it replaces; the first release
+          # creates it.
+          sha=$(gh api "$path" --jq .sha 2>/dev/null || true)
+          gh api -X PUT "$path" \
+            -f message="hangar-experimental ${GITHUB_REF_NAME#app-v}" \
+            -f content="$(base64 -w0 hangar-experimental.rb)" \
+            ${sha:+-f sha="$sha"} \
+            --jq '.commit.html_url'

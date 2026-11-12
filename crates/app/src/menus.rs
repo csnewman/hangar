@@ -43,15 +43,16 @@ pub fn init(cx: &mut App) {
             let _ = w.update(cx, |_, window, _| window.zoom_window());
         }
     });
+    let app = crate::channel::Channel::current().name();
     cx.set_menus([
-        Menu::new("Hangar").items([
+        Menu::new(app).items([
             MenuItem::action("Settings…", OpenSettings),
             MenuItem::separator(),
-            MenuItem::action("Hide Hangar", Hide),
+            MenuItem::action(format!("Hide {app}"), Hide),
             MenuItem::action("Hide Others", HideOthers),
             MenuItem::action("Show All", ShowAll),
             MenuItem::separator(),
-            MenuItem::action("Quit Hangar", Quit),
+            MenuItem::action(format!("Quit {app}"), Quit),
         ]),
         Menu::new("File").items([
             MenuItem::action("Close Tab", CloseTab),

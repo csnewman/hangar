@@ -4,11 +4,14 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::channel::Channel;
 use crate::place::PlaceConfig;
 
 /// The keychain's service name for places' tokens, each kept under its
-/// place's ID.
-const KEYCHAIN_SERVICE: &str = "Hangar";
+/// place's ID: the app's name, so each channel signs in on its own.
+fn keychain_service() -> &'static str {
+    Channel::current().name()
+}
 
 /// Where the app's files are.
 #[derive(Debug, Clone)]
@@ -23,8 +26,10 @@ impl Dirs {
     /// The user's own directories for the app, from the OS.
     pub fn user() -> Option<Dirs> {
         Some(Dirs {
-            config: dirs::config_dir()?.join("Hangar"),
-            cache: dirs::cache_dir()?.join("Hangar").join("places"),
+            config: dirs::config_dir()?.join(Channel::current().name()),
+            cache: dirs::cache_dir()?
+                .join(Channel::current().name())
+                .join("places"),
         })
     }
 
@@ -81,20 +86,20 @@ pub struct Keychain;
 
 impl Tokens for Keychain {
     fn get(&self, place: &str) -> Option<String> {
-        keyring::Entry::new(KEYCHAIN_SERVICE, place)
+        keyring::Entry::new(keychain_service(), place)
             .ok()?
             .get_password()
             .ok()
     }
 
     fn set(&self, place: &str, token: &str) -> Result<(), String> {
-        keyring::Entry::new(KEYCHAIN_SERVICE, place)
+        keyring::Entry::new(keychain_service(), place)
             .and_then(|e| e.set_password(token))
             .map_err(|e| e.to_string())
     }
 
     fn delete(&self, place: &str) {
-        if let Ok(e) = keyring::Entry::new(KEYCHAIN_SERVICE, place) {
+        if let Ok(e) = keyring::Entry::new(keychain_service(), place) {
             let _ = e.delete_credential();
         }
     }

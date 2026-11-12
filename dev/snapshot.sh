@@ -10,5 +10,5 @@ set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
 (cd "$repo/crates" && cargo build -q -p hangar-app --example snapshot)
 bin=$repo/crates/target/debug/examples/snapshot
-"$repo/dev/codesign.sh" io.github.csnewman.hangar.snapshot "$bin"
+"$repo/dev/codesign.sh" "$bin" io.github.csnewman.hangar.snapshot
 exec "$bin" "$@"
