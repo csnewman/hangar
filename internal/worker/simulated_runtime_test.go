@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net"
+	"os/exec"
 	"sort"
 	"strings"
 	"sync"
@@ -15,7 +16,7 @@ import (
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/ch"
 	"github.com/csnewman/hangar/internal/procs"
-	"github.com/csnewman/hangar/internal/terminal"
+	"github.com/csnewman/hangar/internal/terminal/terminaltest"
 )
 
 // Simulated is the tests' Runtime: it runs nothing. Each environment walks
@@ -36,10 +37,9 @@ type Simulated struct {
 	envs    map[string]*simEnv
 	images  map[string]int64
 	changed chan struct{}
-	// terminals are the environments' sessions, run on this machine by the
-	// same manager the guest agent uses, so a terminal behaves the same in
-	// development as against a real environment.
-	terminals map[string]*terminal.Manager
+	// terminals are the environments' sessions, a shell each, run on this
+	// machine.
+	terminals map[string]*terminaltest.Guest
 	// procs lists this machine's processes for every environment.
 	procs *procs.Server
 	// memoryMaxMiB is what a running environment's memory can be resized
@@ -72,7 +72,7 @@ type simEnv struct {
 
 func NewSimulated(step time.Duration) *Simulated {
 	return &Simulated{Step: step, envs: map[string]*simEnv{}, images: map[string]int64{},
-		changed: make(chan struct{}, 1), terminals: map[string]*terminal.Manager{}}
+		changed: make(chan struct{}, 1), terminals: map[string]*terminaltest.Guest{}}
 }
 
 func (s *Simulated) Changed() <-chan struct{} { return s.changed }
@@ -318,7 +318,7 @@ func (s *Simulated) DialTerminal(_ context.Context, id string) (net.Conn, error)
 	}
 	m, ok := s.terminals[id]
 	if !ok {
-		m = terminal.NewManager(terminal.LoginShell("dev"), nil)
+		m = terminaltest.New(func() *exec.Cmd { return exec.Command("/bin/sh") })
 		s.terminals[id] = m
 	}
 	a, b := net.Pipe()

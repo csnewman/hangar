@@ -26,14 +26,15 @@ import (
 	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/terminal"
+	"github.com/csnewman/hangar/internal/terminal/terminaltest"
 	"github.com/csnewman/hangar/internal/tunnel"
 	"github.com/csnewman/hangar/internal/users"
 )
 
 // guest stands in for a worker: each terminal stream is a pipe to one
-// terminal manager, whose shell echoes what it is sent; its logs are the
-// console's one line.
-type guest struct{ m *terminal.Manager }
+// stand-in for the guest's terminals, whose shell echoes what it is sent;
+// its logs are the console's one line.
+type guest struct{ m *terminaltest.Guest }
 
 func (g guest) Open(_ string, h tunnel.Header) (net.Conn, error) {
 	server, client := net.Pipe()
@@ -106,9 +107,9 @@ func TestTerminals(t *testing.T) {
 	d := dbtest.Open(t)
 	um := users.NewManager(d)
 	em := environments.NewManager(d)
-	m := terminal.NewManager(func(terminal.Request) (*exec.Cmd, error) {
-		return exec.Command("/bin/sh", "-c", `echo hello; while read l; do echo "got:$l"; done`), nil
-	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	m := terminaltest.New(func() *exec.Cmd {
+		return exec.Command("/bin/sh", "-c", `echo hello; while read l; do echo "got:$l"; done`)
+	})
 	srv := httptest.NewServer(clientapi.New(clientapi.Config{
 		Environments: em,
 		Users:        um,

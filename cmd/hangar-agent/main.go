@@ -39,7 +39,7 @@ import (
 const agentInRoot = "/usr/local/bin/hangar-agent"
 
 // rustAgentInRoot is where init installs the agent's Rust half
-// (crates/agent), which serves the Code tab, beside the agent.
+// (crates/agent), which serves terminals and the Code tab, beside the agent.
 const rustAgentInRoot = "/usr/local/bin/hangar-agent-rs"
 
 func main() {
@@ -87,7 +87,7 @@ func main() {
 	widenReclaim()
 	go offload()
 	go compact()
-	go serveTerminals()
+	go serveRust()
 	go serveDesktop()
 	go serveCode()
 	go serveProfile()

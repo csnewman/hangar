@@ -1,5 +1,6 @@
-// Package terminal runs interactive shells that outlive the connections
-// watching them, and speaks the protocol that carries them.
+// Package terminal speaks the protocol that carries the guest's terminals,
+// which the agent's Rust half runs (crates/agent/src/terminal.rs): shells
+// that outlive the connections watching them.
 //
 // A session is a shell on a pseudo-terminal. It is started by the first
 // attach that asks for one and runs until its shell exits; connections come

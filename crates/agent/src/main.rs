@@ -1,6 +1,10 @@
 //! hangar-agent-rs: the guest agent's Rust half, run beside the Go agent
 //! while the agent moves to Rust a service at a time.
 //!
+//!   hangar-agent-rs serve
+//!
+//! serves, as root, what has moved over (`serve.rs`): terminals.
+//!
 //!   hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]
 //!
 //! serves the Code tab, as the environment's user, on a unix socket the
@@ -16,6 +20,16 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
+        Some("serve") if args.len() == 1 => {
+            let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+            match rt.block_on(hangar_agent::serve::serve()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("hangar-agent-rs: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("code") => {
             let (mut socket, mut root, mut trust) = (None, None, None);
             let mut rest = args[1..].iter();
@@ -44,6 +58,8 @@ fn main() -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]");
+    eprintln!(
+        "usage: hangar-agent-rs serve\n       hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]"
+    );
     ExitCode::from(2)
 }
