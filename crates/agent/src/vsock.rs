@@ -8,7 +8,13 @@ use tokio::io::unix::AsyncFd;
 
 use crate::fdio::FdStream;
 
-/// A socket listening on a vsock port, for connections from any CID.
+/// A socket listening on a vsock port, for connections from the host alone.
+///
+/// The agent's services act as root, or as any user they are asked to, and
+/// trust whoever reaches them to have been let in by Hangar: the worker,
+/// which the server's gateway and API reach them through. A process in the
+/// guest can dial the guest's own ports too, through vsock's loopback
+/// (CID 1), so every peer but the host is refused.
 pub struct Listener {
     fd: AsyncFd<OwnedFd>,
 }
@@ -47,29 +53,38 @@ impl Listener {
         }
     }
 
+    /// The next connection from the host. One from anywhere else is
+    /// closed as it arrives.
     pub async fn accept(&self) -> io::Result<FdStream> {
         loop {
             let mut ready = self.fd.readable().await?;
             let accepted = ready.try_io(|fd| {
-                // SAFETY: accept4(2) on a listening socket, not asking for
-                // the peer's address.
-                let c = unsafe {
-                    libc::accept4(
+                // SAFETY: accept4(2) on a listening socket, into an address
+                // of the size given.
+                unsafe {
+                    let mut peer: libc::sockaddr_vm = std::mem::zeroed();
+                    let mut len = std::mem::size_of::<libc::sockaddr_vm>() as libc::socklen_t;
+                    let c = libc::accept4(
                         fd.as_raw_fd(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
+                        (&raw mut peer).cast(),
+                        &mut len,
                         libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-                    )
-                };
-                if c < 0 {
-                    return Err(io::Error::last_os_error());
+                    );
+                    if c < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    // A descriptor accept4 just returned, owned by no one
+                    // else.
+                    Ok((OwnedFd::from_raw_fd(c), peer.svm_cid))
                 }
-                // SAFETY: a descriptor accept4 just returned, owned by no one
-                // else.
-                Ok(unsafe { OwnedFd::from_raw_fd(c) })
             });
-            if let Ok(r) = accepted {
-                return FdStream::new(r?);
+            match accepted {
+                Ok(Ok((conn, libc::VMADDR_CID_HOST))) => return FdStream::new(conn),
+                Ok(Ok((_, cid))) => {
+                    eprintln!("hangar-agent-rs: refused a connection from CID {cid}, not the host");
+                }
+                Ok(Err(e)) => return Err(e),
+                Err(_would_block) => {}
             }
         }
     }

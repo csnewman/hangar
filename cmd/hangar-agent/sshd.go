@@ -31,10 +31,18 @@ func serveSSH() {
 			continue
 		}
 		for {
-			conn, _, err := ln.Accept(0)
+			conn, cid, err := ln.Accept(0)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "hangar-agent: ssh: %v\n", err)
 				break
+			}
+			// The server asks nothing of whoever connects, trusting the
+			// gateway to have signed them in: a process in the guest can
+			// dial it too, through vsock's loopback, and is refused.
+			if cid != vsock.CIDHost {
+				fmt.Fprintf(os.Stderr, "hangar-agent: ssh: refused a connection from CID %d, not the host\n", cid)
+				conn.Close()
+				continue
 			}
 			go srv.Serve(sshd.FileConn(conn))
 		}
