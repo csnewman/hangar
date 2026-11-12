@@ -402,6 +402,9 @@ func environment(e api.Environment) Environment {
 	out.EditorPath = optional(e.Spec.EditorPath)
 	public := e.PortsPublic
 	out.PortsPublic = &public
+	if e.Phase == api.PhaseRunning {
+		out.Stats = stats(e.Stats)
+	}
 	if len(e.Spec.WebNames) > 0 {
 		names := e.Spec.WebNames
 		out.WebNames = &names

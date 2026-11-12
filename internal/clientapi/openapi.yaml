@@ -368,6 +368,87 @@ paths:
         "409": { $ref: "#/components/responses/Conflict" }
         "503": { $ref: "#/components/responses/Unavailable" }
 
+  /environments/{id}/processes:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listProcesses
+      summary: The processes running in the environment
+      description: >-
+        Every process in the guest, as its agent reads them from /proc, with
+        how many CPUs and how much memory the guest has. Asked of the
+        environment each time, so a client polls it while it shows it.
+      responses:
+        "200":
+          description: The processes.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ProcessList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /environments/{id}/processes/{pid}/signal:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+      - name: pid
+        in: path
+        required: true
+        schema: { type: integer }
+    post:
+      operationId: signalProcess
+      summary: Stops a process, asking it (TERM) or forcing it (KILL)
+      description: >-
+        The guest's init and its agent cannot be signalled (a process list
+        marks them protected); asking is 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [signal]
+              properties:
+                signal:
+                  type: string
+                  enum: [TERM, KILL]
+      responses:
+        "204": { description: Signalled. }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /environments/{id}/activity:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    get:
+      operationId: listActivity
+      summary: What has been done to the environment, newest first
+      description: >-
+        The audit log's events about the environment the user may see:
+        who did what, and the change it made. A page at a time, before
+        the id of the last one read.
+      parameters:
+        - name: before
+          in: query
+          schema: { type: integer, format: int64 }
+        - name: limit
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: The events.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ActivityEvent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /events:
     get:
       operationId: streamEvents
@@ -582,6 +663,7 @@ components:
           description: The names of its own web servers its template lists.
           items: { type: string }
         task: { $ref: "#/components/schemas/Task" }
+        stats: { $ref: "#/components/schemas/EnvironmentStats" }
         agents:
           type: array
           description: The coding agents' sessions in it, oldest first.
@@ -677,6 +759,92 @@ components:
         logged about the environment; monitor the virtual machine's
         monitor's; gpu the virtual GPU's backend.
       enum: [combined, console, worker, monitor, gpu]
+
+    EnvironmentStats:
+      type: object
+      description: >-
+        What a running environment is using, as its worker last measured.
+      required: [cpu_percent, memory_used_mib, memory_total_mib]
+      properties:
+        cpu_percent:
+          type: number
+          description: Of its own vCPUs; 100 is all of them busy.
+        memory_used_mib:
+          type: integer
+          description: What its programs use, as the guest sees it.
+        memory_total_mib: { type: integer }
+        memory_cached_mib:
+          type: integer
+          description: Its cache of files, which it would give up for its programs.
+        host_memory_mib:
+          type: integer
+          description: The worker's memory its RAM takes up.
+        swap_total_mib: { type: integer }
+        swap_used_mib: { type: integer }
+        disk_used_bytes: { type: integer, format: int64 }
+        disk_read_bps: { type: number }
+        disk_write_bps: { type: number }
+        net_rx_bps: { type: number }
+        net_tx_bps: { type: number }
+
+    ProcessList:
+      type: object
+      required: [cpus, memory_bytes, processes]
+      properties:
+        cpus: { type: integer }
+        memory_bytes: { type: integer, format: int64 }
+        processes:
+          type: array
+          items: { $ref: "#/components/schemas/Process" }
+
+    Process:
+      type: object
+      required: [pid, ppid, user, name, command, state, cpu_percent, rss_bytes, threads, started]
+      properties:
+        pid: { type: integer }
+        ppid: { type: integer }
+        user: { type: string }
+        name: { type: string }
+        command: { type: string }
+        state:
+          type: string
+          description: As /proc gives it -- R running, S sleeping, D waiting on I/O, Z a zombie.
+        cpu_percent: { type: number }
+        rss_bytes: { type: integer, format: int64 }
+        threads: { type: integer }
+        started: { type: string, format: date-time }
+        protected:
+          type: boolean
+          description: The guest's init or its agent, which cannot be stopped from here.
+
+    ActivityEvent:
+      type: object
+      required: [id, at, actor, action, target, details]
+      properties:
+        id: { type: integer, format: int64 }
+        at: { type: string, format: date-time }
+        actor:
+          type: object
+          required: [kind, name]
+          properties:
+            kind:
+              type: string
+              description: user, worker or system. More may come.
+            id: { type: string }
+            name: { type: string }
+        action:
+          type: string
+          description: What was done, as environment.start or environment.phase.
+        target:
+          type: object
+          required: [type, id, name]
+          properties:
+            type: { type: string }
+            id: { type: string }
+            name: { type: string }
+        details:
+          type: object
+          additionalProperties: true
 
     LogPart:
       type: object
