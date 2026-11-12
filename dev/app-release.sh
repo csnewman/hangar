@@ -11,6 +11,10 @@
 # keychain it is in) and zips it into OUT as <Name>-VERSION-mac.zip,
 # printing the zip's path. HANGAR_RELEASE_TARGETS names other targets.
 set -eu
+if [ $# -ne 3 ]; then
+    echo "usage: dev/app-release.sh CHANNEL VERSION OUT" >&2
+    exit 2
+fi
 channel=$1
 version=$2
 out=$3

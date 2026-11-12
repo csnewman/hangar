@@ -16,7 +16,15 @@
 # "Always Allow" for the app's tokens lasts across upgrades. Keep it: a new
 # one has every user's Keychain ask again.
 set -eu
+if [ $# -ne 1 ]; then
+    echo "usage: dev/release-cert.sh DIR    (e.g. dev/release-cert.sh ~/hangar-release)" >&2
+    exit 2
+fi
 dir=$1
+if [ -e "$dir/hangar-release.p12" ]; then
+    echo "$dir already holds a release certificate: a new one would have every user's Keychain ask again" >&2
+    exit 1
+fi
 umask 077
 mkdir -p "$dir"
 cd "$dir"

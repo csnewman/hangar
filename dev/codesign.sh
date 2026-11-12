@@ -16,6 +16,10 @@
 # release's is (.github/workflows/app.yml). With none, the build is left as
 # it is.
 set -eu
+if [ $# -lt 1 ] || [ $# -gt 2 ]; then
+    echo "usage: dev/codesign.sh PATH [IDENTIFIER]" >&2
+    exit 2
+fi
 path=$1
 identifier=${2:-}
 if [ -z "$identifier" ]; then

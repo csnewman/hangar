@@ -9,6 +9,10 @@
 # prints its path. Each channel is an app of its own, by name and bundle
 # identifier, so they can be installed side by side.
 set -eu
+if [ $# -ne 4 ]; then
+    echo "usage: dev/app-bundle.sh CHANNEL BINARY DIR VERSION" >&2
+    exit 2
+fi
 channel=$1
 bin=$2
 dir=$3
