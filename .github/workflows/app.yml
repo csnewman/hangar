@@ -51,8 +51,18 @@ jobs:
           security import "$RUNNER_TEMP/release.p12" -k "$kc" -P "$APP_SIGNING_PASSWORD" -T /usr/bin/codesign
           rm "$RUNNER_TEMP/release.p12"
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pass" "$kc" > /dev/null
+          # codesign on the runner's macOS finds an identity only in a
+          # keychain on the search list, whatever --keychain says.
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          # By its hash, which names it whatever else the keychains hold.
+          identity=$(security find-identity -p codesigning "$kc" | awk '/"Hangar Release"/ { print $2; exit }')
+          if [ -z "$identity" ]; then
+            security find-identity -p codesigning "$kc" >&2
+            echo "no Hangar Release identity in the imported certificate" >&2
+            exit 1
+          fi
           echo "HANGAR_SIGN_KEYCHAIN=$kc" >> "$GITHUB_ENV"
-          echo "HANGAR_SIGN_IDENTITY=Hangar Release" >> "$GITHUB_ENV"
+          echo "HANGAR_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
       - run: dev/app-release.sh experimental "$VERSION" out
       - uses: actions/upload-artifact@v4
         with:
