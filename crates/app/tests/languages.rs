@@ -291,7 +291,7 @@ fn the_completion_taken_is_known_by_its_text() {
     };
     let offered = Offered::default();
     let fill = || {
-        *offered.lock().unwrap() = vec![
+        offered.lock().unwrap().items = vec![
             CompletionItem {
                 data: Some(serde_json::json!({ "import": "std::collections::HashMap" })),
                 ..item("HashMap")
@@ -314,11 +314,32 @@ fn the_completion_taken_is_known_by_its_text() {
         taken(&offered, "HashMap").map(|i| i.label),
         Some("HashMap".into())
     );
-    assert!(offered.lock().unwrap().is_empty(), "let go once taken");
+    assert!(
+        offered.lock().unwrap().items.is_empty(),
+        "let go once taken"
+    );
     fill();
     assert!(taken(&offered, "Hash").is_none(), "nothing more to make");
     fill();
     assert_eq!(taken(&offered, "Vec").map(|i| i.label), Some("Vec".into()));
     fill();
     assert!(taken(&offered, "dup").is_none(), "two put in the same");
+
+    // A snippet is put in as the text it reads as, its first stop kept.
+    let mut items = vec![CompletionItem {
+        insert_text: Some("push(${1:value})".into()),
+        insert_text_format: Some(lsp_types::InsertTextFormat::SNIPPET),
+        ..item("push")
+    }];
+    let stops = hangar_app::lspedit::plain(&mut items);
+    assert_eq!(items[0].insert_text.as_deref(), Some("push(value)"));
+    assert_eq!(
+        items[0].insert_text_format,
+        Some(lsp_types::InsertTextFormat::PLAIN_TEXT)
+    );
+    offered.lock().unwrap().stops = stops;
+    assert_eq!(
+        hangar_app::lspedit::stop(&offered, "push(value)"),
+        Some(5..10)
+    );
 }

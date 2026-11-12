@@ -758,7 +758,7 @@ fn capabilities() -> Value {
             "typeDefinition": { "linkSupport": true },
             "completion": {
                 "completionItem": {
-                    "snippetSupport": false,
+                    "snippetSupport": true,
                     "documentationFormat": ["markdown", "plaintext"],
                     "resolveSupport": { "properties": ["additionalTextEdits"] },
                 },

@@ -24,8 +24,44 @@ use crate::languages::{Languages, file_uri};
 pub type ApplyEdit = Rc<dyn Fn(WorkspaceEdit, &mut Window, &mut App)>;
 
 /// The completions last offered in a file, kept to know which one was
-/// taken.
-pub type Offered = std::sync::Arc<std::sync::Mutex<Vec<lsp_types::CompletionItem>>>;
+/// taken, and each snippet's first stop, by the text it puts in.
+#[derive(Debug, Default)]
+pub struct OfferedItems {
+    pub items: Vec<lsp_types::CompletionItem>,
+    pub stops: std::collections::HashMap<String, std::ops::Range<usize>>,
+}
+
+pub type Offered = std::sync::Arc<std::sync::Mutex<OfferedItems>>;
+
+/// Puts a snippet's items in as the plain text they read as (snippet.rs),
+/// keeping each one's first stop by its text.
+pub fn plain(
+    items: &mut [lsp_types::CompletionItem],
+) -> std::collections::HashMap<String, std::ops::Range<usize>> {
+    let mut stops = std::collections::HashMap::new();
+    for item in items {
+        if item.insert_text_format != Some(lsp_types::InsertTextFormat::SNIPPET) {
+            continue;
+        }
+        let (text, stop) = crate::snippet::expand(item_text(item));
+        match &mut item.text_edit {
+            Some(lsp_types::CompletionTextEdit::Edit(e)) => e.new_text = text.clone(),
+            Some(lsp_types::CompletionTextEdit::InsertAndReplace(e)) => e.new_text = text.clone(),
+            None if item.insert_text.is_some() => item.insert_text = Some(text.clone()),
+            None => continue,
+        }
+        item.insert_text_format = Some(lsp_types::InsertTextFormat::PLAIN_TEXT);
+        if let Some(stop) = stop {
+            stops.insert(text, stop);
+        }
+    }
+    stops
+}
+
+/// The first stop of the snippet text just put in is, if it was one.
+pub fn stop(offered: &Offered, inserted: &str) -> Option<std::ops::Range<usize>> {
+    offered.lock().ok()?.stops.get(inserted).cloned()
+}
 
 /// The text an item puts in when it is taken, as the editor puts it.
 pub fn item_text(item: &lsp_types::CompletionItem) -> &str {
@@ -44,13 +80,14 @@ pub fn taken(offered: &Offered, inserted: &str) -> Option<lsp_types::CompletionI
     if inserted.chars().count() < 2 {
         return None;
     }
-    let mut items = offered.lock().ok()?;
-    let mut matching = items.iter().filter(|i| item_text(i) == inserted);
+    let mut o = offered.lock().ok()?;
+    let mut matching = o.items.iter().filter(|i| item_text(i) == inserted);
     let item = matching.next()?.clone();
     if matching.next().is_some() {
         return None;
     }
-    items.clear();
+    o.items.clear();
+    o.stops.clear();
     let more = item
         .additional_text_edits
         .as_ref()
@@ -131,13 +168,17 @@ impl CompletionProvider for Providers {
             self.ask_with::<CompletionResponse>("textDocument/completion", text, offset, more, cx);
         let offered = self.offered.clone();
         cx.background_spawn(async move {
-            let answer = asked.await?.unwrap_or(CompletionResponse::Array(vec![]));
-            let items = match &answer {
-                CompletionResponse::Array(items) => items.clone(),
-                CompletionResponse::List(list) => list.items.clone(),
+            let mut answer = asked.await?.unwrap_or(CompletionResponse::Array(vec![]));
+            let items = match &mut answer {
+                CompletionResponse::Array(items) => items,
+                CompletionResponse::List(list) => &mut list.items,
             };
+            let stops = plain(items);
             if let Ok(mut o) = offered.lock() {
-                *o = items;
+                *o = OfferedItems {
+                    items: items.clone(),
+                    stops,
+                };
             }
             Ok(answer)
         })

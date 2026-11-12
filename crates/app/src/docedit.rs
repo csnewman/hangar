@@ -1438,10 +1438,22 @@ impl DocEditor {
     /// asks (the import an item from elsewhere needs): asked of the server
     /// first when it left them to be filled in. The completion taken is
     /// the one offered whose text was just put in.
-    fn completed(&mut self, inserted: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn completed(
+        &mut self,
+        inserted: &str,
+        at: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(offered) = &self.offered else {
             return;
         };
+        // A snippet taken: its first stop chosen, as an editor does.
+        if let Some(stop) = crate::lspedit::stop(offered, inserted) {
+            self.editor.update(cx, |e, cx| {
+                e.set_selected_range(at + stop.start..at + stop.end, cx)
+            });
+        }
         let Some(item) = crate::lspedit::taken(offered, inserted) else {
             return;
         };
@@ -2545,7 +2557,10 @@ impl DocEditor {
                 self.shadow = after.clone();
                 continue;
             }
-            inserted = Some(after.slice(edit.start_byte..edit.new_end_byte).to_string());
+            inserted = Some((
+                after.slice(edit.start_byte..edit.new_end_byte).to_string(),
+                edit.start_byte,
+            ));
             if let Some(sync) = &mut self.sync {
                 sync.typed(
                     &self.shadow,
@@ -2559,13 +2574,13 @@ impl DocEditor {
             self.shadow = after.clone();
         }
         self.push(cx);
-        if let Some(inserted) = inserted {
+        if let Some((inserted, at)) = inserted {
             // What was shaded may have moved; it is asked for again once the
             // caret rests.
             self.uses_caret = None;
             self.mark_changes(Duration::from_millis(150), cx);
             self.typed_for_signatures(&inserted, cx);
-            self.completed(&inserted, window, cx);
+            self.completed(&inserted, at, window, cx);
         }
     }
 
