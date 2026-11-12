@@ -14,7 +14,8 @@
 package code
 
 // Port is the vsock port the guest agent serves the Code tab on.
-const Port uint32 = 8104
+// It is below 1024, as every port the agent listens on is (internal/agent).
+const Port uint32 = 104
 
 // Request opens a connection.
 type Request struct {

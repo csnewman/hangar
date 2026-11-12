@@ -1,4 +1,4 @@
-//! The environment's own TCP ports, reached by the host on vsock port 8108
+//! The environment's own TCP ports, reached by the host on vsock port 108
 //! in the protocol `internal/guestport` defines: for each connection the
 //! agent connects to the port the host names on the guest's own loopback,
 //! then carries bytes both ways.
@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-pub const PORT: u32 = 8108;
+pub const PORT: u32 = 108;
 
 pub const CONNECTED: u8 = 0;
 pub const REFUSED: u8 = 1;

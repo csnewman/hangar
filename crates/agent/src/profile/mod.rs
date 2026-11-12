@@ -27,7 +27,7 @@
 //! # Protocol
 //!
 //! A session is JSON lines both ways on one stream, which the server opens
-//! to vsock port 8105. Each line is a `Message`.
+//! to vsock port 105. Each line is a `Message`.
 
 mod files;
 mod moves;
@@ -54,7 +54,7 @@ pub use registry::{HelperCredential, credential_helper};
 pub use routes::{Route, SetPaths, copies_in, copy_of, routes_for, served};
 pub use sshagent::parse_authorized_key;
 
-pub const PORT: u32 = 8105;
+pub const PORT: u32 = 105;
 
 /// Where the credential helper reaches the agent.
 pub const REGISTRY_SOCKET: &str = registry::SOCKET;

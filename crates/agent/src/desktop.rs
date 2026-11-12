@@ -1,4 +1,4 @@
-//! The environment's desktop, served to the host as VNC on vsock port 8103
+//! The environment's desktop, served to the host as VNC on vsock port 103
 //! in the protocol `internal/desktop` defines.
 //!
 //! The desktop is the image's own: a labwc session, headless, that draws
@@ -32,7 +32,7 @@ use tokio::sync::Mutex;
 use crate::launch::{self, Launched};
 use crate::user::{self, User};
 
-pub const PORT: u32 = 8103;
+pub const PORT: u32 = 103;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Request {

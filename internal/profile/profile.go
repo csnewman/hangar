@@ -37,7 +37,8 @@ package profile
 import "github.com/csnewman/hangar/internal/api"
 
 // Port is the vsock port the guest agent serves profile sessions on.
-const Port uint32 = 8105
+// It is below 1024, as every port the agent listens on is (internal/agent).
+const Port uint32 = 105
 
 // Message types.
 const (

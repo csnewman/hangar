@@ -1,4 +1,4 @@
-//! The Code tab's service, started for the host on vsock port 8104 in the
+//! The Code tab's service, started for the host on vsock port 104 in the
 //! protocol `internal/code` defines.
 //!
 //! The service is this binary's `code` command (`src/code`), run as the
@@ -20,7 +20,7 @@ use tokio::sync::Mutex;
 use crate::launch::{self, Launched};
 use crate::user::{self, User};
 
-pub const PORT: u32 = 8104;
+pub const PORT: u32 = 104;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Request {

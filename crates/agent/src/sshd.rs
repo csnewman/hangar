@@ -1,4 +1,4 @@
-//! The SSH server inside an environment, on vsock port 8107, which Hangar's
+//! The SSH server inside an environment, on vsock port 107, which Hangar's
 //! SSH gateway reaches it through: `ssh <environment>@<hangar> -p 2222`,
 //! and an editor's remote SSH over the same.
 //!
@@ -26,7 +26,7 @@ use crate::fdio::FdStream;
 use crate::terminal::{open_pty, winsize};
 use crate::user::{self, User};
 
-pub const PORT: u32 = 8107;
+pub const PORT: u32 = 107;
 
 /// OpenSSH's SFTP server, in the places images have it.
 const OPENSSH_SFTP: &[&str] = &[

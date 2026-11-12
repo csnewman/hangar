@@ -11,7 +11,8 @@ package procs
 import "time"
 
 // Port is the vsock port the guest agent serves the process list on.
-const Port uint32 = 8106
+// It is below 1024, as every port the agent listens on is (internal/agent).
+const Port uint32 = 106
 
 // Request is one request.
 type Request struct {

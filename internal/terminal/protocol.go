@@ -43,7 +43,8 @@ import (
 // Port is the vsock port the guest agent serves terminals on. The host dials
 // it: a terminal is opened when someone asks for one, not when the guest
 // boots.
-const Port uint32 = 8101
+// It is below 1024, as every port the agent listens on is (internal/agent).
+const Port uint32 = 101
 
 // Request operations.
 const (

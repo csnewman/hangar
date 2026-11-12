@@ -14,7 +14,9 @@ use crate::fdio::FdStream;
 /// trust whoever reaches them to have been let in by Hangar: the worker,
 /// which the server's gateway and API reach them through. A process in the
 /// guest can dial the guest's own ports too, through vsock's loopback
-/// (CID 1), so every peer but the host is refused.
+/// (CID 1), so every peer but the host is refused. The agent's ports are
+/// below 1024, which only a privileged process may bind, so no other
+/// process in the guest can take one while the agent restarts.
 pub struct Listener {
     fd: AsyncFd<OwnedFd>,
 }

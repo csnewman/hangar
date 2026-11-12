@@ -1,5 +1,5 @@
 //! Interactive shells that outlive the connections watching them, served on
-//! vsock port 8101 in the protocol `internal/terminal` defines for the
+//! vsock port 101 in the protocol `internal/terminal` defines for the
 //! worker.
 //!
 //! A session is a shell on a pseudo-terminal. It is started by the first
@@ -49,7 +49,7 @@ use crate::user::{self, User};
 
 /// The vsock port terminals are served on. The host dials it: a terminal is
 /// opened when someone asks for one, not when the guest boots.
-pub const PORT: u32 = 8101;
+pub const PORT: u32 = 101;
 
 /// How much of a session's recent output is kept, to replay to a connection
 /// that attaches.

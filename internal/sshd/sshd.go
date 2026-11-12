@@ -6,4 +6,5 @@
 package sshd
 
 // Port is the vsock port the guest agent serves SSH on.
-const Port uint32 = 8107
+// It is below 1024, as every port the agent listens on is (internal/agent).
+const Port uint32 = 107

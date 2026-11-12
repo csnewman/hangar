@@ -1,4 +1,4 @@
-//! The environment's task manager, served on vsock port 8106 in the protocol
+//! The environment's task manager, served on vsock port 106 in the protocol
 //! `internal/procs` defines: what runs in the guest, what each process
 //! costs, and stopping one.
 //!
@@ -18,7 +18,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader
 use crate::clock::rfc3339;
 use crate::user::User;
 
-pub const PORT: u32 = 8106;
+pub const PORT: u32 = 106;
 
 /// USER_HZ, the unit /proc counts CPU time in: 100 on every architecture
 /// Linux runs guests on.

@@ -30,6 +30,12 @@
 // separate connections on separate ports, which vsock provides directly; a
 // single-stream transport would mean multiplexing them by hand.
 //
+// The guest agent's own services -- terminals, the desktop, the Code tab,
+// the profile session, processes, SSH, the guest's ports -- listen on vsock
+// ports below 1024, which only a privileged process may bind: no other
+// process in the guest can take one in the moment the agent is restarting,
+// and be dialled in its place.
+//
 // The protocol is newline-delimited JSON in both directions. Every request
 // carries an ID and every response repeats it, so replies may be returned out
 // of order.
