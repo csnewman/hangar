@@ -183,7 +183,7 @@ pub fn describe(e: &ActivityEvent) -> (String, Option<String>) {
 }
 
 /// MiB as the web shows memory: GB from 1024 on.
-fn memory(mib: i64) -> String {
+pub fn memory(mib: i64) -> String {
     if mib >= 1024 {
         let g = mib as f64 / 1024.;
         if g.fract() == 0. {

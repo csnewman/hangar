@@ -80,6 +80,7 @@ fn running() -> Environment {
         display: None,
         image_update: None,
         web_names: vec![],
+        details: Default::default(),
         task: None,
         agents: vec![],
         created_at: chrono::Utc::now(),

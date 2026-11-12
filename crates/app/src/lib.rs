@@ -23,6 +23,7 @@ pub mod dockerlog;
 pub mod doubleshift;
 pub mod editorconfig;
 pub mod envlogs;
+pub mod envsettings;
 pub mod envtab;
 pub mod filehistory;
 pub mod find;

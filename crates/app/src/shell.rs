@@ -18,6 +18,7 @@ use gpui_component::{TitleBar, h_flex, v_flex};
 use crate::addplace::{AddPlaceEvent, AddPlaceView};
 use crate::assets;
 use crate::doubleshift::DoubleShift;
+use crate::envsettings::{EnvSettingsEvent, EnvSettingsView, Page as EnvPage};
 use crate::envtab::{EnvTab, Tool};
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Action, Card, LineKind};
@@ -80,13 +81,21 @@ pub struct Shell {
     notices_open: bool,
     /// The Settings window, while it is open.
     settings: Option<(Entity<SettingsView>, gpui::Subscription)>,
+    /// The Environment Settings window, while it is open.
+    env_settings: Option<(Entity<EnvSettingsView>, gpui::Subscription)>,
     /// The count on the Dock icon, as last set.
     badge_shown: Option<usize>,
 }
 
 gpui::actions!(
     shell,
-    [SearchEverywhere, GoToSymbol, FileStructure, OpenSettings]
+    [
+        SearchEverywhere,
+        GoToSymbol,
+        FileStructure,
+        OpenSettings,
+        EnvironmentSettings
+    ]
 );
 
 /// Binds the shell's keys: ⌘, (IntelliJ's Ctrl+Alt+S elsewhere) for
@@ -99,13 +108,14 @@ pub fn bind_keys(cx: &mut gpui::App) {
     } else {
         ("ctrl-k", "ctrl-alt-shift-n", "ctrl-f12")
     };
-    let settings = if cfg!(target_os = "macos") {
-        "cmd-,"
+    let (settings, environment) = if cfg!(target_os = "macos") {
+        ("cmd-,", "cmd-;")
     } else {
-        "ctrl-alt-s"
+        ("ctrl-alt-s", "ctrl-alt-shift-s")
     };
     cx.bind_keys([
         gpui::KeyBinding::new(settings, OpenSettings, None),
+        gpui::KeyBinding::new(environment, EnvironmentSettings, Some("Shell")),
         gpui::KeyBinding::new(key, SearchEverywhere, Some("Shell")),
         gpui::KeyBinding::new(symbol, GoToSymbol, Some("Shell")),
         gpui::KeyBinding::new(structure, FileStructure, Some("Shell")),
@@ -168,6 +178,7 @@ impl Shell {
             notices: Notices::default(),
             notices_open: false,
             settings: None,
+            env_settings: None,
             badge_shown: None,
         };
         shell.observe_notices(window, cx);
@@ -477,6 +488,51 @@ impl Shell {
         }
     }
 
+    /// Opens an environment's settings, as IntelliJ's Project Structure:
+    /// on a page, or moved to it if they are open.
+    pub fn open_env_settings(
+        &mut self,
+        place: &str,
+        env: &str,
+        page: EnvPage,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((view, _)) = &self.env_settings {
+            let same = view.read(cx).is_for(place, env);
+            if same {
+                view.update(cx, |v, cx| v.show(page, cx));
+                return;
+            }
+        }
+        let places = self.places.clone();
+        let view = cx.new(|cx| EnvSettingsView::new(places, place, env, page, window, cx));
+        let sub = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, e: &EnvSettingsEvent, window, cx| match e {
+                EnvSettingsEvent::Close => this.close_env_settings(window, cx),
+            },
+        );
+        window.focus(&view.focus_handle(cx), cx);
+        self.env_settings = Some((view, sub));
+        cx.notify();
+    }
+
+    fn close_env_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.env_settings = None;
+        match self.active_view() {
+            Some(v) => window.focus(&v.focus_handle(cx), cx),
+            None => window.focus(&self.focus, cx),
+        }
+        cx.notify();
+    }
+
+    /// The Environment Settings window, while it is open.
+    pub fn env_settings(&self) -> Option<Entity<EnvSettingsView>> {
+        self.env_settings.as_ref().map(|(v, _)| v.clone())
+    }
+
     fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.settings = None;
         window.focus(&self.focus, cx);
@@ -714,6 +770,11 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|s, _: &OpenSettings, window, cx| s.open_settings(None, window, cx)),
             )
+            .on_action(cx.listener(|s, _: &EnvironmentSettings, window, cx| {
+                if let Some(o) = s.active.and_then(|i| s.tabs.get(i)).cloned() {
+                    s.open_env_settings(&o.place, &o.env, EnvPage::General, window, cx)
+                }
+            }))
             .on_action(cx.listener(|s, _: &FileStructure, window, cx| s.file_structure(window, cx)))
             .on_modifiers_changed(
                 cx.listener(|s, e: &gpui::ModifiersChangedEvent, window, cx| {
@@ -780,6 +841,25 @@ impl Render for Shell {
                         .top(px(38.))
                         .right(px(10.))
                         .child(self.notices_list(&p, cx)),
+                )
+            })
+            .when_some(self.env_settings(), |this, view| {
+                this.child(
+                    div()
+                        .id("env-settings-scrim")
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui::black().opacity(0.25))
+                        .occlude(),
+                )
+                .child(
+                    h_flex()
+                        .absolute()
+                        .top(px(36.))
+                        .left_0()
+                        .right_0()
+                        .justify_center()
+                        .child(view),
                 )
             })
             .when_some(self.settings(), |this, view| {

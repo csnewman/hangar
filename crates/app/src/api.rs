@@ -95,6 +95,113 @@ pub struct Environment {
     pub agents: Vec<AgentSession>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// What its settings show of it beyond what the list does.
+    #[serde(flatten)]
+    pub details: Details,
+}
+
+/// What an environment's settings show of it: its machine beyond its size,
+/// what its template gives it, and its image.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Details {
+    /// none, virtual or passthrough; more may come.
+    pub gpu: Option<String>,
+    /// Its image's files mapped from its worker's memory.
+    pub dax: bool,
+    /// Its swap: None is its worker's default, 0 none.
+    pub swap_mib: Option<i64>,
+    pub access: Access,
+    /// What a worker's labels must say for it to run there.
+    pub placement: std::collections::BTreeMap<String, String>,
+    pub template_id: Option<String>,
+    /// Its settings that its template has since changed, which a reset to
+    /// the template gives it.
+    pub template_changes: Vec<String>,
+    /// The image it runs, as its template names it, and the copy.
+    pub image: Option<String>,
+    pub image_digest: Option<String>,
+    /// The copy of its writable disk kept from before its last upgrade.
+    pub image_rollback: Option<ImageRollback>,
+    /// What its next start does to its image: upgrade or rollback.
+    pub image_change: Option<String>,
+}
+
+/// What of its owner's an environment is kept from, as its template says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Access {
+    pub no_self_attached: bool,
+    pub no_sensitive_files: bool,
+    pub no_ssh_keys: bool,
+    pub no_registry: bool,
+    pub no_editor_trust: bool,
+}
+
+/// The copy of an environment's writable disk kept from before its last
+/// upgrade, which a rollback restores.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageRollback {
+    pub digest: String,
+    pub at: DateTime<Utc>,
+    pub size_bytes: i64,
+}
+
+/// What an environment's machine is to be: a stopped one's at its next
+/// start, a running one's memory as it runs.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MachineSettings {
+    pub cpus: i64,
+    pub memory_mib: i64,
+    pub display: String,
+    pub gpu: String,
+    pub dax: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub swap_mib: Option<i64>,
+}
+
+/// A worker's capacity: how big an environment may be.
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct Resources {
+    pub cpus: i64,
+    pub memory_mib: i64,
+}
+
+/// A pack of shared files an environment has, the copy of it it uses, and
+/// those the user could choose instead.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct EnvironmentPack {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub team: Option<String>,
+    #[serde(default)]
+    pub builtin: bool,
+    pub copy: PackCopy,
+    /// environment (chosen on it), template, kept or default; more may come.
+    pub from: String,
+    /// Its template lists it, rather than its attaching itself.
+    #[serde(default)]
+    pub listed: bool,
+    #[serde(default)]
+    pub copies: Vec<PackCopy>,
+}
+
+/// One set of a pack's files.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct PackCopy {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub owner: Option<String>,
+    #[serde(default)]
+    pub team: Option<String>,
+    #[serde(default)]
+    pub personal: bool,
 }
 
 /// What a running environment uses, as its worker last measured.
@@ -114,6 +221,11 @@ pub struct Stats {
     pub disk_write_bps: f64,
     pub net_rx_bps: f64,
     pub net_tx_bps: f64,
+    /// The memory its machine has, and what that can be resized between
+    /// as it runs; the bounds are None for one that cannot be.
+    pub machine_memory_mib: Option<i64>,
+    pub machine_memory_min_mib: Option<i64>,
+    pub machine_memory_max_mib: Option<i64>,
 }
 
 /// The processes in an environment, and what its machine has.
@@ -185,9 +297,21 @@ pub struct StartProgress {
     pub unit: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct ImageUpdate {
     pub digest: String,
+    /// Whether its writable disk has been compared with the newer copy,
+    /// which happens while it is stopped.
+    pub checked: bool,
+    /// Files it has changed that the newer copy changes too, which an
+    /// upgrade would keep its own of.
+    pub conflicts: Vec<String>,
+    pub more_conflicts: i64,
+    /// The package manager's database is among them.
+    pub packages: bool,
+    /// Why the comparison failed.
+    pub error: Option<String>,
 }
 
 /// A server's grant for an app signing in through the browser.
@@ -575,6 +699,55 @@ impl Client {
             )),
             None => self.get(&format!("/environments/{id}/activity?limit={limit}")),
         }
+    }
+
+    /// One environment, as it is.
+    pub fn environment(&self, id: &str) -> Result<Environment, Error> {
+        self.get(&format!("/environments/{id}"))
+    }
+
+    /// Changes an environment's machine: a stopped one's at its next start,
+    /// a running one's memory as it runs. Answered with the environment.
+    pub fn update_settings(&self, id: &str, s: &MachineSettings) -> Result<Environment, Error> {
+        let req = self
+            .agent
+            .put(format!("{}/environments/{id}/settings", self.base))
+            .header("Authorization", self.auth())
+            .header("Content-Type", "application/json");
+        let body = serde_json::to_string(s).map_err(|e| Error::Decode(e.to_string()))?;
+        decode(self.send(req, Some(body))?)
+    }
+
+    /// Each online worker's capacity, largest first.
+    pub fn worker_sizes(&self) -> Result<Vec<Resources>, Error> {
+        self.get("/worker-sizes")
+    }
+
+    /// The packs an environment has, each with the copy it uses.
+    pub fn environment_packs(&self, id: &str) -> Result<Vec<EnvironmentPack>, Error> {
+        self.get(&format!("/environments/{id}/packs"))
+    }
+
+    /// Chooses the copy of a pack an environment uses; None undoes the
+    /// choice.
+    pub fn choose_copy(&self, id: &str, pack: &str, copy: Option<&str>) -> Result<(), Error> {
+        let req = self
+            .agent
+            .put(format!("{}/environments/{id}/packs/{pack}", self.base))
+            .header("Authorization", self.auth())
+            .header("Content-Type", "application/json");
+        let body = match copy {
+            Some(c) => serde_json::json!({ "copy_id": c }),
+            None => serde_json::json!({}),
+        };
+        check(self.send(req, Some(body.to_string()))?).map(|_| ())
+    }
+
+    /// Changes an environment's image: upgrade, rollback, keep or cancel.
+    /// force upgrades though the newer copy has not been compared yet.
+    pub fn change_image(&self, id: &str, change: &str, force: bool) -> Result<Environment, Error> {
+        let body = force.then(|| serde_json::json!({ "force": true }).to_string());
+        self.post(&format!("/environments/{id}/image/{change}"), body)
     }
 
     /// Says whether anyone may reach the environment's own web servers

@@ -3438,9 +3438,10 @@ impl Render for EnvTab {
 }
 
 impl EnvTab {
-    /// The environment's ⋯ menu, as the design's toolbar has it: stopping
-    /// it, its SSH command, resetting it to its template, the web UI's
-    /// page, and deleting it; what cannot be taken back is asked first.
+    /// The environment's ⋯ menu, as the design's toolbar has it: its
+    /// settings, stopping it, its SSH command, resetting it to its
+    /// template, the web UI's page, and deleting it; what cannot be taken
+    /// back is asked first.
     fn env_menu(&self, env: &Environment, web: String, cx: &mut Context<Self>) -> impl IntoElement {
         let (place, id, name) = (self.place.clone(), self.env.clone(), env.name.clone());
         let ssh = self
@@ -3455,6 +3456,7 @@ impl EnvTab {
         let places = self.places.clone();
         let desktop = env.phase == "running" && env.display.as_deref() == Some("desktop");
         let me = cx.entity().downgrade();
+        let focus = self.focus.clone();
         gpui_component::button::Button::new("env-more")
             .ghost()
             .small()
@@ -3480,7 +3482,10 @@ impl EnvTab {
                 let copy_ssh = ssh.clone();
                 let web = web.clone();
                 let me = me.clone();
-                menu.item(
+                menu.action_context(focus.clone())
+                    .menu("Settings…", Box::new(crate::shell::EnvironmentSettings))
+                    .separator()
+                    .item(
                     PopupMenuItem::new("Open Desktop")
                         .disabled(!desktop)
                         .on_click(move |_, _, cx| {

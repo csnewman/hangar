@@ -32,6 +32,7 @@ fn env(name: &str, phase: &str, agents: Vec<AgentSession>) -> Environment {
         display: None,
         image_update: None,
         web_names: vec![],
+        details: Default::default(),
         task: None,
         agents,
         created_at: now() - Duration::days(1),
@@ -176,6 +177,7 @@ fn a_newer_image_is_news_once_and_keeps_what_needs_you() {
     assert_eq!(news[0].event, Event::Asking);
     e.image_update = Some(ImageUpdate {
         digest: "sha256:2".into(),
+        ..Default::default()
     });
     let news = n.observe(&places(Connection::Online, vec![e.clone()]), now());
     assert_eq!(news.len(), 1);
@@ -193,6 +195,7 @@ fn a_newer_image_is_news_once_and_keeps_what_needs_you() {
     // A newer one again is news again.
     e.image_update = Some(ImageUpdate {
         digest: "sha256:3".into(),
+        ..Default::default()
     });
     assert_eq!(
         n.observe(&places(Connection::Online, vec![e]), now()).len(),

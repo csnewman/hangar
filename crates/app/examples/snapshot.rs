@@ -21,6 +21,8 @@
 //! SNAPSHOT_SETTINGS=page opens Settings at a page (appearance, keymap,
 //! editor, terminal, notifications, places, or account and browser for the
 //! first place);
+//! SNAPSHOT_ENV_SETTINGS=page opens the opened environment's settings at a
+//! page (general, resources, files, access, ports, danger);
 //! SNAPSHOT_ASK=METHOD:LINE:COLUMN asks the open file's language server
 //! (textDocument/hover, textDocument/definition) and prints its answer;
 //! SNAPSHOT_FIND=text searches in files in Find in Files' pop-up,
@@ -69,6 +71,7 @@ fn main() {
             hangar_app::docedit::bind_keys(cx);
             hangar_app::shell::bind_keys(cx);
             hangar_app::prefs::bind_keys(cx);
+            hangar_app::envsettings::bind_keys(cx);
             hangar_app::termview::bind_keys(cx);
             // A picture, not an app to switch to: no Dock icon or menu bar.
             cx.set_activation_policy(gpui::ActivationPolicy::Accessory);
@@ -165,6 +168,31 @@ fn main() {
                             _ => Page::Appearance,
                         };
                         shell.update(cx, |s, cx| s.open_settings(Some(page), window, cx));
+                    });
+                }
+                if let (Ok(page), Ok(name)) = (
+                    std::env::var("SNAPSHOT_ENV_SETTINGS"),
+                    std::env::var("SNAPSHOT_OPEN"),
+                ) {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        use hangar_app::envsettings::Page;
+                        let page = match page.as_str() {
+                            "resources" => Page::Resources,
+                            "files" => Page::Files,
+                            "access" => Page::Access,
+                            "ports" => Page::Ports,
+                            "danger" => Page::Danger,
+                            _ => Page::General,
+                        };
+                        let found = places.read(cx).list().iter().find_map(|(p, s)| {
+                            s.environments
+                                .iter()
+                                .find(|e| e.name == name)
+                                .map(|e| (p.id.clone(), e.id.clone()))
+                        });
+                        if let Some((p, e)) = found {
+                            shell.update(cx, |s, cx| s.open_env_settings(&p, &e, page, window, cx));
+                        }
                     });
                 }
                 if let Ok(tools) = std::env::var("SNAPSHOT_TOOLS") {

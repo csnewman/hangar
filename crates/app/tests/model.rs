@@ -30,6 +30,7 @@ fn env(name: &str, phase: &str) -> Environment {
         display: None,
         image_update: None,
         web_names: vec![],
+        details: Default::default(),
         task: None,
         agents: vec![],
         created_at: now() - Duration::days(3),
