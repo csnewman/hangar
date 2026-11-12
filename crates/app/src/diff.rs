@@ -31,11 +31,14 @@ pub enum Kind {
     Changed,
 }
 
-/// A line on one side: its number, from 1, and its text.
+/// A line on one side: its number, from 1, its text, and the parts of it
+/// a changed line's pair does not have (bytes in text), as IntelliJ marks
+/// the words changed within a line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Side {
     pub line: usize,
     pub text: String,
+    pub changed: Vec<Range<usize>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,8 +65,232 @@ fn lines(text: &str) -> Vec<&str> {
 fn side(lines: &[&str], i: usize) -> Side {
     Side {
         line: i + 1,
-        text: lines[i].replace('\t', "    "),
+        text: lines[i].replace('\t', TAB),
+        changed: vec![],
     }
+}
+
+/// How a changed block's lines pair across the sides, as IntelliJ lines
+/// them up: in order, each with the most like it on the other side where
+/// they are alike enough, the rest alone (old only, or new only). A block
+/// too big to weigh pairs line by line.
+pub fn align(old: &[&str], new: &[&str]) -> Vec<(Option<usize>, Option<usize>)> {
+    let (n, m) = (old.len(), new.len());
+    if n * m > 40_000 {
+        return (0..n.max(m))
+            .map(|k| ((k < n).then_some(k), (k < m).then_some(k)))
+            .collect();
+    }
+    let like = |i: usize, j: usize| {
+        let r = TextDiff::from_chars(old[i].trim(), new[j].trim()).ratio();
+        if r >= 0.5 { r } else { 0. }
+    };
+    let alike: Vec<Vec<f32>> = (0..n)
+        .map(|i| (0..m).map(|j| like(i, j)).collect())
+        .collect();
+    // best[i][j]: how alike the best pairing of old[i..] and new[j..] is.
+    let mut best = vec![vec![0f32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            let paired = if alike[i][j] > 0. {
+                alike[i][j] + best[i + 1][j + 1]
+            } else {
+                0.
+            };
+            best[i][j] = paired.max(best[i + 1][j]).max(best[i][j + 1]);
+        }
+    }
+    let mut out = vec![];
+    let (mut i, mut j) = (0, 0);
+    while i < n || j < m {
+        if i < n && j < m && alike[i][j] > 0. && best[i][j] == alike[i][j] + best[i + 1][j + 1] {
+            out.push((Some(i), Some(j)));
+            i += 1;
+            j += 1;
+        } else if i < n && (j == m || best[i][j] == best[i + 1][j]) {
+            out.push((Some(i), None));
+            i += 1;
+        } else {
+            out.push((None, Some(j)));
+            j += 1;
+        }
+    }
+    // Between lines paired, those alone on either side stand side by
+    // side, as IntelliJ shows a block: still a change, and one row each.
+    let mut rows = vec![];
+    let (mut olds, mut news) = (vec![], vec![]);
+    let flush = |rows: &mut Vec<_>, olds: &mut Vec<usize>, news: &mut Vec<usize>| {
+        for k in 0..olds.len().max(news.len()) {
+            rows.push((olds.get(k).copied(), news.get(k).copied()));
+        }
+        olds.clear();
+        news.clear();
+    };
+    for pair in out {
+        match pair {
+            (Some(i), Some(j)) => {
+                flush(&mut rows, &mut olds, &mut news);
+                rows.push((Some(i), Some(j)));
+            }
+            (Some(i), None) => olds.push(i),
+            (None, Some(j)) => news.push(j),
+            (None, None) => {}
+        }
+    }
+    flush(&mut rows, &mut olds, &mut news);
+    rows
+}
+
+/// A tab as the diff shows it.
+const TAB: &str = "    ";
+
+/// A line cut into what in-line changes are told in: words, runs of
+/// spaces, and each other character alone.
+fn tokens(line: &str) -> Vec<&str> {
+    let class = |c: char| {
+        if c.is_alphanumeric() || c == '_' {
+            0
+        } else if c.is_whitespace() {
+            1
+        } else {
+            2
+        }
+    };
+    let mut out = vec![];
+    let mut start = 0;
+    let mut last = None;
+    for (i, c) in line.char_indices() {
+        let k = class(c);
+        if last.is_some_and(|l| l != k || k == 2) {
+            out.push(&line[start..i]);
+            start = i;
+        }
+        last = Some(k);
+    }
+    if start < line.len() {
+        out.push(&line[start..]);
+    }
+    out
+}
+
+/// The parts of a changed line its pair does not have, on each side, as
+/// IntelliJ marks them: byte ranges in old and in new, runs together
+/// joined.
+pub fn inline(old: &str, new: &str) -> (Vec<Range<usize>>, Vec<Range<usize>>) {
+    let (ot, nt) = (tokens(old), tokens(new));
+    let ops = similar::capture_diff_slices(similar::Algorithm::Myers, &ot, &nt);
+    let at = |slices: &[&str]| {
+        let mut starts = Vec::with_capacity(slices.len() + 1);
+        let mut n = 0;
+        for s in slices {
+            starts.push(n);
+            n += s.len();
+        }
+        starts.push(n);
+        starts
+    };
+    let (a, b) = (at(&ot), at(&nt));
+    let (mut left, mut right): (Vec<Range<usize>>, Vec<Range<usize>>) = (vec![], vec![]);
+    let push = |out: &mut Vec<Range<usize>>, r: Range<usize>| {
+        if r.is_empty() {
+            return;
+        }
+        match out.last_mut() {
+            Some(last) if last.end == r.start => last.end = r.end,
+            _ => out.push(r),
+        }
+    };
+    for op in &ops {
+        match *op {
+            DiffOp::Equal { .. } => {}
+            DiffOp::Delete {
+                old_index, old_len, ..
+            } => push(&mut left, a[old_index]..a[old_index + old_len]),
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => push(&mut right, b[new_index]..b[new_index + new_len]),
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                push(&mut left, a[old_index]..a[old_index + old_len]);
+                push(&mut right, b[new_index]..b[new_index + new_len]);
+            }
+        }
+    }
+    (left, right)
+}
+
+/// A highlighted part of a line: bytes in the line as the diff shows it.
+pub type Run = (Range<usize>, gpui::HighlightStyle);
+
+/// Each line's syntax colours, for a file's text highlighted whole: the
+/// parts of each line (as `lines` splits it, tabs widened as the diff
+/// shows them) and their styles.
+pub fn line_styles(text: &str, styles: &[Run]) -> Vec<Vec<Run>> {
+    let mut starts = vec![];
+    let mut at = 0;
+    for l in text.split('\n') {
+        let content = l.strip_suffix('\r').unwrap_or(l);
+        starts.push((at, at + content.len()));
+        at += l.len() + 1;
+    }
+    let count = lines(text).len();
+    starts.truncate(count);
+    let mut out = vec![Vec::new(); count];
+    for (r, style) in styles {
+        if *style == gpui::HighlightStyle::default() {
+            continue;
+        }
+        let first = starts.partition_point(|(_, end)| *end <= r.start);
+        for (i, (start, end)) in starts.iter().enumerate().skip(first) {
+            if *start >= r.end {
+                break;
+            }
+            let from = r.start.max(*start) - start;
+            let to = r.end.min(*end) - start;
+            if from < to {
+                let line = &text[*start..*end];
+                out[i].push((widen(line, from)..widen(line, to), *style));
+            }
+        }
+    }
+    out
+}
+
+/// Where a byte of a line falls once its tabs are widened.
+fn widen(line: &str, at: usize) -> usize {
+    at + line[..at].matches('\t').count() * (TAB.len() - 1)
+}
+
+/// A line's syntax colours with its changed words' background over them,
+/// as runs in order that do not overlap.
+pub fn merge(syntax: &[Run], changed: &[Range<usize>], bg: Hsla) -> Vec<Run> {
+    let mut cuts: Vec<usize> = syntax
+        .iter()
+        .flat_map(|(r, _)| [r.start, r.end])
+        .chain(changed.iter().flat_map(|r| [r.start, r.end]))
+        .collect();
+    cuts.sort_unstable();
+    cuts.dedup();
+    let mut out: Vec<Run> = vec![];
+    for w in cuts.windows(2) {
+        let (a, b) = (w[0], w[1]);
+        let mut style = syntax
+            .iter()
+            .find(|(r, _)| r.start <= a && b <= r.end)
+            .map(|(_, s)| *s)
+            .unwrap_or_default();
+        if changed.iter().any(|r| r.start <= a && b <= r.end) {
+            style.background_color = Some(bg);
+        }
+        if style != gpui::HighlightStyle::default() {
+            out.push((a..b, style));
+        }
+    }
+    out
 }
 
 /// The rows of old against new, folding runs of unchanged lines but
@@ -135,11 +362,18 @@ pub fn rows(old: &str, new: &str, context: usize, open: &HashSet<usize>) -> Vec<
                 new_index,
                 new_len,
             } => {
-                for k in 0..old_len.max(new_len) {
-                    let left = (k < old_len).then(|| side(&a, old_index + k));
-                    let right = (k < new_len).then(|| side(&b, new_index + k));
-                    let kind = match (&left, &right) {
-                        (Some(_), Some(_)) => Kind::Changed,
+                let pairs = align(
+                    &a[old_index..old_index + old_len],
+                    &b[new_index..new_index + new_len],
+                );
+                for (i, j) in pairs {
+                    let mut left = i.map(|i| side(&a, old_index + i));
+                    let mut right = j.map(|j| side(&b, new_index + j));
+                    let kind = match (&mut left, &mut right) {
+                        (Some(l), Some(r)) => {
+                            (l.changed, r.changed) = inline(&l.text, &r.text);
+                            Kind::Changed
+                        }
                         (Some(_), None) => Kind::Deleted,
                         _ => Kind::Added,
                     };
@@ -241,10 +475,18 @@ enum Loaded {
     Texts { old: String, new: String },
 }
 
+/// Each side's lines' syntax colours, for the theme they were made in.
+struct Colours {
+    theme: usize,
+    old: Vec<Vec<Run>>,
+    new: Vec<Vec<Run>>,
+}
+
 pub struct DiffView {
     workspace: Entity<Workspace>,
     spec: Spec,
     loaded: Loaded,
+    colours: Option<Colours>,
     rows: Vec<Row>,
     counts: (usize, usize),
     open: HashSet<usize>,
@@ -294,6 +536,7 @@ impl DiffView {
             workspace,
             spec,
             loaded: Loaded::Reading,
+            colours: None,
             rows: vec![],
             counts: (0, 0),
             open: HashSet::new(),
@@ -353,6 +596,7 @@ impl DiffView {
                 (None, Other::File { .. }) => Err("nothing to compare with".into()),
             };
             let _ = this.update(cx, |v, cx| {
+                v.colours = None;
                 v.loaded = match (left, right) {
                     (Err(e), _) | (_, Err(e)) => Loaded::Failed(e),
                     (Ok(l), Ok(r)) => match (l["text"].as_str(), r["text"].as_str()) {
@@ -393,6 +637,7 @@ impl DiffView {
         cx.spawn(async move |this, cx| {
             let result = call.await;
             let _ = this.update(cx, |v, cx| {
+                v.colours = None;
                 v.loaded = match result {
                     Err(e) => Loaded::Failed(e),
                     Ok(d) if d["binary"].as_bool() == Some(true) => Loaded::Binary,
@@ -406,6 +651,35 @@ impl DiffView {
             });
         })
         .detach();
+    }
+
+    /// Highlights both sides as the file's language, once for each theme:
+    /// files past a couple of megabytes are left plain.
+    fn colour(&mut self, cx: &gpui::App) {
+        use gpui_component::ActiveTheme;
+        let Loaded::Texts { old, new } = &self.loaded else {
+            self.colours = None;
+            return;
+        };
+        let theme = cx.theme().highlight_theme.clone();
+        let key = std::sync::Arc::as_ptr(&theme) as *const () as usize;
+        if self.colours.as_ref().is_some_and(|c| c.theme == key) {
+            return;
+        }
+        let lang = crate::docedit::language(&self.spec.path);
+        let styles = |text: &str| {
+            if lang == "text" || text.len() > 2 << 20 {
+                return vec![];
+            }
+            let mut h = gpui_component::highlighter::SyntaxHighlighter::new(lang);
+            h.update(None, &gpui_component::Rope::from(text), None);
+            line_styles(text, &h.styles(&(0..text.len()), &*theme))
+        };
+        self.colours = Some(Colours {
+            theme: key,
+            old: styles(old),
+            new: styles(new),
+        });
     }
 
     fn relayout(&mut self) {
@@ -450,15 +724,28 @@ impl DiffView {
                     Kind::Added => (None, Some(p.good.opacity(0.14))),
                     Kind::Changed => (Some(p.bad.opacity(0.14)), Some(p.good.opacity(0.14))),
                 };
+                let syntax = |old: bool, s: &Option<Side>| -> Vec<Run> {
+                    let (Some(c), Some(s)) = (&self.colours, s) else {
+                        return vec![];
+                    };
+                    let lines = if old { &c.old } else { &c.new };
+                    lines.get(s.line - 1).cloned().unwrap_or_default()
+                };
+                let lstyle = left
+                    .as_ref()
+                    .map(|s| merge(&syntax(true, left), &s.changed, p.bad.opacity(0.3)));
+                let rstyle = right
+                    .as_ref()
+                    .map(|s| merge(&syntax(false, right), &s.changed, p.good.opacity(0.3)));
                 h_flex()
                     .h(px(ROW))
                     .w_full()
                     .child(
-                        half(left.as_ref(), lbg, p)
+                        half(left.as_ref(), lstyle, lbg, p)
                             .border_r_1()
                             .border_color(p.border),
                     )
-                    .child(half(right.as_ref(), rbg, p))
+                    .child(half(right.as_ref(), rstyle, rbg, p))
                     .into_any_element()
             }
         }
@@ -467,7 +754,7 @@ impl DiffView {
 
 const ROW: f32 = 18.;
 
-fn half(s: Option<&Side>, bg: Option<Hsla>, p: &Palette) -> gpui::Div {
+fn half(s: Option<&Side>, styles: Option<Vec<Run>>, bg: Option<Hsla>, p: &Palette) -> gpui::Div {
     let d = h_flex().flex_1().min_w_0().h_full().overflow_hidden();
     let Some(s) = s else {
         return d.bg(p.surface_2.opacity(0.6));
@@ -483,9 +770,10 @@ fn half(s: Option<&Side>, bg: Option<Hsla>, p: &Palette) -> gpui::Div {
                 .child(s.line.to_string()),
         )
         .child(
-            div()
-                .whitespace_nowrap()
-                .child(SharedString::from(s.text.clone())),
+            div().whitespace_nowrap().child(
+                gpui::StyledText::new(SharedString::from(s.text.clone()))
+                    .with_highlights(styles.unwrap_or_default()),
+            ),
         )
 }
 
@@ -497,6 +785,7 @@ impl Focusable for DiffView {
 
 impl Render for DiffView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.colour(cx);
         let p = palette::of(cx);
         let (before, after) = match (&self.spec.other, &self.spec.to, self.spec.against.as_str()) {
             (Some(Other::Text(_)), ..) => ("Clipboard".to_string(), String::new()),

@@ -84,3 +84,74 @@ fn tabs_are_spaced() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn a_changed_lines_words_are_marked_on_each_side() {
+    use hangar_app::diff::inline;
+    let (old, new) = ("let total = sum(a);", "let total = sum(a, b);");
+    let (l, r) = inline(old, new);
+    let words = |text: &str, rs: &[std::ops::Range<usize>]| -> Vec<String> {
+        rs.iter().map(|r| text[r.clone()].to_string()).collect()
+    };
+    assert!(l.is_empty());
+    assert_eq!(words(new, &r), [", b"]);
+
+    // Only the word that differs, the punctuation around it in common.
+    let (l, r) = inline("fn record(amount: i64)", "fn record(amount: u64)");
+    assert_eq!(words("fn record(amount: i64)", &l), ["i64"]);
+    assert_eq!(words("fn record(amount: u64)", &r), ["u64"]);
+    assert_eq!(inline("same", "same"), (vec![], vec![]));
+}
+
+#[test]
+fn syntax_colours_are_split_by_line_with_tabs_widened() {
+    use gpui::{HighlightStyle, hsla};
+    use hangar_app::diff::{line_styles, merge};
+    let red = HighlightStyle {
+        color: Some(hsla(0., 1., 0.5, 1.)),
+        ..Default::default()
+    };
+    // One style across a line break, one after a tab.
+    let text = "ab\r\ncd\n\tef";
+    let styles = vec![(1..6, red), (8..10, red)];
+    let lines = line_styles(text, &styles);
+    assert_eq!(lines.len(), 3);
+    assert_eq!(lines[0], [(1..2, red)]);
+    assert_eq!(lines[1], [(0..2, red)]);
+    // "\tef" is shown as four spaces then "ef": bytes 1..3 become 4..6.
+    assert_eq!(lines[2], [(4..6, red)]);
+
+    // A changed word's background laid over the colours, cut where
+    // either starts or ends.
+    let bg = hsla(0.3, 1., 0.5, 0.3);
+    let changed: Vec<std::ops::Range<usize>> = std::iter::once(2..6).collect();
+    let merged = merge(&[(0..4, red)], &changed, bg);
+    let on = HighlightStyle {
+        background_color: Some(bg),
+        ..red
+    };
+    let only_bg = HighlightStyle {
+        background_color: Some(bg),
+        ..Default::default()
+    };
+    assert_eq!(merged, [(0..2, red), (2..4, on), (4..6, only_bg)]);
+}
+
+#[test]
+fn a_changed_blocks_lines_pair_with_the_ones_most_like_them() {
+    use hangar_app::diff::align;
+    let old = ["    println!(\"{}\", ledger.total());"];
+    let new = [
+        "    ledger.record(-3);",
+        "    println!(\"total: {}\", ledger.total());",
+    ];
+    // The new line inserted stands alone, the println pairs with its own.
+    assert_eq!(align(&old, &new), [(None, Some(0)), (Some(0), Some(1))]);
+
+    // Lines alike in nothing still stand side by side, in order.
+    assert_eq!(
+        align(&["alpha();"], &["zzz", "yyy"]),
+        [(Some(0), Some(0)), (None, Some(1))]
+    );
+    assert_eq!(align(&["a", "b"], &[]), [(Some(0), None), (Some(1), None)]);
+}
