@@ -3,7 +3,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use hangar_app::api::{AgentSession, Environment, StartProgress, Task};
-use hangar_app::model::{self, Action, LineKind, Mark, Rank, Tone};
+use hangar_app::model::{self, Action, LineKind, Mark, Rank, Tone, Whose};
 use hangar_app::place::{Connection, PlaceConfig, PlaceState};
 
 fn now() -> DateTime<Utc> {
@@ -317,4 +317,65 @@ fn an_environment_is_reached_over_ssh() {
         Some("ssh alice/dev@hangar.example.com")
     );
     assert_eq!(model::ssh_command(&me("alice", None), &dev), None);
+}
+
+/// The list shows the user's own, or everyone's, and narrows to a search
+/// of task, name, owner and template; places with no match drop out of a
+/// search.
+#[test]
+fn the_list_narrows_to_whose_and_a_search() {
+    let mut mine = env("ledger-1", "running");
+    mine.owner = "alice".into();
+    let mut theirs = env("storefront-2", "stopped");
+    theirs.owner = "bob".into();
+    theirs.template = "Web app".into();
+    let state = PlaceState {
+        connection: Connection::Online,
+        me: Some(hangar_app::api::Me {
+            id: "u1".into(),
+            username: "alice".into(),
+            display_name: String::new(),
+            admin: true,
+            ssh: None,
+            environment_host_suffix: None,
+        }),
+        environments: vec![mine, theirs],
+        ..Default::default()
+    };
+    let places = vec![(place(), state)];
+    let names = |groups: Vec<model::Group>| -> Vec<String> {
+        groups
+            .into_iter()
+            .flat_map(|g| g.rows.into_iter().map(|c| c.name))
+            .collect()
+    };
+    let groups = model::sidebar(&places, now());
+    assert!(model::has_others(&groups));
+    assert_eq!(
+        names(model::narrow(groups.clone(), "", Whose::Mine)),
+        ["ledger-1"]
+    );
+    assert_eq!(
+        names(model::narrow(groups.clone(), "", Whose::Everyone)),
+        ["ledger-1", "storefront-2"]
+    );
+    assert_eq!(
+        names(model::narrow(groups.clone(), "bob", Whose::Everyone)),
+        ["storefront-2"],
+        "by owner"
+    );
+    assert_eq!(
+        names(model::narrow(groups.clone(), "web", Whose::Everyone)),
+        ["storefront-2"],
+        "by template"
+    );
+    assert!(
+        model::narrow(groups.clone(), "nothing-like-it", Whose::Everyone).is_empty(),
+        "a place with no match drops out"
+    );
+    assert_eq!(
+        model::narrow(groups, "", Whose::Mine).len(),
+        1,
+        "a place stays when not searching"
+    );
 }

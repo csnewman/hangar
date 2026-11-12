@@ -174,6 +174,11 @@ pub struct Card {
     pub session: Option<String>,
     /// Whether it is as last known, its place not being online.
     pub stale: bool,
+    /// Whose it is, by username, and whether it is the user's own.
+    pub owner: String,
+    pub mine: bool,
+    /// The template it was made from.
+    pub template: String,
 }
 
 /// The session that says most about an environment: the most urgent, then
@@ -454,6 +459,9 @@ pub fn card(place: &PlaceConfig, e: &Environment, now: DateTime<Utc>) -> Card {
         action: look.action,
         session: lead.map(|a| a.id.clone()),
         stale: false,
+        owner: e.owner.clone(),
+        mine: true,
+        template: e.template.clone(),
     }
 }
 
@@ -465,6 +473,7 @@ fn cards_of(p: &PlaceConfig, s: &PlaceState, now: DateTime<Utc>) -> Vec<Card> {
         .iter()
         .map(|e| {
             let mut c = card(p, e, now);
+            c.mine = s.me.as_ref().is_none_or(|m| m.username == e.owner);
             if stale {
                 c.stale = true;
                 c.action = None;
@@ -546,6 +555,41 @@ pub fn sidebar(places: &[(PlaceConfig, PlaceState)], now: DateTime<Utc>) -> Vec<
                 connection: s.connection.clone(),
                 rows,
             }
+        })
+        .collect()
+}
+
+/// Which environments the list shows: the user's own, or every one they
+/// can reach (an administrator's, everyone's).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Whose {
+    #[default]
+    Mine,
+    Everyone,
+}
+
+/// Whether any place lists environments that are not the user's, for
+/// which the list offers Mine and Everyone.
+pub fn has_others(groups: &[Group]) -> bool {
+    groups.iter().any(|g| g.rows.iter().any(|c| !c.mine))
+}
+
+/// The list narrowed to whose environments are shown and what a search
+/// names: a row matches by its task, name, owner, template or what it is
+/// doing. A search leaves out the places with nothing that matches.
+pub fn narrow(groups: Vec<Group>, query: &str, whose: Whose) -> Vec<Group> {
+    let q = query.trim().to_lowercase();
+    groups
+        .into_iter()
+        .filter_map(|mut g| {
+            g.rows.retain(|c| {
+                (whose == Whose::Everyone || c.mine)
+                    && (q.is_empty()
+                        || [&c.title, &c.name, &c.owner, &c.template, &c.summary]
+                            .iter()
+                            .any(|v| v.to_lowercase().contains(&q)))
+            });
+            (q.is_empty() || !g.rows.is_empty()).then_some(g)
         })
         .collect()
 }

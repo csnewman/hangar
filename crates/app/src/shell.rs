@@ -13,7 +13,7 @@ use gpui::{
     svg,
 };
 use gpui_component::menu::{ContextMenuExt, PopupMenu, PopupMenuItem};
-use gpui_component::{TitleBar, h_flex, v_flex};
+use gpui_component::{Sizable as _, TitleBar, h_flex, v_flex};
 
 use crate::addplace::{AddPlaceEvent, AddPlaceView};
 use crate::assets;
@@ -64,6 +64,9 @@ pub struct Shell {
     home_mode: HomeMode,
     /// The places whose environments the sidebar hides.
     collapsed: HashSet<String>,
+    /// What the list is narrowed to: a search, and whose environments.
+    list_query: Entity<gpui_component::input::InputState>,
+    whose: model::Whose,
     /// Add a Place, while it is open.
     adding: Option<(Entity<AddPlaceView>, gpui::Subscription)>,
     /// The sessions said to be seen, so each is said once.
@@ -168,6 +171,18 @@ impl Shell {
         })
         .detach();
         let empty = places.read(cx).list().is_empty();
+        let list_query = cx.new(|cx| {
+            gpui_component::input::InputState::new(window, cx).placeholder("Search environments")
+        });
+        cx.subscribe(
+            &list_query,
+            |_, _, e: &gpui_component::input::InputEvent, cx| {
+                if matches!(e, gpui_component::input::InputEvent::Change) {
+                    cx.notify();
+                }
+            },
+        )
+        .detach();
         let mut shell = Shell {
             places,
             tabs: vec![],
@@ -175,6 +190,8 @@ impl Shell {
             active: None,
             home_mode: HomeMode::Attention,
             collapsed: HashSet::new(),
+            list_query,
+            whose: model::Whose::default(),
             adding: None,
             told_seen: vec![],
             search: None,
@@ -1227,7 +1244,26 @@ impl Shell {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let active = self.active.and_then(|i| self.tabs.get(i)).cloned();
+        let others = model::has_others(&groups);
+        let whose = if others {
+            self.whose
+        } else {
+            model::Whose::Everyone
+        };
+        let query = self.list_query.read(cx).value().to_string();
+        let searching = !query.trim().is_empty();
+        let groups = model::narrow(groups, &query, whose);
         let mut list = v_flex().gap(px(6.));
+        if searching && groups.is_empty() {
+            list = list.child(
+                div()
+                    .px(px(8.))
+                    .py(px(4.))
+                    .text_size(px(11.5))
+                    .text_color(p.muted)
+                    .child("Nothing matches"),
+            );
+        }
         for g in groups {
             let (ctone, state, warn) = model::connection(&g.connection);
             let signed_out = g.connection == crate::place::Connection::SignIn;
@@ -1331,7 +1367,11 @@ impl Shell {
                             .py(px(3.))
                             .text_size(px(11.))
                             .text_color(p.muted)
-                            .child("No environments"),
+                            .child(if whose == model::Whose::Mine {
+                                "None of yours"
+                            } else {
+                                "No environments"
+                            }),
                     );
                 }
                 for c in g.rows {
@@ -1361,6 +1401,55 @@ impl Shell {
                     .child(primary("new-env", "+ New environment", p).on_click(
                         cx.listener(|s, _, window, cx| s.open_new_env(None, window, cx)),
                     )),
+            )
+            .child(
+                v_flex()
+                    .px(px(4.))
+                    .pb(px(6.))
+                    .gap(px(5.))
+                    .child(
+                        gpui_component::input::Input::new(&self.list_query)
+                            .small()
+                            .cleanable(true),
+                    )
+                    .when(others, |d| {
+                        let seg = |id: &'static str,
+                                   label: &'static str,
+                                   value: model::Whose,
+                                   cx: &mut Context<Self>| {
+                            let on = self.whose == value;
+                            div()
+                                .id(id)
+                                .debug_selector(move || id.into())
+                                .flex_1()
+                                .flex()
+                                .justify_center()
+                                .py(px(1.))
+                                .cursor_pointer()
+                                .when(on, |d| d.bg(p.accent).text_color(p.on_accent))
+                                .when(!on, |d| d.hover(|s| s.bg(p.surface_2)))
+                                .child(label)
+                                .on_click(cx.listener(move |s, _, _, cx| {
+                                    s.whose = value;
+                                    cx.notify();
+                                }))
+                        };
+                        d.child(
+                            h_flex()
+                                .text_size(px(11.))
+                                .rounded(px(5.))
+                                .border_1()
+                                .border_color(p.border_strong)
+                                .overflow_hidden()
+                                .child(seg("list-mine", "Mine", model::Whose::Mine, cx))
+                                .child(seg(
+                                    "list-everyone",
+                                    "Everyone",
+                                    model::Whose::Everyone,
+                                    cx,
+                                )),
+                        )
+                    }),
             )
             .child(
                 crate::project::scroll("sidebar-list", list)
@@ -1431,6 +1520,14 @@ impl Shell {
                     ),
             )
             .on_click(cx.listener(move |this, _, window, cx| this.open(&place, &env, window, cx)))
+            .context_menu({
+                let me = cx.entity().downgrade();
+                let (place, env) = (c.place.clone(), c.env.clone());
+                move |menu, _, cx| {
+                    crate::ui::modal(cx);
+                    env_menu(menu, me.clone(), &place, &env, cx)
+                }
+            })
     }
 
     fn home(
@@ -1689,6 +1786,95 @@ impl Shell {
             )
             .on_click(cx.listener(move |this, _, window, cx| this.open(&place, &env, window, cx)))
     }
+}
+
+/// An environment's menu in the sidebar, as the design has it: open it,
+/// its settings, start, suspend or stop it, its SSH command, its page in
+/// the browser, and deleting it, asked first.
+fn env_menu(
+    menu: PopupMenu,
+    me: gpui::WeakEntity<Shell>,
+    place: &str,
+    env: &str,
+    cx: &mut gpui::Context<PopupMenu>,
+) -> PopupMenu {
+    let Some(shell) = me.upgrade() else {
+        return menu;
+    };
+    let places = shell.read(cx).places.clone();
+    let found = places.read(cx).get(place).and_then(|(c, s)| {
+        let e = s.environment(env)?.clone();
+        let ssh = s.me.as_ref().and_then(|m| model::ssh_command(m, &e));
+        Some((c.url.clone(), e, ssh))
+    });
+    let Some((url, e, ssh)) = found else {
+        return menu;
+    };
+    let (place, env) = (place.to_string(), env.to_string());
+    let go = |f: fn(&mut Shell, &str, &str, &mut Window, &mut Context<Shell>)| {
+        let (me, place, env) = (me.clone(), place.clone(), env.clone());
+        move |_: &ClickEvent, window: &mut Window, cx: &mut gpui::App| {
+            let _ = me.update(cx, |s, cx| f(s, &place, &env, window, cx));
+        }
+    };
+    let act = |action: Action| {
+        let (places, place, env) = (places.clone(), place.clone(), env.clone());
+        move |_: &ClickEvent, _: &mut Window, cx: &mut gpui::App| {
+            places.update(cx, |p, cx| p.act(&place, &env, action, cx));
+        }
+    };
+    let running = e.phase == "running" || e.desired == "running";
+    let suspended = e.phase == "suspended";
+    let stopped = matches!(e.phase.as_str(), "stopped" | "failed") && e.desired != "running";
+    let mut menu = menu
+        .item(PopupMenuItem::new("Open").on_click(go(|s, p, e, w, cx| s.open(p, e, w, cx))))
+        .item(
+            PopupMenuItem::new("Settings…").on_click(go(|s, p, e, w, cx| {
+                s.open_env_settings(p, e, EnvPage::General, w, cx)
+            })),
+        )
+        .separator();
+    if stopped {
+        menu = menu.item(PopupMenuItem::new("Start").on_click(act(Action::Start)));
+    }
+    if suspended {
+        menu = menu.item(PopupMenuItem::new("Resume").on_click(act(Action::Resume)));
+    }
+    if running && !suspended {
+        menu = menu.item(PopupMenuItem::new("Suspend").on_click(act(Action::Suspend)));
+    }
+    if !stopped && e.phase != "deleting" {
+        menu = menu.item(PopupMenuItem::new("Stop").on_click(act(Action::Stop)));
+    }
+    let name = e.name.clone();
+    let delete = act(Action::Delete);
+    menu.item(
+        PopupMenuItem::new("Copy SSH Command")
+            .disabled(ssh.is_none())
+            .on_click(move |_, _, cx| {
+                if let Some(c) = &ssh {
+                    crate::treeops::copy(c.clone(), cx);
+                }
+            }),
+    )
+    .item(
+        PopupMenuItem::new("Open in Browser")
+            .on_click(move |_, _, cx| cx.open_url(&format!("{url}/environments/{}", e.id))),
+    )
+    .separator()
+    .item(
+        PopupMenuItem::new("Delete…").on_click(move |_, window, cx| {
+            let delete = delete.clone();
+            crate::treeops::confirm(
+                &format!("Delete {name}?"),
+                "Its disks and everything on them go with it. This cannot be undone.",
+                "Delete",
+                window,
+                cx,
+                move |window, cx| delete(&ClickEvent::default(), window, cx),
+            );
+        }),
+    )
 }
 
 /// A place's menu in the sidebar.
