@@ -651,6 +651,7 @@ fn running() -> hangar_app::api::Environment {
         memory_mib: None,
         editor_path: Some("/home/dev".into()),
         ports_public: false,
+        display: None,
         web_names: vec![],
         task: None,
         agents: vec![],

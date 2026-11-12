@@ -349,6 +349,8 @@ pub struct EnvTab {
     focus_commit: bool,
     /// A comparison of branches the Commit window is to show once it is.
     pending_compare: Option<crate::branches::CompareBranch>,
+    /// The desktop, asked for from a menu, to open as the tab is next drawn.
+    pending_desktop: bool,
     /// The Project, Commit and Git windows, made when each is first shown.
     project: Option<Entity<ProjectView>>,
     /// The Filesystem window's tree: the machine's files.
@@ -463,6 +465,8 @@ enum Tab {
     View(Entity<crate::viewer::FileViewer>),
     /// A container's log, followed, as the web's Show Logs opens it.
     Log(Entity<crate::dockerlog::ContainerLog>),
+    /// The environment's Linux desktop.
+    Desktop(Entity<crate::deskview::DesktopView>),
 }
 
 impl Tab {
@@ -471,7 +475,7 @@ impl Tab {
         match self {
             Tab::Doc(d) => d.read(cx).path().to_string(),
             Tab::Diff(d) => d.read(cx).spec().abs(),
-            Tab::Term(_) | Tab::Log(_) => String::new(),
+            Tab::Term(_) | Tab::Log(_) | Tab::Desktop(_) => String::new(),
             Tab::View(v) => v.read(cx).path().to_string(),
         }
     }
@@ -496,6 +500,7 @@ impl Tab {
                 path.rsplit('/').next().unwrap_or(path).to_string()
             }
             Tab::Log(l) => format!("Log: {}", l.read(cx).name()),
+            Tab::Desktop(d) => d.read(cx).title(),
         }
     }
 
@@ -507,6 +512,8 @@ impl Tab {
             (Tab::Term(_), _) | (_, Tab::Term(_)) => false,
             (Tab::Log(a), Tab::Log(b)) => a == b,
             (Tab::Log(_), _) | (_, Tab::Log(_)) => false,
+            (Tab::Desktop(a), Tab::Desktop(b)) => a == b,
+            (Tab::Desktop(_), _) | (_, Tab::Desktop(_)) => false,
             (Tab::View(a), Tab::View(b)) => {
                 let (a, b) = (a.read(cx), b.read(cx));
                 a.path() == b.path() && a.view() == b.view()
@@ -524,6 +531,7 @@ impl Tab {
             Tab::Term(t) => t.entity_id(),
             Tab::View(v) => v.entity_id(),
             Tab::Log(l) => l.entity_id(),
+            Tab::Desktop(d) => d.entity_id(),
         }
     }
 
@@ -534,6 +542,7 @@ impl Tab {
             Tab::Term(t) => t.focus_handle(cx),
             Tab::View(v) => v.focus_handle(cx),
             Tab::Log(l) => l.focus_handle(cx),
+            Tab::Desktop(d) => d.focus_handle(cx),
         }
     }
 
@@ -544,6 +553,7 @@ impl Tab {
             Tab::Term(t) => t.clone().into_any_element(),
             Tab::View(v) => v.clone().into_any_element(),
             Tab::Log(l) => l.clone().into_any_element(),
+            Tab::Desktop(d) => d.clone().into_any_element(),
         }
     }
 }
@@ -618,6 +628,7 @@ impl EnvTab {
             branches: None,
             focus_commit: false,
             pending_compare: None,
+            pending_desktop: false,
             project: None,
             filesystem: None,
             commit: None,
@@ -923,7 +934,7 @@ impl EnvTab {
                 f.path() == abs || f.asked() == abs
             }
             Tab::View(v) => v.read(cx).path() == abs,
-            Tab::Diff(_) | Tab::Term(_) | Tab::Log(_) => false,
+            Tab::Diff(_) | Tab::Term(_) | Tab::Log(_) | Tab::Desktop(_) => false,
         }) {
             Some(i) => i,
             None => {
@@ -1231,6 +1242,11 @@ impl EnvTab {
                     self.take_tab(i);
                     Tab::Log(l)
                 }
+                Tab::Desktop(d) => {
+                    let d = d.clone();
+                    self.take_tab(i);
+                    Tab::Desktop(d)
+                }
                 Tab::View(v) => {
                     let (abs, way) = (v.read(cx).path().to_string(), v.read(cx).view());
                     match self.new_viewer(&abs, way, cx) {
@@ -1461,6 +1477,23 @@ impl EnvTab {
                 self.files.len() - 1
             }
         };
+        self.show_file(i, window, cx);
+    }
+
+    /// Shows the environment's desktop in an editor tab, the one it has if
+    /// it has one.
+    pub fn open_desktop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(i) = self.files.iter().position(|f| matches!(f, Tab::Desktop(_))) {
+            self.show_file(i, window, cx);
+            return;
+        }
+        let Some(client) = self.client(cx) else {
+            return;
+        };
+        let env = self.env.clone();
+        let view = cx.new(|cx| crate::deskview::DesktopView::new(client, &env, cx));
+        self.files.push(Tab::Desktop(view));
+        let i = self.files.len() - 1;
         self.show_file(i, window, cx);
     }
 
@@ -1856,7 +1889,7 @@ impl EnvTab {
                     let d = d.read(cx);
                     Some((d.path().to_string(), d.text_and_caret(cx).0.to_string()))
                 }
-                Tab::Diff(_) | Tab::Term(_) | Tab::View(_) | Tab::Log(_) => None,
+                Tab::Diff(_) | Tab::Term(_) | Tab::View(_) | Tab::Log(_) | Tab::Desktop(_) => None,
             })
             .collect();
         cx.spawn_in(window, async move |this, cx| {
@@ -3017,6 +3050,9 @@ impl Render for EnvTab {
                 );
                 self.commit = Some(view);
             }
+            if std::mem::take(&mut self.pending_desktop) {
+                self.open_desktop(window, cx);
+            }
             if let (Some(view), Some(c)) = (self.commit.clone(), self.pending_compare.take()) {
                 view.update(cx, |v, cx| v.compare(c.root, c.repo, c.base, cx));
             }
@@ -3322,6 +3358,8 @@ impl EnvTab {
             && env.desired != "stopped";
         let stopped = matches!(env.phase.as_str(), "stopped" | "failed");
         let places = self.places.clone();
+        let desktop = env.phase == "running" && env.display.as_deref() == Some("desktop");
+        let me = cx.entity().downgrade();
         gpui_component::button::Button::new("env-more")
             .ghost()
             .small()
@@ -3346,7 +3384,19 @@ impl EnvTab {
                 };
                 let copy_ssh = ssh.clone();
                 let web = web.clone();
+                let me = me.clone();
                 menu.item(
+                    PopupMenuItem::new("Open Desktop")
+                        .disabled(!desktop)
+                        .on_click(move |_, _, cx| {
+                            let _ = me.update(cx, |t, cx| {
+                                t.pending_desktop = true;
+                                cx.notify();
+                            });
+                        }),
+                )
+                .separator()
+                .item(
                     PopupMenuItem::new("Stop")
                         .disabled(!stoppable)
                         .on_click(act(model::Action::Stop)),
@@ -3511,6 +3561,35 @@ impl EnvTab {
             .when(env.phase == "running", |d| {
                 d.children(self.port_chips(p, cx))
             })
+            .when(
+                env.phase == "running" && env.display.as_deref() == Some("desktop"),
+                |d| {
+                    let hover = p.surface_2;
+                    d.child(
+                        h_flex()
+                            .id("open-desktop")
+                            .debug_selector(|| "open-desktop".into())
+                            .gap(px(4.))
+                            .px(px(8.))
+                            .py(px(1.))
+                            .rounded(px(10.))
+                            .border_1()
+                            .border_color(p.border)
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .cursor_pointer()
+                            .hover(move |s| s.bg(hover))
+                            .child(
+                                svg()
+                                    .path(assets::icon("monitor"))
+                                    .size(px(12.))
+                                    .text_color(p.muted),
+                            )
+                            .child("Desktop")
+                            .on_click(cx.listener(|t, _, window, cx| t.open_desktop(window, cx))),
+                    )
+                },
+            )
             .child(div().flex_1())
             .when_some(lifecycle, |d, (label, action)| {
                 let (place, id) = (place.clone(), id.clone());

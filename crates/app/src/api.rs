@@ -80,6 +80,9 @@ pub struct Environment {
     /// Hangar.
     #[serde(default)]
     pub ports_public: bool,
+    /// Its display: none or desktop; more may come.
+    #[serde(default)]
+    pub display: Option<String>,
     /// The names of its own web servers its template lists.
     #[serde(default)]
     pub web_names: Vec<String>,
@@ -498,6 +501,31 @@ impl Client {
             url.push_str(&encode(d));
         }
         (url, self.auth())
+    }
+
+    /// Where the environment's desktop's WebSocket is (RFB to its VNC
+    /// server), and the header that signs it in.
+    pub fn desktop_socket(&self, id: &str) -> (String, String) {
+        let base = match self.base.split_once("://") {
+            Some(("https", rest)) => format!("wss://{rest}"),
+            Some((_, rest)) => format!("ws://{rest}"),
+            None => self.base.clone(),
+        };
+        (format!("{base}/environments/{id}/desktop"), self.auth())
+    }
+
+    /// Sets the size of the environment's desktop, in pixels.
+    pub fn resize_desktop(&self, id: &str, width: u32, height: u32) -> Result<(), Error> {
+        let req = self
+            .agent
+            .post(format!("{}/environments/{id}/desktop/size", self.base))
+            .header("Authorization", self.auth())
+            .header("Content-Type", "application/json");
+        check(self.send(
+            req,
+            Some(serde_json::json!({ "width": width, "height": height }).to_string()),
+        )?)
+        .map(|_| ())
     }
 
     /// Where the environment's Code service's WebSocket is, starting in

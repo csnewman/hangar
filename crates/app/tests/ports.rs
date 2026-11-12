@@ -79,6 +79,7 @@ fn environment(public: bool) -> Environment {
         memory_mib: None,
         editor_path: Some("/home/dev".into()),
         ports_public: public,
+        display: None,
         web_names: vec!["docs".into()],
         task: None,
         agents: vec![],

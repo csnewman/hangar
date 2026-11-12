@@ -3093,6 +3093,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "dirs 6.0.0",
+ "flate2",
  "gpui-component",
  "gpui-pre",
  "gpui-pre-platform",

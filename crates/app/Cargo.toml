@@ -19,6 +19,7 @@ hangar-proto = { path = "../proto" }
 async-channel = "2"
 similar = "2.7"
 image = { version = "0.25", default-features = false, features = ["png"] }
+flate2 = "1"
 anyhow = "1"
 lsp-types = { version = "0.97", features = ["proposed"] }
 serde.workspace = true

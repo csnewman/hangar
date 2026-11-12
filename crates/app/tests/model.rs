@@ -27,6 +27,7 @@ fn env(name: &str, phase: &str) -> Environment {
         memory_mib: None,
         editor_path: None,
         ports_public: false,
+        display: None,
         web_names: vec![],
         task: None,
         agents: vec![],
