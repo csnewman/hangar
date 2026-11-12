@@ -7,6 +7,7 @@
 !internal/
 !crates/Cargo.toml
 !crates/Cargo.lock
+!crates/.cargo/
 !crates/agent/
 !crates/proto/
 !crates/app/
