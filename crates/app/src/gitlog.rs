@@ -264,6 +264,14 @@ pub struct GitView {
     since: Option<usize>,
     branch: Option<String>,
     branch_names: Vec<String>,
+    /// The branches pane, as IntelliJ's Log has on its left: shown or
+    /// not, and the chosen repository's local and remote branches.
+    pane: bool,
+    local: Vec<String>,
+    remote: Vec<String>,
+    /// The log list's focus, for its keys, and its scrolling.
+    focus: gpui::FocusHandle,
+    scroll: gpui::UniformListScrollHandle,
     log_asked: u64,
     commits: Vec<Commit>,
     graph: Vec<GraphRow>,
@@ -303,6 +311,11 @@ impl GitView {
             since: None,
             branch: None,
             branch_names: vec![],
+            pane: true,
+            local: vec![],
+            remote: vec![],
+            focus: cx.focus_handle(),
+            scroll: gpui::UniformListScrollHandle::new(),
             log_asked: 0,
             commits: vec![],
             graph: vec![],
@@ -411,21 +424,22 @@ impl GitView {
         let call = code.call("git.branches", json!({ "repo": c.repo }));
         cx.spawn(async move |this, cx| {
             let Ok(b) = call.await else { return };
-            let names: Vec<String> = b["local"]
+            let local: Vec<String> = b["local"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter_map(|l| l["name"].as_str().map(str::to_string))
-                .chain(
-                    b["remote"]
-                        .as_array()
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|r| r.as_str().map(str::to_string)),
-                )
+                .collect();
+            let remote: Vec<String> = b["remote"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|r| r.as_str().map(str::to_string))
                 .collect();
             let _ = this.update(cx, |v, cx| {
-                v.branch_names = names;
+                v.branch_names = local.iter().chain(&remote).cloned().collect();
+                v.local = local;
+                v.remote = remote;
                 cx.notify();
             });
         })
@@ -477,6 +491,141 @@ impl GitView {
             self.load(false, cx);
             cx.notify();
         }
+    }
+
+    /// The log's keys, as IntelliJ's: the arrows and Page Up and Down
+    /// through the commits, Home and End to the first and last read, and
+    /// Cmd-C (Ctrl-C) copying the chosen one's hash.
+    fn key(&mut self, e: &gpui::KeyDownEvent, cx: &mut Context<Self>) {
+        let n = self.commits.len();
+        if n == 0 {
+            return;
+        }
+        let at = self
+            .selected
+            .as_ref()
+            .and_then(|h| self.commits.iter().position(|c| &c.hash == h));
+        let m = &e.keystroke.modifiers;
+        let to = match e.keystroke.key.as_str() {
+            "c" if m.platform || m.control => {
+                if let Some(h) = &self.selected {
+                    cx.write_to_clipboard(gpui::ClipboardItem::new_string(h.clone()));
+                }
+                cx.stop_propagation();
+                return;
+            }
+            "down" => at.map_or(0, |a| a + 1),
+            "up" => at.map_or(0, |a| a.saturating_sub(1)),
+            "pagedown" => at.map_or(0, |a| a + STEP),
+            "pageup" => at.map_or(0, |a| a.saturating_sub(STEP)),
+            "home" => 0,
+            "end" => n - 1,
+            _ => return,
+        };
+        let to = to.min(n - 1);
+        // Going past the last read reads the next page.
+        if to + 1 == n && self.more && e.keystroke.key != "up" {
+            self.load(true, cx);
+        }
+        self.scroll.scroll_to_item(to, gpui::ScrollStrategy::Center);
+        let hash = self.commits[to].hash.clone();
+        self.select(hash, cx);
+        cx.stop_propagation();
+    }
+
+    /// The branches pane: HEAD (the log of every branch), the local
+    /// branches and the remote ones, a click showing one's history alone.
+    fn branches_pane(&self, p: &Palette, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let current = self.chosen.as_ref().and_then(|c| {
+            self.status
+                .get(&c.root)?
+                .iter()
+                .find(|r| r.path == c.repo)?
+                .branch
+                .clone()
+        });
+        let row = |id: (&'static str, usize),
+                   label: String,
+                   on: bool,
+                   depth: f32,
+                   pick: Option<Option<String>>,
+                   cx: &mut Context<Self>| {
+            let hover = p.surface_2;
+            h_flex()
+                .id(id)
+                .h(px(20.))
+                .flex_none()
+                .gap(px(5.))
+                .pl(px(8. + depth * 12.))
+                .pr(px(8.))
+                .when(on, |d| d.bg(p.selection))
+                .when(pick.is_some(), |d| {
+                    d.cursor_pointer()
+                        .when(!on, move |d| d.hover(move |s| s.bg(hover)))
+                })
+                .when(pick.is_none(), |d| {
+                    d.text_color(p.muted)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .text_size(px(11.))
+                })
+                .when(pick.is_some(), |d| {
+                    d.child(
+                        gpui::svg()
+                            .path(crate::assets::icon("branch"))
+                            .size(px(11.))
+                            .flex_none()
+                            .text_color(p.muted),
+                    )
+                })
+                .child(div().min_w_0().truncate().child(label))
+                .when_some(pick, |d, b| {
+                    d.on_click(cx.listener(move |v, _, _, cx| {
+                        let b = b.clone();
+                        v.set_filter(|v| v.branch = b, cx)
+                    }))
+                })
+        };
+        let mut list = v_flex()
+            .id("git-branches")
+            .size_full()
+            .overflow_y_scroll()
+            .py(px(4.))
+            .child(row(
+                ("git-pane-head", 0),
+                match &current {
+                    Some(b) => format!("HEAD ({b})"),
+                    None => "HEAD".into(),
+                },
+                self.branch.is_none(),
+                0.,
+                Some(None),
+                cx,
+            ));
+        for (title, names, id) in [
+            ("Local", &self.local, "git-pane-local"),
+            ("Remote", &self.remote, "git-pane-remote"),
+        ] {
+            if names.is_empty() {
+                continue;
+            }
+            list = list.child(row((id, usize::MAX), title.into(), false, 0., None, cx));
+            for (i, b) in names.iter().enumerate() {
+                let mark = if current.as_ref() == Some(b) {
+                    " ✓"
+                } else {
+                    ""
+                };
+                list = list.child(row(
+                    (id, i),
+                    format!("{b}{mark}"),
+                    self.branch.as_ref() == Some(b),
+                    1.,
+                    Some(Some(b.clone())),
+                    cx,
+                ));
+            }
+        }
+        list.into_any_element()
     }
 
     fn set_current_only(&mut self, on: bool, cx: &mut Context<Self>) {
@@ -687,7 +836,10 @@ impl GitView {
                 let at = format!("commit-{i}");
                 move || at
             })
-            .on_click(cx.listener(move |v, _, _, cx| v.select(hash.clone(), cx)))
+            .on_click(cx.listener(move |v, _, window, cx| {
+                window.focus(&v.focus, cx);
+                v.select(hash.clone(), cx)
+            }))
             // A right-click selects the commit, so it is clear what the
             // menu is about.
             .on_mouse_down(
@@ -1265,7 +1417,19 @@ impl Render for GitView {
         bar = bar
             .child(self.author_filter(&p, cx))
             .child(self.since_filter(&p, cx))
-            .child(self.branch_filter(&p, cx));
+            .child(self.branch_filter(&p, cx))
+            .child(div().flex_1())
+            .child(
+                chip("git-pane", "Branches".to_string(), self.pane, &p)
+                    .tooltip(|window, cx| {
+                        gpui_component::tooltip::Tooltip::new("Show the branches pane")
+                            .build(window, cx)
+                    })
+                    .on_click(cx.listener(|v, _, _, cx| {
+                        v.pane = !v.pane;
+                        cx.notify();
+                    })),
+            );
         if let Some(h) = &self.history {
             let name = h.rsplit('/').next().unwrap_or(h).to_string();
             bar = bar
@@ -1326,21 +1490,36 @@ impl Render for GitView {
                             .collect::<Vec<_>>()
                     }),
                 )
+                .track_scroll(&self.scroll)
                 .flex_1()
                 .into_any_element()
             }
         };
+        let pane = (self.pane && self.chosen.is_some()).then(|| self.branches_pane(&p, cx));
         h_flex()
             .size_full()
             .min_h_0()
             .text_size(px(12.))
+            .when_some(pane, |d, pane| {
+                d.child(
+                    div()
+                        .w(px(190.))
+                        .flex_none()
+                        .h_full()
+                        .border_r_1()
+                        .border_color(p.border)
+                        .child(pane),
+                )
+            })
             .child(
-                v_flex()
-                    .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .child(bar)
-                    .child(v_flex().flex_1().min_h_0().child(log)),
+                v_flex().flex_1().min_w_0().h_full().child(bar).child(
+                    v_flex()
+                        .flex_1()
+                        .min_h_0()
+                        .track_focus(&self.focus)
+                        .on_key_down(cx.listener(|v, e: &gpui::KeyDownEvent, _, cx| v.key(e, cx)))
+                        .child(log),
+                ),
             )
             .child(
                 div()
@@ -1375,6 +1554,9 @@ pub(crate) fn chip(
         })
         .child(label)
 }
+
+/// How many commits Page Up and Page Down move.
+const STEP: usize = 20;
 
 /// The Date filter's choices: what each says, and how git is told it.
 const SINCE: [(&str, &str); 4] = [
