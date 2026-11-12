@@ -22,6 +22,11 @@ libc.workspace = true
 notify.workspace = true
 regex.workspace = true
 ropey.workspace = true
+# The agent's SSH server. Its crypto is ring's, which the workspace has
+# already, rather than aws-lc's default: ring cross-compiles for the guest
+# with clang alone.
+russh = { version = "0.65", default-features = false, features = ["ring"] }
+russh-sftp = "3"
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

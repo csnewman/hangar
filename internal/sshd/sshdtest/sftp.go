@@ -1,4 +1,4 @@
-package sshd
+package sshdtest
 
 import (
 	"io"

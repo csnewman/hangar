@@ -24,7 +24,7 @@ import (
 	"github.com/csnewman/hangar/internal/dbtest"
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/profile"
-	"github.com/csnewman/hangar/internal/sshd"
+	"github.com/csnewman/hangar/internal/sshd/sshdtest"
 	"github.com/csnewman/hangar/internal/sshgw"
 	"github.com/csnewman/hangar/internal/tunnel"
 )
@@ -32,7 +32,7 @@ import (
 // TestMain lets the test binary be the guest's sftp-server.
 func TestMain(m *testing.M) {
 	if os.Getenv("HANGAR_TEST_SFTP") == "1" {
-		if err := sshd.ServeSFTP(); err != nil {
+		if err := sshdtest.ServeSFTP(); err != nil {
 			os.Exit(1)
 		}
 		return
@@ -48,11 +48,11 @@ func (g guests) Open(worker string, h tunnel.Header) (net.Conn, error) {
 	if worker != g.worker || h.Kind != tunnel.KindSSH {
 		return nil, errors.New("no such worker")
 	}
-	srv, err := sshd.NewServer("nobody-here", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv, err := sshdtest.NewServer("nobody-here", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		return nil, err
 	}
-	a, b, err := sshd.Pipe()
+	a, b, err := sshdtest.Pipe()
 	if err != nil {
 		return nil, err
 	}

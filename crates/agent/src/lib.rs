@@ -13,6 +13,8 @@ pub mod memory;
 pub mod procs;
 pub mod profile;
 pub mod serve;
+pub mod sftp;
+pub mod sshd;
 pub mod terminal;
 pub mod user;
 #[cfg(target_os = "linux")]

@@ -7,7 +7,7 @@ import (
 	"net"
 
 	"github.com/csnewman/hangar/internal/api"
-	"github.com/csnewman/hangar/internal/sshd"
+	"github.com/csnewman/hangar/internal/sshd/sshdtest"
 )
 
 // DialSSH serves SSH for a running environment. There is no guest, so the
@@ -20,11 +20,11 @@ func (s *Simulated) DialSSH(_ context.Context, id string) (net.Conn, error) {
 	if !running {
 		return nil, fmt.Errorf("environment %s is not running here", id)
 	}
-	srv, err := sshd.NewServer("dev", slog.Default())
+	srv, err := sshdtest.NewServer("dev", slog.Default())
 	if err != nil {
 		return nil, err
 	}
-	a, b, err := sshd.Pipe()
+	a, b, err := sshdtest.Pipe()
 	if err != nil {
 		return nil, err
 	}

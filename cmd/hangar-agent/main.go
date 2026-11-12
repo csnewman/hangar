@@ -27,7 +27,6 @@ import (
 
 	"github.com/csnewman/hangar/internal/agent"
 	"github.com/csnewman/hangar/internal/oomscore"
-	"github.com/csnewman/hangar/internal/sshd"
 	"github.com/csnewman/hangar/internal/vsock"
 )
 
@@ -51,14 +50,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "hangar-agent: %v\n", err)
 		os.Exit(127)
 	}
-	// The sftp subsystem of the agent's own SSH server, run as the user.
-	if len(os.Args) == 2 && os.Args[1] == "sftp-server" {
-		if err := sshd.ServeSFTP(); err != nil {
-			fmt.Fprintf(os.Stderr, "hangar-agent: sftp: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
 	port := flag.Uint("port", uint(agent.Port), "vsock port on the host")
 	retry := flag.Duration("retry", 500*time.Millisecond, "delay between connection attempts")
 	flag.Parse()
@@ -70,7 +61,6 @@ func main() {
 	}
 
 	go serveRust()
-	go serveSSH()
 	run(uint32(*port), *retry)
 }
 

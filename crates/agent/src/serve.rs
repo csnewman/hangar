@@ -1,15 +1,14 @@
 //! `hangar-agent-rs serve`: the agent's services that have moved to Rust,
-//! each on its own vsock port, the profile session and what it carries,
-//! and the handing back of the guest's memory, for as long as the guest
-//! runs. The Go agent
-//! starts it as root, at the agent's own OOM score, and starts it again if
-//! it stops.
+//! each on its own vsock port -- SSH among them -- the profile session and
+//! what it carries, and the handing back of the guest's memory, for as long
+//! as the guest runs. The Go agent starts it as root, at the agent's own OOM
+//! score, and starts it again if it stops.
 
 use std::future::Future;
 use std::io;
 use std::sync::Arc;
 
-use crate::{codeservice, desktop, guestport, memory, procs, profile, terminal};
+use crate::{codeservice, desktop, guestport, memory, procs, profile, sshd, terminal};
 
 pub async fn serve() -> io::Result<()> {
     memory::widen_reclaim();
@@ -36,6 +35,16 @@ pub async fn serve() -> io::Result<()> {
         async move { procs.serve(conn).await }
     }));
     tokio::spawn(listen("ports", guestport::PORT, guestport::serve));
+    match sshd::Server::new(crate::user::DEFAULT_USER) {
+        Ok(ssh) => {
+            let ssh = Arc::new(ssh);
+            tokio::spawn(listen("ssh", sshd::PORT, move |conn| {
+                let ssh = ssh.clone();
+                async move { ssh.serve(conn).await }
+            }));
+        }
+        Err(e) => eprintln!("hangar-agent-rs: ssh: {e}"),
+    }
     tokio::spawn(profile::serve());
     std::future::pending().await
 }

@@ -732,7 +732,7 @@ pub fn login_shell(req: &Request) -> io::Result<Command> {
     Ok(cmd)
 }
 
-fn winsize(cols: u16, rows: u16) -> libc::winsize {
+pub(crate) fn winsize(cols: u16, rows: u16) -> libc::winsize {
     libc::winsize {
         ws_row: rows,
         ws_col: cols,
@@ -743,7 +743,7 @@ fn winsize(cols: u16, rows: u16) -> libc::winsize {
 
 /// A new pseudo-terminal of the size given: its master, and the other side
 /// for the shell.
-fn open_pty(cols: u16, rows: u16) -> io::Result<(OwnedFd, OwnedFd)> {
+pub(crate) fn open_pty(cols: u16, rows: u16) -> io::Result<(OwnedFd, OwnedFd)> {
     let (mut master, mut slave) = (0, 0);
     let mut ws = winsize(cols, rows);
     // SAFETY: openpty fills in two descriptors, which are then owned here,

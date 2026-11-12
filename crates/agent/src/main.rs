@@ -19,7 +19,12 @@
 //!
 //! are a coding agent's hook and the MCP server Claude Code runs, both as
 //! whoever runs the coding agent, reaching the agent through its socket
-//! (`agents`). Run as `docker-credential-hangar`, it is Docker's credential
+//! (`agents`).
+//!
+//!   hangar-agent-rs sftp-server
+//!
+//! serves SFTP on standard input and output, as whoever runs it: the SSH
+//! server's sftp subsystem where the image has no OpenSSH one (`sftp`). Run as `docker-credential-hangar`, it is Docker's credential
 //! helper for Hangar's registry.
 
 mod code;
@@ -49,6 +54,16 @@ fn main() -> ExitCode {
                 parent,
             );
             ExitCode::SUCCESS
+        }
+        Some("sftp-server") if args.len() == 1 => {
+            let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+            match rt.block_on(hangar_agent::sftp::serve()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("hangar-agent-rs: sftp: {e}");
+                    ExitCode::FAILURE
+                }
+            }
         }
         Some("mcp") if args.len() == 1 => {
             let socket = Path::new(agents::SOCKET);
@@ -99,7 +114,7 @@ fn main() -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: hangar-agent-rs serve\n       hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]\n       hangar-agent-rs hook <agent>\n       hangar-agent-rs mcp"
+        "usage: hangar-agent-rs serve\n       hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]\n       hangar-agent-rs hook <agent>\n       hangar-agent-rs mcp\n       hangar-agent-rs sftp-server"
     );
     ExitCode::from(2)
 }

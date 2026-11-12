@@ -77,6 +77,7 @@ ENV PATH=/root/.cargo/bin:$PATH
 FROM rust AS agent-rs
 WORKDIR /src
 COPY crates/Cargo.toml crates/Cargo.lock ./
+COPY crates/.cargo/ .cargo/
 COPY crates/agent/ agent/
 COPY crates/proto/ proto/
 # Only the agent is built, but cargo reads every member's manifest.
