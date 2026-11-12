@@ -19,6 +19,7 @@ fn main() {
             hangar_app::shell::bind_keys(cx);
             hangar_app::prefs::bind_keys(cx);
             hangar_app::envsettings::bind_keys(cx);
+            hangar_app::newenv::bind_keys(cx);
             hangar_app::termview::bind_keys(cx);
             hangar_app::menus::init(cx);
             hangar_app::layout::Layout::init(

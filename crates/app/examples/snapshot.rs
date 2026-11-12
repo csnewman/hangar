@@ -23,6 +23,8 @@
 //! first place);
 //! SNAPSHOT_ENV_SETTINGS=page opens the opened environment's settings at a
 //! page (general, resources, files, access, ports, danger);
+//! SNAPSHOT_NEW_ENV=1 opens the New environment sheet (SNAPSHOT_PRESS
+//! types into it);
 //! SNAPSHOT_ASK=METHOD:LINE:COLUMN asks the open file's language server
 //! (textDocument/hover, textDocument/definition) and prints its answer;
 //! SNAPSHOT_FIND=text searches in files in Find in Files' pop-up,
@@ -72,6 +74,7 @@ fn main() {
             hangar_app::shell::bind_keys(cx);
             hangar_app::prefs::bind_keys(cx);
             hangar_app::envsettings::bind_keys(cx);
+            hangar_app::newenv::bind_keys(cx);
             hangar_app::termview::bind_keys(cx);
             // A picture, not an app to switch to: no Dock icon or menu bar.
             cx.set_activation_policy(gpui::ActivationPolicy::Accessory);
@@ -169,6 +172,12 @@ fn main() {
                         };
                         shell.update(cx, |s, cx| s.open_settings(Some(page), window, cx));
                     });
+                }
+                if std::env::var("SNAPSHOT_NEW_ENV").is_ok() {
+                    let _ = handle.update(cx, |_, window, cx| {
+                        shell.update(cx, |s, cx| s.open_new_env(None, window, cx));
+                    });
+                    settle(cx, handle.into(), Duration::from_secs(2)).await;
                 }
                 if let (Ok(page), Ok(name)) = (
                     std::env::var("SNAPSHOT_ENV_SETTINGS"),

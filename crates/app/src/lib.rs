@@ -40,6 +40,7 @@ pub mod lspops;
 pub mod lsppanel;
 pub mod menus;
 pub mod model;
+pub mod newenv;
 pub mod notices;
 pub mod occur;
 pub mod palette;

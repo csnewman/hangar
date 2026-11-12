@@ -160,6 +160,63 @@ pub struct MachineSettings {
     pub swap_mib: Option<i64>,
 }
 
+/// A template, as making an environment from it needs it: what the
+/// environment is given.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Template {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    /// Who made it or took it on, by username.
+    pub owner: String,
+    /// The team that owns it, when one does.
+    #[serde(default)]
+    pub team: Option<String>,
+    pub cpus: i64,
+    pub memory_mib: i64,
+    pub display: String,
+    pub gpu: String,
+    #[serde(default)]
+    pub dax: bool,
+    #[serde(default)]
+    pub swap_mib: Option<i64>,
+    pub image: String,
+    /// What it clones; ref, path and branch may hold variables, {name}
+    /// and the like, filled in as each environment is made.
+    #[serde(default)]
+    pub repos: Vec<Repo>,
+    #[serde(default)]
+    pub projects: Vec<String>,
+    #[serde(default)]
+    pub name_pattern: Option<String>,
+    #[serde(default)]
+    pub name_hint: Option<String>,
+}
+
+/// A repository an environment clones.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Repo {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#ref: Option<String>,
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+/// An environment to make: from a template, with its machine and
+/// repositories in place of the template's when given.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct NewEnvironment {
+    pub template_id: String,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub settings: Option<MachineSettings>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repos: Option<Vec<Repo>>,
+}
+
 /// A worker's capacity: how big an environment may be.
 #[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
 pub struct Resources {
@@ -699,6 +756,17 @@ impl Client {
             )),
             None => self.get(&format!("/environments/{id}/activity?limit={limit}")),
         }
+    }
+
+    /// The templates the user may make an environment from.
+    pub fn templates(&self) -> Result<Vec<Template>, Error> {
+        self.get("/templates")
+    }
+
+    /// Makes an environment; it starts once a worker takes it.
+    pub fn create_environment(&self, new: &NewEnvironment) -> Result<Environment, Error> {
+        let body = serde_json::to_string(new).map_err(|e| Error::Decode(e.to_string()))?;
+        self.post("/environments", Some(body))
     }
 
     /// One environment, as it is.

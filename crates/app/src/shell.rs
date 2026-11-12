@@ -22,6 +22,7 @@ use crate::envsettings::{EnvSettingsEvent, EnvSettingsView, Page as EnvPage};
 use crate::envtab::{EnvTab, Tool};
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Action, Card, LineKind};
+use crate::newenv::{NewEnvEvent, NewEnvView};
 use crate::notices::Notices;
 use crate::palette::{self, Palette};
 use crate::places::Places;
@@ -83,6 +84,8 @@ pub struct Shell {
     settings: Option<(Entity<SettingsView>, gpui::Subscription)>,
     /// The Environment Settings window, while it is open.
     env_settings: Option<(Entity<EnvSettingsView>, gpui::Subscription)>,
+    /// The New environment sheet, while it is open.
+    new_env: Option<(Entity<NewEnvView>, gpui::Subscription)>,
     /// The count on the Dock icon, as last set.
     badge_shown: Option<usize>,
 }
@@ -94,7 +97,8 @@ gpui::actions!(
         GoToSymbol,
         FileStructure,
         OpenSettings,
-        EnvironmentSettings
+        EnvironmentSettings,
+        NewEnvironment
     ]
 );
 
@@ -108,14 +112,15 @@ pub fn bind_keys(cx: &mut gpui::App) {
     } else {
         ("ctrl-k", "ctrl-alt-shift-n", "ctrl-f12")
     };
-    let (settings, environment) = if cfg!(target_os = "macos") {
-        ("cmd-,", "cmd-;")
+    let (settings, environment, new) = if cfg!(target_os = "macos") {
+        ("cmd-,", "cmd-;", "cmd-n")
     } else {
-        ("ctrl-alt-s", "ctrl-alt-shift-s")
+        ("ctrl-alt-s", "ctrl-alt-shift-s", "ctrl-n")
     };
     cx.bind_keys([
         gpui::KeyBinding::new(settings, OpenSettings, None),
         gpui::KeyBinding::new(environment, EnvironmentSettings, Some("Shell")),
+        gpui::KeyBinding::new(new, NewEnvironment, Some("Shell")),
         gpui::KeyBinding::new(key, SearchEverywhere, Some("Shell")),
         gpui::KeyBinding::new(symbol, GoToSymbol, Some("Shell")),
         gpui::KeyBinding::new(structure, FileStructure, Some("Shell")),
@@ -179,6 +184,7 @@ impl Shell {
             notices_open: false,
             settings: None,
             env_settings: None,
+            new_env: None,
             badge_shown: None,
         };
         shell.observe_notices(window, cx);
@@ -488,6 +494,50 @@ impl Shell {
         }
     }
 
+    /// Opens the New environment sheet, at a place, else the first one
+    /// online.
+    pub fn open_new_env(
+        &mut self,
+        place: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.new_env.is_some() {
+            return;
+        }
+        let places = self.places.clone();
+        let view = cx.new(|cx| NewEnvView::new(places, place, window, cx));
+        let sub = cx.subscribe_in(
+            &view,
+            window,
+            |this, _, e: &NewEnvEvent, window, cx| match e {
+                NewEnvEvent::Close => this.close_new_env(window, cx),
+                NewEnvEvent::Made { place, env } => {
+                    let (place, env) = (place.clone(), env.clone());
+                    this.close_new_env(window, cx);
+                    this.open(&place, &env, window, cx);
+                }
+            },
+        );
+        window.focus(&view.focus_handle(cx), cx);
+        self.new_env = Some((view, sub));
+        cx.notify();
+    }
+
+    fn close_new_env(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_env = None;
+        match self.active_view() {
+            Some(v) => window.focus(&v.focus_handle(cx), cx),
+            None => window.focus(&self.focus, cx),
+        }
+        cx.notify();
+    }
+
+    /// The New environment sheet, while it is open.
+    pub fn new_env(&self) -> Option<Entity<NewEnvView>> {
+        self.new_env.as_ref().map(|(v, _)| v.clone())
+    }
+
     /// Opens an environment's settings, as IntelliJ's Project Structure:
     /// on a page, or moved to it if they are open.
     pub fn open_env_settings(
@@ -770,6 +820,13 @@ impl Render for Shell {
             .on_action(
                 cx.listener(|s, _: &OpenSettings, window, cx| s.open_settings(None, window, cx)),
             )
+            .on_action(cx.listener(|s, _: &NewEnvironment, window, cx| {
+                let place = s
+                    .active
+                    .and_then(|i| s.tabs.get(i))
+                    .map(|o| o.place.clone());
+                s.open_new_env(place, window, cx)
+            }))
             .on_action(cx.listener(|s, _: &EnvironmentSettings, window, cx| {
                 if let Some(o) = s.active.and_then(|i| s.tabs.get(i)).cloned() {
                     s.open_env_settings(&o.place, &o.env, EnvPage::General, window, cx)
@@ -841,6 +898,26 @@ impl Render for Shell {
                         .top(px(38.))
                         .right(px(10.))
                         .child(self.notices_list(&p, cx)),
+                )
+            })
+            .when_some(self.new_env(), |this, view| {
+                this.child(
+                    div()
+                        .id("new-env-scrim")
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui::black().opacity(0.25))
+                        .occlude()
+                        .on_click(cx.listener(|s, _, window, cx| s.close_new_env(window, cx))),
+                )
+                .child(
+                    h_flex()
+                        .absolute()
+                        .top(px(44.))
+                        .left_0()
+                        .right_0()
+                        .justify_center()
+                        .child(view),
                 )
             })
             .when_some(self.env_settings(), |this, view| {
@@ -1266,13 +1343,6 @@ impl Shell {
             }
             list = list.child(group);
         }
-        let new_url = self
-            .places
-            .read(cx)
-            .list()
-            .iter()
-            .find(|(_, s)| s.connection == crate::place::Connection::Online)
-            .map(|(c, _)| c.url.clone());
         v_flex()
             .relative()
             .w(Layout::sizes(cx).get(Edge::Sidebar))
@@ -1283,17 +1353,15 @@ impl Shell {
             .px(px(8.))
             .py(px(10.))
             .gap(px(2.))
-            .child(h_flex().px(px(4.)).pt(px(2.)).pb(px(6.)).child(
-                primary("new-env", "+ New environment", p).on_click(cx.listener(
-                    move |_, _, _, cx| {
-                        // Until the app has its own sheet, the server's
-                        // web UI makes environments.
-                        if let Some(url) = &new_url {
-                            cx.open_url(url);
-                        }
-                    },
-                )),
-            ))
+            .child(
+                h_flex()
+                    .px(px(4.))
+                    .pt(px(2.))
+                    .pb(px(6.))
+                    .child(primary("new-env", "+ New environment", p).on_click(
+                        cx.listener(|s, _, window, cx| s.open_new_env(None, window, cx)),
+                    )),
+            )
             .child(
                 crate::project::scroll("sidebar-list", list)
                     .flex_1()
@@ -1642,7 +1710,15 @@ fn place_menu(
             let _ = me.update(cx, |s, cx| s.sign_in_again(&place, window, cx));
         }
     };
-    menu.item(PopupMenuItem::new("Open in Browser").on_click(move |_, _, cx| cx.open_url(&url)))
+    let new_here = {
+        let (me, place) = (me.clone(), place.clone());
+        move |_: &ClickEvent, window: &mut Window, cx: &mut gpui::App| {
+            let _ = me.update(cx, |s, cx| s.open_new_env(Some(place.clone()), window, cx));
+        }
+    };
+    menu.item(PopupMenuItem::new("New Environment Here…").on_click(new_here))
+        .separator()
+        .item(PopupMenuItem::new("Open in Browser").on_click(move |_, _, cx| cx.open_url(&url)))
         .item(PopupMenuItem::new("Sign In Again…").on_click(sign_in))
         .separator()
         .item(PopupMenuItem::new("Account…").on_click(settings(Page::Account(place.clone()))))
