@@ -217,6 +217,7 @@ func New(cfg Config) (*Server, error) {
 		Profiles:     profiles,
 		Packs:        cfgAPI.Packs,
 		Workers:      wm,
+		Templates:    cfgAPI.Templates,
 		Log:          log,
 	}
 	if gw := cfgAPI.SSH; gw != nil {

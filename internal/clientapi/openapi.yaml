@@ -269,6 +269,41 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Environment" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: createEnvironment
+      summary: Make an environment from a template
+      description: It starts once a worker takes it.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateEnvironment" }
+      responses:
+        "201":
+          description: Made.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Environment" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /templates:
+    get:
+      operationId: listTemplates
+      summary: The templates the user may make an environment from
+      description: >-
+        Shared ones, and private ones they own or collaborate on (all of
+        them, for an administrator).
+      responses:
+        "200":
+          description: The templates.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Template" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
 
   /environments/{id}:
     parameters:
@@ -1013,6 +1048,86 @@ components:
           minimum: 0
           maximum: 262144
           description: Its swap, in MiB. Absent is its worker's default; 0 is none.
+
+    Template:
+      type: object
+      description: What an environment made from it is given.
+      required: [id, name, description, owner, cpus, memory_mib, display, gpu, image, repos]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        owner:
+          type: string
+          description: The username of who made it or took it on.
+        team:
+          type: string
+          description: The name of the team that owns it, when one does.
+        cpus: { type: integer }
+        memory_mib: { type: integer }
+        display:
+          type: string
+          description: none or desktop. More may come.
+        gpu:
+          type: string
+          description: none, virtual or passthrough. More may come.
+        dax: { type: boolean }
+        swap_mib:
+          type: integer
+          description: Its environments' swap, in MiB. Absent is the worker's default; 0 is none.
+        image: { type: string }
+        repos:
+          type: array
+          description: >-
+            What it clones, its ref, path and branch able to use variables
+            filled in as each environment is made: {name}, {owner},
+            {short_id}, {template}, and the name pattern's named groups.
+          items: { $ref: "#/components/schemas/Repo" }
+        projects:
+          type: array
+          description: The folders its editor opens, by default its repositories'.
+          items: { type: string }
+        name_pattern:
+          type: string
+          description: A regular expression an environment's whole name must match.
+        name_hint:
+          type: string
+          description: What name the pattern wants, in words.
+
+    Repo:
+      type: object
+      required: [url, path]
+      additionalProperties: false
+      properties:
+        url: { type: string, minLength: 1 }
+        ref:
+          type: string
+          description: Branch, tag or commit to check out; empty for the default branch.
+        path:
+          type: string
+          description: Where in the environment to clone it.
+        branch:
+          type: string
+          description: A new branch to make after cloning.
+
+    CreateEnvironment:
+      type: object
+      required: [template_id, name]
+      additionalProperties: false
+      properties:
+        template_id: { type: string }
+        name:
+          type: string
+          description: >-
+            A DNS label in either case, since it becomes the hostname in lower
+            case, and whatever else the template's name pattern demands.
+        settings: { $ref: "#/components/schemas/EnvironmentSettings" }
+        repos:
+          type: array
+          description: >-
+            The repositories to clone in place of the template's, which may
+            use its variables as its own do.
+          items: { $ref: "#/components/schemas/Repo" }
 
     Resources:
       type: object

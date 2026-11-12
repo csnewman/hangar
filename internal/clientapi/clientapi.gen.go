@@ -189,6 +189,17 @@ type AgentSession struct {
 	Terminal *string `json:"terminal,omitempty"`
 }
 
+// CreateEnvironment defines model for CreateEnvironment.
+type CreateEnvironment struct {
+	// Name A DNS label in either case, since it becomes the hostname in lower case, and whatever else the template's name pattern demands.
+	Name string `json:"name"`
+
+	// Repos The repositories to clone in place of the template's, which may use its variables as its own do.
+	Repos      *[]Repo              `json:"repos,omitempty"`
+	Settings   *EnvironmentSettings `json:"settings,omitempty"`
+	TemplateID string               `json:"template_id"`
+}
+
 // Environment defines model for Environment.
 type Environment struct {
 	// Access What of its owner's the environment is kept from, for code they do not trust, as its template says. Each is false, giving it everything, when left out.
@@ -486,6 +497,19 @@ type ProcessList struct {
 	Processes   []Process `json:"processes"`
 }
 
+// Repo defines model for Repo.
+type Repo struct {
+	// Branch A new branch to make after cloning.
+	Branch *string `json:"branch,omitempty"`
+
+	// Path Where in the environment to clone it.
+	Path string `json:"path"`
+
+	// Ref Branch, tag or commit to check out; empty for the default branch.
+	Ref *string `json:"ref,omitempty"`
+	URL string  `json:"url"`
+}
+
 // Resources defines model for Resources.
 type Resources struct {
 	CPUs      int `json:"cpus"`
@@ -564,6 +588,44 @@ type Task struct {
 	// SetBy Who set it -- agent or user. More may come.
 	SetBy string `json:"set_by"`
 	Text  string `json:"text"`
+}
+
+// Template What an environment made from it is given.
+type Template struct {
+	CPUs        int    `json:"cpus"`
+	Dax         *bool  `json:"dax,omitempty"`
+	Description string `json:"description"`
+
+	// Display none or desktop. More may come.
+	Display string `json:"display"`
+
+	// Gpu none, virtual or passthrough. More may come.
+	Gpu       string `json:"gpu"`
+	ID        string `json:"id"`
+	Image     string `json:"image"`
+	MemoryMiB int    `json:"memory_mib"`
+	Name      string `json:"name"`
+
+	// NameHint What name the pattern wants, in words.
+	NameHint *string `json:"name_hint,omitempty"`
+
+	// NamePattern A regular expression an environment's whole name must match.
+	NamePattern *string `json:"name_pattern,omitempty"`
+
+	// Owner The username of who made it or took it on.
+	Owner string `json:"owner"`
+
+	// Projects The folders its editor opens, by default its repositories'.
+	Projects *[]string `json:"projects,omitempty"`
+
+	// Repos What it clones, its ref, path and branch able to use variables filled in as each environment is made: {name}, {owner}, {short_id}, {template}, and the name pattern's named groups.
+	Repos []Repo `json:"repos"`
+
+	// SwapMiB Its environments' swap, in MiB. Absent is the worker's default; 0 is none.
+	SwapMiB *int `json:"swap_mib,omitempty"`
+
+	// Team The name of the team that owns it, when one does.
+	Team *string `json:"team,omitempty"`
 }
 
 // TerminalSession defines model for TerminalSession.
@@ -652,6 +714,9 @@ type SignalProcessJSONBody struct {
 // SignalProcessJSONBodySignal defines parameters for SignalProcess.
 type SignalProcessJSONBodySignal string
 
+// CreateEnvironmentJSONRequestBody defines body for CreateEnvironment for application/json ContentType.
+type CreateEnvironmentJSONRequestBody = CreateEnvironment
+
 // ResizeDesktopJSONRequestBody defines body for ResizeDesktop for application/json ContentType.
 type ResizeDesktopJSONRequestBody ResizeDesktopJSONBody
 
@@ -690,6 +755,9 @@ type ServerInterface interface {
 	// ListEnvironments Every environment the user can reach, oldest first
 	// (GET /environments)
 	ListEnvironments(w http.ResponseWriter, r *http.Request)
+	// CreateEnvironment Make an environment from a template
+	// (POST /environments)
+	CreateEnvironment(w http.ResponseWriter, r *http.Request)
 	// DeleteEnvironment Delete an environment and its disks
 	// (DELETE /environments/{id})
 	DeleteEnvironment(w http.ResponseWriter, r *http.Request, id ID)
@@ -792,6 +860,9 @@ type ServerInterface interface {
 	// FinishSignIn Collect the access token an approved grant makes, once. 202 while it waits to be approved: ask again after the grant's interval.
 	// (POST /sign-in/token)
 	FinishSignIn(w http.ResponseWriter, r *http.Request)
+	// ListTemplates The templates the user may make an environment from
+	// (GET /templates)
+	ListTemplates(w http.ResponseWriter, r *http.Request)
 	// GetVersion Which versions of this API the server serves, and its build
 	// (GET /version)
 	GetVersion(w http.ResponseWriter, r *http.Request)
@@ -814,6 +885,20 @@ func (siw *ServerInterfaceWrapper) ListEnvironments(w http.ResponseWriter, r *ht
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListEnvironments(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateEnvironment operation middleware
+func (siw *ServerInterfaceWrapper) CreateEnvironment(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateEnvironment(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1698,6 +1783,20 @@ func (siw *ServerInterfaceWrapper) FinishSignIn(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// ListTemplates operation middleware
+func (siw *ServerInterfaceWrapper) ListTemplates(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTemplates(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetVersion operation middleware
 func (siw *ServerInterfaceWrapper) GetVersion(w http.ResponseWriter, r *http.Request) {
 
@@ -1859,6 +1958,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/me/ssh-keys", wrapper.GenerateSSHKey)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/me/ssh-keys/{id}", wrapper.DeleteSSHKey)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments", wrapper.ListEnvironments)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments", wrapper.CreateEnvironment)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/templates", wrapper.ListTemplates)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/environments/{id}", wrapper.DeleteEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}", wrapper.GetEnvironment)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/reset", wrapper.ResetEnvironment)
@@ -1932,6 +2033,70 @@ func (response ListEnvironments401JSONResponse) VisitListEnvironmentsResponse(w 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEnvironmentRequestObject struct {
+	Body *CreateEnvironmentJSONRequestBody
+}
+
+type CreateEnvironmentResponseObject interface {
+	VisitCreateEnvironmentResponse(w http.ResponseWriter) error
+}
+
+type CreateEnvironment201JSONResponse Environment
+
+func (response CreateEnvironment201JSONResponse) VisitCreateEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEnvironment400JSONResponse struct{ InvalidJSONResponse }
+
+func (response CreateEnvironment400JSONResponse) VisitCreateEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEnvironment401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response CreateEnvironment401JSONResponse) VisitCreateEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateEnvironment409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateEnvironment409JSONResponse) VisitCreateEnvironmentResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -3909,6 +4074,41 @@ func (response FinishSignIn404JSONResponse) VisitFinishSignInResponse(w http.Res
 	return err
 }
 
+type ListTemplatesRequestObject struct {
+}
+
+type ListTemplatesResponseObject interface {
+	VisitListTemplatesResponse(w http.ResponseWriter) error
+}
+
+type ListTemplates200JSONResponse []Template
+
+func (response ListTemplates200JSONResponse) VisitListTemplatesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTemplates401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListTemplates401JSONResponse) VisitListTemplatesResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetVersionRequestObject struct {
 }
 
@@ -3970,6 +4170,9 @@ type StrictServerInterface interface {
 	// ListEnvironments Every environment the user can reach, oldest first
 	// (GET /environments)
 	ListEnvironments(ctx context.Context, request ListEnvironmentsRequestObject) (ListEnvironmentsResponseObject, error)
+	// CreateEnvironment Make an environment from a template
+	// (POST /environments)
+	CreateEnvironment(ctx context.Context, request CreateEnvironmentRequestObject) (CreateEnvironmentResponseObject, error)
 	// DeleteEnvironment Delete an environment and its disks
 	// (DELETE /environments/{id})
 	DeleteEnvironment(ctx context.Context, request DeleteEnvironmentRequestObject) (DeleteEnvironmentResponseObject, error)
@@ -4072,6 +4275,9 @@ type StrictServerInterface interface {
 	// FinishSignIn Collect the access token an approved grant makes, once. 202 while it waits to be approved: ask again after the grant's interval.
 	// (POST /sign-in/token)
 	FinishSignIn(ctx context.Context, request FinishSignInRequestObject) (FinishSignInResponseObject, error)
+	// ListTemplates The templates the user may make an environment from
+	// (GET /templates)
+	ListTemplates(ctx context.Context, request ListTemplatesRequestObject) (ListTemplatesResponseObject, error)
 	// GetVersion Which versions of this API the server serves, and its build
 	// (GET /version)
 	GetVersion(ctx context.Context, request GetVersionRequestObject) (GetVersionResponseObject, error)
@@ -4136,6 +4342,37 @@ func (sh *strictHandler) ListEnvironments(w http.ResponseWriter, r *http.Request
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListEnvironmentsResponseObject); ok {
 		if err := validResponse.VisitListEnvironmentsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateEnvironment operation middleware
+func (sh *strictHandler) CreateEnvironment(w http.ResponseWriter, r *http.Request) {
+	var request CreateEnvironmentRequestObject
+
+	var body CreateEnvironmentJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateEnvironment(ctx, request.(CreateEnvironmentRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateEnvironment")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateEnvironmentResponseObject); ok {
+		if err := validResponse.VisitCreateEnvironmentResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -5090,6 +5327,30 @@ func (sh *strictHandler) FinishSignIn(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(FinishSignInResponseObject); ok {
 		if err := validResponse.VisitFinishSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListTemplates operation middleware
+func (sh *strictHandler) ListTemplates(w http.ResponseWriter, r *http.Request) {
+	var request ListTemplatesRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTemplates(ctx, request.(ListTemplatesRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTemplates")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListTemplatesResponseObject); ok {
+		if err := validResponse.VisitListTemplatesResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

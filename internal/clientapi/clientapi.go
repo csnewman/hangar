@@ -25,6 +25,7 @@ import (
 	"github.com/csnewman/hangar/internal/environments"
 	"github.com/csnewman/hangar/internal/packs"
 	"github.com/csnewman/hangar/internal/profile"
+	"github.com/csnewman/hangar/internal/templates"
 	"github.com/csnewman/hangar/internal/users"
 	"github.com/csnewman/hangar/internal/version"
 	"github.com/csnewman/hangar/internal/workers"
@@ -47,6 +48,8 @@ type Config struct {
 	// nil says nothing.
 	Packs   *packs.Store
 	Workers *workers.Manager
+	// Templates are what environments are made from; nil lists none.
+	Templates *templates.Manager
 	// Changes are the environments' changes, for the event stream. Nil
 	// streams only what is there when it opens.
 	Changes *environments.Changes
@@ -63,17 +66,18 @@ type Config struct {
 }
 
 type handler struct {
-	envs     *environments.Manager
-	users    *users.Manager
-	profiles *profile.Store
-	packs    *packs.Store
-	workers  *workers.Manager
-	changes  *environments.Changes
-	tunnels  Tunnels
-	audit    *audit.Log
-	ssh      *SSHGateway
-	suffix   string
-	log      *slog.Logger
+	envs      *environments.Manager
+	users     *users.Manager
+	profiles  *profile.Store
+	packs     *packs.Store
+	workers   *workers.Manager
+	templates *templates.Manager
+	changes   *environments.Changes
+	tunnels   Tunnels
+	audit     *audit.Log
+	ssh       *SSHGateway
+	suffix    string
+	log       *slog.Logger
 }
 
 var _ StrictServerInterface = (*handler)(nil)
@@ -89,7 +93,7 @@ type principalKey struct{}
 // their full /api/v1 paths.
 func New(cfg Config) http.Handler {
 	h := &handler{envs: cfg.Environments, users: cfg.Users, profiles: cfg.Profiles, packs: cfg.Packs,
-		workers: cfg.Workers, changes: cfg.Changes, ssh: cfg.SSH,
+		workers: cfg.Workers, templates: cfg.Templates, changes: cfg.Changes, ssh: cfg.SSH,
 		tunnels: cfg.Tunnels, audit: cfg.Audit, suffix: cfg.HostSuffix,
 		log: cfg.Log}
 	if h.changes == nil {
