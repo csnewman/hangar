@@ -101,7 +101,11 @@ fn search_everywhere_opens_on_its_keys(cx: &mut TestAppContext) {
     });
     cx.simulate_modifiers_change(shift(false));
 
-    cx.simulate_keystrokes("cmd-k");
+    cx.simulate_keystrokes(if cfg!(target_os = "macos") {
+        "cmd-k"
+    } else {
+        "ctrl-k"
+    });
     shell.read_with(cx, |s, _| assert!(s.search().is_some(), "⌘K"));
 }
 
