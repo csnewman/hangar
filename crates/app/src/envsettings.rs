@@ -915,126 +915,37 @@ impl EnvSettingsView {
             image =
                 image.child(field("Copy", p).child(div().text_color(p.muted).child(digest(dg))));
         }
+        // What needs deciding about its image, as its tab's banners say it.
         let busy = self.busy;
-        let stopped = changeable(env);
-        let act =
-            |id: &'static str, label: &'static str, change: &'static str, force: bool, ok: bool| {
-                if busy || !ok {
-                    disabled(id, label, p)
-                } else {
-                    button(id, label, p)
-                        .on_click(cx.listener(move |this, _, _, cx| this.image(change, force, cx)))
-                }
-            };
-        let build = |dg: Option<&String>| {
-            dg.map(|d| digest(d))
-                .unwrap_or_else(|| "an earlier build".into())
-        };
-        let named = d.image.clone().unwrap_or_else(|| "its image".into());
-        if let Some(change) = &d.image_change {
-            let what = if change == "upgrade" {
-                format!(
-                    "Its next start upgrades {named}{}, keeping a copy of its writable disk to roll back to.",
-                    env.image_update
-                        .as_ref()
-                        .map(|u| format!(" to {}", digest(&u.digest)))
-                        .unwrap_or_default()
-                )
-            } else {
-                format!(
-                    "Its next start rolls back to {} and the writable disk it had then, losing what has been written to it since the upgrade.",
-                    build(d.image_rollback.as_ref().map(|r| &r.digest))
-                )
-            };
-            image = image.child(note(&what, p)).child(h_flex().child(act(
-                "env-image-cancel",
-                "Cancel",
-                "cancel",
-                false,
-                true,
-            )));
-        } else {
-            if let Some(r) = &d.image_rollback {
-                image = image
-                    .child(note(
-                        &format!(
-                            "Upgraded from {} on {}. Its writable disk from before ({}) is kept, to roll back to.",
-                            digest(&r.digest),
-                            r.at.format("%-d %b"),
-                            crate::docker::bytes(r.size_bytes as f64)
-                        ),
-                        p,
-                    ))
-                    .child(
-                        h_flex()
-                            .gap(px(8.))
-                            .child(act("env-image-rollback", "Roll Back", "rollback", false, stopped))
-                            .child(act("env-image-keep", "Keep Upgrade", "keep", false, true)),
+        for (i, b) in crate::banners::banners(env)
+            .into_iter()
+            .filter(|b| b.kind == crate::banners::Kind::Image)
+            .enumerate()
+        {
+            let mut acts = h_flex().gap(px(8.));
+            for (j, a) in b.acts.iter().enumerate() {
+                let id = SharedString::from(format!("env-image-{i}-{j}"));
+                acts = acts.child(match a.does {
+                    crate::banners::Does::Image { change, force } if a.ready && !busy => button(
+                        id, a.label, p,
                     )
-                    .when(!stopped, |d| d.child(note("Rolling back needs it stopped.", p)));
+                    .on_click(cx.listener(move |this, _, _, cx| this.image(change, force, cx))),
+                    _ => disabled(id, a.label, p),
+                });
             }
-            if let Some(u) = &env.image_update {
-                let count = u.conflicts.len() as i64 + u.more_conflicts;
-                let risky = u.checked && u.error.is_none() && (count > 0 || u.packages);
-                let mut said = format!(
-                    "A newer build of {named} is ready ({}; this has {}).",
-                    digest(&u.digest),
-                    build(d.image_digest.as_ref())
-                );
-                if !u.checked {
-                    said.push_str(if stopped {
-                        " Checking what upgrading would leave hidden…"
-                    } else {
-                        " Stop the environment to check what upgrading would leave hidden."
-                    });
-                } else if let Some(e) = &u.error {
-                    said.push_str(&format!(
-                        " Its changes could not be compared with the newer build: {e}"
-                    ));
-                } else if !risky {
-                    said.push_str(" None of its changes hide a file the newer build changes.");
-                } else {
-                    if u.packages {
-                        said.push_str(
-                            " Packages have been installed in it, whose database would hide the newer one.",
-                        );
-                    }
-                    if count > 0 {
-                        said.push_str(&format!(
-                            " {count} file{} it has changed would hide the newer build's.",
-                            if count == 1 { "" } else { "s" }
-                        ));
-                    }
-                }
-                let force = risky || u.error.is_some();
-                image = image
-                    .child(note(&said, p))
-                    .when(risky && !u.conflicts.is_empty(), |d| {
-                        let mut list = u.conflicts.clone();
-                        if u.more_conflicts > 0 {
-                            list.push(format!("and {} more", u.more_conflicts));
-                        }
-                        d.child(
-                            div()
-                                .max_w(px(560.))
-                                .text_size(px(11.))
-                                .font_family(crate::diff::mono())
-                                .text_color(p.muted)
-                                .child(list.join("\n")),
-                        )
-                    })
-                    .child(h_flex().child(act(
-                        "env-image-upgrade",
-                        if force {
-                            "Upgrade Anyway"
-                        } else {
-                            "Upgrade at Next Start"
-                        },
-                        "upgrade",
-                        force,
-                        stopped && u.checked,
-                    )));
-            }
+            image = image
+                .child(note(&b.text, p))
+                .when(!b.files.is_empty(), |d| {
+                    d.child(
+                        div()
+                            .max_w(px(560.))
+                            .text_size(px(11.))
+                            .font_family(crate::diff::mono())
+                            .text_color(p.muted)
+                            .children(b.files.iter().map(|f| div().child(f.clone()))),
+                    )
+                })
+                .child(acts);
         }
         let changed = &d.template_changes;
         v_flex()

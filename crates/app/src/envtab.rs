@@ -351,6 +351,9 @@ pub struct EnvTab {
     pending_compare: Option<crate::branches::CompareBranch>,
     /// The desktop, asked for from a menu, to open as the tab is next drawn.
     pending_desktop: bool,
+    /// The banners put away, by key, and the one whose files are listed.
+    dismissed: std::collections::HashSet<String>,
+    banner_files: Option<String>,
     /// The Project, Commit and Git windows, made when each is first shown.
     project: Option<Entity<ProjectView>>,
     /// The Filesystem window's tree: the machine's files.
@@ -629,6 +632,8 @@ impl EnvTab {
             focus_commit: false,
             pending_compare: None,
             pending_desktop: false,
+            dismissed: Default::default(),
+            banner_files: None,
             project: None,
             filesystem: None,
             commit: None,
@@ -3353,6 +3358,7 @@ impl Render for EnvTab {
                 cx.listener(|t, _: &crate::docedit::Reformat, window, cx| t.reformat(window, cx)),
             )
             .child(self.toolbar(&config, &env, &card, &p, cx))
+            .children(self.banners(&env, &p, cx))
             .child(
                 h_flex()
                     .flex_1()
@@ -3438,6 +3444,149 @@ impl Render for EnvTab {
 }
 
 impl EnvTab {
+    /// What needs deciding about the environment, as IntelliJ's editor
+    /// notifications: a strip each under the toolbar, its actions on the
+    /// right, put away with × where it may be.
+    fn banners(
+        &self,
+        env: &Environment,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        use crate::banners::{Tone, banners};
+        let mut out = vec![];
+        for (i, b) in banners(env).into_iter().enumerate() {
+            if self.dismissed.contains(&b.key) {
+                continue;
+            }
+            let (bg, line) = match b.tone {
+                Tone::Warn => (p.busy.opacity(0.12), p.busy.opacity(0.35)),
+                Tone::Info => (p.accent.opacity(0.08), p.border),
+            };
+            let shown = self.banner_files.as_deref() == Some(b.key.as_str());
+            let mut row = h_flex()
+                .id(SharedString::from(format!("env-banner-{i}")))
+                .debug_selector(move || format!("env-banner-{i}"))
+                .gap(px(12.))
+                .px(px(12.))
+                .py(px(5.))
+                .bg(bg)
+                .border_b_1()
+                .border_color(line)
+                .text_size(px(12.))
+                .child(div().flex_1().min_w_0().child(b.text.clone()));
+            if !b.files.is_empty() {
+                let key = b.key.clone();
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!("env-banner-files-{i}")))
+                        .text_color(p.accent)
+                        .cursor_pointer()
+                        .hover(|s| s.underline())
+                        .child(if shown { "Hide Files" } else { "Files…" })
+                        .on_click(cx.listener(move |t, _, _, cx| {
+                            t.banner_files = if t.banner_files.as_deref() == Some(key.as_str()) {
+                                None
+                            } else {
+                                Some(key.clone())
+                            };
+                            cx.notify();
+                        })),
+                );
+            }
+            for (j, a) in b.acts.iter().enumerate() {
+                let does = a.does;
+                let link = div()
+                    .id(SharedString::from(format!("env-banner-{i}-act-{j}")))
+                    .debug_selector(move || format!("env-banner-{i}-act-{j}"))
+                    .child(a.label)
+                    .when(!a.ready, |d| d.text_color(p.muted))
+                    .when_some(a.why.filter(|_| !a.ready), |d, why| {
+                        d.tooltip(move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(why).build(window, cx)
+                        })
+                    });
+                row = row.child(if a.ready {
+                    link.text_color(p.accent)
+                        .cursor_pointer()
+                        .hover(|s| s.underline())
+                        .on_click(
+                            cx.listener(move |t, _, window, cx| t.banner_act(does, window, cx)),
+                        )
+                } else {
+                    link
+                });
+            }
+            if b.dismissible {
+                let key = b.key.clone();
+                row = row.child(
+                    div()
+                        .id(SharedString::from(format!("env-banner-close-{i}")))
+                        .text_color(p.muted)
+                        .cursor_pointer()
+                        .hover(|s| s.text_color(p.text))
+                        .child("×")
+                        .on_click(cx.listener(move |t, _, _, cx| {
+                            t.dismissed.insert(key.clone());
+                            cx.notify();
+                        })),
+                );
+            }
+            out.push(row.into_any_element());
+            if shown {
+                out.push(
+                    div()
+                        .px(px(24.))
+                        .py(px(4.))
+                        .bg(bg)
+                        .border_b_1()
+                        .border_color(line)
+                        .text_size(px(11.))
+                        .font_family(crate::diff::mono())
+                        .text_color(p.muted)
+                        .children(b.files.iter().map(|f| div().child(f.clone())))
+                        .into_any_element(),
+                );
+            }
+        }
+        out
+    }
+
+    /// Does what a banner's action says: its image changed at once, or
+    /// reset to its template once asked.
+    fn banner_act(
+        &mut self,
+        does: crate::banners::Does,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::banners::Does;
+        let (places, place, id) = (self.places.clone(), self.place.clone(), self.env.clone());
+        match does {
+            Does::Image { change, force } => {
+                places.update(cx, |p, cx| p.change_image(&place, &id, change, force, cx))
+            }
+            Does::Reset => {
+                let name = self
+                    .places
+                    .read(cx)
+                    .get(&place)
+                    .and_then(|(_, s)| s.environment(&id).map(|e| e.name.clone()))
+                    .unwrap_or_default();
+                crate::treeops::confirm(
+                    &format!("Reset {name} to its template?"),
+                    "It takes its template's current settings; its disks and everything on them are kept.",
+                    "Reset",
+                    window,
+                    cx,
+                    move |_, cx| {
+                        places.update(cx, |p, cx| p.act(&place, &id, model::Action::Reset, cx))
+                    },
+                );
+            }
+        }
+    }
+
     /// The environment's ⋯ menu, as the design's toolbar has it: its
     /// settings, stopping it, its SSH command, resetting it to its
     /// template, the web UI's page, and deleting it; what cannot be taken

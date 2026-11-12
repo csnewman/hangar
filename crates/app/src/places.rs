@@ -317,6 +317,34 @@ impl Places {
         self.report(task, cx);
     }
 
+    /// Changes an environment's image -- upgrade, rollback, keep or cancel
+    /// -- and takes the environment as it then is.
+    pub fn change_image(
+        &mut self,
+        place: &str,
+        env: &str,
+        change: &'static str,
+        force: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(client) = self.client(place) else {
+            return;
+        };
+        let (place, env) = (place.to_string(), env.to_string());
+        let task = cx.background_spawn(async move { client.change_image(&env, change, force) });
+        cx.spawn(async move |this, cx| {
+            let got = task.await;
+            let _ = this.update(cx, |p: &mut Places, cx| match got {
+                Ok(e) => p.apply(&place, Update::Environment(Box::new(e)), cx),
+                Err(e) => {
+                    p.error = Some(e.to_string());
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     /// Sets an environment's task, or marks it done for an empty text.
     pub fn set_task(&mut self, place: &str, env: &str, text: &str, cx: &mut Context<Self>) {
         let Some(client) = self.client(place) else {

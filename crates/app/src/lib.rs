@@ -6,6 +6,7 @@ pub mod addfolder;
 pub mod addplace;
 pub mod api;
 pub mod assets;
+pub mod banners;
 pub mod blame;
 pub mod brackets;
 pub mod branch;
