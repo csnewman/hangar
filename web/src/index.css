@@ -1953,6 +1953,39 @@ code {
   margin: 6px 0 2px;
 }
 
+.login-card p {
+  margin: 0;
+}
+
+.login-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* The code an app signing in shows, to compare. */
+.connect-code {
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-align: center;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.connect-code-label {
+  margin-bottom: -6px;
+}
+
+.connect-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 /* Narrow screens: the sidebar goes above the page. */
 
 @media (max-width: 760px) {

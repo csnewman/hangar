@@ -1342,6 +1342,14 @@ type SSHKey struct {
 	PublicKey string `json:"public_key"`
 }
 
+// SignInRequest defines model for SignInRequest.
+type SignInRequest struct {
+	Code      string    `json:"code"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Name      string    `json:"name"`
+}
+
 // SignalProcess defines model for SignalProcess.
 type SignalProcess struct {
 	Signal SignalProcessSignal `json:"signal"`
@@ -1979,6 +1987,15 @@ type ServerInterface interface {
 
 	// (GET /api/frontend/people)
 	ListPeople(w http.ResponseWriter, r *http.Request)
+
+	// (GET /api/frontend/sign-in/{code})
+	GetSignIn(w http.ResponseWriter, r *http.Request, code string)
+
+	// (POST /api/frontend/sign-in/{code}/approve)
+	ApproveSignIn(w http.ResponseWriter, r *http.Request, code string)
+
+	// (POST /api/frontend/sign-in/{code}/refuse)
+	RefuseSignIn(w http.ResponseWriter, r *http.Request, code string)
 
 	// (GET /api/frontend/teams)
 	ListTeams(w http.ResponseWriter, r *http.Request)
@@ -3633,6 +3650,84 @@ func (siw *ServerInterfaceWrapper) ListPeople(w http.ResponseWriter, r *http.Req
 	handler.ServeHTTP(w, r)
 }
 
+// GetSignIn operation middleware
+func (siw *ServerInterfaceWrapper) GetSignIn(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "code" -------------
+	var code string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "code", r.PathValue("code"), &code, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "code", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSignIn(w, r, code)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ApproveSignIn operation middleware
+func (siw *ServerInterfaceWrapper) ApproveSignIn(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "code" -------------
+	var code string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "code", r.PathValue("code"), &code, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "code", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ApproveSignIn(w, r, code)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RefuseSignIn operation middleware
+func (siw *ServerInterfaceWrapper) RefuseSignIn(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "code" -------------
+	var code string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "code", r.PathValue("code"), &code, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "code", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RefuseSignIn(w, r, code)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListTeams operation middleware
 func (siw *ServerInterfaceWrapper) ListTeams(w http.ResponseWriter, r *http.Request) {
 
@@ -4349,6 +4444,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/tokens", wrapper.ListTokens)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/me/tokens", wrapper.CreateToken)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/frontend/me/tokens/{id}", wrapper.RevokeToken)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/sign-in/{code}", wrapper.GetSignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/sign-in/{code}/approve", wrapper.ApproveSignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/sign-in/{code}/refuse", wrapper.RefuseSignIn)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/me/profile", wrapper.GetProfile)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/frontend/packs", wrapper.ListPacks)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/frontend/packs", wrapper.CreatePack)
@@ -8073,6 +8171,144 @@ func (response ListPeople401JSONResponse) VisitListPeopleResponse(w http.Respons
 	return err
 }
 
+type GetSignInRequestObject struct {
+	Code string `json:"code"`
+}
+
+type GetSignInResponseObject interface {
+	VisitGetSignInResponse(w http.ResponseWriter) error
+}
+
+type GetSignIn200JSONResponse SignInRequest
+
+func (response GetSignIn200JSONResponse) VisitGetSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSignIn401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GetSignIn401JSONResponse) VisitGetSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSignIn404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSignIn404JSONResponse) VisitGetSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveSignInRequestObject struct {
+	Code string `json:"code"`
+}
+
+type ApproveSignInResponseObject interface {
+	VisitApproveSignInResponse(w http.ResponseWriter) error
+}
+
+type ApproveSignIn204Response struct {
+}
+
+func (response ApproveSignIn204Response) VisitApproveSignInResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type ApproveSignIn401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ApproveSignIn401JSONResponse) VisitApproveSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ApproveSignIn404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ApproveSignIn404JSONResponse) VisitApproveSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefuseSignInRequestObject struct {
+	Code string `json:"code"`
+}
+
+type RefuseSignInResponseObject interface {
+	VisitRefuseSignInResponse(w http.ResponseWriter) error
+}
+
+type RefuseSignIn204Response struct {
+}
+
+func (response RefuseSignIn204Response) VisitRefuseSignInResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RefuseSignIn401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RefuseSignIn401JSONResponse) VisitRefuseSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RefuseSignIn404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RefuseSignIn404JSONResponse) VisitRefuseSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListTeamsRequestObject struct {
 }
 
@@ -9905,6 +10141,15 @@ type StrictServerInterface interface {
 
 	// (GET /api/frontend/people)
 	ListPeople(ctx context.Context, request ListPeopleRequestObject) (ListPeopleResponseObject, error)
+
+	// (GET /api/frontend/sign-in/{code})
+	GetSignIn(ctx context.Context, request GetSignInRequestObject) (GetSignInResponseObject, error)
+
+	// (POST /api/frontend/sign-in/{code}/approve)
+	ApproveSignIn(ctx context.Context, request ApproveSignInRequestObject) (ApproveSignInResponseObject, error)
+
+	// (POST /api/frontend/sign-in/{code}/refuse)
+	RefuseSignIn(ctx context.Context, request RefuseSignInRequestObject) (RefuseSignInResponseObject, error)
 
 	// (GET /api/frontend/teams)
 	ListTeams(ctx context.Context, request ListTeamsRequestObject) (ListTeamsResponseObject, error)
@@ -11743,6 +11988,84 @@ func (sh *strictHandler) ListPeople(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ListPeopleResponseObject); ok {
 		if err := validResponse.VisitListPeopleResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSignIn operation middleware
+func (sh *strictHandler) GetSignIn(w http.ResponseWriter, r *http.Request, code string) {
+	var request GetSignInRequestObject
+
+	request.Code = code
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSignIn(ctx, request.(GetSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSignInResponseObject); ok {
+		if err := validResponse.VisitGetSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ApproveSignIn operation middleware
+func (sh *strictHandler) ApproveSignIn(w http.ResponseWriter, r *http.Request, code string) {
+	var request ApproveSignInRequestObject
+
+	request.Code = code
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ApproveSignIn(ctx, request.(ApproveSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ApproveSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ApproveSignInResponseObject); ok {
+		if err := validResponse.VisitApproveSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RefuseSignIn operation middleware
+func (sh *strictHandler) RefuseSignIn(w http.ResponseWriter, r *http.Request, code string) {
+	var request RefuseSignInRequestObject
+
+	request.Code = code
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RefuseSignIn(ctx, request.(RefuseSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RefuseSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RefuseSignInResponseObject); ok {
+		if err := validResponse.VisitRefuseSignInResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

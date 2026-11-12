@@ -184,7 +184,8 @@ func safe(r *http.Request) bool {
 // signedIn refuses every operation but the version to a request from nobody.
 func signedIn(next StrictHandlerFunc, operation string) StrictHandlerFunc {
 	return func(ctx context.Context, w http.ResponseWriter, r *http.Request, request any) (any, error) {
-		if operation != "GetVersion" {
+		// Asking the version, and an app signing in, come before any token.
+		if operation != "GetVersion" && operation != "StartSignIn" && operation != "FinishSignIn" {
 			if _, ok := ctx.Value(principalKey{}).(users.Principal); !ok {
 				return nil, errUnauthorized
 			}

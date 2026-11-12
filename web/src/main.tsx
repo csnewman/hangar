@@ -18,6 +18,7 @@ import { UsersPage } from './pages/admin/Users'
 import { WorkersPage } from './pages/admin/Workers'
 import { EnvironmentPage, SummaryTab } from './pages/Environment'
 import { LoginPage } from './pages/Login'
+import { ConnectDesktopPage } from './pages/ConnectDesktop'
 import { MorePage } from './pages/More'
 import { LogsTab } from './pages/LogsTab'
 import { WorkerDetailPage } from './pages/admin/WorkerDetail'
@@ -66,6 +67,7 @@ const router = createBrowserRouter([
   {
     element: <RequireAuth />,
     children: [
+      { path: 'connect/desktop', element: <ConnectDesktopPage /> },
       {
         element: <Shell />,
         children: [

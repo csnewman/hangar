@@ -84,6 +84,57 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Version" }
 
+  /sign-in:
+    post:
+      operationId: startSignIn
+      security: []
+      summary: >-
+        Begin signing an app in through the browser: the app shows the code,
+        opens verification_path on this server, where the person signs in
+        and approves it, and collects its token from /sign-in/token.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartSignIn" }
+      responses:
+        "201":
+          description: The grant to wait on.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignInGrant" }
+        "400": { $ref: "#/components/responses/Invalid" }
+
+  /sign-in/token:
+    post:
+      operationId: finishSignIn
+      security: []
+      summary: >-
+        Collect the access token an approved grant makes, once. 202 while it
+        waits to be approved: ask again after the grant's interval.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FinishSignIn" }
+      responses:
+        "200":
+          description: Approved; the token, shown this once.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignInToken" }
+        "202":
+          description: Not yet approved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "403":
+          description: The person refused it.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /me:
     get:
       operationId: getMe
@@ -712,6 +763,45 @@ components:
         name:
           type: string
           description: Absent takes the key's own comment.
+
+    StartSignIn:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          description: What the app calls itself, which the person approving it sees and its token is named.
+
+    SignInGrant:
+      type: object
+      required: [device_code, user_code, verification_path, expires_at, interval]
+      properties:
+        device_code:
+          type: string
+          description: The app's secret, to collect the token with.
+        user_code:
+          type: string
+          description: XXXX-XXXX, shown by the app for the person to compare, or type if their browser asks.
+        verification_path:
+          type: string
+          description: Where on this server the person approves it, the code in it.
+        expires_at: { type: string, format: date-time }
+        interval:
+          type: integer
+          description: Seconds between asks for the token.
+
+    FinishSignIn:
+      type: object
+      required: [device_code]
+      properties:
+        device_code: { type: string }
+
+    SignInToken:
+      type: object
+      required: [token, name]
+      properties:
+        token: { type: string }
+        name: { type: string }
 
     ImageUpdate:
       type: object

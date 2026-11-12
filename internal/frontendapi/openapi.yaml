@@ -140,6 +140,46 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/frontend/sign-in/{code}:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    get:
+      operationId: getSignIn
+      description: >-
+        An app waiting to sign in as the person, under the code it shows: the
+        page approving it reads what the app calls itself.
+      responses:
+        "200":
+          description: The app waiting.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignInRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/sign-in/{code}/approve:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: approveSignIn
+      description: Let the app waiting under the code sign in as the person, with an access token of its own.
+      responses:
+        "204":
+          description: Approved; the app collects its token.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/frontend/sign-in/{code}/refuse:
+    parameters:
+      - { name: code, in: path, required: true, schema: { type: string } }
+    post:
+      operationId: refuseSignIn
+      responses:
+        "204":
+          description: Refused; the app is told so.
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /api/frontend/me/profile:
     get:
       operationId: getProfile
@@ -1709,6 +1749,15 @@ components:
         public_key:
           type: string
           description: In authorized_keys form, as in ~/.ssh/id_ed25519.pub.
+
+    SignInRequest:
+      type: object
+      required: [code, name, created_at, expires_at]
+      properties:
+        code: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
 
     AccessToken:
       type: object

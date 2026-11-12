@@ -227,6 +227,11 @@ type Error struct {
 	Error string `json:"error"`
 }
 
+// FinishSignIn defines model for FinishSignIn.
+type FinishSignIn struct {
+	DeviceCode string `json:"device_code"`
+}
+
 // GenerateSSHKey defines model for GenerateSSHKey.
 type GenerateSSHKey struct {
 	Name string `json:"name"`
@@ -328,6 +333,28 @@ type SetTask struct {
 	Text string `json:"text"`
 }
 
+// SignInGrant defines model for SignInGrant.
+type SignInGrant struct {
+	// DeviceCode The app's secret, to collect the token with.
+	DeviceCode string    `json:"device_code"`
+	ExpiresAt  time.Time `json:"expires_at"`
+
+	// Interval Seconds between asks for the token.
+	Interval int `json:"interval"`
+
+	// UserCode XXXX-XXXX, shown by the app for the person to compare, or type if their browser asks.
+	UserCode string `json:"user_code"`
+
+	// VerificationPath Where on this server the person approves it, the code in it.
+	VerificationPath string `json:"verification_path"`
+}
+
+// SignInToken defines model for SignInToken.
+type SignInToken struct {
+	Name  string `json:"name"`
+	Token string `json:"token"`
+}
+
 // StartProgress How far a start has got: its step -- download, unpack, disks, boot, network, profile, workspace, in that order, more may come -- and, where the step can be measured, done of total in unit (bytes or objects), at rate a second lately.
 type StartProgress struct {
 	Done  *int64   `json:"done,omitempty"`
@@ -335,6 +362,12 @@ type StartProgress struct {
 	Step  string   `json:"step"`
 	Total *int64   `json:"total,omitempty"`
 	Unit  *string  `json:"unit,omitempty"`
+}
+
+// StartSignIn defines model for StartSignIn.
+type StartSignIn struct {
+	// Name What the app calls itself, which the person approving it sees and its token is named.
+	Name string `json:"name"`
 }
 
 // Task What an environment is for: a line its coding agent sets as it works, or its owner does.
@@ -439,6 +472,12 @@ type AddLoginKeyJSONRequestBody = AddLoginKey
 // GenerateSSHKeyJSONRequestBody defines body for GenerateSSHKey for application/json ContentType.
 type GenerateSSHKeyJSONRequestBody = GenerateSSHKey
 
+// StartSignInJSONRequestBody defines body for StartSignIn for application/json ContentType.
+type StartSignInJSONRequestBody = StartSignIn
+
+// FinishSignInJSONRequestBody defines body for FinishSignIn for application/json ContentType.
+type FinishSignInJSONRequestBody = FinishSignIn
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListEnvironments Every environment the user can reach, oldest first
@@ -528,6 +567,12 @@ type ServerInterface interface {
 	// RevokeToken End one of the user's access tokens
 	// (DELETE /me/tokens/{id})
 	RevokeToken(w http.ResponseWriter, r *http.Request, id string)
+	// StartSignIn Begin signing an app in through the browser: the app shows the code, opens verification_path on this server, where the person signs in and approves it, and collects its token from /sign-in/token.
+	// (POST /sign-in)
+	StartSignIn(w http.ResponseWriter, r *http.Request)
+	// FinishSignIn Collect the access token an approved grant makes, once. 202 while it waits to be approved: ask again after the grant's interval.
+	// (POST /sign-in/token)
+	FinishSignIn(w http.ResponseWriter, r *http.Request)
 	// GetVersion Which versions of this API the server serves, and its build
 	// (GET /version)
 	GetVersion(w http.ResponseWriter, r *http.Request)
@@ -1281,6 +1326,34 @@ func (siw *ServerInterfaceWrapper) RevokeToken(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// StartSignIn operation middleware
+func (siw *ServerInterfaceWrapper) StartSignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartSignIn(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// FinishSignIn operation middleware
+func (siw *ServerInterfaceWrapper) FinishSignIn(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.FinishSignIn(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetVersion operation middleware
 func (siw *ServerInterfaceWrapper) GetVersion(w http.ResponseWriter, r *http.Request) {
 
@@ -1416,6 +1489,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	}
 
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/version", wrapper.GetVersion)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/sign-in", wrapper.StartSignIn)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/sign-in/token", wrapper.FinishSignIn)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me/login-keys", wrapper.ListLoginKeys)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/me/login-keys", wrapper.AddLoginKey)
@@ -3086,6 +3161,106 @@ func (response RevokeToken404JSONResponse) VisitRevokeTokenResponse(w http.Respo
 	return err
 }
 
+type StartSignInRequestObject struct {
+	Body *StartSignInJSONRequestBody
+}
+
+type StartSignInResponseObject interface {
+	VisitStartSignInResponse(w http.ResponseWriter) error
+}
+
+type StartSignIn201JSONResponse SignInGrant
+
+func (response StartSignIn201JSONResponse) VisitStartSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type StartSignIn400JSONResponse struct{ InvalidJSONResponse }
+
+func (response StartSignIn400JSONResponse) VisitStartSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishSignInRequestObject struct {
+	Body *FinishSignInJSONRequestBody
+}
+
+type FinishSignInResponseObject interface {
+	VisitFinishSignInResponse(w http.ResponseWriter) error
+}
+
+type FinishSignIn200JSONResponse SignInToken
+
+func (response FinishSignIn200JSONResponse) VisitFinishSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishSignIn202JSONResponse Error
+
+func (response FinishSignIn202JSONResponse) VisitFinishSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishSignIn403JSONResponse Error
+
+func (response FinishSignIn403JSONResponse) VisitFinishSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type FinishSignIn404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response FinishSignIn404JSONResponse) VisitFinishSignInResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetVersionRequestObject struct {
 }
 
@@ -3196,6 +3371,12 @@ type StrictServerInterface interface {
 	// RevokeToken End one of the user's access tokens
 	// (DELETE /me/tokens/{id})
 	RevokeToken(ctx context.Context, request RevokeTokenRequestObject) (RevokeTokenResponseObject, error)
+	// StartSignIn Begin signing an app in through the browser: the app shows the code, opens verification_path on this server, where the person signs in and approves it, and collects its token from /sign-in/token.
+	// (POST /sign-in)
+	StartSignIn(ctx context.Context, request StartSignInRequestObject) (StartSignInResponseObject, error)
+	// FinishSignIn Collect the access token an approved grant makes, once. 202 while it waits to be approved: ask again after the grant's interval.
+	// (POST /sign-in/token)
+	FinishSignIn(ctx context.Context, request FinishSignInRequestObject) (FinishSignInResponseObject, error)
 	// GetVersion Which versions of this API the server serves, and its build
 	// (GET /version)
 	GetVersion(ctx context.Context, request GetVersionRequestObject) (GetVersionResponseObject, error)
@@ -4019,6 +4200,68 @@ func (sh *strictHandler) RevokeToken(w http.ResponseWriter, r *http.Request, id 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(RevokeTokenResponseObject); ok {
 		if err := validResponse.VisitRevokeTokenResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// StartSignIn operation middleware
+func (sh *strictHandler) StartSignIn(w http.ResponseWriter, r *http.Request) {
+	var request StartSignInRequestObject
+
+	var body StartSignInJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.StartSignIn(ctx, request.(StartSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "StartSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(StartSignInResponseObject); ok {
+		if err := validResponse.VisitStartSignInResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// FinishSignIn operation middleware
+func (sh *strictHandler) FinishSignIn(w http.ResponseWriter, r *http.Request) {
+	var request FinishSignInRequestObject
+
+	var body FinishSignInJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.FinishSignIn(ctx, request.(FinishSignInRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "FinishSignIn")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(FinishSignInResponseObject); ok {
+		if err := validResponse.VisitFinishSignInResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

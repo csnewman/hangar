@@ -36,6 +36,18 @@ func (m *Manager) CreateToken(ctx context.Context, userID, name string, lifetime
 	if name == "" || len(name) > 100 {
 		return "", Token{}, fmt.Errorf("%w: a token needs a name of up to 100 characters", ErrInvalid)
 	}
+	var token string
+	var t Token
+	err := m.db.Transact(ctx, func(tx db.Tx) error {
+		var err error
+		token, t, err = createToken(ctx, tx, userID, name, lifetime)
+		return err
+	})
+	return token, t, err
+}
+
+// createToken makes an access token in tx.
+func createToken(ctx context.Context, tx db.Tx, userID, name string, lifetime time.Duration) (string, Token, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return "", Token{}, err
@@ -48,15 +60,13 @@ func (m *Manager) CreateToken(ctx context.Context, userID, name string, lifetime
 		expires = &e
 	}
 	t := Token{Name: name, ExpiresAt: expires}
-	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		if err := tx.QueryRow(ctx, `INSERT INTO access_tokens (user_id, name, token_hash, expires_at)
-			VALUES ($1, $2, $3, $4) RETURNING id, created_at`, userID, name, sum[:], expires).Scan(&t.ID, &t.CreatedAt); err != nil {
-			return err
-		}
-		return audit.Record(ctx, tx, audit.Event{Action: "token.create",
-			Target:  audit.Ref{Type: "token", ID: t.ID, Name: name},
-			Related: []audit.Ref{{Type: audit.KindUser, ID: userID}, {Type: audit.KindOwner, ID: userID}}})
-	})
+	if err := tx.QueryRow(ctx, `INSERT INTO access_tokens (user_id, name, token_hash, expires_at)
+		VALUES ($1, $2, $3, $4) RETURNING id, created_at`, userID, name, sum[:], expires).Scan(&t.ID, &t.CreatedAt); err != nil {
+		return "", Token{}, err
+	}
+	err := audit.Record(ctx, tx, audit.Event{Action: "token.create",
+		Target:  audit.Ref{Type: "token", ID: t.ID, Name: name},
+		Related: []audit.Ref{{Type: audit.KindUser, ID: userID}, {Type: audit.KindOwner, ID: userID}}})
 	return token, t, err
 }
 

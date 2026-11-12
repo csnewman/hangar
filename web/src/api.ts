@@ -152,6 +152,11 @@ export const api = {
   createToken: (name: string, expires_in_days?: number) =>
     unwrap(client.POST('/api/frontend/me/tokens', { body: { name, expires_in_days } })),
   revokeToken: (id: string) => unwrap(client.DELETE('/api/frontend/me/tokens/{id}', byID(id))),
+  signIn: (code: string) => unwrap(client.GET('/api/frontend/sign-in/{code}', { params: { path: { code } } })),
+  approveSignIn: (code: string) =>
+    unwrap(client.POST('/api/frontend/sign-in/{code}/approve', { params: { path: { code } } })),
+  refuseSignIn: (code: string) =>
+    unwrap(client.POST('/api/frontend/sign-in/{code}/refuse', { params: { path: { code } } })),
 
   environments: () => unwrap(client.GET('/api/frontend/environments')),
   createEnvironment: (body: CreateEnvironment) => unwrap(client.POST('/api/frontend/environments', { body })),
