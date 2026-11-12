@@ -2521,6 +2521,29 @@ impl EnvTab {
         let editor = env.editor_path.clone().unwrap_or_default();
         let ws = cx.new(|cx| Workspace::new(places, &place, &id, &editor, cx));
         self.workspace = Some(ws.clone());
+        // Spelling, as the person's Code settings say, for every editor.
+        self.subs
+            .push(cx.subscribe(&ws, |_, _, e: &crate::workspace::Event, cx| {
+                if let crate::workspace::Event::Heard {
+                    root,
+                    event,
+                    params,
+                } = e
+                    && root == crate::workspace::PRIMARY
+                    && event == "settings.changed"
+                {
+                    crate::spell::take_settings(params, cx);
+                }
+            }));
+        if let Some(code) = ws.read(cx).primary() {
+            let get = code.call("settings.get", serde_json::json!({}));
+            cx.spawn(async move |_, cx| {
+                if let Ok(s) = get.await {
+                    cx.update(|cx| crate::spell::take_settings(&s, cx));
+                }
+            })
+            .detach();
+        }
         let branches = cx.new(|cx| crate::branches::BranchWidget::new(ws.clone(), cx));
         self.subs.push(
             cx.subscribe(&branches, |t, _, _: &crate::branches::OpenCommit, cx| {

@@ -388,8 +388,24 @@ gpui::actions!(
         PreviousProblem,
         RollbackChange,
         StageChange,
+        ToggleSpelling,
     ]
 );
+
+/// Replaces the misspelt word at the caret with a suggestion.
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(namespace = doc_editor, no_json)]
+pub struct UseSpelling {
+    pub word: String,
+    pub with: String,
+}
+
+/// Saves the word at the caret to the person's dictionary.
+#[derive(Clone, PartialEq, gpui::Action)]
+#[action(namespace = doc_editor, no_json)]
+pub struct SaveWord {
+    pub word: String,
+}
 
 /// The editor's keys for IntelliJ's line commands, in a file's editor only
 /// (other text fields keep their own), bound after gpui-component's so they
@@ -529,15 +545,39 @@ pub fn code_editor(state: &Entity<EditorState>) -> Editor {
 /// The editor's menu, as IntelliJ's: going to and renaming the symbol at
 /// the caret, reformatting and commenting, the clipboard, and soft wrap.
 /// Each item names its action, so the menu shows its key.
+#[allow(clippy::too_many_arguments)]
 fn editor_menu(
     menu: gpui_component::native_menu::NativeMenu,
     comment: bool,
     wrap: bool,
     blame: bool,
     change: bool,
+    typo: Option<(String, Vec<String>)>,
+    spelling: bool,
     _: &App,
 ) -> gpui_component::native_menu::NativeMenu {
     use gpui_component::input::{Copy, Cut, GoToDefinition, Paste, SelectAll};
+    // A misspelt word's fixes first, as IntelliJ offers them.
+    let menu = match typo {
+        Some((word, suggestions)) => {
+            let mut menu = menu;
+            for with in suggestions {
+                menu = menu.menu(
+                    format!("Change to “{with}”"),
+                    Box::new(UseSpelling {
+                        word: word.clone(),
+                        with,
+                    }),
+                );
+            }
+            menu.menu(
+                format!("Save “{word}” to Dictionary"),
+                Box::new(SaveWord { word }),
+            )
+            .separator()
+        }
+        None => menu,
+    };
     menu.menu("Go to Definition", Box::new(GoToDefinition))
         .menu("Find Usages", Box::new(crate::envtab::FindUsages))
         .menu("Rename…", Box::new(crate::envtab::RenameSymbol))
@@ -553,6 +593,7 @@ fn editor_menu(
         .separator()
         .menu_with_check("Soft-Wrap", wrap, Box::new(ToggleSoftWrap))
         .menu_with_check("Annotate with Git Blame", blame, Box::new(ToggleBlame))
+        .menu_with_check("Check Spelling", spelling, Box::new(ToggleSpelling))
         .separator()
         .menu_with_disabled("Rollback Change", !change, Box::new(RollbackChange))
         .menu_with_disabled("Stage Change", !change, Box::new(StageChange))
@@ -599,6 +640,14 @@ pub struct DocEditor {
     /// Where to put the cursor once the file is open: 0-based line and
     /// UTF-16 column.
     go_to: Option<(u32, u32)>,
+    /// The words misspelt, by their byte ranges as the text was when they
+    /// were found; whether the text has been checked since it changed, and
+    /// with which version of the person's own words; and how many checks
+    /// have been asked, so only the last is shown.
+    typos: Vec<(std::ops::Range<usize>, String)>,
+    spelt: bool,
+    spell_seen: u64,
+    spell_asked: u64,
     /// Whether the server's actions are listed once the cursor is put
     /// there, for the Problems window's Show Quick Fixes.
     fix: bool,
@@ -739,6 +788,10 @@ impl DocEditor {
             writable: false,
             state: State::Opening,
             go_to: None,
+            typos: Vec::new(),
+            spelt: false,
+            spell_seen: 0,
+            spell_asked: 0,
             fix: false,
             drawn: false,
             wrapped: None,
@@ -2263,15 +2316,119 @@ impl DocEditor {
     }
 
     fn show_diagnostics(&mut self, cx: &mut Context<Self>) {
-        let d = self.diagnostics.clone();
+        use gpui_component::RopeExt as _;
+        let mut d = self.diagnostics.clone();
+        let typos = self.typos.clone();
         self.editor.update(cx, |e, cx| {
             let text = e.text().clone();
+            d.extend(
+                typos
+                    .iter()
+                    .filter(|(r, _)| r.end <= text.len())
+                    .map(|(r, w)| lsp_types::Diagnostic {
+                        range: lsp_types::Range {
+                            start: text.offset_to_position(r.start),
+                            end: text.offset_to_position(r.end),
+                        },
+                        severity: Some(lsp_types::DiagnosticSeverity::INFORMATION),
+                        source: Some("spelling".into()),
+                        message: format!("Typo: “{w}” is not in the dictionary"),
+                        ..Default::default()
+                    }),
+            );
             if let Some(set) = e.diagnostics_mut() {
                 set.reset(&text);
                 set.extend(d);
             }
             cx.notify();
         });
+    }
+
+    /// Checks the text's spelling once typing pauses, in the background:
+    /// what the file's kind says is prose, against the dictionary and the
+    /// person's own words. A file of no kind the editor knows is left be,
+    /// but a .txt.
+    fn check_spelling(&mut self, own: crate::spell::Own, cx: &mut Context<Self>) {
+        self.spell_asked += 1;
+        let asked = self.spell_asked;
+        let lang = match language(&self.path) {
+            "text" if self.path.ends_with(".txt") => Some("text"),
+            "text" => None,
+            l => Some(l),
+        };
+        let Some(lang) = lang.filter(|_| own.on) else {
+            if !self.typos.is_empty() {
+                self.typos.clear();
+                self.show_diagnostics(cx);
+            }
+            return;
+        };
+        let text = self.editor.read(cx).text().to_string();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(300))
+                .await;
+            if this
+                .update(cx, |d, _| d.spell_asked != asked)
+                .unwrap_or(true)
+            {
+                return;
+            }
+            let found = cx
+                .background_executor()
+                .spawn(async move {
+                    let stretches = crate::spell::stretches(&text, lang);
+                    crate::spell::misspelt(&text, &stretches, &own.words)
+                        .into_iter()
+                        .map(|r| (r.clone(), text[r].to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+            let _ = this.update(cx, |d, cx| {
+                if d.spell_asked == asked {
+                    d.typos = found;
+                    d.show_diagnostics(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The misspelt word the caret is in, and what it may have been meant
+    /// as.
+    fn typo_at_caret(&self, cx: &App) -> Option<(String, Vec<String>)> {
+        let caret = self.editor.read(cx).cursor();
+        let (_, word) = self
+            .typos
+            .iter()
+            .find(|(r, _)| r.start <= caret && caret <= r.end)?;
+        Some((word.clone(), crate::spell::Dictionary::get().suggest(word)))
+    }
+
+    /// Puts a suggestion in the misspelt word's place at the caret.
+    fn use_spelling(&mut self, a: &UseSpelling, window: &mut Window, cx: &mut Context<Self>) {
+        use gpui_component::RopeExt as _;
+        let caret = self.editor.read(cx).cursor();
+        let Some((r, _)) = self
+            .typos
+            .iter()
+            .find(|(r, w)| r.start <= caret && caret <= r.end && *w == a.word)
+            .cloned()
+        else {
+            return;
+        };
+        let text = self.editor.read(cx).text().clone();
+        if r.end > text.len() {
+            return;
+        }
+        let edit = lsp_types::TextEdit {
+            range: lsp_types::Range {
+                start: text.offset_to_position(r.start),
+                end: text.offset_to_position(r.end),
+            },
+            new_text: a.with.clone(),
+        };
+        self.make_edits(&[edit], window, cx);
     }
 
     /// Puts the cursor at a 0-based line and UTF-16 column, once the file
@@ -2374,6 +2531,7 @@ impl DocEditor {
 
     /// Takes what the user typed, to send and to undo.
     fn typed(&mut self, e: &InputEditsEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.spelt = false;
         let now = Instant::now();
         let mut inserted = None;
         for (edit, after) in e.edits() {
@@ -2481,6 +2639,7 @@ impl DocEditor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.spelt = false;
         let before = self.shadow.clone();
         let sel = self.editor.read(cx).selected_range();
         let sel16 = before.byte_to_utf16_idx(sel.start.min(before.len()))
@@ -2774,6 +2933,17 @@ impl Render for DocEditor {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
         if self.state == State::Open {
+            let own = cx
+                .try_global::<crate::spell::Own>()
+                .cloned()
+                .unwrap_or_default();
+            if !self.spelt || own.version != self.spell_seen {
+                self.spelt = true;
+                self.spell_seen = own.version;
+                self.check_spelling(own, cx);
+            }
+        }
+        if self.state == State::Open {
             if !self.drawn {
                 self.drawn = true;
                 if self.go_to.is_some() {
@@ -2842,6 +3012,18 @@ impl Render for DocEditor {
                 let on = d.blame.is_none();
                 d.set_blame(on, cx)
             }))
+            .on_action(cx.listener(|d, a: &UseSpelling, window, cx| d.use_spelling(a, window, cx)))
+            .on_action(cx.listener(|d, a: &SaveWord, _, cx| {
+                crate::spell::save_word(d.code.clone(), a.word.clone(), cx)
+            }))
+            .on_action(cx.listener(|d, _: &ToggleSpelling, _, cx| {
+                let on = cx.try_global::<crate::spell::Own>().is_none_or(|o| o.on);
+                crate::spell::change_settings(
+                    d.code.clone(),
+                    move |s| s["spellcheck"] = serde_json::Value::Bool(!on),
+                    cx,
+                )
+            }))
             .on_action(cx.listener(|d, _: &ParameterInfo, _, cx| {
                 d.ask_signatures(crate::sighelp::Ask::Invoked, Duration::ZERO, cx)
             }))
@@ -2895,8 +3077,14 @@ impl Render for DocEditor {
                         !self.writable
                             || !matches!(self.state, State::Open | State::Reconnecting(_)),
                     )
-                    .context_menu(move |menu, _, cx| {
-                        editor_menu(menu, comment, wrap, blamed, change, cx)
+                    .context_menu({
+                        let me = cx.entity().downgrade();
+                        move |menu, _, cx| {
+                            let typo = me.upgrade().and_then(|d| d.read(cx).typo_at_caret(cx));
+                            let spelling =
+                                cx.try_global::<crate::spell::Own>().is_none_or(|o| o.on);
+                            editor_menu(menu, comment, wrap, blamed, change, typo, spelling, cx)
+                        }
                     });
                 match self.preview {
                     None if blamed => h_flex()

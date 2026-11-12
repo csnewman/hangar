@@ -49,6 +49,7 @@ pub mod search;
 pub mod settings;
 pub mod shell;
 pub mod sighelp;
+pub mod spell;
 pub mod store;
 pub mod structure;
 pub mod table;
