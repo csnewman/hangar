@@ -91,6 +91,83 @@ pub struct Environment {
     pub updated_at: DateTime<Utc>,
 }
 
+/// What a running environment uses, as its worker last measured.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize)]
+#[serde(default)]
+pub struct Stats {
+    /// Of its own vCPUs: 100 is all of them busy.
+    pub cpu_percent: f64,
+    pub memory_used_mib: i64,
+    pub memory_total_mib: i64,
+    pub memory_cached_mib: i64,
+    pub host_memory_mib: i64,
+    pub swap_total_mib: i64,
+    pub swap_used_mib: i64,
+    pub disk_used_bytes: i64,
+    pub disk_read_bps: f64,
+    pub disk_write_bps: f64,
+    pub net_rx_bps: f64,
+    pub net_tx_bps: f64,
+}
+
+/// The processes in an environment, and what its machine has.
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default)]
+pub struct ProcessList {
+    pub cpus: i64,
+    pub memory_bytes: i64,
+    pub processes: Vec<Process>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
+#[serde(default)]
+pub struct Process {
+    pub pid: i64,
+    pub ppid: i64,
+    pub user: String,
+    pub name: String,
+    pub command: String,
+    /// As /proc gives it: R running, S sleeping, D waiting on I/O, Z a
+    /// zombie.
+    pub state: String,
+    /// Its share of one CPU: busy on two is 200.
+    pub cpu_percent: f64,
+    pub rss_bytes: i64,
+    pub threads: i64,
+    pub started: Option<DateTime<Utc>>,
+    /// The guest's init or its agent, which cannot be stopped from here.
+    pub protected: bool,
+}
+
+/// Something done to an environment, from the audit log.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ActivityEvent {
+    pub id: i64,
+    pub at: DateTime<Utc>,
+    pub actor: Actor,
+    pub action: String,
+    pub target: Target,
+    #[serde(default)]
+    pub details: serde_json::Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Actor {
+    /// user, worker or system; more may come.
+    pub kind: String,
+    #[serde(default)]
+    pub id: Option<String>,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Target {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub id: String,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StartProgress {
     pub step: String,
@@ -312,6 +389,50 @@ impl Client {
         match offset {
             Some(o) => self.get(&format!("/environments/{id}/logs/{log}?offset={o}")),
             None => self.get(&format!("/environments/{id}/logs/{log}")),
+        }
+    }
+
+    /// What the environment uses, while it runs.
+    pub fn stats(&self, id: &str) -> Result<Option<Stats>, Error> {
+        let env: serde_json::Value = self.get(&format!("/environments/{id}"))?;
+        Ok(serde_json::from_value(env["stats"].clone()).ok())
+    }
+
+    /// The processes running in the environment, asked of it.
+    pub fn processes(&self, id: &str) -> Result<ProcessList, Error> {
+        self.get(&format!("/environments/{id}/processes"))
+    }
+
+    /// Stops a process: TERM asks it to, KILL forces it.
+    pub fn signal_process(&self, id: &str, pid: i64, signal: &str) -> Result<(), Error> {
+        let req = self
+            .agent
+            .post(format!(
+                "{}/environments/{id}/processes/{pid}/signal",
+                self.base
+            ))
+            .header("Authorization", self.auth())
+            .header("Content-Type", "application/json");
+        check(self.send(
+            req,
+            Some(serde_json::json!({ "signal": signal }).to_string()),
+        )?)
+        .map(|_| ())
+    }
+
+    /// What has been done to the environment, newest first: a page of it,
+    /// before an event's ID.
+    pub fn activity(
+        &self,
+        id: &str,
+        before: Option<i64>,
+        limit: usize,
+    ) -> Result<Vec<ActivityEvent>, Error> {
+        match before {
+            Some(b) => self.get(&format!(
+                "/environments/{id}/activity?before={b}&limit={limit}"
+            )),
+            None => self.get(&format!("/environments/{id}/activity?limit={limit}")),
         }
     }
 

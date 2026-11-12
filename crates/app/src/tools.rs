@@ -21,10 +21,11 @@ pub enum Tool {
     Log,
     Agents,
     Ports,
+    Performance,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 12] = [
+    pub const ALL: [Tool; 13] = [
         Tool::Project,
         Tool::Filesystem,
         Tool::Commit,
@@ -37,6 +38,7 @@ impl Tool {
         Tool::Log,
         Tool::Agents,
         Tool::Ports,
+        Tool::Performance,
     ];
 
     pub fn name(self) -> &'static str {
@@ -53,6 +55,7 @@ impl Tool {
             Tool::Log => "Log",
             Tool::Agents => "Agents",
             Tool::Ports => "Ports",
+            Tool::Performance => "Performance",
         }
     }
 
@@ -71,6 +74,7 @@ impl Tool {
             Tool::Log => "log",
             Tool::Agents => "agents",
             Tool::Ports => "ports",
+            Tool::Performance => "activity",
         }
     }
 

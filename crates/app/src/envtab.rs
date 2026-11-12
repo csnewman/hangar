@@ -49,7 +49,12 @@ impl Tool {
     fn needs_running(self) -> bool {
         matches!(
             self,
-            Tool::Git | Tool::Find | Tool::Problems | Tool::Docker | Tool::Ports
+            Tool::Git
+                | Tool::Find
+                | Tool::Problems
+                | Tool::Docker
+                | Tool::Ports
+                | Tool::Performance
         )
     }
 
@@ -68,6 +73,7 @@ impl Tool {
             Tool::Find => "Matches across the projects.",
             Tool::Log => "The environment's console and its services' logs.",
             Tool::Ports => "The ports the environment listens on, each with its address.",
+            Tool::Performance => "What the environment uses, its processes and its activity.",
             Tool::Agents => "",
         }
     }
@@ -351,6 +357,7 @@ pub struct EnvTab {
     git: Option<Entity<GitView>>,
     docker: Option<Entity<DockerView>>,
     logs: Option<Entity<LogsView>>,
+    performance: Option<Entity<crate::perf::PerformanceView>>,
     ports: Option<Entity<PortsView>>,
     find: Option<Entity<FindView>>,
     structure: Option<Entity<crate::structure::StructureView>>,
@@ -617,6 +624,7 @@ impl EnvTab {
             git: None,
             docker: None,
             logs: None,
+            performance: None,
             ports: None,
             find: None,
             structure: None,
@@ -3136,6 +3144,20 @@ impl Render for EnvTab {
         {
             v.update(cx, |v, cx| v.set_paused(!logs_open, cx));
         }
+        // Performance reads while it is shown and the environment runs.
+        let perf_open = self.is_open(Tool::Performance) && env.phase == "running";
+        if self.performance.is_none()
+            && perf_open
+            && let Some(client) = self.client(cx)
+        {
+            let id = self.env.clone();
+            let view = cx.new(|cx| crate::perf::PerformanceView::new(client, &id, cx));
+            self.subs.push(cx.observe(&view, |_, _, cx| cx.notify()));
+            self.performance = Some(view);
+        }
+        if let Some(v) = &self.performance {
+            v.update(cx, |v, cx| v.set_paused(!perf_open, cx));
+        }
         let sizes = Layout::sizes(cx);
 
         let find_popup = self.find_popup.clone();
@@ -4522,6 +4544,7 @@ impl EnvTab {
             Tool::Docker => self.docker.clone().map(|v| v.into_any_element()),
             Tool::Log => self.logs.clone().map(|v| v.into_any_element()),
             Tool::Ports => self.ports.clone().map(|v| v.into_any_element()),
+            Tool::Performance => self.performance.clone().map(|v| v.into_any_element()),
             _ => None,
         }
     }
@@ -4531,6 +4554,7 @@ impl EnvTab {
         match t {
             Tool::Docker => self.docker.as_ref()?.read(cx).summary(),
             Tool::Ports => self.ports.as_ref()?.read(cx).summary(),
+            Tool::Performance => self.performance.as_ref()?.read(cx).summary(),
             _ => None,
         }
     }

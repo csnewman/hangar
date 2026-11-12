@@ -37,6 +37,7 @@ pub mod model;
 pub mod notices;
 pub mod occur;
 pub mod palette;
+pub mod perf;
 pub mod pick;
 pub mod place;
 pub mod places;
