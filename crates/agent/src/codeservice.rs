@@ -66,14 +66,14 @@ impl Server {
             Ok(s) => s,
             Err(e) => {
                 eprintln!(
-                    "hangar-agent-rs: starting the code service for {:?}: {e}",
+                    "hangar-agent: starting the code service for {:?}: {e}",
                     req.root
                 );
                 return;
             }
         };
         if let Err(e) = launch::join(rd, wr, &socket).await {
-            eprintln!("hangar-agent-rs: connecting to the code service: {e}");
+            eprintln!("hangar-agent: connecting to the code service: {e}");
         }
     }
 

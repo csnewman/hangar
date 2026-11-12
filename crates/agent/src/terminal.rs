@@ -335,11 +335,11 @@ impl Manager {
             }),
         });
         self.sessions.lock().unwrap().insert(sid.clone(), s.clone());
-        eprintln!("hangar-agent-rs: terminal session {sid} started: {program}");
+        eprintln!("hangar-agent: terminal session {sid} started: {program}");
         let manager = self.clone();
         tokio::spawn(s.clone().pump(child, move |code| {
             manager.sessions.lock().unwrap().remove(&sid);
-            eprintln!("hangar-agent-rs: terminal session {sid} ended: {code}");
+            eprintln!("hangar-agent: terminal session {sid} ended: {code}");
         }));
         Ok(s)
     }

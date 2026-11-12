@@ -17,11 +17,9 @@
 #   /usr/share/hangar/vmlinuz         the guest kernel (internal/kernel)
 #   /usr/share/hangar/vmlinux         on amd64, the same kernel as ELF, which
 #                                     libkrun boots there
-#   /usr/share/hangar/hangar-agent    the guest agent, each boot's initramfs
-#                                     (as init) and then the agent
-#   /usr/share/hangar/hangar-agent-rs the agent's Rust half (crates/), static,
-#                                     in the initramfs beside it: the Code
-#                                     tab's service
+#   /usr/share/hangar/hangar-agent    the guest agent (crates/agent), static,
+#                                     each boot's initramfs (as init) and
+#                                     then the agent
 #
 # Environment images are not in it: an image is a root filesystem, built by the
 # imagebuilder target (see deploy/compose.yaml), which needs mount and
@@ -44,7 +42,6 @@ RUN go mod download
 COPY cmd/ cmd/
 COPY internal/ internal/
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/csnewman/hangar/internal/version.Version=$VERSION" -o /out/hangar-worker ./cmd/hangar-worker \
- && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/hangar-agent ./cmd/hangar-agent \
  && rm -rf "$(go env GOCACHE)"
 
 # ---------------------------------------------------------------- guest kernel
@@ -72,9 +69,9 @@ RUN apt-get update -qq \
  && curl -fsSL https://sh.rustup.rs | sh -s -- -y -q --profile minimal
 ENV PATH=/root/.cargo/bin:$PATH
 
-# ---------------------------------------------------------------- The agent's Rust half
+# ---------------------------------------------------------------- The guest agent
 # Static, against musl: the guest's own C library is whatever its image has.
-FROM rust AS agent-rs
+FROM rust AS agent
 WORKDIR /src
 COPY crates/Cargo.toml crates/Cargo.lock ./
 COPY crates/.cargo/ .cargo/
@@ -85,7 +82,7 @@ COPY crates/app/ app/
 RUN target="$(uname -m)-unknown-linux-musl" \
  && rustup target add "$target" \
  && cargo build --release --locked --target "$target" -p hangar-agent \
- && install -D "target/$target/release/hangar-agent-rs" /out/hangar-agent-rs \
+ && install -D "target/$target/release/hangar-agent" /out/hangar-agent \
  && cd / && rm -rf /src /root/.cargo/registry /root/.cargo/git
 
 # ---------------------------------------------------------------- Cloud Hypervisor
@@ -174,8 +171,7 @@ COPY --from=cloud-hypervisor /out/cloud-hypervisor /usr/local/bin/
 COPY --from=gpu /out/hangar-gpu /usr/local/bin/
 COPY --from=krun /out/hangar-krun /usr/local/bin/
 COPY --from=go /out/hangar-worker /usr/local/bin/
-COPY --from=go /out/hangar-agent /usr/share/hangar/hangar-agent
-COPY --from=agent-rs /out/hangar-agent-rs /usr/share/hangar/hangar-agent-rs
+COPY --from=agent /out/hangar-agent /usr/share/hangar/hangar-agent
 # vmlinux is amd64's alone; the pattern lets the copy go ahead without it.
 COPY --from=kernel /out/vmlinuz /out/vmlinu[x] /usr/share/hangar/
 ENTRYPOINT ["hangar-worker"]

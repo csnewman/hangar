@@ -1,10 +1,9 @@
 // Package code connects the host to the Code tab's service in the guest.
 //
 // The service lists and watches files, answers git, and holds the files
-// open for editing as shared documents. It is the agent's Rust half
-// (crates/agent: `hangar-agent-rs code`, started by
-// `src/codeservice.rs`), which the worker puts in each initramfs beside the
-// agent. One runs per root folder, as the environment's user.
+// open for editing as shared documents. It is the agent's own
+// (crates/agent: `hangar-agent code`, started by `src/codeservice.rs`).
+// One runs per root folder, as the environment's user.
 //
 // # Protocol
 //

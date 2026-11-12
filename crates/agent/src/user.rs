@@ -23,7 +23,7 @@ pub const PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:
 /// another.
 pub const DEFAULT_USER: &str = "dev";
 
-/// OOM scores (internal/oomscore). When memory runs out the kernel kills
+/// OOM scores. When memory runs out the kernel kills
 /// the process with the highest badness: its share of memory in
 /// thousandths plus its score, from -1000, never, to 1000. The agent runs at
 /// -1000, since every session dies with it, and what it starts is given one

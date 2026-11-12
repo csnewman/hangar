@@ -359,14 +359,14 @@ fn hook_without_the_agent() {
 #[test]
 fn plugin() {
     let dir = Scratch::new();
-    agents::write_plugin(&dir.0, "/usr/local/bin/hangar-agent-rs").unwrap();
+    agents::write_plugin(&dir.0, "/usr/local/bin/hangar-agent").unwrap();
     let read = |name: &str| -> Value {
         serde_json::from_slice(&std::fs::read(dir.0.join(name)).unwrap()).unwrap()
     };
     assert_eq!(read(".claude-plugin/plugin.json")["name"], "hangar");
     assert_eq!(
         read("hooks/hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
-        "/usr/local/bin/hangar-agent-rs hook claude"
+        "/usr/local/bin/hangar-agent hook claude"
     );
     assert_eq!(read(".mcp.json")["mcpServers"]["hangar"]["args"][0], "mcp");
 }

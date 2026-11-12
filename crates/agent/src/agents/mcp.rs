@@ -1,4 +1,4 @@
-//! `hangar-agent-rs mcp`: an MCP server on stdio, one JSON-RPC message a
+//! `hangar-agent mcp`: an MCP server on stdio, one JSON-RPC message a
 //! line, with one tool, set_task, which sets the environment's task
 //! through the agent.
 

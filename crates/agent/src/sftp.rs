@@ -1,4 +1,4 @@
-//! `hangar-agent-rs sftp-server`: SFTP on standard input and output, as
+//! `hangar-agent sftp-server`: SFTP on standard input and output, as
 //! OpenSSH's sftp-server serves it, with the permissions of whoever runs
 //! it. The SSH server runs it, as the user, for an image with no OpenSSH
 //! one.

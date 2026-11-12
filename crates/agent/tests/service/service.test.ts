@@ -1,4 +1,4 @@
-// Runs the Code tab's service, hangar-agent-rs (crates/agent), as the agent
+// Runs the Code tab's service, hangar-agent code (crates/agent), as the agent
 // does and talks to it as two browser windows would: files, git, and one
 // shared document edited from both sides and from the disk. HANGAR_CODE_BIN
 // names the binary.
@@ -40,7 +40,7 @@ before(async () => {
 	git('add', '.')
 	git('commit', '-q', '-m', 'first')
 	const bin = process.env.HANGAR_CODE_BIN
-	if (!bin) throw new Error('HANGAR_CODE_BIN names hangar-agent-rs, the service under test')
+	if (!bin) throw new Error('HANGAR_CODE_BIN names hangar-agent, whose code subcommand is the service under test')
 	proc = spawn(bin, ['code', '--socket', sock, '--root', root], {
 		stdio: 'inherit',
 		// The settings file is in the home directory; Docker is the fake

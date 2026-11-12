@@ -63,7 +63,7 @@ pub async fn offload() {
     let mut prev = match memory_stall() {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("hangar-agent-rs: offload: {e}");
+            eprintln!("hangar-agent: offload: {e}");
             return;
         }
     };
@@ -116,7 +116,7 @@ pub async fn offload() {
         if let Err(e) = fs::write(MEMORY_RECLAIM, n.to_string())
             && e.raw_os_error() != Some(libc::EAGAIN)
         {
-            eprintln!("hangar-agent-rs: offload: {e}");
+            eprintln!("hangar-agent: offload: {e}");
         }
     }
 }
@@ -206,7 +206,7 @@ pub async fn compact() {
     let order: usize = match order.trim().parse() {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("hangar-agent-rs: compact: {REPORTING_ORDER}: {e}");
+            eprintln!("hangar-agent: compact: {REPORTING_ORDER}: {e}");
             return;
         }
     };
@@ -229,7 +229,7 @@ pub async fn compact() {
             continue;
         }
         if let Err(e) = fs::write(COMPACT_MEMORY, "1") {
-            eprintln!("hangar-agent-rs: compact: {e}");
+            eprintln!("hangar-agent: compact: {e}");
             return;
         }
         after = scattered();
@@ -273,7 +273,7 @@ pub fn widen_reclaim() {
     let (start, end) = match span {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("hangar-agent-rs: reclaim: {e}");
+            eprintln!("hangar-agent: reclaim: {e}");
             return;
         }
     };
@@ -285,7 +285,7 @@ pub fn widen_reclaim() {
         ("commit_inputs", "Y".to_string()),
     ] {
         if let Err(e) = fs::write(dir.join(name), value) {
-            eprintln!("hangar-agent-rs: reclaim: {name}: {e}");
+            eprintln!("hangar-agent: reclaim: {name}: {e}");
             return;
         }
     }

@@ -1,8 +1,8 @@
-//! `hangar-agent-rs serve`: the agent's services that have moved to Rust,
-//! each on its own vsock port -- SSH among them -- the profile session and
-//! what it carries, and the handing back of the guest's memory, for as long
-//! as the guest runs. The Go agent starts it as root, at the agent's own OOM
-//! score, and starts it again if it stops.
+//! The agent's services, each on its own vsock port -- terminals, the
+//! desktop, the Code service, SSH, the profile session and what it carries,
+//! processes, the guest's ports -- and the handing back of the guest's
+//! memory, for as long as the guest runs. hangar-agent.service runs the
+//! agent as root, at OOM score -1000 (`init::OOM_DROP_IN`).
 
 use std::future::Future;
 use std::io;
@@ -43,7 +43,7 @@ pub async fn serve() -> io::Result<()> {
                 async move { ssh.serve(conn).await }
             }));
         }
-        Err(e) => eprintln!("hangar-agent-rs: ssh: {e}"),
+        Err(e) => eprintln!("hangar-agent: ssh: {e}"),
     }
     tokio::spawn(profile::serve());
     std::future::pending().await
@@ -63,7 +63,7 @@ where
         let ln = match crate::vsock::Listener::bind(port) {
             Ok(ln) => ln,
             Err(e) => {
-                eprintln!("hangar-agent-rs: {name}: listening on vsock port {port}: {e}");
+                eprintln!("hangar-agent: {name}: listening on vsock port {port}: {e}");
                 tokio::time::sleep(Duration::from_secs(5)).await;
                 continue;
             }
@@ -74,7 +74,7 @@ where
                     tokio::spawn(handle(conn));
                 }
                 Err(e) => {
-                    eprintln!("hangar-agent-rs: {name}: {e}");
+                    eprintln!("hangar-agent: {name}: {e}");
                     break;
                 }
             }
@@ -89,7 +89,7 @@ where
     F: Fn(crate::fdio::FdStream) -> Fut,
     Fut: Future<Output = ()> + Send + 'static,
 {
-    eprintln!("hangar-agent-rs: {name}: no vsock here");
+    eprintln!("hangar-agent: {name}: no vsock here");
 }
 
 /// A task stopped when this is dropped.

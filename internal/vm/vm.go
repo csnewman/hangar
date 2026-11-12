@@ -80,8 +80,7 @@ type Config struct {
 	// Agent is the hangar-agent every environment runs, built for the
 	// guest's architecture. It is the node's, not the image's: each boot's
 	// initramfs is the agent, as init, so it always matches the worker that
-	// talks to it. Its Rust half, hangar-agent-rs, is beside it (RustAgent),
-	// and goes in the initramfs too when it is there.
+	// talks to it.
 	Agent string
 	// Images maps an image reference, as a template names it, to a local
 	// source the worker copies it from into its store. Any other reference

@@ -32,16 +32,13 @@ limactl shell hangar bash -c "
     sudo systemctl enable --now nfs-server >/dev/null 2>&1
     sudo exportfs -ra
     /usr/local/go/bin/go build -o /var/tmp/hangar-worker ./cmd/hangar-worker
-    # The agent every environment boots with: static, for the guest.
-    CGO_ENABLED=0 /usr/local/go/bin/go build -trimpath -ldflags '-s -w' \
-        -o /var/tmp/hangar-agent-guest ./cmd/hangar-agent
-    # Its Rust half, static against musl, beside it: terminals, the desktop,
-    # the Code tab, processes and ports.
+    # The agent every environment boots with (crates/agent): static against
+    # musl, for the guest.
     # Built on the VM's own disk, the Mac's mount being slow.
     (. \$HOME/.cargo/env && cd crates && CARGO_TARGET_DIR=/var/tmp/hangar-crates \
         cargo build -q --release --target \$(uname -m)-unknown-linux-musl -p hangar-agent)
-    install -m 0755 /var/tmp/hangar-crates/\$(uname -m)-unknown-linux-musl/release/hangar-agent-rs \
-        /var/tmp/hangar-agent-guest-rs
+    install -m 0755 /var/tmp/hangar-crates/\$(uname -m)-unknown-linux-musl/release/hangar-agent \
+        /var/tmp/hangar-agent-guest
     # By process name: a pattern over whole command lines would also match
     # this shell, whose command line names the worker. A stopping worker
     # powers its environments off first, so the new one waits for it: two

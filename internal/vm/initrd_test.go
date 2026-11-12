@@ -41,19 +41,14 @@ func files(t *testing.T, b []byte) map[string]string {
 	return nil
 }
 
-func TestInitrdHoldsTheAgentAndItsRustHalf(t *testing.T) {
+func TestInitrdHoldsTheAgentAsInit(t *testing.T) {
 	dir := t.TempDir()
 	agent := filepath.Join(dir, "hangar-agent")
-	if err := os.WriteFile(agent, []byte("go agent"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	initrd := filepath.Join(dir, "initrd")
-
 	if err := vm.WriteInitrd(agent, initrd); err == nil {
-		t.Fatal("an initramfs without the agent's Rust half")
+		t.Fatal("an initramfs without the agent")
 	}
-
-	if err := os.WriteFile(vm.RustAgent(agent), []byte("rust half"), 0o755); err != nil {
+	if err := os.WriteFile(agent, []byte("the agent"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := vm.WriteInitrd(agent, initrd); err != nil {
@@ -63,8 +58,7 @@ func TestInitrdHoldsTheAgentAndItsRustHalf(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got := files(t, b)
-	if got["init"] != "go agent" || got[vm.RustAgentName] != "rust half" || len(got) != 2 {
-		t.Fatalf("with a Rust half: %v", got)
+	if got := files(t, b); got["init"] != "the agent" || len(got) != 1 {
+		t.Fatalf("the initramfs holds %v", got)
 	}
 }

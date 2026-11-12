@@ -1,4 +1,4 @@
-//! `hangar-agent-rs hook <agent>`: a coding agent's hook.
+//! `hangar-agent hook <agent>`: a coding agent's hook.
 
 use std::io::{Read, Write};
 use std::path::Path;

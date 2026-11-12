@@ -289,7 +289,7 @@ func (c *Config) Cmdline() string {
 	// as long as it runs. DAMON reclaims pages untouched for minAge,
 	// whatever memory is free, so the cache of what was read once goes
 	// back too. A program's memory is left to the agent, which swaps out
-	// what is idle where the guest has swap (cmd/hangar-agent/offload.go):
+	// what is idle where the guest has swap (crates/agent/src/memory.rs):
 	// DAMON samples memory too coarsely to find it. The agent widens what
 	// it watches to the memory virtio-mem plugs in.
 	cl += fmt.Sprintf(" damon_reclaim.enabled=Y damon_reclaim.min_age=%d damon_reclaim.skip_anon=Y"+

@@ -1,13 +1,15 @@
-//! The guest agent's Rust half: what has moved over from the Go agent, which
-//! starts it (`hangar-agent-rs serve`) and stays the guest's init until the
-//! rest has moved too.
+//! The guest agent: the initramfs's init (`init`), the control channel to
+//! the host (`control`), and the services the host reaches on vsock
+//! (`serve`).
 
 pub mod agents;
 pub mod clock;
 pub mod codeservice;
+pub mod control;
 pub mod desktop;
 pub mod fdio;
 pub mod guestport;
+pub mod init;
 pub mod launch;
 pub mod memory;
 pub mod procs;

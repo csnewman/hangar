@@ -100,12 +100,12 @@ impl Server {
                 let socket = match self.ensure().await {
                     Ok(s) => s,
                     Err(e) => {
-                        eprintln!("hangar-agent-rs: starting the desktop's VNC server: {e}");
+                        eprintln!("hangar-agent: starting the desktop's VNC server: {e}");
                         return;
                     }
                 };
                 if let Err(e) = launch::join(rd, wr, &socket).await {
-                    eprintln!("hangar-agent-rs: connecting to the desktop's VNC server: {e}");
+                    eprintln!("hangar-agent: connecting to the desktop's VNC server: {e}");
                 }
             }
             "resize" => {

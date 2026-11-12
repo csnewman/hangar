@@ -63,10 +63,7 @@ pub async fn start(
     let mut child = tokio::process::Command::from(cmd)
         .spawn()
         .map_err(|e| io::Error::new(e.kind(), format!("starting {name}: {e}")))?;
-    eprintln!(
-        "hangar-agent-rs: {name} started: {}",
-        child.id().unwrap_or(0)
-    );
+    eprintln!("hangar-agent: {name} started: {}", child.id().unwrap_or(0));
     let exited = Arc::new(AtomicBool::new(false));
     let gone = exited.clone();
     let (stop_tx, mut stop) = tokio::sync::oneshot::channel::<()>();
@@ -80,7 +77,7 @@ pub async fn start(
                 child.wait().await
             }
         };
-        eprintln!("hangar-agent-rs: {name} exited: {status:?}");
+        eprintln!("hangar-agent: {name} exited: {status:?}");
         gone.store(true, Ordering::Relaxed);
     });
 

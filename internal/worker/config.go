@@ -76,10 +76,9 @@ type Config struct {
 // agent serve every environment, whatever its image.
 type VMConfig struct {
 	Kernel string `yaml:"kernel"`
-	// Agent is a hangar-agent built for the guest's architecture. It is each
-	// environment's initramfs, as init, and then its agent. Its Rust half,
-	// hangar-agent-rs built for the guest, is the same path with -rs after
-	// it, and goes in the initramfs beside it.
+	// Agent is a hangar-agent (crates/agent) built for the guest's
+	// architecture, static against musl. It is each environment's
+	// initramfs, as init, and then its agent.
 	Agent string `yaml:"agent"`
 	// UpperGiB and DockerGiB are an environment's room for its files and
 	// for Docker's store: one sparse disk of their sum.

@@ -186,13 +186,13 @@ mod b64 {
 }
 
 pub(crate) fn warn(msg: &str) {
-    eprintln!("hangar-agent-rs: profile: {msg}");
+    eprintln!("hangar-agent: profile: {msg}");
 }
 
 /// A line only `HANGAR_AGENT_DEBUG` asks for.
 pub(crate) fn debug(msg: &str) {
     if std::env::var_os("HANGAR_AGENT_DEBUG").is_some() {
-        eprintln!("hangar-agent-rs: profile: {msg}");
+        eprintln!("hangar-agent: profile: {msg}");
     }
 }
 
@@ -699,7 +699,7 @@ pub async fn serve() {
         }
     });
 
-    let exe = std::env::current_exe().unwrap_or_else(|_| "/usr/local/bin/hangar-agent-rs".into());
+    let exe = std::env::current_exe().unwrap_or_else(|_| "/usr/local/bin/hangar-agent".into());
     if let Err(e) = install_credential_helper(&exe) {
         warn(&format!("installing the docker credential helper: {e}"));
     }

@@ -94,7 +94,7 @@ impl Server {
             Ok(running) => {
                 let _ = running.await;
             }
-            Err(e) => eprintln!("hangar-agent-rs: ssh: {e}"),
+            Err(e) => eprintln!("hangar-agent: ssh: {e}"),
         }
     }
 }

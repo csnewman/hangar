@@ -1,6 +1,6 @@
 //! The SSH server, through russh's client as the gateway would reach it:
 //! commands on pipes and on a terminal, the client's input and environment,
-//! SFTP through `hangar-agent-rs sftp-server`, and port forwarding.
+//! SFTP through `hangar-agent sftp-server`, and port forwarding.
 //!
 //! There is no user named as the server's, so it serves as whoever runs the
 //! tests.
@@ -31,7 +31,7 @@ impl client::Handler for Client {
 }
 
 fn server() -> Arc<Server> {
-    let sftp = format!("{} sftp-server", env!("CARGO_BIN_EXE_hangar-agent-rs"));
+    let sftp = format!("{} sftp-server", env!("CARGO_BIN_EXE_hangar-agent"));
     Arc::new(
         Server::new("no-such-user-here")
             .unwrap()

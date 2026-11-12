@@ -1,5 +1,5 @@
 //! The agent starts this service protected from the kernel's OOM killer
-//! (internal/oomscore), and what the service starts would inherit that: a
+//! (`user::oom::SERVICE`), and what the service starts would inherit that: a
 //! language server of several gigabytes, or a commit hook's build, would
 //! outlive the user's own work when memory runs out. So it starts them
 //! through a shell that first gives them the score of anything else the user

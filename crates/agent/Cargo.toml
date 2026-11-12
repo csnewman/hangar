@@ -3,14 +3,14 @@ name = "hangar-agent"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "The guest agent's Rust half: the Code tab's service, and the rest of the agent as it moves over"
+description = "The guest agent: init, the control channel, and every service the host reaches in an environment"
 
 [lib]
 name = "hangar_agent"
 path = "src/lib.rs"
 
 [[bin]]
-name = "hangar-agent-rs"
+name = "hangar-agent"
 path = "src/main.rs"
 
 [dependencies]

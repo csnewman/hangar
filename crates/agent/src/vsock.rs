@@ -81,11 +81,43 @@ impl Listener {
             match accepted {
                 Ok(Ok((conn, libc::VMADDR_CID_HOST))) => return FdStream::new(conn),
                 Ok(Ok((_, cid))) => {
-                    eprintln!("hangar-agent-rs: refused a connection from CID {cid}, not the host");
+                    eprintln!("hangar-agent: refused a connection from CID {cid}, not the host");
                 }
                 Ok(Err(e)) => return Err(e),
                 Err(_would_block) => {}
             }
         }
     }
+}
+
+/// The host's context ID, which the guest dials it at.
+pub const HOST: u32 = libc::VMADDR_CID_HOST;
+
+/// Dials `port` on `cid`. The connect blocks the calling thread until the
+/// other end answers or refuses, as vsock's do at once or after its connect
+/// timeout.
+pub fn connect(cid: u32, port: u32) -> io::Result<FdStream> {
+    // SAFETY: socket(2), then connect(2) on the descriptor it returned with
+    // an address of the size given; the descriptor is owned from the start.
+    let fd = unsafe {
+        let fd = libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let fd = OwnedFd::from_raw_fd(fd);
+        let mut addr: libc::sockaddr_vm = std::mem::zeroed();
+        addr.svm_family = libc::AF_VSOCK as libc::sa_family_t;
+        addr.svm_port = port;
+        addr.svm_cid = cid;
+        if libc::connect(
+            fd.as_raw_fd(),
+            (&addr as *const libc::sockaddr_vm).cast(),
+            std::mem::size_of::<libc::sockaddr_vm>() as libc::socklen_t,
+        ) < 0
+        {
+            return Err(io::Error::last_os_error());
+        }
+        fd
+    };
+    FdStream::new(fd)
 }

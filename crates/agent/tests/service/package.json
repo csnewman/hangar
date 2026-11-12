@@ -1,7 +1,7 @@
 {
 	"name": "hangar-code-service-tests",
 	"private": true,
-	"description": "Black-box tests of the Code tab's service, hangar-agent-rs, run against the binary HANGAR_CODE_BIN names.",
+	"description": "Black-box tests of the Code tab's service, hangar-agent code, run against the binary HANGAR_CODE_BIN names.",
 	"license": "MIT",
 	"type": "module",
 	"scripts": {

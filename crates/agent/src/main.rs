@@ -1,31 +1,34 @@
-//! hangar-agent-rs: the guest agent's Rust half, run beside the Go agent
-//! while the agent moves to Rust a service at a time.
+//! hangar-agent: the guest agent. The worker supplies it in every
+//! environment's initramfs, and the image's hangar-agent.service runs it.
 //!
-//!   hangar-agent-rs serve
+//! As PID 1, in the initramfs, it assembles the root and hands over to the
+//! image's init (`init`). With no arguments, as the service, it is the
+//! agent: it dials the host's control channel (`control`) and serves, as
+//! root, the rest on their own vsock ports (`serve`) -- terminals, the
+//! desktop, the Code tab, SSH, the profile session, processes, the guest's
+//! ports -- and hands the guest's idle memory back to the host.
 //!
-//! serves, as root, what has moved over (`serve.rs`): terminals, the
-//! desktop, the Code tab's service, the process list and the guest's ports,
-//! and hands the guest's idle memory back to the host.
-//!
-//!   hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]
+//!   hangar-agent code --socket <path> --root <dir> [--trust <file>]
 //!
 //! serves the Code tab, as the environment's user, on a unix socket the
 //! agent joins the browser to. `--trust` names the worker's list of trusted
 //! folders, the only ones whose code it runs; without it, every folder is
 //! trusted.
 //!
-//!   hangar-agent-rs hook <agent>
-//!   hangar-agent-rs mcp
+//!   hangar-agent hook <agent>
+//!   hangar-agent mcp
 //!
 //! are a coding agent's hook and the MCP server Claude Code runs, both as
 //! whoever runs the coding agent, reaching the agent through its socket
 //! (`agents`).
 //!
-//!   hangar-agent-rs sftp-server
+//!   hangar-agent sftp-server
 //!
 //! serves SFTP on standard input and output, as whoever runs it: the SSH
-//! server's sftp subsystem where the image has no OpenSSH one (`sftp`). Run as `docker-credential-hangar`, it is Docker's credential
-//! helper for Hangar's registry.
+//! server's sftp subsystem where the image has no OpenSSH one (`sftp`).
+//!
+//! Run as `docker-credential-hangar`, it is Docker's credential helper for
+//! Hangar's registry.
 
 mod code;
 
@@ -41,7 +44,22 @@ fn main() -> ExitCode {
     if Path::new(&name).file_name() == Some("docker-credential-hangar".as_ref()) {
         return profile::credential_helper(&args, Path::new(profile::REGISTRY_SOCKET));
     }
+    // In the initramfs the kernel starts the agent as init.
+    #[cfg(target_os = "linux")]
+    if std::process::id() == 1 {
+        hangar_agent::init::run();
+    }
     match args.first().map(String::as_str) {
+        None => {
+            let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+            match rt.block_on(agent()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("hangar-agent: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("hook") if args.len() == 2 => {
             // SAFETY: getppid cannot fail.
             let parent = unsafe { libc::getppid() };
@@ -60,7 +78,7 @@ fn main() -> ExitCode {
             match rt.block_on(hangar_agent::sftp::serve()) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("hangar-agent-rs: sftp: {e}");
+                    eprintln!("hangar-agent: sftp: {e}");
                     ExitCode::FAILURE
                 }
             }
@@ -70,17 +88,7 @@ fn main() -> ExitCode {
             match agents::serve_mcp(std::io::stdin().lock(), std::io::stdout(), socket) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(e) => {
-                    eprintln!("hangar-agent-rs: mcp: {e}");
-                    ExitCode::FAILURE
-                }
-            }
-        }
-        Some("serve") if args.len() == 1 => {
-            let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
-            match rt.block_on(hangar_agent::serve::serve()) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(e) => {
-                    eprintln!("hangar-agent-rs: {e}");
+                    eprintln!("hangar-agent: mcp: {e}");
                     ExitCode::FAILURE
                 }
             }
@@ -114,7 +122,15 @@ fn main() -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: hangar-agent-rs serve\n       hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]\n       hangar-agent-rs hook <agent>\n       hangar-agent-rs mcp\n       hangar-agent-rs sftp-server"
+        "usage: hangar-agent\n       hangar-agent code --socket <path> --root <dir> [--trust <file>]\n       hangar-agent hook <agent>\n       hangar-agent mcp\n       hangar-agent sftp-server"
     );
     ExitCode::from(2)
+}
+
+/// The agent, for as long as the guest runs: the control channel to the
+/// host, and every service.
+async fn agent() -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    tokio::spawn(hangar_agent::control::run());
+    hangar_agent::serve::serve().await
 }
