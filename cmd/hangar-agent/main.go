@@ -84,9 +84,6 @@ func main() {
 	retry := flag.Duration("retry", 500*time.Millisecond, "delay between connection attempts")
 	flag.Parse()
 
-	widenReclaim()
-	go offload()
-	go compact()
 	go serveRust()
 	go serveProfile()
 	go serveSSH()

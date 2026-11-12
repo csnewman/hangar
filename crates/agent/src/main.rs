@@ -4,7 +4,8 @@
 //!   hangar-agent-rs serve
 //!
 //! serves, as root, what has moved over (`serve.rs`): terminals, the
-//! desktop, the Code tab's service, the process list and the guest's ports.
+//! desktop, the Code tab's service, the process list and the guest's ports,
+//! and hands the guest's idle memory back to the host.
 //!
 //!   hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]
 //!

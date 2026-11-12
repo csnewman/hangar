@@ -10,8 +10,9 @@ import (
 
 // serveRust runs the agent's Rust half (crates/agent), which serves what
 // has moved over from this agent -- terminals, the desktop, the Code tab's
-// service, the process list and the guest's ports -- for as long as the
-// guest runs, starting it again if it stops. It runs as the agent does, as root
+// service, the process list, the guest's ports, and handing idle memory back
+// to the host -- for as long as the guest runs, starting it again if it
+// stops. It runs as the agent does, as root
 // and never killed for memory, since every session it holds dies with it.
 func serveRust() {
 	// The child is told when the thread that started it ends, so that

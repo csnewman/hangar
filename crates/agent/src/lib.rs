@@ -8,6 +8,7 @@ pub mod desktop;
 pub mod fdio;
 pub mod guestport;
 pub mod launch;
+pub mod memory;
 pub mod procs;
 pub mod serve;
 pub mod terminal;

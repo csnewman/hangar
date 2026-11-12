@@ -1,5 +1,6 @@
 //! `hangar-agent-rs serve`: the agent's services that have moved to Rust,
-//! each on its own vsock port, for as long as the guest runs. The Go agent
+//! each on its own vsock port, and the handing back of the guest's memory,
+//! for as long as the guest runs. The Go agent
 //! starts it as root, at the agent's own OOM score, and starts it again if
 //! it stops.
 
@@ -7,9 +8,12 @@ use std::future::Future;
 use std::io;
 use std::sync::Arc;
 
-use crate::{codeservice, desktop, guestport, procs, terminal};
+use crate::{codeservice, desktop, guestport, memory, procs, terminal};
 
 pub async fn serve() -> io::Result<()> {
+    memory::widen_reclaim();
+    tokio::spawn(memory::offload());
+    tokio::spawn(memory::compact());
     let terminals = terminal::Manager::new(Box::new(terminal::login_shell));
     tokio::spawn(listen("terminals", terminal::PORT, move |conn| {
         let terminals = terminals.clone();
