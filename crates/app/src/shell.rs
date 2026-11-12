@@ -443,6 +443,30 @@ impl Shell {
         cx.notify();
     }
 
+    /// The link that signs a place in again, as the place's header and its
+    /// empty list show it: a click there is the link's alone, not the row's
+    /// it sits in.
+    fn sign_in_link(
+        &self,
+        id: impl Into<gpui::ElementId>,
+        place: &str,
+        label: &'static str,
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> gpui::Stateful<gpui::Div> {
+        let place = place.to_string();
+        div()
+            .id(id)
+            .text_color(p.busy)
+            .cursor_pointer()
+            .hover(|s| s.underline())
+            .child(label)
+            .on_click(cx.listener(move |s, _, window, cx| {
+                cx.stop_propagation();
+                s.sign_in_again(&place, window, cx);
+            }))
+    }
+
     /// Opens the form adding a place, at a place's address, to sign it in
     /// again.
     pub fn sign_in_again(&mut self, place: &str, window: &mut Window, cx: &mut Context<Self>) {
@@ -955,6 +979,7 @@ impl Shell {
         }
         for (i, n) in shown.iter().enumerate() {
             let target = n.env.clone().map(|e| (n.place.clone(), e));
+            let sign_in = (n.event == crate::settings::Event::SignIn).then(|| n.place.clone());
             list = list.child(
                 h_flex()
                     .id(("notice", i))
@@ -963,7 +988,7 @@ impl Shell {
                     .px(px(10.))
                     .py(px(7.))
                     .rounded(px(6.))
-                    .when(target.is_some(), |d| {
+                    .when(target.is_some() || sign_in.is_some(), |d| {
                         d.cursor_pointer().hover(|s| s.bg(p.surface_2))
                     })
                     .child(div().pt(px(5.)).child(dot(n.tone, p)))
@@ -1004,6 +1029,9 @@ impl Shell {
                         if let Some((place, env)) = &target {
                             s.notices_open = false;
                             s.open(place, env, window, cx);
+                        } else if let Some(place) = &sign_in {
+                            s.notices_open = false;
+                            s.sign_in_again(place, window, cx);
                         }
                     })),
             );
@@ -1045,6 +1073,7 @@ impl Shell {
         let mut list = v_flex().gap(px(6.));
         for g in groups {
             let (ctone, state, warn) = model::connection(&g.connection);
+            let signed_out = g.connection == crate::place::Connection::SignIn;
             let open = !self.collapsed.contains(&g.place);
             let id = g.place.clone();
             let mut group = v_flex().gap(px(1.)).child(
@@ -1078,13 +1107,25 @@ impl Shell {
                     )
                     .child(div().text_size(px(10.)).text_color(p.muted).child(g.kind))
                     .when_some(state, |d, s| {
-                        d.child(
+                        d.child(if signed_out {
+                            self.sign_in_link(
+                                SharedString::from(format!("sidebar-sign-in-{}", g.place)),
+                                &g.place,
+                                "Sign in",
+                                p,
+                                cx,
+                            )
+                            .ml_auto()
+                            .text_size(px(10.5))
+                            .into_any_element()
+                        } else {
                             div()
                                 .ml_auto()
                                 .text_size(px(10.5))
                                 .text_color(if warn { p.busy } else { p.muted })
-                                .child(s),
-                        )
+                                .child(s)
+                                .into_any_element()
+                        })
                     })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         if !this.collapsed.remove(&id) {
@@ -1108,7 +1149,25 @@ impl Shell {
                     }),
             );
             if open {
-                if g.rows.is_empty() {
+                if g.rows.is_empty() && signed_out {
+                    // Nothing is known of its environments until it is.
+                    group = group.child(
+                        h_flex()
+                            .pl(px(18.))
+                            .py(px(3.))
+                            .gap(px(4.))
+                            .text_size(px(11.))
+                            .text_color(p.muted)
+                            .child(self.sign_in_link(
+                                SharedString::from(format!("sidebar-sign-in-body-{}", g.place)),
+                                &g.place,
+                                "Sign in",
+                                p,
+                                cx,
+                            ))
+                            .child("to see its environments"),
+                    );
+                } else if g.rows.is_empty() {
                     group = group.child(
                         div()
                             .pl(px(18.))
@@ -1280,6 +1339,11 @@ impl Shell {
             });
         let grid =
             |cards: Vec<AnyElement>| div().grid().grid_cols(cols).gap(px(10.)).children(cards);
+        let signed_out: Vec<(String, String)> = by_place
+            .iter()
+            .filter(|g| g.connection == crate::place::Connection::SignIn)
+            .map(|g| (g.place.clone(), g.name.clone()))
+            .collect();
         let mut body = v_flex().gap(px(14.));
         match self.home_mode {
             HomeMode::Attention => {
@@ -1293,6 +1357,7 @@ impl Shell {
             HomeMode::Place => {
                 for g in by_place {
                     let (ctone, state, warn) = model::connection(&g.connection);
+                    let signed_out = g.connection == crate::place::Connection::SignIn;
                     body = body.child(
                         v_flex()
                             .gap(px(8.))
@@ -1309,12 +1374,26 @@ impl Shell {
                                         div().text_size(px(11.)).text_color(p.muted).child(g.kind),
                                     )
                                     .when_some(state, |d, s| {
-                                        d.child(
+                                        d.child(if signed_out {
+                                            self.sign_in_link(
+                                                SharedString::from(format!(
+                                                    "home-sign-in-{}",
+                                                    g.place
+                                                )),
+                                                &g.place,
+                                                "Sign in",
+                                                p,
+                                                cx,
+                                            )
+                                            .text_size(px(11.))
+                                            .into_any_element()
+                                        } else {
                                             div()
                                                 .text_size(px(11.))
                                                 .text_color(if warn { p.busy } else { p.muted })
-                                                .child(s),
-                                        )
+                                                .child(s)
+                                                .into_any_element()
+                                        })
                                     }),
                             )
                             .child(grid(
@@ -1327,7 +1406,29 @@ impl Shell {
                 }
             }
         }
-        if cards.is_empty() {
+        if cards.is_empty() && !signed_out.is_empty() {
+            for (place, name) in &signed_out {
+                body = body.child(
+                    h_flex()
+                        .gap(px(10.))
+                        .text_color(p.muted)
+                        .child(format!(
+                            "{name} is signed out: its environments show once you sign in."
+                        ))
+                        .child(
+                            crate::ui::primary(
+                                format!("home-empty-sign-in-{place}"),
+                                "Sign in…",
+                                p,
+                            )
+                            .on_click(cx.listener({
+                                let place = place.clone();
+                                move |s, _, window, cx| s.sign_in_again(&place, window, cx)
+                            })),
+                        ),
+                );
+            }
+        } else if cards.is_empty() {
             body = body.child(
                 div()
                     .text_color(p.muted)
