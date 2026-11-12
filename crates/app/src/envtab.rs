@@ -3326,6 +3326,8 @@ impl Render for EnvTab {
                         .absolute()
                         .inset_0()
                         .bg(gpui::black().opacity(0.18))
+                        // Nothing behind Find reacts to the pointer.
+                        .occlude()
                         .on_click(cx.listener(|t, _, window, cx| t.close_find(window, cx))),
                 )
                 .child(

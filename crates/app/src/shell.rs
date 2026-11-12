@@ -745,6 +745,9 @@ impl Render for Shell {
                         .id("notices-scrim")
                         .absolute()
                         .inset_0()
+                        // It takes the pointer, so nothing behind the list
+                        // reacts to it: no hover, no cursor, no click.
+                        .occlude()
                         .on_click(cx.listener(|s, _, _, cx| s.toggle_notices(cx))),
                 )
                 .child(
@@ -761,7 +764,10 @@ impl Render for Shell {
                         .id("settings-scrim")
                         .absolute()
                         .inset_0()
-                        .bg(gpui::black().opacity(0.25)),
+                        .bg(gpui::black().opacity(0.25))
+                        // Settings is modal: nothing behind it reacts to the
+                        // pointer, a panel's resize handle among them.
+                        .occlude(),
                 )
                 .child(
                     h_flex()
@@ -781,6 +787,8 @@ impl Render for Shell {
                         .absolute()
                         .inset_0()
                         .bg(gpui::black().opacity(0.18))
+                        // Nothing behind the search reacts to the pointer.
+                        .occlude()
                         .on_click(cx.listener(|s, _, window, cx| s.close_search(window, cx))),
                 )
                 .child(
