@@ -7,25 +7,29 @@ import (
 
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/environments"
+	"github.com/csnewman/hangar/internal/profile"
 )
 
-// What the guest says of its coding agents reaches the server, sent again
-// with each session, and the environment's task goes both ways.
+// What the guest says of its coding agents reaches the server, and the
+// environment's task goes both ways.
 func TestAgentsAndTasks(t *testing.T) {
 	ctx := context.Background()
 	p := newPlane(t)
 	em := environments.NewManager(p.d)
 	owner := as(p.owner)
 
-	// Reported before there is a session, it is sent when one opens.
-	id, _, g := p.env(t, "a", api.Access{})
-	g.ReportAgents([]api.AgentSession{{ID: "s1", Agent: api.AgentClaude, State: api.AgentWorking,
-		Step: "Edit main.go", Since: time.Now()}})
+	id, g := p.env(t, "a", api.Access{})
+	if err := g.Send(profile.Message{Type: profile.TypeAgents, Agents: []api.AgentSession{{ID: "s1",
+		Agent: api.AgentClaude, State: api.AgentWorking, Step: "Edit main.go", Since: time.Now()}}}); err != nil {
+		t.Fatal(err)
+	}
 	eventually(t, "the session's report", func() bool {
 		e, err := em.Get(ctx, owner, id)
 		return err == nil && len(e.Agents) == 1 && e.Agents[0].Step == "Edit main.go"
 	})
-	g.ReportAgents(nil)
+	if err := g.Send(profile.Message{Type: profile.TypeAgents}); err != nil {
+		t.Fatal(err)
+	}
 	eventually(t, "the session to go", func() bool {
 		e, err := em.Get(ctx, owner, id)
 		return err == nil && len(e.Agents) == 0

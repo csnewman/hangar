@@ -30,7 +30,8 @@
 // # Protocol
 //
 // A session is JSON lines both ways on one stream, which the server opens
-// to the agent's Port. Each line is a Message.
+// to the agent's Port. Each line is a Message. The agent's half is
+// crates/agent/src/profile; profiletest stands in for it.
 package profile
 
 import "github.com/csnewman/hangar/internal/api"
@@ -113,6 +114,14 @@ type Message struct {
 	Text string    `json:"text,omitempty"`
 	// Agents are the coding agents' sessions.
 	Agents []api.AgentSession `json:"agents,omitempty"`
+}
+
+// SetPaths are a copy's ID and the paths it shares, as a session sends
+// them: in the home directory (~/), or absolute, an exclusion with a
+// leading !, and a directory's with a trailing /.
+type SetPaths struct {
+	ID    string   `json:"id"`
+	Paths []string `json:"paths"`
 }
 
 // How a conflict is resolved.

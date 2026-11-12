@@ -59,7 +59,7 @@ pub const HISTORY_BYTES: usize = 2 << 20;
 pub const MAX_FRAME: usize = 1 << 20;
 
 /// Names the session a process runs in, so what runs there can say which it
-/// is, as a coding agent's hooks do (internal/agentstatus).
+/// is, as a coding agent's hooks do (`agents`).
 pub const TERMINAL_ENV: &str = "HANGAR_TERMINAL_SESSION";
 
 /// Keystrokes and pastes for the shell.

@@ -13,15 +13,53 @@
 //! agent joins the browser to. `--trust` names the worker's list of trusted
 //! folders, the only ones whose code it runs; without it, every folder is
 //! trusted.
+//!
+//!   hangar-agent-rs hook <agent>
+//!   hangar-agent-rs mcp
+//!
+//! are a coding agent's hook and the MCP server Claude Code runs, both as
+//! whoever runs the coding agent, reaching the agent through its socket
+//! (`agents`). Run as `docker-credential-hangar`, it is Docker's credential
+//! helper for Hangar's registry.
 
 mod code;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use hangar_agent::{agents, profile};
+
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut argv = std::env::args();
+    let name = argv.next().unwrap_or_default();
+    let args: Vec<String> = argv.collect();
+    if Path::new(&name).file_name() == Some("docker-credential-hangar".as_ref()) {
+        return profile::credential_helper(&args, Path::new(profile::REGISTRY_SOCKET));
+    }
     match args.first().map(String::as_str) {
+        Some("hook") if args.len() == 2 => {
+            // SAFETY: getppid cannot fail.
+            let parent = unsafe { libc::getppid() };
+            agents::run_hook(
+                &args[1],
+                std::io::stdin(),
+                std::io::stdout(),
+                Path::new(agents::SOCKET),
+                |k| std::env::var(k).ok(),
+                parent,
+            );
+            ExitCode::SUCCESS
+        }
+        Some("mcp") if args.len() == 1 => {
+            let socket = Path::new(agents::SOCKET);
+            match agents::serve_mcp(std::io::stdin().lock(), std::io::stdout(), socket) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("hangar-agent-rs: mcp: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         Some("serve") if args.len() == 1 => {
             let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
             match rt.block_on(hangar_agent::serve::serve()) {
@@ -61,7 +99,7 @@ fn main() -> ExitCode {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "usage: hangar-agent-rs serve\n       hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]"
+        "usage: hangar-agent-rs serve\n       hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]\n       hangar-agent-rs hook <agent>\n       hangar-agent-rs mcp"
     );
     ExitCode::from(2)
 }

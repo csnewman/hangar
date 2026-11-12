@@ -11,18 +11,18 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-
-	"github.com/csnewman/hangar/internal/agentstatus"
 )
 
 // SSHAuthSock is the guest's SSH agent, which signs with the environment
-// owner's keys (internal/profile). Every process started for the user is
-// given it.
+// owner's keys (the agent's profile session, crates/agent/src/profile).
+// Every process started for the user is given it.
 const SSHAuthSock = "/run/hangar/ssh-agent.sock"
 
-// RegistrySock is where the guest's Docker credential helper asks the agent
-// for credentials for Hangar's registry (internal/profile).
-const RegistrySock = "/run/hangar/registry.sock"
+// PluginEnv loads Hangar's Claude Code plugin, which the agent writes at
+// each boot (crates/agent/src/agents), into every claude started in the
+// guest's sessions, with nothing written to the person's own settings,
+// which the profile carries between environments.
+const PluginEnv = "CLAUDE_CODE_PLUGIN_DIRS=/run/hangar/claude-plugin"
 
 // ProfileSynced is written once the owner's profile has first arrived whole
 // (internal/profile), which the worker waits for before setting up the
@@ -94,7 +94,7 @@ func LoginShell(name string) string {
 // SessionEnv is the environment of every session the agent starts:
 // MachineEnv, and what loads Hangar's Claude Code plugin.
 func SessionEnv() []string {
-	return append(slices.Clip(MachineEnv()), agentstatus.PluginEnv)
+	return append(slices.Clip(MachineEnv()), PluginEnv)
 }
 
 var (

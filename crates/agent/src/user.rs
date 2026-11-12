@@ -9,11 +9,11 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 /// The guest's SSH agent, which signs with the environment owner's keys
-/// (internal/profile). Every process started for the user is given it.
+/// (`profile`). Every process started for the user is given it.
 pub const SSH_AUTH_SOCK: &str = "/run/hangar/ssh-agent.sock";
 
 /// What loads Hangar's Claude Code plugin, written at boot, into every
-/// claude started in a session (internal/agentstatus).
+/// claude started in a session (`agents::PLUGIN_DIR`).
 pub const PLUGIN_ENV: &str = "CLAUDE_CODE_PLUGIN_DIRS=/run/hangar/claude-plugin";
 
 /// The PATH every process the agent starts is given.

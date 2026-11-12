@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,9 +26,7 @@ import (
 	"time"
 
 	"github.com/csnewman/hangar/internal/agent"
-	"github.com/csnewman/hangar/internal/agentstatus"
 	"github.com/csnewman/hangar/internal/oomscore"
-	"github.com/csnewman/hangar/internal/profile"
 	"github.com/csnewman/hangar/internal/sshd"
 	"github.com/csnewman/hangar/internal/vsock"
 )
@@ -54,24 +51,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "hangar-agent: %v\n", err)
 		os.Exit(127)
 	}
-	// Docker's credential helper for Hangar's registry, run by docker as
-	// docker-credential-hangar.
-	if filepath.Base(os.Args[0]) == "docker-credential-"+profile.CredentialHelper {
-		os.Exit(credentialHelper(os.Args[1:]))
-	}
-	// A coding agent's hook, and the MCP server Claude Code runs, both
-	// as whoever runs the agent.
-	if len(os.Args) == 3 && os.Args[1] == "hook" {
-		agentstatus.RunHook(os.Args[2], os.Stdin, os.Stdout, agentstatus.Socket, os.Getenv, os.Getppid())
-		return
-	}
-	if len(os.Args) == 2 && os.Args[1] == "mcp" {
-		if err := agentstatus.ServeMCP(os.Stdin, os.Stdout, agentstatus.Socket); err != nil {
-			fmt.Fprintf(os.Stderr, "hangar-agent: mcp: %v\n", err)
-			os.Exit(1)
-		}
-		return
-	}
 	// The sftp subsystem of the agent's own SSH server, run as the user.
 	if len(os.Args) == 2 && os.Args[1] == "sftp-server" {
 		if err := sshd.ServeSFTP(); err != nil {
@@ -83,9 +62,14 @@ func main() {
 	port := flag.Uint("port", uint(agent.Port), "vsock port on the host")
 	retry := flag.Duration("retry", 500*time.Millisecond, "delay between connection attempts")
 	flag.Parse()
+	if flag.NArg() > 0 {
+		// Something meant for another command: run as the agent, it would
+		// dial the host beside the one already running.
+		fmt.Fprintf(os.Stderr, "hangar-agent: unknown command %q\n", flag.Arg(0))
+		os.Exit(2)
+	}
 
 	go serveRust()
-	go serveProfile()
 	go serveSSH()
 	run(uint32(*port), *retry)
 }
