@@ -63,6 +63,18 @@ func (e SignalProcessJSONBodySignal) Valid() bool {
 	}
 }
 
+// AccessToken defines model for AccessToken.
+type AccessToken struct {
+	CreatedAt time.Time `json:"created_at"`
+
+	// Current Whether this request came with it.
+	Current    bool       `json:"current"`
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	ID         string     `json:"id"`
+	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
+	Name       string     `json:"name"`
+}
+
 // ActivityEvent defines model for ActivityEvent.
 type ActivityEvent struct {
 	// Action What was done, as environment.start or environment.phase.
@@ -136,8 +148,11 @@ type Environment struct {
 	// EditorPath The folder an editor opens in it: its first project.
 	EditorPath *string `json:"editor_path,omitempty"`
 	ID         string  `json:"id"`
-	MemoryMiB  *int    `json:"memory_mib,omitempty"`
-	Name       string  `json:"name"`
+
+	// ImageUpdate A newer copy of the environment's image, which its worker holds. The environment's page in the browser upgrades to it.
+	ImageUpdate *ImageUpdate `json:"image_update,omitempty"`
+	MemoryMiB   *int         `json:"memory_mib,omitempty"`
+	Name        string       `json:"name"`
 
 	// Owner The owner's username.
 	Owner   string `json:"owner"`
@@ -210,6 +225,16 @@ type EnvironmentStats struct {
 // Error defines model for Error.
 type Error struct {
 	Error string `json:"error"`
+}
+
+// GenerateSSHKey defines model for GenerateSSHKey.
+type GenerateSSHKey struct {
+	Name string `json:"name"`
+}
+
+// ImageUpdate A newer copy of the environment's image, which its worker holds. The environment's page in the browser upgrades to it.
+type ImageUpdate struct {
+	Digest string `json:"digest"`
 }
 
 // LogPart defines model for LogPart.
@@ -285,6 +310,17 @@ type SSHGateway struct {
 	// HostKey The gateway's public host key, in known_hosts form without the host name.
 	HostKey string `json:"host_key"`
 	Port    int    `json:"port"`
+}
+
+// SSHKey defines model for SSHKey.
+type SSHKey struct {
+	CreatedAt   time.Time `json:"created_at"`
+	Fingerprint string    `json:"fingerprint"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+
+	// PublicKey In authorized_keys form, for adding where it should be let in.
+	PublicKey string `json:"public_key"`
 }
 
 // SetTask defines model for SetTask.
@@ -400,6 +436,9 @@ type SetTaskJSONRequestBody = SetTask
 // AddLoginKeyJSONRequestBody defines body for AddLoginKey for application/json ContentType.
 type AddLoginKeyJSONRequestBody = AddLoginKey
 
+// GenerateSSHKeyJSONRequestBody defines body for GenerateSSHKey for application/json ContentType.
+type GenerateSSHKeyJSONRequestBody = GenerateSSHKey
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// ListEnvironments Every environment the user can reach, oldest first
@@ -471,6 +510,24 @@ type ServerInterface interface {
 	// AddLoginKey Add a public key that signs the user in over SSH
 	// (POST /me/login-keys)
 	AddLoginKey(w http.ResponseWriter, r *http.Request)
+	// DeleteLoginKey Remove a public key that signs the user in over SSH
+	// (DELETE /me/login-keys/{id})
+	DeleteLoginKey(w http.ResponseWriter, r *http.Request, id string)
+	// ListSSHKeys The SSH keys the server signs with for the user. Their private halves never leave the server.
+	// (GET /me/ssh-keys)
+	ListSSHKeys(w http.ResponseWriter, r *http.Request)
+	// GenerateSSHKey Make a new SSH key for the user, kept on the server
+	// (POST /me/ssh-keys)
+	GenerateSSHKey(w http.ResponseWriter, r *http.Request)
+	// DeleteSSHKey Remove one of the user's SSH keys
+	// (DELETE /me/ssh-keys/{id})
+	DeleteSSHKey(w http.ResponseWriter, r *http.Request, id string)
+	// ListTokens The user's access tokens, the one this request came with marked
+	// (GET /me/tokens)
+	ListTokens(w http.ResponseWriter, r *http.Request)
+	// RevokeToken End one of the user's access tokens
+	// (DELETE /me/tokens/{id})
+	RevokeToken(w http.ResponseWriter, r *http.Request, id string)
 	// GetVersion Which versions of this API the server serves, and its build
 	// (GET /version)
 	GetVersion(w http.ResponseWriter, r *http.Request)
@@ -1104,6 +1161,126 @@ func (siw *ServerInterfaceWrapper) AddLoginKey(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// DeleteLoginKey operation middleware
+func (siw *ServerInterfaceWrapper) DeleteLoginKey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteLoginKey(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSSHKeys operation middleware
+func (siw *ServerInterfaceWrapper) ListSSHKeys(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSSHKeys(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GenerateSSHKey operation middleware
+func (siw *ServerInterfaceWrapper) GenerateSSHKey(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GenerateSSHKey(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// DeleteSSHKey operation middleware
+func (siw *ServerInterfaceWrapper) DeleteSSHKey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.DeleteSSHKey(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListTokens operation middleware
+func (siw *ServerInterfaceWrapper) ListTokens(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListTokens(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RevokeToken operation middleware
+func (siw *ServerInterfaceWrapper) RevokeToken(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RevokeToken(w, r, id)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetVersion operation middleware
 func (siw *ServerInterfaceWrapper) GetVersion(w http.ResponseWriter, r *http.Request) {
 
@@ -1242,6 +1419,12 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me", wrapper.GetMe)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me/login-keys", wrapper.ListLoginKeys)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/me/login-keys", wrapper.AddLoginKey)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/me/login-keys/{id}", wrapper.DeleteLoginKey)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me/tokens", wrapper.ListTokens)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/me/tokens/{id}", wrapper.RevokeToken)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/me/ssh-keys", wrapper.ListSSHKeys)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/me/ssh-keys", wrapper.GenerateSSHKey)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/me/ssh-keys/{id}", wrapper.DeleteSSHKey)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments", wrapper.ListEnvironments)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/environments/{id}", wrapper.DeleteEnvironment)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}", wrapper.GetEnvironment)
@@ -2651,6 +2834,258 @@ func (response AddLoginKey401JSONResponse) VisitAddLoginKeyResponse(w http.Respo
 	return err
 }
 
+type DeleteLoginKeyRequestObject struct {
+	ID string `json:"id"`
+}
+
+type DeleteLoginKeyResponseObject interface {
+	VisitDeleteLoginKeyResponse(w http.ResponseWriter) error
+}
+
+type DeleteLoginKey204Response struct {
+}
+
+func (response DeleteLoginKey204Response) VisitDeleteLoginKeyResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteLoginKey401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteLoginKey401JSONResponse) VisitDeleteLoginKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteLoginKey404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteLoginKey404JSONResponse) VisitDeleteLoginKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSSHKeysRequestObject struct {
+}
+
+type ListSSHKeysResponseObject interface {
+	VisitListSSHKeysResponse(w http.ResponseWriter) error
+}
+
+type ListSSHKeys200JSONResponse []SSHKey
+
+func (response ListSSHKeys200JSONResponse) VisitListSSHKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSSHKeys401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListSSHKeys401JSONResponse) VisitListSSHKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GenerateSSHKeyRequestObject struct {
+	Body *GenerateSSHKeyJSONRequestBody
+}
+
+type GenerateSSHKeyResponseObject interface {
+	VisitGenerateSSHKeyResponse(w http.ResponseWriter) error
+}
+
+type GenerateSSHKey201JSONResponse SSHKey
+
+func (response GenerateSSHKey201JSONResponse) VisitGenerateSSHKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GenerateSSHKey400JSONResponse struct{ InvalidJSONResponse }
+
+func (response GenerateSSHKey400JSONResponse) VisitGenerateSSHKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GenerateSSHKey401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response GenerateSSHKey401JSONResponse) VisitGenerateSSHKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSSHKeyRequestObject struct {
+	ID string `json:"id"`
+}
+
+type DeleteSSHKeyResponseObject interface {
+	VisitDeleteSSHKeyResponse(w http.ResponseWriter) error
+}
+
+type DeleteSSHKey204Response struct {
+}
+
+func (response DeleteSSHKey204Response) VisitDeleteSSHKeyResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type DeleteSSHKey401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response DeleteSSHKey401JSONResponse) VisitDeleteSSHKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type DeleteSSHKey404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response DeleteSSHKey404JSONResponse) VisitDeleteSSHKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTokensRequestObject struct {
+}
+
+type ListTokensResponseObject interface {
+	VisitListTokensResponse(w http.ResponseWriter) error
+}
+
+type ListTokens200JSONResponse []AccessToken
+
+func (response ListTokens200JSONResponse) VisitListTokensResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListTokens401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ListTokens401JSONResponse) VisitListTokensResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeTokenRequestObject struct {
+	ID string `json:"id"`
+}
+
+type RevokeTokenResponseObject interface {
+	VisitRevokeTokenResponse(w http.ResponseWriter) error
+}
+
+type RevokeToken204Response struct {
+}
+
+func (response RevokeToken204Response) VisitRevokeTokenResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type RevokeToken401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response RevokeToken401JSONResponse) VisitRevokeTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RevokeToken404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RevokeToken404JSONResponse) VisitRevokeTokenResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetVersionRequestObject struct {
 }
 
@@ -2743,6 +3178,24 @@ type StrictServerInterface interface {
 	// AddLoginKey Add a public key that signs the user in over SSH
 	// (POST /me/login-keys)
 	AddLoginKey(ctx context.Context, request AddLoginKeyRequestObject) (AddLoginKeyResponseObject, error)
+	// DeleteLoginKey Remove a public key that signs the user in over SSH
+	// (DELETE /me/login-keys/{id})
+	DeleteLoginKey(ctx context.Context, request DeleteLoginKeyRequestObject) (DeleteLoginKeyResponseObject, error)
+	// ListSSHKeys The SSH keys the server signs with for the user. Their private halves never leave the server.
+	// (GET /me/ssh-keys)
+	ListSSHKeys(ctx context.Context, request ListSSHKeysRequestObject) (ListSSHKeysResponseObject, error)
+	// GenerateSSHKey Make a new SSH key for the user, kept on the server
+	// (POST /me/ssh-keys)
+	GenerateSSHKey(ctx context.Context, request GenerateSSHKeyRequestObject) (GenerateSSHKeyResponseObject, error)
+	// DeleteSSHKey Remove one of the user's SSH keys
+	// (DELETE /me/ssh-keys/{id})
+	DeleteSSHKey(ctx context.Context, request DeleteSSHKeyRequestObject) (DeleteSSHKeyResponseObject, error)
+	// ListTokens The user's access tokens, the one this request came with marked
+	// (GET /me/tokens)
+	ListTokens(ctx context.Context, request ListTokensRequestObject) (ListTokensResponseObject, error)
+	// RevokeToken End one of the user's access tokens
+	// (DELETE /me/tokens/{id})
+	RevokeToken(ctx context.Context, request RevokeTokenRequestObject) (RevokeTokenResponseObject, error)
 	// GetVersion Which versions of this API the server serves, and its build
 	// (GET /version)
 	GetVersion(ctx context.Context, request GetVersionRequestObject) (GetVersionResponseObject, error)
@@ -3409,6 +3862,163 @@ func (sh *strictHandler) AddLoginKey(w http.ResponseWriter, r *http.Request) {
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(AddLoginKeyResponseObject); ok {
 		if err := validResponse.VisitAddLoginKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteLoginKey operation middleware
+func (sh *strictHandler) DeleteLoginKey(w http.ResponseWriter, r *http.Request, id string) {
+	var request DeleteLoginKeyRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteLoginKey(ctx, request.(DeleteLoginKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteLoginKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteLoginKeyResponseObject); ok {
+		if err := validResponse.VisitDeleteLoginKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSSHKeys operation middleware
+func (sh *strictHandler) ListSSHKeys(w http.ResponseWriter, r *http.Request) {
+	var request ListSSHKeysRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSSHKeys(ctx, request.(ListSSHKeysRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSSHKeys")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSSHKeysResponseObject); ok {
+		if err := validResponse.VisitListSSHKeysResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GenerateSSHKey operation middleware
+func (sh *strictHandler) GenerateSSHKey(w http.ResponseWriter, r *http.Request) {
+	var request GenerateSSHKeyRequestObject
+
+	var body GenerateSSHKeyJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GenerateSSHKey(ctx, request.(GenerateSSHKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GenerateSSHKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GenerateSSHKeyResponseObject); ok {
+		if err := validResponse.VisitGenerateSSHKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// DeleteSSHKey operation middleware
+func (sh *strictHandler) DeleteSSHKey(w http.ResponseWriter, r *http.Request, id string) {
+	var request DeleteSSHKeyRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.DeleteSSHKey(ctx, request.(DeleteSSHKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "DeleteSSHKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(DeleteSSHKeyResponseObject); ok {
+		if err := validResponse.VisitDeleteSSHKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListTokens operation middleware
+func (sh *strictHandler) ListTokens(w http.ResponseWriter, r *http.Request) {
+	var request ListTokensRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListTokens(ctx, request.(ListTokensRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListTokens")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListTokensResponseObject); ok {
+		if err := validResponse.VisitListTokensResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RevokeToken operation middleware
+func (sh *strictHandler) RevokeToken(w http.ResponseWriter, r *http.Request, id string) {
+	var request RevokeTokenRequestObject
+
+	request.ID = id
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RevokeToken(ctx, request.(RevokeTokenRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RevokeToken")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RevokeTokenResponseObject); ok {
+		if err := validResponse.VisitRevokeTokenResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

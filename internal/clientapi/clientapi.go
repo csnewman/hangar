@@ -417,6 +417,9 @@ func environment(e api.Environment) Environment {
 		task := task(*t)
 		out.Task = &task
 	}
+	if u := e.ImageUpdate; u != nil {
+		out.ImageUpdate = &ImageUpdate{Digest: u.Digest}
+	}
 	if len(e.Agents) > 0 {
 		agents := make([]AgentSession, len(e.Agents))
 		for i, a := range e.Agents {

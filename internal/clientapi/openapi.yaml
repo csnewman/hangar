@@ -126,6 +126,85 @@ paths:
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /me/login-keys/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: deleteLoginKey
+      summary: Remove a public key that signs the user in over SSH
+      responses:
+        "204": { description: The key was removed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /me/tokens:
+    get:
+      operationId: listTokens
+      summary: The user's access tokens, the one this request came with marked
+      responses:
+        "200":
+          description: The tokens, oldest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AccessToken" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /me/tokens/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: revokeToken
+      summary: End one of the user's access tokens
+      responses:
+        "204": { description: The token was revoked. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /me/ssh-keys:
+    get:
+      operationId: listSSHKeys
+      summary: >-
+        The SSH keys the server signs with for the user. Their private halves
+        never leave the server.
+      responses:
+        "200":
+          description: The keys.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/SSHKey" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      operationId: generateSSHKey
+      summary: Make a new SSH key for the user, kept on the server
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/GenerateSSHKey" }
+      responses:
+        "201":
+          description: The key was made.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SSHKey" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /me/ssh-keys/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+    delete:
+      operationId: deleteSSHKey
+      summary: Remove one of the user's SSH keys
+      responses:
+        "204": { description: The key was removed. }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
   /environments:
     get:
       operationId: listEnvironments
@@ -634,6 +713,46 @@ components:
           type: string
           description: Absent takes the key's own comment.
 
+    ImageUpdate:
+      type: object
+      description: >-
+        A newer copy of the environment's image, which its worker holds. The
+        environment's page in the browser upgrades to it.
+      required: [digest]
+      properties:
+        digest: { type: string }
+
+    AccessToken:
+      type: object
+      required: [id, name, created_at, current]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        created_at: { type: string, format: date-time }
+        last_used_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time }
+        current:
+          type: boolean
+          description: Whether this request came with it.
+
+    SSHKey:
+      type: object
+      required: [id, name, public_key, fingerprint, created_at]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        public_key:
+          type: string
+          description: In authorized_keys form, for adding where it should be let in.
+        fingerprint: { type: string }
+        created_at: { type: string, format: date-time }
+
+    GenerateSSHKey:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string }
+
     Environment:
       type: object
       required: [id, short_id, name, owner_id, owner, template, phase, desired, created_at, updated_at]
@@ -699,6 +818,7 @@ components:
           description: The names of its own web servers its template lists.
           items: { type: string }
         task: { $ref: "#/components/schemas/Task" }
+        image_update: { $ref: "#/components/schemas/ImageUpdate" }
         stats: { $ref: "#/components/schemas/EnvironmentStats" }
         agents:
           type: array

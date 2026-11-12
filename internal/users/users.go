@@ -55,6 +55,9 @@ type Principal struct {
 	UserID   string
 	Username string
 	Admin    bool
+	// TokenID is the access token the request came with, if it came with
+	// one.
+	TokenID string
 }
 
 // User is one account.

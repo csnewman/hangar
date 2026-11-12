@@ -112,11 +112,11 @@ func (m *Manager) AuthenticateToken(ctx context.Context, token string) (Principa
 	var name string
 	var lastUsed *time.Time
 	err := m.db.Transact(ctx, func(tx db.Tx) error {
-		err := tx.QueryRow(ctx, `SELECT u.id, u.username, u.is_admin, t.name, t.last_used_at
+		err := tx.QueryRow(ctx, `SELECT u.id, u.username, u.is_admin, t.id, t.name, t.last_used_at
 			FROM access_tokens t JOIN users u ON u.id = t.user_id
 			WHERE t.token_hash = $1 AND (t.expires_at IS NULL OR t.expires_at > now())
 				AND u.disabled_at IS NULL AND u.kind = 'person'`, sum[:]).
-			Scan(&p.UserID, &p.Username, &p.Admin, &name, &lastUsed)
+			Scan(&p.UserID, &p.Username, &p.Admin, &p.TokenID, &name, &lastUsed)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNoSession
 		}
