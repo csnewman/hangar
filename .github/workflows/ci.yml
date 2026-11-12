@@ -206,7 +206,9 @@ jobs:
           workspaces: crates
           key: app
       - run: cargo clippy -p hangar-app --all-targets -- -D warnings
-      - run: cargo test -p hangar-app --release
+      # A debug build: gpui records the elements the tests find by their
+      # debug selectors only with debug assertions on.
+      - run: cargo test -p hangar-app
 
   gpu:
     # hangar-gpu links against virglrenderer with the patches in
