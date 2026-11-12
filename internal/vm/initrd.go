@@ -1,10 +1,8 @@
 package vm
 
 import (
-	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 )
 
@@ -19,8 +17,8 @@ func RustAgent(agent string) string {
 }
 
 // WriteInitrd writes the initramfs an environment boots: the agent, as its
-// init, and its Rust half (RustAgent) when the worker has one. Nothing else
-// is needed: the agent assembles the root from the base and the writable
+// init, and its Rust half (RustAgent), which serves terminals, the desktop,
+// the Code tab, processes and ports. Nothing else is needed: the agent assembles the root from the base and the writable
 // disk, installs itself there, and hands over to the image's own init
 // (cmd/hangar-agent/init.go). So an image is a root filesystem and nothing
 // else, and every environment runs the agent of the worker that boots it.
@@ -29,11 +27,13 @@ func WriteInitrd(agent, path string) error {
 	if err != nil {
 		return fmt.Errorf("reading the agent: %w", err)
 	}
-	entries := []cpioEntry{{name: "init", mode: 0o100755, data: bin}}
-	if rs, err := os.ReadFile(RustAgent(agent)); err == nil {
-		entries = append(entries, cpioEntry{name: RustAgentName, mode: 0o100755, data: rs})
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("reading the agent's Rust half: %w", err)
+	rs, err := os.ReadFile(RustAgent(agent))
+	if err != nil {
+		return fmt.Errorf("reading the agent's Rust half, which serves the environment's terminals, desktop and Code tab: %w", err)
+	}
+	entries := []cpioEntry{
+		{name: "init", mode: 0o100755, data: bin},
+		{name: RustAgentName, mode: 0o100755, data: rs},
 	}
 	out, err := os.Create(path + ".new")
 	if err != nil {

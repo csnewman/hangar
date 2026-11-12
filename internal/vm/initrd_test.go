@@ -49,15 +49,8 @@ func TestInitrdHoldsTheAgentAndItsRustHalf(t *testing.T) {
 	}
 	initrd := filepath.Join(dir, "initrd")
 
-	if err := vm.WriteInitrd(agent, initrd); err != nil {
-		t.Fatal(err)
-	}
-	b, err := os.ReadFile(initrd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := files(t, b); len(got) != 1 || got["init"] != "go agent" {
-		t.Fatalf("without a Rust half: %v", got)
+	if err := vm.WriteInitrd(agent, initrd); err == nil {
+		t.Fatal("an initramfs without the agent's Rust half")
 	}
 
 	if err := os.WriteFile(vm.RustAgent(agent), []byte("rust half"), 0o755); err != nil {
@@ -66,7 +59,7 @@ func TestInitrdHoldsTheAgentAndItsRustHalf(t *testing.T) {
 	if err := vm.WriteInitrd(agent, initrd); err != nil {
 		t.Fatal(err)
 	}
-	b, err = os.ReadFile(initrd)
+	b, err := os.ReadFile(initrd)
 	if err != nil {
 		t.Fatal(err)
 	}

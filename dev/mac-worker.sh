@@ -27,17 +27,16 @@ go build -o "$dir/hangar-worker" ./cmd/hangar-worker
 # The agent every environment boots with: static, for the guest.
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags '-s -w' \
     -o "$dir/hangar-agent-guest" ./cmd/hangar-agent
-# Its Rust half, static against musl and linked by rust-lld, beside it: the
-# Code tab's service.
+# Its Rust half, static against musl and linked by rust-lld, beside it:
+# terminals, the desktop, the Code tab, processes and ports.
 musl=aarch64-unknown-linux-musl
-if rustup target list --installed 2>/dev/null | grep -qx $musl; then
-    (cd crates && CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
-        cargo build -q --release --target $musl -p hangar-agent)
-    install -m 0755 crates/target/$musl/release/hangar-agent-rs "$dir/hangar-agent-guest-rs"
-else
-    echo "no $musl Rust target (rustup target add $musl): environments here have no Code tab service" >&2
-    rm -f "$dir/hangar-agent-guest-rs"
+if ! rustup target list --installed 2>/dev/null | grep -qx $musl; then
+    echo "no $musl Rust target, which the guest agent's Rust half needs: rustup target add $musl" >&2
+    exit 1
 fi
+(cd crates && CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
+    cargo build -q --release --target $musl -p hangar-agent)
+install -m 0755 crates/target/$musl/release/hangar-agent-rs "$dir/hangar-agent-guest-rs"
 # A stopping worker powers its environments off first, so the new one waits
 # for it: two would fight over the same machines.
 stop
