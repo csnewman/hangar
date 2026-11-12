@@ -53,6 +53,7 @@ pub mod store;
 pub mod structure;
 pub mod table;
 pub mod termconn;
+pub mod termimage;
 pub mod terminal;
 pub mod termkeys;
 pub mod termview;

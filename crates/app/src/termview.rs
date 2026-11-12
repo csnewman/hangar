@@ -5,6 +5,7 @@
 //! terminal's: copy, paste, select all, find, clear the buffer, and the
 //! session's own commands.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use gpui::{
@@ -146,7 +147,26 @@ pub struct TerminalView {
     env: String,
     dir: Option<String>,
     _find: Option<Subscription>,
+    /// What the program writes besides text: the pictures it draws, by the
+    /// number their anchor in the grid names, and the progress it reports.
+    extract: crate::termimage::Extract,
+    pictures: HashMap<u64, Shown>,
+    next_picture: u64,
+    progress: Option<crate::termimage::Progress>,
+    /// The window's pixels to a point, for a picture's size.
+    scale: f32,
 }
+
+/// A picture drawn in the terminal, and its size where it is drawn.
+struct Shown {
+    image: std::sync::Arc<gpui::Image>,
+    width: Pixels,
+    height: Pixels,
+}
+
+/// What names a picture's anchor: an OSC 8 link on the cell it starts at,
+/// so it scrolls and clears with the text around it.
+const PICTURE: &str = "hangar-picture:";
 
 fn mono() -> Font {
     font(if cfg!(target_os = "macos") {
@@ -229,6 +249,11 @@ impl TerminalView {
             env: env.to_string(),
             dir: dir.map(str::to_string),
             _find: None,
+            extract: Default::default(),
+            pictures: HashMap::new(),
+            next_picture: 0,
+            progress: None,
+            scale: 2.,
         };
         view.connect(session, cx);
         view
@@ -339,6 +364,39 @@ impl TerminalView {
         self.send(Command::Input(text.as_bytes().to_vec()));
     }
 
+    /// Draws a picture at the cursor, as wide as it is (narrowed to the
+    /// screen) and as many rows tall as it takes: an anchor where it
+    /// starts, then the cursor below it, as a terminal moves it past one.
+    fn place(&mut self, p: crate::termimage::Picture) {
+        let format = match p.format {
+            crate::termimage::Format::Png => gpui::ImageFormat::Png,
+            crate::termimage::Format::Jpeg => gpui::ImageFormat::Jpeg,
+            crate::termimage::Format::Gif => gpui::ImageFormat::Gif,
+            crate::termimage::Format::Webp => gpui::ImageFormat::Webp,
+        };
+        let cell = f32::from(self.cell.unwrap_or(px(7.5)));
+        let room = (self.cols as f32 * cell).max(cell);
+        let (mut w, mut h) = (p.width as f32 / self.scale, p.height as f32 / self.scale);
+        if w > room {
+            h *= room / w;
+            w = room;
+        }
+        let rows = (h / f32::from(LINE_HEIGHT)).ceil().max(1.) as usize;
+        let id = self.next_picture;
+        self.next_picture += 1;
+        self.pictures.insert(
+            id,
+            Shown {
+                image: std::sync::Arc::new(gpui::Image::from_bytes(format, p.bytes)),
+                width: px(w),
+                height: px(h),
+            },
+        );
+        let mut anchor = format!("\x1b]8;;{PICTURE}{id}\x1b\\ \x1b]8;;\x1b\\\r").into_bytes();
+        anchor.extend(std::iter::repeat_n(b'\n', rows));
+        self.screen.feed(&anchor);
+    }
+
     fn send(&self, c: Command) {
         if let Some(conn) = &self.conn {
             conn.send(c);
@@ -377,10 +435,21 @@ impl TerminalView {
                 }
             }
             Event::Output(b) => {
-                self.screen.feed(&b);
                 let replayed = self.history.min(b.len());
                 self.history -= replayed;
-                let (replies, title) = self.replies.take();
+                let mut extra = Vec::new();
+                for piece in self.extract.split(&b) {
+                    match piece {
+                        crate::termimage::Piece::Text(t) => self.screen.feed(&t),
+                        crate::termimage::Piece::Progress(p) => {
+                            self.progress = (p.state != 0).then_some(p)
+                        }
+                        crate::termimage::Piece::Picture(p) => self.place(p),
+                        crate::termimage::Piece::Reply(r) => extra.extend(r),
+                    }
+                }
+                let (mut replies, title) = self.replies.take();
+                replies.extend(extra);
                 // What the past asked was answered then; what the program
                 // asks is answered by the window holding the size alone,
                 // since every window watching would answer, and the program
@@ -445,6 +514,7 @@ impl TerminalView {
             .floor()
             .max(1.) as u16;
         self.origin = bounds.origin;
+        self.scale = window.scale_factor();
         if (cols, rows) != (self.cols, self.rows) {
             (self.cols, self.rows) = (cols, rows);
             if self.holds_size() {
@@ -967,6 +1037,36 @@ impl Render for TerminalView {
                 StyledText::new(line.text).with_runs(runs)
             })
             .collect();
+        // The pictures on the screen, or starting above it: each where its
+        // anchor is.
+        let cell = self.cell.unwrap_or(px(7.5));
+        let tallest = self
+            .pictures
+            .values()
+            .map(|s| (f32::from(s.height) / f32::from(LINE_HEIGHT)).ceil() as usize)
+            .max()
+            .unwrap_or(0);
+        let pictures: Vec<gpui::AnyElement> = if self.pictures.is_empty() {
+            vec![]
+        } else {
+            self.screen
+                .anchors(PICTURE, tallest)
+                .into_iter()
+                .filter_map(|(row, col, name)| {
+                    let shown = self.pictures.get(&name.parse::<u64>().ok()?)?;
+                    Some(
+                        gpui::img(shown.image.clone())
+                            .absolute()
+                            .left(cell * col as f32)
+                            .top(LINE_HEIGHT * row as f32)
+                            .w(shown.width)
+                            .h(shown.height)
+                            .into_any_element(),
+                    )
+                })
+                .collect()
+        };
+        let progress = self.progress;
         let me = cx.entity().downgrade();
         let notice = match &self.state {
             State::Connecting => Some("Connecting…".to_string()),
@@ -1065,6 +1165,7 @@ impl Render for TerminalView {
                     .text_size(FONT_SIZE)
                     .line_height(LINE_HEIGHT)
                     .children(rows)
+                    .children(pictures)
                     .child(
                         canvas(
                             move |bounds, window, cx| {
@@ -1083,6 +1184,38 @@ impl Render for TerminalView {
                         .size_full(),
                     ),
             )
+            // A program's progress, along the top, as the web's terminal
+            // shows it: red when it failed, amber paused, full and faint
+            // when it cannot say how far.
+            .when_some(progress, |d, pr| {
+                let colour = match pr.state {
+                    2 => p.bad,
+                    4 => p.busy,
+                    3 => p.accent.opacity(0.4),
+                    _ => p.accent,
+                };
+                let done = if pr.state == 3 {
+                    1.
+                } else {
+                    pr.value as f32 / 100.
+                };
+                d.child(
+                    div()
+                        .id("terminal-progress")
+                        .debug_selector(|| "terminal-progress".into())
+                        .absolute()
+                        .top_0()
+                        .left_0()
+                        .w_full()
+                        .h(px(3.))
+                        .bg(p.surface_2)
+                        .child(div().h_full().w(gpui::relative(done)).bg(colour))
+                        .tooltip(|window, cx| {
+                            gpui_component::tooltip::Tooltip::new("Progress the program reports")
+                                .build(window, cx)
+                        }),
+                )
+            })
             .when_some(self.find.clone(), |d, input| {
                 let missing = self.missing;
                 d.child(

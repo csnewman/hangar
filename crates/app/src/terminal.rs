@@ -13,6 +13,10 @@ use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 
+/// What names a link that anchors something drawn over the text rather
+/// than a link to follow.
+const ANCHOR: &str = "hangar-";
+
 /// What the grid is told it measures.
 struct Size {
     columns: usize,
@@ -348,7 +352,9 @@ impl<L: EventListener> Screen<L> {
     /// a URL in the text, which may wrap onto the lines either side.
     pub fn link_at(&mut self, row: usize, col: usize) -> Option<String> {
         let point = self.point(row, col);
-        if let Some(link) = self.term.grid()[point].hyperlink() {
+        if let Some(link) = self.term.grid()[point].hyperlink()
+            && !link.uri().starts_with(ANCHOR)
+        {
             return Some(link.uri().to_string());
         }
         let mut regex = RegexSearch::new(URL).ok()?;
@@ -366,6 +372,30 @@ impl<L: EventListener> Screen<L> {
                 .bounds_to_string(*found.start(), *found.end())
                 .replace('\n', ""),
         )
+    }
+
+    /// The cells on the screen, and in the lines above it given, that
+    /// carry a link named with prefix: each's row on the screen (above it
+    /// negative), column and the rest of its name. A terminal's pictures
+    /// are anchored so.
+    pub fn anchors(&self, prefix: &str, above: usize) -> Vec<(i32, usize, String)> {
+        let grid = self.term.grid();
+        let top = -(grid.display_offset() as i32);
+        let oldest = -(grid.history_size() as i32);
+        let first = (top - above as i32).max(oldest);
+        let mut out = vec![];
+        for line in first..top + grid.screen_lines() as i32 {
+            for col in 0..grid.columns() {
+                let cell = &grid[Point::new(GridLine(line), Column(col))];
+                if let Some(rest) = cell
+                    .hyperlink()
+                    .and_then(|h| h.uri().strip_prefix(prefix).map(str::to_string))
+                {
+                    out.push((line - top, col, rest));
+                }
+            }
+        }
+        out
     }
 
     /// Whether Find is on a match.
