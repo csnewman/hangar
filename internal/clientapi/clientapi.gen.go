@@ -361,6 +361,12 @@ type ListActivityParams struct {
 	Limit  *int   `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// ResizeDesktopJSONBody defines parameters for ResizeDesktop.
+type ResizeDesktopJSONBody struct {
+	Height int `json:"height"`
+	Width  int `json:"width"`
+}
+
 // GetEnvironmentLogParams defines parameters for GetEnvironmentLog.
 type GetEnvironmentLogParams struct {
 	Offset *int64 `form:"offset,omitempty" json:"offset,omitempty"`
@@ -378,6 +384,9 @@ type SignalProcessJSONBody struct {
 
 // SignalProcessJSONBodySignal defines parameters for SignalProcess.
 type SignalProcessJSONBodySignal string
+
+// ResizeDesktopJSONRequestBody defines body for ResizeDesktop for application/json ContentType.
+type ResizeDesktopJSONRequestBody ResizeDesktopJSONBody
 
 // SetEnvironmentPortsJSONRequestBody defines body for SetEnvironmentPorts for application/json ContentType.
 type SetEnvironmentPortsJSONRequestBody SetEnvironmentPortsJSONBody
@@ -408,6 +417,9 @@ type ServerInterface interface {
 	// SeeAgent Say the user has looked at an agent's session
 	// (POST /environments/{id}/agents/{session}/seen)
 	SeeAgent(w http.ResponseWriter, r *http.Request, id ID, session string)
+	// ResizeDesktop Sets the size of the environment's desktop
+	// (POST /environments/{id}/desktop/size)
+	ResizeDesktop(w http.ResponseWriter, r *http.Request, id ID)
 	// GetEnvironmentLog Part of one of the environment's logs, from its worker
 	// (GET /environments/{id}/logs/{log})
 	GetEnvironmentLog(w http.ResponseWriter, r *http.Request, id ID, log EnvironmentLogName, params GetEnvironmentLogParams)
@@ -620,6 +632,32 @@ func (siw *ServerInterfaceWrapper) SeeAgent(w http.ResponseWriter, r *http.Reque
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SeeAgent(w, r, id, session)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ResizeDesktop operation middleware
+func (siw *ServerInterfaceWrapper) ResizeDesktop(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "id" -------------
+	var id ID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "id", r.PathValue("id"), &id, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ResizeDesktop(w, r, id)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1219,6 +1257,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}/terminals", wrapper.ListTerminals)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/environments/{id}/terminals/{session}", wrapper.CloseTerminal)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}/logs/{log}", wrapper.GetEnvironmentLog)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/desktop/size", wrapper.ResizeDesktop)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}/processes", wrapper.ListProcesses)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/environments/{id}/processes/{pid}/signal", wrapper.SignalProcess)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/environments/{id}/activity", wrapper.ListActivity)
@@ -1474,6 +1513,79 @@ func (response SeeAgent404JSONResponse) VisitSeeAgentResponse(w http.ResponseWri
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResizeDesktopRequestObject struct {
+	ID   ID `json:"id"`
+	Body *ResizeDesktopJSONRequestBody
+}
+
+type ResizeDesktopResponseObject interface {
+	VisitResizeDesktopResponse(w http.ResponseWriter) error
+}
+
+type ResizeDesktop204Response struct {
+}
+
+func (response ResizeDesktop204Response) VisitResizeDesktopResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type ResizeDesktop401JSONResponse struct{ UnauthorizedJSONResponse }
+
+func (response ResizeDesktop401JSONResponse) VisitResizeDesktopResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResizeDesktop404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ResizeDesktop404JSONResponse) VisitResizeDesktopResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResizeDesktop409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ResizeDesktop409JSONResponse) VisitResizeDesktopResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ResizeDesktop503JSONResponse struct{ UnavailableJSONResponse }
+
+func (response ResizeDesktop503JSONResponse) VisitResizeDesktopResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(503)
 	_, err := buf.WriteTo(w)
 	return err
 }
@@ -2577,6 +2689,9 @@ type StrictServerInterface interface {
 	// SeeAgent Say the user has looked at an agent's session
 	// (POST /environments/{id}/agents/{session}/seen)
 	SeeAgent(ctx context.Context, request SeeAgentRequestObject) (SeeAgentResponseObject, error)
+	// ResizeDesktop Sets the size of the environment's desktop
+	// (POST /environments/{id}/desktop/size)
+	ResizeDesktop(ctx context.Context, request ResizeDesktopRequestObject) (ResizeDesktopResponseObject, error)
 	// GetEnvironmentLog Part of one of the environment's logs, from its worker
 	// (GET /environments/{id}/logs/{log})
 	GetEnvironmentLog(ctx context.Context, request GetEnvironmentLogRequestObject) (GetEnvironmentLogResponseObject, error)
@@ -2795,6 +2910,39 @@ func (sh *strictHandler) SeeAgent(w http.ResponseWriter, r *http.Request, id ID,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SeeAgentResponseObject); ok {
 		if err := validResponse.VisitSeeAgentResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ResizeDesktop operation middleware
+func (sh *strictHandler) ResizeDesktop(w http.ResponseWriter, r *http.Request, id ID) {
+	var request ResizeDesktopRequestObject
+
+	request.ID = id
+
+	var body ResizeDesktopJSONRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ResizeDesktop(ctx, request.(ResizeDesktopRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ResizeDesktop")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ResizeDesktopResponseObject); ok {
+		if err := validResponse.VisitResizeDesktopResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

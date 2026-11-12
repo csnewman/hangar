@@ -44,6 +44,16 @@ info:
     as the terminal is.
 
 
+    Desktop. GET /api/v1/environments/{id}/desktop is a WebSocket to the
+    environment's Linux desktop's VNC server: every binary message is RFB
+    bytes, as they are, both ways, and the server reads none of them. The
+    VNC server asks no password: reaching the socket is the permission. A
+    socket the desktop closes before sending anything means there is no
+    desktop to serve. POST .../desktop/size sets the desktop's size. It is
+    refused as the terminal is, and with 409 for an environment that has no
+    desktop.
+
+
     A client asks /api/v1/version first. It needs no sign-in, and says which
     versions the server serves and which build it is, so a client can tell
     "this server is too old for me" from "I am too old for this server".
@@ -363,6 +373,32 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LogPart" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+
+  /environments/{id}/desktop/size:
+    parameters:
+      - $ref: "#/components/parameters/ID"
+    post:
+      operationId: resizeDesktop
+      summary: Sets the size of the environment's desktop
+      description: >-
+        Its output's mode, in pixels, as a viewer fitting it to its window
+        asks: every viewer sees the one desktop, so the last to ask wins.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [width, height]
+              properties:
+                width: { type: integer }
+                height: { type: integer }
+      responses:
+        "204": { description: Resized. }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
