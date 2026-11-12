@@ -5,8 +5,9 @@
 
 use std::future::Future;
 use std::io;
+use std::sync::Arc;
 
-use crate::terminal;
+use crate::{codeservice, desktop, guestport, procs, terminal};
 
 pub async fn serve() -> io::Result<()> {
     let terminals = terminal::Manager::new(Box::new(terminal::login_shell));
@@ -14,6 +15,22 @@ pub async fn serve() -> io::Result<()> {
         let terminals = terminals.clone();
         async move { terminals.serve(conn).await }
     }));
+    let desktop = Arc::new(desktop::Server::new());
+    tokio::spawn(listen("desktop", desktop::PORT, move |conn| {
+        let desktop = desktop.clone();
+        async move { desktop.serve(conn).await }
+    }));
+    let code = Arc::new(codeservice::Server::new());
+    tokio::spawn(listen("code", codeservice::PORT, move |conn| {
+        let code = code.clone();
+        async move { code.serve(conn).await }
+    }));
+    let procs = Arc::new(procs::Server::new());
+    tokio::spawn(listen("procs", procs::PORT, move |conn| {
+        let procs = procs.clone();
+        async move { procs.serve(conn).await }
+    }));
+    tokio::spawn(listen("ports", guestport::PORT, guestport::serve));
     std::future::pending().await
 }
 

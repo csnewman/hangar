@@ -3,7 +3,8 @@
 //!
 //!   hangar-agent-rs serve
 //!
-//! serves, as root, what has moved over (`serve.rs`): terminals.
+//! serves, as root, what has moved over (`serve.rs`): terminals, the
+//! desktop, the Code tab's service, the process list and the guest's ports.
 //!
 //!   hangar-agent-rs code --socket <path> --root <dir> [--trust <file>]
 //!

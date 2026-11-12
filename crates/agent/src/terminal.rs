@@ -37,12 +37,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
+use crate::clock::rfc3339;
 use crate::fdio::FdStream;
 use crate::user::{self, User};
 
@@ -721,10 +722,7 @@ pub fn login_shell(req: &Request) -> io::Result<Command> {
         .env("USER", &u.name)
         .env("LOGNAME", &u.name)
         .env("SHELL", &shell)
-        .env(
-            "PATH",
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        )
+        .env("PATH", user::PATH)
         .env("TERM", "xterm-256color")
         .env("COLORTERM", "truecolor")
         .env("TERM_PROGRAM", "hangar")
@@ -777,34 +775,6 @@ fn random_id() -> String {
         let _ = f.read_exact(&mut b);
     }
     b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-/// A time in RFC 3339, in UTC, to the nanosecond with trailing zeros left
-/// off, as Go writes one.
-fn rfc3339(t: SystemTime) -> String {
-    let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
-    // time_t is 64-bit on every target the agent is built for.
-    let secs = d.as_secs() as i64;
-    // SAFETY: tm is plain data, which gmtime_r fills in.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::gmtime_r(&secs, &mut tm) };
-    let mut s = format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-        tm.tm_year + 1900,
-        tm.tm_mon + 1,
-        tm.tm_mday,
-        tm.tm_hour,
-        tm.tm_min,
-        tm.tm_sec
-    );
-    let nanos = d.subsec_nanos();
-    if nanos > 0 {
-        let frac = format!("{nanos:09}");
-        s.push('.');
-        s.push_str(frac.trim_end_matches('0'));
-    }
-    s.push('Z');
-    s
 }
 
 async fn write_reply<W: AsyncWrite + Unpin>(w: &mut W, r: &Reply) -> io::Result<()> {

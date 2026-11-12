@@ -16,6 +16,9 @@ pub const SSH_AUTH_SOCK: &str = "/run/hangar/ssh-agent.sock";
 /// claude started in a session (internal/agentstatus).
 pub const PLUGIN_ENV: &str = "CLAUDE_CODE_PLUGIN_DIRS=/run/hangar/claude-plugin";
 
+/// The PATH every process the agent starts is given.
+pub const PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// The environment's usual user, who a session belongs to unless it names
 /// another.
 pub const DEFAULT_USER: &str = "dev";
@@ -70,6 +73,12 @@ impl User {
             passwd_shell: String::new(),
             groups: vec![gid],
         })
+    }
+
+    /// The name of the user `uid` is, if /etc/passwd has one.
+    pub fn name_of(uid: u32) -> Option<String> {
+        let uid = uid.to_string();
+        Self::find(|f| f[2] == uid).map(|u| u.name)
     }
 
     fn find(matches: impl Fn(&[&str]) -> bool) -> Option<User> {

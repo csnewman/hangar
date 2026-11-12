@@ -15,7 +15,6 @@ import (
 
 	"github.com/csnewman/hangar/internal/api"
 	"github.com/csnewman/hangar/internal/ch"
-	"github.com/csnewman/hangar/internal/procs"
 	"github.com/csnewman/hangar/internal/terminal/terminaltest"
 )
 
@@ -40,8 +39,6 @@ type Simulated struct {
 	// terminals are the environments' sessions, a shell each, run on this
 	// machine.
 	terminals map[string]*terminaltest.Guest
-	// procs lists this machine's processes for every environment.
-	procs *procs.Server
 	// memoryMaxMiB is what a running environment's memory can be resized
 	// to, as a real worker's can (UseCapacity).
 	memoryMaxMiB int

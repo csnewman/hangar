@@ -1,11 +1,10 @@
-// Package code runs the Code tab's service in the guest and connects the
-// host to it.
+// Package code connects the host to the Code tab's service in the guest.
 //
 // The service lists and watches files, answers git, and holds the files
 // open for editing as shared documents. It is the agent's Rust half
-// (crates/agent, `hangar-agent-rs code`), which the worker puts in each
-// initramfs beside the agent. One runs per root folder, as the environment's
-// user, on a unix socket.
+// (crates/agent: `hangar-agent-rs code`, started by
+// `src/codeservice.rs`), which the worker puts in each initramfs beside the
+// agent. One runs per root folder, as the environment's user.
 //
 // # Protocol
 //
@@ -14,28 +13,6 @@
 // the service speaks length-prefixed frames, which the host carries without
 // reading.
 package code
-
-import (
-	"bufio"
-	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
-	"fmt"
-	"io"
-	"log/slog"
-	"net"
-	"os"
-	"os/exec"
-	"os/user"
-	"path"
-	"path/filepath"
-	"strconv"
-	"sync"
-	"time"
-
-	"github.com/csnewman/hangar/internal/sysuser"
-)
 
 // Port is the vsock port the guest agent serves the Code tab on.
 const Port uint32 = 8104
@@ -50,167 +27,3 @@ type Request struct {
 // worker at each boot (api.Spec.CodeTrust): a language server starts only
 // in one of them, or in a folder the person trusts from the Code tab.
 const TrustFile = "/run/hangar/trusted-folders.json"
-
-const (
-	socketDir    = "/run/hangar/code"
-	logFile      = "/var/log/hangar-code.log"
-	startTimeout = 30 * time.Second
-)
-
-// Server runs the service for one user, one process per root.
-type Server struct {
-	// Prepare, if set, is given each process the server starts before it
-	// starts: the agent ranks it for the OOM killer (internal/oomscore).
-	Prepare func(*exec.Cmd)
-	// Rust is the agent's Rust half, which is the service.
-	Rust string
-
-	user string
-	log  *slog.Logger
-
-	mu      sync.Mutex
-	running map[string]*process
-}
-
-type process struct {
-	socket string
-	exited chan struct{}
-}
-
-func NewServer(user string, log *slog.Logger) *Server {
-	return &Server{user: user, log: log, running: map[string]*process{}}
-}
-
-// Serve answers one connection from the host.
-func (s *Server) Serve(conn io.ReadWriteCloser) {
-	defer conn.Close()
-	br := bufio.NewReader(conn)
-	line, err := br.ReadBytes('\n')
-	if err != nil {
-		return
-	}
-	var req Request
-	if err := json.Unmarshal(line, &req); err != nil {
-		return
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), startTimeout)
-	socket, err := s.ensure(ctx, req.Root)
-	cancel()
-	if err != nil {
-		s.log.Warn("starting the code service", "root", req.Root, "err", err)
-		return
-	}
-	upstream, err := net.Dial("unix", socket)
-	if err != nil {
-		s.log.Warn("connecting to the code service", "err", err)
-		return
-	}
-	defer upstream.Close()
-	done := make(chan struct{}, 2)
-	go func() { io.Copy(upstream, br); done <- struct{}{} }()
-	go func() { io.Copy(conn, upstream); done <- struct{}{} }()
-	<-done
-}
-
-func (s *Server) ensure(ctx context.Context, root string) (string, error) {
-	u, err := user.Lookup(s.user)
-	if err != nil {
-		return "", err
-	}
-	if root == "" || !path.IsAbs(root) {
-		root = u.HomeDir
-	}
-	root = path.Clean(root)
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if p := s.running[root]; p != nil {
-		select {
-		case <-p.exited:
-		default:
-			return p.socket, nil
-		}
-	}
-	p, err := s.start(ctx, u, root)
-	if err != nil {
-		return "", err
-	}
-	s.running[root] = p
-	return p.socket, nil
-}
-
-// command is how the service is started for a root on a socket.
-func (s *Server) command(socket, root string) (*exec.Cmd, error) {
-	if _, err := os.Stat(s.Rust); err != nil {
-		return nil, fmt.Errorf("the agent's Rust half, which serves the Code tab, is missing: %w", err)
-	}
-	return exec.Command(s.Rust, "code", "--socket", socket, "--root", root, "--trust", TrustFile), nil
-}
-
-func (s *Server) start(ctx context.Context, u *user.User, root string) (*process, error) {
-	uid, _ := strconv.Atoi(u.Uid)
-	gid, _ := strconv.Atoi(u.Gid)
-	if err := os.MkdirAll(socketDir, 0o700); err != nil {
-		return nil, err
-	}
-	if err := os.Chown(socketDir, uid, gid); err != nil {
-		return nil, err
-	}
-	sum := sha256.Sum256([]byte(root))
-	socket := filepath.Join(socketDir, hex.EncodeToString(sum[:6])+".sock")
-	_ = os.Remove(socket)
-
-	logOut, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return nil, err
-	}
-	defer logOut.Close()
-
-	cmd, err := s.command(socket, root)
-	if err != nil {
-		return nil, err
-	}
-	cmd.Dir = u.HomeDir
-	cmd.Env = []string{
-		"HOME=" + u.HomeDir,
-		"SSH_AUTH_SOCK=" + sysuser.SSHAuthSock,
-		"USER=" + u.Username,
-		"LOGNAME=" + u.Username,
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-		"LANG=C.UTF-8",
-	}
-	cmd.Env = append(cmd.Env, sysuser.SessionEnv()...)
-	cmd.Stdout = logOut
-	cmd.Stderr = logOut
-	if err := sysuser.RunAs(cmd, u); err != nil {
-		return nil, err
-	}
-	if s.Prepare != nil {
-		s.Prepare(cmd)
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("starting the code service: %w", err)
-	}
-	p := &process{socket: socket, exited: make(chan struct{})}
-	go func() {
-		err := cmd.Wait()
-		s.log.Warn("the code service exited", "root", root, "err", err)
-		close(p.exited)
-	}()
-	s.log.Info("code service started", "root", root, "pid", cmd.Process.Pid)
-
-	for {
-		if c, err := net.Dial("unix", socket); err == nil {
-			c.Close()
-			return p, nil
-		}
-		select {
-		case <-p.exited:
-			return nil, fmt.Errorf("the code service exited while starting; see %s", logFile)
-		case <-ctx.Done():
-			cmd.Process.Kill()
-			return nil, fmt.Errorf("the code service did not start in %s; see %s", startTimeout, logFile)
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-}
