@@ -51,15 +51,32 @@ impl EventListener for Quiet {
 /// the window title it sets.
 #[derive(Clone, Default)]
 pub struct Replies {
-    pending: std::sync::Arc<std::sync::Mutex<(Vec<u8>, Option<String>)>>,
+    pending: std::sync::Arc<std::sync::Mutex<(Vec<Reply>, Option<String>)>>,
 }
 
+/// A reply as the program asked for it: written as it is, or a colour
+/// (OSC 4, 10, 11 and 12's queries), answered with the screen's own.
+enum Reply {
+    Bytes(Vec<u8>),
+    Colour(usize, ColourReply),
+}
+
+type ColourReply = std::sync::Arc<dyn Fn(Rgb) -> String + Sync + Send + 'static>;
+
 impl Replies {
-    /// The replies since this was last called, and the title, if it was
-    /// set meanwhile.
-    pub fn take(&self) -> (Vec<u8>, Option<String>) {
+    /// The replies since this was last called, in the order asked, colours
+    /// answered by `colour` (`Screen::colour`), and the title, if it was set
+    /// meanwhile.
+    pub fn take(&self, colour: impl Fn(usize) -> Rgb) -> (Vec<u8>, Option<String>) {
         let mut p = self.pending.lock().unwrap();
-        (std::mem::take(&mut p.0), p.1.take())
+        let mut out = vec![];
+        for r in std::mem::take(&mut p.0) {
+            match r {
+                Reply::Bytes(b) => out.extend(b),
+                Reply::Colour(i, f) => out.extend(f(colour(i)).into_bytes()),
+            }
+        }
+        (out, p.1.take())
     }
 }
 
@@ -67,7 +84,8 @@ impl EventListener for Replies {
     fn send_event(&self, e: Event) {
         let mut p = self.pending.lock().unwrap();
         match e {
-            Event::PtyWrite(s) => p.0.extend_from_slice(s.as_bytes()),
+            Event::PtyWrite(s) => p.0.push(Reply::Bytes(s.into_bytes())),
+            Event::ColorRequest(i, f) => p.0.push(Reply::Colour(i, f)),
             Event::Title(t) => p.1 = Some(t),
             _ => {}
         }
@@ -486,6 +504,27 @@ impl<L: EventListener> Screen<L> {
     pub fn cursor(&self) -> (usize, usize) {
         let p = self.term.grid().cursor.point;
         (p.line.0.max(0) as usize, p.column.0)
+    }
+
+    /// Whether the program shows the cursor: one that draws its own, as
+    /// Claude Code's prompt does, hides it.
+    pub fn cursor_shown(&self) -> bool {
+        self.term.mode().contains(TermMode::SHOW_CURSOR)
+    }
+
+    /// A colour by the index a program asks after it (OSC 4's 0 to 255,
+    /// then the foreground, background and cursor, OSC 10 to 12): the one
+    /// the program set, else the screen's own. A program learns from the
+    /// background whether the theme is light or dark.
+    pub fn colour(&self, index: usize) -> Rgb {
+        if let Some(c) = self.term.colors()[index] {
+            return c;
+        }
+        match index {
+            i if i < 256 => indexed_in(i as u8, self.light()),
+            i if i == NamedColor::Background as usize => self.bg,
+            _ => self.fg,
+        }
     }
 
     /// The visible rows, each a line of text with its spans, the selection

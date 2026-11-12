@@ -475,7 +475,8 @@ impl TerminalView {
                         crate::termimage::Piece::Directory(d) => self.cwd = Some(d),
                     }
                 }
-                let (mut replies, title) = self.replies.take();
+                let screen = &self.screen;
+                let (mut replies, title) = self.replies.take(|i| screen.colour(i));
                 replies.extend(extra);
                 // What the past asked was answered then; what the program
                 // asks is answered by the window holding the size alone,
@@ -1163,7 +1164,7 @@ impl Render for TerminalView {
         let found = p.busy.opacity(0.3);
         let current = p.busy;
         let mark_text = p.term_bg;
-        let show_cursor = focused && self.screen.scrolled_back() == 0;
+        let show_cursor = focused && self.screen.scrolled_back() == 0 && self.screen.cursor_shown();
         let (cursor_row, cursor_col) = self.screen.cursor();
         let rows: Vec<_> = self
             .screen
@@ -1361,6 +1362,10 @@ impl Render for TerminalView {
                 div()
                     .size_full()
                     .relative()
+                    // A row is the screen's width. A glyph from a fallback
+                    // font can be wider than a cell; wrapped, its row would
+                    // take two lines and push the rows below off the end.
+                    .whitespace_nowrap()
                     .font(self.font.clone())
                     .text_size(self.font_size)
                     .line_height(self.line_height)

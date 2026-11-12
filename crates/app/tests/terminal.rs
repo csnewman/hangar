@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use hangar_app::terminal::{LinkKind, Mark, Screen, Select};
+use hangar_app::terminal::{LinkKind, Mark, Replies, Screen, Select};
 
 #[test]
 fn colours_and_attributes_become_spans() {
@@ -260,6 +260,50 @@ fn the_hovered_link_is_underlined() {
     assert_eq!(underlined(&mut s), "http://localhost:5173/");
     s.set_hover(None);
     assert_eq!(underlined(&mut s), "");
+}
+
+/// A program asking the terminal's colours is answered with the screen's
+/// own, in the order it asked: from the background it learns whether the
+/// theme is light, as Claude Code's auto theme does.
+#[test]
+fn colour_queries_are_answered_with_the_screens_colours() {
+    use alacritty_terminal::vte::ansi::Rgb;
+    let replies = Replies::default();
+    let mut s = Screen::with_listener(20, 2, replies.clone());
+    s.set_default_colours(
+        Rgb {
+            r: 0x1f,
+            g: 0x2a,
+            b: 0x3b,
+        },
+        Rgb {
+            r: 0xff,
+            g: 0xfe,
+            b: 0xfd,
+        },
+    );
+    s.feed(b"\x1b]11;?\x1b\\\x1b]10;?\x07\x1b]4;1;?\x07\x1b[c");
+    let (out, _) = replies.take(|i| s.colour(i));
+    let out = String::from_utf8(out).unwrap();
+    let colours = "\x1b]11;rgb:ffff/fefe/fdfd\x1b\\\x1b]10;rgb:1f1f/2a2a/3b3b\x07\x1b]4;1;rgb:cdcd/3131/3131\x07";
+    assert!(out.starts_with(colours), "{out:?}");
+    assert!(out.len() > colours.len(), "the device's attributes after");
+
+    // A colour the program set is the one it is told.
+    s.feed(b"\x1b]11;rgb:00/00/00\x07\x1b]11;?\x07");
+    let (out, _) = replies.take(|i| s.colour(i));
+    assert_eq!(out, b"\x1b]11;rgb:0000/0000/0000\x07");
+}
+
+/// A program that hides the cursor, to draw its own, is drawn without ours.
+#[test]
+fn a_hidden_cursor_is_not_shown() {
+    let mut s = Screen::new(10, 2);
+    assert!(s.cursor_shown());
+    s.feed(b"\x1b[?25l");
+    assert!(!s.cursor_shown());
+    s.feed(b"\x1b[?25h");
+    assert!(s.cursor_shown());
 }
 
 /// Select All takes the scrollback and the screen; Clear Buffer leaves the
