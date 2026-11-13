@@ -362,9 +362,15 @@ impl Store {
                 });
                 // Owners, modes, links and extended attributes are the
                 // image, and reach the guest as they are, so the copy keeps
-                // them all.
+                // them all. Its blocks are shared with the source where the
+                // filesystem can: reflinks on Linux, clones on APFS.
+                let share = if cfg!(target_os = "macos") {
+                    "-c"
+                } else {
+                    "--reflink=auto"
+                };
                 let out = Command::new("cp")
-                    .args(["-a", "--reflink=auto", "--"])
+                    .args(["-a", share, "--"])
                     .arg(src)
                     .arg(tmp.join("rootfs"))
                     .output()?;
