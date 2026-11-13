@@ -5,6 +5,7 @@
 pub mod agent;
 pub mod ch;
 pub mod files;
+pub mod gitout;
 pub mod guest;
 pub mod host;
 pub mod hugepages;
@@ -12,6 +13,7 @@ mod initrd;
 pub mod instance;
 pub mod krun;
 pub mod log;
+pub mod provision;
 pub mod stats;
 pub mod suspend;
 mod swap;
