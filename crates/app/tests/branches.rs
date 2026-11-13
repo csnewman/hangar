@@ -196,7 +196,22 @@ fn a_branch_is_checked_out_and_one_made(cx: &mut TestAppContext) {
     until(cx, "the branch", |cx| {
         cx.debug_bounds("branch-widget").is_some()
     });
-    let next = || asked.recv_timeout(Duration::from_secs(5)).unwrap();
+    // The service's next call, the app run as it waits: what asks may be a
+    // task it has yet to run.
+    let next = |cx: &mut VisualTestContext| {
+        let start = Instant::now();
+        loop {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "waiting for a call"
+            );
+            if let Ok(m) = asked.try_recv() {
+                return m;
+            }
+            cx.run_until_parked();
+            thread::sleep(Duration::from_millis(10));
+        }
+    };
     let open = |cx: &mut VisualTestContext| {
         let at = cx.debug_bounds("branch-widget").unwrap().center();
         cx.simulate_click(at, Modifiers::none());
@@ -206,10 +221,10 @@ fn a_branch_is_checked_out_and_one_made(cx: &mut TestAppContext) {
     };
 
     open(cx);
-    assert_eq!(next().0, "git.branches");
+    assert_eq!(next(cx).0, "git.branches");
     cx.simulate_input("rat");
     cx.simulate_keystrokes("enter");
-    let (method, params) = next();
+    let (method, params) = next(cx);
     assert_eq!(method, "git.checkout");
     assert_eq!(params["name"], "feature/rates");
     until(cx, "the pop-up closes", |cx| {
@@ -217,23 +232,23 @@ fn a_branch_is_checked_out_and_one_made(cx: &mut TestAppContext) {
     });
 
     open(cx);
-    assert_eq!(next().0, "git.branches");
+    assert_eq!(next(cx).0, "git.branches");
     cx.simulate_input("fix/limits");
     cx.simulate_keystrokes("enter");
-    let (method, params) = next();
+    let (method, params) = next(cx);
     assert_eq!(method, "git.createBranch", "nothing found: a new branch");
     assert_eq!(params["name"], "fix/limits");
 
     // Commit… asks for the Commit window: the second action.
     open(cx);
-    assert_eq!(next().0, "git.branches");
+    assert_eq!(next(cx).0, "git.branches");
     cx.simulate_keystrokes("down enter");
     until(cx, "Commit… is asked for", |_| commits.get() == 1);
 
     // Push, by a click.
     open(cx);
-    assert_eq!(next().0, "git.branches");
+    assert_eq!(next(cx).0, "git.branches");
     let push = cx.debug_bounds("branch-row-Push").unwrap().center();
     cx.simulate_click(push, Modifiers::none());
-    assert_eq!(next().0, "git.push");
+    assert_eq!(next(cx).0, "git.push");
 }

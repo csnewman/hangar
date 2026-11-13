@@ -1212,6 +1212,13 @@ fn new_from_the_keys_makes_folders_on_the_way(cx: &mut TestAppContext) {
             .is_ok_and(|o| o.root == "/home/dev/app" && o.path == "docs/today.md")
     });
 
+    // What was made is listed above main.rs, which moves down a row: its
+    // row is clicked once it has.
+    until(cx, "what was made listed", |cx| {
+        cx.update(|window, _| window.refresh());
+        cx.debug_bounds("tree-row-docs/today.md").is_some()
+    });
+
     // Directory, the list's second item: a file on the way is said.
     let row = cx.debug_bounds("tree-row-main.rs").unwrap();
     cx.simulate_click(row.center(), Modifiers::none());

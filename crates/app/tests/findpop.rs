@@ -44,6 +44,9 @@ fn running(id: &str) -> Environment {
 /// A window on a running environment of a place that never connects: its
 /// Code service unreached, which the pop-up does not need to open.
 fn open(cx: &mut TestAppContext) -> (gpui::Entity<EnvTab>, &mut VisualTestContext) {
+    // The tab's connections fail on threads of their own, which wake its
+    // tasks when they hear of it: soon or, on Windows, seconds later.
+    cx.executor().allow_parking();
     cx.update(gpui_component::init);
     cx.update(hangar_app::envtab::bind_keys);
     let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));

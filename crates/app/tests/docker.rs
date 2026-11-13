@@ -283,10 +283,22 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
         })
         .detach()
     });
-    let next = |want: &str| loop {
-        let (method, params) = asked.recv_timeout(Duration::from_secs(5)).unwrap();
-        if method == want {
-            return params;
+    // The service's next call of want, those before it passed over, the app
+    // run as it waits: what asks may be a task it has yet to run.
+    let next = |cx: &mut VisualTestContext, want: &str| {
+        let start = Instant::now();
+        loop {
+            assert!(
+                start.elapsed() < Duration::from_secs(10),
+                "waiting for {want}"
+            );
+            match asked.try_recv() {
+                Ok((method, params)) if method == want => return params,
+                Ok(_) => continue,
+                Err(_) => {}
+            }
+            cx.run_until_parked();
+            thread::sleep(Duration::from_millis(10));
         }
     };
     until(cx, "the containers", |cx| {
@@ -300,7 +312,7 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
     // Choosing a container follows its log; what came before docker.logs
     // answered is kept.
     click(cx, "docker-row-shop-web-1");
-    assert_eq!(next("docker.logs")["id"], "aaaaaaaaaaaa");
+    assert_eq!(next(cx, "docker.logs")["id"], "aaaaaaaaaaaa");
     until(cx, "the log", |cx| {
         docker.read_with(cx, |d, cx| d.log(cx).read(cx).lines().text())
             == "aaaaaaaaaaaa says\nhello world\n"
@@ -308,8 +320,8 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
 
     // Another container stops following the first.
     click(cx, "docker-row-shop-worker-1");
-    assert_eq!(next("docker.logsStop")["stream"], 7);
-    assert_eq!(next("docker.logs")["id"], "bbbbbbbbbbbb");
+    assert_eq!(next(cx, "docker.logsStop")["stream"], 7);
+    assert_eq!(next(cx, "docker.logs")["id"], "bbbbbbbbbbbb");
     until(cx, "its log alone", |cx| {
         docker.read_with(cx, |d, cx| d.log(cx).read(cx).lines().text())
             == "bbbbbbbbbbbb says\nhello world\n"
@@ -317,7 +329,7 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
 
     // The bar: an exited container starts; it has no shell.
     click(cx, "docker-start");
-    let p = next("docker.act");
+    let p = next(cx, "docker.act");
     assert_eq!(
         (p["id"].as_str(), p["action"].as_str()),
         (Some("bbbbbbbbbbbb"), Some("start"))
@@ -328,7 +340,7 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
     // A running one: Restart and Shell.
     click(cx, "docker-row-shop-web-1");
     click(cx, "docker-restart");
-    let p = next("docker.act");
+    let p = next(cx, "docker.act");
     assert_eq!(
         (p["id"].as_str(), p["action"].as_str()),
         (Some("aaaaaaaaaaaa"), Some("restart"))
@@ -338,7 +350,7 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
 
     // Inspect stops following and shows the details.
     click(cx, "docker-inspect-tab");
-    next("docker.logsStop");
+    next(cx, "docker.logsStop");
     until(cx, "the details", |cx| {
         cx.debug_bounds("docker-copy-id").is_some()
     });
@@ -350,7 +362,7 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
     cx.simulate_mouse_up(row, MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
     cx.simulate_keystrokes("down down down down down down down enter");
-    let p = next("docker.act");
+    let p = next(cx, "docker.act");
     assert_eq!(p["action"], "pause");
 
     // A project: its details, and Down once asked.
@@ -365,7 +377,7 @@ fn containers_are_followed_and_acted_on(cx: &mut TestAppContext) {
         "Down asks first"
     );
     click(cx, "dialog-ok");
-    let p = next("docker.project");
+    let p = next(cx, "docker.project");
     assert_eq!(
         (p["project"].as_str(), p["action"].as_str()),
         (Some("shop"), Some("down"))

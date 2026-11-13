@@ -29,7 +29,9 @@ fn open(cx: &mut TestAppContext) -> (FocusHandle, FocusHandle, &mut VisualTestCo
     cx.update(gpui_component::init);
     cx.update(hangar_app::termview::bind_keys);
     // Nothing answers there: the terminal fails to connect, and still
-    // takes keys.
+    // takes keys. It fails on the connection's own thread, which wakes the
+    // view when it hears of it: soon or, on Windows, seconds later.
+    cx.executor().allow_parking();
     let client = Client::new("http://127.0.0.1:9", "hgr_t");
     let (root, cx) = cx.add_window_view(|window, cx| {
         let term = cx.new(|cx| TerminalView::new(&client, "env1", None, cx));
@@ -394,9 +396,12 @@ fn shared(
     let (from_tx, from) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let (tcp, _) = ln.accept().unwrap();
-        tcp.set_read_timeout(Some(std::time::Duration::from_millis(10)))
-            .unwrap();
         let mut ws = tungstenite::accept(tcp).unwrap();
+        // Reads time out, so what the test sends goes out between them; the
+        // handshake waits for the terminal's request however long it takes.
+        ws.get_ref()
+            .set_read_timeout(Some(std::time::Duration::from_millis(10)))
+            .unwrap();
         ws.send(Message::text(hello)).unwrap();
         loop {
             while let Ok(b) = to.try_recv() {
