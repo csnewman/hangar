@@ -178,6 +178,35 @@ jobs:
         env:
           HANGAR_REQUIRE_CODEMIRROR: 1
 
+  nfs:
+    # pjdfstest against the shared files' NFS server through Linux's own
+    # client, in each squash mode (dev/pjdfstest-tcp.sh).
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends nfs-common netbase autoconf automake
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+          key: nfs
+      - run: cargo build --release -p hangar-nfs --example tcp
+        working-directory: crates
+      # A difference is also an annotation: what the API shows without the
+      # log.
+      - name: pjdfstest
+        shell: bash
+        run: |
+          out=$RUNNER_TEMP/pjdfstest
+          if ! sudo SERVER="$PWD/crates/target/release/examples/tcp" PJDFSTEST="$RUNNER_TEMP/suite" \
+            dev/pjdfstest-tcp.sh 2>&1 | tee "$out"; then
+            echo "::error title=pjdfstest::$(grep -E '^   |differs|no result' "$out" | head -60 |
+              sed 's/%/%25/g' | awk '{ printf "%s%%0A", $0 }')"
+            exit 1
+          fi
+
   app:
     # The desktop app (gpui, through gpui-component) on each platform it
     # ships for, its editor's behaviour checked headless.
