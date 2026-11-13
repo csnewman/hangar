@@ -30,6 +30,7 @@ pub(crate) fn err(msg: impl Into<String>) -> std::io::Error {
 }
 
 /// A path as the C library takes it.
+#[cfg(target_os = "macos")]
 pub(crate) fn fs_cstr(p: &std::path::Path) -> std::io::Result<std::ffi::CString> {
     use std::os::unix::ffi::OsStrExt;
     std::ffi::CString::new(p.as_os_str().as_bytes())
