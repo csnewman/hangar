@@ -258,6 +258,7 @@ func (s *Server) answer(c call) []byte {
 		if res.replay != nil {
 			// The reply to the same call, made before: replyHeader's xid
 			// is the retransmission's, the same.
+			accepted(w, acceptSuccess)
 			return append(w.b, res.replay...)
 		}
 		accepted(w, acceptSuccess)
