@@ -425,8 +425,11 @@ impl PerformanceView {
         };
         let series = |f: fn(&Stats) -> f64| -> Vec<f64> { self.history.iter().map(f).collect() };
         let total = now.memory_total_mib.max(1) as f64;
+        // As wide as the window and no wider, the tiles sharing it.
         h_flex()
             .flex_none()
+            .min_w_0()
+            .overflow_hidden()
             .gap(px(8.))
             .px(px(8.))
             .py(px(6.))
@@ -436,6 +439,7 @@ impl PerformanceView {
                 series(|s| s.cpu_percent),
                 100.,
                 p.accent,
+                None,
                 p,
             ))
             .child(tile(
@@ -448,8 +452,30 @@ impl PerformanceView {
                 series(|s| s.memory_used_mib as f64),
                 total,
                 p.good,
+                None,
                 p,
             ))
+            // What it has swapped out, where it has swap: zswap's share in
+            // its memory, and the rest on its disk, as the web's tile says.
+            .when(now.swap_total_mib > 0, |d| {
+                d.child(tile(
+                    "Swap",
+                    format!("{} out", memory(now.swap_used_mib)),
+                    series(|s| s.swap_used_mib as f64),
+                    now.swap_total_mib as f64,
+                    p.peer,
+                    Some(format!(
+                        "What it has swapped out, of {}: {} compressed into {} of its memory, the rest on its disk, which takes {} of the worker's. In {}, out {}.",
+                        memory(now.swap_total_mib),
+                        memory(now.swap_compressed_mib),
+                        memory(now.swap_pool_mib),
+                        bytes(now.swap_disk_bytes as f64),
+                        rate(now.swap_in_bps),
+                        rate(now.swap_out_bps)
+                    )),
+                    p,
+                ))
+            })
             .child(tile(
                 "Disk",
                 format!(
@@ -461,6 +487,7 @@ impl PerformanceView {
                 series(|s| s.disk_read_bps + s.disk_write_bps),
                 0.,
                 p.busy,
+                None,
                 p,
             ))
             .child(tile(
@@ -469,6 +496,7 @@ impl PerformanceView {
                 series(|s| s.net_rx_bps + s.net_tx_bps),
                 0.,
                 p.wait,
+                None,
                 p,
             ))
             .into_any_element()
@@ -762,30 +790,31 @@ fn ago(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
 }
 
 /// One measure: its name, its reading, and its last readings drawn, scaled
-/// to top (or to their own highest, for 0).
+/// to top (or to their own highest, for 0), with more said of it on hover
+/// where there is more.
 fn tile(
     name: &'static str,
     value: String,
     series: Vec<f64>,
     top: f64,
     colour: Hsla,
+    tip: Option<String>,
     p: &Palette,
 ) -> gpui::AnyElement {
-    v_flex()
-        .flex_1()
-        .min_w(px(120.))
+    let el = v_flex()
+        .flex_grow(1.)
+        .flex_shrink(1.)
+        .flex_basis(px(100.))
+        .min_w(px(80.))
         .p(px(6.))
         .gap(px(2.))
         .rounded(px(6.))
         .border_1()
         .border_color(p.border)
-        .child(
-            h_flex()
-                .gap(px(6.))
-                .child(div().text_size(px(11.)).text_color(p.muted).child(name))
-                .child(div().flex_1())
-                .child(div().text_size(px(11.)).truncate().child(value)),
-        )
+        // The measure's name over its reading, so a narrow window still
+        // has room for every tile and most of each reading.
+        .child(div().text_size(px(11.)).text_color(p.muted).child(name))
+        .child(div().min_w_0().text_size(px(12.)).truncate().child(value))
         .child(
             canvas(
                 |_, _, _| {},
@@ -793,8 +822,16 @@ fn tile(
             )
             .h(px(28.))
             .w_full(),
-        )
-        .into_any_element()
+        );
+    match tip {
+        Some(tip) => el
+            .id(name)
+            .tooltip(move |window, cx| {
+                gpui_component::tooltip::Tooltip::new(tip.clone()).build(window, cx)
+            })
+            .into_any_element(),
+        None => el.into_any_element(),
+    }
 }
 
 /// Draws readings as a line across bounds, the newest at the right.
@@ -893,9 +930,13 @@ impl Render for PerformanceView {
                         .child(b),
                 )
             });
+        // No wider than its window, whatever its tiles and columns would
+        // take.
         v_flex()
             .size_full()
             .min_h_0()
+            .min_w_0()
+            .overflow_hidden()
             .text_size(px(12.))
             .track_focus(&self.focus)
             .child(self.tiles(&p))

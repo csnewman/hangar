@@ -111,6 +111,9 @@ pub struct Details {
     pub dax: bool,
     /// Its swap: None is its worker's default, 0 none.
     pub swap_mib: Option<i64>,
+    /// It hands back the memory its programs leave idle: experimental, off
+    /// unless asked for, and changeable while it runs.
+    pub memory_reclaim: bool,
     pub access: Access,
     /// What a worker's labels must say for it to run there.
     pub placement: std::collections::BTreeMap<String, String>,
@@ -158,6 +161,7 @@ pub struct MachineSettings {
     pub dax: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub swap_mib: Option<i64>,
+    pub memory_reclaim: bool,
 }
 
 /// A template, as making an environment from it needs it: what the
@@ -181,6 +185,8 @@ pub struct Template {
     pub dax: bool,
     #[serde(default)]
     pub swap_mib: Option<i64>,
+    #[serde(default)]
+    pub memory_reclaim: bool,
     pub image: String,
     /// What it clones; ref, path and branch may hold variables, {name}
     /// and the like, filled in as each environment is made.
@@ -271,8 +277,17 @@ pub struct Stats {
     pub memory_total_mib: i64,
     pub memory_cached_mib: i64,
     pub host_memory_mib: i64,
+    /// Its swap, zswap's pool and disk together, and what it has swapped
+    /// out: swap_compressed_mib of it compressed into swap_pool_mib of its
+    /// memory, the rest on its disk, which takes swap_disk_bytes of its
+    /// worker's; and how fast it swaps in and out, in bytes a second.
     pub swap_total_mib: i64,
     pub swap_used_mib: i64,
+    pub swap_compressed_mib: i64,
+    pub swap_pool_mib: i64,
+    pub swap_disk_bytes: i64,
+    pub swap_in_bps: f64,
+    pub swap_out_bps: f64,
     pub disk_used_bytes: i64,
     pub disk_read_bps: f64,
     pub disk_write_bps: f64,

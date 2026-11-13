@@ -72,6 +72,7 @@ fn setting(name: &str) -> &str {
         "cpus" => "vCPUs",
         "gpu" => "GPU",
         "dax" => "image mapping",
+        "memory_reclaim" => "idle memory",
         "repos" => "repositories",
         "trusted_folders" => "trusted folders",
         "web_names" => "web server names",

@@ -335,6 +335,7 @@ impl NewEnvView {
                 gpu: m.gpu.clone(),
                 dax: t.dax,
                 swap_mib: t.swap_mib,
+                memory_reclaim: t.memory_reclaim,
             }),
         };
         // A branch typed over is sent with the template's repositories; one

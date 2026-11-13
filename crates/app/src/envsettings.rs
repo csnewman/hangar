@@ -61,7 +61,9 @@ impl Page {
     fn words(self) -> &'static str {
         match self {
             Page::General => "name task template image upgrade rollback",
-            Page::Resources => "memory ram vcpus cpus swap display desktop gpu dax placement",
+            Page::Resources => {
+                "memory ram vcpus cpus swap idle reclaim display desktop gpu dax placement"
+            }
             Page::Files => "packs copies shared files profile",
             Page::Access => "sensitive credentials ssh keys registry trust",
             Page::Ports => "public private web servers",
@@ -105,6 +107,12 @@ pub fn live_memory(env: &Environment, stats: Option<&Stats>) -> Option<(i64, i64
     Some((s.machine_memory_min_mib.unwrap_or(0).max(used), max))
 }
 
+/// Whether a running environment's memory reclaim can change as it runs:
+/// it is up, and its worker is reporting, to tell its guest.
+pub fn live_reclaim(env: &Environment) -> bool {
+    env.desired == "running" && env.phase == "running" && env.worker_online == Some(true)
+}
+
 /// An environment's machine as its settings say it is.
 pub fn saved(env: &Environment) -> MachineSettings {
     MachineSettings {
@@ -114,6 +122,7 @@ pub fn saved(env: &Environment) -> MachineSettings {
         gpu: env.details.gpu.clone().unwrap_or_else(|| "none".into()),
         dax: env.details.dax,
         swap_mib: env.details.swap_mib,
+        memory_reclaim: env.details.memory_reclaim,
     }
 }
 
@@ -150,6 +159,14 @@ pub fn changes(from: &MachineSettings, to: &MachineSettings) -> Vec<String> {
             "swap {} → {}",
             swap(from.swap_mib),
             swap(to.swap_mib)
+        ));
+    }
+    if from.memory_reclaim != to.memory_reclaim {
+        let way = |r| if r { "handed back" } else { "kept" };
+        out.push(format!(
+            "idle memory {} → {}",
+            way(from.memory_reclaim),
+            way(to.memory_reclaim)
         ));
     }
     out
@@ -229,6 +246,7 @@ pub struct EnvSettingsView {
     display: String,
     gpu: String,
     dax: bool,
+    reclaim: bool,
     swap: SwapWay,
     swap_size: Entity<InputState>,
     task: Entity<InputState>,
@@ -277,6 +295,7 @@ impl EnvSettingsView {
             gpu: "none".into(),
             dax: false,
             swap_mib: None,
+            memory_reclaim: false,
         });
         let input = |value: String, window: &mut Window, cx: &mut Context<Self>| {
             cx.new(|cx| {
@@ -346,6 +365,7 @@ impl EnvSettingsView {
             display: base.display.clone(),
             gpu: base.gpu.clone(),
             dax: base.dax,
+            reclaim: base.memory_reclaim,
             swap: match base.swap_mib {
                 None => SwapWay::Default,
                 Some(0) => SwapWay::None,
@@ -515,6 +535,7 @@ impl EnvSettingsView {
             gpu: self.gpu.clone(),
             dax: self.dax,
             swap_mib,
+            memory_reclaim: self.reclaim,
         })
     }
 
@@ -1075,10 +1096,13 @@ impl EnvSettingsView {
                 ))
             };
         let passthrough = env.details.gpu.as_deref() == Some("passthrough");
+        let reclaim_live = live_reclaim(env);
         let hint = if changeable(env) {
             "They apply when it next starts."
         } else if live.is_some() {
-            "Its memory changes as it runs. Stop it to change the rest; they apply when it next starts."
+            "Its memory and idle memory change as it runs. Stop it to change the rest; they apply when it next starts."
+        } else if reclaim_live {
+            "Its idle memory changes as it runs. Stop it to change the rest; they apply when it next starts."
         } else {
             "Stop it to change these. They apply when it next starts."
         };
@@ -1156,6 +1180,50 @@ impl EnvSettingsView {
             )
             .child(note(
                 "Behind zswap; made empty at each cold start, kept across a suspend.",
+                p,
+            ))
+            .child(
+                h_flex()
+                    .gap(px(8.))
+                    .child(section("Idle memory", p))
+                    .when(reclaim_live, |d| {
+                        d.child(
+                            div()
+                                .pt(px(4.))
+                                .text_size(px(11.))
+                                .text_color(p.muted)
+                                .child("changes while it runs"),
+                        )
+                    }),
+            )
+            .child(
+                field("Idle memory", p).child(
+                    h_flex()
+                        .gap(px(8.))
+                        .child(
+                            Checkbox::new("reclaim")
+                                .label("Hand it back to the worker")
+                                .checked(self.reclaim)
+                                .disabled(fixed && !reclaim_live)
+                                .on_click(cx.listener(|this, b: &bool, _, cx| {
+                                    this.reclaim = *b;
+                                    cx.notify();
+                                })),
+                        )
+                        .child(
+                            div()
+                                .px(px(7.))
+                                .rounded_full()
+                                .border_1()
+                                .border_color(p.wait)
+                                .text_color(p.wait)
+                                .text_size(px(10.5))
+                                .child("Experimental"),
+                        ),
+                ),
+            )
+            .child(note(
+                "What its programs leave idle is swapped out, and cache nothing touches dropped, so its place gets the memory back. A program left idle is slow for a moment when next used.",
                 p,
             ))
             .child(section("Machine", p))

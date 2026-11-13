@@ -105,6 +105,7 @@ fn changes_are_said_as_the_web_says_them() {
             gpu: "virtual".into(),
             dax: false,
             swap_mib: None,
+            memory_reclaim: false,
         }
     );
     let to = MachineSettings {
@@ -112,6 +113,7 @@ fn changes_are_said_as_the_web_says_them() {
         memory_mib: 6144,
         display: "none".into(),
         swap_mib: Some(0),
+        memory_reclaim: true,
         ..from.clone()
     };
     assert_eq!(
@@ -121,6 +123,7 @@ fn changes_are_said_as_the_web_says_them() {
             "memory 4 GB → 6 GB",
             "display desktop → headless",
             "swap the worker's default → none",
+            "idle memory kept → handed back",
         ]
     );
     assert!(changes(&from, &from).is_empty());
