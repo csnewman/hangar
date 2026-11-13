@@ -100,7 +100,8 @@ export function settingsSummary(env: Environment): string {
     `${s.cpus} vCPU${s.cpus === 1 ? '' : 's'}, ${s.memory_mib} MiB, ` +
     `${s.display === 'desktop' ? 'desktop' : 'headless'}, ${s.gpu === 'none' ? 'no GPU' : `${s.gpu} GPU`}` +
     (s.dax ? ', image files mapped from the host' : '') +
-    (s.swap_mib === undefined ? '' : s.swap_mib === 0 ? ', no swap' : `, ${formatMemory(s.swap_mib)} swap`)
+    (s.swap_mib === undefined ? '' : s.swap_mib === 0 ? ', no swap' : `, ${formatMemory(s.swap_mib)} swap`) +
+    (s.memory_reclaim ? ', idle memory handed back' : '')
   )
 }
 

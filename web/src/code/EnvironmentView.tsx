@@ -20,7 +20,7 @@ import { api, type Environment, type EnvironmentSettings, type TemplateSetting }
 import { Conflicts, CopyChoice, fromWhat, useEnvironmentPacks } from '../components/EnvironmentPacks'
 import { formatAgo, formatBytes, formatMemory, shortDigest } from '../components/format'
 import { imageBuild, imageRisk, useImageChange } from '../components/imageChange'
-import { CPUField, MemoryField, SwapField } from '../components/MachineFields'
+import { CPUField, MemoryField, ReclaimField, SwapField } from '../components/MachineFields'
 import { Banner, CopyField, IndexedPage, Row, Rows, Section } from '../components/Pane'
 import { PhaseDot } from '../components/Status'
 import { canSuspend, useEnvironmentActions } from '../environmentActions'
@@ -255,6 +255,7 @@ const settingNames: Record<TemplateSetting, string> = {
   gpu: 'GPU',
   dax: 'image mapping',
   swap: 'swap',
+  memory_reclaim: 'idle memory',
   repos: 'repositories',
   projects: 'projects',
   access: 'access',
@@ -628,6 +629,7 @@ function fromSpec(spec: Environment['spec']): EnvironmentSettings {
     gpu: spec.gpu,
     dax: spec.dax ?? false,
     swap_mib: spec.swap_mib,
+    memory_reclaim: spec.memory_reclaim ?? false,
   }
 }
 
@@ -640,6 +642,7 @@ const settingFields: { key: keyof EnvironmentSettings; word: string; show: (s: E
   { key: 'gpu', word: 'GPU', show: (s) => s.gpu },
   { key: 'dax', word: 'image files', show: (s) => (s.dax ? 'mapped' : 'read in') },
   { key: 'swap_mib', word: 'swap', show: (s) => swapWords(s.swap_mib) },
+  { key: 'memory_reclaim', word: 'idle memory', show: (s) => (s.memory_reclaim ? 'handed back' : 'kept') },
 ]
 
 type SettingsForm = ReturnType<typeof useSettingsForm>
@@ -669,7 +672,8 @@ function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
   const live = ok ? undefined : liveMemory(env)
   const changed = (key: keyof EnvironmentSettings) => f.changes.some((c) => c.key === key)
   const placement = Object.entries(env.spec.placement ?? {})
-  // While it runs, its memory alone can change.
+  // While it runs, its memory and its idle memory's reclaim alone can
+  // change.
   const fixed = (children: ReactNode) =>
     live ? (
       <fieldset className="pane-fields pane-fields-inline" disabled>
@@ -746,6 +750,9 @@ function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
               />,
             )}
           </Row>
+          <Row label="Idle memory" modified={changed('memory_reclaim')}>
+            <ReclaimField on={f.form.memory_reclaim ?? false} onChange={(memory_reclaim) => f.set({ memory_reclaim })} />
+          </Row>
           {placement.length > 0 && (
             <Row label="Placement">
               <span className="mono">{placement.map(([k, v]) => `${k}=${v}`).join(', ')}</span>
@@ -759,7 +766,7 @@ function Machine({ env, form: f }: { env: Environment; form: SettingsForm }) {
         {ok
           ? 'They apply when it next starts.'
           : live
-            ? 'Its memory changes as it runs. Stop the environment to change the rest; they apply when it next starts.'
+            ? 'Its memory and idle memory change as it runs. Stop the environment to change the rest; they apply when it next starts.'
             : 'Stop the environment to change these. They apply when it next starts.'}
       </p>
     </>

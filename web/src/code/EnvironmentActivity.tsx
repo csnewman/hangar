@@ -110,6 +110,7 @@ const settingWords: { key: string; label: string; show: (v: never) => string }[]
   { key: 'gpu', label: 'GPU', show: (v: string) => v },
   { key: 'dax', label: 'image mapping', show: (v: boolean) => (v ? 'on' : 'off') },
   { key: 'swap_mib', label: 'swap', show: (v: number | null) => swapWords(v) },
+  { key: 'memory_reclaim', label: 'idle memory', show: (v: boolean) => (v ? 'handed back' : 'kept') },
 ]
 
 // describe says an event in words: what was done, and what it changed.

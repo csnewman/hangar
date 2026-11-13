@@ -6,7 +6,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { api, type Access, type Display, type GPU, type Repo, type Template, type TemplateInput } from '../api'
 import { ConfirmButton } from '../components/ConfirmButton'
 import { formatMemory } from '../components/format'
-import { CPUField, MemoryField, SwapField } from '../components/MachineFields'
+import { CPUField, MemoryField, ReclaimField, SwapField } from '../components/MachineFields'
 import {
   ApplyBar,
   DetailHead,
@@ -85,6 +85,7 @@ function toBody(form: TemplateInput, placement: [string, string][]): TemplateInp
         return names.length > 0 ? names : undefined
       })(),
       dax: spec.dax || undefined,
+      memory_reclaim: spec.memory_reclaim || undefined,
       packs: spec.packs?.length ? spec.packs : undefined,
       trusted_folders: spec.access?.no_editor_trust
         ? undefined
@@ -134,6 +135,7 @@ const templateFields: {
   { key: 'gpu', label: 'GPU', get: (b) => b.spec.gpu, show: (b) => b.spec.gpu },
   { key: 'dax', label: 'Image files', get: (b) => !!b.spec.dax },
   { key: 'swap', label: 'Swap', get: (b) => b.spec.swap_mib, show: (b) => swapWords(b.spec.swap_mib) },
+  { key: 'memory_reclaim', label: 'Idle memory', get: (b) => !!b.spec.memory_reclaim },
   { key: 'repos', label: 'Repositories', get: (b) => b.spec.repos },
   { key: 'projects', label: 'Projects', get: (b) => b.spec.projects },
   { key: 'access', label: 'What it is given', get: (b) => b.spec.access },
@@ -421,7 +423,17 @@ function Editor({ existing }: { existing?: Template }) {
                   onChange={(swap_mib) => setSpec({ swap_mib })}
                 />
                 {hint(
-                  'What its programs leave untouched for five minutes is swapped out, compressed in its own memory and then to a disk, and the memory goes back to the worker. Programs that sit idle, such as a search engine in Docker, then cost little until used, but are slow for a moment when they are.',
+                  'What does not fit in its memory is swapped out, compressed in its own memory and then to a disk. With its idle memory handed back, what its programs leave idle goes there too.',
+                )}
+              </Row>
+              <Row label={label('Idle memory', 'tpl-reclaim')} modified={changed('memory_reclaim')}>
+                <ReclaimField
+                  id="tpl-reclaim"
+                  on={spec.memory_reclaim ?? false}
+                  onChange={(memory_reclaim) => setSpec({ memory_reclaim })}
+                />
+                {hint(
+                  'What its programs leave idle for a minute or two is swapped out, and cache nothing has touched for five minutes dropped, so the worker gets that memory back. A program left idle, such as a coding agent’s CLI, is then slow for a moment when next used. What it frees goes back either way. A running environment takes a change at once.',
                 )}
               </Row>
             </Rows>

@@ -1270,6 +1270,15 @@ input:focus {
   width: auto;
 }
 
+/* Whether a machine hands back its idle memory: a checkbox, and its
+   experimental badge beside it. */
+.reclaim-field {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
 /* vCPUs: a number between buttons that step it, drawn as one control. */
 .cpu-field {
   display: inline-flex;

@@ -4,7 +4,7 @@ import { useState, type FormEvent } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 
 import { api, type EnvironmentSettings, type Template } from '../api'
-import { CPUField, MemoryField, SwapField } from '../components/MachineFields'
+import { CPUField, MemoryField, ReclaimField, SwapField } from '../components/MachineFields'
 import { Row, Rows, SearchField, Segmented, Tile } from '../components/Pane'
 import { desktop } from '../desktop'
 import { PhoneFoot, PhoneNav } from '../components/Phone'
@@ -339,6 +339,7 @@ function NewEnvironmentForm({
     gpu: s.gpu,
     dax: s.dax ?? false,
     swap_mib: s.swap_mib,
+    memory_reclaim: s.memory_reclaim ?? false,
   }
   const projects =
     repo !== null
@@ -456,6 +457,13 @@ function NewEnvironmentForm({
                   mib={m.swap_mib}
                   memory={m.memory_mib}
                   onChange={(swap_mib) => onMachine({ ...m, swap_mib })}
+                />
+              </label>
+              <label>
+                <span>Idle memory</span>
+                <ReclaimField
+                  on={m.memory_reclaim ?? false}
+                  onChange={(memory_reclaim) => onMachine({ ...m, memory_reclaim })}
                 />
               </label>
               <span className="newenv-machine-row">

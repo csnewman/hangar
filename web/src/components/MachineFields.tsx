@@ -299,3 +299,21 @@ export function SwapField({
     </span>
   )
 }
+
+// ReclaimField is whether a machine hands back the memory its programs
+// leave idle, swapping it out, and the cache nothing has touched: an
+// experimental setting, off unless asked for, which a running environment
+// takes at once.
+export function ReclaimField({ on, onChange, id }: { on: boolean; onChange: (on: boolean) => void; id?: string }) {
+  return (
+    <span className="reclaim-field">
+      <label className="check">
+        <input id={id} type="checkbox" checked={on} onChange={(e) => onChange(e.target.checked)} />
+        <span>Hand it back to the worker</span>
+      </label>
+      <span className="badge badge-wait" title="It may change or go">
+        Experimental
+      </span>
+    </span>
+  )
+}
