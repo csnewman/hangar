@@ -322,11 +322,13 @@ jobs:
       # The Rust hangar-krun (crates/krun), which links the same checkout as
       # a crate. The Mac runs it; here it is built and asked what it has,
       # until it has run Linux machines and replaces the Go one.
+      # Clippy lints path dependencies too: --no-deps keeps it to hangar-krun,
+      # leaving libkrun's crates to the fork's own checks.
       - name: Build the Rust hangar-krun
         working-directory: crates/krun
         run: |
           ln -sfn "$RUNNER_TEMP/libkrun" libkrun
           cargo fmt --check
-          cargo clippy --release --locked --features gpu -- -D warnings
+          cargo clippy --release --locked --features gpu --no-deps -- -D warnings
           cargo build --release --locked --features gpu
           target/release/hangar-krun -features | tee /dev/stderr | grep -q '"gpu":true'
