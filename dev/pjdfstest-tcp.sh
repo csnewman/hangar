@@ -14,9 +14,11 @@
 # As root on Linux, with cargo, perl's prove, mount.nfs (nfs-common) and
 # /etc/protocols (netbase): a CI runner, or on the Mac a privileged
 # OrbStack container (AGENTS.md). SERVER names another server's binary,
-# taking the example's arguments, to run instead. A run takes about three
-# minutes.
+# taking the example's arguments, to run instead. FILES is where the files
+# root is made, on ext4 as CI's runner has it (btrfs counts no directory's
+# links, which rename/24.t checks). A run takes about three minutes.
 set -eu
+umask 022
 
 update=
 if [ "${1:-}" = -update ]; then
@@ -66,7 +68,8 @@ status=0
 for run in all_squash root_squash no_root_squash; do
 	echo "== $run"
 	# One set, its run folder the environment user's, as a home's is.
-	rm -rf "$files" && mkdir -p "$files/s1/run" && chown 1000:1000 "$files/s1" "$files/s1/run"
+	rm -rf "$files" && mkdir -p "$files/s1/run"
+	chown 1000:1000 "$files/s1" "$files/s1/run" && chmod 755 "$files/s1" "$files/s1/run"
 	case $run in
 	all_squash) squash=all ;;
 	root_squash) squash=root ;;

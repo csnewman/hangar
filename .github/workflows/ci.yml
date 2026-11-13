@@ -194,16 +194,19 @@ jobs:
           key: nfs
       - run: cargo build --release -p hangar-nfs --example tcp
         working-directory: crates
-      # A difference is also an annotation: what the API shows without the
-      # log.
+      # Each run's difference is also an annotation, what the API shows
+      # without the log: one a run, as one holds 4 KB.
       - name: pjdfstest
         shell: bash
         run: |
           out=$RUNNER_TEMP/pjdfstest
           if ! sudo SERVER="$PWD/crates/target/release/examples/tcp" PJDFSTEST="$RUNNER_TEMP/suite" \
             dev/pjdfstest-tcp.sh 2>&1 | tee "$out"; then
-            echo "::error title=pjdfstest::$(grep -E '^   |differs|no result' "$out" | head -60 |
-              sed 's/%/%25/g' | awk '{ printf "%s%%0A", $0 }')"
+            awk '/^== / { run = $2; next } run && !/as expected/ { print > (ENVIRON["RUNNER_TEMP"] "/diff-" run) }' "$out"
+            for f in "$RUNNER_TEMP"/diff-*; do
+              [ -s "$f" ] || continue
+              echo "::error title=pjdfstest ${f##*/diff-}::$(head -c 3500 "$f" | sed 's/%/%25/g' | awk '{ printf "%s%%0A", $0 }')"
+            done
             exit 1
           fi
 
