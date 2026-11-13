@@ -156,3 +156,106 @@ async fn hybrid_vsock() {
     assert!(HybridListener::listen(&long, 1, 1).is_err());
     let _ = std::fs::remove_dir_all(d);
 }
+
+// The guest's /proc, as the agent reads it back: meminfo, net/dev,
+// diskstats and vmstat, one after the other.
+#[test]
+fn guest_stats() {
+    use hangar_vm::stats::{self, Counters};
+    let text = "MemTotal:        4028512 kB\nMemFree:          100000 kB\nMemAvailable:    3004512 kB\n\
+        Buffers:           10240 kB\nCached:           512000 kB\nShmem:             20480 kB\nMlocked:            2048 kB\n\
+        SwapTotal:       4194304 kB\nSwapFree:        3145728 kB\nZswap:             65536 kB\nZswapped:         262144 kB\n\
+        Inter-|   Receive                                                |  Transmit\n \
+        face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed\n    \
+        lo:  999999     100    0    0    0     0          0         0   999999     100    0    0    0     0       0          0\n  \
+        eth0: 1000000    2000    0    0    0     0          0         0   500000    1000    0    0    0     0       0          0\n \
+        253       0 vda 100 0 2048 50 200 0 4096 80 0 100 130 0 0 0 0\n \
+        253       1 vda1 100 0 2048 50 200 0 4096 80 0 100 130 0 0 0 0\n \
+        253      16 vdb 10 0 8 5 20 0 16 8 0 10 13 0 0 0 0\n\
+        pswpin 10\npswpout 30\nzswpin 100\nzswpout 200\nzswpwb 5\nnr_free_pages 25000\n";
+    let mut st = hangar_api::EnvironmentStats::default();
+    let mut c = Counters::new(std::time::Instant::now());
+    stats::guest(text, &mut st, &mut c);
+    assert_eq!((st.memory_total_mib, st.memory_used_mib), (3934, 1000));
+    assert_eq!((st.memory_cached_mib, st.memory_locked_mib), (490, 2));
+    assert_eq!((st.swap_total_mib, st.swap_used_mib), (4096, 1024));
+    assert_eq!((st.swap_compressed_mib, st.swap_pool_mib), (256, 64));
+    assert_eq!(
+        (c.net_rx, c.net_tx),
+        (1_000_000, 500_000),
+        "loopback counted"
+    );
+    assert_eq!(
+        (c.disk_read, c.disk_write),
+        ((2048 + 8) * 512, (4096 + 16) * 512),
+        "a partition counted"
+    );
+    assert_eq!((c.swap_in, c.swap_out), (110, 225));
+
+    let mut later = c;
+    later.at = c.at + std::time::Duration::from_secs(2);
+    later.cpu_ticks = c.cpu_ticks + 100;
+    later.net_rx = c.net_rx + 4096;
+    later.swap_out = c.swap_out + 10;
+    stats::rates(&c, &later, 2, 16384.0, &mut st);
+    assert_eq!(st.cpu_percent, 25.0);
+    assert_eq!(st.net_rx_bps, 2048.0);
+    assert_eq!(st.swap_out_bps, 5.0 * 16384.0);
+}
+
+#[test]
+fn host_procs() {
+    use hangar_vm::stats::{HostProcs, Proc, parse_smaps, parse_stat};
+    let p = parse_stat(
+        "1234 (hangar (gpu) x) S 1 1234 1234 0 -1 4194560 100 0 0 0 250 50 7 3 20 0 9 0 100 0\n",
+    )
+    .unwrap();
+    assert_eq!(
+        p,
+        Proc {
+            ppid: 1,
+            ticks: 300,
+            reaped: 10
+        }
+    );
+
+    let ps = HostProcs(
+        [
+            (10, (1, 5, 1)),
+            (11, (10, 7, 0)),
+            (12, (11, 3, 0)),
+            (13, (10, 2, 0)),
+            (20, (1, 100, 0)),
+        ]
+        .into_iter()
+        .map(|(pid, (ppid, ticks, reaped))| {
+            (
+                pid,
+                Proc {
+                    ppid,
+                    ticks,
+                    reaped,
+                },
+            )
+        })
+        .collect(),
+    );
+    let mut tree = ps.tree(10);
+    assert_eq!(tree.remove(0), 10);
+    tree.sort();
+    assert_eq!(tree, [11, 12, 13]);
+    assert_eq!(ps.tree_ticks(10), 1 + 5 + 7 + 3 + 2);
+    assert!(ps.tree(99).is_empty());
+
+    let smaps = "\
+7f0000000000-7f0040000000 rw-s 00000000 00:01 1234 /memfd:ch_ram (deleted)\nRss: 524288 kB\nPss: 524288 kB\n\
+7f1000000000-7f1000100000 rw-p 00000000 00:00 0\nRss: 1024 kB\nPss: 1000 kB\n\
+7f2000000000-7f2080000000 rw-p 00000000 00:00 0\nRss: 2097152 kB\nPss: 2097152 kB\n\
+5555000-5556000 r-xp 00000000 08:01 99 /usr/bin/cloud-hypervisor\nRss: 4 kB\nPss: 4 kB\n\
+7f3000000000-7f3000010000 rw-s 00000000 00:05 7 /dev/dri/renderD128\nRss: 64 kB\nPss: 32 kB\n\
+7ffc000-7ffd000 rw-p 00000000 00:00 0 [stack]\nRss: 8 kB\nPss: 8 kB\n";
+    assert_eq!(
+        parse_smaps(smaps),
+        ((524288 + 2097152) << 10, (1000 + 32 + 8) << 10)
+    );
+}

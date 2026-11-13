@@ -6,6 +6,7 @@ pub mod ch;
 pub mod host;
 pub mod hugepages;
 mod initrd;
+pub mod stats;
 mod swap;
 pub mod vsock;
 

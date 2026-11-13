@@ -10,6 +10,7 @@ name = "hangar_vm"
 path = "src/lib.rs"
 
 [dependencies]
+hangar-api = { path = "../api" }
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
