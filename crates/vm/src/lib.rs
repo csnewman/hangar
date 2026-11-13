@@ -5,9 +5,11 @@
 pub mod agent;
 pub mod ch;
 pub mod files;
+pub mod guest;
 pub mod host;
 pub mod hugepages;
 mod initrd;
+pub mod krun;
 pub mod stats;
 pub mod suspend;
 mod swap;
