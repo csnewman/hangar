@@ -11,6 +11,10 @@ path = "src/lib.rs"
 
 [dependencies]
 hangar-api = { path = "../api" }
+hangar-erofs = { path = "../erofs" }
+hangar-ext4 = { path = "../ext4" }
+hangar-images = { path = "../images" }
+hangar-layercheck = { path = "../layercheck" }
 hangar-nfs = { path = "../nfs" }
 libc.workspace = true
 log = "0.4"

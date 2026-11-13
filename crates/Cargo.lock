@@ -3581,6 +3581,10 @@ version = "0.1.0"
 dependencies = [
  "hangar-agent",
  "hangar-api",
+ "hangar-erofs",
+ "hangar-ext4",
+ "hangar-images",
+ "hangar-layercheck",
  "hangar-nfs",
  "libc",
  "log",

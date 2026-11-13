@@ -161,8 +161,16 @@ pub fn tool(name: &str) -> io::Result<PathBuf> {
     Ok(p)
 }
 
-async fn ask(arg: &str, env: &[(String, String)], timeout: Duration) -> io::Result<Vec<u8>> {
-    let bin = find()?;
+async fn ask(
+    bin: Option<&Path>,
+    arg: &str,
+    env: &[(String, String)],
+    timeout: Duration,
+) -> io::Result<Vec<u8>> {
+    let bin = match bin {
+        Some(b) => b.to_path_buf(),
+        None => find()?,
+    };
     let out = tokio::time::timeout(
         timeout,
         tokio::process::Command::new(bin)
@@ -183,9 +191,10 @@ async fn ask(arg: &str, env: &[(String, String)], timeout: Duration) -> io::Resu
     Ok(out.stdout)
 }
 
-/// What hangar-krun's libkrun was built with.
-pub async fn read_features() -> io::Result<Features> {
-    let out = ask("-features", &[], Duration::from_secs(30))
+/// What hangar-krun's libkrun was built with; bin names hangar-krun, or
+/// none finds it.
+pub async fn read_features(bin: Option<&Path>) -> io::Result<Features> {
+    let out = ask(bin, "-features", &[], Duration::from_secs(30))
         .await
         .map_err(|e| err(format!("asking hangar-krun what it offers: {e}")))?;
     serde_json::from_slice(&out).map_err(|e| err(format!("hangar-krun's features: {e}")))
@@ -193,8 +202,8 @@ pub async fn read_features() -> io::Result<Features> {
 
 /// What the host renders with under env, as hangar-krun's libkrun's GPU
 /// renders on Linux.
-pub async fn probe_gpu(env: &[(String, String)]) -> io::Result<GpuProbe> {
-    let out = ask("-probe", env, Duration::from_secs(30))
+pub async fn probe_gpu(bin: Option<&Path>, env: &[(String, String)]) -> io::Result<GpuProbe> {
+    let out = ask(bin, "-probe", env, Duration::from_secs(30))
         .await
         .map_err(|e| err(format!("probing the GPU with hangar-krun: {e}")))?;
     serde_json::from_slice(&out).map_err(|e| err(format!("hangar-krun's GPU probe: {e}")))

@@ -84,6 +84,8 @@ pub struct InstanceConfig {
     pub monitor: String,
     /// The monitor's program; none finds it (ch::find, krun::find).
     pub monitor_bin: Option<PathBuf>,
+    /// gvproxy, a libkrun guest's network on macOS; none finds it.
+    pub gvproxy: Option<PathBuf>,
     /// Holds what outlives a boot: the backends' saved state, a suspended
     /// machine's snapshot, and the monitor's log.
     pub dir: PathBuf,
@@ -129,6 +131,9 @@ pub struct InstanceConfig {
     pub shared_files: Option<(PathBuf, Arc<dyn hangar_nfs::View>)>,
     /// How long the agent has to dial back.
     pub agent_wait: Duration,
+    /// Set to true when the boot stops being wanted: one waiting for its
+    /// agent gives up, and what it started is stopped again.
+    pub cancel: Option<watch::Receiver<bool>>,
     pub progress: Option<Progress>,
     pub log: Log,
 }
@@ -242,6 +247,7 @@ pub struct Instance {
     vsock: PathBuf,
     gpu: Option<GpuBackend>,
     net: Option<Passt>,
+    mac_net: Option<crate::gvproxy::Network>,
     files: Option<SharedFiles>,
     krun: Option<tokio::sync::Mutex<KrunPipe>>,
     /// The memory a machine under libkrun booted with, and its virtio-mem
@@ -261,6 +267,7 @@ struct Parts {
     vsock: PathBuf,
     gpu: Option<GpuBackend>,
     net: Option<Passt>,
+    mac_net: Option<crate::gvproxy::Network>,
     files: Option<SharedFiles>,
     krun: Option<KrunPipe>,
     krun_boot: u32,
@@ -285,6 +292,9 @@ impl Parts {
             g.close().await;
         }
         if let Some(n) = self.net.take() {
+            n.close().await;
+        }
+        if let Some(n) = self.mac_net.take() {
             n.close().await;
         }
         if let Some(d) = self.krun_dir.take() {
@@ -400,6 +410,7 @@ impl Instance {
             vsock: std::mem::take(&mut parts.vsock),
             gpu: parts.gpu.take(),
             net: parts.net.take(),
+            mac_net: parts.mac_net.take(),
             files: parts.files.take(),
             krun: parts.krun.take().map(tokio::sync::Mutex::new),
             krun_boot: parts.krun_boot,
@@ -456,10 +467,9 @@ impl Instance {
     /// The processes that serve the guest beside its monitor: the GPU
     /// backend, if it has one, and the others.
     pub fn support_pids(&self) -> (Option<u32>, Vec<u32>) {
-        (
-            self.gpu.as_ref().map(GpuBackend::pid),
-            self.net.iter().map(Passt::pid).collect(),
-        )
+        let mut others: Vec<u32> = self.net.iter().map(Passt::pid).collect();
+        others.extend(self.mac_net.iter().map(crate::gvproxy::Network::pid));
+        (self.gpu.as_ref().map(GpuBackend::pid), others)
     }
 
     /// The machine's memory, as its monitor has it.
@@ -721,6 +731,9 @@ impl Instance {
             g.close().await;
         }
         if let Some(n) = &self.net {
+            n.close().await;
+        }
+        if let Some(n) = &self.mac_net {
             n.close().await;
         }
         if let Some(d) = &self.krun_dir {
@@ -1084,12 +1097,19 @@ async fn start_krun(
     for p in GUEST_PORTS {
         kc.guest_ports.insert(p, s(&guest::krun_socket(&vsock, p)));
     }
-    if cfg.net {
-        if caps.os != "linux" {
-            return Err(err(
-                "a Mac's environments have no network from this worker yet: run the Go worker for them",
-            ));
-        }
+    if cfg.net && caps.os != "linux" {
+        let sock = dir.join("net");
+        let bin = crate::gvproxy::find(cfg.gvproxy.as_deref())?;
+        let net = crate::gvproxy::Network::start(&bin, &sock, &cfg.dir.join("net.log"))
+            .await
+            .map_err(|e| err(format!("starting the network: {e}")))?;
+        parts.mac_net = Some(net);
+        kc.net = Some(krun::Net {
+            socket: s(&sock),
+            mac: GUEST_MAC.into(),
+            stream: false,
+        });
+    } else if cfg.net {
         // passt, as under Cloud Hypervisor, speaking its stream protocol.
         let sock = dir.join("net");
         let net = Passt::start(&sock, false)
@@ -1206,7 +1226,17 @@ async fn await_agent(
 ) -> io::Result<agent::Session> {
     let server = parts.server.as_ref().expect("an agent listener");
     let process = parts.process.as_ref().expect("a started monitor");
+    let mut cancel = cfg.cancel.clone();
+    let cancelled = async {
+        match cancel.as_mut() {
+            Some(c) => {
+                let _ = c.wait_for(|c| *c).await;
+            }
+            None => std::future::pending::<()>().await,
+        }
+    };
     tokio::select! {
+        _ = cancelled => Err(err("the boot was called off")),
         s = server.accept(Some(cfg.agent_wait)) => s.map_err(|e| {
             err(format!("the agent did not connect within {:?}: {e}", cfg.agent_wait))
         }),
