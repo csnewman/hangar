@@ -1,0 +1,30 @@
+# A workspace of its own: libkrun is a path dependency on the checkout of
+# Hangar's fork that dev/krun-build.sh (and the worker image, and CI) make
+# at its pin and link here as libkrun/, which the rest of crates/ must
+# build without.
+[workspace]
+
+[package]
+name = "hangar-krun"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Runs one environment's machine under libkrun"
+
+[[bin]]
+name = "hangar-krun"
+path = "src/main.rs"
+
+[features]
+# A virtio-gpu, through virglrenderer, which the build must find.
+gpu = ["krun/gpu", "dep:krun-display"]
+
+[dependencies]
+hangar-api = { path = "../api" }
+krun = { package = "libkrun", path = "libkrun/src/libkrun", default-features = false, features = ["blk", "net"] }
+krun-display = { path = "libkrun/src/display", optional = true, features = ["bindgen_clang_runtime"] }
+libc = "0.2"
+serde_json = "1"
+
+[profile.release]
+strip = true

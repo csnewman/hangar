@@ -291,7 +291,7 @@ jobs:
       # libkrun's C bindings are generated and run through rustfmt.
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
       # libkrun's build makes its own guest init, linked against musl,
       # though Hangar builds without it.
       - run: rustup target add "$(uname -m)-unknown-linux-musl"
@@ -319,3 +319,14 @@ jobs:
       - name: It loads, with a GPU
         run: |
           out/krun/hangar-krun -features | tee /dev/stderr | grep -q '"gpu":true'
+      # The Rust hangar-krun (crates/krun), which links the same checkout as
+      # a crate. The Mac runs it; here it is built and asked what it has,
+      # until it has run Linux machines and replaces the Go one.
+      - name: Build the Rust hangar-krun
+        working-directory: crates/krun
+        run: |
+          ln -sfn "$RUNNER_TEMP/libkrun" libkrun
+          cargo fmt --check
+          cargo clippy --release --locked --features gpu -- -D warnings
+          cargo build --release --locked --features gpu
+          target/release/hangar-krun -features | tee /dev/stderr | grep -q '"gpu":true'

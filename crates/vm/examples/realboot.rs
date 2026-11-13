@@ -167,7 +167,12 @@ async fn main() {
         images_dir: dir.join("images"),
         kernel: repo.join("out/kernel-dev-16k/vmlinuz"),
         agent: dir.join("hangar-agent-guest"),
-        monitor_bin: Some(repo.join("out/krun/bin/hangar-krun")),
+        // HANGAR_KRUN names another hangar-krun to run it under.
+        monitor_bin: Some(
+            std::env::var_os("HANGAR_KRUN")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| repo.join("out/krun/bin/hangar-krun")),
+        ),
         mkfs: Some(repo.join("out/krun/bin/mkfs.ext4")),
         gvproxy: Some(dir.join("gvproxy")),
         upper_gib: 8,

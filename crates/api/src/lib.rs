@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+pub mod monitor;
 mod time;
 
 pub use time::rfc3339;

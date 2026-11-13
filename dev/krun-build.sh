@@ -41,6 +41,10 @@
 # bundled otherwise. libkrun is built without its guest init (Hangar's agent
 # is init); hangar-krun is signed with the hypervisor entitlement, without
 # which macOS refuses it a VM.
+#
+# The Mac's hangar-krun is crates/krun, Rust, with libkrun linked into it
+# as a crate; the Lima VM's is cmd/hangar-krun, Go, against libkrun's
+# library, until the Rust one has run Linux machines.
 set -eu
 krunRepo=https://github.com/csnewman/libkrun.git
 krunHangar=557ab0a29b0858efb0af4d63e151322262460036
@@ -163,10 +167,6 @@ fi
 # keeps it in its default toolchain, the Command Line Tools in usr/lib.
 clang=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib
 [ -f "$clang/libclang.dylib" ] || clang=$(xcode-select -p)/usr/lib
-(cd "$src" && LIBRARY_PATH=$out/virgl/lib PKG_CONFIG_PATH=$out/virgl/lib/pkgconfig \
-    LIBCLANG_PATH=$clang DYLD_FALLBACK_LIBRARY_PATH=$clang \
-    cargo build -q --release -p libkrun --no-default-features --features "$features")
-
 # Each library beside hangar-krun, found there by @rpath, and what it
 # links to rewritten to match. Each is renamed into place: a machine
 # running keeps the library it mapped, which writing over it would crash.
@@ -176,9 +176,8 @@ install_lib() { # source, name
     install_name_tool -id "@rpath/$2" "$bin/$2.new" 2>/dev/null
     mv -f "$bin/$2.new" "$bin/$2"
 }
-rm -f "$bin/libkrun.1.dylib" "$bin/libepoxy.0.dylib"
-install_lib "$src/target/release/libkrun.dylib" libkrun.2.dylib
-ln -sf libkrun.2.dylib "$bin/libkrun.dylib"
+# libkrun is linked into hangar-krun, so there is no library of it.
+rm -f "$bin/libkrun.1.dylib" "$bin/libkrun.2.dylib" "$bin/libkrun.dylib" "$bin/libepoxy.0.dylib"
 if [ "$features" = ffi,blk,net,gpu ]; then
     install_lib "$out/virgl/lib/libvirglrenderer.1.dylib" libvirglrenderer.1.dylib
     cp -f "$out/virgl/libexec/virgl_render_server" "$bin/virgl_render_server.new"
@@ -196,24 +195,33 @@ if [ "$features" = ffi,blk,net,gpu ]; then
         printf '{"file_format_version": "1.0.0", "ICD": {"library_path": "../libvulkan_kosmickrisp.dylib", "api_version": "1.4.0"}}\n' \
             > "$bin/vulkan/kosmickrisp.json"
     fi
-    install_name_tool -change "$out/virgl/lib/libvirglrenderer.1.dylib" @rpath/libvirglrenderer.1.dylib \
-        "$bin/libkrun.2.dylib"
-    install_name_tool -add_rpath @loader_path "$bin/libkrun.2.dylib" 2>/dev/null || true
     codesign -f -s - "$bin/virgl_render_server" 2>/dev/null
 fi
 for l in "$bin"/*.dylib; do
     [ -L "$l" ] || codesign -f -s - "$l" 2>/dev/null
 done
 
+# hangar-krun (crates/krun) links the checkout as a crate, through
+# crates/krun/libkrun; with a GPU it links virglrenderer, found beside it.
 cd "$repo"
-CGO_CFLAGS="-I$src/include" CGO_LDFLAGS="-L$bin -Wl,-rpath,@executable_path" \
-    go build -tags krun -o "$bin/hangar-krun" ./cmd/hangar-krun 2>&1 | grep -v 'duplicate -rpath\|^# ' || true
+ln -sfn "$src" crates/krun/libkrun
+gpu=""
+[ "$features" = ffi,blk,net,gpu ] && gpu="--features gpu"
+(cd crates/krun && LIBRARY_PATH=$out/virgl/lib PKG_CONFIG_PATH=$out/virgl/lib/pkgconfig \
+    LIBCLANG_PATH=$clang DYLD_FALLBACK_LIBRARY_PATH=$clang CARGO_TARGET_DIR=$out/hangar-krun-target \
+    cargo build -q --release --locked $gpu)
+cp -f "$out/hangar-krun-target/release/hangar-krun" "$bin/hangar-krun.new"
+install_name_tool -change "$out/virgl/lib/libvirglrenderer.1.dylib" @rpath/libvirglrenderer.1.dylib \
+    "$bin/hangar-krun.new" 2>/dev/null || true
 cat > "$out/entitlements.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict><key>com.apple.security.hypervisor</key><true/></dict></plist>
 PLIST
-codesign -f -s - --entitlements "$out/entitlements.plist" "$bin/hangar-krun" 2>/dev/null
+codesign -f -s - --entitlements "$out/entitlements.plist" "$bin/hangar-krun.new" 2>/dev/null
+# Renamed into place: a machine running keeps the program it was started
+# from.
+mv -f "$bin/hangar-krun.new" "$bin/hangar-krun"
 
 e2=$out/e2fsprogs-$e2fsprogs
 if [ ! -x "$bin/mkfs.ext4" ]; then

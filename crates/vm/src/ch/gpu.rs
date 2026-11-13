@@ -4,7 +4,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
 
 use super::launch::{Backend, launch};
 use super::state::{log_path_for, ready_path, save_state, wait_file};
@@ -231,37 +230,7 @@ fn device_selection(device: &str) -> io::Result<Vec<(String, String)>> {
     ])
 }
 
-/// What the GPU backend, or hangar-krun, reports it renders with, under
-/// the environment it was given.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct GpuProbe {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub gl: Option<ProbedGl>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub gl_error: String,
-    #[serde(default)]
-    pub vulkan: Option<Vec<ProbedVulkan>>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub vulkan_error: String,
-}
-
-/// The OpenGL renderer a surfaceless EGL context gets.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ProbedGl {
-    pub vendor: String,
-    pub renderer: String,
-    pub version: String,
-    /// Whether it renders on the CPU: Mesa's llvmpipe or softpipe.
-    pub software: bool,
-}
-
-/// A Vulkan device.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct ProbedVulkan {
-    pub name: String,
-    /// Whether it is a CPU device, such as lavapipe.
-    pub software: bool,
-}
+pub use hangar_api::monitor::{GpuProbe, ProbedGl, ProbedVulkan};
 
 /// Asks the GPU backend what it renders with, under env.
 pub async fn probe_gpu(env: &[(String, String)]) -> io::Result<GpuProbe> {
