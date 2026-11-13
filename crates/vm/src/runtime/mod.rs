@@ -824,13 +824,16 @@ async fn watch_images(rt: Weak<Runtime>, mut stop: watch::Receiver<bool>) {
             .filter_map(|m| m.st.lock().unwrap().image.as_ref().map(|i| i.r#ref.clone()))
             .collect();
         let store = r.store.clone();
+        let log = r.cfg.log.clone();
         let changed = tokio::task::spawn_blocking(move || {
             let mut changed = false;
             for reference in refs {
                 let before = store.latest(&reference);
                 match store.current(&reference) {
                     Ok(d) => changed |= before.as_deref() != Some(d.as_str()),
-                    Err(e) => ::log::debug!(target: "hangar", "looking up an image image={reference} err={e}"),
+                    Err(e) => {
+                        log.debug("looking up an image", &[("image", &reference), ("err", &e)])
+                    }
                 }
             }
             changed

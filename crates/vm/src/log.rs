@@ -1,6 +1,7 @@
 //! Logging with fields, through the log crate: what a line is about (an
-//! environment, a component) travels with the handle, as key=value pairs
-//! after the message.
+//! environment, a component) travels with the handle. Each line is
+//! `msg=MESSAGE` and then the fields as key=value pairs, as Go's slog text
+//! handler writes them, quoted where a value needs it.
 
 use std::fmt::Write;
 use std::sync::Arc;
@@ -24,7 +25,9 @@ impl Log {
     }
 
     pub fn log(&self, level: Level, msg: &str, kv: &[(&str, &dyn std::fmt::Display)]) {
-        let mut line = String::from(msg);
+        let mut line = String::new();
+        push(&mut line, "msg", msg);
+        line.remove(0);
         line.push_str(&self.fields);
         for (k, v) in kv {
             push(&mut line, k, &v.to_string());
