@@ -53,7 +53,17 @@ pub fn hybrid_path(base: &Path, port: u32) -> PathBuf {
 pub struct HybridListener {
     l: UnixListener,
     path: PathBuf,
+    /// The socket file's device and inode as bound: another listener may
+    /// have bound the path since, whose socket is not this one's to remove.
+    file: (u64, u64),
     cid: u32,
+}
+
+fn file_id(p: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(p)
+        .ok()
+        .map(|m| (m.dev(), m.ino()))
 }
 
 impl HybridListener {
@@ -92,7 +102,8 @@ impl HybridListener {
                 path.display()
             ))
         })?;
-        Ok(HybridListener { l, path, cid })
+        let file = file_id(&path).unwrap_or_default();
+        Ok(HybridListener { l, path, file, cid })
     }
 
     /// Waits up to timeout, or for ever for none, for the guest to connect,
@@ -118,8 +129,17 @@ impl HybridListener {
     }
 }
 
+impl HybridListener {
+    /// Removes the socket file, if it is still this listener's.
+    pub fn remove(&self) {
+        if file_id(&self.path) == Some(self.file) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 impl Drop for HybridListener {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+        self.remove();
     }
 }

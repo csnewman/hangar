@@ -259,3 +259,114 @@ fn host_procs() {
         ((524288 + 2097152) << 10, (1000 + 32 + 8) << 10)
     );
 }
+
+// A suspend record matches the same machine, and not one whose base or
+// read-only disks were made again.
+#[test]
+fn suspend_record() {
+    use hangar_vm::suspend::{self, Record};
+    let d = scratch("suspend");
+    let f = d.join("image.erofs");
+    std::fs::write(&f, "one").unwrap();
+    let first = hangar_vm::suspend::fingerprint(&f);
+    std::fs::remove_file(&f).unwrap();
+    std::fs::write(&f, "one").unwrap();
+    assert_ne!(
+        first,
+        suspend::fingerprint(&f),
+        "a file made again has the same fingerprint"
+    );
+    assert_eq!(suspend::fingerprint(&d.join("none")), "");
+
+    let r = Record {
+        base: "b".into(),
+        image: "disk:false:x".into(),
+        read_only: vec!["r".into()],
+        krun_memory: None,
+    };
+    let pulled = Record {
+        base: String::new(),
+        ..r.clone()
+    };
+    assert!(
+        r.same_machine(&pulled),
+        "a pulled copy has no base to compare"
+    );
+    assert!(!r.same_machine(&Record {
+        image: "pmem:true:x".into(),
+        ..r.clone()
+    }));
+    assert!(!r.same_machine(&Record {
+        read_only: vec![],
+        ..r.clone()
+    }));
+
+    assert!(suspend::suspended(&d).is_none());
+    std::fs::create_dir_all(d.join("snapshot")).unwrap();
+    suspend::mark(&d, &r).unwrap();
+    assert_eq!(suspend::suspended(&d), Some(r));
+    suspend::discard(&d);
+    assert!(suspend::suspended(&d).is_none() && !d.join("snapshot").exists());
+    let _ = std::fs::remove_dir_all(d);
+}
+
+struct NoFiles;
+
+impl hangar_nfs::View for NoFiles {
+    fn sets(&self) -> Vec<String> {
+        vec![]
+    }
+    fn hidden(&self, _: &str, _: &[u8]) -> bool {
+        false
+    }
+    fn squash(&self, _: &str) -> hangar_nfs::Squash {
+        hangar_nfs::Squash::All
+    }
+}
+
+// The shared files are answered on their vsock port, and closing ends the
+// guest's connections.
+#[tokio::test]
+async fn shared_files() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let d = PathBuf::from(format!("/tmp/hvm-{}-files", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(d.join("root")).unwrap();
+    let files = hangar_vm::files::SharedFiles::serve(
+        &d.join("v"),
+        3,
+        &d.join("root"),
+        std::sync::Arc::new(NoFiles),
+    )
+    .unwrap();
+    let mut c = tokio::net::UnixStream::connect(d.join("v_2049"))
+        .await
+        .unwrap();
+    // An RPC call to NFS's NULL procedure: xid 9, a call, RPC 2, program
+    // 100003 version 4 procedure 0, no credential or verifier.
+    let call: Vec<u8> = [9u32, 0, 2, 100003, 4, 0, 0, 0, 0, 0]
+        .iter()
+        .flat_map(|v| v.to_be_bytes())
+        .collect();
+    let mut rec = (0x8000_0000u32 | call.len() as u32).to_be_bytes().to_vec();
+    rec.extend(call);
+    c.write_all(&rec).await.unwrap();
+    let mut reply = [0u8; 28];
+    c.read_exact(&mut reply).await.unwrap();
+    let word = |i: usize| u32::from_be_bytes(reply[i * 4..i * 4 + 4].try_into().unwrap());
+    assert_eq!(
+        (word(1), word(2), word(3), word(6)),
+        (9, 1, 0, 0),
+        "not an accepted reply to the call"
+    );
+    files.close();
+    let mut rest = vec![];
+    let n = tokio::time::timeout(std::time::Duration::from_secs(5), c.read_to_end(&mut rest))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(n, 0);
+    drop(files);
+    assert!(!d.join("v_2049").exists());
+    let _ = std::fs::remove_dir_all(d);
+}

@@ -3581,6 +3581,7 @@ version = "0.1.0"
 dependencies = [
  "hangar-agent",
  "hangar-api",
+ "hangar-nfs",
  "libc",
  "serde",
  "serde_json",

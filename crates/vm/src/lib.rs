@@ -4,10 +4,12 @@
 
 pub mod agent;
 pub mod ch;
+pub mod files;
 pub mod host;
 pub mod hugepages;
 mod initrd;
 pub mod stats;
+pub mod suspend;
 mod swap;
 pub mod vsock;
 
