@@ -421,6 +421,10 @@ func environment(e api.Environment) Environment {
 		out.Dax = &dax
 	}
 	out.SwapMiB = e.Spec.SwapMiB
+	if e.Spec.MemoryReclaim {
+		reclaim := true
+		out.MemoryReclaim = &reclaim
+	}
 	out.Access = access(e.Spec.Access)
 	if len(e.Spec.Placement) > 0 {
 		placement := e.Spec.Placement

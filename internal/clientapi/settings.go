@@ -16,7 +16,8 @@ func (h *handler) UpdateEnvironmentSettings(ctx context.Context, req UpdateEnvir
 	e, err := h.envs.UpdateSettings(ctx, principal(ctx), req.ID, environments.Settings{
 		CPUs: b.CPUs, MemoryMiB: b.MemoryMiB,
 		Display: api.Display(b.Display), GPU: api.GPU(b.Gpu),
-		DAX: b.Dax != nil && *b.Dax, SwapMiB: b.SwapMiB})
+		DAX: b.Dax != nil && *b.Dax, SwapMiB: b.SwapMiB,
+		MemoryReclaim: b.MemoryReclaim != nil && *b.MemoryReclaim})
 	switch {
 	case errors.Is(err, environments.ErrNotFound):
 		return UpdateEnvironmentSettings404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil

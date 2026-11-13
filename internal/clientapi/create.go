@@ -38,6 +38,10 @@ func (h *handler) ListTemplates(ctx context.Context, _ ListTemplatesRequestObjec
 			dax := true
 			o.Dax = &dax
 		}
+		if s.MemoryReclaim {
+			reclaim := true
+			o.MemoryReclaim = &reclaim
+		}
 		if len(s.Projects) > 0 {
 			projects := s.Projects
 			o.Projects = &projects
@@ -53,7 +57,8 @@ func (h *handler) CreateEnvironment(ctx context.Context, req CreateEnvironmentRe
 	in := api.CreateEnvironment{TemplateID: b.TemplateID, Name: b.Name}
 	if m := b.Settings; m != nil {
 		in.Machine = &api.Machine{CPUs: m.CPUs, MemoryMiB: m.MemoryMiB, Display: api.Display(m.Display),
-			GPU: api.GPU(m.Gpu), DAX: m.Dax != nil && *m.Dax, SwapMiB: m.SwapMiB}
+			GPU: api.GPU(m.Gpu), DAX: m.Dax != nil && *m.Dax, SwapMiB: m.SwapMiB,
+			MemoryReclaim: m.MemoryReclaim != nil && *m.MemoryReclaim}
 	}
 	if rs := b.Repos; rs != nil {
 		repos := make([]api.Repo, len(*rs))

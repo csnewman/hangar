@@ -259,4 +259,23 @@ func TestMemoryWhileRunning(t *testing.T) {
 	if _, err := em.UpdateSettings(ctx, p, env.ID, s); !errors.Is(err, environments.ErrConflict) {
 		t.Errorf("changing its vCPUs while it runs: %v, want ErrConflict", err)
 	}
+
+	// Its memory reclaim, off unless asked for, is told to the running
+	// guest, and differs from its template's.
+	if env.Spec.MemoryReclaim {
+		t.Error("reclaim is on without asking")
+	}
+	s = memory(4096)
+	s.MemoryReclaim = true
+	before = version()
+	got, err = em.UpdateSettings(ctx, p, env.ID, s)
+	if err != nil {
+		t.Fatalf("turning memory reclaim on as it runs: %v", err)
+	}
+	if !got.Spec.MemoryReclaim || !slices.Contains(got.TemplateChanges, environments.SettingMemoryReclaim) {
+		t.Errorf("reclaim %v, changes from the template %v", got.Spec.MemoryReclaim, got.TemplateChanges)
+	}
+	if version() == before {
+		t.Error("its worker's desired set did not change")
+	}
 }

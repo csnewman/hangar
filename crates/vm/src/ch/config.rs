@@ -244,15 +244,16 @@ impl Config {
         cl += " memory_hotplug.online_policy=auto-movable";
         // Memory the guest frees goes back to the host by the balloon's
         // free page reporting, but its file cache is not free and would be
-        // kept for as long as it runs. DAMON reclaims pages untouched for
+        // kept for as long as it runs. DAMON can reclaim pages untouched for
         // RECLAIM_MIN_AGE, whatever memory is free, so the cache of what was
-        // read once goes back too. A program's memory is left to the agent,
-        // which swaps out what is idle where the guest has swap
-        // (crates/agent/src/memory.rs): DAMON samples memory too coarsely to
-        // find it. The agent widens what it watches to the memory
-        // virtio-mem plugs in.
+        // read once goes back too; it is set up here and left off, and the
+        // agent turns it on while the environment asks for reclaim (the
+        // spec's memory_reclaim), widening what it watches to the memory
+        // virtio-mem plugs in. A program's memory is the agent's to swap
+        // out: DAMON samples memory too coarsely to find it
+        // (crates/agent/src/memory.rs).
         cl += &format!(
-            " damon_reclaim.enabled=Y damon_reclaim.min_age={} damon_reclaim.skip_anon=Y \
+            " damon_reclaim.min_age={} damon_reclaim.skip_anon=Y \
              damon_reclaim.wmarks_high=1000 damon_reclaim.wmarks_mid=999 damon_reclaim.wmarks_low=0",
             RECLAIM_MIN_AGE.as_micros()
         );

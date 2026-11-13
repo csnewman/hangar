@@ -2195,10 +2195,11 @@ components:
     TemplateSetting:
       type: string
       description: A setting an environment takes from its template.
-      enum: [image, cpus, memory, display, gpu, dax, swap, repos, projects, access, trusted_folders, web_names, packs, placement, name]
-      x-enum-varnames: [SettingImage, SettingCPUs, SettingMemory, SettingDisplay, SettingGPU, SettingDAX, SettingRepos,
-        SettingProjects, SettingAccess, SettingTrustedFolders, SettingWebNames, SettingPacks, SettingPlacement,
-        SettingName]
+      enum: [image, cpus, memory, display, gpu, dax, swap, memory_reclaim, repos, projects, access, trusted_folders,
+        web_names, packs, placement, name]
+      x-enum-varnames: [SettingImage, SettingCPUs, SettingMemory, SettingDisplay, SettingGPU, SettingDAX, SettingSwap,
+        SettingMemoryReclaim, SettingRepos, SettingProjects, SettingAccess, SettingTrustedFolders, SettingWebNames,
+        SettingPacks, SettingPlacement, SettingName]
 
     EnvironmentLogName:
       type: string
@@ -2291,6 +2292,14 @@ components:
             to a disk, handing that memory back to its worker. Absent is its
             worker's default (as much as its memory, unless the worker is set
             otherwise); 0 is none.
+        memory_reclaim:
+          type: boolean
+          description: >-
+            Experimental: the environment hands back the memory its programs
+            leave idle, swapping it out, and the cache nothing has touched for
+            a while, so its worker gets that memory back. A program left idle
+            is then slow to answer when next used, while its memory is brought
+            back in. Off unless asked for; what it frees goes back either way.
 
     GPU:
       type: string
@@ -2427,6 +2436,14 @@ components:
             to a disk, handing that memory back to its worker. Absent is its
             worker's default (as much as its memory, unless the worker is set
             otherwise); 0 is none.
+        memory_reclaim:
+          type: boolean
+          description: >-
+            Experimental: the environment hands back the memory its programs
+            leave idle, swapping it out, and the cache nothing has touched for
+            a while, so its worker gets that memory back. A program left idle
+            is then slow to answer when next used, while its memory is brought
+            back in. Off unless asked for; what it frees goes back either way.
         web_names:
           type: array
           maxItems: 16

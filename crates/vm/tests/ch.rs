@@ -14,7 +14,7 @@ fn p(s: &str) -> PathBuf {
 fn cmdline(tty: &str, extra: &str) -> String {
     let mut s = format!(
         "console={tty} systemd.show_status=1 mitigations=off memory_hotplug.online_policy=auto-movable \
-         damon_reclaim.enabled=Y damon_reclaim.min_age=300000000 damon_reclaim.skip_anon=Y \
+         damon_reclaim.min_age=300000000 damon_reclaim.skip_anon=Y \
          damon_reclaim.wmarks_high=1000 damon_reclaim.wmarks_mid=999 damon_reclaim.wmarks_low=0"
     );
     if !extra.is_empty() {

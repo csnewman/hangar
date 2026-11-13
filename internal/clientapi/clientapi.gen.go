@@ -241,7 +241,10 @@ type Environment struct {
 	// ImageUpdate A newer copy of the environment's image its worker holds, and what upgrading to it would hide: files the environment has changed that the newer copy also changes keep the environment's version.
 	ImageUpdate *ImageUpdate `json:"image_update,omitempty"`
 	MemoryMiB   *int         `json:"memory_mib,omitempty"`
-	Name        string       `json:"name"`
+
+	// MemoryReclaim Experimental: it hands back the memory its programs leave idle, swapping it out, and the cache nothing has touched for a while, so its worker gets that memory back; a program left idle is then slow to answer when next used. Off unless asked for.
+	MemoryReclaim *bool  `json:"memory_reclaim,omitempty"`
+	Name          string `json:"name"`
 
 	// Owner The owner's username.
 	Owner   string `json:"owner"`
@@ -275,7 +278,7 @@ type Environment struct {
 	Task     *Task  `json:"task,omitempty"`
 	Template string `json:"template"`
 
-	// TemplateChanges The settings it has that its template has since changed, which a reset to the template gives it: image, cpus, memory, display, gpu, dax, swap, repos, projects, access, trusted_folders, web_names, packs, placement, name. More may come.
+	// TemplateChanges The settings it has that its template has since changed, which a reset to the template gives it: image, cpus, memory, display, gpu, dax, swap, memory_reclaim, repos, projects, access, trusted_folders, web_names, packs, placement, name. More may come.
 	TemplateChanges *[]string `json:"template_changes,omitempty"`
 	TemplateID      *string   `json:"template_id,omitempty"`
 
@@ -335,6 +338,9 @@ type EnvironmentSettings struct {
 	Gpu       EnvironmentSettingsGpu     `json:"gpu"`
 	MemoryMiB int                        `json:"memory_mib"`
 
+	// MemoryReclaim Experimental: it hands back the memory its programs leave idle, swapping it out, and the cache nothing has touched for a while, so its worker gets that memory back; a program left idle is then slow to answer when next used. Off unless asked for.
+	MemoryReclaim *bool `json:"memory_reclaim,omitempty"`
+
 	// SwapMiB Its swap, in MiB. Absent is its worker's default; 0 is none.
 	SwapMiB *int `json:"swap_mib,omitempty"`
 }
@@ -373,8 +379,27 @@ type EnvironmentStats struct {
 	MemoryUsedMiB int      `json:"memory_used_mib"`
 	NetRxBps      *float32 `json:"net_rx_bps,omitempty"`
 	NetTxBps      *float32 `json:"net_tx_bps,omitempty"`
-	SwapTotalMiB  *int     `json:"swap_total_mib,omitempty"`
-	SwapUsedMiB   *int     `json:"swap_used_mib,omitempty"`
+
+	// SwapCompressedMiB What of swap_used_mib is in zswap's pool, in its own memory, compressed into swap_pool_mib of it; the rest is on its disk.
+	SwapCompressedMiB *int `json:"swap_compressed_mib,omitempty"`
+
+	// SwapDiskBytes The worker's disk its swap disk takes.
+	SwapDiskBytes *int64 `json:"swap_disk_bytes,omitempty"`
+
+	// SwapInBps How fast memory is swapped back in, from either, in bytes a second.
+	SwapInBps *float32 `json:"swap_in_bps,omitempty"`
+
+	// SwapOutBps How fast memory is swapped out, to either, in bytes a second.
+	SwapOutBps *float32 `json:"swap_out_bps,omitempty"`
+
+	// SwapPoolMiB The memory zswap's pool takes.
+	SwapPoolMiB *int `json:"swap_pool_mib,omitempty"`
+
+	// SwapTotalMiB Its swap, zswap's pool and disk together.
+	SwapTotalMiB *int `json:"swap_total_mib,omitempty"`
+
+	// SwapUsedMiB What it has swapped out, compressed in its memory or on its disk.
+	SwapUsedMiB *int `json:"swap_used_mib,omitempty"`
 }
 
 // Error defines model for Error.
@@ -604,7 +629,10 @@ type Template struct {
 	ID        string `json:"id"`
 	Image     string `json:"image"`
 	MemoryMiB int    `json:"memory_mib"`
-	Name      string `json:"name"`
+
+	// MemoryReclaim Its environments hand back the memory their programs leave idle (experimental).
+	MemoryReclaim *bool  `json:"memory_reclaim,omitempty"`
+	Name          string `json:"name"`
 
 	// NameHint What name the pattern wants, in words.
 	NameHint *string `json:"name_hint,omitempty"`

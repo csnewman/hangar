@@ -1,7 +1,8 @@
 //! The agent's services, each on its own vsock port -- terminals, the
 //! desktop, the Code service, SSH, the profile session and what it carries,
 //! processes, the guest's ports -- and the handing back of the guest's
-//! memory, for as long as the guest runs. hangar-agent.service runs the
+//! memory, for as long as the guest runs: what it frees always, and what
+//! its programs leave idle where the environment asks. hangar-agent.service runs the
 //! agent as root, at OOM score -1000 (`init::OOM_DROP_IN`).
 
 use std::future::Future;
@@ -11,7 +12,6 @@ use std::sync::Arc;
 use crate::{codeservice, desktop, guestport, memory, procs, profile, sshd, terminal};
 
 pub async fn serve() -> io::Result<()> {
-    memory::widen_reclaim();
     tokio::spawn(memory::offload());
     tokio::spawn(memory::compact());
     let terminals = terminal::Manager::new(Box::new(terminal::login_shell));

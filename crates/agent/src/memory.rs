@@ -1,6 +1,7 @@
-//! The guest's memory handed back to the host: what its programs leave
-//! idle (offload), what it frees in pieces (compact), and DAMON's reclaim
-//! of untouched cache over all of its RAM (widen_reclaim).
+//! The guest's memory handed back to the host: what it frees in pieces
+//! (compact), and, while the environment asks for it (RECLAIM_FILE), what
+//! its programs leave idle (offload) and DAMON's reclaim of untouched cache
+//! over all of its RAM (damon).
 
 use std::fs;
 use std::io;
@@ -50,23 +51,37 @@ mod offload {
     pub const MAX_HOLD: Duration = Duration::from_secs(300);
 }
 
+/// Says whether the environment hands back the memory its programs leave
+/// idle and the cache nothing has touched: its spec's memory_reclaim, an
+/// experimental setting, "1" while it is on. The worker writes it at each
+/// boot and resume and whenever the setting changes, and the agent reads it
+/// every round, so a running guest takes a change at once. A program left
+/// idle has its memory taken, and is slow to answer when next used while it
+/// is brought back in, so it is off unless asked for; what the guest frees
+/// goes back to the host either way.
+pub const RECLAIM_FILE: &str = "/run/hangar/memory-reclaim";
+
+/// Whether reclaim is asked for.
+fn reclaim_wanted() -> bool {
+    reclaim_in(&fs::read_to_string(RECLAIM_FILE).unwrap_or_default())
+}
+
+/// Whether the reclaim file's content asks for reclaim.
+pub fn reclaim_in(file: &str) -> bool {
+    file.trim() == "1"
+}
+
 const MEMORY_RECLAIM: &str = "/sys/fs/cgroup/memory.reclaim";
 const MEMORY_PRESSURE: &str = "/proc/pressure/memory";
 
-/// Asks the kernel to reclaim, every [`offload::EVERY`], for as long as the
-/// guest runs. A guest without swap is left to DAMON (widen_reclaim), which
-/// reclaims only its cache.
+/// Asks the kernel to reclaim, every [`offload::EVERY`], while the
+/// environment asks for reclaim, for as long as the guest runs, turning
+/// DAMON's reclaim on and off with it. A guest without swap is left to
+/// DAMON, which reclaims only its cache.
 pub async fn offload() {
-    if !Path::new(MEMORY_RECLAIM).exists() {
-        return;
-    }
-    let mut prev = match memory_stall() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("hangar-agent: offload: {e}");
-            return;
-        }
-    };
+    // A guest the kernel cannot be asked to reclaim in is still DAMON's.
+    let can_ask = Path::new(MEMORY_RECLAIM).exists();
+    let mut prev = memory_stall().unwrap_or(0);
     let page = page_size();
     let (mut taken, mut back) = reclaim_counts();
     // What was taken and read back over the last minute or so, in bytes.
@@ -76,9 +91,24 @@ pub async fn offload() {
     let (mut hold, mut wait) = (0u32, 0u32);
     let max_hold = (offload::MAX_HOLD.as_secs() / offload::EVERY.as_secs()) as u32;
     let mut tick = tokio::time::interval(offload::EVERY);
-    tick.tick().await;
+    let mut on = false;
     loop {
         tick.tick().await;
+        let want = reclaim_wanted();
+        if want != on {
+            on = want;
+            damon(on);
+            // Rounds from before the switch say nothing of this one.
+            (took_recently, back_recently, hold, wait) = (0.0, 0.0, 0, 0);
+            (taken, back) = reclaim_counts();
+            if let Ok(s) = memory_stall() {
+                prev = s;
+            }
+            continue;
+        }
+        if !on || !can_ask {
+            continue;
+        }
         let Ok(stall) = memory_stall() else {
             continue;
         };
@@ -255,16 +285,23 @@ pub fn scattered_free(buddyinfo: &str, order: usize, page: i64) -> i64 {
 }
 
 /// Where DAMON's reclaim of pages the guest has not touched for a while is
-/// set. The kernel's command line turns it on (ch.Config).
+/// set. The kernel's command line sets it up and leaves it off (ch.Config),
+/// and the agent turns it on while the environment asks for reclaim.
 const DAMON_RECLAIM: &str = "/sys/module/damon_reclaim/parameters";
 
-/// Has DAMON watch all of the guest's RAM. Left to itself it watches the
-/// largest block the guest booted with, which leaves out what virtio-mem
-/// plugs in: most of a resizable machine's memory, and the whole of what it
-/// grows into.
-pub fn widen_reclaim() {
+/// Turns DAMON's reclaim on, watching all of the guest's RAM, or off. Left
+/// to itself it watches the largest block the guest booted with, which
+/// leaves out what virtio-mem plugs in: most of a resizable machine's
+/// memory, and the whole of what it grows into.
+fn damon(on: bool) {
     let dir = Path::new(DAMON_RECLAIM);
     if !dir.exists() {
+        return;
+    }
+    if !on {
+        if let Err(e) = fs::write(dir.join("enabled"), "N") {
+            eprintln!("hangar-agent: reclaim: enabled: {e}");
+        }
         return;
     }
     let span = fs::read_to_string("/proc/iomem")
@@ -277,12 +314,11 @@ pub fn widen_reclaim() {
             return;
         }
     };
-    // The region is read only when the inputs are committed, and it is
-    // committed whole, so both ends are written first.
+    // The region is read as DAMON starts, so both ends are written first.
     for (name, value) in [
         ("monitor_region_start", start.to_string()),
         ("monitor_region_end", end.to_string()),
-        ("commit_inputs", "Y".to_string()),
+        ("enabled", "Y".to_string()),
     ] {
         if let Err(e) = fs::write(dir.join(name), value) {
             eprintln!("hangar-agent: reclaim: {name}: {e}");

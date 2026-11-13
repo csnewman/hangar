@@ -192,6 +192,12 @@ pub struct Spec {
     /// The environment's swap; none is its worker's default, 0 no swap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub swap_mib: Option<i64>,
+    /// Has the guest hand back what its programs leave idle, into swap,
+    /// and the cache nothing has touched for a while: experimental, and off
+    /// unless asked for, since a program left idle is slow to answer when
+    /// next used, while its memory is brought back in.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub memory_reclaim: bool,
     /// The packs it has, in order, before those that attach themselves.
     #[serde(
         default,

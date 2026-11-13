@@ -24,7 +24,8 @@ func (h *handler) CreateEnvironment(ctx context.Context, req CreateEnvironmentRe
 	in := api.CreateEnvironment{TemplateID: req.Body.TemplateID, Name: req.Body.Name}
 	if m := req.Body.Settings; m != nil {
 		in.Machine = &api.Machine{CPUs: m.CPUs, MemoryMiB: m.MemoryMiB, Display: api.Display(m.Display),
-			GPU: api.GPU(m.GPU), DAX: m.Dax != nil && *m.Dax, SwapMiB: m.SwapMiB}
+			GPU: api.GPU(m.GPU), DAX: m.Dax != nil && *m.Dax, SwapMiB: m.SwapMiB,
+			MemoryReclaim: m.MemoryReclaim != nil && *m.MemoryReclaim}
 	}
 	if rs := req.Body.Repos; rs != nil {
 		repos := make([]api.Repo, len(*rs))
@@ -86,7 +87,8 @@ func (h *handler) UpdateEnvironmentSettings(ctx context.Context, req UpdateEnvir
 	e, err := h.envs.UpdateSettings(ctx, principal(ctx), req.ID, environments.Settings{
 		CPUs: req.Body.CPUs, MemoryMiB: req.Body.MemoryMiB,
 		Display: api.Display(req.Body.Display), GPU: api.GPU(req.Body.GPU),
-		DAX: req.Body.Dax != nil && *req.Body.Dax, SwapMiB: req.Body.SwapMiB})
+		DAX: req.Body.Dax != nil && *req.Body.Dax, SwapMiB: req.Body.SwapMiB,
+		MemoryReclaim: req.Body.MemoryReclaim != nil && *req.Body.MemoryReclaim})
 	switch {
 	case errors.Is(err, environments.ErrNotFound):
 		return UpdateEnvironmentSettings404JSONResponse{NotFoundJSONResponse{Error: err.Error()}}, nil

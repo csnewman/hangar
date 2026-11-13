@@ -446,28 +446,27 @@ func (e TeamRole) Valid() bool {
 
 // Defines values for TemplateSetting.
 const (
-	Name                  TemplateSetting = "name"
-	SettingAccess         TemplateSetting = "projects"
+	SettingAccess         TemplateSetting = "access"
 	SettingCPUs           TemplateSetting = "cpus"
 	SettingDAX            TemplateSetting = "dax"
 	SettingDisplay        TemplateSetting = "display"
 	SettingGPU            TemplateSetting = "gpu"
 	SettingImage          TemplateSetting = "image"
 	SettingMemory         TemplateSetting = "memory"
-	SettingName           TemplateSetting = "placement"
-	SettingPacks          TemplateSetting = "web_names"
-	SettingPlacement      TemplateSetting = "packs"
-	SettingProjects       TemplateSetting = "repos"
-	SettingRepos          TemplateSetting = "swap"
-	SettingTrustedFolders TemplateSetting = "access"
-	SettingWebNames       TemplateSetting = "trusted_folders"
+	SettingMemoryReclaim  TemplateSetting = "memory_reclaim"
+	SettingName           TemplateSetting = "name"
+	SettingPacks          TemplateSetting = "packs"
+	SettingPlacement      TemplateSetting = "placement"
+	SettingProjects       TemplateSetting = "projects"
+	SettingRepos          TemplateSetting = "repos"
+	SettingSwap           TemplateSetting = "swap"
+	SettingTrustedFolders TemplateSetting = "trusted_folders"
+	SettingWebNames       TemplateSetting = "web_names"
 )
 
 // Valid indicates whether the value is a known member of the TemplateSetting enum.
 func (e TemplateSetting) Valid() bool {
 	switch e {
-	case Name:
-		return true
 	case SettingAccess:
 		return true
 	case SettingCPUs:
@@ -482,6 +481,8 @@ func (e TemplateSetting) Valid() bool {
 		return true
 	case SettingMemory:
 		return true
+	case SettingMemoryReclaim:
+		return true
 	case SettingName:
 		return true
 	case SettingPacks:
@@ -491,6 +492,8 @@ func (e TemplateSetting) Valid() bool {
 	case SettingProjects:
 		return true
 	case SettingRepos:
+		return true
+	case SettingSwap:
 		return true
 	case SettingTrustedFolders:
 		return true
@@ -832,6 +835,9 @@ type EnvironmentSettings struct {
 	// GPU virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
 	GPU       GPU `json:"gpu"`
 	MemoryMiB int `json:"memory_mib"`
+
+	// MemoryReclaim Experimental: the environment hands back the memory its programs leave idle, swapping it out, and the cache nothing has touched for a while, so its worker gets that memory back. A program left idle is then slow to answer when next used, while its memory is brought back in. Off unless asked for; what it frees goes back either way.
+	MemoryReclaim *bool `json:"memory_reclaim,omitempty"`
 
 	// SwapMiB The environment's swap, in MiB: what its programs leave untouched for a while is swapped out, compressed in its own memory and then to a disk, handing that memory back to its worker. Absent is its worker's default (as much as its memory, unless the worker is set otherwise); 0 is none.
 	SwapMiB *int `json:"swap_mib,omitempty"`
@@ -1374,6 +1380,9 @@ type Spec struct {
 	GPU       GPU    `json:"gpu"`
 	Image     string `json:"image"`
 	MemoryMiB int    `json:"memory_mib"`
+
+	// MemoryReclaim Experimental: the environment hands back the memory its programs leave idle, swapping it out, and the cache nothing has touched for a while, so its worker gets that memory back. A program left idle is then slow to answer when next used, while its memory is brought back in. Off unless asked for; what it frees goes back either way.
+	MemoryReclaim *bool `json:"memory_reclaim,omitempty"`
 
 	// Packs The packs the environment has, in order, before those attaching themselves to it: a path two of them name is the first's. A pack the owner may not use is left out.
 	Packs *[]PackRef `json:"packs,omitempty"`

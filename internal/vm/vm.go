@@ -476,6 +476,9 @@ type machine struct {
 	// resize to, so a size it cannot take is tried once, not on every
 	// desired set.
 	memoryAsked int
+	// reclaimAsked is whether the running machine was last told to reclaim
+	// the memory its programs leave idle.
+	reclaimAsked bool
 	// image is the copy of its image the environment was made over, once
 	// it has first started.
 	image *api.ImageCopy
@@ -624,6 +627,7 @@ func (m *machine) control(ctx context.Context) {
 				m.boot(ctx, *spec)
 			}
 			m.fitMemory(ctx)
+			m.fitReclaim()
 		case api.DesiredSuspended:
 			// Only a running machine has memory to keep. One that is not
 			// stays as it is: stopped, failed, or already suspended.
@@ -719,6 +723,26 @@ func (m *machine) fitMemory(ctx context.Context) {
 		return
 	}
 	m.log.Info("resizing memory", "mib", asked)
+}
+
+// fitReclaim tells the running machine's agent whether to reclaim the
+// memory its programs leave idle, when its spec says other than it was
+// last told. A guest takes the change at once.
+func (m *machine) fitReclaim() {
+	m.mu.Lock()
+	inst, spec := m.running, m.spec
+	if inst == nil || spec == nil || spec.Spec.MemoryReclaim == m.reclaimAsked {
+		m.mu.Unlock()
+		return
+	}
+	want := spec.Spec.MemoryReclaim
+	m.reclaimAsked = want
+	m.mu.Unlock()
+	if err := writeReclaim(inst.Session(), want); err != nil {
+		m.log.Warn("telling the guest whether to reclaim idle memory", "err", err)
+		return
+	}
+	m.log.Info("reclaiming idle memory", "on", want)
 }
 
 // lost handles a machine that exited without being asked to.

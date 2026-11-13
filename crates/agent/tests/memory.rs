@@ -1,4 +1,4 @@
-use hangar_agent::memory::{ram_span, scattered_free};
+use hangar_agent::memory::{ram_span, reclaim_in, scattered_free};
 
 /// As an arm64 guest with virtio-mem has it, its device region beyond a
 /// hole above the RAM it booted with, part of it plugged in.
@@ -37,4 +37,14 @@ fn scattered_free_memory() {
     // Order 0 to 8 at 4 KiB pages: 3 pages, 2 pairs, 1 quad.
     assert_eq!(scattered_free(buddyinfo, 9, 4096), (3 + 4 + 4) * 4096);
     assert_eq!(scattered_free(buddyinfo, 1, 4096), 3 * 4096);
+}
+
+// Reclaim is the environment's to ask for, in the file the worker writes.
+#[test]
+fn reclaim_asked() {
+    assert!(reclaim_in("1"));
+    assert!(reclaim_in("1\n"));
+    assert!(!reclaim_in("0"));
+    assert!(!reclaim_in("10"));
+    assert!(!reclaim_in(""));
 }

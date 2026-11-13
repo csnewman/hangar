@@ -3,7 +3,7 @@
 //! under a stand-in for hangar-krun and a stand-in guest.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use hangar_api::{DesiredState, EnvironmentSpec, Phase};
@@ -44,7 +44,7 @@ os._exit(0)
 
 /// Dials the agent's socket whenever it is there and answers everything as
 /// done; asked to power off, it tells the stand-in monitor to stop.
-async fn guest(socket: PathBuf, run: PathBuf) {
+async fn guest(socket: PathBuf, run: PathBuf, asked: Arc<Mutex<Vec<Vec<String>>>>) {
     loop {
         let Ok(c) = tokio::net::UnixStream::connect(&socket).await else {
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -60,6 +60,13 @@ async fn guest(socket: PathBuf, run: PathBuf) {
         let mut lines = BufReader::new(r).lines();
         while let Ok(Some(l)) = lines.next_line().await {
             let req: serde_json::Value = serde_json::from_str(&l).unwrap();
+            if let Some(cmd) = req["cmd"].as_array() {
+                let cmd = cmd
+                    .iter()
+                    .map(|c| c.as_str().unwrap_or_default().to_string())
+                    .collect();
+                asked.lock().unwrap().push(cmd);
+            }
             if req["cmd"][1] == "poweroff" {
                 std::fs::write(run.join("poweroff"), "").unwrap();
             }
@@ -140,10 +147,25 @@ async fn environment_lifecycle() {
     .unwrap();
     assert!(rt.gpu().is_none());
     let run = d.join("env").join(&id).join("run");
+    let asked = Arc::new(Mutex::new(vec![]));
     let g = tokio::spawn(guest(
         PathBuf::from(format!("/tmp/hangar-{id}/v_8100")),
         run,
+        asked.clone(),
     ));
+    // What the guest was last told of reclaim: the reclaim file's content.
+    let reclaim = || {
+        asked
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find(|c| {
+                c.iter()
+                    .any(|a| a.contains(hangar_vm::provision::RECLAIM_FILE))
+            })
+            .and_then(|c| c.last().cloned())
+    };
 
     let mut spec: EnvironmentSpec = serde_json::from_value(serde_json::json!({
         "id": id, "name": "test", "desired": "running",
@@ -158,6 +180,23 @@ async fn environment_lifecycle() {
     assert_eq!(images.len(), 1);
     assert_eq!(images[0].environments, std::slice::from_ref(&id));
     assert!(d.join("env").join(&id).join("provisioned").exists());
+    assert_eq!(
+        reclaim().as_deref(),
+        Some("0"),
+        "reclaim was not off from the start"
+    );
+
+    // Turned on as it runs, the guest is told at once.
+    spec.spec.memory_reclaim = true;
+    rt.apply(spec.clone());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while reclaim().as_deref() != Some("1") {
+        assert!(
+            Instant::now() < deadline,
+            "the guest was not told to reclaim"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     spec.desired = DesiredState::Suspended;
     rt.apply(spec.clone());

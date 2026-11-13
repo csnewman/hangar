@@ -27,6 +27,12 @@ pub const PROFILE_SYNCED: &str = "/run/hangar/profile-synced";
 /// service reads before starting a language server.
 pub const TRUST_FILE: &str = "/run/hangar/trusted-folders.json";
 
+/// Where the agent learns whether the environment hands back the memory its
+/// programs leave idle (the spec's memory_reclaim): "1" while it does. It is
+/// in /run, written at each boot and resume and whenever the setting
+/// changes, so a running guest takes a change at once.
+pub const RECLAIM_FILE: &str = "/run/hangar/memory-reclaim";
+
 /// Where a clone's progress and errors are written in the guest, for the
 /// host to read while it runs.
 const CLONE_LOG: &str = "/run/hangar-clone.log";
@@ -114,6 +120,26 @@ pub async fn write_code_trust(sess: &Session, spec: &Spec) -> io::Result<()> {
     );
     let out = sess
         .exec(Duration::from_secs(10), &["sh", "-c", &script, "sh", &b])
+        .await?;
+    if out.code != 0 {
+        return Err(err(format!(
+            "exit {}: {}",
+            out.code,
+            first_line(&[&out.stderr, &out.stdout])
+        )));
+    }
+    Ok(())
+}
+
+/// Tells the guest's agent whether to reclaim the memory its programs leave
+/// idle.
+pub async fn write_reclaim(sess: &Session, on: bool) -> io::Result<()> {
+    let script = format!(
+        "mkdir -p /run/hangar && printf '%s' \"$1\" > {RECLAIM_FILE}.new && mv {RECLAIM_FILE}.new {RECLAIM_FILE}"
+    );
+    let v = if on { "1" } else { "0" };
+    let out = sess
+        .exec(Duration::from_secs(10), &["sh", "-c", &script, "sh", v])
         .await?;
     if out.code != 0 {
         return Err(err(format!(

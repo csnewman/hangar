@@ -153,20 +153,25 @@ func stats(s *api.EnvironmentStats) *EnvironmentStats {
 	}
 	f := func(v float64) *float32 { x := float32(v); return &x }
 	i := func(v int) *int { return &v }
-	disk := s.DiskUsedBytes
+	disk, swapDisk := s.DiskUsedBytes, s.SwapDiskBytes
 	out := &EnvironmentStats{
-		CPUPercent:      float32(s.CPUPercent),
-		MemoryUsedMiB:   s.MemoryUsedMiB,
-		MemoryTotalMiB:  s.MemoryTotalMiB,
-		MemoryCachedMiB: i(s.MemoryCachedMiB),
-		HostMemoryMiB:   i(s.HostMemoryMiB),
-		SwapTotalMiB:    i(s.SwapTotalMiB),
-		SwapUsedMiB:     i(s.SwapUsedMiB),
-		DiskUsedBytes:   &disk,
-		DiskReadBps:     f(s.DiskReadBps),
-		DiskWriteBps:    f(s.DiskWriteBps),
-		NetRxBps:        f(s.NetRxBps),
-		NetTxBps:        f(s.NetTxBps),
+		CPUPercent:        float32(s.CPUPercent),
+		MemoryUsedMiB:     s.MemoryUsedMiB,
+		MemoryTotalMiB:    s.MemoryTotalMiB,
+		MemoryCachedMiB:   i(s.MemoryCachedMiB),
+		HostMemoryMiB:     i(s.HostMemoryMiB),
+		SwapTotalMiB:      i(s.SwapTotalMiB),
+		SwapUsedMiB:       i(s.SwapUsedMiB),
+		SwapCompressedMiB: i(s.SwapCompressedMiB),
+		SwapPoolMiB:       i(s.SwapPoolMiB),
+		SwapDiskBytes:     &swapDisk,
+		SwapInBps:         f(s.SwapInBps),
+		SwapOutBps:        f(s.SwapOutBps),
+		DiskUsedBytes:     &disk,
+		DiskReadBps:       f(s.DiskReadBps),
+		DiskWriteBps:      f(s.DiskWriteBps),
+		NetRxBps:          f(s.NetRxBps),
+		NetTxBps:          f(s.NetTxBps),
 	}
 	if s.MachineMemoryMiB > 0 {
 		out.MachineMemoryMiB = i(s.MachineMemoryMiB)

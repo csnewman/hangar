@@ -900,6 +900,9 @@ struct MState {
     /// The memory the running machine was last asked to resize to, so a
     /// size it cannot take is tried once, not on every desired set.
     memory_asked: i64,
+    /// Whether the running machine was last told to reclaim the memory its
+    /// programs leave idle.
+    reclaim_asked: bool,
     /// The copy of its image the environment was made over, once it has
     /// first started.
     image: Option<ImageCopy>,
@@ -927,6 +930,7 @@ impl Default for MState {
             stats: None,
             suspend_failed: false,
             memory_asked: 0,
+            reclaim_asked: false,
             image: None,
             rollback: None,
             update: None,
@@ -1130,6 +1134,7 @@ impl Machine {
                         self.boot(&spec, &stop).await;
                     }
                     self.fit_memory().await;
+                    self.fit_reclaim().await;
                 }
                 DesiredState::Suspended => {
                     // Only a running machine has memory to keep. One that is
@@ -1385,6 +1390,13 @@ impl Machine {
                     &[("err", &e)],
                 );
             }
+            self.st.lock().unwrap().reclaim_asked = spec.spec.memory_reclaim;
+            if let Err(e) = provision::write_reclaim(sess, spec.spec.memory_reclaim).await {
+                self.log.warn(
+                    "could not tell the guest whether to reclaim idle memory",
+                    &[("err", &e)],
+                );
+            }
             provision::wait_network(sess, self).await?;
             provision::wait_profile(sess, self, &self.log).await;
             provision::provision(sess, &self.dir, spec, self, &self.log).await
@@ -1558,6 +1570,31 @@ impl Machine {
             Err(e) => self
                 .log
                 .warn("resizing memory", &[("mib", &want), ("err", &e)]),
+        }
+    }
+
+    /// Tells the running machine's agent whether to reclaim the memory its
+    /// programs leave idle, when its spec says other than it was last told.
+    /// A guest takes the change at once.
+    async fn fit_reclaim(&self) {
+        let (inst, want) = {
+            let mut st = self.st.lock().unwrap();
+            let (Some(inst), Some(spec)) = (st.running.clone(), st.spec.as_ref()) else {
+                return;
+            };
+            let want = spec.spec.memory_reclaim;
+            if want == st.reclaim_asked {
+                return;
+            }
+            st.reclaim_asked = want;
+            (inst, want)
+        };
+        match provision::write_reclaim(inst.session(), want).await {
+            Ok(()) => self.log.info("reclaiming idle memory", &[("on", &want)]),
+            Err(e) => self.log.warn(
+                "telling the guest whether to reclaim idle memory",
+                &[("err", &e)],
+            ),
         }
     }
 

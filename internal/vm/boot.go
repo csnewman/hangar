@@ -238,6 +238,12 @@ func (m *machine) start(ctx context.Context, spec api.EnvironmentSpec) (_ *Insta
 	if err := writeCodeTrust(inst.Session(), s); err != nil {
 		m.log.Warn("could not tell the Code tab which folders to trust", "err", err)
 	}
+	m.mu.Lock()
+	m.reclaimAsked = s.MemoryReclaim
+	m.mu.Unlock()
+	if err := writeReclaim(inst.Session(), s.MemoryReclaim); err != nil {
+		m.log.Warn("could not tell the guest whether to reclaim idle memory", "err", err)
+	}
 	if err := m.waitNetwork(ctx, inst.Session()); err != nil {
 		return nil, err
 	}
@@ -644,6 +650,29 @@ func writeCodeTrust(sess *agent.Session, spec api.Spec) error {
 		`mkdir -p /run/hangar && printf '%s' "$1" > /run/hangar/trusted-folders.json.new && `+
 			`chmod 644 /run/hangar/trusted-folders.json.new && mv /run/hangar/trusted-folders.json.new /run/hangar/trusted-folders.json`,
 		"sh", string(b))
+	if err != nil {
+		return err
+	}
+	if out.Code != 0 {
+		return fmt.Errorf("exit %d: %s", out.Code, firstLine(out.Stderr, out.Stdout))
+	}
+	return nil
+}
+
+// reclaimFile is where the agent learns whether the environment hands back
+// the memory its programs leave idle (api.Spec.MemoryReclaim): "1" while it
+// does. It is in /run, written at each boot and resume and whenever the
+// setting changes, so a running guest takes a change at once.
+const reclaimFile = "/run/hangar/memory-reclaim"
+
+// writeReclaim tells the guest's agent whether to reclaim.
+func writeReclaim(sess *agent.Session, on bool) error {
+	v := "0"
+	if on {
+		v = "1"
+	}
+	out, err := sess.Exec(10*time.Second, "sh", "-c",
+		`mkdir -p /run/hangar && printf '%s' "$1" > `+reclaimFile+`.new && mv `+reclaimFile+`.new `+reclaimFile, "sh", v)
 	if err != nil {
 		return err
 	}

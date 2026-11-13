@@ -1539,7 +1539,7 @@ export interface components {
          * @description A setting an environment takes from its template.
          * @enum {string}
          */
-        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "swap" | "repos" | "projects" | "access" | "trusted_folders" | "web_names" | "packs" | "placement" | "name";
+        TemplateSetting: "image" | "cpus" | "memory" | "display" | "gpu" | "dax" | "swap" | "memory_reclaim" | "repos" | "projects" | "access" | "trusted_folders" | "web_names" | "packs" | "placement" | "name";
         /**
          * @description combined is the others as one, each line marked with the log it is from, in the order the worker saw them written; console is the guest's serial console, kernel and systemd; worker what the worker logged about the environment; monitor the virtual machine's monitor's; gpu the virtual GPU's backend.
          * @enum {string}
@@ -1597,6 +1597,8 @@ export interface components {
             dax?: boolean;
             /** @description The environment's swap, in MiB: what its programs leave untouched for a while is swapped out, compressed in its own memory and then to a disk, handing that memory back to its worker. Absent is its worker's default (as much as its memory, unless the worker is set otherwise); 0 is none. */
             swap_mib?: number;
+            /** @description Experimental: the environment hands back the memory its programs leave idle, swapping it out, and the cache nothing has touched for a while, so its worker gets that memory back. A program left idle is then slow to answer when next used, while its memory is brought back in. Off unless asked for; what it frees goes back either way. */
+            memory_reclaim?: boolean;
         };
         /**
          * @description virtual renders through a GPU shared with other environments; passthrough gives the environment a whole physical GPU.
@@ -1648,6 +1650,8 @@ export interface components {
             dax?: boolean;
             /** @description The environment's swap, in MiB: what its programs leave untouched for a while is swapped out, compressed in its own memory and then to a disk, handing that memory back to its worker. Absent is its worker's default (as much as its memory, unless the worker is set otherwise); 0 is none. */
             swap_mib?: number;
+            /** @description Experimental: the environment hands back the memory its programs leave idle, swapping it out, and the cache nothing has touched for a while, so its worker gets that memory back. A program left idle is then slow to answer when next used, while its memory is brought back in. Off unless asked for; what it frees goes back either way. */
+            memory_reclaim?: boolean;
             /** @description Names of the environment's own web servers, such as dashboard, which its page links to: each is reached on <name>-env<short> after Hangar's host. */
             web_names?: string[];
             /** @description Worker labels the environment requires: it runs only on a worker with every one of these labels, with these values. */

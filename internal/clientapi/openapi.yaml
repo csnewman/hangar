@@ -1048,6 +1048,10 @@ components:
           minimum: 0
           maximum: 262144
           description: Its swap, in MiB. Absent is its worker's default; 0 is none.
+        memory_reclaim:
+          type: boolean
+          description: >-
+            Experimental: it hands back the memory its programs leave idle, swapping it out, and the cache nothing has touched for a while, so its worker gets that memory back; a program left idle is then slow to answer when next used. Off unless asked for.
 
     Template:
       type: object
@@ -1075,6 +1079,9 @@ components:
         swap_mib:
           type: integer
           description: Its environments' swap, in MiB. Absent is the worker's default; 0 is none.
+        memory_reclaim:
+          type: boolean
+          description: Its environments hand back the memory their programs leave idle (experimental).
         image: { type: string }
         repos:
           type: array
@@ -1284,6 +1291,10 @@ components:
           description: >-
             Its swap, in MiB. Absent is its worker's default (as much as its
             memory, unless the worker is set otherwise); 0 is none.
+        memory_reclaim:
+          type: boolean
+          description: >-
+            Experimental: it hands back the memory its programs leave idle, swapping it out, and the cache nothing has touched for a while, so its worker gets that memory back; a program left idle is then slow to answer when next used. Off unless asked for.
         access: { $ref: "#/components/schemas/Access" }
         placement:
           type: object
@@ -1295,8 +1306,8 @@ components:
           description: >-
             The settings it has that its template has since changed, which a
             reset to the template gives it: image, cpus, memory, display, gpu,
-            dax, swap, repos, projects, access, trusted_folders, web_names,
-            packs, placement, name. More may come.
+            dax, swap, memory_reclaim, repos, projects, access,
+            trusted_folders, web_names, packs, placement, name. More may come.
           items: { type: string }
         image:
           type: string
@@ -1437,8 +1448,30 @@ components:
         machine_memory_max_mib:
           type: integer
           description: What its memory can be resized up to as it runs.
-        swap_total_mib: { type: integer }
-        swap_used_mib: { type: integer }
+        swap_total_mib:
+          type: integer
+          description: Its swap, zswap's pool and disk together.
+        swap_used_mib:
+          type: integer
+          description: What it has swapped out, compressed in its memory or on its disk.
+        swap_compressed_mib:
+          type: integer
+          description: >-
+            What of swap_used_mib is in zswap's pool, in its own memory,
+            compressed into swap_pool_mib of it; the rest is on its disk.
+        swap_pool_mib:
+          type: integer
+          description: The memory zswap's pool takes.
+        swap_disk_bytes:
+          type: integer
+          format: int64
+          description: The worker's disk its swap disk takes.
+        swap_in_bps:
+          type: number
+          description: How fast memory is swapped back in, from either, in bytes a second.
+        swap_out_bps:
+          type: number
+          description: How fast memory is swapped out, to either, in bytes a second.
         disk_used_bytes: { type: integer, format: int64 }
         disk_read_bps: { type: number }
         disk_write_bps: { type: number }

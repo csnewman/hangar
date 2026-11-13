@@ -286,13 +286,15 @@ func (c *Config) Cmdline() string {
 	cl += " memory_hotplug.online_policy=auto-movable"
 	// Memory the guest frees goes back to the host by the balloon's free
 	// page reporting, but its file cache is not free and would be kept for
-	// as long as it runs. DAMON reclaims pages untouched for minAge,
-	// whatever memory is free, so the cache of what was read once goes
-	// back too. A program's memory is left to the agent, which swaps out
-	// what is idle where the guest has swap (crates/agent/src/memory.rs):
-	// DAMON samples memory too coarsely to find it. The agent widens what
-	// it watches to the memory virtio-mem plugs in.
-	cl += fmt.Sprintf(" damon_reclaim.enabled=Y damon_reclaim.min_age=%d damon_reclaim.skip_anon=Y"+
+	// as long as it runs. DAMON can reclaim pages untouched for
+	// reclaimMinAge, whatever memory is free, so the cache of what was read
+	// once goes back too; it is set up here and left off, and the agent
+	// turns it on while the environment asks for reclaim
+	// (api.Spec.MemoryReclaim), widening what it watches to the memory
+	// virtio-mem plugs in. A program's memory is the agent's to swap out:
+	// DAMON samples memory too coarsely to find it
+	// (crates/agent/src/memory.rs).
+	cl += fmt.Sprintf(" damon_reclaim.min_age=%d damon_reclaim.skip_anon=Y"+
 		" damon_reclaim.wmarks_high=1000 damon_reclaim.wmarks_mid=999 damon_reclaim.wmarks_low=0",
 		reclaimMinAge.Microseconds())
 	if c.ExtraCmdline != "" {

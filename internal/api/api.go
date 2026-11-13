@@ -133,6 +133,13 @@ type Spec struct {
 	// worker gives by default (vm.swap, as much as its memory unless set
 	// otherwise); 0 is none.
 	SwapMiB *int `json:"swap_mib,omitempty"`
+	// MemoryReclaim has the guest hand back what its programs leave idle,
+	// into swap, and the cache nothing has touched for a while, so its
+	// worker gets that memory back: experimental, and off unless asked
+	// for, since a program left idle is slow to answer when next used,
+	// while its memory is brought back in. What the guest frees goes back
+	// either way.
+	MemoryReclaim bool `json:"memory_reclaim,omitempty"`
 	// Packs are the packs the environment has (internal/packs), in order,
 	// before those that attach themselves to it: a path two of them name is
 	// the first's. One its owner may not use is left out.
@@ -356,6 +363,8 @@ type Machine struct {
 	GPU       GPU     `json:"gpu"`
 	DAX       bool    `json:"dax"`
 	SwapMiB   *int    `json:"swap_mib,omitempty"`
+	// MemoryReclaim is Spec.MemoryReclaim.
+	MemoryReclaim bool `json:"memory_reclaim,omitempty"`
 }
 
 // Worker is the public view of one worker.
