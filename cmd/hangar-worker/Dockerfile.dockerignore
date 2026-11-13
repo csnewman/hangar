@@ -5,12 +5,7 @@
 !go.sum
 !cmd/
 !internal/
-!crates/Cargo.toml
-!crates/Cargo.lock
-!crates/.cargo/
-!crates/agent/
-!crates/proto/
-!crates/app/
+!crates/
 !fs/Cargo.toml
 !fs/Cargo.lock
 !fs/src/
@@ -22,3 +17,5 @@
 !dev/krun-build.sh
 internal/webui/dist/app
 crates/agent/tests/service/node_modules
+crates/target
+crates/krun

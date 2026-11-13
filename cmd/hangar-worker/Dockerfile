@@ -73,12 +73,9 @@ ENV PATH=/root/.cargo/bin:$PATH
 # Static, against musl: the guest's own C library is whatever its image has.
 FROM rust AS agent
 WORKDIR /src
-COPY crates/Cargo.toml crates/Cargo.lock ./
-COPY crates/.cargo/ .cargo/
-COPY crates/agent/ agent/
-COPY crates/proto/ proto/
-# Only the agent is built, but cargo reads every member's manifest.
-COPY crates/app/ app/
+# The whole workspace: only the agent is built, but cargo reads every
+# member's manifest and finds each one's targets.
+COPY crates/ ./
 RUN target="$(uname -m)-unknown-linux-musl" \
  && rustup target add "$target" \
  && cargo build --release --locked --target "$target" -p hangar-agent \
