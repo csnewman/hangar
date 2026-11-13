@@ -2,6 +2,7 @@
 //! (Cloud Hypervisor or libkrun), and what it boots from -- its image, its
 //! writable disk, its swap and the initramfs that is the agent.
 
+pub mod agent;
 pub mod ch;
 pub mod host;
 pub mod hugepages;
