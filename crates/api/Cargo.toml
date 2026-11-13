@@ -1,0 +1,14 @@
+[package]
+name = "hangar-api"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "The worker API's JSON shapes, as internal/api has them"
+
+[lib]
+name = "hangar_api"
+path = "src/lib.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
