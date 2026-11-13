@@ -3,5 +3,9 @@
 //! them.
 
 mod merge;
+mod reference;
+mod registry;
 
 pub use merge::{EROFS_ALIGN, Merge, build_erofs};
+pub use reference::Reference;
+pub use registry::{Auth, Client, HangarRegistry, Progress, Stage, guest_arch};

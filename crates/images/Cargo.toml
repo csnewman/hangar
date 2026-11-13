@@ -10,10 +10,17 @@ name = "hangar_images"
 path = "src/lib.rs"
 
 [dependencies]
+base64.workspace = true
+flate2.workspace = true
 hangar-erofs = { path = "../erofs" }
-tar = { version = "0.4", default-features = false }
-
-[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
 sha2 = "0.10"
 hex = "0.4"
 tar = { version = "0.4", default-features = false }
+ureq = { version = "3", features = ["platform-verifier"] }
+zstd = { version = "0.13", default-features = false }
+
+[dev-dependencies]
+tar = { version = "0.4", default-features = false }
+base64.workspace = true
