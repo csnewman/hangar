@@ -8,7 +8,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::ch::{Backend, launch};
+use crate::ch::{Backend, launch_tethered, tethered};
 use crate::err;
 
 /// The guest's address, which its network leases to its device's MAC.
@@ -53,7 +53,8 @@ pub fn find(bin: Option<&Path>) -> io::Result<PathBuf> {
         .map_err(|e| err(format!("no gvproxy for the guest's network: {e}")))
 }
 
-/// A running gvproxy, serving one guest.
+/// A running gvproxy, serving one guest. It is tethered (ch::tethered): it
+/// stops when the network is dropped or this process dies, however it dies.
 pub struct Network {
     backend: Backend,
     socket: PathBuf,
@@ -66,14 +67,15 @@ impl Network {
         let _ = std::fs::remove_file(socket);
         let conf = socket.with_extension("yaml");
         std::fs::write(&conf, CONFIG)?;
-        let mut cmd = tokio::process::Command::new(bin);
+        let mut cmd = tethered(bin);
         cmd.arg("-config")
             .arg(&conf)
             .arg("-listen-vfkit")
             .arg(format!("unixgram://{}", socket.display()))
             .arg("-log-file")
             .arg(log);
-        let backend = launch(cmd, "gvproxy", Some(socket), None, Duration::from_secs(10)).await?;
+        let backend =
+            launch_tethered(cmd, "gvproxy", Some(socket), None, Duration::from_secs(10)).await?;
         Ok(Network {
             backend,
             socket: socket.to_path_buf(),
