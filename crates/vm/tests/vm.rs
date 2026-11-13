@@ -89,3 +89,70 @@ fn host() {
     }
     assert!(hangar_vm::host::detect("qemu").is_err());
 }
+
+#[test]
+fn gpu_env() {
+    use hangar_vm::ch::gpu_env;
+    let env = gpu_env("auto", "").unwrap();
+    assert_eq!(
+        env,
+        [("EGL_PLATFORM".to_string(), "surfaceless".to_string())]
+    );
+    let env = gpu_env("software", "").unwrap();
+    assert_eq!(
+        env[..2],
+        [
+            ("EGL_PLATFORM".to_string(), "surfaceless".to_string()),
+            ("LIBGL_ALWAYS_SOFTWARE".to_string(), "1".to_string())
+        ]
+    );
+    assert!(gpu_env("software", "/dev/dri/renderD128").is_err());
+    assert!(gpu_env("fast", "").is_err());
+    assert_eq!(
+        hangar_vm::ch::ready_path(std::path::Path::new("/e/gpu.state")),
+        std::path::Path::new("/e/gpu.ready")
+    );
+}
+
+// A guest's connection to a port arrives on that port's socket, reported as
+// the environment's; a stale socket is replaced, anything else refused.
+#[tokio::test]
+async fn hybrid_vsock() {
+    use hangar_vm::vsock::{HybridListener, hybrid_path};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let d = PathBuf::from(format!("/tmp/hvm-{}-vsock", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    let base = d.join("v");
+    assert_eq!(hybrid_path(&base, 8100), d.join("v_8100"));
+    drop(std::os::unix::net::UnixListener::bind(d.join("v_8100")).unwrap());
+    let l = HybridListener::listen(&base, 8100, 42).unwrap();
+    let mut guest = tokio::net::UnixStream::connect(d.join("v_8100"))
+        .await
+        .unwrap();
+    let (mut c, cid) = l
+        .accept(Some(std::time::Duration::from_secs(5)))
+        .await
+        .unwrap();
+    assert_eq!(cid, 42);
+    guest.write_all(b"hello").await.unwrap();
+    let mut b = [0u8; 5];
+    c.read_exact(&mut b).await.unwrap();
+    assert_eq!(&b, b"hello");
+    let e = l
+        .accept(Some(std::time::Duration::from_millis(50)))
+        .await
+        .unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::TimedOut);
+    drop(l);
+    assert!(
+        !d.join("v_8100").exists(),
+        "the socket outlived its listener"
+    );
+
+    std::fs::write(d.join("v_2049"), "not a socket").unwrap();
+    assert!(HybridListener::listen(&base, 2049, 42).is_err());
+    let long = d.join("x".repeat(120));
+    assert!(HybridListener::listen(&long, 1, 1).is_err());
+    let _ = std::fs::remove_dir_all(d);
+}

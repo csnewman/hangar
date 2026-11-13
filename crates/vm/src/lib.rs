@@ -7,6 +7,7 @@ pub mod host;
 pub mod hugepages;
 mod initrd;
 mod swap;
+pub mod vsock;
 
 pub use initrd::write_initrd;
 pub use swap::{drop_swap, make_swap};
