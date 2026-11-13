@@ -4,7 +4,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-
 use super::launch::{Backend, launch};
 use super::state::{log_path_for, ready_path, save_state, wait_file};
 use crate::err;

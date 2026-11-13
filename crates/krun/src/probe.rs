@@ -224,10 +224,12 @@ fn vulkan() -> Result<Vec<ProbedVulkan>, &'static str> {
             let properties: GetProperties = std::mem::transmute(properties);
             let mut count = 0u32;
             let mut devices: Vec<*mut c_void> = Vec::new();
-            if enumerate(instance, &mut count, std::ptr::null_mut()) != 0 || {
+            let mut listed = enumerate(instance, &mut count, std::ptr::null_mut()) == 0;
+            if listed {
                 devices.resize(count.max(1) as usize, std::ptr::null_mut());
-                enumerate(instance, &mut count, devices.as_mut_ptr()) != 0
-            } {
+                listed = enumerate(instance, &mut count, devices.as_mut_ptr()) == 0;
+            }
+            if !listed {
                 Err("Vulkan did not list its devices")
             } else {
                 let mut buf = vec![0u8; PROPERTIES_SIZE];
