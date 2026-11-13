@@ -3518,6 +3518,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-layercheck"
+version = "0.1.0"
+dependencies = [
+ "hangar-erofs",
+ "hangar-ext4",
+]
+
+[[package]]
 name = "hangar-proto"
 version = "0.1.0"
 dependencies = [
