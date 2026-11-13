@@ -1,6 +1,11 @@
 //! The runtime holding one environment through its life -- started,
 //! suspended, resumed, stopped and deleted -- as the worker hands it specs,
 //! under a stand-in for hangar-krun and a stand-in guest.
+//!
+//! It is the Mac's shape of a machine, its network a stand-in gvproxy: on
+//! Linux a libkrun machine's network is passt, which nothing here stands
+//! in for.
+#![cfg(target_os = "macos")]
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
