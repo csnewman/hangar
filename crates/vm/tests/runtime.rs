@@ -12,7 +12,10 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 /// Answers the worker's requests on descriptor 3 and stops when told to,
 /// when its stdin closes, or when the guest powers off (a file the
-/// stand-in guest leaves beside its config).
+/// stand-in guest leaves beside its config, which it takes away as it
+/// goes). The stand-in guest can answer a resumed machine before its
+/// monitor's interpreter has started, and so power it off first: a file
+/// already there when it starts is that.
 const FAKE_KRUN: &str = r#"#!/usr/bin/env python3
 import os, sys, threading, time
 if sys.argv[1] == "-features":
@@ -20,12 +23,11 @@ if sys.argv[1] == "-features":
     sys.exit(0)
 run = os.path.dirname(sys.argv[1])
 off = os.path.join(run, "poweroff")
-if os.path.exists(off):
-    os.remove(off)
 out = os.fdopen(3, "w", buffering=1)
 def watch():
     while not os.path.exists(off):
         time.sleep(0.05)
+    os.remove(off)
     os._exit(0)
 threading.Thread(target=watch, daemon=True).start()
 for line in sys.stdin:
