@@ -1,0 +1,17 @@
+[package]
+name = "hangar-erofs"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "EROFS images: the read-only filesystem an environment's image is attached as"
+
+[lib]
+name = "hangar_erofs"
+path = "src/lib.rs"
+
+[dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true

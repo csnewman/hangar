@@ -1,0 +1,2239 @@
+[
+ {
+  "path": ".",
+  "type": "dir",
+  "perm": 493,
+  "mtime": 1700000001,
+  "nsec": 123,
+  "uid": 0,
+  "gid": 0
+ },
+ {
+  "path": "a/b/c.txt",
+  "type": "file",
+  "text": "deep\n",
+  "uid": 1000,
+  "gid": 1000,
+  "perm": 420,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "a",
+  "type": "dir",
+  "perm": 488,
+  "uid": 1000,
+  "gid": 1000,
+  "xattrs": {
+   "user.dir": "yes"
+  },
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "small.txt",
+  "type": "file",
+  "text": "hello, erofs\n",
+  "mtime": 1700000002,
+  "nsec": 999999999,
+  "perm": 420,
+  "uid": 0,
+  "gid": 0
+ },
+ {
+  "path": "empty",
+  "type": "file",
+  "text": "",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "block",
+  "type": "file",
+  "fill": 4096,
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "block-and-a-bit",
+  "type": "file",
+  "fill": 4097,
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "ten-k",
+  "type": "file",
+  "fill": 10000,
+  "perm": 493,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "tail-own-block",
+  "type": "file",
+  "fill": 8136,
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "setuid",
+  "type": "file",
+  "text": "#!/bin/sh\n",
+  "perm": 2541,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "tmp",
+  "type": "dir",
+  "perm": 1023,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "link-to-small",
+  "type": "symlink",
+  "target": "small.txt",
+  "perm": 511,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "abs-link",
+  "type": "symlink",
+  "target": "/etc/hosts",
+  "perm": 511,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "hard",
+  "type": "link",
+  "target": "small.txt",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "dev/null",
+  "type": "char",
+  "major": 1,
+  "minor": 3,
+  "perm": 438,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "dev/sda",
+  "type": "block",
+  "major": 8,
+  "minor": 0,
+  "perm": 432,
+  "gid": 6,
+  "uid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "dev/big-minor",
+  "type": "char",
+  "major": 254,
+  "minor": 300,
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "fifo",
+  "type": "fifo",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "sock",
+  "type": "socket",
+  "perm": 493,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "attrs",
+  "type": "file",
+  "text": "with attributes",
+  "xattrs": {
+   "user.mime": "text/plain",
+   "security.selinux": "system_u:object_r:etc_t:s0\u0000",
+   "trusted.x": "t",
+   "system.posix_acl_access": "\u0002\u0000\u0000\u0000",
+   "system.other": "left out"
+  },
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "-dash",
+  "type": "file",
+  "text": "sorts before .",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "!bang",
+  "type": "file",
+  "text": "sorts before . too",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big",
+  "type": "dir",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0000-with-a-longish-name",
+  "type": "file",
+  "text": "0",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0001-with-a-longish-name",
+  "type": "file",
+  "text": "1",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0002-with-a-longish-name",
+  "type": "file",
+  "text": "2",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0003-with-a-longish-name",
+  "type": "file",
+  "text": "3",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0004-with-a-longish-name",
+  "type": "file",
+  "text": "4",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0005-with-a-longish-name",
+  "type": "file",
+  "text": "5",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0006-with-a-longish-name",
+  "type": "file",
+  "text": "6",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0007-with-a-longish-name",
+  "type": "file",
+  "text": "7",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0008-with-a-longish-name",
+  "type": "file",
+  "text": "8",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0009-with-a-longish-name",
+  "type": "file",
+  "text": "9",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0010-with-a-longish-name",
+  "type": "file",
+  "text": "10",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0011-with-a-longish-name",
+  "type": "file",
+  "text": "11",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0012-with-a-longish-name",
+  "type": "file",
+  "text": "12",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0013-with-a-longish-name",
+  "type": "file",
+  "text": "13",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0014-with-a-longish-name",
+  "type": "file",
+  "text": "14",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0015-with-a-longish-name",
+  "type": "file",
+  "text": "15",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0016-with-a-longish-name",
+  "type": "file",
+  "text": "16",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0017-with-a-longish-name",
+  "type": "file",
+  "text": "17",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0018-with-a-longish-name",
+  "type": "file",
+  "text": "18",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0019-with-a-longish-name",
+  "type": "file",
+  "text": "19",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0020-with-a-longish-name",
+  "type": "file",
+  "text": "20",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0021-with-a-longish-name",
+  "type": "file",
+  "text": "21",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0022-with-a-longish-name",
+  "type": "file",
+  "text": "22",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0023-with-a-longish-name",
+  "type": "file",
+  "text": "23",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0024-with-a-longish-name",
+  "type": "file",
+  "text": "24",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0025-with-a-longish-name",
+  "type": "file",
+  "text": "25",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0026-with-a-longish-name",
+  "type": "file",
+  "text": "26",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0027-with-a-longish-name",
+  "type": "file",
+  "text": "27",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0028-with-a-longish-name",
+  "type": "file",
+  "text": "28",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0029-with-a-longish-name",
+  "type": "file",
+  "text": "29",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0030-with-a-longish-name",
+  "type": "file",
+  "text": "30",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0031-with-a-longish-name",
+  "type": "file",
+  "text": "31",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0032-with-a-longish-name",
+  "type": "file",
+  "text": "32",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0033-with-a-longish-name",
+  "type": "file",
+  "text": "33",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0034-with-a-longish-name",
+  "type": "file",
+  "text": "34",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0035-with-a-longish-name",
+  "type": "file",
+  "text": "35",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0036-with-a-longish-name",
+  "type": "file",
+  "text": "36",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0037-with-a-longish-name",
+  "type": "file",
+  "text": "37",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0038-with-a-longish-name",
+  "type": "file",
+  "text": "38",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0039-with-a-longish-name",
+  "type": "file",
+  "text": "39",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0040-with-a-longish-name",
+  "type": "file",
+  "text": "40",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0041-with-a-longish-name",
+  "type": "file",
+  "text": "41",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0042-with-a-longish-name",
+  "type": "file",
+  "text": "42",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0043-with-a-longish-name",
+  "type": "file",
+  "text": "43",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0044-with-a-longish-name",
+  "type": "file",
+  "text": "44",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0045-with-a-longish-name",
+  "type": "file",
+  "text": "45",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0046-with-a-longish-name",
+  "type": "file",
+  "text": "46",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0047-with-a-longish-name",
+  "type": "file",
+  "text": "47",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0048-with-a-longish-name",
+  "type": "file",
+  "text": "48",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0049-with-a-longish-name",
+  "type": "file",
+  "text": "49",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0050-with-a-longish-name",
+  "type": "file",
+  "text": "50",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0051-with-a-longish-name",
+  "type": "file",
+  "text": "51",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0052-with-a-longish-name",
+  "type": "file",
+  "text": "52",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0053-with-a-longish-name",
+  "type": "file",
+  "text": "53",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0054-with-a-longish-name",
+  "type": "file",
+  "text": "54",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0055-with-a-longish-name",
+  "type": "file",
+  "text": "55",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0056-with-a-longish-name",
+  "type": "file",
+  "text": "56",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0057-with-a-longish-name",
+  "type": "file",
+  "text": "57",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0058-with-a-longish-name",
+  "type": "file",
+  "text": "58",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0059-with-a-longish-name",
+  "type": "file",
+  "text": "59",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0060-with-a-longish-name",
+  "type": "file",
+  "text": "60",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0061-with-a-longish-name",
+  "type": "file",
+  "text": "61",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0062-with-a-longish-name",
+  "type": "file",
+  "text": "62",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0063-with-a-longish-name",
+  "type": "file",
+  "text": "63",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0064-with-a-longish-name",
+  "type": "file",
+  "text": "64",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0065-with-a-longish-name",
+  "type": "file",
+  "text": "65",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0066-with-a-longish-name",
+  "type": "file",
+  "text": "66",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0067-with-a-longish-name",
+  "type": "file",
+  "text": "67",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0068-with-a-longish-name",
+  "type": "file",
+  "text": "68",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0069-with-a-longish-name",
+  "type": "file",
+  "text": "69",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0070-with-a-longish-name",
+  "type": "file",
+  "text": "70",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0071-with-a-longish-name",
+  "type": "file",
+  "text": "71",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0072-with-a-longish-name",
+  "type": "file",
+  "text": "72",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0073-with-a-longish-name",
+  "type": "file",
+  "text": "73",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0074-with-a-longish-name",
+  "type": "file",
+  "text": "74",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0075-with-a-longish-name",
+  "type": "file",
+  "text": "75",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0076-with-a-longish-name",
+  "type": "file",
+  "text": "76",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0077-with-a-longish-name",
+  "type": "file",
+  "text": "77",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0078-with-a-longish-name",
+  "type": "file",
+  "text": "78",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0079-with-a-longish-name",
+  "type": "file",
+  "text": "79",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0080-with-a-longish-name",
+  "type": "file",
+  "text": "80",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0081-with-a-longish-name",
+  "type": "file",
+  "text": "81",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0082-with-a-longish-name",
+  "type": "file",
+  "text": "82",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0083-with-a-longish-name",
+  "type": "file",
+  "text": "83",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0084-with-a-longish-name",
+  "type": "file",
+  "text": "84",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0085-with-a-longish-name",
+  "type": "file",
+  "text": "85",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0086-with-a-longish-name",
+  "type": "file",
+  "text": "86",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0087-with-a-longish-name",
+  "type": "file",
+  "text": "87",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0088-with-a-longish-name",
+  "type": "file",
+  "text": "88",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0089-with-a-longish-name",
+  "type": "file",
+  "text": "89",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0090-with-a-longish-name",
+  "type": "file",
+  "text": "90",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0091-with-a-longish-name",
+  "type": "file",
+  "text": "91",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0092-with-a-longish-name",
+  "type": "file",
+  "text": "92",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0093-with-a-longish-name",
+  "type": "file",
+  "text": "93",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0094-with-a-longish-name",
+  "type": "file",
+  "text": "94",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0095-with-a-longish-name",
+  "type": "file",
+  "text": "95",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0096-with-a-longish-name",
+  "type": "file",
+  "text": "96",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0097-with-a-longish-name",
+  "type": "file",
+  "text": "97",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0098-with-a-longish-name",
+  "type": "file",
+  "text": "98",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0099-with-a-longish-name",
+  "type": "file",
+  "text": "99",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0100-with-a-longish-name",
+  "type": "file",
+  "text": "100",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0101-with-a-longish-name",
+  "type": "file",
+  "text": "101",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0102-with-a-longish-name",
+  "type": "file",
+  "text": "102",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0103-with-a-longish-name",
+  "type": "file",
+  "text": "103",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0104-with-a-longish-name",
+  "type": "file",
+  "text": "104",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0105-with-a-longish-name",
+  "type": "file",
+  "text": "105",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0106-with-a-longish-name",
+  "type": "file",
+  "text": "106",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0107-with-a-longish-name",
+  "type": "file",
+  "text": "107",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0108-with-a-longish-name",
+  "type": "file",
+  "text": "108",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0109-with-a-longish-name",
+  "type": "file",
+  "text": "109",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0110-with-a-longish-name",
+  "type": "file",
+  "text": "110",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0111-with-a-longish-name",
+  "type": "file",
+  "text": "111",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0112-with-a-longish-name",
+  "type": "file",
+  "text": "112",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0113-with-a-longish-name",
+  "type": "file",
+  "text": "113",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0114-with-a-longish-name",
+  "type": "file",
+  "text": "114",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0115-with-a-longish-name",
+  "type": "file",
+  "text": "115",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0116-with-a-longish-name",
+  "type": "file",
+  "text": "116",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0117-with-a-longish-name",
+  "type": "file",
+  "text": "117",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0118-with-a-longish-name",
+  "type": "file",
+  "text": "118",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0119-with-a-longish-name",
+  "type": "file",
+  "text": "119",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0120-with-a-longish-name",
+  "type": "file",
+  "text": "120",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0121-with-a-longish-name",
+  "type": "file",
+  "text": "121",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0122-with-a-longish-name",
+  "type": "file",
+  "text": "122",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0123-with-a-longish-name",
+  "type": "file",
+  "text": "123",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0124-with-a-longish-name",
+  "type": "file",
+  "text": "124",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0125-with-a-longish-name",
+  "type": "file",
+  "text": "125",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0126-with-a-longish-name",
+  "type": "file",
+  "text": "126",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0127-with-a-longish-name",
+  "type": "file",
+  "text": "127",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0128-with-a-longish-name",
+  "type": "file",
+  "text": "128",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0129-with-a-longish-name",
+  "type": "file",
+  "text": "129",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0130-with-a-longish-name",
+  "type": "file",
+  "text": "130",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0131-with-a-longish-name",
+  "type": "file",
+  "text": "131",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0132-with-a-longish-name",
+  "type": "file",
+  "text": "132",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0133-with-a-longish-name",
+  "type": "file",
+  "text": "133",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0134-with-a-longish-name",
+  "type": "file",
+  "text": "134",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0135-with-a-longish-name",
+  "type": "file",
+  "text": "135",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0136-with-a-longish-name",
+  "type": "file",
+  "text": "136",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0137-with-a-longish-name",
+  "type": "file",
+  "text": "137",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0138-with-a-longish-name",
+  "type": "file",
+  "text": "138",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0139-with-a-longish-name",
+  "type": "file",
+  "text": "139",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0140-with-a-longish-name",
+  "type": "file",
+  "text": "140",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0141-with-a-longish-name",
+  "type": "file",
+  "text": "141",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0142-with-a-longish-name",
+  "type": "file",
+  "text": "142",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0143-with-a-longish-name",
+  "type": "file",
+  "text": "143",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0144-with-a-longish-name",
+  "type": "file",
+  "text": "144",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0145-with-a-longish-name",
+  "type": "file",
+  "text": "145",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0146-with-a-longish-name",
+  "type": "file",
+  "text": "146",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0147-with-a-longish-name",
+  "type": "file",
+  "text": "147",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0148-with-a-longish-name",
+  "type": "file",
+  "text": "148",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0149-with-a-longish-name",
+  "type": "file",
+  "text": "149",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0150-with-a-longish-name",
+  "type": "file",
+  "text": "150",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0151-with-a-longish-name",
+  "type": "file",
+  "text": "151",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0152-with-a-longish-name",
+  "type": "file",
+  "text": "152",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0153-with-a-longish-name",
+  "type": "file",
+  "text": "153",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0154-with-a-longish-name",
+  "type": "file",
+  "text": "154",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0155-with-a-longish-name",
+  "type": "file",
+  "text": "155",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0156-with-a-longish-name",
+  "type": "file",
+  "text": "156",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0157-with-a-longish-name",
+  "type": "file",
+  "text": "157",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0158-with-a-longish-name",
+  "type": "file",
+  "text": "158",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0159-with-a-longish-name",
+  "type": "file",
+  "text": "159",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0160-with-a-longish-name",
+  "type": "file",
+  "text": "160",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0161-with-a-longish-name",
+  "type": "file",
+  "text": "161",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0162-with-a-longish-name",
+  "type": "file",
+  "text": "162",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0163-with-a-longish-name",
+  "type": "file",
+  "text": "163",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0164-with-a-longish-name",
+  "type": "file",
+  "text": "164",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0165-with-a-longish-name",
+  "type": "file",
+  "text": "165",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0166-with-a-longish-name",
+  "type": "file",
+  "text": "166",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0167-with-a-longish-name",
+  "type": "file",
+  "text": "167",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0168-with-a-longish-name",
+  "type": "file",
+  "text": "168",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0169-with-a-longish-name",
+  "type": "file",
+  "text": "169",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0170-with-a-longish-name",
+  "type": "file",
+  "text": "170",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0171-with-a-longish-name",
+  "type": "file",
+  "text": "171",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0172-with-a-longish-name",
+  "type": "file",
+  "text": "172",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0173-with-a-longish-name",
+  "type": "file",
+  "text": "173",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0174-with-a-longish-name",
+  "type": "file",
+  "text": "174",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0175-with-a-longish-name",
+  "type": "file",
+  "text": "175",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0176-with-a-longish-name",
+  "type": "file",
+  "text": "176",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0177-with-a-longish-name",
+  "type": "file",
+  "text": "177",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0178-with-a-longish-name",
+  "type": "file",
+  "text": "178",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0179-with-a-longish-name",
+  "type": "file",
+  "text": "179",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0180-with-a-longish-name",
+  "type": "file",
+  "text": "180",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0181-with-a-longish-name",
+  "type": "file",
+  "text": "181",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0182-with-a-longish-name",
+  "type": "file",
+  "text": "182",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0183-with-a-longish-name",
+  "type": "file",
+  "text": "183",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0184-with-a-longish-name",
+  "type": "file",
+  "text": "184",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0185-with-a-longish-name",
+  "type": "file",
+  "text": "185",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0186-with-a-longish-name",
+  "type": "file",
+  "text": "186",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0187-with-a-longish-name",
+  "type": "file",
+  "text": "187",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0188-with-a-longish-name",
+  "type": "file",
+  "text": "188",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0189-with-a-longish-name",
+  "type": "file",
+  "text": "189",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0190-with-a-longish-name",
+  "type": "file",
+  "text": "190",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0191-with-a-longish-name",
+  "type": "file",
+  "text": "191",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0192-with-a-longish-name",
+  "type": "file",
+  "text": "192",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0193-with-a-longish-name",
+  "type": "file",
+  "text": "193",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0194-with-a-longish-name",
+  "type": "file",
+  "text": "194",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0195-with-a-longish-name",
+  "type": "file",
+  "text": "195",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0196-with-a-longish-name",
+  "type": "file",
+  "text": "196",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0197-with-a-longish-name",
+  "type": "file",
+  "text": "197",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0198-with-a-longish-name",
+  "type": "file",
+  "text": "198",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ },
+ {
+  "path": "big/entry-0199-with-a-longish-name",
+  "type": "file",
+  "text": "199",
+  "perm": 420,
+  "uid": 0,
+  "gid": 0,
+  "mtime": 1700000000,
+  "nsec": 0
+ }
+]

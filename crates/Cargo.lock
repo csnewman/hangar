@@ -3502,6 +3502,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-erofs"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "hangar-proto"
 version = "0.1.0"
 dependencies = [
