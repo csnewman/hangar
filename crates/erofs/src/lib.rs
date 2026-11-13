@@ -20,5 +20,5 @@ mod writer;
 mod dir;
 
 pub use format::{BLOCK_SIZE, Kind};
-pub use reader::{DirEntry, Image, Inode};
+pub use reader::{DirEntry, Image, Inode, ReadAt};
 pub use writer::{Entry, Out, Writer};

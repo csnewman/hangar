@@ -26,6 +26,12 @@ impl ReadAt for std::fs::File {
     }
 }
 
+impl<T: ReadAt + ?Sized> ReadAt for &T {
+    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
+        (**self).read_at(buf, offset)
+    }
+}
+
 impl ReadAt for [u8] {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
         let start = (offset as usize).min(self.len());
