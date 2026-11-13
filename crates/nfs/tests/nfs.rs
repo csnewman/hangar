@@ -519,6 +519,38 @@ fn allocate() {
     );
 }
 
+/// A file an unchecked create makes, as Linux's open with O_CREAT and no
+/// O_EXCL asks, has the mode asked for, which the server's umask would
+/// cut; one there already keeps its own.
+#[test]
+fn an_unchecked_create_gives_the_mode_asked_for() {
+    // SAFETY: umask has no preconditions. 022, a shell's, cuts the group's
+    // and others' write.
+    unsafe { libc::umask(0o022) };
+    let f = Fixture::new("unchecked", sets(&["s"]));
+    f.make_set("s");
+    let mut c = connect(&f, "u");
+    let id = c.id;
+    let create = |c: &mut Client, mode: u32| {
+        let mut d = c.run(|e| {
+            path(e, &["s"]);
+            // OPEN: create unchecked, with a mode (attribute 33), by name.
+            e.u32(18).u32(0).u32(3).u32(0).u64(id).str("owner");
+            e.u32(1).u32(0).u32(2).u32(0).u32(1 << (33 - 32));
+            e.opaque(&mode.to_be_bytes()).u32(0).str("f");
+            3
+        });
+        status(&mut d);
+        status(&mut d);
+        assert_eq!(status(&mut d), 0, "OPEN");
+    };
+    let mode = || std::fs::metadata(f.path("s/f")).unwrap().mode() & 0o7777;
+    create(&mut c, 0o666);
+    assert_eq!(mode(), 0o666, "made as asked");
+    create(&mut c, 0o600);
+    assert_eq!(mode(), 0o666, "there already: its own");
+}
+
 // A retransmitted call gets the reply the first one got, not the answer a
 // second run of it would give.
 #[test]

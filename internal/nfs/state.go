@@ -206,12 +206,11 @@ func (s *Server) open(cs *cstate, r *reader, w *writer) uint32 {
 	flags := openFlags(access)
 	var set bitmap
 	created := false
+	// Every create is tried as a guarded one, so that a file it makes is
+	// known to be new and is given the mode asked for, which the server's
+	// umask cuts.
 	if how == openCreate {
-		flags |= unix.O_CREAT
-		switch createMode {
-		case createGuarded, createExclusive, createExclusive1:
-			flags |= unix.O_EXCL
-		}
+		flags |= unix.O_CREAT | unix.O_EXCL
 	}
 	mode := uint32(0o644)
 	if attrs.mode != nil {
@@ -219,7 +218,10 @@ func (s *Server) open(cs *cstate, r *reader, w *writer) uint32 {
 	}
 	fd, err := s.openFile(p, flags, mode)
 	exclusive := createMode == createExclusive || createMode == createExclusive1
-	if err == unix.EEXIST && how == openCreate && exclusive {
+	if err == unix.EEXIST && how == openCreate && createMode == createUnchecked {
+		// An unchecked create opens what is there already.
+		fd, err = s.openFile(p, openFlags(access)|unix.O_CREAT, mode)
+	} else if err == unix.EEXIST && how == openCreate && exclusive {
 		// The same create retransmitted, made already.
 		s.mu.Lock()
 		v, ok := s.excl[p]
@@ -228,7 +230,7 @@ func (s *Server) open(cs *cstate, r *reader, w *writer) uint32 {
 			fd, err = s.openFile(p, openFlags(access), 0)
 		}
 	} else if err == nil && how == openCreate {
-		created = flags&unix.O_EXCL != 0
+		created = true
 	}
 	if err != nil {
 		return errno(err)

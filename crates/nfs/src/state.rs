@@ -342,18 +342,28 @@ impl Server {
         let mut flags = open_flags(access);
         let exclusive =
             how == OPEN_CREATE && matches!(create_mode, CREATE_EXCLUSIVE | CREATE_EXCLUSIVE1);
+        // Every create is tried as a guarded one, so that a file it makes is
+        // known to be new and is given the mode asked for, which the
+        // server's umask cuts.
         if how == OPEN_CREATE {
-            flags |= libc::O_CREAT;
-            if create_mode != CREATE_UNCHECKED {
-                flags |= libc::O_EXCL;
-            }
+            flags |= libc::O_CREAT | libc::O_EXCL;
         }
         let mode = attrs.mode.unwrap_or(0o644);
         let mut created = false;
         let fd = match self.root.open_file(&p, flags, mode) {
             Ok(fd) => {
-                created = how == OPEN_CREATE && flags & libc::O_EXCL != 0;
+                created = how == OPEN_CREATE;
                 fd
+            }
+            // An unchecked create opens what is there already.
+            Err(e) if e.raw_os_error() == Some(libc::EEXIST) && create_mode == CREATE_UNCHECKED => {
+                match self
+                    .root
+                    .open_file(&p, open_flags(access) | libc::O_CREAT, mode)
+                {
+                    Ok(fd) => fd,
+                    Err(e) => return errno(&e),
+                }
             }
             // The same create retransmitted, made already.
             Err(e)

@@ -389,6 +389,49 @@ func TestAllocate(t *testing.T) {
 	}
 }
 
+// A file an unchecked create makes, as Linux's open with O_CREAT and no
+// O_EXCL asks, has the mode asked for, which the server's umask would cut;
+// one there already keeps its own.
+func TestUncheckedCreateGivesTheModeAskedFor(t *testing.T) {
+	// 022, a shell's, cuts the group's and others' write.
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	srv, root := newServer(t, view{sets: []string{"s"}})
+	makeSet(root, "s")
+	c := connect(t, srv, "u")
+	create := func(mode uint32) {
+		t.Helper()
+		_, d := c.run(func(e *enc) uint32 {
+			path(e, "s")
+			// OPEN: create unchecked, with a mode (attribute 33), by name.
+			e.u32(18).u32(0).u32(3).u32(0).u64(c.id).str("owner")
+			e.u32(1).u32(0).u32(2).u32(0).u32(1 << (33 - 32))
+			e.opaque(binary.BigEndian.AppendUint32(nil, mode)).u32(0).str("f")
+			return 3
+		})
+		status(d)
+		status(d)
+		if st := status(d); st != 0 {
+			t.Fatalf("OPEN: %d", st)
+		}
+	}
+	mode := func() os.FileMode {
+		st, err := os.Stat(filepath.Join(root, "s", "f"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return st.Mode().Perm()
+	}
+	create(0o666)
+	if m := mode(); m != 0o666 {
+		t.Errorf("made as %o, not as asked", m)
+	}
+	create(0o600)
+	if m := mode(); m != 0o666 {
+		t.Errorf("there already, it became %o", m)
+	}
+}
+
 // Who a set's callers act as: one owner for everything, root as nobody,
 // or each as themselves. Only a server run as root acts as anyone else.
 func TestSquash(t *testing.T) {
