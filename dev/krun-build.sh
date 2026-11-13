@@ -5,6 +5,7 @@
 #
 #   dev/krun-build.sh        the Mac's, in out/krun/bin, with mkfs.ext4
 #                            (e2fsprogs) for environments' writable disks
+#                            and gvproxy (gvisor-tap-vsock) for their network
 #   dev/krun-build.sh mac BRANCH
 #                            the same, from a branch of the fork's clone in
 #                            libkrun/ beside this checkout
@@ -223,4 +224,11 @@ if [ ! -x "$bin/mkfs.ext4" ]; then
     # Named so, mke2fs makes ext4 without being told.
     cp "$e2/misc/mke2fs" "$bin/mkfs.ext4"
 fi
-echo "built $bin: hangar-krun (libkrun $branch $(echo $want | cut -c1-8), $features) and mkfs.ext4"
+
+# A guest's network on the Mac, for the Rust worker (crates/vm/src/gvproxy.rs),
+# at the gvisor-tap-vsock the Go worker links.
+gvproxy=v0.9.0
+if [ ! -x "$bin/gvproxy" ] || ! "$bin/gvproxy" -version 2>/dev/null | grep -q "$gvproxy"; then
+    GOBIN=$bin GOFLAGS= go install github.com/containers/gvisor-tap-vsock/cmd/gvproxy@$gvproxy
+fi
+echo "built $bin: hangar-krun (libkrun $branch $(echo $want | cut -c1-8), $features), mkfs.ext4 and gvproxy"

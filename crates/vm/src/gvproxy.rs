@@ -15,18 +15,23 @@ use crate::err;
 pub const GUEST_IP: &str = "192.168.127.2";
 
 /// gvproxy's configuration: the guest's subnet, its gateway (which answers
-/// DNS), and the lease of GUEST_IP to the guest's device. It names no NAT
-/// and no forwards, which gvproxy's own defaults have: the host's address
-/// in the subnet NATed to the host's loopback, and the host's port 2222 to
-/// the guest's SSH. Nothing on the host's loopback is reachable from a
-/// guest -- a guest talks to the worker over vsock -- and the host's port
-/// 2222 is the SSH gateway's.
+/// DNS), and the lease of GUEST_IP to the guest's device. It names no
+/// forwards, which gvproxy's defaults have without a configuration (the
+/// host's port 2222 to the guest's SSH, the SSH gateway's port). Nothing on
+/// the host's loopback is to be reachable from a guest -- a guest talks to
+/// the worker over vsock -- but gvproxy NATs the host's address in the
+/// subnet to the host's loopback whenever no NAT is named, and has no way
+/// to name none; so it is NATed to 192.0.2.1, one of RFC 5737's addresses
+/// for documentation, which nothing answers on.
 const CONFIG: &str = "\
 stack:
   mtu: 1500
   subnet: 192.168.127.0/24
   gatewayIP: 192.168.127.1
+  hostIP: 192.168.127.254
   gatewayMacAddress: 5a:94:ef:e4:0c:dd
+  nat:
+    192.168.127.254: 192.0.2.1
   dhcpStaticLeases:
     192.168.127.2: 5a:94:ef:e4:0c:ee
 ";

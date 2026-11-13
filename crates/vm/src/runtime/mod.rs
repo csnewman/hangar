@@ -531,6 +531,14 @@ impl Runtime {
             .collect()
     }
 
+    /// The agent's session with a running environment's guest, to ask it
+    /// things.
+    pub fn session(&self, id: &str) -> Option<Arc<crate::agent::Session>> {
+        let m = self.state.lock().unwrap().envs.get(id).cloned()?;
+        let st = m.st.lock().unwrap();
+        st.running.as_ref().map(|i| i.session().clone())
+    }
+
     /// Where an environment's machine writes the log of that name: only
     /// environments this runtime holds, and only those logs, so a request
     /// names no other file.
