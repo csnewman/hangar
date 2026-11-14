@@ -39,13 +39,6 @@ fn valid_name(name: &str) -> bool {
             .all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-'))
 }
 
-fn system() -> Actor {
-    Actor {
-        name: "hangar".into(),
-        ..Actor::default()
-    }
-}
-
 fn worker_actor(id: Uuid, name: &str) -> Actor {
     Actor {
         worker: Some(id),
@@ -91,7 +84,7 @@ pub async fn register(
     }
     audit::record(
         &mut tx,
-        &system(),
+        &audit::system(),
         Event::new("worker.register", "worker", w.id, name)
             .details(serde_json::json!({ "labels": labels })),
     )

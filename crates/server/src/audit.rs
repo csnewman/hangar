@@ -6,13 +6,39 @@ use uuid::Uuid;
 use crate::store::rows::AuditEvent;
 use crate::store::{Result, Tx};
 
-/// Who acts: a person, a worker, or someone not signed in.
+/// Who acts: a person, a worker, Hangar itself, or someone not signed in.
 #[derive(Debug, Clone, Default)]
 pub struct Actor {
     pub user: Option<Uuid>,
     pub worker: Option<Uuid>,
     pub name: String,
     pub ip: String,
+    /// How a person signed in, when it is worth saying: an access token's
+    /// name.
+    pub via: String,
+}
+
+/// The users migration 0001 makes for Hangar acting on its own: the
+/// control plane, and placement.
+pub const SYSTEM_HANGAR: Uuid = Uuid::from_u128(0x00000000_0000_4000_8000_000000000001);
+pub const SYSTEM_PLACEMENT: Uuid = Uuid::from_u128(0x00000000_0000_4000_8000_000000000002);
+
+/// Hangar itself acting.
+pub fn system() -> Actor {
+    Actor {
+        user: Some(SYSTEM_HANGAR),
+        name: "hangar".into(),
+        ..Actor::default()
+    }
+}
+
+/// Placement deciding.
+pub fn placement() -> Actor {
+    Actor {
+        user: Some(SYSTEM_PLACEMENT),
+        name: "hangar:placement".into(),
+        ..Actor::default()
+    }
 }
 
 /// What was done, to what, and what else it concerns.
@@ -60,6 +86,12 @@ pub async fn record(tx: &mut Tx, actor: &Actor, e: Event) -> Result<()> {
     if let Some(w) = actor.worker {
         subjects.push(format!("worker:{w}"));
     }
+    let mut details = e.details;
+    if !actor.via.is_empty()
+        && let Some(o) = details.as_object_mut()
+    {
+        o.insert("via".into(), serde_json::json!(actor.via));
+    }
     tx.record(AuditEvent {
         id: 0,
         at: chrono::Utc::now(),
@@ -72,7 +104,45 @@ pub async fn record(tx: &mut Tx, actor: &Actor, e: Event) -> Result<()> {
         target_id: e.target.1,
         target_name: e.target.2,
         subjects,
-        details: e.details,
+        details,
     })
     .await
+}
+
+/// An event as it is read back, with who acted's kind.
+pub struct Entry {
+    pub event: AuditEvent,
+    pub actor_kind: String,
+}
+
+/// Events about every one of subjects, newest first, before an ID if
+/// given, at most limit (100 when not given or out of 1 to 500). An
+/// administrator sees every event, anyone else those about what they own,
+/// about them, or by them.
+pub async fn list(
+    store: &crate::store::Store,
+    p: &crate::users::Principal,
+    subjects: &[String],
+    before: Option<i64>,
+    limit: Option<i64>,
+) -> Result<Vec<Entry>> {
+    let mine = [
+        format!("owner:{}", p.user_id),
+        format!("user:{}", p.user_id),
+        format!("actor:{}", p.user_id),
+    ];
+    let q = crate::store::audit::Query {
+        subjects,
+        any_of: (!p.admin).then_some(&mine[..]),
+        before: before.filter(|b| *b > 0).unwrap_or(i64::MAX),
+        limit: limit.filter(|l| (1..=500).contains(l)).unwrap_or(100),
+    };
+    Ok(store
+        .begin()
+        .await?
+        .audit_events(&q)
+        .await?
+        .into_iter()
+        .map(|(event, actor_kind)| Entry { event, actor_kind })
+        .collect())
 }

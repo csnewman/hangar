@@ -3,6 +3,7 @@
 //! and how errors are told.
 
 mod access;
+mod audit;
 mod catalog;
 mod client;
 mod environments;
@@ -52,12 +53,14 @@ pub fn router(app: Shared) -> Router {
         .nest(
             "/api/frontend",
             frontend::routes()
+                .merge(audit::frontend())
                 .merge(catalog::frontend())
                 .merge(environments::frontend()),
         )
         .nest(
             "/api/v1",
             client::routes()
+                .merge(audit::client())
                 .merge(catalog::client())
                 .merge(environments::client()),
         )
@@ -194,7 +197,7 @@ impl FromRequestParts<Shared> for Signed {
 impl Signed {
     /// Who a request's bearer token or session cookie signs in.
     pub async fn authenticate(parts: &mut Parts, app: &Shared) -> Result<Signed, ApiError> {
-        let ip = client_ip(&parts.headers);
+        let ip = client_ip(parts);
         if let Some(token) = bearer(&parts.headers) {
             return match users::token(&app.store, &token).await? {
                 Some(principal) => Ok(Signed {
@@ -219,15 +222,33 @@ impl Signed {
     }
 }
 
-/// The address a request came from, as the request says it: the first
-/// X-Forwarded-For, which the proxy in front sets.
-pub fn client_ip(headers: &HeaderMap) -> String {
-    headers
+/// The address a request came from: the first X-Forwarded-For, which the
+/// proxy in front sets, else the connection's.
+pub fn client_ip(parts: &Parts) -> String {
+    if let Some(first) = parts
+        .headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(',').next())
-        .map(|v| v.trim().to_string())
+    {
+        return first.trim().to_string();
+    }
+    parts
+        .extensions
+        .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
+        .map(|c| c.0.ip().to_string())
         .unwrap_or_default()
+}
+
+/// The address a request came from, as client_ip has it.
+pub struct ClientIp(pub String);
+
+impl<S: Send + Sync> FromRequestParts<S> for ClientIp {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(ClientIp(client_ip(parts)))
+    }
 }
 
 pub fn bearer(headers: &HeaderMap) -> Option<String> {

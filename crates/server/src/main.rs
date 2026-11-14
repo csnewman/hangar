@@ -46,7 +46,10 @@ async fn run() -> Result<(), String> {
     eprintln!("hangar-server: serving HTTP on {}", cfg.listen);
     tokio::spawn(placement::run(store.clone()));
     let app = http::router(Arc::new(http::App::new(store, cfg)));
-    axum::serve(listener, app)
-        .await
-        .map_err(|e| format!("serving: {e}"))
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .map_err(|e| format!("serving: {e}"))
 }

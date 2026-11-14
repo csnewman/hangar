@@ -6,6 +6,7 @@
 //! the Postgres tables' as `internal/db/migrations` makes them, which the
 //! JSON file holds as they are.
 
+pub mod audit;
 mod catalog;
 pub mod environments;
 mod json;

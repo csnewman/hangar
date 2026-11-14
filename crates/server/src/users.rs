@@ -30,6 +30,8 @@ pub struct Principal {
     pub user_id: Uuid,
     pub username: String,
     pub admin: bool,
+    /// How they signed in, for the audit log: an access token's name.
+    pub via: String,
 }
 
 impl Principal {
@@ -38,6 +40,7 @@ impl Principal {
             user_id: u.id,
             username: u.username.clone(),
             admin: u.is_admin,
+            via: String::new(),
         }
     }
 
@@ -48,6 +51,7 @@ impl Principal {
             worker: None,
             name: self.username.clone(),
             ip: ip.to_string(),
+            via: self.via.clone(),
         }
     }
 }
@@ -111,13 +115,9 @@ pub async fn ensure_admin(store: &Store, username: &str, password: &str) -> Resu
         theme: "system".into(),
     };
     tx.insert_user(&u).await?;
-    let system = Actor {
-        name: "hangar".into(),
-        ..Actor::default()
-    };
     audit::record(
         &mut tx,
-        &system,
+        &audit::system(),
         Event::new("user.create", "user", u.id, username)
             .details(serde_json::json!({ "admin": true })),
     )
@@ -221,7 +221,10 @@ pub async fn token(store: &Store, token: &str) -> Result<Option<Principal>> {
         tx.touch_token(t.id, now).await?;
         tx.commit().await?;
     }
-    Ok(Some(Principal::of(&user)))
+    Ok(Some(Principal {
+        via: format!("access token {}", t.name),
+        ..Principal::of(&user)
+    }))
 }
 
 /// Ends the session whose token this is.

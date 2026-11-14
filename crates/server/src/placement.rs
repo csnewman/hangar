@@ -10,7 +10,7 @@ use std::time::Duration;
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::audit::{self, Actor, Event};
+use crate::audit::{self, Event};
 use crate::store::{Result, Store};
 use crate::workers::ONLINE_WINDOW;
 
@@ -27,15 +27,6 @@ const BATCH: i64 = 100;
 /// How often placement runs without being asked, for what nothing
 /// signals, such as a worker coming back by reporting again.
 const EVERY: Duration = Duration::from_secs(10);
-
-/// The decider's own name in the audit log.
-fn actor() -> Actor {
-    Actor {
-        user: Uuid::parse_str("00000000-0000-4000-8000-000000000002").ok(),
-        name: "hangar:placement".into(),
-        ..Actor::default()
-    }
-}
 
 struct Free {
     id: Uuid,
@@ -75,7 +66,7 @@ pub async fn place(store: &Store) -> Result<usize> {
             }
         })
         .collect();
-    let by = actor();
+    let by = audit::placement();
     let mut placed = 0;
     let mut bumped = HashSet::new();
     for mut e in queue {

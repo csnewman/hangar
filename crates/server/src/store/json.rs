@@ -39,6 +39,35 @@ pub struct State {
     pub agent_sessions: Vec<AgentSession>,
 }
 
+impl State {
+    /// A state as a new database starts: Hangar's own users and nothing
+    /// else, as migration 0001 makes them.
+    fn new() -> State {
+        let user = |id, username: &str, display_name: &str| User {
+            id,
+            username: username.into(),
+            display_name: display_name.into(),
+            password_hash: None,
+            is_admin: false,
+            kind: "system".into(),
+            disabled_at: None,
+            created_at: chrono::Utc::now(),
+            theme: "system".into(),
+        };
+        State {
+            users: vec![
+                user(crate::audit::SYSTEM_HANGAR, "hangar", "Hangar"),
+                user(
+                    crate::audit::SYSTEM_PLACEMENT,
+                    "hangar:placement",
+                    "Hangar placement",
+                ),
+            ],
+            ..State::default()
+        }
+    }
+}
+
 /// The file, open.
 pub struct File {
     path: PathBuf,
@@ -73,7 +102,7 @@ impl File {
         let state = match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .map_err(|e| Error(format!("{}: {e}", path.display())))?,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::default(),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => State::new(),
             Err(e) => return Err(Error(format!("{}: {e}", path.display()))),
         };
         Ok(File {

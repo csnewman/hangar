@@ -2,13 +2,13 @@
 //! what the browser asks of the server.
 
 use axum::extract::{Path, State};
-use axum::http::{HeaderMap, StatusCode, header};
+use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use hangar_openapi::frontendapi::types;
 
-use super::{ApiError, App, Body, Shared, Signed, Via, client_ip, session_cookie, spec};
+use super::{ApiError, App, Body, ClientIp, Shared, Signed, Via, session_cookie, spec};
 use crate::store::rows::{AccessToken, User};
 use crate::users;
 
@@ -239,10 +239,9 @@ fn token_of(t: &AccessToken) -> types::AccessToken {
 
 async fn login(
     State(app): State<Shared>,
-    headers: HeaderMap,
+    ClientIp(ip): ClientIp,
     Body(b): Body<types::Login>,
 ) -> Result<Response, ApiError> {
-    let ip = client_ip(&headers);
     let Some((token, user)) = users::login(&app.store, &ip, &b.username, &b.password).await? else {
         return Err(ApiError::new(
             StatusCode::UNAUTHORIZED,
