@@ -11,13 +11,24 @@ use hangar_worker::config::Config;
 use hangar_worker::logs::{Logger, Rings};
 use hangar_worker::{Worker, vm};
 
-const USAGE: &str = "usage: hangar-worker [-config FILE] [-debug]";
+mod tools;
+
+const USAGE: &str = "usage: hangar-worker [-config FILE] [-debug]
+       hangar-worker doctor                  check this machine can run environments
+       hangar-worker erofs -o IMAGE DIR      write a directory as an EROFS image
+       hangar-worker erofs -o IMAGE -tar     write a tar archive on standard input as one";
 
 fn main() -> ExitCode {
+    let argv: Vec<String> = std::env::args().skip(1).collect();
+    match argv.first().map(String::as_str) {
+        Some("doctor") => return tools::doctor(),
+        Some("erofs") => return tools::erofs(&argv[1..]),
+        _ => {}
+    }
     raise_file_limit();
     let mut config = PathBuf::from("/etc/hangar/worker.yaml");
     let mut debug = false;
-    let mut args = std::env::args().skip(1);
+    let mut args = argv.into_iter();
     while let Some(a) = args.next() {
         match a.trim_start_matches('-') {
             "config" => match args.next() {

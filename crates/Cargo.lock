@@ -3601,6 +3601,7 @@ dependencies = [
  "base64 0.22.1",
  "futures-util",
  "hangar-api",
+ "hangar-erofs",
  "hangar-images",
  "hangar-nfs",
  "hangar-vm",

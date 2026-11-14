@@ -1,12 +1,11 @@
 // Command hangar is the Hangar CLI.
 //
-// At this stage it does the minimum needed to prove the environment shape:
-// build a guest kernel, build a VM image, and boot the two together.
+// It builds what workers boot: the guest kernel and the distributions'
+// images. Checking a machine and writing EROFS images by hand are
+// hangar-worker's (`hangar-worker doctor`, `hangar-worker erofs`).
 package main
 
 import (
-	"archive/tar"
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -15,22 +14,19 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/csnewman/hangar/internal/ch"
-	"github.com/csnewman/hangar/internal/erofs"
-	"github.com/csnewman/hangar/internal/host"
 	"github.com/csnewman/hangar/internal/image"
 	"github.com/csnewman/hangar/internal/kernel"
-	"github.com/csnewman/hangar/internal/krun"
 )
 
 const usage = `hangar - development environments for coding agents
 
 Usage:
-  hangar doctor              check this machine can run environments
   hangar build [flags]       build a distribution's images with mkosi
   hangar oci   [flags]       write built images as an OCI layout, to push
   hangar kernel [flags]      build the guest kernel
-  hangar erofs [flags] [dir] write a directory or a tar archive as an EROFS image
+
+Checking a machine and writing EROFS images are hangar-worker's:
+"hangar-worker doctor" and "hangar-worker erofs".
 
 Run "hangar <command> -h" for the flags of a command.
 `
@@ -45,16 +41,12 @@ func main() {
 	var err error
 
 	switch os.Args[1] {
-	case "doctor":
-		err = doctor()
 	case "build":
 		err = build(ctx, os.Args[2:])
 	case "oci":
 		err = writeOCI(ctx, os.Args[2:])
 	case "kernel":
 		err = buildKernel(ctx, os.Args[2:])
-	case "erofs":
-		err = writeEROFS(os.Args[2:])
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 		return
@@ -67,41 +59,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "hangar: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-func doctor() error {
-	caps, err := host.Detect("")
-	if err != nil {
-		fmt.Printf("host        %s/%s\n", runtime.GOOS, runtime.GOARCH)
-		return err
-	}
-	fmt.Print(caps.Summary())
-
-	if caps.Monitor == host.MonitorKrun {
-		if bin, err := krun.Find(); err != nil {
-			fmt.Printf("hangar-krun not available: %v\n", err)
-		} else {
-			fmt.Printf("hangar-krun %s\n", bin)
-		}
-		return nil
-	}
-
-	// Cloud Hypervisor runs the environments, so its state belongs here.
-	if bin, err := ch.Find(); err != nil {
-		fmt.Printf("cloud-hyp   not available: %v\n", err)
-	} else {
-		fmt.Printf("cloud-hyp   %s\n", bin)
-	}
-	if err := ch.CheckHugePages(); err != nil {
-		fmt.Printf("huge pages  NO\n")
-		// The full explanation is long and only worth printing when it
-		// applies.
-		fmt.Println()
-		fmt.Println(err)
-	} else {
-		fmt.Printf("huge pages  yes, shared memory is eligible\n")
-	}
-	return nil
 }
 
 func writeOCI(ctx context.Context, argv []string) error {
@@ -217,43 +174,4 @@ func humanSize(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGT"[exp])
-}
-
-// writeEROFS writes an EROFS image of a directory, or of a tar archive on
-// standard input.
-func writeEROFS(argv []string) error {
-	fs := flag.NewFlagSet("erofs", flag.ExitOnError)
-	out := fs.String("o", "", "the image to write")
-	fromTar := fs.Bool("tar", false, "read a tar archive from standard input rather than a directory")
-	fs.Usage = func() {
-		fmt.Fprint(fs.Output(), "Usage: hangar erofs -o IMAGE DIR\n       hangar erofs -o IMAGE -tar < ARCHIVE\n\n")
-		fs.PrintDefaults()
-	}
-	if err := fs.Parse(argv); err != nil {
-		return err
-	}
-	if *out == "" || *fromTar == (fs.NArg() == 1) || fs.NArg() > 1 {
-		fs.Usage()
-		os.Exit(2)
-	}
-	f, err := os.Create(*out)
-	if err != nil {
-		return err
-	}
-	w := erofs.NewWriter(f)
-	if *fromTar {
-		err = w.AddTar(tar.NewReader(bufio.NewReaderSize(os.Stdin, 1<<20)))
-	} else {
-		err = w.AddDir(fs.Arg(0))
-	}
-	if err == nil {
-		err = w.Close()
-	}
-	if cerr := f.Close(); err == nil {
-		err = cerr
-	}
-	if err != nil {
-		os.Remove(*out)
-	}
-	return err
 }

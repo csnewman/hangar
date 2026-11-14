@@ -17,6 +17,7 @@ path = "src/main.rs"
 base64.workspace = true
 futures-util = { version = "0.3", features = ["sink"] }
 hangar-api = { path = "../api" }
+hangar-erofs = { path = "../erofs" }
 hangar-images = { path = "../images" }
 hangar-nfs = { path = "../nfs" }
 hangar-vm = { path = "../vm" }
