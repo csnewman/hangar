@@ -202,11 +202,22 @@ func TestMemoryWhileRunning(t *testing.T) {
 		return environments.Settings{CPUs: 2, MemoryMiB: mib, Display: api.DisplayNone, GPU: api.GPUNone}
 	}
 
+	// Just started, it has not been measured yet.
+	set(`UPDATE environments SET worker_id = $2, phase = 'running' WHERE id = $1`, env.ID, worker)
+	_, early := em.UpdateSettings(ctx, p, env.ID, memory(6144))
+	if !errors.Is(early, environments.ErrConflict) {
+		t.Fatalf("resizing a machine not yet measured: %v, want ErrConflict", early)
+	}
+
 	// Booted before it could be resized, it reports no range.
-	set(`UPDATE environments SET worker_id = $2, phase = 'running', stats = '{"machine_memory_mib": 4096}'
-		WHERE id = $1`, env.ID, worker)
-	if _, err := em.UpdateSettings(ctx, p, env.ID, memory(6144)); !errors.Is(err, environments.ErrConflict) {
-		t.Fatalf("resizing a machine that cannot be: %v, want ErrConflict", err)
+	set(`UPDATE environments SET stats = '{"machine_memory_mib": 4096}' WHERE id = $1`, env.ID)
+	_, never := em.UpdateSettings(ctx, p, env.ID, memory(6144))
+	if !errors.Is(never, environments.ErrConflict) {
+		t.Fatalf("resizing a machine that cannot be: %v, want ErrConflict", never)
+	}
+	// Only the second is told to stop it.
+	if early.Error() == never.Error() {
+		t.Errorf("a machine not yet measured is refused as one that cannot be resized: %v", early)
 	}
 
 	set(`UPDATE environments SET stats = '{"machine_memory_mib": 4096, "machine_memory_min_mib": 1024,

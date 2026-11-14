@@ -157,7 +157,11 @@ func running(e api.Environment) bool {
 func resizable(ctx context.Context, tx db.Tx, e api.Environment, mib int) error {
 	st := e.Stats
 	switch {
-	case st == nil || st.MachineMemoryMaxMiB == 0:
+	// A machine reports its range with its first measurement, a few
+	// seconds after it starts or resumes.
+	case st == nil:
+		return fmt.Errorf("%w: its worker has not yet said how far its memory can be resized; try again in a few seconds", ErrConflict)
+	case st.MachineMemoryMaxMiB == 0:
 		return fmt.Errorf("%w: it started with no room to resize its memory while it runs; stop it to change its memory, and from its next start it can be resized while it runs", ErrConflict)
 	case mib < st.MachineMemoryMinMiB:
 		return fmt.Errorf("%w: while it runs, its memory can go down to %d MiB, what it started with; stop it to go lower", ErrConflict, st.MachineMemoryMinMiB)
