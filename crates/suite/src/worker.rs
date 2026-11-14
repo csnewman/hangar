@@ -22,6 +22,9 @@ const GUEST_PORTS: u32 = 108;
 /// The vsock port the agent serves terminals on.
 const TERMINALS: u32 = 101;
 
+/// The vsock port the agent serves SSH on.
+const SSH: u32 = 107;
+
 /// The guest ports the suite's guests serve a web page on.
 pub const WEB_PORTS: [u16; 2] = [80, 8080];
 
@@ -170,6 +173,10 @@ impl Runtime for Machines {
         let (ours, mut guest) = tokio::io::duplex(1 << 16);
         if port == GUEST_PORTS {
             tokio::spawn(guest_ports(guest));
+            return Ok(ours);
+        }
+        if port == SSH {
+            tokio::spawn(ssh(guest));
             return Ok(ours);
         }
         if port == TERMINALS {
@@ -382,4 +389,65 @@ async fn frame(
     out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
     out.extend_from_slice(payload);
     conn.get_mut().write_all(&out).await
+}
+
+/// Holds one SSH connection as the agent's server does
+/// (crates/agent/src/sshd.rs): anyone the gateway brings is let in, and
+/// each command is answered "ran <command>" with exit status 0.
+async fn ssh(conn: DuplexStream) {
+    use russh::keys::PrivateKey;
+    use russh::keys::ssh_key::private::Ed25519Keypair;
+    let config = russh::server::Config {
+        keys: vec![PrivateKey::from(Ed25519Keypair::from_seed(&[7; 32]))],
+        inactivity_timeout: None,
+        ..russh::server::Config::default()
+    };
+    let guest = GuestSsh {
+        channels: BTreeMap::new(),
+    };
+    if let Ok(running) = russh::server::run_stream(Arc::new(config), conn, guest).await {
+        let _ = running.await;
+    }
+}
+
+struct GuestSsh {
+    channels: BTreeMap<russh::ChannelId, russh::Channel<russh::server::Msg>>,
+}
+
+impl russh::server::Handler for GuestSsh {
+    type Error = russh::Error;
+
+    async fn auth_none(&mut self, _user: &str) -> Result<russh::server::Auth, Self::Error> {
+        Ok(russh::server::Auth::Accept)
+    }
+
+    async fn channel_open_session(
+        &mut self,
+        channel: russh::Channel<russh::server::Msg>,
+        reply: russh::server::ChannelOpenHandle,
+        _session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        self.channels.insert(channel.id(), channel);
+        reply.accept().await;
+        Ok(())
+    }
+
+    async fn exec_request(
+        &mut self,
+        id: russh::ChannelId,
+        data: &[u8],
+        session: &mut russh::server::Session,
+    ) -> Result<(), Self::Error> {
+        session.channel_success(id)?;
+        if let Some(ch) = self.channels.remove(&id) {
+            let out = format!("ran {}\n", String::from_utf8_lossy(data));
+            tokio::spawn(async move {
+                let _ = ch.data(out.as_bytes()).await;
+                let _ = ch.exit_status(0).await;
+                let _ = ch.eof().await;
+                let _ = ch.close().await;
+            });
+        }
+        Ok(())
+    }
 }

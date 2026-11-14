@@ -3622,6 +3622,7 @@ dependencies = [
  "hangar-worker",
  "postgres",
  "reqwest",
+ "russh",
  "serde",
  "serde_json",
  "tokio",

@@ -15,6 +15,7 @@ hangar-openapi = { path = "../openapi" }
 hangar-vm = { path = "../vm" }
 hangar-worker = { path = "../worker" }
 postgres = "0.19"
+russh = { version = "0.65", default-features = false, features = ["ring"] }
 reqwest = { version = "0.13", default-features = false, features = ["cookies", "json"] }
 serde.workspace = true
 serde_json.workspace = true
