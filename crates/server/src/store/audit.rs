@@ -84,7 +84,7 @@ impl Tx {
                         (e.clone(), kind)
                     })
                     .collect();
-                out.sort_by(|a, b| b.0.id.cmp(&a.0.id));
+                out.sort_by_key(|e| std::cmp::Reverse(e.0.id));
                 out.truncate(q.limit.max(0) as usize);
                 Ok(out)
             }

@@ -17,22 +17,30 @@ pub fn client() -> Router<Shared> {
     Router::new().route("/environments/{id}/activity", get(activity))
 }
 
+/// What a query asks of the log.
+#[derive(Default)]
+struct Params {
+    subjects: Vec<String>,
+    before: Option<i64>,
+    limit: Option<i64>,
+}
+
 /// A query's subject (repeated), before and limit.
-fn params(query: Option<String>) -> Result<(Vec<String>, Option<i64>, Option<i64>), ApiError> {
-    let (mut subjects, mut before, mut limit) = (Vec::new(), None, None);
+fn params(query: Option<String>) -> Result<Params, ApiError> {
+    let mut p = Params::default();
     for (k, v) in form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
         let number = || {
             v.parse::<i64>()
                 .map_err(|_| ApiError::invalid(format!("{k} is a number")))
         };
         match k.as_ref() {
-            "subject" => subjects.push(v.to_string()),
-            "before" => before = Some(number()?),
-            "limit" => limit = Some(number()?),
+            "subject" => p.subjects.push(v.to_string()),
+            "before" => p.before = Some(number()?),
+            "limit" => p.limit = Some(number()?),
             _ => {}
         }
     }
-    Ok((subjects, before, limit))
+    Ok(p)
 }
 
 fn actor_json(e: &Entry) -> Value {
@@ -61,8 +69,8 @@ async fn list(
     s: Signed,
     RawQuery(q): RawQuery,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    let (subjects, before, limit) = params(q)?;
-    let entries = audit::list(&app.store, &s.principal, &subjects, before, limit).await?;
+    let q = params(q)?;
+    let entries = audit::list(&app.store, &s.principal, &q.subjects, q.before, q.limit).await?;
     Ok(Json(
         entries
             .iter()
@@ -99,15 +107,9 @@ async fn activity(
     {
         return Err(ApiError::not_found("environment"));
     }
-    let (_, before, limit) = params(q)?;
-    let entries = audit::list(
-        &app.store,
-        &s.principal,
-        &[format!("environment:{id}")],
-        before,
-        limit,
-    )
-    .await?;
+    let q = params(q)?;
+    let subject = [format!("environment:{id}")];
+    let entries = audit::list(&app.store, &s.principal, &subject, q.before, q.limit).await?;
     Ok(Json(
         entries
             .iter()
