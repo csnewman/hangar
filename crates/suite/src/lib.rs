@@ -19,6 +19,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub use hangar_openapi::{clientapi, frontendapi};
 
+pub mod worker;
+
 /// The administrator every server starts with.
 pub const ADMIN: &str = "admin";
 /// Its password.
@@ -194,6 +196,12 @@ impl Server {
             .token
     }
 
+    /// Starts a worker named name for this server, which takes templates
+    /// placed on `worker::LABEL`.
+    pub fn worker(&self, name: &str) -> worker::Worker {
+        worker::Worker::start(&format!("http://127.0.0.1:{}", self.port), name)
+    }
+
     /// Waits for the server to answer, failing the test with its log if it
     /// exits or does not answer within 60 seconds.
     fn wait_ready(&mut self) {
@@ -294,5 +302,42 @@ fn database_url(admin: &str, name: &str) -> String {
         format!("{base}/{name}")
     } else {
         format!("{base}/{name}?{query}")
+    }
+}
+
+/// A request body of the spec's, written as JSON: the spec's types check
+/// it as they read it.
+pub fn body<T: serde::de::DeserializeOwned>(json: serde_json::Value) -> T {
+    serde_json::from_value(json.clone())
+        .unwrap_or_else(|e| panic!("a body the spec does not take ({e}): {json}"))
+}
+
+/// Asks f until it gives something, for up to 20 seconds, failing the test
+/// with what it was waiting for.
+pub async fn eventually<T, F, Fut>(what: &str, mut f: F) -> T
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Option<T>>,
+{
+    let start = Instant::now();
+    loop {
+        if let Some(v) = f().await {
+            return v;
+        }
+        if start.elapsed() > Duration::from_secs(20) {
+            panic!("timed out waiting for {what}");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// Why a call failed, saying where an answer broke the spec when it did:
+/// the suite's first sign of a server out of step with its spec.
+pub fn why<E: std::fmt::Debug>(e: &frontendapi::Error<E>) -> String {
+    match e {
+        frontendapi::Error::InvalidResponsePayload(_, broke) => {
+            format!("an answer the spec does not allow: {broke}")
+        }
+        e => e.to_string(),
     }
 }

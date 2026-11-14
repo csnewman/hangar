@@ -3613,9 +3613,13 @@ dependencies = [
 name = "hangar-suite"
 version = "0.1.0"
 dependencies = [
+ "hangar-api",
  "hangar-openapi",
+ "hangar-vm",
+ "hangar-worker",
  "postgres",
  "reqwest",
+ "serde",
  "serde_json",
  "tokio",
 ]
