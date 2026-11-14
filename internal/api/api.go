@@ -8,7 +8,6 @@
 package api
 
 import (
-	"slices"
 	"time"
 )
 
@@ -202,39 +201,8 @@ func (s Spec) ProjectFolders() []string {
 	return s.Projects
 }
 
-// CodeTrust is the folders an environment's Code tab trusts to run their
-// code without asking: none with NoEditorTrust; otherwise its
-// repositories, its projects, and whatever else its template names. With
-// no repositories or projects the Code tab opens the home folder, ~, which
-// is then trusted, as the person's own.
-func (s Spec) CodeTrust() []string {
-	out := []string{}
-	if s.NoEditorTrust {
-		return out
-	}
-	add := func(p string) {
-		if p != "" && !slices.Contains(out, p) {
-			out = append(out, p)
-		}
-	}
-	for _, r := range s.Repos {
-		add(r.Path)
-	}
-	for _, p := range s.ProjectFolders() {
-		add(p)
-	}
-	add(s.EditorPath)
-	if len(out) == 0 {
-		add("~")
-	}
-	for _, f := range s.TrustedFolders {
-		add(f)
-	}
-	return out
-}
-
 // EnvironmentFiles is what of the files root an environment may reach, as
-// its worker serves it (internal/nfs): the copies of packs it uses, by ID,
+// its worker serves it (crates/nfs): the copies of packs it uses, by ID,
 // and in each, the paths kept from it -- sensitive ones, from an
 // environment with NoSensitiveFiles -- as the copy's directory has them: a
 // directory's ending in a slash, and everything under it kept too.

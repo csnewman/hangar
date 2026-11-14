@@ -1,6 +1,5 @@
 //! Provisioning, against a scripted guest that records what it is asked
-//! to run; and what git and ssh-add say, read as internal/gitout and
-//! internal/vm read them.
+//! to run; and what git and ssh-add say, read as the worker reads them.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};

@@ -26,12 +26,14 @@ limactl shell hangar bash -c "
     set -e
     cd $repo
     [ -x out/krun-linux/bin/hangar-krun ] || { echo 'no out/krun-linux/bin/hangar-krun: run dev/krun-build.sh linux' >&2; exit 1; }
-    /usr/local/go/bin/go build -o /var/tmp/hangar-worker-krun ./cmd/hangar-worker
-    # The agent every environment boots with (crates/agent): static against
-    # musl, for the guest.
-    # Built on the VM's own disk, the Mac's mount being slow.
-    (. \$HOME/.cargo/env && cd crates && CARGO_TARGET_DIR=/var/tmp/hangar-crates \
+    # The worker (crates/worker), and the agent every environment boots
+    # with (crates/agent): static against musl, for the guest. Built on the
+    # VM's own disk, the Mac's mount being slow.
+    (. \$HOME/.cargo/env && cd crates && export CARGO_TARGET_DIR=/var/tmp/hangar-crates &&
+        cargo build -q --release -p hangar-worker &&
         cargo build -q --release --target \$(uname -m)-unknown-linux-musl -p hangar-agent)
+    install -m 0755 /var/tmp/hangar-crates/release/hangar-worker /var/tmp/hangar-worker-krun.new
+    mv -f /var/tmp/hangar-worker-krun.new /var/tmp/hangar-worker-krun
     install -m 0755 /var/tmp/hangar-crates/\$(uname -m)-unknown-linux-musl/release/hangar-agent \
         /var/tmp/hangar-agent-guest
     $stop

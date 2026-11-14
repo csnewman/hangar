@@ -1,7 +1,7 @@
 #!/bin/sh
 # Builds what a worker running libkrun needs beside itself, from source:
-# libkrun, with virglrenderer for a GPU, and hangar-krun against it. Run on
-# the Mac:
+# hangar-krun (crates/krun), with libkrun linked into it as a crate and
+# virglrenderer for a GPU. Run on the Mac:
 #
 #   dev/krun-build.sh        the Mac's, in out/krun/bin, with mkfs.ext4
 #                            (e2fsprogs) for environments' writable disks
@@ -42,9 +42,8 @@
 # is init); hangar-krun is signed with the hypervisor entitlement, without
 # which macOS refuses it a VM.
 #
-# The Mac's hangar-krun is crates/krun, Rust, with libkrun linked into it
-# as a crate; the Lima VM's is cmd/hangar-krun, Go, against libkrun's
-# library, until the Rust one has run Linux machines.
+# Both hosts build the same checkout, out/krun/libkrun-hangar, which the
+# Lima VM sees at the same path, and link it through crates/krun/libkrun.
 set -eu
 krunRepo=https://github.com/csnewman/libkrun.git
 krunHangar=5f94cfaf224a1b7d224ad01965b6571524cd57ba
@@ -54,13 +53,11 @@ if [ "${1:-}" = linux ]; then
 fi
 if [ "${1:-}" = in-vm ]; then
     . "$HOME/.cargo/env"
-    src=$HOME/.cache/hangar-krun/libkrun
+    src=$repo/out/krun/libkrun-hangar
     bin=$repo/out/krun-linux/bin
     arch=$(uname -m)
-    # bindgen loads libclang, and libkrun's build makes its own guest init,
-    # which it links against musl, whether or not it is used.
+    # bindgen loads libclang.
     dpkg -s libclang-dev >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq libclang-dev >/dev/null
-    rustup target list --installed | grep -q "$arch-unknown-linux-musl" || rustup target add "$arch-unknown-linux-musl" >/dev/null
     if [ ! -d "$src/.git" ]; then
         mkdir -p "$(dirname "$src")"
         GIT_CONFIG_GLOBAL=/dev/null git clone -q "$krunRepo" "$src"
@@ -78,18 +75,16 @@ if [ "${1:-}" = in-vm ]; then
         GIT_CONFIG_GLOBAL=/dev/null git -C "$src" fetch -q "$from" "$branch"
         git -C "$src" checkout -q "$want"
     fi
-    # Built on the VM's own disk: the Mac's mount is slow for cargo.
-    (cd "$src" && PKG_CONFIG_PATH=/usr/local/lib/$arch-linux-gnu/pkgconfig \
-        make -s INIT_BLOB=0 BLK=1 NET=1 GPU=1 >/dev/null)
+    ln -sfn "$src" "$repo/crates/krun/libkrun"
+    # Built on the VM's own disk: the Mac's mount is slow for cargo. It
+    # links the VM's own virglrenderer.
+    (cd "$repo/crates/krun" && PKG_CONFIG_PATH=/usr/local/lib/$arch-linux-gnu/pkgconfig \
+        CARGO_TARGET_DIR=/var/tmp/hangar-krun-target cargo build -q --release --locked --features gpu)
     mkdir -p "$bin"
-    # Renamed into place: a machine running keeps the library it mapped,
-    # which writing over it would crash.
-    cp -f "$src/target/release/libkrun.so.2.0.0" "$bin/libkrun.so.2.new"
-    mv -f "$bin/libkrun.so.2.new" "$bin/libkrun.so.2"
-    ln -sf libkrun.so.2 "$bin/libkrun.so"
-    cd "$repo"
-    CGO_CFLAGS="-I$src/include" CGO_LDFLAGS="-L$bin -Wl,-rpath,\$ORIGIN" \
-        /usr/local/go/bin/go build -tags krun -o "$bin/hangar-krun" ./cmd/hangar-krun
+    # Renamed into place: a machine running keeps the program it was
+    # started from, which writing over it would crash.
+    cp -f /var/tmp/hangar-krun-target/release/hangar-krun "$bin/hangar-krun.new"
+    mv -f "$bin/hangar-krun.new" "$bin/hangar-krun"
     echo "built $bin: hangar-krun (libkrun $branch $(echo $want | cut -c1-8))"
     exit
 fi
@@ -233,8 +228,8 @@ if [ ! -x "$bin/mkfs.ext4" ]; then
     cp "$e2/misc/mke2fs" "$bin/mkfs.ext4"
 fi
 
-# A guest's network on the Mac, for the Rust worker (crates/vm/src/gvproxy.rs),
-# at the gvisor-tap-vsock the Go worker links.
+# A guest's network on the Mac (crates/vm/src/gvproxy.rs): gvisor-tap-vsock's
+# gvproxy, beside each machine.
 gvproxy=v0.9.0
 if [ ! -x "$bin/gvproxy" ] || ! "$bin/gvproxy" -version 2>/dev/null | grep -q "$gvproxy"; then
     GOBIN=$bin GOFLAGS= go install github.com/containers/gvisor-tap-vsock/cmd/gvproxy@$gvproxy

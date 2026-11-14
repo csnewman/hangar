@@ -15,7 +15,7 @@ can publish a shared memory window and let its backend place memory in it.
 
 Two consumers exist the moment it lands: virtio-fs gets a DAX cache, and a
 vhost-user virtio-gpu backend gets somewhere to put host-visible blob
-resources. Hangar uses it for the second (`../../../gpu/`).
+resources. Hangar uses it for the second (`../gpu/`).
 
 It is deliberately generic and mentions no GPU. The maintainers are on record
 as uninterested in GPU support, and this needs none of it to be worth having.
@@ -91,7 +91,7 @@ and the rest is anonymous.
 
 ### What it does not do
 
-Nothing about virtio-gpu. The device is `../../../gpu/`, a vhost-user backend,
+Nothing about virtio-gpu. The device is `../gpu/`, a vhost-user backend,
 and the monitor holds no GPU code at all.
 
 ## 0002-vsock-deliver-restore-resets.patch

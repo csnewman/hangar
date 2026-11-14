@@ -1,4 +1,4 @@
-//! The control channel, in the protocol `internal/agent` defines: the agent
+//! The control channel, in the protocol `hangar_vm::agent` speaks: the agent
 //! dials the host on vsock port 8100, says hello, and answers what the host
 //! asks -- ping, info, a command to run, the time to set -- for as long as
 //! the guest runs.

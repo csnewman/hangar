@@ -161,7 +161,7 @@ services:
     profiles: [worker]
     build:
       context: ..
-      dockerfile: cmd/hangar-worker/Dockerfile
+      dockerfile: crates/worker/Dockerfile
       target: worker
     image: ${HANGAR_REGISTRY:-ghcr.io/csnewman/hangar}/worker:${HANGAR_VERSION:-latest}
     restart: unless-stopped
@@ -198,7 +198,7 @@ services:
     profiles: [images]
     build:
       context: ..
-      dockerfile: cmd/hangar-worker/Dockerfile
+      dockerfile: crates/worker/Dockerfile
       target: imagebuilder
     image: hangar-imagebuilder
     # mkosi creates user namespaces and mounts, as `hangar build` allows it.

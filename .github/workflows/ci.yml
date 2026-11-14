@@ -288,11 +288,10 @@ jobs:
       - run: cargo test
 
   krun:
-    # libkrun at dev/krun-build.sh's pin, built as the worker image builds
-    # it, and hangar-krun against it. A pin that no longer builds, or no
-    # longer matches hangar-krun (code only a -tags krun build compiles),
-    # fails here in minutes, and on pull requests, which never build the
-    # worker image.
+    # hangar-krun (crates/krun) with libkrun at dev/krun-build.sh's pin linked
+    # into it, built as the worker image builds it. A pin that fails to
+    # build, or that hangar-krun fails to build against, fails here in
+    # minutes, and on pull requests, which never build the worker image.
     strategy:
       fail-fast: false
       matrix:
@@ -319,44 +318,19 @@ jobs:
         run: |
           lib=$(dirname "$(dirname "$(find /opt/virgl -name virglrenderer.pc)")")
           echo "PKG_CONFIG_PATH=$lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$lib:$PWD/out/krun" >> "$GITHUB_ENV"
-      # libkrun's C bindings are generated and run through rustfmt.
+          echo "LD_LIBRARY_PATH=$lib" >> "$GITHUB_ENV"
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      # libkrun's build makes its own guest init, linked against musl,
-      # though Hangar builds without it.
-      - run: rustup target add "$(uname -m)-unknown-linux-musl"
-      - name: Build libkrun at the pin
+      - name: Fetch libkrun at the pin
         run: |
           eval "$(grep -E '^krun(Repo|Hangar)=' dev/krun-build.sh)"
           git init -q "$RUNNER_TEMP/libkrun" && cd "$RUNNER_TEMP/libkrun"
           git fetch -q --depth 1 "$krunRepo" "$krunHangar"
           git checkout -q FETCH_HEAD
-          make -s INIT_BLOB=0 BLK=1 NET=1 GPU=1
-          mkdir -p "$GITHUB_WORKSPACE/out/krun"
-          cp target/release/libkrun.so.2.0.0 "$GITHUB_WORKSPACE/out/krun/libkrun.so.2"
-          ln -s libkrun.so.2 "$GITHUB_WORKSPACE/out/krun/libkrun.so"
-          cp -L include/*.h "$GITHUB_WORKSPACE/out/krun/"
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.27'
-      - name: Build hangar-krun
-        env:
-          CGO_CFLAGS: -I${{ github.workspace }}/out/krun
-          CGO_LDFLAGS: -L${{ github.workspace }}/out/krun
-        run: |
-          go vet -tags krun ./cmd/hangar-krun
-          go build -tags krun -o out/krun/hangar-krun ./cmd/hangar-krun
-      - name: It loads, with a GPU
-        run: |
-          out/krun/hangar-krun -features | tee /dev/stderr | grep -q '"gpu":true'
-      # The Rust hangar-krun (crates/krun), which links the same checkout as
-      # a crate. The Mac runs it; here it is built and asked what it has,
-      # until it has run Linux machines and replaces the Go one.
       # Clippy lints path dependencies too: --no-deps keeps it to hangar-krun,
       # leaving libkrun's crates to the fork's own checks.
-      - name: Build the Rust hangar-krun
+      - name: Build hangar-krun
         working-directory: crates/krun
         run: |
           ln -sfn "$RUNNER_TEMP/libkrun" libkrun

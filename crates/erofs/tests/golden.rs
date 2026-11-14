@@ -1,5 +1,5 @@
-//! The writer held to the Go writer's image of the same tree, byte for byte
-//! (internal/erofs/golden_test.go makes it), and the reader reading back
+//! The writer held to a golden image of the same tree, byte for byte
+//! (tests/data), and the reader reading back
 //! everything the tree has.
 
 use std::collections::BTreeMap;
@@ -93,7 +93,7 @@ fn image() -> Vec<u8> {
 }
 
 #[test]
-fn the_image_is_the_go_writers_byte_for_byte() {
+fn the_image_is_the_golden_one_byte_for_byte() {
     let got = image();
     let want = include_bytes!("data/golden.erofs");
     let first = got.iter().zip(want.iter()).position(|(a, b)| a != b);

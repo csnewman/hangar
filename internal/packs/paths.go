@@ -2,7 +2,7 @@
 //
 // A pack is a named list of paths and holds no files. A copy is one set of
 // a pack's files, a directory on the files root named by the copy's ID,
-// which every worker serves its environments over NFS (internal/nfs) and
+// which every worker serves its environments over NFS (crates/nfs) and
 // each environment's agent routes the pack's paths to (hangarfs). A copy
 // is a person's own, made when they first need it, or shared: a team's,
 // or one a person keeps apart from their own.

@@ -17,7 +17,7 @@ on:
   pull_request:
     paths:
       - 'cmd/hangar-server/**'
-      - 'cmd/hangar-worker/Dockerfile'
+      - 'crates/worker/Dockerfile'
       - '.github/workflows/containers.yml'
   workflow_dispatch:
 
@@ -90,9 +90,8 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: cmd/hangar-worker/Dockerfile
+          file: crates/worker/Dockerfile
           target: worker
-          build-args: VERSION=${{ github.sha }}
           platforms: linux/${{ matrix.arch }}
           push: true
           tags: |

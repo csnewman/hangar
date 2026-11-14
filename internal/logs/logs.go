@@ -1,6 +1,8 @@
-// Package logs reads a worker's logs for the control plane: the files an
-// environment's machine writes -- its console, its monitor's, its backends'
-// -- and the worker's own log, kept in memory, whole and per environment.
+// Package logs is how the control plane asks a worker for its logs: the
+// files an environment's machine writes -- its console, its monitor's, its
+// backends' -- the worker's own log, which it keeps in memory, whole and
+// per environment, and each environment's combined log. The worker's half
+// is crates/worker's logs.
 //
 // Every log reads as a stream of bytes that only grows, so a reader asks
 // for what follows the offset it has read to. The oldest of a long log may
@@ -13,11 +15,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"os"
 )
 
 // The logs an environment has.
 const (
+	// Combined is all of an environment's other logs as one: each line as
+	// the worker sees it written, marked with the log it is from.
+	Combined = "combined"
 	// Console is the guest's serial console: the kernel's messages, the
 	// agent as init assembling the root, and systemd.
 	Console = "console"
@@ -84,42 +88,4 @@ func Ask(stream io.ReadWriter, req Request) (Reply, error) {
 		return Reply{}, errors.New(reply.Error)
 	}
 	return reply, nil
-}
-
-// clamp is the window a request reads of a log size bytes long, of which
-// the oldest kept begins at first.
-func clamp(req Request, first, size int64) (start, n int64) {
-	limit := int64(req.Max)
-	if limit <= 0 || limit > MaxRead {
-		limit = MaxRead
-	}
-	start = req.Offset
-	if start < 0 || start > size {
-		start = size - limit
-	}
-	start = min(max(start, first), size)
-	return start, min(limit, size-start)
-}
-
-// ReadFile reads part of a log file.
-func ReadFile(path string, req Request) (Reply, error) {
-	f, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return Reply{Missing: true}, nil
-	}
-	if err != nil {
-		return Reply{}, err
-	}
-	defer f.Close()
-	st, err := f.Stat()
-	if err != nil {
-		return Reply{}, err
-	}
-	start, n := clamp(req, 0, st.Size())
-	data := make([]byte, n)
-	got, err := f.ReadAt(data, start)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return Reply{}, err
-	}
-	return Reply{Start: start, Size: st.Size(), Data: data[:got]}, nil
 }

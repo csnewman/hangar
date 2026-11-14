@@ -2,18 +2,19 @@
 # from source. Build from the repository root, on the architecture the node
 # runs (guests are the host's architecture):
 #
-#   docker build -f cmd/hangar-worker/Dockerfile -t hangar-worker .
-#   docker build -f cmd/hangar-worker/Dockerfile --target imagebuilder -t hangar-imagebuilder .
+#   docker build -f crates/worker/Dockerfile -t hangar-worker .
+#   docker build -f crates/worker/Dockerfile --target imagebuilder -t hangar-imagebuilder .
 #
 # The worker image holds:
 #
-#   /usr/local/bin/hangar-worker      the worker
-#   /usr/local/bin/cloud-hypervisor   upstream at CH_COMMIT plus internal/ch/upstream
+#   /usr/local/bin/hangar-worker      the worker (crates/worker)
+#   /usr/local/bin/cloud-hypervisor   upstream at CH_COMMIT plus cloud-hypervisor/
 #   /usr/local/bin/hangar-gpu         virtio-gpu backend (gpu/), with the patched
 #                                     virglrenderer in /usr/local/lib
-#   /usr/local/bin/hangar-krun        runs a machine under libkrun (runtime: krun),
-#                                     with libkrun in /usr/local/lib: the fork's
-#                                     hangar branch at krunHangar in dev/krun-build.sh
+#   /usr/local/bin/hangar-krun        runs a machine under libkrun (runtime: krun;
+#                                     crates/krun), with libkrun linked in: the
+#                                     fork's hangar branch at krunHangar in
+#                                     dev/krun-build.sh
 #   /usr/share/hangar/vmlinuz         the guest kernel (internal/kernel)
 #   /usr/share/hangar/vmlinux         on amd64, the same kernel as ELF, which
 #                                     libkrun boots there
@@ -31,18 +32,6 @@
 # gigabytes of it.
 
 ARG UBUNTU=ubuntu:26.04
-
-# ---------------------------------------------------------------- Go
-FROM golang:1.27 AS go
-# VERSION names the build.
-ARG VERSION=dev
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY cmd/ cmd/
-COPY internal/ internal/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/csnewman/hangar/internal/version.Version=$VERSION" -o /out/hangar-worker ./cmd/hangar-worker \
- && rm -rf "$(go env GOCACHE)"
 
 # ---------------------------------------------------------------- guest kernel
 FROM ${UBUNTU} AS kernel
@@ -69,25 +58,28 @@ RUN apt-get update -qq \
  && curl -fsSL https://sh.rustup.rs | sh -s -- -y -q --profile minimal
 ENV PATH=/root/.cargo/bin:$PATH
 
-# ---------------------------------------------------------------- The guest agent
-# Static, against musl: the guest's own C library is whatever its image has.
-FROM rust AS agent
+# ---------------------------------------------------------------- the worker and the guest agent
+# The agent is static, against musl: the guest's own C library is whatever
+# its image has. The worker is against the image's own.
+FROM rust AS crates
 WORKDIR /src
-# The whole workspace: only the agent is built, but cargo reads every
+# The whole workspace: only two members are built, but cargo reads every
 # member's manifest and finds each one's targets.
 COPY crates/ ./
 RUN target="$(uname -m)-unknown-linux-musl" \
  && rustup target add "$target" \
  && cargo build --release --locked --target "$target" -p hangar-agent \
  && install -D "target/$target/release/hangar-agent" /out/hangar-agent \
+ && cargo build --release --locked -p hangar-worker \
+ && install -D target/release/hangar-worker /out/hangar-worker \
  && cd / && rm -rf /src /root/.cargo/registry /root/.cargo/git
 
 # ---------------------------------------------------------------- Cloud Hypervisor
 FROM rust AS cloud-hypervisor
-# Upstream main at the commit the patches in internal/ch/upstream are carried
+# Upstream main at the commit the patches in cloud-hypervisor/ are carried
 # against.
 ARG CH_COMMIT=1d63a241b3c78d103b12956e3a2b9dd5d7a5df2e
-COPY internal/ch/upstream/*.patch /patches/
+COPY cloud-hypervisor/*.patch /patches/
 RUN git init -q /src && cd /src \
  && git fetch -q --depth 1 https://github.com/cloud-hypervisor/cloud-hypervisor.git "$CH_COMMIT" \
  && git checkout -q FETCH_HEAD \
@@ -123,31 +115,19 @@ RUN grep -E '^krun(Repo|Hangar)=' /krun-build.sh > /pin \
 
 FROM virgl AS krun
 COPY --from=krun-pin /pin /pin
-# Built without its guest init (Hangar's agent is init), though the build
-# still makes one, linked against musl. Its C bindings are generated and run
-# through rustfmt.
 RUN . /pin \
- && rustup target add "$(uname -m)-unknown-linux-musl" \
- && rustup component add rustfmt \
- && git init -q /src && cd /src \
+ && git init -q /libkrun && cd /libkrun \
  && git fetch -q --depth 1 "$krunRepo" "$krunHangar" \
- && git checkout -q FETCH_HEAD \
- && PKG_CONFIG_PATH=/usr/local/lib/$(gcc -dumpmachine)/pkgconfig make -s INIT_BLOB=0 BLK=1 NET=1 GPU=1 \
- && install -D target/release/libkrun.so.2.0.0 /out/libkrun.so.2 \
- && ln -s libkrun.so.2 /out/libkrun.so \
- && cp -rL include /out/include \
- && cd / && rm -rf /src /root/.cargo/registry /root/.cargo/git
-# hangar-krun links libkrun with cgo, against this stage's C libraries,
-# which are the worker's.
-COPY --from=golang:1.27 /usr/local/go /usr/local/go
-WORKDIR /hk
-COPY go.mod go.sum ./
-RUN /usr/local/go/bin/go mod download
-COPY cmd/ cmd/
-COPY internal/ internal/
-RUN CGO_CFLAGS=-I/out/include CGO_LDFLAGS=-L/out \
-    /usr/local/go/bin/go build -tags krun -trimpath -ldflags="-s -w" -o /out/hangar-krun ./cmd/hangar-krun \
- && rm -rf "$(/usr/local/go/bin/go env GOCACHE)" "$(/usr/local/go/bin/go env GOMODCACHE)"
+ && git checkout -q FETCH_HEAD
+# hangar-krun links the checkout as a crate (crates/krun/libkrun, the link
+# dev/krun-build.sh makes on a dev host), and virglrenderer from this
+# stage's /usr/local, which is the worker's. hangar-api, a path dependency,
+# takes its edition from the workspace, so the whole of crates/ comes in.
+COPY crates/ /src/
+RUN ln -s /libkrun /src/krun/libkrun && cd /src/krun \
+ && PKG_CONFIG_PATH=/usr/local/lib/$(gcc -dumpmachine)/pkgconfig cargo build --release --locked --features gpu \
+ && install -D target/release/hangar-krun /out/hangar-krun \
+ && cd / && rm -rf /src /libkrun /root/.cargo/registry /root/.cargo/git
 
 # ---------------------------------------------------------------- worker
 FROM ${UBUNTU} AS worker
@@ -162,13 +142,12 @@ RUN apt-get update -qq \
  && rm -rf /var/lib/apt/lists/*
 COPY --from=gpu /usr/local/lib/ /usr/local/lib/
 COPY --from=gpu /usr/local/libexec/ /usr/local/libexec/
-COPY --from=krun /out/libkrun.so.2 /usr/local/lib/
 RUN ldconfig
 COPY --from=cloud-hypervisor /out/cloud-hypervisor /usr/local/bin/
 COPY --from=gpu /out/hangar-gpu /usr/local/bin/
 COPY --from=krun /out/hangar-krun /usr/local/bin/
-COPY --from=go /out/hangar-worker /usr/local/bin/
-COPY --from=agent /out/hangar-agent /usr/share/hangar/hangar-agent
+COPY --from=crates /out/hangar-worker /usr/local/bin/
+COPY --from=crates /out/hangar-agent /usr/share/hangar/hangar-agent
 # vmlinux is amd64's alone; the pattern lets the copy go ahead without it.
 COPY --from=kernel /out/vmlinuz /out/vmlinu[x] /usr/share/hangar/
 ENTRYPOINT ["hangar-worker"]

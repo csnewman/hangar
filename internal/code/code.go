@@ -14,7 +14,7 @@
 package code
 
 // Port is the vsock port the guest agent serves the Code tab on.
-// It is below 1024, as every port the agent listens on is (internal/agent).
+// It is below 1024, as every port the agent listens on is (crates/agent).
 const Port uint32 = 104
 
 // Request opens a connection.
@@ -24,6 +24,7 @@ type Request struct {
 }
 
 // TrustFile is the folders whose code the service may run, written by the
-// worker at each boot (api.Spec.CodeTrust): a language server starts only
-// in one of them, or in a folder the person trusts from the Code tab.
+// worker at each boot (crates/api's Spec::code_trust): a language server
+// starts only in one of them, or in a folder the person trusts from the
+// Code tab.
 const TrustFile = "/run/hangar/trusted-folders.json"

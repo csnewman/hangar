@@ -17,7 +17,7 @@ import (
 )
 
 // Port is the vsock port the agent serves this on.
-// It is below 1024, as every port the agent listens on is (internal/agent).
+// It is below 1024, as every port the agent listens on is (crates/agent).
 const Port uint32 = 108
 
 // Answers to a request.

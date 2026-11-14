@@ -5,7 +5,7 @@
 #   dev/mac-worker.sh          start it, detached; log in out/mac-worker/worker.log
 #   dev/mac-worker.sh stop     stop it, powering its environments off
 #
-# It needs dev/krun-build.sh's hangar-krun and mkfs.ext4, and
+# It needs dev/krun-build.sh's hangar-krun, mkfs.ext4 and gvproxy, and
 # `dev/kernel-dev.sh 16k`'s kernel.
 set -eu
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -23,7 +23,10 @@ fi
 
 mkdir -p "$dir"
 cd "$repo"
-go build -o "$dir/hangar-worker" ./cmd/hangar-worker
+# Renamed into place, over the running worker's program.
+(cd crates && cargo build -q --release -p hangar-worker)
+install -m 0755 crates/target/release/hangar-worker "$dir/hangar-worker.new"
+mv -f "$dir/hangar-worker.new" "$dir/hangar-worker"
 # The agent every environment boots with (crates/agent): static against
 # musl, for the guest, and linked by rust-lld.
 musl=aarch64-unknown-linux-musl

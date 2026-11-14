@@ -54,5 +54,5 @@ same reason.
 
 ## Depends on
 
-`../internal/ch/upstream/0001-vhost-user-shmem-map.patch`, without which the
+`../cloud-hypervisor/0001-vhost-user-shmem-map.patch`, without which the
 monitor cannot serve the map requests this backend sends.

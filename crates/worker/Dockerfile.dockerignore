@@ -1,21 +1,17 @@
-# Only what cmd/hangar-worker/Dockerfile copies. Rust targets and build output
+# Only what crates/worker/Dockerfile copies. Rust targets and build output
 # elsewhere in the tree are gigabytes it never reads.
 *
-!go.mod
-!go.sum
-!cmd/
-!internal/
 !crates/
-!fs/Cargo.toml
-!fs/Cargo.lock
-!fs/src/
+!cloud-hypervisor/
+!internal/kernel/
+!internal/image/scripts/
 !gpu/Cargo.toml
 !gpu/Cargo.lock
 !gpu/src/
 !gpu/virglrenderer/
 !images/
 !dev/krun-build.sh
-internal/webui/dist/app
 crates/agent/tests/service/node_modules
 crates/target
-crates/krun
+crates/krun/libkrun
+crates/krun/target

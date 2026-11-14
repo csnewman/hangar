@@ -31,12 +31,14 @@ limactl shell hangar bash -c "
         sudo tee /etc/exports.d/hangar-files.exports >/dev/null
     sudo systemctl enable --now nfs-server >/dev/null 2>&1
     sudo exportfs -ra
-    /usr/local/go/bin/go build -o /var/tmp/hangar-worker ./cmd/hangar-worker
-    # The agent every environment boots with (crates/agent): static against
-    # musl, for the guest.
-    # Built on the VM's own disk, the Mac's mount being slow.
-    (. \$HOME/.cargo/env && cd crates && CARGO_TARGET_DIR=/var/tmp/hangar-crates \
+    # The worker (crates/worker), and the agent every environment boots
+    # with (crates/agent): static against musl, for the guest. Built on the
+    # VM's own disk, the Mac's mount being slow.
+    (. \$HOME/.cargo/env && cd crates && export CARGO_TARGET_DIR=/var/tmp/hangar-crates &&
+        cargo build -q --release -p hangar-worker &&
         cargo build -q --release --target \$(uname -m)-unknown-linux-musl -p hangar-agent)
+    install -m 0755 /var/tmp/hangar-crates/release/hangar-worker /var/tmp/hangar-worker.new
+    mv -f /var/tmp/hangar-worker.new /var/tmp/hangar-worker
     install -m 0755 /var/tmp/hangar-crates/\$(uname -m)-unknown-linux-musl/release/hangar-agent \
         /var/tmp/hangar-agent-guest
     # By process name: a pattern over whole command lines would also match

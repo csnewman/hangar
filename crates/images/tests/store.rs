@@ -1,5 +1,5 @@
-//! The store of image copies: laid out as the Go worker lays it, so either
-//! reads the other's; one fetch shared by everyone asking for a copy at
+//! The store of image copies: laid out as copies on workers' disks are, so
+//! a worker reads every copy its disk holds; one fetch shared by everyone asking for a copy at
 //! once; current, newest and oldest copies; pruning; and the EROFS image of
 //! a local build.
 
@@ -22,8 +22,8 @@ fn copy(reference: &str, digest: &str) -> ImageCopy {
     }
 }
 
-/// A copy as the Go worker leaves one: its reference, digest and mark.
-fn go_copy(dir: &std::path::Path, name: &str, c: &ImageCopy, age: u64) {
+/// A copy as a worker's disk holds one: its reference, digest and mark.
+fn disk_copy(dir: &std::path::Path, name: &str, c: &ImageCopy, age: u64) {
     let d = dir.join(name);
     fs::create_dir_all(&d).unwrap();
     fs::write(d.join("ref"), &c.reference).unwrap();
@@ -40,9 +40,9 @@ fn go_copy(dir: &std::path::Path, name: &str, c: &ImageCopy, age: u64) {
 }
 
 #[test]
-fn copies_are_named_as_the_go_workers_are() {
+fn copies_are_named_as_on_workers_disks() {
     let s = Store::open(&scratch("names"), HashMap::new(), HashMap::new()).unwrap();
-    // Two copies the Go worker made on a Mac.
+    // Two copies on a Mac worker's disk.
     for (digest, name) in [
         (
             "sha256:8cb9ddb6ee97fcc9e7c571ecb6f5b34dce91aa8596beb2d64ff5bc601164554c",
@@ -59,12 +59,12 @@ fn copies_are_named_as_the_go_workers_are() {
 }
 
 #[test]
-fn a_go_workers_store_opens_as_it_left_it() {
+fn a_workers_store_opens_as_its_disk_holds_it() {
     let dir = scratch("open");
     let r = "ghcr.io/x/base:latest";
     let (old, new) = (copy(r, "sha256:old"), copy(r, "sha256:new"));
-    go_copy(&dir, "base-old", &old, 3600);
-    go_copy(&dir, "base-new", &new, 60);
+    disk_copy(&dir, "base-old", &old, 3600);
+    disk_copy(&dir, "base-new", &new, 60);
     fs::create_dir_all(dir.join("base-x.fetching")).unwrap();
     let s = Store::open(&dir, HashMap::new(), HashMap::new()).unwrap();
     assert!(
@@ -111,7 +111,7 @@ fn a_go_workers_store_opens_as_it_left_it() {
 }
 
 #[test]
-fn askers_at_once_share_one_pull_laid_out_as_gos() {
+fn askers_at_once_share_one_pull_laid_out_on_disk() {
     let reg = store();
     let index = reg.index.clone();
     let dir = scratch("get");

@@ -17,8 +17,8 @@
 //! never mounted; for a local build, a copy of it as rootfs/. A directory
 //! being fetched is named with ".fetching" and renamed into place when
 //! complete, so a copy interrupted half made is fetched again rather than
-//! booted. The layout is the Go worker's, so either reads the other's
-//! copies.
+//! booted. The layout is fixed: workers' disks hold copies in it, and
+//! each is read as it is.
 
 use std::collections::HashMap;
 use std::fs;

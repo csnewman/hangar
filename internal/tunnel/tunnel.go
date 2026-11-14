@@ -17,7 +17,6 @@
 package tunnel
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -26,7 +25,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -158,78 +156,4 @@ func (r *Registry) Open(workerID string, h Header) (net.Conn, error) {
 		return nil, err
 	}
 	return stream, nil
-}
-
-// Handler serves one stream on the worker. It owns the stream, and is given
-// a reader positioned after the header.
-type Handler func(h Header, r io.Reader, stream net.Conn)
-
-// Serve holds a tunnel open to the server at base, redialling whenever it
-// drops, until ctx ends or the server refuses the credential.
-func Serve(ctx context.Context, base, credential string, handle Handler, log *slog.Logger) error {
-	url := strings.Replace(strings.TrimRight(base, "/"), "http", "ws", 1) + "/api/worker/v1/tunnel"
-	backoff := time.Second
-	for {
-		connected, err := serveOnce(ctx, url, credential, handle)
-		if ctx.Err() != nil {
-			return nil
-		}
-		if websocket.CloseStatus(err) == websocket.StatusPolicyViolation || errors.Is(err, errRefused) {
-			return err
-		}
-		// The backoff is for a server that cannot be reached; once one was,
-		// a drop is a new outage, and the first retry comes soon.
-		if connected {
-			backoff = time.Second
-		}
-		log.Warn("worker tunnel dropped, redialling", "err", err, "after", backoff)
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(backoff):
-		}
-		backoff = min(backoff*2, 30*time.Second)
-	}
-}
-
-var errRefused = errors.New("the server refused the worker's tunnel")
-
-// serveOnce holds one tunnel until it drops, and says whether it was made.
-func serveOnce(ctx context.Context, url, credential string, handle Handler) (bool, error) {
-	c, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{
-		HTTPHeader: http.Header{"Authorization": {"Bearer " + credential}},
-	})
-	if err != nil {
-		if resp != nil && resp.StatusCode == http.StatusUnauthorized {
-			return false, errRefused
-		}
-		return false, err
-	}
-	c.SetReadLimit(-1)
-	sess, err := yamux.Server(websocket.NetConn(ctx, c, websocket.MessageBinary), muxConfig())
-	if err != nil {
-		c.Close(websocket.StatusInternalError, "")
-		return false, err
-	}
-	defer sess.Close()
-	for {
-		stream, err := sess.Accept()
-		if err != nil {
-			return true, err
-		}
-		go func() {
-			br := bufio.NewReader(stream)
-			line, err := br.ReadBytes('\n')
-			if err != nil {
-				stream.Close()
-				return
-			}
-			var h Header
-			if err := json.Unmarshal(line, &h); err != nil {
-				stream.Close()
-				return
-			}
-			handle(h, br, stream)
-		}()
-	}
 }

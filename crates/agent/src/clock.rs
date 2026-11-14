@@ -1,4 +1,4 @@
-//! Times as the host's Go code reads them.
+//! Times as the control plane's Go code reads them.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

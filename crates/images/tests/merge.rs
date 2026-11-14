@@ -1,6 +1,6 @@
-//! An image's layers merged into one EROFS image: held to the Go merge's
-//! image of the same layers (internal/vm/golden_merge_test.go writes them
-//! and its hash), and read back for what each layer changed.
+//! An image's layers merged into one EROFS image: held to a golden image
+//! of the same layers (tests/data, the layers and its hash), and read back
+//! for what each layer changed.
 
 use std::fs::File;
 use std::io::Read;
@@ -25,7 +25,7 @@ fn merged(name: &str) -> std::path::PathBuf {
 }
 
 #[test]
-fn the_image_is_the_go_merges_byte_for_byte() {
+fn the_image_is_the_golden_one_byte_for_byte() {
     let out = merged("hash");
     let bytes = std::fs::read(&out).unwrap();
     std::fs::remove_file(&out).unwrap();

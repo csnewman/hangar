@@ -17,7 +17,7 @@ fn initrd() {
     std::fs::write(d.join("agent"), b"agent!").unwrap();
     hangar_vm::write_initrd(&d.join("agent"), &d.join("initrd")).unwrap();
     let got = std::fs::read(d.join("initrd")).unwrap();
-    // As internal/vm's WriteInitrd writes it.
+    // The archive, byte for byte: newc, the agent as init.
     let want: &[u8] = b"07070100000001000081ED00000000000000000000000100000000000000060000000000\
         00000000000000000000000000000500000000init\x00\x00agent!\x00\x0007070100000002000000\
         000000000000000000000000010000000000000000000000000000000000000000000000\
