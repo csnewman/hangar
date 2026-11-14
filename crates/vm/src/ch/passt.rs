@@ -254,9 +254,12 @@ fn enlarge_send_buffer(fd: &OwnedFd) {
             ) == 0
         }
     };
-    if !set(libc::SO_SNDBUFFORCE) {
-        set(libc::SO_SNDBUF);
+    // SO_SNDBUFFORCE is Linux's alone, as passt is.
+    #[cfg(target_os = "linux")]
+    if set(libc::SO_SNDBUFFORCE) {
+        return;
     }
+    set(libc::SO_SNDBUF);
 }
 
 /// Has cmd's process inherit fd as its descriptor 3, the one passt's
