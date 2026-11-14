@@ -159,6 +159,31 @@ impl Server {
         format!("{name}-env{short}.{HOST}")
     }
 
+    /// Opens one of the client API's WebSockets, path under /api/v1,
+    /// signed in with token; or the status it was refused with.
+    pub async fn socket(
+        &self,
+        token: &str,
+        path: &str,
+    ) -> Result<tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>, u16> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let tcp = tokio::net::TcpStream::connect(("127.0.0.1", self.port))
+            .await
+            .expect("reaching the server");
+        let mut req = format!("ws://{HOST}:{}/api/v1{path}", self.port)
+            .into_client_request()
+            .expect("a WebSocket request");
+        req.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {token}").parse().expect("a header"),
+        );
+        match tokio_tungstenite::client_async(req, tcp).await {
+            Ok((ws, _)) => Ok(ws),
+            Err(tokio_tungstenite::tungstenite::Error::Http(r)) => Err(r.status().as_u16()),
+            Err(e) => panic!("opening {path}: {e}"),
+        }
+    }
+
     /// The server's port.
     pub fn port(&self) -> u16 {
         self.port

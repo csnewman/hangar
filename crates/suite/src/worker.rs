@@ -19,6 +19,9 @@ use tokio::sync::Notify;
 /// The vsock port the agent reaches the guest's own TCP ports on.
 const GUEST_PORTS: u32 = 108;
 
+/// The vsock port the agent serves terminals on.
+const TERMINALS: u32 = 101;
+
 /// The guest ports the suite's guests serve a web page on.
 pub const WEB_PORTS: [u16; 2] = [80, 8080];
 
@@ -105,6 +108,7 @@ impl Drop for Worker {
 struct Machines {
     held: Arc<Mutex<BTreeMap<String, DesiredState>>>,
     specs: Arc<Mutex<BTreeMap<String, EnvironmentSpec>>>,
+    terminals: Terminals,
     changed: Arc<Notify>,
 }
 
@@ -166,6 +170,10 @@ impl Runtime for Machines {
         let (ours, mut guest) = tokio::io::duplex(1 << 16);
         if port == GUEST_PORTS {
             tokio::spawn(guest_ports(guest));
+            return Ok(ours);
+        }
+        if port == TERMINALS {
+            tokio::spawn(self.terminals.clone().serve(id.to_string(), guest));
             return Ok(ours);
         }
         tokio::spawn(async move {
@@ -232,4 +240,146 @@ async fn guest_ports(mut conn: DuplexStream) {
         page.len()
     );
     let _ = conn.write_all(response.as_bytes()).await;
+}
+
+/// Terminal sessions as the agent keeps them (crates/agent/src/terminal.rs,
+/// internal/terminal): each environment's, outliving the connections
+/// attached to them. Their shells write back what is typed, and exit when
+/// typed "exit".
+#[derive(Clone, Default)]
+struct Terminals {
+    sessions: Arc<Mutex<BTreeMap<String, Vec<serde_json::Value>>>>,
+}
+
+impl Terminals {
+    /// Answers one connection: a JSON request line, a JSON reply line, then
+    /// for an attach, frames.
+    async fn serve(self, env: String, conn: DuplexStream) {
+        use tokio::io::AsyncBufReadExt;
+        let mut conn = tokio::io::BufReader::new(conn);
+        let mut line = String::new();
+        if conn.read_line(&mut line).await.unwrap_or(0) == 0 {
+            return;
+        }
+        let req: serde_json::Value = serde_json::from_str(&line).unwrap_or_default();
+        let reply = |v: serde_json::Value| format!("{v}\n");
+        match req["op"].as_str().unwrap_or("") {
+            "list" => {
+                let sessions = self.sessions.lock().unwrap().get(&env).cloned();
+                let _ = conn
+                    .write_all(
+                        reply(serde_json::json!({ "sessions": sessions.unwrap_or_default() }))
+                            .as_bytes(),
+                    )
+                    .await;
+            }
+            "close" => {
+                let id = req["session"].as_str().unwrap_or("").to_string();
+                if let Some(list) = self.sessions.lock().unwrap().get_mut(&env) {
+                    list.retain(|s| s["id"] != id.as_str());
+                }
+                let _ = conn
+                    .write_all(reply(serde_json::json!({})).as_bytes())
+                    .await;
+            }
+            "attach" => self.attach(env, req, conn).await,
+            op => {
+                let _ = conn
+                    .write_all(
+                        reply(serde_json::json!({ "err": format!("no op {op:?}") })).as_bytes(),
+                    )
+                    .await;
+            }
+        }
+    }
+
+    async fn attach(
+        self,
+        env: String,
+        req: serde_json::Value,
+        mut conn: tokio::io::BufReader<DuplexStream>,
+    ) {
+        let (cols, rows) = (
+            req["cols"].as_u64().unwrap_or(80) as u16,
+            req["rows"].as_u64().unwrap_or(24) as u16,
+        );
+        let session = {
+            let mut all = self.sessions.lock().unwrap();
+            let list = all.entry(env.clone()).or_default();
+            match req["session"].as_str().filter(|s| !s.is_empty()) {
+                Some(id) => list.iter().find(|s| s["id"] == id).cloned(),
+                None => {
+                    let s = serde_json::json!({
+                        "id": format!("s{}", list.len() + 1),
+                        "title": "shell",
+                        "created": "2026-11-14T00:00:00Z",
+                        "clients": 1,
+                        "cols": cols,
+                        "rows": rows,
+                    });
+                    list.push(s.clone());
+                    Some(s)
+                }
+            }
+        };
+        let Some(session) = session else {
+            let _ = conn.write_all(b"{\"err\":\"no such session\"}\n").await;
+            return;
+        };
+        let id = session["id"].as_str().unwrap_or("").to_string();
+        let reply = serde_json::json!({ "session": session, "history": 0, "owner": true });
+        if conn
+            .write_all(format!("{reply}\n").as_bytes())
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let mut size = Vec::with_capacity(7);
+        size.extend_from_slice(&cols.to_be_bytes());
+        size.extend_from_slice(&rows.to_be_bytes());
+        size.extend_from_slice(&1u16.to_be_bytes());
+        size.push(1);
+        if frame(&mut conn, b's', &size).await.is_err() {
+            return;
+        }
+        loop {
+            let mut head = [0u8; 5];
+            if conn.read_exact(&mut head).await.is_err() {
+                return;
+            }
+            let len = u32::from_be_bytes([head[1], head[2], head[3], head[4]]) as usize;
+            let mut payload = vec![0u8; len];
+            if conn.read_exact(&mut payload).await.is_err() {
+                return;
+            }
+            if head[0] != b'i' {
+                continue;
+            }
+            if frame(&mut conn, b'o', &payload).await.is_err() {
+                return;
+            }
+            if payload.starts_with(b"exit") {
+                let _ = frame(&mut conn, b'x', &0u32.to_be_bytes()).await;
+                if let Some(list) = self.sessions.lock().unwrap().get_mut(&env) {
+                    list.retain(|s| s["id"] != id.as_str());
+                }
+                return;
+            }
+        }
+    }
+}
+
+/// Writes one terminal frame: its type, its length (four bytes big-endian)
+/// and its payload.
+async fn frame(
+    conn: &mut tokio::io::BufReader<DuplexStream>,
+    kind: u8,
+    payload: &[u8],
+) -> io::Result<()> {
+    let mut out = Vec::with_capacity(5 + payload.len());
+    out.push(kind);
+    out.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(payload);
+    conn.get_mut().write_all(&out).await
 }
