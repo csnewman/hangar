@@ -342,9 +342,17 @@ impl Instance {
         }
         if cfg.swap_mib > 0 {
             cfg.extra_cmdline += &format!(" hangar.swap=/dev/{}", cfg.next_disk(cfg.disks.len()));
+            let path = crate::swap::swap_file(&cfg.dir);
+            let direct = crate::swap::direct_fits(&path);
+            if !direct {
+                cfg.log.info(
+                    "the swap disk is cached on the host: direct I/O here needs blocks larger than the guest's pages",
+                    &[],
+                );
+            }
             cfg.disks.push(ch::Disk {
-                path: crate::swap::swap_file(&cfg.dir),
-                direct: true,
+                path,
+                direct,
                 ..Default::default()
             });
         }
