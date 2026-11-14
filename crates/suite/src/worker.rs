@@ -77,6 +77,12 @@ impl Worker {
     pub fn desired(&self, id: &str) -> Option<DesiredState> {
         self.machines.desired(id)
     }
+
+    /// The last spec the worker was given for an environment, deleted or
+    /// not.
+    pub fn spec(&self, id: &str) -> Option<EnvironmentSpec> {
+        self.machines.specs.lock().unwrap().get(id).cloned()
+    }
 }
 
 impl Drop for Worker {
@@ -92,6 +98,7 @@ impl Drop for Worker {
 #[derive(Clone, Default)]
 struct Machines {
     held: Arc<Mutex<BTreeMap<String, DesiredState>>>,
+    specs: Arc<Mutex<BTreeMap<String, EnvironmentSpec>>>,
     changed: Arc<Notify>,
 }
 
@@ -105,6 +112,10 @@ impl Runtime for Machines {
     type Conn = DuplexStream;
 
     fn apply(&self, spec: EnvironmentSpec) {
+        self.specs
+            .lock()
+            .unwrap()
+            .insert(spec.id.clone(), spec.clone());
         let mut held = self.held.lock().unwrap();
         if spec.desired == DesiredState::Deleted {
             held.remove(&spec.id);

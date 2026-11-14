@@ -382,3 +382,80 @@ pub fn machine(name: &str, visibility: &str) -> serde_json::Value {
 pub fn status<T, E>(r: Result<T, frontendapi::Error<E>>) -> Option<u16> {
     r.err().and_then(|e| e.status()).map(|s| s.as_u16())
 }
+
+/// The client API's event stream, read an event at a time.
+pub struct Events {
+    stream: std::pin::Pin<
+        Box<dyn futures_core::Stream<Item = reqwest::Result<bytes::Bytes>> + Send + Sync>,
+    >,
+    buf: String,
+}
+
+/// One server-sent event: its type and its data.
+#[derive(Debug, Clone)]
+pub struct Event {
+    pub kind: String,
+    pub data: serde_json::Value,
+}
+
+impl Events {
+    /// Opens client's stream.
+    pub async fn open(client: &clientapi::Client) -> Events {
+        let bytes = client
+            .stream_events()
+            .await
+            .unwrap_or_else(|e| panic!("opening the event stream: {}", why(&e)))
+            .into_inner();
+        Events {
+            stream: bytes.into_inner(),
+            buf: String::new(),
+        }
+    }
+
+    /// The next event, or None if none comes within 20 seconds or the stream
+    /// ends. Comments (the server's keepalives) are passed over.
+    pub async fn next(&mut self) -> Option<Event> {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            if let Some(end) = self.buf.find("\n\n") {
+                let block: String = self.buf.drain(..end + 2).collect();
+                let (mut kind, mut data) = (String::new(), String::new());
+                for line in block.lines() {
+                    if let Some(v) = line.strip_prefix("event:") {
+                        kind = v.trim().to_string();
+                    } else if let Some(v) = line.strip_prefix("data:") {
+                        data.push_str(v.trim_start());
+                    }
+                }
+                if kind.is_empty() && data.is_empty() {
+                    continue;
+                }
+                return Some(Event {
+                    kind,
+                    data: serde_json::from_str(&data).unwrap_or(serde_json::Value::Null),
+                });
+            }
+            let left = deadline.checked_duration_since(Instant::now())?;
+            let chunk = tokio::time::timeout(
+                left,
+                std::future::poll_fn(|cx| self.stream.as_mut().poll_next(cx)),
+            )
+            .await
+            .ok()??
+            .ok()?;
+            self.buf
+                .push_str(&String::from_utf8_lossy(&chunk).replace("\r\n", "\n"));
+        }
+    }
+
+    /// Reads events until one of kind whose data's id is id comes, or none
+    /// does within 20 seconds.
+    pub async fn until(&mut self, kind: &str, id: &str) -> Option<Event> {
+        while let Some(e) = self.next().await {
+            if e.kind == kind && e.data["id"] == id {
+                return Some(e);
+            }
+        }
+        None
+    }
+}
