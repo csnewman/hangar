@@ -199,7 +199,12 @@ jobs:
           workspaces: crates
           key: macos
       - run: cargo clippy $PACKAGES --all-targets -- -D warnings
-      - run: cargo test $PACKAGES
+      - run: |
+          set -o pipefail
+          cargo test $PACKAGES 2>&1 | tee "$RUNNER_TEMP/test.log"
+      # Failed tests as annotations, which can be read without the log.
+      - if: failure()
+        run: grep -E 'panicked at|^test .* FAILED' "$RUNNER_TEMP/test.log" | head -40 | sed 's/^/::error::/'
 
   nfs:
     # pjdfstest against the shared files' NFS server through Linux's own

@@ -82,9 +82,15 @@ fn huge_page_counts() {
 fn host() {
     let caps = hangar_vm::host::detect("");
     if cfg!(target_os = "macos") {
-        let caps = caps.unwrap();
-        assert_eq!(caps.monitor, hangar_vm::host::Monitor::Krun);
-        assert_eq!(caps.console_tty, "hvc0");
+        match caps {
+            Ok(caps) => {
+                assert_eq!(caps.monitor, hangar_vm::host::Monitor::Krun);
+                assert_eq!(caps.console_tty, "hvc0");
+            }
+            // A Mac that is itself a virtual machine, as CI's are, has no
+            // Hypervisor.framework to offer.
+            Err(e) => assert!(e.to_string().contains("Hypervisor.framework"), "{e}"),
+        }
         assert!(hangar_vm::host::detect("cloud-hypervisor").is_err());
     }
     assert!(hangar_vm::host::detect("qemu").is_err());
