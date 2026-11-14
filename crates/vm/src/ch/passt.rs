@@ -143,6 +143,7 @@ impl Passt {
         let bin = find_passt()?;
         PROBED.get_or_init(|| probe(&bin)).await;
         let (ours, theirs) = socket_pair()?;
+        enlarge_send_buffer(&theirs);
         let mut cmd = tokio::process::Command::new(&bin);
         // Stay in the foreground so this process supervises it rather than
         // losing track of a daemon that forked away.
@@ -228,6 +229,34 @@ impl Passt {
 fn socket_pair() -> io::Result<(OwnedFd, OwnedFd)> {
     let (a, b) = std::os::unix::net::UnixStream::pair()?;
     Ok((a.into(), b.into()))
+}
+
+/// What passt's end of a libkrun machine's socket pair may hold unread:
+/// everything for the guest waits there until the monitor reads it, and
+/// the default (net.core.wmem_default, 208 KiB on most hosts) holds three
+/// of the 64 KiB frames a guest takes at passt's MTU.
+const PASST_SEND_BUFFER: libc::c_int = 16 << 20;
+
+/// Raises fd's send buffer to PASST_SEND_BUFFER: past net.core.wmem_max
+/// where this process may (CAP_NET_ADMIN), else as far as that allows. In
+/// the Lima VM host-to-guest TCP runs at 9.7-13.7 Gbit/s with it and
+/// 9.2-11.4 without, the slowest runs gaining most.
+fn enlarge_send_buffer(fd: &OwnedFd) {
+    let set = |opt| {
+        // SAFETY: fd is an open socket, and the value is a c_int.
+        unsafe {
+            libc::setsockopt(
+                fd.as_raw_fd(),
+                libc::SOL_SOCKET,
+                opt,
+                (&PASST_SEND_BUFFER as *const libc::c_int).cast(),
+                std::mem::size_of::<libc::c_int>() as libc::socklen_t,
+            ) == 0
+        }
+    };
+    if !set(libc::SO_SNDBUFFORCE) {
+        set(libc::SO_SNDBUF);
+    }
 }
 
 /// Has cmd's process inherit fd as its descriptor 3, the one passt's
