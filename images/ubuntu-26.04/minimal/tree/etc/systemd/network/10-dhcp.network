@@ -3,3 +3,9 @@ Name=en* eth*
 
 [Network]
 DHCP=yes
+
+# The MTU the DHCP server offers: passt's is 65520, and guest-bound TCP in
+# frames that size is many times faster than in 1500-byte ones (Cloud
+# Hypervisor 0.23 against 35 Gbit/s in the Lima VM, libkrun 4 against 11).
+[DHCPv4]
+UseMTU=yes
