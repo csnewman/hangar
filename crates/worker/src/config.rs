@@ -93,6 +93,7 @@ pub struct Overcommit {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct VmConfig {
+    /// The guest kernel; unset, the worker image's own (default_kernel).
     pub kernel: String,
     /// A hangar-agent built for the guest's architecture, static against
     /// musl. It is each environment's initramfs, as init, and then its
@@ -204,10 +205,7 @@ impl Config {
             "" => return Err("runtime is required".into()),
             "cloud-hypervisor" | "krun" => {
                 if c.vm.kernel.is_empty() {
-                    return Err(format!(
-                        "vm.kernel is required for the {} runtime",
-                        c.runtime
-                    ));
+                    c.vm.kernel = default_kernel(&c.runtime).into();
                 }
                 if c.storage.environments.is_empty() || c.storage.images.is_empty() {
                     return Err(format!(
@@ -219,6 +217,17 @@ impl Config {
             _ => {}
         }
         Ok(c)
+    }
+}
+
+/// The guest kernel the worker image holds for runtime, which a
+/// configuration naming none boots: libkrun boots an x86_64 kernel only as
+/// ELF, the image's vmlinux, and everything else the vmlinuz beside it.
+pub fn default_kernel(runtime: &str) -> &'static str {
+    if runtime == "krun" && std::env::consts::ARCH == "x86_64" {
+        "/usr/share/hangar/vmlinux"
+    } else {
+        "/usr/share/hangar/vmlinuz"
     }
 }
 

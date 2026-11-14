@@ -39,6 +39,31 @@ fn defaults() {
     );
 }
 
+/// A machine's kernel, unnamed, is the worker image's for its monitor:
+/// libkrun on x86_64 boots the ELF one.
+#[test]
+fn default_kernel() {
+    let yaml = |runtime: &str, vm: &str| {
+        format!(
+            "server:\n  url: http://x\nruntime: {runtime}\nstorage:\n  environments: /e\n  images: /i\n{vm}"
+        )
+    };
+    let krun = Config::parse(&yaml("krun", "")).unwrap();
+    let elf = std::env::consts::ARCH == "x86_64";
+    assert_eq!(
+        krun.vm.kernel,
+        if elf {
+            "/usr/share/hangar/vmlinux"
+        } else {
+            "/usr/share/hangar/vmlinuz"
+        }
+    );
+    let ch = Config::parse(&yaml("cloud-hypervisor", "")).unwrap();
+    assert_eq!(ch.vm.kernel, "/usr/share/hangar/vmlinuz");
+    let named = Config::parse(&yaml("krun", "vm:\n  kernel: /k\n")).unwrap();
+    assert_eq!(named.vm.kernel, "/k");
+}
+
 /// A setting the worker does not know is refused, as a misspelt one would
 /// otherwise be ignored; so is what the worker cannot run with.
 #[test]
@@ -58,9 +83,8 @@ fn refusals() {
             "server:\n  url: http://x\nruntime: simulated\nvm:\n  swap: -1\n",
             "vm.swap",
         ),
-        ("server:\n  url: http://x\nruntime: krun\n", "vm.kernel"),
         (
-            "server:\n  url: http://x\nruntime: krun\nvm:\n  kernel: /k\n",
+            "server:\n  url: http://x\nruntime: krun\n",
             "storage.environments",
         ),
         (

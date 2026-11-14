@@ -14,7 +14,7 @@ node:
   name: worker-1
   labels:
     # The same as runtime below, for templates' placement rules.
-    runtime: cloud-hypervisor
+    runtime: krun
 
 storage:
   images: /var/lib/hangar/images
@@ -40,14 +40,15 @@ reserved:
 #   cpus: 4
 #   memory: 1.5
 
-# What runs environments: cloud-hypervisor, or krun for libkrun (README.md,
-# "libkrun"). Both are in the worker image.
-runtime: cloud-hypervisor
+# What runs environments: krun for libkrun, or cloud-hypervisor (README.md,
+# "libkrun and Cloud Hypervisor"). Both are in the worker image.
+runtime: krun
 
 vm:
-  # Under krun on amd64, /usr/share/hangar/vmlinux: libkrun boots an x86_64
-  # kernel as ELF.
-  kernel: /usr/share/hangar/vmlinuz
+  # The guest kernel. Unset, the worker image's own: /usr/share/hangar/vmlinux
+  # under krun on amd64, where libkrun boots a kernel only as ELF, and
+  # /usr/share/hangar/vmlinuz otherwise.
+  # kernel: /usr/share/hangar/vmlinuz
   agent: /usr/share/hangar/hangar-agent
   # Each environment's room for its files and for Docker's images and
   # containers: one sparse disk of the sum, of which only what is written

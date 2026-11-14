@@ -178,8 +178,8 @@ services:
     security_opt:
       - seccomp=unconfined
       - apparmor=unconfined
-    # Every machine's Cloud Hypervisor holds descriptors for each queue of
-    # each device -- hundreds for a large machine -- and the worker holds
+    # Every machine's monitor holds descriptors for each queue of each
+    # device -- hundreds for a large machine -- and the worker holds
     # more for each machine it runs. 1048576 is the kernel's own ceiling
     # (fs.nr_open) by default, so this is the most a stock host allows,
     # whatever its Docker would otherwise give a container.

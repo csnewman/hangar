@@ -69,13 +69,14 @@ pub fn detect(monitor: &str) -> io::Result<Caps> {
     };
     match std::env::consts::OS {
         "linux" => {
+            // libkrun unless Cloud Hypervisor is named; its console is a
+            // virtio one.
             let (monitor, console_tty) = match named {
-                None | Some(Monitor::CloudHypervisor) => (
+                Some(Monitor::CloudHypervisor) => (
                     Monitor::CloudHypervisor,
                     if arch == "x86_64" { "ttyS0" } else { "ttyAMA0" },
                 ),
-                // libkrun's console is a virtio one.
-                Some(Monitor::Krun) => (Monitor::Krun, "hvc0"),
+                None | Some(Monitor::Krun) => (Monitor::Krun, "hvc0"),
             };
             // Neither monitor has an emulation mode: without KVM there is
             // no way to run a guest at all, fast or slow. So this is a

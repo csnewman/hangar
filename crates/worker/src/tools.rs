@@ -6,11 +6,12 @@ use std::io::{self, BufReader};
 use std::path::Path;
 use std::process::ExitCode;
 
-use hangar_vm::host::{self, Monitor};
+use hangar_vm::host;
 
-/// Prints what this machine offers environments and what is missing:
-/// its capabilities, its monitor, and on Linux under Cloud Hypervisor,
-/// whether shared memory can take huge pages.
+/// Prints what this machine offers environments and what is missing: its
+/// capabilities, and the monitors it has. On Linux that is both, and
+/// whether shared memory can take huge pages, which Cloud Hypervisor's
+/// guest memory needs.
 pub fn doctor() -> ExitCode {
     let caps = match host::detect("") {
         Ok(c) => c,
@@ -25,11 +26,11 @@ pub fn doctor() -> ExitCode {
         }
     };
     print!("{}", caps.summary());
-    if caps.monitor == Monitor::Krun {
-        match hangar_vm::krun::find() {
-            Ok(bin) => println!("hangar-krun {}", bin.display()),
-            Err(e) => println!("hangar-krun not available: {e}"),
-        }
+    match hangar_vm::krun::find() {
+        Ok(bin) => println!("hangar-krun {}", bin.display()),
+        Err(e) => println!("hangar-krun not available: {e}"),
+    }
+    if caps.os != "linux" {
         return ExitCode::SUCCESS;
     }
     match hangar_vm::ch::find() {
@@ -39,7 +40,7 @@ pub fn doctor() -> ExitCode {
     match hangar_vm::hugepages::check() {
         Ok(()) => println!("huge pages  yes, shared memory is eligible"),
         // The explanation is long, and worth printing only when it applies.
-        Err(e) => println!("huge pages  NO\n\n{e}"),
+        Err(e) => println!("huge pages  NO, which Cloud Hypervisor needs\n\n{e}"),
     }
     ExitCode::SUCCESS
 }
