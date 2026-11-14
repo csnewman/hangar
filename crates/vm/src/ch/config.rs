@@ -69,7 +69,9 @@ pub struct Config {
     /// writes are discarded, and the host's page cache pages are mapped
     /// copy-on-write, so every guest on a file shares them.
     pub pmem: Vec<PathBuf>,
-    /// A passt vhost-user socket; none leaves the guest with no network.
+    /// The guest's network's vhost-user socket, which the monitor listens
+    /// on and passt is handed a connection to; none leaves the guest with
+    /// no network.
     pub net_socket: Option<PathBuf>,
     /// A hangar-gpu vhost-user socket: the guest gets a virtio-gpu device
     /// rendered by that process.
@@ -178,10 +180,14 @@ impl Config {
             ]);
         }
         if let Some(net) = &self.net_socket {
-            // passt in vhost-user mode is the backend, so it owns the
-            // socket and listens; Cloud Hypervisor connects, which is
-            // vhost_mode=client and is its default.
-            args.extend(["--net".into(), format!("vhost_user=on,socket={}", s(net))]);
+            // The monitor listens, and passt, the backend, is handed the
+            // connection the worker makes (Passt::connect_vhost_user):
+            // passt accepting on a path is refused by AppArmor once it has
+            // sandboxed itself.
+            args.extend([
+                "--net".into(),
+                format!("vhost_user=on,socket={},vhost_mode=server", s(net)),
+            ]);
         }
         if let Some(gpu) = &self.gpu_socket {
             // The device type is named rather than numbered, and the window

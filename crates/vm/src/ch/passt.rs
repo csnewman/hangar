@@ -162,6 +162,49 @@ impl Passt {
         ))
     }
 
+    /// Gives one Cloud Hypervisor machine a network through passt in
+    /// vhost-user mode, on the socket the monitor listens on
+    /// (vhost_mode=server): this process connects to it, and passt is
+    /// handed the connection, as start_connected hands one over for
+    /// libkrun, so passt never accepts on a path, which AppArmor refuses it
+    /// once it has sandboxed itself.
+    ///
+    /// The monitor binds the socket as it builds the machine, and waits
+    /// for the connection before running it; within timeout of being asked,
+    /// it has to have bound it.
+    pub async fn connect_vhost_user(socket: &Path, timeout: Duration) -> io::Result<Passt> {
+        let bin = find_passt()?;
+        PROBED.get_or_init(|| probe(&bin)).await;
+        let deadline = tokio::time::Instant::now() + timeout;
+        let conn = loop {
+            match std::os::unix::net::UnixStream::connect(socket) {
+                Ok(c) => break c,
+                Err(e) if tokio::time::Instant::now() >= deadline => {
+                    return Err(err(format!(
+                        "connecting to the monitor's network socket {}: {e}",
+                        socket.display()
+                    )));
+                }
+                Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        };
+        let theirs = OwnedFd::from(conn);
+        let mut cmd = tokio::process::Command::new(&bin);
+        // Stay in the foreground so this process supervises it rather than
+        // losing track of a daemon that forked away.
+        cmd.args(["--vhost-user", "--fd", "3", "--foreground", "--quiet"]);
+        if AS_ROOT_FOUND.load(Ordering::Relaxed) {
+            cmd.args(AS_ROOT);
+        }
+        inherit_as_3(&mut cmd, theirs.as_raw_fd());
+        let backend = launch(cmd, "passt", None, None, Duration::from_secs(10)).await?;
+        drop(theirs);
+        Ok(Passt {
+            backend,
+            socket: None,
+        })
+    }
+
     /// The path the monitor connects to, for a passt started on one.
     pub fn socket(&self) -> Option<&Path> {
         self.socket.as_deref()

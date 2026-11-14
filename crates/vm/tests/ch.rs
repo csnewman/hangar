@@ -1,5 +1,5 @@
-//! Cloud Hypervisor's command line, held to what internal/ch gives for the
-//! same machines, and its API spoken to a stand-in for the monitor.
+//! Cloud Hypervisor's command line for known machines, and its API spoken
+//! to a stand-in for the monitor.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -86,7 +86,7 @@ fn args() {
         "--vsock",
         "cid=7,socket=/e/vsock.sock",
         "--net",
-        "vhost_user=on,socket=/tmp/hangar-x/passt.sock",
+        "vhost_user=on,socket=/tmp/hangar-x/passt.sock,vhost_mode=server",
         "--generic-vhost-user",
         "socket=/e/gpu.sock,device_type=gpu,queue_sizes=[256,256],shm_size=4096M,shm_id=1",
         "--api-socket",
@@ -133,7 +133,8 @@ fn args() {
     );
 }
 
-// The layout of resizable memory, as internal/ch's Hotplug and Fit give it.
+// The layout of resizable memory: boot memory, the region it grows into,
+// and what is plugged in, for given sizes.
 #[test]
 fn hotplug() {
     for [mb, max, boot, region, plugged] in [

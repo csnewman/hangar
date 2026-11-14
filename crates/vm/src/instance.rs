@@ -751,8 +751,9 @@ fn set_mode(p: &Path, mode: u32) -> io::Result<()> {
     std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode))
 }
 
-/// Where a Cloud Hypervisor machine's passt has its socket: passt's
-/// AppArmor profile allows it nowhere else.
+/// Where a Cloud Hypervisor machine's network has its socket: under /tmp,
+/// where passt's AppArmor profile lets it bind one for a machine suspended
+/// with passt listening, and short enough for a unix socket's path.
 fn passt_dir(id: &str) -> io::Result<PathBuf> {
     let d = std::env::temp_dir().join(format!("hangar-{id}"));
     std::fs::create_dir_all(&d)?;
@@ -919,10 +920,19 @@ async fn start_cloud_hypervisor(
             }
         }
     }
+    // The network's socket is the monitor's, which binds it, so one left by
+    // a monitor that was killed goes first. A machine suspended with passt
+    // listening on it instead (vhost_mode=client) is resumed so.
+    let mut net_socket = None;
     if cfg.net {
-        let net = Passt::start(&passt_dir(&cfg.id)?.join("net.sock"), true).await?;
-        ccfg.net_socket = net.socket().map(Path::to_path_buf);
-        parts.net = Some(net);
+        let sock = passt_dir(&cfg.id)?.join("net.sock");
+        let _ = std::fs::remove_file(&sock);
+        if resuming && !snapshot_net_server(&cfg.dir.join(SNAPSHOT_DIR)) {
+            parts.net = Some(Passt::start(&sock, true).await?);
+        } else {
+            net_socket = Some(sock.clone());
+        }
+        ccfg.net_socket = Some(sock);
     }
     if cfg.gpu {
         let gpu = GpuBackend::start(
@@ -974,6 +984,11 @@ async fn start_cloud_hypervisor(
     };
     launch_cloud_hypervisor(cfg, args, exit, parts)?;
     let api = Api::new(&api_socket);
+    // The monitor waits for passt's connection as it builds the machine:
+    // in booting it, or within the restore call.
+    let net = net_socket.map(|sock| {
+        tokio::spawn(async move { Passt::connect_vhost_user(&sock, Duration::from_secs(60)).await })
+    });
     if resuming {
         api.wait_ready(Duration::from_secs(10)).await?;
         api.restore(&cfg.dir.join(SNAPSHOT_DIR))
@@ -986,8 +1001,31 @@ async fn start_cloud_hypervisor(
         }
         api.resume().await?;
     }
+    if let Some(net) = net {
+        let net = net
+            .await
+            .map_err(io::Error::other)?
+            .map_err(|e| err(format!("starting the network: {e}")))?;
+        parts.net = Some(net);
+    }
     parts.api = Some(api);
     Ok(())
+}
+
+/// Whether a Cloud Hypervisor snapshot's network has the monitor listening
+/// (vhost_mode=server), which the snapshot's config records as it was.
+fn snapshot_net_server(snapshot: &Path) -> bool {
+    let Ok(b) = std::fs::read(snapshot.join("config.json")) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_slice::<serde_json::Value>(&b) else {
+        return false;
+    };
+    v["net"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|n| n["vhost_mode"] == "Server")
 }
 
 /// Starts Cloud Hypervisor with args. A guest that reboots is reset inside
