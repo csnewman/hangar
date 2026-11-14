@@ -99,15 +99,20 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 	for _, p := range guestPorts {
 		kc.GuestPorts[p] = guestSocket(i.vsock, p)
 	}
+	// The monitor's end of passt's socket, which it inherits as netFD.
+	var netFile *os.File
 	if cfg.Net && caps.OS == "linux" {
-		// passt, as under Cloud Hypervisor, speaking its stream protocol.
-		sock := filepath.Join(dir, "net")
-		p, err := ch.StartPasst(procCtx, sock, false)
+		// passt, as under Cloud Hypervisor, speaking its stream protocol on
+		// a socket hangar-krun inherits.
+		p, f, err := ch.StartPasstConnected(procCtx)
 		if err != nil {
 			return fmt.Errorf("starting the network: %w", err)
 		}
 		i.backends = append(i.backends, p)
-		kc.Net = &krun.Net{Socket: sock, MAC: guestMAC, Stream: true}
+		netFile = f
+		defer netFile.Close()
+		fd := netFD
+		kc.Net = &krun.Net{MAC: guestMAC, Stream: true, FD: &fd}
 	} else if cfg.Net {
 		sock := filepath.Join(dir, "net")
 		n, err := startNetwork(procCtx, sock)
@@ -168,12 +173,17 @@ func (i *Instance) startKrun(ctx, procCtx, monCtx context.Context, initrd string
 	} else {
 		progress("booting")
 	}
-	return i.launchKrun(monCtx, conf)
+	return i.launchKrun(monCtx, conf, netFile)
 }
 
+// netFD is the descriptor hangar-krun has the network's socket as, beside
+// its replies' 3.
+const netFD = 4
+
 // launchKrun starts hangar-krun and watches for it to exit, which it does
-// when the guest powers off or reboots.
-func (i *Instance) launchKrun(ctx context.Context, conf string) error {
+// when the guest powers off or reboots. netFile, if any, is passt's socket,
+// which it inherits as netFD.
+func (i *Instance) launchKrun(ctx context.Context, conf string, netFile *os.File) error {
 	bin, err := krun.Find()
 	if err != nil {
 		return err
@@ -210,6 +220,9 @@ func (i *Instance) launchKrun(ctx context.Context, conf string) error {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.ExtraFiles = []*os.File{reply}
+	if netFile != nil {
+		cmd.ExtraFiles = append(cmd.ExtraFiles, netFile)
+	}
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 15 * time.Second
 	err = cmd.Start()

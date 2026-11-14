@@ -9,7 +9,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 // Passt is a running passt, giving one guest outbound networking.
@@ -48,7 +51,7 @@ func StartPasst(ctx context.Context, socket string, vhostUser bool) (*Passt, err
 	if err := os.MkdirAll(filepath.Dir(socket), 0o755); err != nil {
 		return nil, err
 	}
-	passtProbe.Do(func() { probePasst(bin, filepath.Dir(socket)) })
+	passtProbe.Do(func() { probePasst(bin) })
 
 	args := []string{
 		"--socket-path", socket,
@@ -96,24 +99,27 @@ func StartPasst(ctx context.Context, socket string, vhostUser bool) (*Passt, err
 var passtProbe sync.Once
 
 // probePasst finds out whether passt can sandbox itself as nobody on this
-// host, and if it cannot, has every passt run as root. Its socket is no sign:
-// passt binds it before sandboxing, then exits when that fails, leaving a
-// socket nothing answers, and the monitor waits on it for a minute. So a
-// passt is started on a socket of its own and watched until it has had time
-// to sandbox itself.
-func probePasst(bin, dir string) {
+// host, and if it cannot, has every passt run as root. A passt listening on
+// a path binds it before sandboxing, then exits when that fails, leaving a
+// socket nothing answers, and the monitor waits on it for a minute; one
+// given a connected socket fails as quietly. So a passt is started on a
+// socket of its own and watched until it has had time to sandbox itself.
+func probePasst(bin string) {
 	if os.Geteuid() != 0 {
 		return
 	}
-	socket := filepath.Join(dir, "probe.sock")
-	defer os.Remove(socket)
-	defer os.Remove(socket + ".repair")
-	_ = os.Remove(socket)
-	_ = os.Remove(socket + ".repair")
+	ours, theirs, err := socketPair()
+	if err != nil {
+		return
+	}
+	defer ours.Close()
 	var stderr strings.Builder
-	cmd := exec.Command(bin, "--vhost-user", "--socket-path", socket, "--foreground", "--one-off")
+	cmd := exec.Command(bin, "--fd", "3", "--foreground")
+	cmd.ExtraFiles = []*os.File{theirs}
 	cmd.Stderr = &stderr
-	if err := cmd.Start(); err != nil {
+	err = cmd.Start()
+	theirs.Close()
+	if err != nil {
 		return
 	}
 	exited := make(chan struct{})
@@ -129,6 +135,60 @@ func probePasst(bin, dir string) {
 	}
 }
 
+// StartPasstConnected gives one libkrun machine a network through passt,
+// over a connected pair of sockets: passt has one, speaking its stream
+// protocol on it, and the other, returned, is the monitor's to inherit.
+//
+// passt accepts nothing on a connected socket. One listening on a path
+// accepts its monitor after it has sandboxed itself, when the path is
+// outside its mount namespace, and an AppArmor that mediates unix sockets by
+// path refuses that (Ubuntu's 7.0 kernels, under passt's own profile): the
+// monitor's frames then wait in the socket, and the guest never has a
+// network.
+//
+// passt exits when the monitor's end closes.
+func StartPasstConnected(ctx context.Context) (*Passt, *os.File, error) {
+	bin, err := exec.LookPath("passt")
+	if err != nil {
+		return nil, nil, fmt.Errorf("passt not found (apt install passt): %w", err)
+	}
+	passtProbe.Do(func() { probePasst(bin) })
+	ours, theirs, err := socketPair()
+	if err != nil {
+		return nil, nil, err
+	}
+	// Stay in the foreground so this process supervises it rather than
+	// losing track of a daemon that forked away.
+	args := []string{"--fd", "3", "--foreground", "--quiet"}
+	if passtAsRoot.Load() {
+		args = append(args, asRoot...)
+	}
+	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.ExtraFiles = []*os.File{theirs}
+	err = launch(cmd, "passt", "", "", 10*time.Second)
+	theirs.Close()
+	if err != nil {
+		ours.Close()
+		return nil, nil, err
+	}
+	return &Passt{cmd: cmd}, ours, nil
+}
+
+// socketPair makes a connected pair of stream sockets, closed on exec.
+func socketPair() (*os.File, *os.File, error) {
+	syscall.ForkLock.RLock()
+	fds, err := unix.Socketpair(unix.AF_UNIX, unix.SOCK_STREAM, 0)
+	if err == nil {
+		unix.CloseOnExec(fds[0])
+		unix.CloseOnExec(fds[1])
+	}
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		return nil, nil, fmt.Errorf("making passt's socket: %w", err)
+	}
+	return os.NewFile(uintptr(fds[0]), "passt"), os.NewFile(uintptr(fds[1]), "passt"), nil
+}
+
 // asRoot keeps passt as root rather than changing to nobody.
 var asRoot = []string{"--runas", "0:0"}
 
@@ -136,7 +196,8 @@ var asRoot = []string{"--runas", "0:0"}
 // nobody on this host, so every later one starts as root.
 var passtAsRoot atomic.Bool
 
-// Socket is the path the monitor should connect to.
+// Socket is the path the monitor should connect to, for a passt started
+// on one.
 func (p *Passt) Socket() string { return p.socket }
 
 // Close stops passt and removes its socket.
@@ -144,6 +205,9 @@ func (p *Passt) Close() error {
 	if p.cmd != nil && p.cmd.Process != nil {
 		_ = p.cmd.Process.Kill()
 		_, _ = p.cmd.Process.Wait()
+	}
+	if p.socket == "" {
+		return nil
 	}
 	_ = os.Remove(p.socket + ".repair")
 	return os.Remove(p.socket)

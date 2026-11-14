@@ -53,6 +53,9 @@ func launch(cmd *exec.Cmd, name, socket, logPath string, timeout time.Duration) 
 		exited <- err
 	}()
 
+	if socket == "" {
+		return nil
+	}
 	deadline := time.After(timeout)
 	for {
 		if _, err := os.Stat(socket); err == nil {

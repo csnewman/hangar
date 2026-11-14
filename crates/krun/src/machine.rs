@@ -111,11 +111,26 @@ pub fn start(c: &Config, ctl: &Control) -> Result<(), String> {
 
     if let Some(n) = &c.net {
         let mac = parse_mac(&n.mac).ok_or_else(|| format!("the MAC address {:?}", n.mac))?;
-        let nd = if n.stream {
-            // passt, which takes the offloads virtio-net asks for.
-            NetDevice::new_unixstream_path("net0", &n.socket, &mac, NET_OFFLOADS, NetFlags::empty())
-        } else {
-            NetDevice::new_unixgram_path("net0", &n.socket, &mac, 0, NetFlags::VFKIT)
+        // passt, which takes the offloads virtio-net asks for.
+        let nd = match (n.stream, n.fd) {
+            (true, Some(fd)) => {
+                // SAFETY: the worker hands the socket down as this
+                // descriptor, and nothing else here takes it.
+                let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+                // Programs this process starts (the render server) must not
+                // hold it open, or passt outlives the machine.
+                // SAFETY: fd is open.
+                unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) };
+                NetDevice::new_unixstream_fd("net0", fd, &mac, NET_OFFLOADS, NetFlags::empty())
+            }
+            (true, None) => NetDevice::new_unixstream_path(
+                "net0",
+                &n.socket,
+                &mac,
+                NET_OFFLOADS,
+                NetFlags::empty(),
+            ),
+            (false, _) => NetDevice::new_unixgram_path("net0", &n.socket, &mac, 0, NetFlags::VFKIT),
         }
         .map_err(failed("the network"))?;
         devices.add(nd);

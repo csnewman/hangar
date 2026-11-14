@@ -80,12 +80,17 @@ pub struct Disk {
 /// The guest's network device.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Net {
+    /// The socket's path, which the monitor connects to; empty with `fd`.
     pub socket: String,
     pub mac: String,
     /// A unix stream socket, passt's on Linux; otherwise a datagram one,
     /// gvisor-tap-vsock's in vfkit mode, as on macOS.
     #[serde(default, skip_serializing_if = "is_false")]
     pub stream: bool,
+    /// A connected stream socket the monitor inherits as this descriptor,
+    /// in place of a path to connect to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fd: Option<i32>,
 }
 
 /// What hangar-krun's libkrun was built with, and what it renders with.

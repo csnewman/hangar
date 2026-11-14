@@ -75,12 +75,17 @@ type Disk struct {
 
 // Net is the guest's network device.
 type Net struct {
+	// Socket is the socket's path, which the monitor connects to; empty
+	// with FD.
 	Socket string `json:"socket"`
 	MAC    string `json:"mac"`
 	// Stream is a unix stream socket, passt's on Linux; otherwise the
 	// socket is a datagram one, gvisor-tap-vsock's in vfkit mode, as on
 	// macOS.
 	Stream bool `json:"stream,omitempty"`
+	// FD is a connected stream socket the monitor inherits as this
+	// descriptor, in place of a path to connect to.
+	FD *int `json:"fd,omitempty"`
 }
 
 // searchPath is where hangar-krun is found beside PATH: what

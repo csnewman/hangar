@@ -257,11 +257,19 @@ func start(c krun.Config) error {
 		}
 		cmac := C.hk_bytes((*C.uint8_t)(C.CBytes(mac)), 6)
 		var nd C.KrunNetDevice
-		if c.Net.Stream {
+		switch {
+		case c.Net.Stream && c.Net.FD != nil:
+			// passt's connected socket, inherited; libkrun owns it from
+			// here. Programs this process starts (the render server) must
+			// not hold it open, or passt outlives the machine.
+			unix.CloseOnExec(*c.Net.FD)
+			nd = C.krun_net_device_new_unixstream_fd(cstr("net0"), C.int(*c.Net.FD), cmac,
+				netFeaturesOffloaded, 0, &e)
+		case c.Net.Stream:
 			// passt, which takes the offloads virtio-net asks for.
 			nd = C.krun_net_device_new_unixstream_path(cstr("net0"), cstr(c.Net.Socket), cmac,
 				netFeaturesOffloaded, 0, &e)
-		} else {
+		default:
 			nd = C.krun_net_device_new_unixgram_path(cstr("net0"), cstr(c.Net.Socket), cmac,
 				0, C.KRUN_NET_FLAGS_VFKIT, &e)
 		}

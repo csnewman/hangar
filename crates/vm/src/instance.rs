@@ -37,6 +37,10 @@ pub const GUEST_PORTS: [u32; 7] = [101, 103, 104, 105, 106, 107, 108];
 /// The address of a libkrun guest's network device.
 pub const GUEST_MAC: &str = "5a:94:ef:e4:0c:ee";
 
+/// The descriptor hangar-krun has the network's socket as, beside its
+/// replies' 3.
+const NET_FD: i32 = 4;
+
 /// How the base reaches the guest.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ImageDevice {
@@ -799,20 +803,32 @@ fn spawn_monitor(
     mut cmd: tokio::process::Command,
     name: &'static str,
     fd3: OwnedFd,
+    fd4: Option<OwnedFd>,
     exit: &Arc<Mutex<Exit>>,
 ) -> io::Result<Process> {
     let log_path = cfg.dir.join("monitor.log");
     let log = std::fs::File::create(&log_path)?;
     cmd.stdout(log.try_clone()?).stderr(log);
-    let fd = fd3.as_raw_fd();
+    let a = fd3.as_raw_fd();
+    let b = fd4.as_ref().map_or(-1, |f| f.as_raw_fd());
+    let fd4_given = fd4.is_some();
     // SAFETY: the closure calls only async-signal-safe functions.
     unsafe {
         cmd.pre_exec(move || {
-            // dup2 leaves the copy open across exec; a descriptor that is 3
-            // already has its flag cleared instead.
-            if fd == 3 {
-                libc::fcntl(3, libc::F_SETFD, 0);
-            } else if libc::dup2(fd, 3) < 0 {
+            // Each is copied clear of 3 and 4 before either is placed, so
+            // placing one cannot close the other. dup2's copies stay open
+            // across exec; the copies between close.
+            let a = libc::fcntl(a, libc::F_DUPFD_CLOEXEC, 5);
+            let b = if b < 0 {
+                b
+            } else {
+                libc::fcntl(b, libc::F_DUPFD_CLOEXEC, 5)
+            };
+            if a < 0
+                || (fd4_given && b < 0)
+                || libc::dup2(a, 3) < 0
+                || (b >= 0 && libc::dup2(b, 4) < 0)
+            {
                 return Err(io::Error::last_os_error());
             }
             // The monitor dies with the worker on Linux; on macOS
@@ -827,7 +843,7 @@ fn spawn_monitor(
     let mut child = cmd
         .spawn()
         .map_err(|e| err(format!("starting {name}: {e}")))?;
-    drop(fd3);
+    drop((fd3, fd4));
     let pid = child.id().unwrap_or(0);
     let (tx, exited) = watch::channel(false);
     let stopping = Arc::new(AtomicBool::new(false));
@@ -905,7 +921,7 @@ async fn start_cloud_hypervisor(
     }
     if cfg.net {
         let net = Passt::start(&passt_dir(&cfg.id)?.join("net.sock"), true).await?;
-        ccfg.net_socket = Some(net.socket().to_path_buf());
+        ccfg.net_socket = net.socket().map(Path::to_path_buf);
         parts.net = Some(net);
     }
     if cfg.gpu {
@@ -992,7 +1008,7 @@ fn launch_cloud_hypervisor(
     args.extend(["--event-monitor".into(), "fd=3".into()]);
     let mut cmd = tokio::process::Command::new(bin);
     cmd.args(&args).stdin(Stdio::null());
-    let process = spawn_monitor(cfg, cmd, "cloud-hypervisor", events_w, exit)?;
+    let process = spawn_monitor(cfg, cmd, "cloud-hypervisor", events_w, None, exit)?;
     let (exit, pid) = (exit.clone(), process.pid);
     // The monitor's events until it exits: a panic is noted, and a reboot
     // stops it. The guest has flushed its disks by then, and what the
@@ -1051,6 +1067,8 @@ async fn start_krun(
     }
     (parts.krun_boot, parts.krun_region) = (boot, region);
     let s = |p: &Path| p.to_string_lossy().into_owned();
+    // The monitor's end of passt's socket, which it inherits as NET_FD.
+    let mut net_fd = None;
     let mut kc = krun::Config {
         cpus: cfg.cpus,
         memory_mib: boot,
@@ -1107,20 +1125,22 @@ async fn start_krun(
         kc.net = Some(krun::Net {
             socket: s(&sock),
             mac: GUEST_MAC.into(),
-            stream: false,
+            ..Default::default()
         });
     } else if cfg.net {
-        // passt, as under Cloud Hypervisor, speaking its stream protocol.
-        let sock = dir.join("net");
-        let net = Passt::start(&sock, false)
+        // passt, as under Cloud Hypervisor, speaking its stream protocol on
+        // a socket hangar-krun inherits.
+        let (net, sock) = Passt::start_connected()
             .await
             .map_err(|e| err(format!("starting the network: {e}")))?;
         parts.net = Some(net);
         kc.net = Some(krun::Net {
-            socket: s(&sock),
             mac: GUEST_MAC.into(),
             stream: true,
+            fd: Some(NET_FD),
+            ..Default::default()
         });
+        net_fd = Some(sock);
     }
     if cfg.gpu {
         kc.gpu = Some(krun::Gpu {
@@ -1191,7 +1211,7 @@ async fn start_krun(
         // program takes, which carries it across a suspend.
         cmd.env("VKR_RECORD", "1");
     }
-    let process = spawn_monitor(cfg, cmd, "hangar-krun", reply_w, exit)?;
+    let process = spawn_monitor(cfg, cmd, "hangar-krun", reply_w, net_fd, exit)?;
     let (tx, answers) = mpsc::unbounded_channel();
     std::thread::spawn(move || {
         let mut r = std::io::BufReader::new(std::fs::File::from(replies));

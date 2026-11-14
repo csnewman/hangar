@@ -45,6 +45,7 @@ fn config() {
             socket: "/tmp/h/net".into(),
             mac: "5a:94:ef:e4:0c:ee".into(),
             stream: true,
+            ..Default::default()
         }),
         gpu: Some(Gpu {
             window_mib: 512,
@@ -56,6 +57,16 @@ fn config() {
     let go = r#"{"cpus":4,"memory_mib":2048,"hotplug_mib":14336,"plugged_mib":6144,"kernel":"/k","initrd":"/i","cmdline":"console=hvc0 x","console":"/c","disks":[{"id":"vda","path":"/u"},{"id":"vdb","path":"/s","direct":true},{"id":"vdc","path":"/e","read_only":true}],"host_ports":{"2049":"/tmp/h/v_2049","8100":"/tmp/h/v_8100"},"guest_ports":{"101":"/tmp/h/v-g101"},"net":{"socket":"/tmp/h/net","mac":"5a:94:ef:e4:0c:ee","stream":true},"gpu":{"window_mib":512,"virgl":true},"restore":"/d/snapshot"}"#;
     assert_eq!(serde_json::to_string(&c).unwrap(), go);
     assert_eq!(serde_json::from_str::<Config>(go).unwrap(), c);
+    // passt's connected socket, inherited.
+    let inherited = Net {
+        mac: "5a:94:ef:e4:0c:ee".into(),
+        stream: true,
+        fd: Some(4),
+        ..Default::default()
+    };
+    let go = r#"{"socket":"","mac":"5a:94:ef:e4:0c:ee","stream":true,"fd":4}"#;
+    assert_eq!(serde_json::to_string(&inherited).unwrap(), go);
+    assert_eq!(serde_json::from_str::<Net>(go).unwrap(), inherited);
     let bare = Config {
         cpus: 1,
         memory_mib: 1024,
