@@ -7,7 +7,7 @@ use axum::routing::{delete, get};
 use axum::{Json, Router};
 use hangar_openapi::clientapi::types;
 
-use super::{ApiError, Shared, Signed, Via};
+use super::{ApiError, Shared, Signed, Via, spec};
 use crate::users;
 
 /// The versions of this API the server serves.
@@ -37,7 +37,7 @@ async fn me(State(app): State<Shared>, s: Signed) -> Result<Json<types::Me>, Api
         display_name: u.display_name,
         environment_host_suffix: app.cfg.public.as_ref().map(|p| p.name("")),
         id: u.id.to_string(),
-        ssh: None,
+        ssh: app.ssh_gateway().map(spec).transpose()?,
         username: u.username,
     }))
 }

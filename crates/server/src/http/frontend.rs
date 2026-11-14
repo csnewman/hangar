@@ -221,7 +221,7 @@ pub fn me_of(app: &App, u: &User) -> Result<types::Me, ApiError> {
             .as_ref()
             .filter(|_| app.cfg.registry)
             .map(|p| p.name("registry")),
-        ssh: None,
+        ssh: app.ssh_gateway().map(spec).transpose()?,
         theme: spec(serde_json::json!(u.theme))?,
         username: u.username.clone(),
     })

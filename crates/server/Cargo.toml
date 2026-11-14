@@ -22,6 +22,8 @@ hangar-openapi = { path = "../openapi" }
 hyper = { version = "1", features = ["client", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 rand = "0.8"
+ring = "0.17"
+russh = { version = "0.65", default-features = false, features = ["ring", "rsa"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 regex.workspace = true
 serde.workspace = true

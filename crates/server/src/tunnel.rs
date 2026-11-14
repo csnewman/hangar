@@ -33,6 +33,7 @@ pub const KIND_CODE: &str = "code";
 pub const KIND_PROCESSES: &str = "processes";
 pub const KIND_PORTS: &str = "ports";
 pub const KIND_LOGS: &str = "logs";
+pub const KIND_SSH: &str = "ssh";
 
 /// How often the server pings a tunnel: often enough to keep it through a
 /// proxy's idle timeout, and for the worker, which drops one it has heard

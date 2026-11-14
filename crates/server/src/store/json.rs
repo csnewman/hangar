@@ -12,7 +12,8 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::rows::{
     AccessToken, AgentSession, AuditEvent, Collaborator, Environment, EnvironmentRemoval,
-    HostSession, ImageRemoval, Session, Task, Team, TeamMember, Template, User, Worker,
+    HostSession, ImageRemoval, LoginKey, ServerKey, Session, SshKey, Task, Team, TeamMember,
+    Template, User, Worker,
 };
 use super::{Error, Result};
 
@@ -38,6 +39,9 @@ pub struct State {
     pub environment_tasks: Vec<Task>,
     pub agent_sessions: Vec<AgentSession>,
     pub editor_sessions: Vec<HostSession>,
+    pub ssh_keys: Vec<SshKey>,
+    pub ssh_login_keys: Vec<LoginKey>,
+    pub server_keys: Vec<ServerKey>,
 }
 
 impl State {

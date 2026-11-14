@@ -119,3 +119,140 @@ async fn someone_elses_environment_is_out_of_reach() {
         );
     }
 }
+
+/// Remembers the host key the gateway shows.
+struct Noting(Arc<std::sync::Mutex<Option<String>>>);
+
+impl russh::client::Handler for Noting {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
+        if let PublicKeyOrCertificate::PublicKey { key, .. } = key {
+            let mut k = key.clone();
+            k.set_comment("");
+            *self.0.lock().unwrap() = k.to_openssh().ok();
+        }
+        Ok(true)
+    }
+}
+
+/// Signs in as user with key and runs command, giving its standard
+/// output, its error stream and its exit status.
+async fn run_all(
+    s: &Server,
+    user: &str,
+    key: &PrivateKey,
+    command: &str,
+) -> (String, String, Option<u32>, Option<String>) {
+    let shown = Arc::new(std::sync::Mutex::new(None));
+    let config = Arc::new(russh::client::Config::default());
+    let mut session = russh::client::connect(config, s.ssh_addr(), Noting(shown.clone()))
+        .await
+        .expect("reaching the gateway");
+    let auth = session
+        .authenticate_publickey(
+            user,
+            PrivateKeyWithHashAlg::new(Arc::new(key.clone()), None),
+        )
+        .await
+        .expect("asking to sign in");
+    assert!(auth.success(), "{user} refused");
+    let mut ch = session.channel_open_session().await.expect("a session");
+    ch.exec(true, command).await.expect("running it");
+    let (mut out, mut err, mut status) = (Vec::new(), Vec::new(), None);
+    while let Some(m) = tokio::time::timeout(std::time::Duration::from_secs(10), ch.wait())
+        .await
+        .expect("an answer in time")
+    {
+        match m {
+            russh::ChannelMsg::Data { data } => out.extend_from_slice(&data),
+            russh::ChannelMsg::ExtendedData { data, .. } => err.extend_from_slice(&data),
+            russh::ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+            _ => {}
+        }
+    }
+    let shown = shown.lock().unwrap().clone();
+    (
+        String::from_utf8_lossy(&out).into_owned(),
+        String::from_utf8_lossy(&err).into_owned(),
+        status,
+        shown,
+    )
+}
+
+/// The gateway shows the host key the server says it has, takes an
+/// environment's short ID as its name, says why a stopped one cannot be
+/// reached, and records each connection with the key it was made with.
+#[tokio::test]
+async fn the_gateway_is_what_the_server_says() {
+    let Some(s) = Server::start() else { return };
+    let admin = s.admin().await;
+    let _w = s.worker("w");
+    running(&admin, "shell").await;
+    let mine = key(4);
+    admin
+        .add_login_key(&body(json!({
+            "public_key": format!("{} mine", mine.public_key().to_openssh().unwrap()),
+        })))
+        .await
+        .unwrap();
+    let me = admin.get_me().await.unwrap().into_inner();
+    let gateway = me.ssh.expect("the SSH gateway in Me");
+    assert_eq!(gateway.port, s.ssh_addr().port() as i64);
+
+    let (out, _, status, shown) = run_all(&s, "shell", &mine, "echo hi").await;
+    assert_eq!((out.as_str(), status), ("ran echo hi\n", Some(0)));
+    assert_eq!(
+        shown.as_deref(),
+        Some(gateway.host_key.as_str()),
+        "the host key shown"
+    );
+
+    let env = admin
+        .list_environments()
+        .await
+        .unwrap()
+        .into_inner()
+        .into_iter()
+        .find(|e| e.name == "shell")
+        .unwrap();
+    let (out, _, status, _) = run_all(&s, &env.short_id, &mine, "true").await;
+    assert_eq!(
+        (out.as_str(), status),
+        ("ran true\n", Some(0)),
+        "by short ID"
+    );
+
+    let subject = vec![format!("environment:{}", env.id)];
+    let events = admin
+        .list_audit(None, None, Some(&subject))
+        .await
+        .unwrap()
+        .into_inner();
+    let connect = events
+        .iter()
+        .find(|e| e.action == "environment.ssh_connect")
+        .expect("the connection in the audit log");
+    let fingerprint = mine
+        .public_key()
+        .fingerprint(russh::keys::ssh_key::HashAlg::Sha256)
+        .to_string();
+    assert_eq!(connect.details["key"], json!(fingerprint));
+    assert_eq!(
+        connect.details["via"],
+        json!(format!("ssh key {fingerprint}"))
+    );
+
+    admin.stop_environment(&env.id).await.unwrap();
+    eventually("the environment stopped", || async {
+        let e = admin.get_environment(&env.id).await.ok()?.into_inner();
+        (serde_json::to_value(e.phase).ok()? == json!("stopped")).then_some(())
+    })
+    .await;
+    let (_, err, status, _) = run_all(&s, "shell", &mine, "true").await;
+    assert_eq!(status, Some(1));
+    assert!(err.contains("not running: start it first"), "told {err:?}");
+}

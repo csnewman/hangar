@@ -217,6 +217,8 @@ impl Tx {
                 let u = tx.work.users.remove(at);
                 tx.work.sessions.retain(|s| s.user_id != id);
                 tx.work.access_tokens.retain(|t| t.user_id != id);
+                tx.work.ssh_keys.retain(|k| k.user_id != id);
+                tx.work.ssh_login_keys.retain(|k| k.user_id != id);
                 Ok(Some(u.username))
             }
         }

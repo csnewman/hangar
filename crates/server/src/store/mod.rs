@@ -11,6 +11,7 @@ mod catalog;
 pub mod environments;
 mod hosts;
 mod json;
+pub mod keys;
 mod pg;
 pub mod report;
 pub mod rows;

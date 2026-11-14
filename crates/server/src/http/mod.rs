@@ -8,6 +8,7 @@ mod catalog;
 mod client;
 mod environments;
 mod frontend;
+mod keys;
 mod streams;
 mod worker;
 
@@ -32,16 +33,29 @@ pub struct App {
     pub cfg: Config,
     pub rules: access::Rules,
     pub tunnels: crate::tunnel::Tunnels,
+    /// The SSH gateway's host key, in known_hosts form, when it runs.
+    pub ssh_host_key: Option<String>,
 }
 
 impl App {
-    pub fn new(store: Store, cfg: Config) -> App {
+    pub fn new(store: Store, cfg: Config, host_key: Option<&russh::keys::PrivateKey>) -> App {
         App {
             store,
             cfg,
             rules: access::Rules::from_specs(),
             tunnels: crate::tunnel::Tunnels::default(),
+            ssh_host_key: host_key.map(crate::keys::host_key_line),
         }
+    }
+
+    /// Where the SSH gateway is reached, for Me: host, port and host key.
+    pub fn ssh_gateway(&self) -> Option<serde_json::Value> {
+        let s = self.cfg.ssh.as_ref()?;
+        Some(serde_json::json!({
+            "host": s.host,
+            "port": s.port,
+            "host_key": self.ssh_host_key.clone().unwrap_or_default(),
+        }))
     }
 }
 
@@ -57,7 +71,8 @@ pub fn router(app: Shared) -> Router {
                 .merge(audit::frontend())
                 .merge(catalog::frontend())
                 .merge(environments::frontend())
-                .merge(streams::frontend()),
+                .merge(streams::frontend())
+                .merge(keys::frontend()),
         )
         .nest(
             "/api/v1",
@@ -65,7 +80,8 @@ pub fn router(app: Shared) -> Router {
                 .merge(audit::client())
                 .merge(catalog::client())
                 .merge(environments::client())
-                .merge(streams::client()),
+                .merge(streams::client())
+                .merge(keys::client()),
         )
         .nest("/api/worker/v1", worker::routes())
         .route_layer(axum::middleware::from_fn_with_state(

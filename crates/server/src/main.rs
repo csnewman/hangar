@@ -6,9 +6,12 @@ mod config;
 mod environments;
 mod fail;
 mod http;
+mod keys;
 mod placement;
 mod ports;
 mod publichost;
+mod seal;
+mod sshgw;
 mod store;
 mod teams;
 mod templates;
@@ -47,7 +50,19 @@ async fn run() -> Result<(), String> {
         .map_err(|e| format!("listening on {}: {e}", cfg.listen))?;
     eprintln!("hangar-server: serving HTTP on {}", cfg.listen);
     tokio::spawn(placement::run(store.clone()));
-    let app = http::router(Arc::new(http::App::new(store, cfg)));
+    let host_key = match &cfg.ssh {
+        Some(_) => Some(
+            keys::host_key(&store, cfg.sealer.as_deref())
+                .await
+                .map_err(|e| format!("the SSH gateway's host key: {e}"))?,
+        ),
+        None => None,
+    };
+    let app = Arc::new(http::App::new(store, cfg, host_key.as_ref()));
+    if let (Some(ssh), Some(key)) = (&app.cfg.ssh, host_key) {
+        tokio::spawn(sshgw::serve(app.clone(), ssh.listen.clone(), key));
+    }
+    let app = http::router(app);
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),

@@ -32,6 +32,54 @@ pub struct Config {
     /// Whether the server is its own container registry: it is whenever it
     /// has a public URL, unless `HANGAR_REGISTRY_ENABLED` is false.
     pub registry: bool,
+    /// What seals secrets at rest (`HANGAR_SECRET_KEY_FILE`); without it,
+    /// people cannot keep SSH keys.
+    pub sealer: Option<std::sync::Arc<crate::seal::Sealer>>,
+    /// The SSH gateway: where it listens (`HANGAR_SSH_LISTEN`), and where
+    /// people reach it, host and port.
+    pub ssh: Option<Ssh>,
+}
+
+/// The SSH gateway's addresses.
+#[derive(Debug, Clone)]
+pub struct Ssh {
+    pub listen: String,
+    pub host: String,
+    pub port: u16,
+}
+
+/// Where people reach the SSH gateway: address as given
+/// (`HANGAR_SSH_ADDRESS`), or the public URL's host at the port it listens
+/// on.
+fn ssh_address(
+    address: Option<String>,
+    listen: &str,
+    public: Option<&Public>,
+) -> Result<(String, u16), String> {
+    let address = match address {
+        Some(a) => a,
+        None => {
+            let (_, port) = listen
+                .rsplit_once(':')
+                .ok_or_else(|| format!("the SSH listen address {listen:?} has no port"))?;
+            let host = public.map_or("localhost", |p| p.hostname());
+            format!("{host}:{port}")
+        }
+    };
+    let (host, port) = address
+        .rsplit_once(':')
+        .ok_or_else(|| format!("the SSH address {address:?} has no port"))?;
+    let port: u16 = port
+        .parse()
+        .ok()
+        .filter(|p| *p > 0)
+        .ok_or_else(|| format!("the SSH address {address:?} has no valid port"))?;
+    Ok((
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .to_string(),
+        port,
+    ))
 }
 
 impl Config {
@@ -83,6 +131,20 @@ impl Config {
         };
         let registry =
             public.is_some() && var("HANGAR_REGISTRY_ENABLED").as_deref() != Some("false");
+        let sealer = var("HANGAR_SECRET_KEY_FILE")
+            .map(|f| crate::seal::Sealer::load(&f).map(std::sync::Arc::new))
+            .transpose()?;
+        let ssh = match var("HANGAR_SSH_LISTEN") {
+            Some(l) => {
+                let (host, port) = ssh_address(var("HANGAR_SSH_ADDRESS"), &l, public.as_ref())?;
+                let listen = match l.strip_prefix(':') {
+                    Some(port) => format!("0.0.0.0:{port}"),
+                    None => l,
+                };
+                Some(Ssh { listen, host, port })
+            }
+            None => None,
+        };
         Ok(Config {
             listen,
             storage,
@@ -90,6 +152,8 @@ impl Config {
             initial_admin,
             public,
             registry,
+            sealer,
+            ssh,
         })
     }
 }

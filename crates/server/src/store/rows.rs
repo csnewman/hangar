@@ -246,3 +246,40 @@ pub struct HostSession {
     pub ticket: bool,
     pub expires_at: DateTime<Utc>,
 }
+
+/// `ssh_keys`: a person's own SSH key, its private half sealed, which
+/// signs for them through their environments' agents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SshKey {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub name: String,
+    /// In authorized_keys form, with the name as its comment.
+    pub public_key: String,
+    #[serde(with = "hex_bytes")]
+    pub private_key: Vec<u8>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `ssh_login_keys`: a public key its owner signs in to the SSH gateway
+/// with.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoginKey {
+    pub id: Uuid,
+    pub user_id: Uuid,
+    pub name: String,
+    pub public_key: String,
+    pub fingerprint: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `server_keys`: a key of the server's own, such as the SSH gateway's
+/// host key, sealed when the server has a secret key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerKey {
+    pub name: String,
+    #[serde(with = "hex_bytes")]
+    pub value: Vec<u8>,
+    pub sealed: bool,
+    pub created_at: DateTime<Utc>,
+}
