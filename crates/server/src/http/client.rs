@@ -35,7 +35,7 @@ async fn me(State(app): State<Shared>, s: Signed) -> Result<Json<types::Me>, Api
     Ok(Json(types::Me {
         admin: u.is_admin,
         display_name: u.display_name,
-        environment_host_suffix: app.cfg.public.as_ref().map(|p| format!(".{}", p.host)),
+        environment_host_suffix: app.cfg.public.as_ref().map(|p| p.name("")),
         id: u.id.to_string(),
         ssh: None,
         username: u.username,

@@ -212,7 +212,7 @@ pub fn me_of(app: &App, u: &User) -> Result<types::Me, ApiError> {
     Ok(types::Me {
         admin: u.is_admin,
         display_name: u.display_name.clone(),
-        environment_host_suffix: app.cfg.public.as_ref().map(|p| format!(".{}", p.host)),
+        environment_host_suffix: app.cfg.public.as_ref().map(|p| p.name("")),
         has_password: u.password_hash.is_some(),
         id: u.id.to_string(),
         registry: app

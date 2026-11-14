@@ -25,6 +25,15 @@ const TERMINALS: u32 = 101;
 /// The vsock port the agent serves SSH on.
 const SSH: u32 = 107;
 
+/// The vsock port the agent serves the desktop on.
+const DESKTOP: u32 = 103;
+
+/// The vsock port the agent serves the Code service on.
+const CODE: u32 = 104;
+
+/// The vsock port the agent serves the process list on.
+const PROCESSES: u32 = 106;
+
 /// The guest ports the suite's guests serve a web page on.
 pub const WEB_PORTS: [u16; 2] = [80, 8080];
 
@@ -183,6 +192,18 @@ impl Runtime for Machines {
             tokio::spawn(self.terminals.clone().serve(id.to_string(), guest));
             return Ok(ours);
         }
+        if port == DESKTOP {
+            tokio::spawn(desktop(guest));
+            return Ok(ours);
+        }
+        if port == CODE {
+            tokio::spawn(code(guest));
+            return Ok(ours);
+        }
+        if port == PROCESSES {
+            tokio::spawn(processes(guest));
+            return Ok(ours);
+        }
         tokio::spawn(async move {
             let _ = guest.write_all(format!("port {port}\n").as_bytes()).await;
             let mut buf = [0u8; 4096];
@@ -204,6 +225,130 @@ impl Runtime for Machines {
     /// suspends, so the server lets environments be suspended on it.
     fn monitor(&self) -> (String, bool) {
         ("krun".into(), true)
+    }
+}
+
+/// The first line of a connection, as JSON.
+async fn request(conn: &mut tokio::io::BufReader<DuplexStream>) -> Option<serde_json::Value> {
+    use tokio::io::AsyncBufReadExt;
+    let mut line = String::new();
+    if conn.read_line(&mut line).await.unwrap_or(0) == 0 {
+        return None;
+    }
+    serde_json::from_str(&line).ok()
+}
+
+/// The desktop as the agent serves it (crates/agent/src/desktop.rs): a
+/// "vnc" request is answered with "RFB 003.008\n", then an echo of what is
+/// sent; a "resize" one with a reply, refusing a side under 640x400.
+async fn desktop(conn: DuplexStream) {
+    let mut conn = tokio::io::BufReader::new(conn);
+    let Some(req) = request(&mut conn).await else {
+        return;
+    };
+    match req["op"].as_str() {
+        Some("vnc") => {
+            if conn.write_all(b"RFB 003.008\n").await.is_err() {
+                return;
+            }
+            echo(conn).await;
+        }
+        Some("resize") => {
+            let (w, h) = (
+                req["width"].as_i64().unwrap_or(0),
+                req["height"].as_i64().unwrap_or(0),
+            );
+            let reply = if w < 640 || h < 400 {
+                serde_json::json!({ "err": format!("{w}x{h} is smaller than 640x400") })
+            } else {
+                serde_json::json!({})
+            };
+            let _ = conn.write_all(format!("{reply}\n").as_bytes()).await;
+        }
+        _ => {}
+    }
+}
+
+/// Writes back what is read until the connection ends.
+async fn echo(mut conn: tokio::io::BufReader<DuplexStream>) {
+    let mut buf = [0u8; 4096];
+    loop {
+        match conn.read(&mut buf).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => {
+                if conn.write_all(&buf[..n]).await.is_err() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// The Code service as the agent frames it (crates/agent/src/code): after
+/// the request line, frames of a four-byte big-endian length and that many
+/// bytes. The first frame it sends is the request it was given; then it
+/// sends back each frame it is sent.
+async fn code(conn: DuplexStream) {
+    let mut conn = tokio::io::BufReader::new(conn);
+    let Some(req) = request(&mut conn).await else {
+        return;
+    };
+    let first = req.to_string();
+    let mut frame = (first.len() as u32).to_be_bytes().to_vec();
+    frame.extend_from_slice(first.as_bytes());
+    if conn.write_all(&frame).await.is_err() {
+        return;
+    }
+    loop {
+        let mut len = [0u8; 4];
+        if conn.read_exact(&mut len).await.is_err() {
+            return;
+        }
+        let mut body = vec![0u8; u32::from_be_bytes(len) as usize];
+        if conn.read_exact(&mut body).await.is_err() {
+            return;
+        }
+        if conn.write_all(&len).await.is_err() || conn.write_all(&body).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// The process list as the agent serves it (crates/agent/src/procs.rs):
+/// JSON lines, one reply per request. PID 1, its init, is protected.
+async fn processes(conn: DuplexStream) {
+    let mut conn = tokio::io::BufReader::new(conn);
+    while let Some(req) = request(&mut conn).await {
+        let reply = match (req["op"].as_str(), req["pid"].as_i64()) {
+            (Some("list"), _) => serde_json::json!({
+                "cpus": 2,
+                "memory_bytes": 2147483648i64,
+                "processes": [
+                    {
+                        "pid": 1, "ppid": 0, "user": "root", "name": "systemd",
+                        "command": "/sbin/init", "state": "S", "cpu_percent": 0.5,
+                        "rss_bytes": 12345678, "threads": 1,
+                        "started": "2026-11-14T00:00:00Z", "protected": true,
+                    },
+                    {
+                        "pid": 42, "ppid": 1, "user": "dev", "name": "sleep",
+                        "command": "sleep 1000", "state": "S", "cpu_percent": 0.0,
+                        "rss_bytes": 1024, "threads": 1,
+                        "started": "2026-11-14T00:01:00Z",
+                    },
+                ],
+            }),
+            (Some("kill"), Some(1)) => serde_json::json!({ "error": "process 1 is protected" }),
+            (Some("kill"), _) => serde_json::json!({}),
+            (op, _) => serde_json::json!({ "error": format!("no op {op:?}") }),
+        };
+        if conn
+            .write_all(format!("{reply}\n").as_bytes())
+            .await
+            .is_err()
+        {
+            return;
+        }
     }
 }
 

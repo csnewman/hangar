@@ -1179,3 +1179,30 @@ pub async fn see_agent(store: &Store, p: &Principal, id: Uuid, session: &str) ->
     tx.commit().await?;
     Ok(())
 }
+
+/// Records someone reaching into an environment: a terminal, its editor,
+/// its desktop. It changes nothing, so it is recorded on its own, and a
+/// failure to record it is logged rather than refusing them.
+pub async fn record_access(
+    store: &Store,
+    actor: &crate::audit::Actor,
+    v: &View,
+    action: &'static str,
+    details: serde_json::Value,
+) {
+    let mut e = Event::new(action, "environment", v.row.id, &v.row.name)
+        .related("owner", v.row.owner_id)
+        .related("image", &v.row.image)
+        .details(details);
+    if let Some(w) = v.row.worker_id {
+        e = e.related("worker", w);
+    }
+    let done = async {
+        let mut tx = store.begin().await?;
+        audit::record(&mut tx, actor, e).await?;
+        tx.commit().await
+    };
+    if let Err(err) = done.await {
+        eprintln!("hangar-server: recording {action}: {err}");
+    }
+}

@@ -232,3 +232,17 @@ pub struct AgentSession {
     /// When its owner last looked at it.
     pub seen_at: Option<DateTime<Utc>>,
 }
+
+/// `editor_sessions`: a ticket or cookie for one environment's hosts, by
+/// its SHA-256, opened from a Hangar session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HostSession {
+    #[serde(with = "hex_bytes")]
+    pub token_hash: Vec<u8>,
+    #[serde(with = "hex_bytes")]
+    pub session_hash: Vec<u8>,
+    pub environment_id: Uuid,
+    /// A ticket, redeemed once for a cookie; else the cookie.
+    pub ticket: bool,
+    pub expires_at: DateTime<Utc>,
+}

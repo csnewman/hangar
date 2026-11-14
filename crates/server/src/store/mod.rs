@@ -9,6 +9,7 @@
 pub mod audit;
 mod catalog;
 pub mod environments;
+mod hosts;
 mod json;
 mod pg;
 pub mod report;

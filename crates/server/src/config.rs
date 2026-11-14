@@ -5,6 +5,8 @@
 
 use std::path::PathBuf;
 
+use crate::publichost::{Public, Style};
+
 /// Where the server keeps its state.
 #[derive(Debug, Clone)]
 pub enum Storage {
@@ -24,32 +26,12 @@ pub struct Config {
     pub bootstrap_token: Option<String>,
     /// The administrator made at start when there is none by that name.
     pub initial_admin: Option<(String, String)>,
-    /// Where Hangar is reached (`HANGAR_PUBLIC_URL`): its scheme, and its
-    /// host with any port.
+    /// Where Hangar is reached (`HANGAR_PUBLIC_URL`), and how its other
+    /// hosts are named after it (`HANGAR_HOST_STYLE`).
     pub public: Option<Public>,
     /// Whether the server is its own container registry: it is whenever it
     /// has a public URL, unless `HANGAR_REGISTRY_ENABLED` is false.
     pub registry: bool,
-}
-
-/// The public URL, split.
-#[derive(Debug, Clone)]
-pub struct Public {
-    pub scheme: String,
-    /// The host, with its port when it has one.
-    pub host: String,
-}
-
-impl Public {
-    /// Whether people reach Hangar over HTTPS.
-    pub fn secure(&self) -> bool {
-        self.scheme == "https"
-    }
-
-    /// The name of the host for label, under Hangar's: `<label>.<host>`.
-    pub fn name(&self, label: &str) -> String {
-        format!("{}.{}", label.to_lowercase(), self.host)
-    }
 }
 
 impl Config {
@@ -89,22 +71,11 @@ impl Config {
                 pw,
             )
         });
-        let public = match var("HANGAR_PUBLIC_URL") {
-            Some(url) => {
-                let (scheme, rest) = url
-                    .split_once("://")
-                    .ok_or_else(|| format!("HANGAR_PUBLIC_URL {url:?} is not a URL"))?;
-                let host = rest.split('/').next().unwrap_or_default().to_lowercase();
-                if host.is_empty() || !matches!(scheme, "http" | "https") {
-                    return Err(format!("HANGAR_PUBLIC_URL {url:?} is not an http(s) URL"));
-                }
-                Some(Public {
-                    scheme: scheme.into(),
-                    host,
-                })
-            }
-            None => None,
-        };
+        let style = Style::parse(&var("HANGAR_HOST_STYLE").unwrap_or_default())
+            .map_err(|e| format!("HANGAR_HOST_STYLE: {e}"))?;
+        let public = var("HANGAR_PUBLIC_URL")
+            .map(|url| Public::parse(&url, style).map_err(|e| format!("HANGAR_PUBLIC_URL: {e}")))
+            .transpose()?;
         let listen = var("HANGAR_LISTEN").unwrap_or_else(|| ":8081".into());
         let listen = match listen.strip_prefix(':') {
             Some(port) => format!("0.0.0.0:{port}"),

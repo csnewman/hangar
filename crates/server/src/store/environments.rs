@@ -88,6 +88,7 @@ pub(super) fn json_delete(work: &mut State, id: Uuid) {
     work.environments.retain(|e| e.id != id);
     work.environment_tasks.retain(|t| t.environment_id != id);
     work.agent_sessions.retain(|a| a.environment_id != id);
+    work.editor_sessions.retain(|s| s.environment_id != id);
 }
 
 impl Tx {

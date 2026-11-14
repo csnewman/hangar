@@ -7,6 +7,8 @@ mod environments;
 mod fail;
 mod http;
 mod placement;
+mod ports;
+mod publichost;
 mod store;
 mod teams;
 mod templates;

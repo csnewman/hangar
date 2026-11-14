@@ -55,6 +55,19 @@ impl Rules {
                 }
             }
         }
+        // The WebSockets, which the specs describe in words: each needs
+        // someone signed in who may reach the environment.
+        for prefix in ["/api/frontend", "/api/v1"] {
+            for socket in ["terminal", "code", "desktop"] {
+                r.insert(
+                    (
+                        Method::GET,
+                        format!("{prefix}/environments/{{id}}/{socket}"),
+                    ),
+                    Access::SignedIn,
+                );
+            }
+        }
         Rules(r)
     }
 

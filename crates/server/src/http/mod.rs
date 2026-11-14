@@ -8,6 +8,7 @@ mod catalog;
 mod client;
 mod environments;
 mod frontend;
+mod streams;
 mod worker;
 
 use std::sync::Arc;
@@ -55,14 +56,16 @@ pub fn router(app: Shared) -> Router {
             frontend::routes()
                 .merge(audit::frontend())
                 .merge(catalog::frontend())
-                .merge(environments::frontend()),
+                .merge(environments::frontend())
+                .merge(streams::frontend()),
         )
         .nest(
             "/api/v1",
             client::routes()
                 .merge(audit::client())
                 .merge(catalog::client())
-                .merge(environments::client()),
+                .merge(environments::client())
+                .merge(streams::client()),
         )
         .nest("/api/worker/v1", worker::routes())
         .route_layer(axum::middleware::from_fn_with_state(
@@ -70,7 +73,28 @@ pub fn router(app: Shared) -> Router {
             access::enforce,
         ))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "not found") })
+        .layer(axum::middleware::from_fn_with_state(app.clone(), hosts))
         .with_state(app)
+}
+
+/// Sends a request for a host of its own, one of an environment's web
+/// servers', there: everything on those hosts is the environment's.
+async fn hosts(
+    axum::extract::State(app): axum::extract::State<Shared>,
+    req: Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if let Some(public) = &app.cfg.public {
+        let host = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        if crate::ports::owns(public, host).is_some() {
+            return crate::ports::serve(app.clone(), req).await;
+        }
+    }
+    next.run(req).await
 }
 
 /// An answer refusing a request: its status and the spec's Error body.
@@ -225,16 +249,19 @@ impl Signed {
 /// The address a request came from: the first X-Forwarded-For, which the
 /// proxy in front sets, else the connection's.
 pub fn client_ip(parts: &Parts) -> String {
-    if let Some(first) = parts
-        .headers
+    client_ip_of(&parts.headers, &parts.extensions)
+}
+
+/// client_ip, of a request's headers and extensions.
+pub fn client_ip_of(headers: &HeaderMap, extensions: &axum::http::Extensions) -> String {
+    if let Some(first) = headers
         .get("x-forwarded-for")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(',').next())
     {
         return first.trim().to_string();
     }
-    parts
-        .extensions
+    extensions
         .get::<axum::extract::ConnectInfo<std::net::SocketAddr>>()
         .map(|c| c.0.ip().to_string())
         .unwrap_or_default()
