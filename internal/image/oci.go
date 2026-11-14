@@ -2,6 +2,11 @@ package image
 
 import (
 	"context"
+	// go-digest hashes with SHA-256 only when crypto/sha256 is linked into
+	// the program, and panics otherwise; nothing else in the hangar tool
+	// links it. Tests always do (testing's fuzzer uses it), so they cannot
+	// show it missing.
+	_ "crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
