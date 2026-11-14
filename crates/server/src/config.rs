@@ -19,6 +19,9 @@ pub struct Config {
     /// The address HTTP is served on (`HANGAR_LISTEN`, :8081 unless set).
     pub listen: String,
     pub storage: Storage,
+    /// The token a worker presents to register (`HANGAR_BOOTSTRAP_TOKEN`,
+    /// or the file `HANGAR_BOOTSTRAP_TOKEN_FILE` names).
+    pub bootstrap_token: Option<String>,
     /// The administrator made at start when there is none by that name.
     pub initial_admin: Option<(String, String)>,
     /// Where Hangar is reached (`HANGAR_PUBLIC_URL`): its scheme, and its
@@ -67,6 +70,19 @@ impl Config {
                 );
             }
         };
+        let bootstrap_token = match (
+            var("HANGAR_BOOTSTRAP_TOKEN"),
+            var("HANGAR_BOOTSTRAP_TOKEN_FILE"),
+        ) {
+            (Some(t), _) => Some(t),
+            (None, Some(f)) => Some(
+                std::fs::read_to_string(&f)
+                    .map_err(|e| format!("HANGAR_BOOTSTRAP_TOKEN_FILE: {e}"))?
+                    .trim()
+                    .to_string(),
+            ),
+            (None, None) => None,
+        };
         let initial_admin = var("HANGAR_INITIAL_ADMIN_PASSWORD").map(|pw| {
             (
                 var("HANGAR_INITIAL_ADMIN_USERNAME").unwrap_or_else(|| "admin".into()),
@@ -99,6 +115,7 @@ impl Config {
         Ok(Config {
             listen,
             storage,
+            bootstrap_token,
             initial_admin,
             public,
             registry,

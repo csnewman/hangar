@@ -10,7 +10,9 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
-use super::rows::{AccessToken, AuditEvent, Session, User};
+use super::rows::{
+    AccessToken, AuditEvent, Environment, EnvironmentRemoval, ImageRemoval, Session, User, Worker,
+};
 use super::{Error, Result};
 
 /// Everything the server keeps, as the Postgres tables hold it.
@@ -23,6 +25,10 @@ pub struct State {
     pub audit_events: Vec<AuditEvent>,
     /// The ID the next audit event takes, as Postgres's bigserial gives one.
     pub next_audit_id: i64,
+    pub workers: Vec<Worker>,
+    pub environments: Vec<Environment>,
+    pub worker_image_removals: Vec<ImageRemoval>,
+    pub worker_environment_removals: Vec<EnvironmentRemoval>,
 }
 
 /// The file, open.

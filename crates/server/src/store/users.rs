@@ -7,7 +7,7 @@ use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
 use super::rows::{AccessToken, AuditEvent, Session, User};
-use super::{Result, Tx};
+use super::{Backend, Result, Tx};
 
 const USER_COLUMNS: &str =
     "id, username, display_name, password_hash, is_admin, kind, disabled_at, created_at, theme";
@@ -41,8 +41,8 @@ fn token(r: &PgRow) -> Result<AccessToken> {
 impl Tx {
     /// Every person, by name, ignoring case.
     pub async fn people(&mut self) -> Result<Vec<User>> {
-        match self {
-            Tx::Pg(tx) => sqlx::query(&format!(
+        match &mut self.inner {
+            Backend::Pg(tx) => sqlx::query(&format!(
                 "SELECT {USER_COLUMNS} FROM users WHERE kind = 'person' ORDER BY lower(username)"
             ))
             .fetch_all(&mut **tx)
@@ -50,7 +50,7 @@ impl Tx {
             .iter()
             .map(user)
             .collect(),
-            Tx::Json(tx) => {
+            Backend::Json(tx) => {
                 let mut out: Vec<User> = tx
                     .work
                     .users
@@ -67,7 +67,7 @@ impl Tx {
     /// Holds every active administrator's row until the transaction ends, so
     /// two changes cannot each leave the other the last.
     pub async fn lock_admins(&mut self) -> Result<()> {
-        if let Tx::Pg(tx) = self {
+        if let Backend::Pg(tx) = &mut self.inner {
             sqlx::query(
                 "SELECT 1 FROM users WHERE is_admin AND disabled_at IS NULL ORDER BY id FOR UPDATE",
             )
@@ -79,13 +79,13 @@ impl Tx {
 
     /// How many administrators are not disabled.
     pub async fn active_admins(&mut self) -> Result<i64> {
-        match self {
-            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query_scalar(
                 "SELECT count(*) FROM users WHERE is_admin AND disabled_at IS NULL",
             )
             .fetch_one(&mut **tx)
             .await?),
-            Tx::Json(tx) => Ok(tx
+            Backend::Json(tx) => Ok(tx
                 .work
                 .users
                 .iter()
@@ -96,40 +96,40 @@ impl Tx {
 
     /// Whether a team has the slug name, ignoring case.
     pub async fn team_slug_taken(&mut self, name: &str) -> Result<bool> {
-        match self {
-            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query_scalar(
                 "SELECT EXISTS (SELECT 1 FROM teams WHERE lower(slug) = lower($1))",
             )
             .bind(name)
             .fetch_one(&mut **tx)
             .await?),
-            Tx::Json(_) => Ok(false),
+            Backend::Json(_) => Ok(false),
         }
     }
 
     /// How many environments a user owns.
     pub async fn owned_environments(&mut self, user_id: Uuid) -> Result<i64> {
-        match self {
-            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query_scalar(
                 "SELECT count(*) FROM environments WHERE owner_id = $1",
             )
             .bind(user_id)
             .fetch_one(&mut **tx)
             .await?),
-            Tx::Json(_) => Ok(0),
+            Backend::Json(_) => Ok(0),
         }
     }
 
     /// How many image repositories a user owns.
     pub async fn owned_image_repositories(&mut self, user_id: Uuid) -> Result<i64> {
-        match self {
-            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query_scalar(
                 "SELECT count(*) FROM image_repositories WHERE owner_id = $1",
             )
             .bind(user_id)
             .fetch_one(&mut **tx)
             .await?),
-            Tx::Json(_) => Ok(0),
+            Backend::Json(_) => Ok(0),
         }
     }
 
@@ -145,8 +145,8 @@ impl Tx {
         password_hash: Option<&str>,
         now: DateTime<Utc>,
     ) -> Result<Option<User>> {
-        match self {
-            Tx::Pg(tx) => sqlx::query(&format!(
+        match &mut self.inner {
+            Backend::Pg(tx) => sqlx::query(&format!(
                 "UPDATE users SET
                     display_name = coalesce($2, display_name),
                     is_admin = coalesce($3, is_admin),
@@ -167,7 +167,7 @@ impl Tx {
             .await?
             .map(|r| user(&r))
             .transpose(),
-            Tx::Json(tx) => {
+            Backend::Json(tx) => {
                 let Some(u) = tx
                     .work
                     .users
@@ -198,14 +198,14 @@ impl Tx {
     /// Deletes a person, and with them their sessions and tokens; gives
     /// their name, or None if there is no such person.
     pub async fn delete_user(&mut self, id: Uuid) -> Result<Option<String>> {
-        match self {
-            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query_scalar(
                 "DELETE FROM users WHERE id = $1 AND kind = 'person' RETURNING username",
             )
             .bind(id)
             .fetch_optional(&mut **tx)
             .await?),
-            Tx::Json(tx) => {
+            Backend::Json(tx) => {
                 let Some(at) = tx
                     .work
                     .users
@@ -225,8 +225,8 @@ impl Tx {
     /// Ends every session of a user's but the one whose token hashes to
     /// keep.
     pub async fn delete_sessions(&mut self, user_id: Uuid, keep: Option<&[u8]>) -> Result<()> {
-        match self {
-            Tx::Pg(tx) => {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
                 sqlx::query(
                     "DELETE FROM sessions WHERE user_id = $1 AND token_hash IS DISTINCT FROM $2",
                 )
@@ -235,7 +235,7 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Tx::Json(tx) => tx
+            Backend::Json(tx) => tx
                 .work
                 .sessions
                 .retain(|s| s.user_id != user_id || Some(s.token_hash.as_slice()) == keep),
@@ -245,8 +245,8 @@ impl Tx {
 
     /// The person named name, ignoring case.
     pub async fn person_by_name(&mut self, name: &str) -> Result<Option<User>> {
-        match self {
-            Tx::Pg(tx) => sqlx::query(&format!(
+        match &mut self.inner {
+            Backend::Pg(tx) => sqlx::query(&format!(
                 "SELECT {USER_COLUMNS} FROM users WHERE lower(username) = lower($1) AND kind = 'person'"
             ))
             .bind(name)
@@ -254,7 +254,7 @@ impl Tx {
             .await?
             .map(|r| user(&r))
             .transpose(),
-            Tx::Json(tx) => Ok(tx
+            Backend::Json(tx) => Ok(tx
                 .work
                 .users
                 .iter()
@@ -265,20 +265,22 @@ impl Tx {
 
     /// The user with id.
     pub async fn user(&mut self, id: Uuid) -> Result<Option<User>> {
-        match self {
-            Tx::Pg(tx) => sqlx::query(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"))
-                .bind(id)
-                .fetch_optional(&mut **tx)
-                .await?
-                .map(|r| user(&r))
-                .transpose(),
-            Tx::Json(tx) => Ok(tx.work.users.iter().find(|u| u.id == id).cloned()),
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                sqlx::query(&format!("SELECT {USER_COLUMNS} FROM users WHERE id = $1"))
+                    .bind(id)
+                    .fetch_optional(&mut **tx)
+                    .await?
+                    .map(|r| user(&r))
+                    .transpose()
+            }
+            Backend::Json(tx) => Ok(tx.work.users.iter().find(|u| u.id == id).cloned()),
         }
     }
 
     pub async fn insert_user(&mut self, u: &User) -> Result<()> {
-        match self {
-            Tx::Pg(tx) => {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
                 sqlx::query(&format!(
                     "INSERT INTO users ({USER_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"
                 ))
@@ -294,14 +296,14 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Tx::Json(tx) => tx.work.users.push(u.clone()),
+            Backend::Json(tx) => tx.work.users.push(u.clone()),
         }
         Ok(())
     }
 
     pub async fn insert_session(&mut self, s: &Session) -> Result<()> {
-        match self {
-            Tx::Pg(tx) => {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
                 sqlx::query(
                     "INSERT INTO sessions (token_hash, user_id, created_at, last_seen_at, expires_at)
                      VALUES ($1, $2, $3, $4, $5)",
@@ -314,7 +316,7 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Tx::Json(tx) => tx.work.sessions.push(s.clone()),
+            Backend::Json(tx) => tx.work.sessions.push(s.clone()),
         }
         Ok(())
     }
@@ -326,8 +328,8 @@ impl Tx {
         hash: &[u8],
         now: DateTime<Utc>,
     ) -> Result<Option<(User, Session)>> {
-        match self {
-            Tx::Pg(tx) => {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
                 let Some(r) = sqlx::query(&format!(
                     "SELECT {}, s.token_hash, s.user_id, s.created_at AS s_created_at, s.last_seen_at, s.expires_at
                      FROM sessions s JOIN users u ON u.id = s.user_id
@@ -354,7 +356,7 @@ impl Tx {
                 };
                 Ok(Some((user(&r)?, s)))
             }
-            Tx::Json(tx) => {
+            Backend::Json(tx) => {
                 let Some(s) = tx
                     .work
                     .sessions
@@ -380,8 +382,8 @@ impl Tx {
         now: DateTime<Utc>,
         expires: DateTime<Utc>,
     ) -> Result<()> {
-        match self {
-            Tx::Pg(tx) => {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
                 sqlx::query(
                     "UPDATE sessions SET last_seen_at = $2, expires_at = $3 WHERE token_hash = $1",
                 )
@@ -391,7 +393,7 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Tx::Json(tx) => {
+            Backend::Json(tx) => {
                 for s in tx.work.sessions.iter_mut().filter(|s| s.token_hash == hash) {
                     s.last_seen_at = now;
                     s.expires_at = expires;
@@ -403,14 +405,14 @@ impl Tx {
 
     /// Ends the session whose token hashes to hash, giving whose it was.
     pub async fn delete_session(&mut self, hash: &[u8]) -> Result<Option<Uuid>> {
-        match self {
-            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query_scalar(
                 "DELETE FROM sessions WHERE token_hash = $1 RETURNING user_id",
             )
             .bind(hash)
             .fetch_optional(&mut **tx)
             .await?),
-            Tx::Json(tx) => {
+            Backend::Json(tx) => {
                 let at = tx.work.sessions.iter().position(|s| s.token_hash == hash);
                 Ok(at.map(|i| tx.work.sessions.remove(i).user_id))
             }
@@ -418,8 +420,8 @@ impl Tx {
     }
 
     pub async fn insert_token(&mut self, t: &AccessToken) -> Result<()> {
-        match self {
-            Tx::Pg(tx) => {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
                 sqlx::query(
                     "INSERT INTO access_tokens (id, user_id, name, token_hash, created_at, last_used_at, expires_at)
                      VALUES ($1, $2, $3, $4, $5, $6, $7)",
@@ -434,7 +436,7 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Tx::Json(tx) => tx.work.access_tokens.push(t.clone()),
+            Backend::Json(tx) => tx.work.access_tokens.push(t.clone()),
         }
         Ok(())
     }
@@ -446,8 +448,8 @@ impl Tx {
         hash: &[u8],
         now: DateTime<Utc>,
     ) -> Result<Option<(User, AccessToken)>> {
-        let t = match self {
-            Tx::Pg(tx) => sqlx::query(
+        let t = match &mut self.inner {
+            Backend::Pg(tx) => sqlx::query(
                 "SELECT id, user_id, name, token_hash, created_at, last_used_at, expires_at
                  FROM access_tokens WHERE token_hash = $1 AND (expires_at IS NULL OR expires_at > $2)",
             )
@@ -457,7 +459,7 @@ impl Tx {
             .await?
             .map(|r| token(&r))
             .transpose()?,
-            Tx::Json(tx) => tx
+            Backend::Json(tx) => tx
                 .work
                 .access_tokens
                 .iter()
@@ -474,15 +476,15 @@ impl Tx {
 
     /// Marks a token used at `now`.
     pub async fn touch_token(&mut self, id: Uuid, now: DateTime<Utc>) -> Result<()> {
-        match self {
-            Tx::Pg(tx) => {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
                 sqlx::query("UPDATE access_tokens SET last_used_at = $2 WHERE id = $1")
                     .bind(id)
                     .bind(now)
                     .execute(&mut **tx)
                     .await?;
             }
-            Tx::Json(tx) => {
+            Backend::Json(tx) => {
                 for t in tx.work.access_tokens.iter_mut().filter(|t| t.id == id) {
                     t.last_used_at = Some(now);
                 }
@@ -493,8 +495,8 @@ impl Tx {
 
     /// A user's access tokens, newest first.
     pub async fn tokens_of(&mut self, user_id: Uuid) -> Result<Vec<AccessToken>> {
-        match self {
-            Tx::Pg(tx) => sqlx::query(
+        match &mut self.inner {
+            Backend::Pg(tx) => sqlx::query(
                 "SELECT id, user_id, name, token_hash, created_at, last_used_at, expires_at
                  FROM access_tokens WHERE user_id = $1 ORDER BY created_at DESC",
             )
@@ -504,7 +506,7 @@ impl Tx {
             .iter()
             .map(token)
             .collect(),
-            Tx::Json(tx) => {
+            Backend::Json(tx) => {
                 let mut out: Vec<AccessToken> = tx
                     .work
                     .access_tokens
@@ -520,8 +522,8 @@ impl Tx {
 
     /// Revokes a user's access token, giving it if there was one.
     pub async fn delete_token(&mut self, user_id: Uuid, id: Uuid) -> Result<Option<AccessToken>> {
-        match self {
-            Tx::Pg(tx) => sqlx::query(
+        match &mut self.inner {
+            Backend::Pg(tx) => sqlx::query(
                 "DELETE FROM access_tokens WHERE user_id = $1 AND id = $2
                  RETURNING id, user_id, name, token_hash, created_at, last_used_at, expires_at",
             )
@@ -531,7 +533,7 @@ impl Tx {
             .await?
             .map(|r| token(&r))
             .transpose(),
-            Tx::Json(tx) => {
+            Backend::Json(tx) => {
                 let at = tx
                     .work
                     .access_tokens
@@ -544,8 +546,8 @@ impl Tx {
 
     /// Records an audit event; its ID is the store's to give.
     pub async fn record(&mut self, e: AuditEvent) -> Result<()> {
-        match self {
-            Tx::Pg(tx) => {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
                 sqlx::query(
                     "INSERT INTO audit_events
                      (at, actor_user, actor_worker, actor_name, source_ip, action, target_type, target_id, target_name, subjects, details)
@@ -565,7 +567,7 @@ impl Tx {
                 .execute(&mut **tx)
                 .await?;
             }
-            Tx::Json(tx) => {
+            Backend::Json(tx) => {
                 tx.work.next_audit_id += 1;
                 let id = tx.work.next_audit_id;
                 tx.work.audit_events.push(AuditEvent { id, ..e });

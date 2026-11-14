@@ -6,7 +6,9 @@ mod config;
 mod fail;
 mod http;
 mod store;
+mod tunnel;
 mod users;
+mod workers;
 
 use std::process::ExitCode;
 use std::sync::Arc;

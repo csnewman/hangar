@@ -5,6 +5,7 @@
 mod access;
 mod client;
 mod frontend;
+mod worker;
 
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ pub struct App {
     pub store: Store,
     pub cfg: Config,
     pub rules: access::Rules,
+    pub tunnels: crate::tunnel::Tunnels,
 }
 
 impl App {
@@ -34,6 +36,7 @@ impl App {
             store,
             cfg,
             rules: access::Rules::from_specs(),
+            tunnels: crate::tunnel::Tunnels::default(),
         }
     }
 }
@@ -46,6 +49,7 @@ pub fn router(app: Shared) -> Router {
         .route("/api/healthz", get(|| async { "ok" }))
         .nest("/api/frontend", frontend::routes())
         .nest("/api/v1", client::routes())
+        .nest("/api/worker/v1", worker::routes())
         .route_layer(axum::middleware::from_fn_with_state(
             app.clone(),
             access::enforce,

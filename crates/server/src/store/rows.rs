@@ -85,3 +85,76 @@ mod hex_bytes {
             .collect()
     }
 }
+
+/// `workers`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Worker {
+    pub id: Uuid,
+    pub name: String,
+    #[serde(with = "hex_bytes")]
+    pub credential_hash: Vec<u8>,
+    /// Its labels, a JSON object of strings.
+    pub labels: serde_json::Value,
+    pub cpus: i32,
+    pub memory_mib: i32,
+    /// Environments it reports that have no row: a JSON array of IDs.
+    pub unknown: serde_json::Value,
+    pub stats: Option<serde_json::Value>,
+    pub images: serde_json::Value,
+    pub gpu: Option<serde_json::Value>,
+    /// Bumped with every change to what it is asked to run.
+    pub desired_version: i64,
+    pub last_seen_at: Option<DateTime<Utc>>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub monitor: String,
+    pub suspends: bool,
+}
+
+/// `environments`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Environment {
+    pub id: Uuid,
+    pub short_id: String,
+    pub owner_id: Uuid,
+    pub name: String,
+    pub template_id: Option<Uuid>,
+    pub template_name: String,
+    pub template_revision: i64,
+    /// What it runs: hangar_api's Spec.
+    pub spec: serde_json::Value,
+    pub image: String,
+    pub image_digest: String,
+    pub image_pin_want: Option<String>,
+    pub image_drop_rollback: bool,
+    pub image_update: Option<serde_json::Value>,
+    pub image_rollback: Option<serde_json::Value>,
+    pub ports_public: bool,
+    pub cpus: i32,
+    pub memory_mib: i32,
+    /// running, stopped, suspended or deleted.
+    pub desired: String,
+    pub worker_id: Option<Uuid>,
+    pub phase: String,
+    pub reason: String,
+    pub stats: Option<serde_json::Value>,
+    pub progress: Option<serde_json::Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// `worker_image_removals`: a copy of an image a worker is to delete.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ImageRemoval {
+    pub worker_id: Uuid,
+    pub r#ref: String,
+    pub digest: String,
+}
+
+/// `worker_environment_removals`: an environment a worker holds and is to
+/// forget.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnvironmentRemoval {
+    pub worker_id: Uuid,
+    pub environment: String,
+}

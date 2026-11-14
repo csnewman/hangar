@@ -25,6 +25,71 @@ pub fn routes() -> Router<Shared> {
             "/users/{id}",
             axum::routing::patch(update_user).delete(delete_user),
         )
+        .route("/workers", get(list_workers))
+        .route("/workers/{id}", get(get_worker).delete(delete_worker))
+        .route("/workers/{id}/revoke", post(revoke_worker))
+}
+
+/// A worker as the web UI shows it.
+fn worker_of(l: &crate::store::workers::Listed) -> Result<types::Worker, ApiError> {
+    let w = &l.worker;
+    let monitor = (!w.monitor.is_empty()).then(|| w.monitor.clone());
+    spec(serde_json::json!({
+        "id": w.id.to_string(),
+        "name": w.name,
+        "labels": w.labels,
+        "capacity": { "cpus": w.cpus, "memory_mib": w.memory_mib },
+        "allocated": { "cpus": l.allocated_cpus, "memory_mib": l.allocated_memory_mib },
+        "unknown": w.unknown,
+        "last_seen_at": w.last_seen_at,
+        "revoked": w.revoked_at.is_some(),
+        "online": crate::workers::online(w),
+        "created_at": w.created_at,
+        "stats": w.stats,
+        "images": w.images,
+        "gpu": w.gpu,
+        "monitor": monitor,
+        "pending_removals": l.removals.iter()
+            .map(|r| serde_json::json!({ "ref": r.r#ref, "digest": r.digest }))
+            .collect::<Vec<_>>(),
+    }))
+}
+
+fn worker_id(id: &str) -> Result<uuid::Uuid, ApiError> {
+    uuid::Uuid::parse_str(id).map_err(|_| ApiError::not_found("worker"))
+}
+
+async fn list_workers(State(app): State<Shared>) -> Result<Json<Vec<types::Worker>>, ApiError> {
+    let ws = crate::workers::list(&app.store).await?;
+    Ok(Json(ws.iter().map(worker_of).collect::<Result<_, _>>()?))
+}
+
+async fn get_worker(
+    State(app): State<Shared>,
+    Path(id): Path<String>,
+) -> Result<Json<types::Worker>, ApiError> {
+    let w = crate::workers::get(&app.store, worker_id(&id)?)
+        .await?
+        .ok_or_else(|| ApiError::not_found("worker"))?;
+    Ok(Json(worker_of(&w)?))
+}
+
+async fn revoke_worker(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    crate::workers::revoke(&app.store, &s.principal, &s.ip, worker_id(&id)?).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_worker(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    crate::workers::delete(&app.store, &s.principal, &s.ip, worker_id(&id)?).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn user_of(l: &users::Listed) -> types::User {
