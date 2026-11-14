@@ -22,7 +22,7 @@ use std::time::Duration;
 use futures_util::{SinkExt, StreamExt};
 use hangar_vm::log::Log;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::protocol::WebSocketConfig;
@@ -153,7 +153,16 @@ where
         };
         let handle = handle.clone();
         tokio::spawn(async move {
-            let mut r = BufReader::new(stream.compat());
+            let mut s = stream.compat();
+            // The server's yamux closes the whole tunnel when a stream it
+            // opened goes unacknowledged for 75 seconds, and opens no more
+            // while 256 wait; this end acknowledges with a stream's first
+            // frame. An empty write sends that frame at once, whether or
+            // not anything goes back on the stream later.
+            if s.write(&[]).await.is_err() {
+                return;
+            }
+            let mut r = BufReader::new(s);
             let mut line = Vec::new();
             match r.read_until(b'\n', &mut line).await {
                 Ok(n) if n > 0 && line.ends_with(b"\n") => {}

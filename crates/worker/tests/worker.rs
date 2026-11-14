@@ -349,6 +349,15 @@ impl Runtime for Fake {
     }
 
     async fn dial(&self, id: &str, port: u32) -> io::Result<DuplexStream> {
+        // A guest that says nothing and keeps its end open.
+        if id == "quiet" {
+            let (a, b) = tokio::io::duplex(1 << 16);
+            tokio::spawn(async move {
+                let _held = b;
+                std::future::pending::<()>().await
+            });
+            return Ok(a);
+        }
         if id != "e1" {
             return Err(io::Error::other(format!(
                 "environment {id} is not on this worker"
@@ -425,6 +434,29 @@ fn trace() {
         let _ = log::set_logger(&TestLog);
         log::set_max_level(log::LevelFilter::Trace);
     }
+}
+
+// The server's yamux closes the tunnel over a stream it opened that is not
+// acknowledged in time, and waits once 256 are: each is acknowledged as it
+// arrives, though nothing goes back on it. Here more than 256 stay open to
+// a guest that says nothing.
+#[tokio::test]
+async fn acknowledges_streams_at_once() {
+    let (srv, url) = Server::start().await;
+    let dir = scratch("quiet");
+    let w = Worker::new(config(&url, &dir), Fake::default(), Log::default(), None).unwrap();
+    let run = tokio::spawn(w.run());
+    let mut held = Vec::new();
+    for i in 0..300 {
+        held.push(
+            within(
+                &format!("opening stream {i}"),
+                srv.open("terminal", "quiet"),
+            )
+            .await,
+        );
+    }
+    run.abort();
 }
 
 /// Waits for f, for up to ten seconds, saying what for.
