@@ -178,6 +178,29 @@ jobs:
         env:
           HANGAR_REQUIRE_CODEMIRROR: 1
 
+  crates-macos:
+    # The crates a Mac's worker is built from, on macOS: the Linux build
+    # above never compiles their macOS halves.
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: crates
+    env:
+      PACKAGES: >-
+        -p hangar-worker -p hangar-vm -p hangar-images -p hangar-nfs
+        -p hangar-erofs -p hangar-ext4 -p hangar-layercheck -p hangar-api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+          key: macos
+      - run: cargo clippy $PACKAGES --all-targets -- -D warnings
+      - run: cargo test $PACKAGES
+
   nfs:
     # pjdfstest against the shared files' NFS server through Linux's own
     # client, in each squash mode (dev/pjdfstest-tcp.sh).
