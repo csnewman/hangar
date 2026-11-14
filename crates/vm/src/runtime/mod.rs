@@ -22,6 +22,7 @@ mod upgrade;
 use std::collections::{BTreeMap, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -1542,10 +1543,20 @@ impl Machine {
         }
         let start = Instant::now();
         if let Err(e) = crate::hugepages::compact_memory() {
-            self.log.warn(
-                "compacting the host's memory for the guest's huge pages",
-                &[("err", &e)],
-            );
+            // A container that is not privileged has /proc/sys read-only,
+            // which no later boot changes: said once, with what stands in.
+            static READ_ONLY_SAID: AtomicBool = AtomicBool::new(false);
+            if e.kind() != io::ErrorKind::ReadOnlyFilesystem {
+                self.log.warn(
+                    "compacting the host's memory for the guest's huge pages",
+                    &[("err", &e)],
+                );
+            } else if !READ_ONLY_SAID.swap(true, Ordering::Relaxed) {
+                self.log.warn(
+                    "the host's memory cannot be compacted from here (/proc/sys is read-only), so its vm.compaction_proactiveness and vm.min_free_kbytes keep blocks free for the guests' huge pages",
+                    &[],
+                );
+            }
             return;
         }
         let after = crate::hugepages::free_huge_blocks_mib().unwrap_or(0);
