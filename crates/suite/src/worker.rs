@@ -16,6 +16,12 @@ use hangar_worker::{Runtime, Worker as RealWorker};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio::sync::Notify;
 
+/// The vsock port the agent reaches the guest's own TCP ports on.
+const GUEST_PORTS: u32 = 108;
+
+/// The guest ports the suite's guests serve a web page on.
+pub const WEB_PORTS: [u16; 2] = [80, 8080];
+
 /// The label a template's placement names to land on the suite's workers.
 pub const LABEL: (&str, &str) = ("runtime", "fake");
 
@@ -158,6 +164,10 @@ impl Runtime for Machines {
             return Err(io::Error::other(format!("environment {id} is not running")));
         }
         let (ours, mut guest) = tokio::io::duplex(1 << 16);
+        if port == GUEST_PORTS {
+            tokio::spawn(guest_ports(guest));
+            return Ok(ours);
+        }
         tokio::spawn(async move {
             let _ = guest.write_all(format!("port {port}\n").as_bytes()).await;
             let mut buf = [0u8; 4096];
@@ -180,4 +190,46 @@ impl Runtime for Machines {
     fn monitor(&self) -> (String, bool) {
         ("krun".into(), true)
     }
+}
+
+/// Answers one connection to the guest's TCP ports as the agent does
+/// (crates/agent/src/guestport.rs): the port, two bytes big-endian, then a
+/// byte, 0 connected or 1 refused. A WEB_PORTS port answers each HTTP
+/// request with a page naming the port and the request's host and path.
+async fn guest_ports(mut conn: DuplexStream) {
+    let mut port = [0u8; 2];
+    if conn.read_exact(&mut port).await.is_err() {
+        return;
+    }
+    let port = u16::from_be_bytes(port);
+    if !WEB_PORTS.contains(&port) {
+        let _ = conn.write_all(&[1]).await;
+        return;
+    }
+    if conn.write_all(&[0]).await.is_err() {
+        return;
+    }
+    let mut request = Vec::new();
+    let mut buf = [0u8; 4096];
+    while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+        match conn.read(&mut buf).await {
+            Ok(0) | Err(_) => return,
+            Ok(n) => request.extend_from_slice(&buf[..n]),
+        }
+    }
+    let text = String::from_utf8_lossy(&request);
+    let path = text.split_whitespace().nth(1).unwrap_or("/");
+    let host = text
+        .lines()
+        .find_map(|l| {
+            l.strip_prefix("Host: ")
+                .or_else(|| l.strip_prefix("host: "))
+        })
+        .unwrap_or("");
+    let page = format!("guest port {port}, {host}, {path}");
+    let response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{page}",
+        page.len()
+    );
+    let _ = conn.write_all(response.as_bytes()).await;
 }

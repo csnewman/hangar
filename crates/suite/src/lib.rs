@@ -138,6 +138,32 @@ impl Server {
             .expect("an HTTP client")
     }
 
+    /// As http, also reaching names, hosts of the server's environments,
+    /// and following no redirect, so a test sees where it is sent.
+    pub fn http_to(&self, names: &[&str]) -> reqwest::Client {
+        let addr = SocketAddr::from(([127, 0, 0, 1], self.port));
+        let mut b = hangar_openapi::http_client()
+            .expect("TLS")
+            .resolve(HOST, addr)
+            .cookie_store(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(30));
+        for name in names {
+            b = b.resolve(name, addr);
+        }
+        b.build().expect("an HTTP client")
+    }
+
+    /// An environment's host on the server, under name: `<name>-env<short>`.
+    pub fn environment_host(&self, name: &str, short: &str) -> String {
+        format!("{name}-env{short}.{HOST}")
+    }
+
+    /// The server's port.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
     /// The web UI's API, signed in as no one.
     pub fn frontend(&self) -> frontendapi::Client {
         frontendapi::Client::new_with_client(&self.url(), self.http())
