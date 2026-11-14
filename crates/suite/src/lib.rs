@@ -7,6 +7,8 @@
 //! Without `HANGAR_SUITE_SERVER`, or without `HANGAR_TEST_DATABASE_URL` (a
 //! Postgres to make each server's database on, as the Go tests' dbtest
 //! has), `Server::start` gives None and a test passes over its checks.
+//! `HANGAR_SUITE_STORAGE=json` gives each server a JSON state file
+//! (`HANGAR_STATE_FILE`, the Rust server's) and needs no Postgres.
 //! Blobs go to `HANGAR_SUITE_BLOB_URL`, the dev stack's RustFS unless set.
 
 use std::fs;
@@ -42,7 +44,7 @@ pub struct Server {
     ssh_port: u16,
     dir: PathBuf,
     log: PathBuf,
-    _database: Database,
+    _database: Option<Database>,
 }
 
 /// A database of the suite's, dropped when this goes, whatever becomes of
@@ -63,15 +65,17 @@ impl Server {
     /// server or database to start one with.
     pub fn start() -> Option<Server> {
         let bin = std::env::var("HANGAR_SUITE_SERVER").ok()?;
-        let admin_db = std::env::var("HANGAR_TEST_DATABASE_URL").ok()?;
+        let json = std::env::var("HANGAR_SUITE_STORAGE").is_ok_and(|s| s == "json");
+        let admin_db = match json {
+            true => None,
+            false => Some(std::env::var("HANGAR_TEST_DATABASE_URL").ok()?),
+        };
         let blobs =
             std::env::var("HANGAR_SUITE_BLOB_URL").unwrap_or_else(|_| DEFAULT_BLOB_URL.into());
-        let name = unique("hangar_suite");
-        let db_url = create_database(&admin_db, &name);
-        let database = Database {
-            admin: admin_db,
-            name,
-        };
+        let database = admin_db.map(|admin| Database {
+            name: unique("hangar_suite"),
+            admin,
+        });
         let dir = std::env::temp_dir().join(unique("hangar-suite"));
         fs::create_dir_all(dir.join("files")).expect("the server's directory");
         let key = dir.join("secret-key");
@@ -83,12 +87,16 @@ impl Server {
         let (port, ssh_port) = (free_port(), free_port());
         let log = dir.join("server.log");
         let out = fs::File::create(&log).expect("the server's log");
-        let child = Command::new(&bin)
-            .env_clear()
+        let mut cmd = Command::new(&bin);
+        cmd.env_clear();
+        match &database {
+            Some(db) => cmd.env("HANGAR_DATABASE_URL", create_database(&db.admin, &db.name)),
+            None => cmd.env("HANGAR_STATE_FILE", dir.join("state.json")),
+        };
+        let child = cmd
             .env("PATH", std::env::var("PATH").unwrap_or_default())
             .env("HOME", &dir)
             .env("HANGAR_LISTEN", format!("127.0.0.1:{port}"))
-            .env("HANGAR_DATABASE_URL", &db_url)
             .env("HANGAR_BOOTSTRAP_TOKEN", BOOTSTRAP_TOKEN)
             .env("HANGAR_INITIAL_ADMIN_USERNAME", ADMIN)
             .env("HANGAR_INITIAL_ADMIN_PASSWORD", ADMIN_PASSWORD)
