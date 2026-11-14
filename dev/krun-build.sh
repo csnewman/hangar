@@ -47,7 +47,7 @@
 # library, until the Rust one has run Linux machines.
 set -eu
 krunRepo=https://github.com/csnewman/libkrun.git
-krunHangar=557ab0a29b0858efb0af4d63e151322262460036
+krunHangar=eef3aaa86a025ad6d1341e71771e583d26525bc9
 repo=$(cd "$(dirname "$0")/.." && pwd)
 if [ "${1:-}" = linux ]; then
     exec limactl shell hangar sh "$repo/dev/krun-build.sh" in-vm "${2:-}"
