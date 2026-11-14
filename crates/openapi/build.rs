@@ -11,8 +11,9 @@
 //! - The client API is versioned, and a client "treats an enum value it does
 //!   not know as the description says" (its compatibility rule). progenitor's
 //!   enums refuse an unknown value, so the client API's string enums are
-//!   generated as strings, their values kept in the docs. The web UI's API
-//!   ships with its UI and keeps strict enums.
+//!   generated as strings, their values kept in the docs, and its integers'
+//!   bounds are the server's to check; every client type then derives
+//!   Default. The web UI's API ships with its UI and keeps strict enums.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -57,6 +58,11 @@ fn generate(spec: &Path, out: &str, second: &[(&str, &str)], open_enums: bool) {
     settings
         .with_interface(progenitor::InterfaceStyle::Positional)
         .with_derive("PartialEq");
+    // With its enums strings, every client API type can start from
+    // nothing: what a test, or a request, does not set.
+    if open_enums {
+        settings.with_derive("Default");
+    }
     let tokens = progenitor::Generator::new(&settings)
         .generate_tokens(&api)
         .unwrap_or_else(|e| panic!("{name}: {e}"));
@@ -130,10 +136,15 @@ fn body(response: &Value, shared: &Value) -> String {
 }
 
 /// Makes every string enum in doc a string, its values said in its
-/// description.
+/// description, and leaves numbers' bounds to the server: typify makes a
+/// bounded integer a `NonZeroU64` or `u64`, which nothing can start from.
 fn open(doc: &mut Value) {
     match doc {
         Value::Object(map) => {
+            if map.get("type").and_then(Value::as_str) == Some("integer") {
+                map.remove("minimum");
+                map.remove("maximum");
+            }
             if map.get("type").and_then(Value::as_str) == Some("string")
                 && let Some(Value::Array(values)) = map.remove("enum")
             {
