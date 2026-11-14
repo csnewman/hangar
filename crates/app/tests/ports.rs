@@ -78,15 +78,15 @@ fn environment(public: bool) -> Environment {
         cpus: None,
         memory_mib: None,
         editor_path: Some("/home/dev".into()),
-        ports_public: public,
+        ports_public: Some(public),
         display: None,
         image_update: None,
         web_names: vec!["docs".into()],
-        details: Default::default(),
         task: None,
         agents: vec![],
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        ..Default::default()
     }
 }
 

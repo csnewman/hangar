@@ -34,15 +34,15 @@ fn running() -> Environment {
         cpus: None,
         memory_mib: None,
         editor_path: Some("/home/dev".into()),
-        ports_public: false,
+        ports_public: Some(false),
         display: None,
         image_update: None,
         web_names: vec![],
-        details: Default::default(),
         task: None,
         agents: vec![],
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        ..Default::default()
     }
 }
 
@@ -104,7 +104,7 @@ fn serve(tcp: TcpStream, ended: Sender<String>) {
     let (status, body) = match (method, path) {
         ("GET", "/api/v1/environments/e1/terminals") => (
             "200 OK",
-            r#"[{"id":"s1","title":"s1","created_at":"2026-11-07T10:00:00Z"},{"id":"s2","title":"s2","created_at":"2026-11-07T10:01:00Z"}]"#,
+            r#"[{"id":"s1","title":"s1","created_at":"2026-11-07T10:00:00Z","clients":0,"cols":80,"rows":24},{"id":"s2","title":"s2","created_at":"2026-11-07T10:01:00Z","clients":0,"cols":80,"rows":24}]"#,
         ),
         ("DELETE", p) if p.starts_with("/api/v1/environments/e1/terminals/") => {
             ended.send(p.to_string()).unwrap();

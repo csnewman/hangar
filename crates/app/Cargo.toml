@@ -26,7 +26,11 @@ serde.workspace = true
 serde_json.workspace = true
 base64.workspace = true
 chrono = { version = "0.4", default-features = false, features = ["std", "clock", "serde"] }
-ureq = { version = "3", features = ["json", "platform-verifier"] }
+hangar-openapi = { path = "../openapi" }
+reqwest = { version = "0.13", default-features = false }
+tokio.workspace = true
+bytes = "1"
+futures-core = "0.3"
 dirs = "6"
 tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }

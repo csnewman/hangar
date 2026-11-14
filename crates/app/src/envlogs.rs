@@ -191,7 +191,7 @@ impl LogsView {
             Some(_) => {}
         }
         self.next = Some(part.next);
-        let empty = if part.missing {
+        let empty = if part.missing.unwrap_or_default() {
             "There is no such log here yet."
         } else {
             "Nothing logged yet."

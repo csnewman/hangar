@@ -119,10 +119,10 @@ pub fn saved(env: &Environment) -> MachineSettings {
         cpus: env.cpus.unwrap_or(1),
         memory_mib: env.memory_mib.unwrap_or(1024),
         display: env.display.clone().unwrap_or_else(|| "none".into()),
-        gpu: env.details.gpu.clone().unwrap_or_else(|| "none".into()),
-        dax: env.details.dax,
-        swap_mib: env.details.swap_mib,
-        memory_reclaim: env.details.memory_reclaim,
+        gpu: env.gpu.clone().unwrap_or_else(|| "none".into()),
+        dax: Some(env.dax.unwrap_or_default()),
+        swap_mib: env.swap_mib,
+        memory_reclaim: Some(env.memory_reclaim.unwrap_or_default()),
     }
 }
 
@@ -151,7 +151,7 @@ pub fn changes(from: &MachineSettings, to: &MachineSettings) -> Vec<String> {
         out.push(format!("GPU {} → {}", from.gpu, to.gpu));
     }
     if from.dax != to.dax {
-        let way = |d| if d { "mapped" } else { "read in" };
+        let way = |d: Option<bool>| if d == Some(true) { "mapped" } else { "read in" };
         out.push(format!("image files {} → {}", way(from.dax), way(to.dax)));
     }
     if from.swap_mib != to.swap_mib {
@@ -162,7 +162,13 @@ pub fn changes(from: &MachineSettings, to: &MachineSettings) -> Vec<String> {
         ));
     }
     if from.memory_reclaim != to.memory_reclaim {
-        let way = |r| if r { "handed back" } else { "kept" };
+        let way = |r: Option<bool>| {
+            if r == Some(true) {
+                "handed back"
+            } else {
+                "kept"
+            }
+        };
         out.push(format!(
             "idle memory {} → {}",
             way(from.memory_reclaim),
@@ -293,9 +299,9 @@ impl EnvSettingsView {
             memory_mib: 1024,
             display: "none".into(),
             gpu: "none".into(),
-            dax: false,
+            dax: Some(false),
             swap_mib: None,
-            memory_reclaim: false,
+            memory_reclaim: Some(false),
         });
         let input = |value: String, window: &mut Window, cx: &mut Context<Self>| {
             cx.new(|cx| {
@@ -364,8 +370,8 @@ impl EnvSettingsView {
             live,
             display: base.display.clone(),
             gpu: base.gpu.clone(),
-            dax: base.dax,
-            reclaim: base.memory_reclaim,
+            dax: base.dax.unwrap_or_default(),
+            reclaim: base.memory_reclaim.unwrap_or_default(),
             swap: match base.swap_mib {
                 None => SwapWay::Default,
                 Some(0) => SwapWay::None,
@@ -373,7 +379,9 @@ impl EnvSettingsView {
             },
             swap_size,
             task,
-            ports_public: e.as_ref().is_some_and(|e| e.ports_public),
+            ports_public: e
+                .as_ref()
+                .is_some_and(|e| e.ports_public.unwrap_or_default()),
             copies: HashMap::new(),
             packs: None,
             sizes: vec![],
@@ -533,9 +541,9 @@ impl EnvSettingsView {
             memory_mib,
             display: self.display.clone(),
             gpu: self.gpu.clone(),
-            dax: self.dax,
+            dax: Some(self.dax),
             swap_mib,
-            memory_reclaim: self.reclaim,
+            memory_reclaim: Some(self.reclaim),
         })
     }
 
@@ -548,7 +556,7 @@ impl EnvSettingsView {
             Ok(d) => changes(&saved(&env), &d),
             Err(_) => vec!["the machine".into()],
         };
-        if self.ports_public != env.ports_public {
+        if self.ports_public != env.ports_public.unwrap_or_default() {
             out.push(format!(
                 "ports {}",
                 if self.ports_public {
@@ -594,7 +602,8 @@ impl EnvSettingsView {
             }
         };
         let machine = (machine != saved(&env)).then_some(machine);
-        let ports = (self.ports_public != env.ports_public).then_some(self.ports_public);
+        let ports = (self.ports_public != env.ports_public.unwrap_or_default())
+            .then_some(self.ports_public);
         let text = self.task.read(cx).value().trim().to_string();
         let had = env
             .task
@@ -915,7 +924,7 @@ impl EnvSettingsView {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let d = &env.details;
+        let d = env;
         let digest = |s: &str| {
             s.strip_prefix("sha256:")
                 .unwrap_or(s)
@@ -1005,7 +1014,7 @@ impl EnvSettingsView {
             .get(&self.place)
             .map(|(c, _)| c.name.clone())
             .unwrap_or_default();
-        let most = self.sizes.first().copied();
+        let most = self.sizes.first().cloned();
         let mut memory_part = v_flex().gap(px(4.));
         if let Some((min, max)) = live {
             let now = self.live.read(cx).value().end().round() as i64;
@@ -1034,10 +1043,10 @@ impl EnvSettingsView {
                 let mut used = format!(
                     "In use {} · on the host {}",
                     memory(s.memory_used_mib),
-                    memory(s.host_memory_mib)
+                    memory(s.host_memory_mib.unwrap_or_default())
                 );
-                if s.swap_used_mib > 0 {
-                    used.push_str(&format!(" · swapped {}", memory(s.swap_used_mib)));
+                if let Some(swapped) = s.swap_used_mib.filter(|&m| m > 0) {
+                    used.push_str(&format!(" · swapped {}", memory(swapped)));
                 }
                 used.push_str(". It can't go below what its programs use plus 512 MB.");
                 memory_part = memory_part.child(note(&used, p));
@@ -1053,7 +1062,7 @@ impl EnvSettingsView {
                                 .child(Input::new(&self.memory).small().disabled(fixed)),
                         )
                         .child("GB")
-                        .when_some(most, |d, m| {
+                        .when_some(most.clone(), |d, m| {
                             d.child(div().text_color(p.muted).child(format!(
                                 "up to {} on the largest worker",
                                 memory(m.memory_mib)
@@ -1095,7 +1104,7 @@ impl EnvSettingsView {
                     },
                 ))
             };
-        let passthrough = env.details.gpu.as_deref() == Some("passthrough");
+        let passthrough = env.gpu.as_deref() == Some("passthrough");
         let reclaim_live = live_reclaim(env);
         let hint = if changeable(env) {
             "They apply when it next starts."
@@ -1107,7 +1116,6 @@ impl EnvSettingsView {
             "Stop it to change these. They apply when it next starts."
         };
         let placement: Vec<String> = env
-            .details
             .placement
             .iter()
             .map(|(k, v)| format!("{k}={v}"))
@@ -1139,7 +1147,7 @@ impl EnvSettingsView {
                                 .w(px(60.))
                                 .child(Input::new(&self.cpus).small().disabled(fixed)),
                         )
-                        .when_some(most, |d, m| {
+                        .when_some(most.clone(), |d, m| {
                             d.child(
                                 div()
                                     .text_color(p.muted)
@@ -1493,7 +1501,7 @@ impl EnvSettingsView {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let stopped = matches!(env.phase.as_str(), "stopped" | "failed");
-        let changed = &env.details.template_changes;
+        let changed = &env.template_changes;
         let reset_note = if changed.is_empty() {
             "It takes its template's current settings; its disks and everything on them are kept."
                 .to_string()
@@ -1562,31 +1570,31 @@ impl EnvSettingsView {
 
 /// The Access page: what its template keeps from it, each said either way.
 fn access(env: &Environment, p: &Palette) -> impl IntoElement {
-    let a = env.details.access;
+    let a = env.access.clone().unwrap_or_default();
     let rows = [
         (
             "Packs that attach themselves",
-            !a.no_self_attached,
+            !a.no_self_attached.unwrap_or_default(),
             "the profile among them",
         ),
         (
             "Sensitive files",
-            !a.no_sensitive_files,
+            !a.no_sensitive_files.unwrap_or_default(),
             "credentials in its packs, such as Claude's sign-in",
         ),
         (
             "Signing with your SSH keys",
-            !a.no_ssh_keys,
+            !a.no_ssh_keys.unwrap_or_default(),
             "through its SSH agent; the keys never enter it",
         ),
         (
             "Hangar's registry",
-            !a.no_registry,
+            !a.no_registry.unwrap_or_default(),
             "a credential for pulling and pushing images",
         ),
         (
             "Running code in its folders",
-            !a.no_editor_trust,
+            !a.no_editor_trust.unwrap_or_default(),
             "language servers, without asking first",
         ),
     ];

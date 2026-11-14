@@ -201,7 +201,7 @@ impl AddPlaceView {
         let Some(w) = &self.waiting else { return };
         let client = Client::new(&w.url, "");
         let device = w.grant.device_code.clone();
-        let every = Duration::from_secs(w.grant.interval.clamp(1, 30));
+        let every = Duration::from_secs(w.grant.interval.clamp(1, 30) as u64);
         let until = w.grant.expires_at;
         self.poll = Some(cx.spawn(async move |this, cx| {
             loop {

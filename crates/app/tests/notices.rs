@@ -28,15 +28,15 @@ fn env(name: &str, phase: &str, agents: Vec<AgentSession>) -> Environment {
         cpus: None,
         memory_mib: None,
         editor_path: None,
-        ports_public: false,
+        ports_public: Some(false),
         display: None,
         image_update: None,
         web_names: vec![],
-        details: Default::default(),
         task: None,
         agents,
         created_at: now() - Duration::days(1),
         updated_at: now() - Duration::hours(1),
+        ..Default::default()
     }
 }
 

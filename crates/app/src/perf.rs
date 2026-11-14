@@ -105,13 +105,15 @@ pub fn notable(e: &ActivityEvent) -> bool {
         "environment.place",
     ];
     !QUIET.contains(&e.action.as_str())
-        && !(e.action == "environment.phase" && e.details["to"] != "failed")
+        && !(e.action == "environment.phase"
+            && e.details.get("to") != Some(&serde_json::Value::from("failed")))
 }
 
 /// An event in words, as the web says it: what was done, and what more
 /// there is to say.
 pub fn describe(e: &ActivityEvent) -> (String, Option<String>) {
-    let d = &e.details;
+    // As a value, which reads a key it lacks as null, as the details may.
+    let d = &serde_json::Value::Object(e.details.clone());
     let text = |k: &str| d[k].as_str().filter(|s| !s.is_empty()).map(str::to_string);
     let what = match e.action.as_str() {
         "environment.create" => {
@@ -415,7 +417,7 @@ impl PerformanceView {
     /// The tiles along the top: each measure, at the moment and over the
     /// last two minutes.
     fn tiles(&self, p: &Palette) -> gpui::AnyElement {
-        let Some(now) = self.history.back().copied() else {
+        let Some(now) = self.history.back().cloned() else {
             return div()
                 .px(px(10.))
                 .py(px(8.))
@@ -457,21 +459,21 @@ impl PerformanceView {
             ))
             // What it has swapped out, where it has swap: zswap's share in
             // its memory, and the rest on its disk, as the web's tile says.
-            .when(now.swap_total_mib > 0, |d| {
+            .when(now.swap_total_mib.unwrap_or_default() > 0, |d| {
                 d.child(tile(
                     "Swap",
-                    format!("{} out", memory(now.swap_used_mib)),
-                    series(|s| s.swap_used_mib as f64),
-                    now.swap_total_mib as f64,
+                    format!("{} out", memory(now.swap_used_mib.unwrap_or_default())),
+                    series(|s| s.swap_used_mib.unwrap_or_default() as f64),
+                    now.swap_total_mib.unwrap_or_default() as f64,
                     p.peer,
                     Some(format!(
                         "What it has swapped out, of {}: {} compressed into {} of its memory, the rest on its disk, which takes {} of the worker's. In {}, out {}.",
-                        memory(now.swap_total_mib),
-                        memory(now.swap_compressed_mib),
-                        memory(now.swap_pool_mib),
-                        bytes(now.swap_disk_bytes as f64),
-                        rate(now.swap_in_bps),
-                        rate(now.swap_out_bps)
+                        memory(now.swap_total_mib.unwrap_or_default()),
+                        memory(now.swap_compressed_mib.unwrap_or_default()),
+                        memory(now.swap_pool_mib.unwrap_or_default()),
+                        bytes(now.swap_disk_bytes.unwrap_or_default() as f64),
+                        rate(now.swap_in_bps.unwrap_or_default()),
+                        rate(now.swap_out_bps.unwrap_or_default())
                     )),
                     p,
                 ))
@@ -480,11 +482,11 @@ impl PerformanceView {
                 "Disk",
                 format!(
                     "{} · ↓{} ↑{}",
-                    bytes(now.disk_used_bytes as f64),
-                    rate(now.disk_read_bps),
-                    rate(now.disk_write_bps)
+                    bytes(now.disk_used_bytes.unwrap_or_default() as f64),
+                    rate(now.disk_read_bps.unwrap_or_default()),
+                    rate(now.disk_write_bps.unwrap_or_default())
                 ),
-                series(|s| s.disk_read_bps + s.disk_write_bps),
+                series(|s| s.disk_read_bps.unwrap_or_default() + s.disk_write_bps.unwrap_or_default()),
                 0.,
                 p.busy,
                 None,
@@ -492,8 +494,8 @@ impl PerformanceView {
             ))
             .child(tile(
                 "Network",
-                format!("↓{} ↑{}", rate(now.net_rx_bps), rate(now.net_tx_bps)),
-                series(|s| s.net_rx_bps + s.net_tx_bps),
+                format!("↓{} ↑{}", rate(now.net_rx_bps.unwrap_or_default()), rate(now.net_tx_bps.unwrap_or_default())),
+                series(|s| s.net_rx_bps.unwrap_or_default() + s.net_tx_bps.unwrap_or_default()),
                 0.,
                 p.wait,
                 None,
@@ -691,14 +693,14 @@ impl PerformanceView {
                 let (pid, command) = (p.pid.to_string(), p.command.clone());
                 menu.item(
                     PopupMenuItem::new("Stop (TERM)…")
-                        .disabled(p.protected)
+                        .disabled(p.protected.unwrap_or_default())
                         .on_click(move |_, window, cx| {
                             Self::ask_signal(stop.clone(), &ps, "TERM", window, cx)
                         }),
                 )
                 .item(
                     PopupMenuItem::new("Kill (KILL)…")
-                        .disabled(p.protected)
+                        .disabled(p.protected.unwrap_or_default())
                         .on_click(move |_, window, cx| {
                             Self::ask_signal(kill.clone(), &pk, "KILL", window, cx)
                         }),

@@ -54,11 +54,11 @@ fn event(action: &str, details: serde_json::Value) -> ActivityEvent {
         },
         action: action.into(),
         target: Target {
-            kind: "environment".into(),
+            type_: "environment".into(),
             id: "e1".into(),
             name: "dev".into(),
         },
-        details,
+        details: details.as_object().cloned().unwrap_or_default(),
     }
 }
 

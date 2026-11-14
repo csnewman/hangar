@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use gpui::{AppContext, TestAppContext, VisualTestContext};
-use hangar_app::api::{Details, Environment, MachineSettings, Stats};
+use hangar_app::api::{Environment, MachineSettings, Stats};
 use hangar_app::envsettings::{Page, changeable, changes, live_memory, memory, parse_gib, saved};
 use hangar_app::place::Update;
 use hangar_app::places::Places;
@@ -28,19 +28,17 @@ fn env(phase: &str, desired: &str) -> Environment {
         cpus: Some(2),
         memory_mib: Some(4096),
         editor_path: Some("/home/dev".into()),
-        ports_public: false,
+        ports_public: Some(false),
         display: Some("desktop".into()),
         image_update: None,
         web_names: vec![],
-        details: Details {
-            gpu: Some("virtual".into()),
-            swap_mib: None,
-            ..Default::default()
-        },
+        gpu: Some("virtual".into()),
+        swap_mib: None,
         task: None,
         agents: vec![],
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        ..Default::default()
     }
 }
 
@@ -103,9 +101,9 @@ fn changes_are_said_as_the_web_says_them() {
             memory_mib: 4096,
             display: "desktop".into(),
             gpu: "virtual".into(),
-            dax: false,
+            dax: Some(false),
             swap_mib: None,
-            memory_reclaim: false,
+            memory_reclaim: Some(false),
         }
     );
     let to = MachineSettings {
@@ -113,7 +111,7 @@ fn changes_are_said_as_the_web_says_them() {
         memory_mib: 6144,
         display: "none".into(),
         swap_mib: Some(0),
-        memory_reclaim: true,
+        memory_reclaim: Some(true),
         ..from.clone()
     };
     assert_eq!(

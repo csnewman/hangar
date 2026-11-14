@@ -3,7 +3,7 @@
 //! its template, each with what can be done now.
 
 use chrono::Utc;
-use hangar_app::api::{Details, Environment, ImageRollback, ImageUpdate};
+use hangar_app::api::{Environment, ImageRollback, ImageUpdate};
 use hangar_app::banners::{Act, Does, Kind, Tone, banners};
 
 fn env(phase: &str, desired: &str) -> Environment {
@@ -22,20 +22,18 @@ fn env(phase: &str, desired: &str) -> Environment {
         cpus: Some(2),
         memory_mib: Some(4096),
         editor_path: None,
-        ports_public: false,
+        ports_public: Some(false),
         display: None,
         image_update: None,
         web_names: vec![],
-        details: Details {
-            image: Some("base:ubuntu".into()),
-            image_digest: Some("sha256:aaaaaaaaaaaaaaaa".into()),
-            template_id: Some("t1".into()),
-            ..Default::default()
-        },
+        image: Some("base:ubuntu".into()),
+        image_digest: Some("sha256:aaaaaaaaaaaaaaaa".into()),
+        template_id: Some("t1".into()),
         task: None,
         agents: vec![],
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        ..Default::default()
     }
 }
 
@@ -44,7 +42,7 @@ fn newer(checked: bool, conflicts: &[&str], more: i64) -> Option<ImageUpdate> {
         digest: "sha256:bbbbbbbbbbbbbbbb".into(),
         checked,
         conflicts: conflicts.iter().map(|c| c.to_string()).collect(),
-        more_conflicts: more,
+        more_conflicts: Some(more),
         ..Default::default()
     })
 }
@@ -115,7 +113,7 @@ fn files_an_upgrade_would_hide_ask_for_it_anyway() {
 fn a_change_waiting_is_all_that_is_said_of_the_image() {
     let mut e = env("stopped", "stopped");
     e.image_update = newer(true, &[], 0);
-    e.details.image_change = Some("upgrade".into());
+    e.image_change = Some("upgrade".into());
     let list = banners(&e);
     assert_eq!(list.len(), 1);
     assert_eq!(
@@ -129,7 +127,7 @@ fn a_change_waiting_is_all_that_is_said_of_the_image() {
 #[test]
 fn an_upgrade_is_kept_or_rolled_back() {
     let mut e = env("running", "running");
-    e.details.image_rollback = Some(ImageRollback {
+    e.image_rollback = Some(ImageRollback {
         digest: "sha256:aaaaaaaaaaaaaaaa".into(),
         at: Utc::now(),
         size_bytes: 3 * 1024 * 1024,
@@ -142,7 +140,7 @@ fn an_upgrade_is_kept_or_rolled_back() {
 #[test]
 fn how_it_differs_from_its_template_is_said_in_words() {
     let mut e = env("stopped", "stopped");
-    e.details.template_changes = vec!["cpus".into(), "dax".into(), "image".into()];
+    e.template_changes = vec!["cpus".into(), "dax".into(), "image".into()];
     let b = &banners(&e)[0];
     assert_eq!(b.kind, Kind::Template);
     assert_eq!(

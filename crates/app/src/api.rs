@@ -1,12 +1,34 @@
 //! A server's client API, /api/v1 (internal/clientapi/openapi.yaml): what
-//! the app reads and asks of a server place. Blocking, so each place's
-//! connection runs on a thread of its own.
+//! the app reads and asks of a server place. Its types and calls are
+//! generated from the spec (hangar-openapi); this is the app's blocking face
+//! on them, each call run to its end on a runtime of this module's, so each
+//! place's connection runs on a thread of its own as the rest of the app
+//! expects.
 
-use std::io::{BufRead, BufReader, Read};
+use std::future::Future;
+use std::io::{self, BufRead, BufReader, Read};
+use std::sync::OnceLock;
 use std::time::Duration;
 
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use hangar_openapi::clientapi::{self as generated, types};
+use serde::Deserialize;
+
+pub use types::{
+    Access, AccessToken, ActivityEvent, AgentSession, Environment, EnvironmentPack, ImageRollback,
+    ImageUpdate, LogPart, LoginKey, Me, PackCopy, Process, ProcessList, Repo, Resources,
+    SignInGrant, SshGateway, SshKey, StartProgress, Task, Template, TerminalSession, Version,
+};
+
+/// An environment's machine, as its settings change it.
+pub type MachineSettings = types::EnvironmentSettings;
+/// What making an environment asks for.
+pub type NewEnvironment = types::CreateEnvironment;
+/// What an environment uses, while it runs.
+pub type Stats = types::EnvironmentStats;
+/// Who did something to an environment.
+pub type Actor = types::ActivityEventActor;
+/// What something was done to.
+pub type Target = types::ActivityEventTarget;
 
 /// The API version the app speaks.
 pub const VERSION: &str = "v1";
@@ -17,393 +39,6 @@ const STREAM_READ: Duration = Duration::from_secs(75);
 
 /// How long any other request may take.
 const CALL: Duration = Duration::from_secs(30);
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Version {
-    pub versions: Vec<String>,
-    pub server: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Me {
-    pub id: String,
-    pub username: String,
-    #[serde(default)]
-    pub display_name: String,
-    #[serde(default)]
-    pub admin: bool,
-    /// Where the server's SSH gateway is, if it has one.
-    #[serde(default)]
-    pub ssh: Option<SshGateway>,
-    /// What follows env<short> in the hosts environments' own web servers
-    /// are reached on: a name and a hyphen before it reach a server by that
-    /// name, a number that port. None when the server has no public URL.
-    #[serde(default)]
-    pub environment_host_suffix: Option<String>,
-}
-
-/// Where environments are reached over SSH: ssh <environment>@<host> -p
-/// <port>.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SshGateway {
-    pub host: String,
-    pub port: u16,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Environment {
-    pub id: String,
-    pub short_id: String,
-    pub name: String,
-    pub owner: String,
-    pub template: String,
-    /// pending, starting, running, stopping, stopped, suspending,
-    /// suspended, failed, deleting; more may come.
-    pub phase: String,
-    pub desired: String,
-    #[serde(default)]
-    pub reason: Option<String>,
-    #[serde(default)]
-    pub progress: Option<StartProgress>,
-    #[serde(default)]
-    pub worker: Option<String>,
-    #[serde(default)]
-    pub worker_online: Option<bool>,
-    #[serde(default)]
-    pub cpus: Option<i64>,
-    #[serde(default)]
-    pub memory_mib: Option<i64>,
-    /// The folder an editor opens in it: its first project.
-    #[serde(default)]
-    pub editor_path: Option<String>,
-    /// Whether anyone may reach its own web servers without signing in to
-    /// Hangar.
-    #[serde(default)]
-    pub ports_public: bool,
-    /// Its display: none or desktop; more may come.
-    #[serde(default)]
-    pub display: Option<String>,
-    /// The names of its own web servers its template lists.
-    #[serde(default)]
-    pub web_names: Vec<String>,
-    #[serde(default)]
-    pub task: Option<Task>,
-    /// A newer copy of its image, which its worker holds.
-    #[serde(default)]
-    pub image_update: Option<ImageUpdate>,
-    #[serde(default)]
-    pub agents: Vec<AgentSession>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    /// What its settings show of it beyond what the list does.
-    #[serde(flatten)]
-    pub details: Details,
-}
-
-/// What an environment's settings show of it: its machine beyond its size,
-/// what its template gives it, and its image.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Details {
-    /// none, virtual or passthrough; more may come.
-    pub gpu: Option<String>,
-    /// Its image's files mapped from its worker's memory.
-    pub dax: bool,
-    /// Its swap: None is its worker's default, 0 none.
-    pub swap_mib: Option<i64>,
-    /// It hands back the memory its programs leave idle: experimental, off
-    /// unless asked for, and changeable while it runs.
-    pub memory_reclaim: bool,
-    pub access: Access,
-    /// What a worker's labels must say for it to run there.
-    pub placement: std::collections::BTreeMap<String, String>,
-    pub template_id: Option<String>,
-    /// Its settings that its template has since changed, which a reset to
-    /// the template gives it.
-    pub template_changes: Vec<String>,
-    /// The image it runs, as its template names it, and the copy.
-    pub image: Option<String>,
-    pub image_digest: Option<String>,
-    /// The copy of its writable disk kept from before its last upgrade.
-    pub image_rollback: Option<ImageRollback>,
-    /// What its next start does to its image: upgrade or rollback.
-    pub image_change: Option<String>,
-}
-
-/// What of its owner's an environment is kept from, as its template says.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct Access {
-    pub no_self_attached: bool,
-    pub no_sensitive_files: bool,
-    pub no_ssh_keys: bool,
-    pub no_registry: bool,
-    pub no_editor_trust: bool,
-}
-
-/// The copy of an environment's writable disk kept from before its last
-/// upgrade, which a rollback restores.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ImageRollback {
-    pub digest: String,
-    pub at: DateTime<Utc>,
-    pub size_bytes: i64,
-}
-
-/// What an environment's machine is to be: a stopped one's at its next
-/// start, a running one's memory as it runs.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct MachineSettings {
-    pub cpus: i64,
-    pub memory_mib: i64,
-    pub display: String,
-    pub gpu: String,
-    pub dax: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub swap_mib: Option<i64>,
-    pub memory_reclaim: bool,
-}
-
-/// A template, as making an environment from it needs it: what the
-/// environment is given.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Template {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    /// Who made it or took it on, by username.
-    pub owner: String,
-    /// The team that owns it, when one does.
-    #[serde(default)]
-    pub team: Option<String>,
-    pub cpus: i64,
-    pub memory_mib: i64,
-    pub display: String,
-    pub gpu: String,
-    #[serde(default)]
-    pub dax: bool,
-    #[serde(default)]
-    pub swap_mib: Option<i64>,
-    #[serde(default)]
-    pub memory_reclaim: bool,
-    pub image: String,
-    /// What it clones; ref, path and branch may hold variables, {name}
-    /// and the like, filled in as each environment is made.
-    #[serde(default)]
-    pub repos: Vec<Repo>,
-    #[serde(default)]
-    pub projects: Vec<String>,
-    #[serde(default)]
-    pub name_pattern: Option<String>,
-    #[serde(default)]
-    pub name_hint: Option<String>,
-}
-
-/// A repository an environment clones.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Repo {
-    pub url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub r#ref: Option<String>,
-    pub path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-}
-
-/// An environment to make: from a template, with its machine and
-/// repositories in place of the template's when given.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct NewEnvironment {
-    pub template_id: String,
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub settings: Option<MachineSettings>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repos: Option<Vec<Repo>>,
-}
-
-/// A worker's capacity: how big an environment may be.
-#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
-pub struct Resources {
-    pub cpus: i64,
-    pub memory_mib: i64,
-}
-
-/// A pack of shared files an environment has, the copy of it it uses, and
-/// those the user could choose instead.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct EnvironmentPack {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub description: String,
-    #[serde(default)]
-    pub owner: Option<String>,
-    #[serde(default)]
-    pub team: Option<String>,
-    #[serde(default)]
-    pub builtin: bool,
-    pub copy: PackCopy,
-    /// environment (chosen on it), template, kept or default; more may come.
-    pub from: String,
-    /// Its template lists it, rather than its attaching itself.
-    #[serde(default)]
-    pub listed: bool,
-    #[serde(default)]
-    pub copies: Vec<PackCopy>,
-}
-
-/// One set of a pack's files.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct PackCopy {
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub owner: Option<String>,
-    #[serde(default)]
-    pub team: Option<String>,
-    #[serde(default)]
-    pub personal: bool,
-}
-
-/// What a running environment uses, as its worker last measured.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize)]
-#[serde(default)]
-pub struct Stats {
-    /// Of its own vCPUs: 100 is all of them busy.
-    pub cpu_percent: f64,
-    pub memory_used_mib: i64,
-    pub memory_total_mib: i64,
-    pub memory_cached_mib: i64,
-    pub host_memory_mib: i64,
-    /// Its swap, zswap's pool and disk together, and what it has swapped
-    /// out: swap_compressed_mib of it compressed into swap_pool_mib of its
-    /// memory, the rest on its disk, which takes swap_disk_bytes of its
-    /// worker's; and how fast it swaps in and out, in bytes a second.
-    pub swap_total_mib: i64,
-    pub swap_used_mib: i64,
-    pub swap_compressed_mib: i64,
-    pub swap_pool_mib: i64,
-    pub swap_disk_bytes: i64,
-    pub swap_in_bps: f64,
-    pub swap_out_bps: f64,
-    pub disk_used_bytes: i64,
-    pub disk_read_bps: f64,
-    pub disk_write_bps: f64,
-    pub net_rx_bps: f64,
-    pub net_tx_bps: f64,
-    /// The memory its machine has, and what that can be resized between
-    /// as it runs; the bounds are None for one that cannot be.
-    pub machine_memory_mib: Option<i64>,
-    pub machine_memory_min_mib: Option<i64>,
-    pub machine_memory_max_mib: Option<i64>,
-}
-
-/// The processes in an environment, and what its machine has.
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
-#[serde(default)]
-pub struct ProcessList {
-    pub cpus: i64,
-    pub memory_bytes: i64,
-    pub processes: Vec<Process>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Deserialize)]
-#[serde(default)]
-pub struct Process {
-    pub pid: i64,
-    pub ppid: i64,
-    pub user: String,
-    pub name: String,
-    pub command: String,
-    /// As /proc gives it: R running, S sleeping, D waiting on I/O, Z a
-    /// zombie.
-    pub state: String,
-    /// Its share of one CPU: busy on two is 200.
-    pub cpu_percent: f64,
-    pub rss_bytes: i64,
-    pub threads: i64,
-    pub started: Option<DateTime<Utc>>,
-    /// The guest's init or its agent, which cannot be stopped from here.
-    pub protected: bool,
-}
-
-/// Something done to an environment, from the audit log.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct ActivityEvent {
-    pub id: i64,
-    pub at: DateTime<Utc>,
-    pub actor: Actor,
-    pub action: String,
-    pub target: Target,
-    #[serde(default)]
-    pub details: serde_json::Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Actor {
-    /// user, worker or system; more may come.
-    pub kind: String,
-    #[serde(default)]
-    pub id: Option<String>,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Deserialize)]
-pub struct Target {
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub id: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StartProgress {
-    pub step: String,
-    #[serde(default)]
-    pub done: Option<i64>,
-    #[serde(default)]
-    pub total: Option<i64>,
-    #[serde(default)]
-    pub unit: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
-pub struct ImageUpdate {
-    pub digest: String,
-    /// Whether its writable disk has been compared with the newer copy,
-    /// which happens while it is stopped.
-    pub checked: bool,
-    /// Files it has changed that the newer copy changes too, which an
-    /// upgrade would keep its own of.
-    pub conflicts: Vec<String>,
-    pub more_conflicts: i64,
-    /// The package manager's database is among them.
-    pub packages: bool,
-    /// Why the comparison failed.
-    pub error: Option<String>,
-}
-
-/// A server's grant for an app signing in through the browser.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SignInGrant {
-    /// The app's secret, to collect the token with.
-    pub device_code: String,
-    /// XXXX-XXXX, for the person to compare in the browser.
-    pub user_code: String,
-    /// Where on the server the person approves it.
-    pub verification_path: String,
-    pub expires_at: DateTime<Utc>,
-    /// Seconds between asks for the token.
-    pub interval: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SignInToken {
-    token: String,
-}
 
 /// Where a sign-in through the browser stands.
 #[derive(Debug, Clone, PartialEq)]
@@ -416,102 +51,6 @@ pub enum SignedIn {
     Refused,
     /// It expired or was collected.
     Gone,
-}
-
-/// A public key that signs the user in to the place's SSH gateway.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct LoginKey {
-    pub id: String,
-    pub name: String,
-    pub fingerprint: String,
-    pub created_at: DateTime<Utc>,
-}
-
-/// One of the user's access tokens: what is shown of it after it is made.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AccessToken {
-    pub id: String,
-    pub name: String,
-    pub created_at: DateTime<Utc>,
-    #[serde(default)]
-    pub last_used_at: Option<DateTime<Utc>>,
-    #[serde(default)]
-    pub expires_at: Option<DateTime<Utc>>,
-    /// Whether the request listing it came with it: the app's own.
-    #[serde(default)]
-    pub current: bool,
-}
-
-/// An SSH key the place signs with for the user, its private half kept
-/// there.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SshKey {
-    pub id: String,
-    pub name: String,
-    pub public_key: String,
-    pub fingerprint: String,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Task {
-    pub id: String,
-    pub text: String,
-    /// agent or user; more may come.
-    pub set_by: String,
-    pub set_at: DateTime<Utc>,
-    #[serde(default)]
-    pub done_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentSession {
-    pub id: String,
-    /// claude or codex; more may come.
-    pub agent: String,
-    #[serde(default)]
-    pub terminal: Option<String>,
-    /// asking, finished, working, idle, ended; more may come, taken as
-    /// working.
-    pub state: String,
-    #[serde(default)]
-    pub step: Option<String>,
-    #[serde(default)]
-    pub message: Option<String>,
-    pub since: DateTime<Utc>,
-    #[serde(default)]
-    pub needs_you: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TerminalSession {
-    pub id: String,
-    /// What the shell or the program in it last set as the window title.
-    #[serde(default)]
-    pub title: String,
-    pub created_at: DateTime<Utc>,
-    /// How many windows are attached to it.
-    #[serde(default)]
-    pub clients: i64,
-    #[serde(default)]
-    pub cols: i64,
-    #[serde(default)]
-    pub rows: i64,
-}
-
-/// Part of one of an environment's logs, which only grows: text from
-/// start, of a log size bytes long so far, read on from next.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-pub struct LogPart {
-    pub start: i64,
-    pub next: i64,
-    pub size: i64,
-    #[serde(default)]
-    pub text: String,
-    /// There is no such log yet: the machine has not been started, or has
-    /// no GPU.
-    #[serde(default)]
-    pub missing: bool,
 }
 
 /// Why a request failed.
@@ -552,167 +91,175 @@ pub enum Event {
     Synced,
 }
 
+/// The runtime every call runs on: reqwest's connections need tokio's,
+/// whichever thread waits on the call.
+fn runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("hangar-api")
+            .enable_all()
+            .build()
+            .expect("a tokio runtime")
+    })
+}
+
 /// A server's client API, signed in with an access token.
 #[derive(Clone)]
 pub struct Client {
     base: String,
     token: String,
-    agent: ureq::Agent,
-    stream: ureq::Agent,
+    /// The generated client for calls, held to CALL, and for the event
+    /// stream, whose reads are held to STREAM_READ; or why neither could be
+    /// made.
+    api: Result<(generated::Client, generated::Client), String>,
 }
 
 impl Client {
     /// A client for the server at url (its address, such as
     /// https://hangar.example.com), signing in with token.
     pub fn new(url: &str, token: &str) -> Client {
-        let config = |read: Option<Duration>, global: Option<Duration>| {
-            ureq::Agent::config_builder()
-                .http_status_as_error(false)
-                .timeout_global(global)
-                .timeout_per_read(read)
-                .tls_config(
-                    ureq::tls::TlsConfig::builder()
-                        .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-                        .build(),
-                )
-                .user_agent(concat!("hangar-app/", env!("CARGO_PKG_VERSION")))
-                .build()
-                .new_agent()
+        let base = format!("{}/api/{VERSION}", url.trim_end_matches('/'));
+        let make = |calls: bool| -> Result<generated::Client, String> {
+            let mut headers = reqwest::header::HeaderMap::new();
+            if !token.is_empty() {
+                let auth = reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))
+                    .map_err(|e| e.to_string())?;
+                headers.insert(reqwest::header::AUTHORIZATION, auth);
+            }
+            let builder = hangar_openapi::http_client()
+                .map_err(|e| e.to_string())?
+                .default_headers(headers)
+                .user_agent(concat!("hangar-app/", env!("CARGO_PKG_VERSION")));
+            let builder = if calls {
+                builder.timeout(CALL)
+            } else {
+                builder.read_timeout(STREAM_READ)
+            };
+            let http = builder.build().map_err(|e| e.to_string())?;
+            Ok(generated::Client::new_with_client(&base, http))
         };
+        let api = make(true).and_then(|calls| Ok((calls, make(false)?)));
         Client {
-            base: format!("{}/api/{VERSION}", url.trim_end_matches('/')),
+            base,
             token: token.to_string(),
-            agent: config(None, Some(CALL)),
-            stream: config(Some(STREAM_READ), None),
+            api,
         }
     }
 
     pub fn version(&self) -> Result<Version, Error> {
-        self.get("/version")
+        self.call(|c| c.get_version())
     }
 
     pub fn me(&self) -> Result<Me, Error> {
-        self.get("/me")
+        self.call(|c| c.get_me())
     }
 
     /// Asks the server to let an app that calls itself name sign in
     /// through the browser. Needs no token.
     pub fn start_sign_in(&self, name: &str) -> Result<SignInGrant, Error> {
-        let body = serde_json::json!({ "name": name });
-        let req = self
-            .agent
-            .post(format!("{}/sign-in", self.base))
-            .header("Content-Type", "application/json");
-        decode(self.send(req, Some(body.to_string()))?)
+        let body = types::StartSignIn { name: name.into() };
+        self.call(|c| c.start_sign_in(&body))
     }
 
     /// Asks whether a grant is approved, collecting its token once it is.
     /// Needs no token.
     pub fn finish_sign_in(&self, device_code: &str) -> Result<SignedIn, Error> {
-        let body = serde_json::json!({ "device_code": device_code });
-        let req = self
-            .agent
-            .post(format!("{}/sign-in/token", self.base))
-            .header("Content-Type", "application/json");
-        let resp = self.send(req, Some(body.to_string()))?;
-        match resp.status().as_u16() {
-            202 => Ok(SignedIn::Waiting),
-            403 => Ok(SignedIn::Refused),
-            404 => Ok(SignedIn::Gone),
-            _ => {
-                let t: SignInToken = decode(resp)?;
-                Ok(SignedIn::Token(t.token))
-            }
+        let body = types::FinishSignIn {
+            device_code: device_code.into(),
+        };
+        match self.answer(|c| c.finish_sign_in_step(&body)) {
+            Ok(hangar_openapi::SignInStep::Token(t)) => Ok(SignedIn::Token(t.token)),
+            Ok(hangar_openapi::SignInStep::Waiting(_)) => Ok(SignedIn::Waiting),
+            Err(Error::Status(403, _)) => Ok(SignedIn::Refused),
+            Err(Error::Status(404, _)) => Ok(SignedIn::Gone),
+            Err(e) => Err(e),
         }
     }
 
     pub fn login_keys(&self) -> Result<Vec<LoginKey>, Error> {
-        self.get("/me/login-keys")
+        self.call(|c| c.list_login_keys())
     }
 
     /// Adds a public key, in authorized_keys form, that signs the user in
     /// over SSH; its comment names it.
     pub fn add_login_key(&self, public_key: &str) -> Result<LoginKey, Error> {
-        let body = serde_json::json!({ "public_key": public_key.trim() });
-        self.post("/me/login-keys", Some(body.to_string()))
+        let body = types::AddLoginKey {
+            public_key: public_key.trim().into(),
+            ..Default::default()
+        };
+        self.call(|c| c.add_login_key(&body))
     }
 
     pub fn delete_login_key(&self, id: &str) -> Result<(), Error> {
-        self.delete_path(&format!("/me/login-keys/{id}"))
+        self.call(|c| c.delete_login_key(id))
     }
 
     pub fn tokens(&self) -> Result<Vec<AccessToken>, Error> {
-        self.get("/me/tokens")
+        self.call(|c| c.list_tokens())
     }
 
     pub fn revoke_token(&self, id: &str) -> Result<(), Error> {
-        self.delete_path(&format!("/me/tokens/{id}"))
+        self.call(|c| c.revoke_token(id))
     }
 
     pub fn ssh_keys(&self) -> Result<Vec<SshKey>, Error> {
-        self.get("/me/ssh-keys")
+        self.call(|c| c.list_ssh_keys())
     }
 
     pub fn generate_ssh_key(&self, name: &str) -> Result<SshKey, Error> {
-        let body = serde_json::json!({ "name": name.trim() });
-        self.post("/me/ssh-keys", Some(body.to_string()))
+        let body = types::GenerateSshKey {
+            name: name.trim().into(),
+        };
+        self.call(|c| c.generate_ssh_key(&body))
     }
 
     pub fn delete_ssh_key(&self, id: &str) -> Result<(), Error> {
-        self.delete_path(&format!("/me/ssh-keys/{id}"))
+        self.call(|c| c.delete_ssh_key(id))
     }
 
     pub fn environments(&self) -> Result<Vec<Environment>, Error> {
-        self.get("/environments")
+        self.call(|c| c.list_environments())
     }
 
     pub fn start(&self, id: &str) -> Result<Environment, Error> {
-        self.post(&format!("/environments/{id}/start"), None)
+        self.call(|c| c.start_environment(id))
     }
 
     pub fn stop(&self, id: &str) -> Result<Environment, Error> {
-        self.post(&format!("/environments/{id}/stop"), None)
+        self.call(|c| c.stop_environment(id))
     }
 
     pub fn suspend(&self, id: &str) -> Result<Environment, Error> {
-        self.post(&format!("/environments/{id}/suspend"), None)
+        self.call(|c| c.suspend_environment(id))
     }
 
     /// Gives a stopped environment its template's settings, keeping its
     /// disks.
     pub fn reset(&self, id: &str) -> Result<Environment, Error> {
-        self.post(&format!("/environments/{id}/reset"), None)
+        self.call(|c| c.reset_environment(id))
     }
 
     /// Deletes an environment and its disks: at once if it is stopped, else
     /// once it has stopped.
     pub fn delete(&self, id: &str) -> Result<(), Error> {
-        self.delete_path(&format!("/environments/{id}"))
+        self.answer(|c| c.delete_environment_or_gone(id))
+            .map(|_| ())
     }
 
     pub fn set_task(&self, id: &str, text: &str) -> Result<Task, Error> {
-        let body = serde_json::json!({ "text": text });
-        let resp = self.send(
-            self.agent
-                .put(format!("{}/environments/{id}/task", self.base))
-                .header("Authorization", self.auth())
-                .header("Content-Type", "application/json"),
-            Some(body.to_string()),
-        )?;
-        decode(resp)
+        let body = types::SetTask { text: text.into() };
+        self.call(|c| c.set_task(id, &body))
     }
 
     pub fn end_task(&self, id: &str) -> Result<(), Error> {
-        let req = self
-            .agent
-            .delete(format!("{}/environments/{id}/task", self.base))
-            .header("Authorization", self.auth());
-        check(req.call().map_err(transport)?).map(|_| ())
+        self.call(|c| c.end_task(id))
     }
 
     /// The environment's terminal sessions.
     pub fn terminals(&self, id: &str) -> Result<Vec<TerminalSession>, Error> {
-        self.get(&format!("/environments/{id}/terminals"))
+        self.call(|c| c.list_terminals(id))
     }
 
     /// Part of one of the environment's logs, kept by its worker: what
@@ -723,38 +270,26 @@ impl Client {
         log: &str,
         offset: Option<i64>,
     ) -> Result<LogPart, Error> {
-        match offset {
-            Some(o) => self.get(&format!("/environments/{id}/logs/{log}?offset={o}")),
-            None => self.get(&format!("/environments/{id}/logs/{log}")),
-        }
+        let log = types::EnvironmentLogName(log.into());
+        self.call(|c| c.get_environment_log(id, &log, offset))
     }
 
     /// What the environment uses, while it runs.
     pub fn stats(&self, id: &str) -> Result<Option<Stats>, Error> {
-        let env: serde_json::Value = self.get(&format!("/environments/{id}"))?;
-        Ok(serde_json::from_value(env["stats"].clone()).ok())
+        self.environment(id).map(|e| e.stats)
     }
 
     /// The processes running in the environment, asked of it.
     pub fn processes(&self, id: &str) -> Result<ProcessList, Error> {
-        self.get(&format!("/environments/{id}/processes"))
+        self.call(|c| c.list_processes(id))
     }
 
     /// Stops a process: TERM asks it to, KILL forces it.
     pub fn signal_process(&self, id: &str, pid: i64, signal: &str) -> Result<(), Error> {
-        let req = self
-            .agent
-            .post(format!(
-                "{}/environments/{id}/processes/{pid}/signal",
-                self.base
-            ))
-            .header("Authorization", self.auth())
-            .header("Content-Type", "application/json");
-        check(self.send(
-            req,
-            Some(serde_json::json!({ "signal": signal }).to_string()),
-        )?)
-        .map(|_| ())
+        let body = types::SignalProcessBody {
+            signal: signal.into(),
+        };
+        self.call(|c| c.signal_process(id, pid, &body))
     }
 
     /// What has been done to the environment, newest first: a page of it,
@@ -765,98 +300,68 @@ impl Client {
         before: Option<i64>,
         limit: usize,
     ) -> Result<Vec<ActivityEvent>, Error> {
-        match before {
-            Some(b) => self.get(&format!(
-                "/environments/{id}/activity?before={b}&limit={limit}"
-            )),
-            None => self.get(&format!("/environments/{id}/activity?limit={limit}")),
-        }
+        self.call(|c| c.list_activity(id, before, Some(limit as i64)))
     }
 
     /// The templates the user may make an environment from.
     pub fn templates(&self) -> Result<Vec<Template>, Error> {
-        self.get("/templates")
+        self.call(|c| c.list_templates())
     }
 
     /// Makes an environment; it starts once a worker takes it.
     pub fn create_environment(&self, new: &NewEnvironment) -> Result<Environment, Error> {
-        let body = serde_json::to_string(new).map_err(|e| Error::Decode(e.to_string()))?;
-        self.post("/environments", Some(body))
+        self.call(|c| c.create_environment(new))
     }
 
     /// One environment, as it is.
     pub fn environment(&self, id: &str) -> Result<Environment, Error> {
-        self.get(&format!("/environments/{id}"))
+        self.call(|c| c.get_environment(id))
     }
 
     /// Changes an environment's machine: a stopped one's at its next start,
     /// a running one's memory as it runs. Answered with the environment.
     pub fn update_settings(&self, id: &str, s: &MachineSettings) -> Result<Environment, Error> {
-        let req = self
-            .agent
-            .put(format!("{}/environments/{id}/settings", self.base))
-            .header("Authorization", self.auth())
-            .header("Content-Type", "application/json");
-        let body = serde_json::to_string(s).map_err(|e| Error::Decode(e.to_string()))?;
-        decode(self.send(req, Some(body))?)
+        self.call(|c| c.update_environment_settings(id, s))
     }
 
     /// Each online worker's capacity, largest first.
     pub fn worker_sizes(&self) -> Result<Vec<Resources>, Error> {
-        self.get("/worker-sizes")
+        self.call(|c| c.list_worker_sizes())
     }
 
     /// The packs an environment has, each with the copy it uses.
     pub fn environment_packs(&self, id: &str) -> Result<Vec<EnvironmentPack>, Error> {
-        self.get(&format!("/environments/{id}/packs"))
+        self.call(|c| c.list_environment_packs(id))
     }
 
     /// Chooses the copy of a pack an environment uses; None undoes the
     /// choice.
     pub fn choose_copy(&self, id: &str, pack: &str, copy: Option<&str>) -> Result<(), Error> {
-        let req = self
-            .agent
-            .put(format!("{}/environments/{id}/packs/{pack}", self.base))
-            .header("Authorization", self.auth())
-            .header("Content-Type", "application/json");
-        let body = match copy {
-            Some(c) => serde_json::json!({ "copy_id": c }),
-            None => serde_json::json!({}),
+        let body = types::ChooseEnvironmentCopyBody {
+            copy_id: copy.map(str::to_string),
         };
-        check(self.send(req, Some(body.to_string()))?).map(|_| ())
+        self.call(|c| c.choose_environment_copy(id, pack, &body))
     }
 
     /// Changes an environment's image: upgrade, rollback, keep or cancel.
     /// force upgrades though the newer copy has not been compared yet.
     pub fn change_image(&self, id: &str, change: &str, force: bool) -> Result<Environment, Error> {
-        let body = force.then(|| serde_json::json!({ "force": true }).to_string());
-        self.post(&format!("/environments/{id}/image/{change}"), body)
+        let body = types::ChangeEnvironmentImageBody {
+            force: force.then_some(true),
+        };
+        self.call(|c| c.change_environment_image(id, change, &body))
     }
 
     /// Says whether anyone may reach the environment's own web servers
     /// without signing in to Hangar, answered with the environment.
     pub fn set_ports_public(&self, id: &str, public: bool) -> Result<Environment, Error> {
-        let req = self
-            .agent
-            .put(format!("{}/environments/{id}/ports", self.base))
-            .header("Authorization", self.auth())
-            .header("Content-Type", "application/json");
-        decode(self.send(
-            req,
-            Some(serde_json::json!({ "public": public }).to_string()),
-        )?)
+        let body = types::SetEnvironmentPortsBody { public };
+        self.call(|c| c.set_environment_ports(id, &body))
     }
 
     /// Ends a terminal session, and what runs in it.
     pub fn close_terminal(&self, id: &str, session: &str) -> Result<(), Error> {
-        let req = self
-            .agent
-            .delete(format!(
-                "{}/environments/{id}/terminals/{session}",
-                self.base
-            ))
-            .header("Authorization", self.auth());
-        check(req.call().map_err(transport)?).map(|_| ())
+        self.call(|c| c.close_terminal(id, session))
     }
 
     /// Where a terminal session's WebSocket is, and the header that signs
@@ -910,16 +415,11 @@ impl Client {
 
     /// Sets the size of the environment's desktop, in pixels.
     pub fn resize_desktop(&self, id: &str, width: u32, height: u32) -> Result<(), Error> {
-        let req = self
-            .agent
-            .post(format!("{}/environments/{id}/desktop/size", self.base))
-            .header("Authorization", self.auth())
-            .header("Content-Type", "application/json");
-        check(self.send(
-            req,
-            Some(serde_json::json!({ "width": width, "height": height }).to_string()),
-        )?)
-        .map(|_| ())
+        let body = types::ResizeDesktopBody {
+            width: width.into(),
+            height: height.into(),
+        };
+        self.call(|c| c.resize_desktop(id, &body))
     }
 
     /// Where the environment's Code service's WebSocket is, starting in
@@ -937,115 +437,145 @@ impl Client {
 
     /// Says the user has looked at an agent's session.
     pub fn seen(&self, id: &str, session: &str) -> Result<(), Error> {
-        self.post_empty(&format!("/environments/{id}/agents/{session}/seen"))
+        self.call(|c| c.see_agent(id, session))
     }
 
     /// Opens the event stream: every environment, Synced, then changes.
     pub fn events(&self) -> Result<Events<impl BufRead + use<>>, Error> {
-        let resp = self
-            .stream
-            .get(format!("{}/events", self.base))
-            .header("Authorization", self.auth())
-            .header("Accept", "text/event-stream")
-            .call()
-            .map_err(transport)?;
-        let resp = check(resp)?;
-        Ok(Events::new(BufReader::new(resp.into_body().into_reader())))
+        let (_, stream) = self.api.as_ref().map_err(|e| Error::Transport(e.clone()))?;
+        let bytes = runtime().block_on(async {
+            match stream.stream_events().await {
+                Ok(v) => Ok(v.into_inner()),
+                Err(e) => Err(error(e).await),
+            }
+        })?;
+        Ok(Events::new(BufReader::new(StreamReader {
+            stream: bytes.into_inner(),
+            chunk: bytes::Bytes::new(),
+        })))
     }
 
     fn auth(&self) -> String {
         format!("Bearer {}", self.token)
     }
 
-    fn get<T: for<'de> Deserialize<'de>>(&self, path: &str) -> Result<T, Error> {
-        let resp = self
-            .agent
-            .get(format!("{}{path}", self.base))
-            .header("Authorization", self.auth())
-            .call()
-            .map_err(transport)?;
-        decode(resp)
+    /// Runs a generated call to its end, its answer's body or why it
+    /// failed.
+    fn call<'a, T, E: Message, F>(
+        &'a self,
+        f: impl FnOnce(&'a generated::Client) -> F,
+    ) -> Result<T, Error>
+    where
+        F: Future<Output = Result<generated::ResponseValue<T>, generated::Error<E>>>,
+    {
+        self.answer(|c| {
+            let call = f(c);
+            async move { call.await.map(generated::ResponseValue::into_inner) }
+        })
     }
 
-    fn post<T: for<'de> Deserialize<'de>>(
-        &self,
-        path: &str,
-        body: Option<String>,
-    ) -> Result<T, Error> {
-        let req = self
-            .agent
-            .post(format!("{}{path}", self.base))
-            .header("Authorization", self.auth())
-            .header("Content-Type", "application/json");
-        decode(self.send(req, body)?)
+    /// Runs a call that gives its answer as it is (hangar-openapi's calls
+    /// for the operations that answer two ways) to its end.
+    fn answer<'a, T, E: Message, F>(
+        &'a self,
+        f: impl FnOnce(&'a generated::Client) -> F,
+    ) -> Result<T, Error>
+    where
+        F: Future<Output = Result<T, generated::Error<E>>>,
+    {
+        let (calls, _) = self.api.as_ref().map_err(|e| Error::Transport(e.clone()))?;
+        let call = f(calls);
+        runtime().block_on(async move {
+            match call.await {
+                Ok(v) => Ok(v),
+                Err(e) => Err(error(e).await),
+            }
+        })
     }
+}
 
-    fn delete_path(&self, path: &str) -> Result<(), Error> {
-        let req = self
-            .agent
-            .delete(format!("{}{path}", self.base))
-            .header("Authorization", self.auth());
-        check(req.call().map_err(transport)?).map(|_| ())
+/// What an error answer says: the spec's Error body, or nothing for a call
+/// the spec gives no error body.
+trait Message: std::fmt::Debug {
+    fn message(self) -> String;
+}
+
+impl Message for types::Error {
+    fn message(self) -> String {
+        self.error
     }
+}
 
-    fn post_empty(&self, path: &str) -> Result<(), Error> {
-        let req = self
-            .agent
-            .post(format!("{}{path}", self.base))
-            .header("Authorization", self.auth());
-        check(self.send(req, None)?).map(|_| ())
+impl Message for () {
+    fn message(self) -> String {
+        String::new()
     }
+}
 
-    fn send(
-        &self,
-        req: ureq::RequestBuilder<ureq::typestate::WithBody>,
-        body: Option<String>,
-    ) -> Result<ureq::http::Response<ureq::Body>, Error> {
-        match body {
-            Some(b) => req.send(b),
-            None => req.send_empty(),
+/// A failed call, as the app tells it.
+async fn error<E: Message>(e: generated::Error<E>) -> Error {
+    let status = |code: u16, msg: String| {
+        if code == 401 {
+            Error::Unauthorized
+        } else {
+            Error::Status(code, msg)
         }
-        .map_err(transport)
+    };
+    match e {
+        generated::Error::ErrorResponse(r) => {
+            let code = r.status().as_u16();
+            status(code, r.into_inner().message())
+        }
+        generated::Error::UnexpectedResponse(r) => {
+            #[derive(Deserialize)]
+            struct Body {
+                error: String,
+            }
+            let code = r.status().as_u16();
+            let msg = r.json::<Body>().await.map(|b| b.error).unwrap_or_default();
+            status(code, msg)
+        }
+        generated::Error::InvalidResponsePayload(_, e) => Error::Decode(e.to_string()),
+        e => Error::Transport(e.to_string()),
     }
 }
 
-fn transport(e: ureq::Error) -> Error {
-    Error::Transport(e.to_string())
+/// The event stream's bytes, read as they arrive by whichever thread reads
+/// the stream, each read held to STREAM_READ.
+struct StreamReader {
+    stream: std::pin::Pin<
+        Box<dyn futures_core::Stream<Item = reqwest::Result<bytes::Bytes>> + Send + Sync>,
+    >,
+    chunk: bytes::Bytes,
 }
 
-/// The response, or the error it carries.
-fn check(
-    mut resp: ureq::http::Response<ureq::Body>,
-) -> Result<ureq::http::Response<ureq::Body>, Error> {
-    let status = resp.status().as_u16();
-    if status < 300 {
-        return Ok(resp);
+impl Read for StreamReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        while self.chunk.is_empty() {
+            let next = runtime().block_on(async {
+                tokio::time::timeout(
+                    STREAM_READ,
+                    std::future::poll_fn(|cx| self.stream.as_mut().poll_next(cx)),
+                )
+                .await
+            });
+            match next {
+                Err(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "the event stream went quiet",
+                    ));
+                }
+                Ok(None) => return Ok(0),
+                Ok(Some(Err(e))) => return Err(io::Error::other(e)),
+                Ok(Some(Ok(bytes))) => self.chunk = bytes,
+            }
+        }
+        let n = buf.len().min(self.chunk.len());
+        buf[..n].copy_from_slice(&self.chunk[..n]);
+        self.chunk = self.chunk.slice(n..);
+        Ok(n)
     }
-    if status == 401 {
-        return Err(Error::Unauthorized);
-    }
-    #[derive(Deserialize)]
-    struct Body {
-        error: String,
-    }
-    let msg = resp
-        .body_mut()
-        .read_json::<Body>()
-        .map(|b| b.error)
-        .unwrap_or_default();
-    Err(Error::Status(status, msg))
-}
-
-fn decode<T: for<'de> Deserialize<'de>>(
-    resp: ureq::http::Response<ureq::Body>,
-) -> Result<T, Error> {
-    let mut resp = check(resp)?;
-    let mut text = String::new();
-    resp.body_mut()
-        .as_reader()
-        .read_to_string(&mut text)
-        .map_err(|e| Error::Transport(e.to_string()))?;
-    serde_json::from_str(&text).map_err(|e| Error::Decode(e.to_string()))
 }
 
 /// The events of a server-sent event stream, as this API sends them.

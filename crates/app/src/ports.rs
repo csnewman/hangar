@@ -423,7 +423,7 @@ impl Render for PortsView {
         let mut body = v_flex().gap(px(1.));
 
         if let Some((env, _, _)) = &about {
-            let public = env.ports_public;
+            let public = env.ports_public.unwrap_or_default();
             let enabled = !self.setting;
             body = body.child(
                 h_flex()

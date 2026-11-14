@@ -26,15 +26,15 @@ fn env(name: &str, phase: &str) -> Environment {
         cpus: None,
         memory_mib: None,
         editor_path: None,
-        ports_public: false,
+        ports_public: Some(false),
         display: None,
         image_update: None,
         web_names: vec![],
-        details: Default::default(),
         task: None,
         agents: vec![],
         created_at: now() - Duration::days(3),
         updated_at: now() - Duration::hours(2),
+        ..Default::default()
     }
 }
 
@@ -148,6 +148,7 @@ fn each_state_is_a_card() {
         done: None,
         total: None,
         unit: None,
+        rate: None,
     });
     assert_eq!(
         model::card(&place(), &starting, now()).lines[0].text,
@@ -297,6 +298,7 @@ fn an_environment_is_reached_over_ssh() {
         Some(hangar_app::api::SshGateway {
             host: "hangar.example.com".into(),
             port,
+            ..Default::default()
         })
     };
     let me = |name: &str, ssh| hangar_app::api::Me {

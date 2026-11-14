@@ -13,7 +13,7 @@ use hangar_app::place::{self, Connection, PlaceState, Update};
 
 fn env_json(id: &str, name: &str, phase: &str) -> String {
     format!(
-        r#"{{"id":"{id}","short_id":"abc123","name":"{name}","owner":"alice","template":"t","phase":"{phase}","desired":"running","created_at":"2026-11-07T10:00:00Z","updated_at":"2026-11-07T10:00:00Z","task":{{"id":"t1","text":"Fix rounding","set_by":"agent","set_at":"2026-11-07T10:00:00Z"}},"agents":[{{"id":"s1","agent":"claude","state":"asking","message":"May I?","since":"2026-11-07T10:01:00Z","needs_you":true}}],"later_field":{{"x":1}}}}"#
+        r#"{{"id":"{id}","short_id":"abc123","name":"{name}","owner":"alice","owner_id":"u1","template":"t","phase":"{phase}","desired":"running","created_at":"2026-11-07T10:00:00Z","updated_at":"2026-11-07T10:00:00Z","task":{{"id":"t1","text":"Fix rounding","set_by":"agent","set_at":"2026-11-07T10:00:00Z"}},"agents":[{{"id":"s1","agent":"claude","state":"asking","message":"May I?","since":"2026-11-07T10:01:00Z","needs_you":true}}],"later_field":{{"x":1}}}}"#
     )
 }
 

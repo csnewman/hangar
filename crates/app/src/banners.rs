@@ -83,7 +83,7 @@ fn setting(name: &str) -> &str {
 
 /// What needs deciding about an environment, most pressing first.
 pub fn banners(env: &Environment) -> Vec<Banner> {
-    let d = &env.details;
+    let d = env;
     let stopped = changeable(env);
     let stop_first = (!stopped).then_some("Stop the environment first");
     let image = d.image.clone().unwrap_or_else(|| "its image".into());
@@ -160,8 +160,9 @@ pub fn banners(env: &Environment) -> Vec<Banner> {
             });
         }
         if let Some(u) = &env.image_update {
-            let count = u.conflicts.len() as i64 + u.more_conflicts;
-            let risky = u.checked && u.error.is_none() && (count > 0 || u.packages);
+            let count = u.conflicts.len() as i64 + u.more_conflicts.unwrap_or_default();
+            let risky =
+                u.checked && u.error.is_none() && (count > 0 || u.packages.unwrap_or_default());
             let mut text = format!(
                 "A newer build of {image} is ready ({}; this has {}).",
                 build(&u.digest),
@@ -183,7 +184,7 @@ pub fn banners(env: &Environment) -> Vec<Banner> {
             } else if !risky {
                 text.push_str(" None of its changes hide a file the newer build changes.");
             } else {
-                if u.packages {
+                if u.packages.unwrap_or_default() {
                     text.push_str(
                         " Packages have been installed in it, whose database would hide the newer one.",
                     );
@@ -196,8 +197,8 @@ pub fn banners(env: &Environment) -> Vec<Banner> {
                 }
             }
             let mut files = if risky { u.conflicts.clone() } else { vec![] };
-            if risky && u.more_conflicts > 0 {
-                files.push(format!("and {} more", u.more_conflicts));
+            if let Some(more) = u.more_conflicts.filter(|&m| risky && m > 0) {
+                files.push(format!("and {more} more"));
             }
             let force = risky || u.error.is_some();
             out.push(Banner {

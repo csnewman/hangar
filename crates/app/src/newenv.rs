@@ -216,7 +216,7 @@ impl NewEnvView {
             .environments
             .iter()
             .filter(|e| Some(&e.owner) == me.as_ref())
-            .filter_map(|e| e.details.template_id.clone().map(|t| (e.created_at, t)))
+            .filter_map(|e| e.template_id.clone().map(|t| (e.created_at, t)))
             .max_by_key(|(at, _)| *at)
             .map(|(_, t)| t);
         newest
@@ -350,7 +350,7 @@ impl NewEnvView {
             template_id: t.id.clone(),
             name,
             settings,
-            repos,
+            repos: repos.unwrap_or_default(),
         })
     }
 
@@ -461,7 +461,7 @@ impl Render for NewEnvView {
                                     format!(
                                         "Made in {} from {}",
                                         repo_name(&r.url),
-                                        r.r#ref
+                                        r.ref_
                                             .clone()
                                             .unwrap_or_else(|| "its default branch".into())
                                     ),

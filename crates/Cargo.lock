@@ -3493,12 +3493,15 @@ dependencies = [
  "anyhow",
  "async-channel",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "dirs 6.0.0",
  "flate2",
+ "futures-core",
  "gpui-component",
  "gpui-pre",
  "gpui-pre-platform",
+ "hangar-openapi",
  "hangar-proto",
  "image",
  "keyring",
@@ -3508,6 +3511,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "pollster 0.4.0",
+ "reqwest",
  "ropey 1.6.1",
  "rustls",
  "rustls-platform-verifier",
@@ -3515,8 +3519,8 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "similar",
+ "tokio",
  "tungstenite",
- "ureq",
 ]
 
 [[package]]
