@@ -202,6 +202,25 @@ impl Server {
         worker::Worker::start(&format!("http://127.0.0.1:{}", self.port), name)
     }
 
+    /// As worker, presenting token as the bootstrap token.
+    pub fn worker_with_token(&self, name: &str, token: &str) -> worker::Worker {
+        worker::Worker::start_with_token(&format!("http://127.0.0.1:{}", self.port), name, token)
+    }
+
+    /// Makes a user, who is no administrator, and gives a session signed in
+    /// as them.
+    pub async fn user(&self, admin: &frontendapi::Client, username: &str) -> frontendapi::Client {
+        admin
+            .create_user(&body(serde_json::json!({
+                "username": username,
+                "password": format!("{username}-password"),
+            })))
+            .await
+            .unwrap_or_else(|e| panic!("making {username}: {}", why(&e)));
+        self.sign_in(username, &format!("{username}-password"))
+            .await
+    }
+
     /// Waits for the server to answer, failing the test with its log if it
     /// exits or does not answer within 60 seconds.
     fn wait_ready(&mut self) {
@@ -340,4 +359,26 @@ pub fn why<E: std::fmt::Debug>(e: &frontendapi::Error<E>) -> String {
         }
         e => e.to_string(),
     }
+}
+
+/// A template body for a small headless machine on the suite's workers.
+pub fn machine(name: &str, visibility: &str) -> serde_json::Value {
+    serde_json::json!({
+        "name": name,
+        "visibility": visibility,
+        "spec": {
+            "image": "ghcr.io/csnewman/hangar/minimal:ubuntu-26.04",
+            "cpus": 1,
+            "memory_mib": 1024,
+            "display": "none",
+            "gpu": "none",
+            "placement": { worker::LABEL.0: worker::LABEL.1 },
+            "repos": [],
+        },
+    })
+}
+
+/// The status a call was refused with.
+pub fn status<T, E>(r: Result<T, frontendapi::Error<E>>) -> Option<u16> {
+    r.err().and_then(|e| e.status()).map(|s| s.as_u16())
 }

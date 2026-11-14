@@ -21,7 +21,7 @@ pub const LABEL: (&str, &str) = ("runtime", "fake");
 
 /// A worker, connected to its server until it goes.
 pub struct Worker {
-    task: tokio::task::JoinHandle<()>,
+    task: Option<tokio::task::JoinHandle<Result<(), String>>>,
     machines: Machines,
     dir: PathBuf,
 }
@@ -30,10 +30,14 @@ impl Worker {
     /// Starts a worker named name for the server at url (its own address:
     /// the worker reaches it by number), presenting the bootstrap token.
     pub fn start(url: &str, name: &str) -> Worker {
+        Worker::start_with_token(url, name, crate::BOOTSTRAP_TOKEN)
+    }
+
+    /// As start, presenting token as the bootstrap token.
+    pub fn start_with_token(url: &str, name: &str, token: &str) -> Worker {
         let dir = std::env::temp_dir().join(crate::unique("hangar-suite-worker"));
         std::fs::create_dir_all(&dir).expect("the worker's directory");
-        std::fs::write(dir.join("token"), format!("{}\n", crate::BOOTSTRAP_TOKEN))
-            .expect("the bootstrap token");
+        std::fs::write(dir.join("token"), format!("{token}\n")).expect("the bootstrap token");
         let cfg = Config::parse(&format!(
             "server:\n  url: {url}\n  token_file: {}\n  credential_file: {}\n\
              node:\n  name: {name}\n  labels:\n    {}: {}\n\
@@ -50,14 +54,23 @@ impl Worker {
         let machines = Machines::default();
         let worker = RealWorker::new(cfg, machines.clone(), Log::default(), None)
             .expect("making the worker");
-        let task = tokio::spawn(async move {
-            let _ = worker.run().await;
-        });
+        let task = tokio::spawn(async move { worker.run().await.map_err(|e| e.to_string()) });
         Worker {
-            task,
+            task: Some(task),
             machines,
             dir,
         }
+    }
+
+    /// How the worker's run ended, if it ends within 20 seconds: an error
+    /// says why, such as the server rejecting its credential.
+    pub async fn ended(&mut self) -> Option<Result<(), String>> {
+        let task = self.task.as_mut()?;
+        let out = tokio::time::timeout(std::time::Duration::from_secs(20), task)
+            .await
+            .ok()?;
+        self.task = None;
+        Some(out.unwrap_or_else(|e| Err(e.to_string())))
     }
 
     /// What the worker has been asked of an environment, last.
@@ -68,7 +81,9 @@ impl Worker {
 
 impl Drop for Worker {
     fn drop(&mut self) {
-        self.task.abort();
+        if let Some(task) = &self.task {
+            task.abort();
+        }
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }

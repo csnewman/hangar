@@ -3,7 +3,7 @@
 //! it and as the worker is asked.
 
 use hangar_api::DesiredState;
-use hangar_suite::{Server, body, eventually, frontendapi, why, worker};
+use hangar_suite::{Server, body, eventually, frontendapi, machine, why};
 use serde_json::json;
 
 /// What the server says an environment's phase is.
@@ -17,19 +17,7 @@ fn phase(e: &frontendapi::types::Environment) -> String {
 /// A template the suite's workers take.
 async fn template(admin: &frontendapi::Client) -> frontendapi::types::Template {
     admin
-        .create_template(&body(json!({
-            "name": "Suite machine",
-            "visibility": "private",
-            "spec": {
-                "image": "ghcr.io/csnewman/hangar/minimal:ubuntu-26.04",
-                "cpus": 1,
-                "memory_mib": 1024,
-                "display": "none",
-                "gpu": "none",
-                "placement": { worker::LABEL.0: worker::LABEL.1 },
-                "repos": [],
-            },
-        })))
+        .create_template(&body(machine("Suite machine", "private")))
         .await
         .expect("making a template")
         .into_inner()
