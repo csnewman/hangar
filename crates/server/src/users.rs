@@ -29,6 +29,7 @@ pub const TOKEN_PREFIX: &str = "hgr_";
 pub struct Principal {
     pub user_id: Uuid,
     pub username: String,
+    pub admin: bool,
 }
 
 impl Principal {
@@ -36,6 +37,7 @@ impl Principal {
         Principal {
             user_id: u.id,
             username: u.username.clone(),
+            admin: u.is_admin,
         }
     }
 
@@ -301,4 +303,232 @@ pub async fn revoke_token(store: &Store, p: &Principal, ip: &str, id: Uuid) -> R
 /// Whether token is the access token t keeps the hash of.
 pub fn is_token(token: &str, t: &AccessToken) -> bool {
     sha256(token) == t.token_hash
+}
+
+/// The shortest password a user may have.
+pub const MIN_PASSWORD: usize = 8;
+
+/// A username: letters, digits and . _ @ -, starting with a letter or
+/// digit, at most 63 characters.
+fn valid_username(name: &str) -> bool {
+    let mut chars = name.chars();
+    let first = chars.next().is_some_and(|c| c.is_ascii_alphanumeric());
+    first
+        && name.len() <= 63
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '@' | '-'))
+}
+
+fn valid_password(p: &str) -> crate::fail::Result<()> {
+    if p.len() < MIN_PASSWORD {
+        return crate::fail::invalid(format!(
+            "a password must be at least {MIN_PASSWORD} characters"
+        ));
+    }
+    Ok(())
+}
+
+/// A user and how many environments they own, as the administrators'
+/// list shows them.
+pub struct Listed {
+    pub user: User,
+    pub environments: i64,
+}
+
+/// Every person, by name.
+pub async fn list(store: &Store) -> Result<Vec<Listed>> {
+    let mut tx = store.begin().await?;
+    let mut out = Vec::new();
+    for user in tx.people().await? {
+        let environments = tx.owned_environments(user.id).await?;
+        out.push(Listed { user, environments });
+    }
+    Ok(out)
+}
+
+/// What a new user is made with.
+pub struct NewUser<'a> {
+    pub username: &'a str,
+    pub display_name: &'a str,
+    pub password: &'a str,
+    pub admin: bool,
+}
+
+/// Makes a person; refused for a name taken by another or a team.
+pub async fn create(
+    store: &Store,
+    by: &Principal,
+    ip: &str,
+    nu: NewUser<'_>,
+) -> crate::fail::Result<User> {
+    if !valid_username(nu.username) {
+        return crate::fail::invalid(
+            "a username is letters, digits and . _ @ -, at most 63 characters",
+        );
+    }
+    valid_password(nu.password)?;
+    let hash = hash_password(nu.password);
+    let mut tx = store.begin().await?;
+    if tx.team_slug_taken(nu.username).await? {
+        return crate::fail::conflict(format!("{} is a team's name", nu.username));
+    }
+    if tx.person_by_name(nu.username).await?.is_some() {
+        return crate::fail::conflict(format!("the username {} is taken", nu.username));
+    }
+    let u = User {
+        id: Uuid::new_v4(),
+        username: nu.username.to_string(),
+        display_name: nu.display_name.trim().to_string(),
+        password_hash: Some(hash),
+        is_admin: nu.admin,
+        kind: "person".into(),
+        disabled_at: None,
+        created_at: Utc::now(),
+        theme: "system".into(),
+    };
+    tx.insert_user(&u).await?;
+    audit::record(
+        &mut tx,
+        &by.actor(ip),
+        Event::new("user.create", "user", u.id, &u.username)
+            .details(serde_json::json!({ "admin": nu.admin })),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(u)
+}
+
+/// A change to a person: each field given, the rest as they are.
+#[derive(Default)]
+pub struct Update<'a> {
+    pub display_name: Option<&'a str>,
+    pub admin: Option<bool>,
+    pub disabled: Option<bool>,
+    pub password: Option<&'a str>,
+}
+
+/// Changes a person. A new password, or disabling them, ends their
+/// sessions; refused if it would leave no administrator.
+pub async fn update(
+    store: &Store,
+    by: &Principal,
+    ip: &str,
+    id: Uuid,
+    up: Update<'_>,
+) -> crate::fail::Result<User> {
+    let hash = match up.password {
+        Some(p) => {
+            valid_password(p)?;
+            Some(hash_password(p))
+        }
+        None => None,
+    };
+    let display = up.display_name.map(str::trim);
+    let mut tx = store.begin().await?;
+    tx.lock_admins().await?;
+    let Some(u) = tx
+        .update_user(
+            id,
+            display,
+            up.admin,
+            up.disabled,
+            hash.as_deref(),
+            Utc::now(),
+        )
+        .await?
+    else {
+        return Err(crate::fail::Fail::NotFound("user not found".into()));
+    };
+    if tx.active_admins().await? == 0 {
+        return crate::fail::conflict("that would leave no administrator");
+    }
+    if hash.is_some() || up.disabled == Some(true) {
+        tx.delete_sessions(id, None).await?;
+    }
+    let mut changed = serde_json::Map::new();
+    if let Some(d) = display {
+        changed.insert("display_name".into(), d.into());
+    }
+    if let Some(a) = up.admin {
+        changed.insert("admin".into(), a.into());
+    }
+    if let Some(d) = up.disabled {
+        changed.insert("disabled".into(), d.into());
+    }
+    if up.password.is_some() {
+        changed.insert("password".into(), "reset".into());
+    }
+    audit::record(
+        &mut tx,
+        &by.actor(ip),
+        Event::new("user.update", "user", u.id, &u.username).details(changed.into()),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(u)
+}
+
+/// Deletes a person who owns nothing that would be left without them;
+/// refused if it would leave no administrator.
+pub async fn delete(store: &Store, by: &Principal, ip: &str, id: Uuid) -> crate::fail::Result<()> {
+    let mut tx = store.begin().await?;
+    tx.lock_admins().await?;
+    let owned = tx.owned_environments(id).await?;
+    if owned > 0 {
+        return crate::fail::conflict(format!(
+            "the user owns {owned} environments; delete them or disable the user instead"
+        ));
+    }
+    let owned = tx.owned_image_repositories(id).await?;
+    if owned > 0 {
+        return crate::fail::conflict(format!(
+            "the user owns {owned} image repositories; delete them or disable the user instead"
+        ));
+    }
+    let Some(name) = tx.delete_user(id).await? else {
+        return Err(crate::fail::Fail::NotFound("user not found".into()));
+    };
+    if tx.active_admins().await? == 0 {
+        return crate::fail::conflict("that would leave no administrator");
+    }
+    audit::record(
+        &mut tx,
+        &by.actor(ip),
+        Event::new("user.delete", "user", id, &name),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Changes p's own password, given the current one, ending every session
+/// of theirs but the one asking (whose token is session).
+pub async fn change_password(
+    store: &Store,
+    p: &Principal,
+    ip: &str,
+    session: Option<&str>,
+    current: &str,
+    next: &str,
+) -> crate::fail::Result<()> {
+    valid_password(next)?;
+    let mut tx = store.begin().await?;
+    let Some(hash) = tx.user(p.user_id).await?.and_then(|u| u.password_hash) else {
+        return crate::fail::invalid("this account has no password to change");
+    };
+    if !check_password(&hash, current) {
+        return crate::fail::invalid("the current password is incorrect");
+    }
+    let new_hash = hash_password(next);
+    tx.update_user(p.user_id, None, None, None, Some(&new_hash), Utc::now())
+        .await?;
+    let keep = session.map(sha256);
+    tx.delete_sessions(p.user_id, keep.as_deref()).await?;
+    audit::record(
+        &mut tx,
+        &p.actor(ip),
+        Event::new("user.change_password", "user", p.user_id, &p.username),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }

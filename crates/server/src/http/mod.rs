@@ -2,6 +2,7 @@
 //! client API (/api/v1), and what is shared between them: who is signed in,
 //! and how errors are told.
 
+mod access;
 mod client;
 mod frontend;
 
@@ -24,6 +25,17 @@ pub const SESSION_COOKIE: &str = "hangar_session";
 pub struct App {
     pub store: Store,
     pub cfg: Config,
+    pub rules: access::Rules,
+}
+
+impl App {
+    pub fn new(store: Store, cfg: Config) -> App {
+        App {
+            store,
+            cfg,
+            rules: access::Rules::from_specs(),
+        }
+    }
 }
 
 pub type Shared = Arc<App>;
@@ -34,6 +46,10 @@ pub fn router(app: Shared) -> Router {
         .route("/api/healthz", get(|| async { "ok" }))
         .nest("/api/frontend", frontend::routes())
         .nest("/api/v1", client::routes())
+        .route_layer(axum::middleware::from_fn_with_state(
+            app.clone(),
+            access::enforce,
+        ))
         .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "not found") })
         .with_state(app)
 }
@@ -83,6 +99,18 @@ impl From<crate::store::Error> for ApiError {
     }
 }
 
+impl From<crate::fail::Fail> for ApiError {
+    fn from(f: crate::fail::Fail) -> ApiError {
+        use crate::fail::Fail;
+        match f {
+            Fail::Invalid(m) => ApiError::new(StatusCode::BAD_REQUEST, m),
+            Fail::Conflict(m) => ApiError::new(StatusCode::CONFLICT, m),
+            Fail::NotFound(m) => ApiError::new(StatusCode::NOT_FOUND, m),
+            Fail::Store(e) => e.into(),
+        }
+    }
+}
+
 /// A JSON body, refused as invalid (400) when it is not what the spec says.
 pub struct Body<T>(pub T);
 
@@ -107,6 +135,7 @@ pub enum Via {
 }
 
 /// Who a request is signed in as, refused (401) when no one.
+#[derive(Clone)]
 pub struct Signed {
     pub principal: Principal,
     pub via: Via,
@@ -116,7 +145,19 @@ pub struct Signed {
 impl FromRequestParts<Shared> for Signed {
     type Rejection = ApiError;
 
+    /// Who access::enforce found signed in, or for a route outside the
+    /// specs, who the request signs in as.
     async fn from_request_parts(parts: &mut Parts, app: &Shared) -> Result<Self, ApiError> {
+        if let Some(s) = parts.extensions.get::<Signed>() {
+            return Ok(s.clone());
+        }
+        Signed::authenticate(parts, app).await
+    }
+}
+
+impl Signed {
+    /// Who a request's bearer token or session cookie signs in.
+    pub async fn authenticate(parts: &mut Parts, app: &Shared) -> Result<Signed, ApiError> {
         let ip = client_ip(&parts.headers);
         if let Some(token) = bearer(&parts.headers) {
             return match users::token(&app.store, &token).await? {

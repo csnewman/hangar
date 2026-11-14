@@ -3,6 +3,7 @@
 
 mod audit;
 mod config;
+mod fail;
 mod http;
 mod store;
 mod users;
@@ -37,7 +38,7 @@ async fn run() -> Result<(), String> {
         .await
         .map_err(|e| format!("listening on {}: {e}", cfg.listen))?;
     eprintln!("hangar-server: serving HTTP on {}", cfg.listen);
-    let app = http::router(Arc::new(http::App { store, cfg }));
+    let app = http::router(Arc::new(http::App::new(store, cfg)));
     axum::serve(listener, app)
         .await
         .map_err(|e| format!("serving: {e}"))

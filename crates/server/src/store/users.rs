@@ -39,6 +39,210 @@ fn token(r: &PgRow) -> Result<AccessToken> {
 }
 
 impl Tx {
+    /// Every person, by name, ignoring case.
+    pub async fn people(&mut self) -> Result<Vec<User>> {
+        match self {
+            Tx::Pg(tx) => sqlx::query(&format!(
+                "SELECT {USER_COLUMNS} FROM users WHERE kind = 'person' ORDER BY lower(username)"
+            ))
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(user)
+            .collect(),
+            Tx::Json(tx) => {
+                let mut out: Vec<User> = tx
+                    .work
+                    .users
+                    .iter()
+                    .filter(|u| u.kind == "person")
+                    .cloned()
+                    .collect();
+                out.sort_by_key(|u| u.username.to_lowercase());
+                Ok(out)
+            }
+        }
+    }
+
+    /// Holds every active administrator's row until the transaction ends, so
+    /// two changes cannot each leave the other the last.
+    pub async fn lock_admins(&mut self) -> Result<()> {
+        if let Tx::Pg(tx) = self {
+            sqlx::query(
+                "SELECT 1 FROM users WHERE is_admin AND disabled_at IS NULL ORDER BY id FOR UPDATE",
+            )
+            .execute(&mut **tx)
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// How many administrators are not disabled.
+    pub async fn active_admins(&mut self) -> Result<i64> {
+        match self {
+            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+                "SELECT count(*) FROM users WHERE is_admin AND disabled_at IS NULL",
+            )
+            .fetch_one(&mut **tx)
+            .await?),
+            Tx::Json(tx) => Ok(tx
+                .work
+                .users
+                .iter()
+                .filter(|u| u.is_admin && u.disabled_at.is_none())
+                .count() as i64),
+        }
+    }
+
+    /// Whether a team has the slug name, ignoring case.
+    pub async fn team_slug_taken(&mut self, name: &str) -> Result<bool> {
+        match self {
+            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM teams WHERE lower(slug) = lower($1))",
+            )
+            .bind(name)
+            .fetch_one(&mut **tx)
+            .await?),
+            Tx::Json(_) => Ok(false),
+        }
+    }
+
+    /// How many environments a user owns.
+    pub async fn owned_environments(&mut self, user_id: Uuid) -> Result<i64> {
+        match self {
+            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+                "SELECT count(*) FROM environments WHERE owner_id = $1",
+            )
+            .bind(user_id)
+            .fetch_one(&mut **tx)
+            .await?),
+            Tx::Json(_) => Ok(0),
+        }
+    }
+
+    /// How many image repositories a user owns.
+    pub async fn owned_image_repositories(&mut self, user_id: Uuid) -> Result<i64> {
+        match self {
+            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+                "SELECT count(*) FROM image_repositories WHERE owner_id = $1",
+            )
+            .bind(user_id)
+            .fetch_one(&mut **tx)
+            .await?),
+            Tx::Json(_) => Ok(0),
+        }
+    }
+
+    /// Changes a person: each field given, the rest as they are; disabled
+    /// keeps the time they were first disabled. None if there is no such
+    /// person.
+    pub async fn update_user(
+        &mut self,
+        id: Uuid,
+        display_name: Option<&str>,
+        admin: Option<bool>,
+        disabled: Option<bool>,
+        password_hash: Option<&str>,
+        now: DateTime<Utc>,
+    ) -> Result<Option<User>> {
+        match self {
+            Tx::Pg(tx) => sqlx::query(&format!(
+                "UPDATE users SET
+                    display_name = coalesce($2, display_name),
+                    is_admin = coalesce($3, is_admin),
+                    disabled_at = CASE WHEN $4::boolean IS NULL THEN disabled_at
+                                       WHEN $4 THEN coalesce(disabled_at, $6)
+                                       ELSE NULL END,
+                    password_hash = coalesce($5, password_hash)
+                 WHERE id = $1 AND kind = 'person'
+                 RETURNING {USER_COLUMNS}"
+            ))
+            .bind(id)
+            .bind(display_name)
+            .bind(admin)
+            .bind(disabled)
+            .bind(password_hash)
+            .bind(now)
+            .fetch_optional(&mut **tx)
+            .await?
+            .map(|r| user(&r))
+            .transpose(),
+            Tx::Json(tx) => {
+                let Some(u) = tx
+                    .work
+                    .users
+                    .iter_mut()
+                    .find(|u| u.id == id && u.kind == "person")
+                else {
+                    return Ok(None);
+                };
+                if let Some(d) = display_name {
+                    u.display_name = d.to_string();
+                }
+                if let Some(a) = admin {
+                    u.is_admin = a;
+                }
+                match disabled {
+                    Some(true) => u.disabled_at = u.disabled_at.or(Some(now)),
+                    Some(false) => u.disabled_at = None,
+                    None => {}
+                }
+                if let Some(h) = password_hash {
+                    u.password_hash = Some(h.to_string());
+                }
+                Ok(Some(u.clone()))
+            }
+        }
+    }
+
+    /// Deletes a person, and with them their sessions and tokens; gives
+    /// their name, or None if there is no such person.
+    pub async fn delete_user(&mut self, id: Uuid) -> Result<Option<String>> {
+        match self {
+            Tx::Pg(tx) => Ok(sqlx::query_scalar(
+                "DELETE FROM users WHERE id = $1 AND kind = 'person' RETURNING username",
+            )
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?),
+            Tx::Json(tx) => {
+                let Some(at) = tx
+                    .work
+                    .users
+                    .iter()
+                    .position(|u| u.id == id && u.kind == "person")
+                else {
+                    return Ok(None);
+                };
+                let u = tx.work.users.remove(at);
+                tx.work.sessions.retain(|s| s.user_id != id);
+                tx.work.access_tokens.retain(|t| t.user_id != id);
+                Ok(Some(u.username))
+            }
+        }
+    }
+
+    /// Ends every session of a user's but the one whose token hashes to
+    /// keep.
+    pub async fn delete_sessions(&mut self, user_id: Uuid, keep: Option<&[u8]>) -> Result<()> {
+        match self {
+            Tx::Pg(tx) => {
+                sqlx::query(
+                    "DELETE FROM sessions WHERE user_id = $1 AND token_hash IS DISTINCT FROM $2",
+                )
+                .bind(user_id)
+                .bind(keep)
+                .execute(&mut **tx)
+                .await?;
+            }
+            Tx::Json(tx) => tx
+                .work
+                .sessions
+                .retain(|s| s.user_id != user_id || Some(s.token_hash.as_slice()) == keep),
+        }
+        Ok(())
+    }
+
     /// The person named name, ignoring case.
     pub async fn person_by_name(&mut self, name: &str) -> Result<Option<User>> {
         match self {

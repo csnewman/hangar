@@ -19,6 +19,127 @@ pub fn routes() -> Router<Shared> {
         .route("/me", get(me))
         .route("/me/tokens", get(list_tokens).post(create_token))
         .route("/me/tokens/{id}", delete(revoke_token))
+        .route("/me/password", post(change_password))
+        .route("/users", get(list_users).post(create_user))
+        .route(
+            "/users/{id}",
+            axum::routing::patch(update_user).delete(delete_user),
+        )
+}
+
+fn user_of(l: &users::Listed) -> types::User {
+    let u = &l.user;
+    types::User {
+        admin: u.is_admin,
+        created_at: u.created_at,
+        disabled: u.disabled_at.is_some(),
+        display_name: u.display_name.clone(),
+        environments: l.environments,
+        has_password: u.password_hash.is_some(),
+        id: u.id.to_string(),
+        username: u.username.clone(),
+    }
+}
+
+/// A user's ID from a path: one that is not a UUID names no one.
+fn user_id(id: &str) -> Result<uuid::Uuid, ApiError> {
+    uuid::Uuid::parse_str(id).map_err(|_| ApiError::not_found("user"))
+}
+
+async fn list_users(State(app): State<Shared>) -> Result<Json<Vec<types::User>>, ApiError> {
+    Ok(Json(
+        users::list(&app.store).await?.iter().map(user_of).collect(),
+    ))
+}
+
+async fn create_user(
+    State(app): State<Shared>,
+    s: Signed,
+    Body(b): Body<types::CreateUser>,
+) -> Result<(StatusCode, Json<types::User>), ApiError> {
+    let display = b
+        .display_name
+        .as_ref()
+        .map(|d| d.to_string())
+        .unwrap_or_default();
+    let u = users::create(
+        &app.store,
+        &s.principal,
+        &s.ip,
+        users::NewUser {
+            username: &b.username,
+            display_name: &display,
+            password: &b.password,
+            admin: b.admin.unwrap_or(false),
+        },
+    )
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(user_of(&users::Listed {
+            user: u,
+            environments: 0,
+        })),
+    ))
+}
+
+async fn update_user(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(id): Path<String>,
+    Body(b): Body<types::UpdateUser>,
+) -> Result<Json<types::User>, ApiError> {
+    let id = user_id(&id)?;
+    let display = b.display_name.as_ref().map(|d| d.to_string());
+    let password = b.password.as_ref().map(|p| p.to_string());
+    let u = users::update(
+        &app.store,
+        &s.principal,
+        &s.ip,
+        id,
+        users::Update {
+            display_name: display.as_deref(),
+            admin: b.admin,
+            disabled: b.disabled,
+            password: password.as_deref(),
+        },
+    )
+    .await?;
+    let environments = app.store.begin().await?.owned_environments(u.id).await?;
+    Ok(Json(user_of(&users::Listed {
+        user: u,
+        environments,
+    })))
+}
+
+async fn delete_user(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
+    users::delete(&app.store, &s.principal, &s.ip, user_id(&id)?).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn change_password(
+    State(app): State<Shared>,
+    s: Signed,
+    Body(b): Body<types::ChangePassword>,
+) -> Result<StatusCode, ApiError> {
+    let session = match &s.via {
+        Via::Session(t) => Some(t.as_str()),
+        Via::Token(_) => None,
+    };
+    users::change_password(
+        &app.store,
+        &s.principal,
+        &s.ip,
+        session,
+        &b.current_password,
+        &b.new_password,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// The signed-in user, as the web UI shows them.
