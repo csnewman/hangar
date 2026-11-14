@@ -7,6 +7,7 @@ use hangar_api::{ObservedEnvironment, WorkerStatus};
 use sqlx::Row;
 use uuid::Uuid;
 
+use super::signals::Signal;
 use super::{Backend, Result, Tx};
 
 /// One environment the report moved from one phase to another.
@@ -63,7 +64,7 @@ impl Tx {
         now: DateTime<Utc>,
     ) -> Result<Option<Taken>> {
         let placed = self.placed(worker_id).await?;
-        let Some(worker_name) = self.worker_name(worker_id).await? else {
+        let Some((worker_name, cpus, memory_mib)) = self.worker_held(worker_id).await? else {
             return Ok(None);
         };
         let mut unknown = Vec::new();
@@ -101,6 +102,9 @@ impl Tx {
             self.bump(worker_id).await?;
         }
         self.worker_reported(worker_id, st, &unknown, now).await?;
+        if (cpus as i64, memory_mib as i64) != (st.capacity.cpus, st.capacity.memory_mib) {
+            self.signal(Signal::Placement);
+        }
         Ok(Some(Taken {
             worker_name,
             phases,
@@ -145,11 +149,12 @@ impl Tx {
         }
     }
 
-    /// A worker's name, its row held until the transaction ends.
-    async fn worker_name(&mut self, id: Uuid) -> Result<Option<String>> {
+    /// A worker's name and capacity, its row held until the transaction
+    /// ends.
+    async fn worker_held(&mut self, id: Uuid) -> Result<Option<(String, i32, i32)>> {
         match &mut self.inner {
-            Backend::Pg(tx) => Ok(sqlx::query_scalar(
-                "SELECT name FROM workers WHERE id = $1 FOR UPDATE",
+            Backend::Pg(tx) => Ok(sqlx::query_as(
+                "SELECT name, cpus, memory_mib FROM workers WHERE id = $1 FOR UPDATE",
             )
             .bind(id)
             .fetch_optional(&mut **tx)
@@ -159,7 +164,7 @@ impl Tx {
                 .workers
                 .iter()
                 .find(|w| w.id == id)
-                .map(|w| w.name.clone())),
+                .map(|w| (w.name.clone(), w.cpus, w.memory_mib))),
         }
     }
 
@@ -173,6 +178,7 @@ impl Tx {
     ) -> Result<()> {
         let (stats, progress) = (json(&o.stats), json(&o.progress));
         let (update, rollback) = (json(&o.image_update), json(&o.image_rollback));
+        let mut changed = false;
         match &mut self.inner {
             Backend::Pg(tx) => {
                 sqlx::query(
@@ -204,7 +210,11 @@ impl Tx {
                 }
             }
             Backend::Json(tx) => {
+                if !keeps_agents(phase) {
+                    tx.work.agent_sessions.retain(|a| a.environment_id != id);
+                }
                 if let Some(e) = tx.work.environments.iter_mut().find(|e| e.id == id) {
+                    let before = e.clone();
                     if (e.phase.as_str(), e.reason.as_str()) != (phase, o.reason.as_str()) {
                         e.updated_at = now;
                     }
@@ -223,8 +233,32 @@ impl Tx {
                     e.image_drop_rollback = e.image_drop_rollback && rollback.is_some();
                     e.image_update = update;
                     e.image_rollback = rollback;
+                    // As Postgres's trigger has it: usage alone is no change.
+                    let unchanged = (
+                        &before.phase,
+                        &before.reason,
+                        &before.progress,
+                        &before.image_digest,
+                        &before.image_pin_want,
+                        before.image_drop_rollback,
+                        &before.image_update,
+                        &before.image_rollback,
+                    ) == (
+                        &e.phase,
+                        &e.reason,
+                        &e.progress,
+                        &e.image_digest,
+                        &e.image_pin_want,
+                        e.image_drop_rollback,
+                        &e.image_update,
+                        &e.image_rollback,
+                    );
+                    changed = !unchanged;
                 }
             }
+        }
+        if changed {
+            self.signal(Signal::Environment(id));
         }
         Ok(())
     }
@@ -238,8 +272,9 @@ impl Tx {
                     .execute(&mut **tx)
                     .await?;
             }
-            Backend::Json(tx) => tx.work.environments.retain(|e| e.id != id),
+            Backend::Json(tx) => super::environments::json_delete(&mut tx.work, id),
         }
+        self.signal(Signal::Environment(id));
         Ok(())
     }
 

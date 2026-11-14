@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::rows::{
-    AccessToken, AuditEvent, Environment, EnvironmentRemoval, ImageRemoval, Session, User, Worker,
+    AccessToken, AgentSession, AuditEvent, Collaborator, Environment, EnvironmentRemoval,
+    ImageRemoval, Session, Task, Team, TeamMember, Template, User, Worker,
 };
 use super::{Error, Result};
 
@@ -29,6 +30,13 @@ pub struct State {
     pub environments: Vec<Environment>,
     pub worker_image_removals: Vec<ImageRemoval>,
     pub worker_environment_removals: Vec<EnvironmentRemoval>,
+    pub templates: Vec<Template>,
+    pub template_collaborators: Vec<Collaborator>,
+    pub template_team_collaborators: Vec<Collaborator>,
+    pub teams: Vec<Team>,
+    pub team_members: Vec<TeamMember>,
+    pub environment_tasks: Vec<Task>,
+    pub agent_sessions: Vec<AgentSession>,
 }
 
 /// The file, open.

@@ -158,3 +158,77 @@ pub struct EnvironmentRemoval {
     pub worker_id: Uuid,
     pub environment: String,
 }
+
+/// `templates`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Template {
+    pub id: Uuid,
+    pub owner_id: Uuid,
+    pub team_id: Option<Uuid>,
+    pub name: String,
+    pub description: String,
+    /// private or shared.
+    pub visibility: String,
+    /// What it makes: hangar_api's TemplateSpec.
+    pub spec: serde_json::Value,
+    /// Bumped whenever its spec changes.
+    pub revision: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// `teams`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Team {
+    pub id: Uuid,
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `team_members`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TeamMember {
+    pub team_id: Uuid,
+    pub user_id: Uuid,
+    /// viewer, member or admin.
+    pub role: String,
+}
+
+/// `template_collaborators` (who: a user) and `template_team_collaborators`
+/// (who: a team).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Collaborator {
+    pub template_id: Uuid,
+    pub who: Uuid,
+}
+
+/// `environment_tasks`: what an environment is for, set by its coding agent
+/// or its owner. The one not done is its task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Task {
+    pub id: Uuid,
+    pub environment_id: Uuid,
+    pub text: String,
+    /// agent or user.
+    pub set_by: String,
+    pub set_at: DateTime<Utc>,
+    pub done_at: Option<DateTime<Utc>>,
+}
+
+/// `agent_sessions`: a coding agent's session in an environment, as its
+/// guest agent last reported it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentSession {
+    pub environment_id: Uuid,
+    pub id: String,
+    pub agent: String,
+    pub terminal: String,
+    pub state: String,
+    pub step: String,
+    pub message: String,
+    pub since: DateTime<Utc>,
+    /// When its owner last looked at it.
+    pub seen_at: Option<DateTime<Utc>>,
+}

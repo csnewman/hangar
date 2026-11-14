@@ -149,6 +149,21 @@ pub struct Access {
     pub no_editor_trust: bool,
 }
 
+/// A template's spec: an environment's, its paths and branches holding
+/// variables a name fills in, and a pattern that name must match.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TemplateSpec {
+    #[serde(flatten)]
+    pub spec: Spec,
+    /// A regular expression the whole name must match; its named groups
+    /// are variables too.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name_pattern: String,
+    /// What a name that does not match is told.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name_hint: String,
+}
+
 /// What an environment is: its own resolved copy of its template's.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Spec {

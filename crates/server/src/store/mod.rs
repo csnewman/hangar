@@ -6,16 +6,20 @@
 //! the Postgres tables' as `internal/db/migrations` makes them, which the
 //! JSON file holds as they are.
 
+mod catalog;
+pub mod environments;
 mod json;
 mod pg;
 pub mod report;
 pub mod rows;
+pub mod signals;
 mod users;
 pub mod workers;
 
 use std::sync::Arc;
 
 use crate::config::Storage;
+use signals::{Signal, Signals};
 
 /// A failure of the store itself, not of what was asked of it.
 #[derive(Debug)]
@@ -35,12 +39,11 @@ impl From<sqlx::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// The server's state, and the workers waiting on what they are asked to
-/// run.
+/// The server's state, and whoever waits on its changes.
 #[derive(Clone)]
 pub struct Store {
     backend: Kind,
-    pub waiters: Arc<Waiters>,
+    pub signals: Arc<Signals>,
 }
 
 #[derive(Clone)]
@@ -50,82 +53,81 @@ enum Kind {
 }
 
 /// One transaction: what it reads is as of its start, and what it writes is
-/// kept only once it commits; committing wakes the workers whose desired
-/// sets it changed.
+/// kept only once it commits; committing signals what it changed.
 pub struct Tx {
     pub(super) inner: Backend,
-    bumped: Vec<uuid::Uuid>,
-    waiters: Arc<Waiters>,
+    signalled: Vec<Signal>,
+    signals: Arc<Signals>,
 }
 
 pub(super) enum Backend {
     Pg(sqlx::Transaction<'static, sqlx::Postgres>),
-    Json(json::Tx),
-}
-
-/// Workers waiting for their desired set to change, each woken by a commit
-/// that bumped it.
-#[derive(Default)]
-pub struct Waiters(
-    std::sync::Mutex<std::collections::HashMap<uuid::Uuid, Arc<tokio::sync::Notify>>>,
-);
-
-impl Waiters {
-    /// What wakes for the worker with id.
-    pub fn watch(&self, id: uuid::Uuid) -> Arc<tokio::sync::Notify> {
-        self.0.lock().unwrap().entry(id).or_default().clone()
-    }
-
-    fn wake(&self, id: uuid::Uuid) {
-        if let Some(n) = self.0.lock().unwrap().get(&id) {
-            n.notify_waiters();
-        }
-    }
+    Json(Box<json::Tx>),
 }
 
 impl Store {
     /// Opens the store storage names, bringing a database's schema up to
     /// date.
     pub async fn open(storage: &Storage) -> Result<Store> {
+        let signals = Arc::<Signals>::default();
         let backend = match storage {
-            Storage::Postgres(url) => Kind::Pg(pg::open(url).await?),
+            Storage::Postgres(url) => {
+                let pool = pg::open(url).await?;
+                tokio::spawn(signals::listen(pool.clone(), signals.clone()));
+                Kind::Pg(pool)
+            }
             Storage::Json(path) => Kind::Json(Arc::new(json::File::open(path)?)),
         };
-        Ok(Store {
-            backend,
-            waiters: Arc::default(),
-        })
+        Ok(Store { backend, signals })
     }
 
     /// Starts a transaction.
     pub async fn begin(&self) -> Result<Tx> {
         let inner = match &self.backend {
             Kind::Pg(pool) => Backend::Pg(pool.begin().await?),
-            Kind::Json(file) => Backend::Json(file.begin().await),
+            Kind::Json(file) => Backend::Json(Box::new(file.begin().await)),
         };
         Ok(Tx {
             inner,
-            bumped: Vec::new(),
-            waiters: self.waiters.clone(),
+            signalled: Vec::new(),
+            signals: self.signals.clone(),
         })
     }
 }
 
 impl Tx {
-    /// Keeps what the transaction wrote, and wakes the workers it bumped.
+    /// Keeps what the transaction wrote, and signals what it changed, to
+    /// other servers sharing a database too: environments' changes reach
+    /// them by the database's own triggers.
     pub async fn commit(self) -> Result<()> {
         match self.inner {
-            Backend::Pg(tx) => tx.commit().await?,
-            Backend::Json(tx) => tx.commit()?,
+            Backend::Pg(mut tx) => {
+                for s in &self.signalled {
+                    let (channel, payload) = match s {
+                        Signal::Worker(id) => (signals::WORKER_CHANNEL, id.to_string()),
+                        Signal::Placement => (signals::PLACEMENT_CHANNEL, String::new()),
+                        Signal::Environment(_) => continue,
+                    };
+                    sqlx::query("SELECT pg_notify($1, $2)")
+                        .bind(channel)
+                        .bind(payload)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+                tx.commit().await?
+            }
+            Backend::Json(tx) => (*tx).commit()?,
         }
-        for id in self.bumped {
-            self.waiters.wake(id);
+        for s in self.signalled {
+            self.signals.deliver(s);
         }
         Ok(())
     }
 
-    /// Notes a worker whose desired set changed, to wake on commit.
-    pub(super) fn bumped(&mut self, id: uuid::Uuid) {
-        self.bumped.push(id);
+    /// Notes something changed, to signal once this commits.
+    pub fn signal(&mut self, s: Signal) {
+        if !self.signalled.contains(&s) {
+            self.signalled.push(s);
+        }
     }
 }

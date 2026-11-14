@@ -3,9 +3,13 @@
 
 mod audit;
 mod config;
+mod environments;
 mod fail;
 mod http;
+mod placement;
 mod store;
+mod teams;
+mod templates;
 mod tunnel;
 mod users;
 mod workers;
@@ -40,6 +44,7 @@ async fn run() -> Result<(), String> {
         .await
         .map_err(|e| format!("listening on {}: {e}", cfg.listen))?;
     eprintln!("hangar-server: serving HTTP on {}", cfg.listen);
+    tokio::spawn(placement::run(store.clone()));
     let app = http::router(Arc::new(http::App::new(store, cfg)));
     axum::serve(listener, app)
         .await

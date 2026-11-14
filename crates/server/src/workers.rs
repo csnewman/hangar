@@ -147,7 +147,7 @@ pub async fn desired(
     after: i64,
     registry: &str,
 ) -> Result<Option<DesiredSet>> {
-    let notify = store.waiters.watch(id);
+    let notify = store.signals.watch_worker(id);
     let deadline = tokio::time::Instant::now() + DESIRED_HOLD;
     loop {
         let changed = notify.notified();

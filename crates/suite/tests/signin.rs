@@ -1,6 +1,7 @@
 //! Signing in: a session through the web UI's API, and access tokens for
 //! the client API.
 
+use hangar_suite::clientapi::ClientInfo;
 use hangar_suite::{ADMIN, Server, frontendapi};
 
 /// The administrator signs in with their password and is who the server
@@ -71,4 +72,57 @@ async fn a_token_signs_in_until_revoked() {
     c.revoke_token(&mine.id).await.expect("revoking it");
     let e = c.get_me().await.expect_err("a revoked token");
     assert_eq!(e.status().map(|s| s.as_u16()), Some(401));
+}
+
+/// A change a browser says another site caused is refused when it would
+/// ride on the session's cookie; an access token is no browser's to send.
+#[tokio::test]
+async fn cross_site_changes_are_refused() {
+    let Some(s) = Server::start() else { return };
+    let admin = s.admin().await;
+    let http = admin.client();
+    let made = std::sync::atomic::AtomicU32::new(0);
+    let post = |headers: &[(&str, &str)]| {
+        let n = made.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let template = hangar_suite::machine(&format!("Cross-site {n}"), "private");
+        let mut r = http
+            .post(format!("{}/api/frontend/templates", s.url()))
+            .json(&template);
+        for (k, v) in headers {
+            r = r.header(*k, *v);
+        }
+        async move { r.send().await.expect("the request").status().as_u16() }
+    };
+    assert_eq!(post(&[("Sec-Fetch-Site", "cross-site")]).await, 403);
+    assert_eq!(post(&[("Sec-Fetch-Site", "same-site")]).await, 403);
+    assert_eq!(post(&[("Origin", "https://evil.example")]).await, 403);
+    assert_eq!(post(&[("Sec-Fetch-Site", "same-origin")]).await, 201);
+    assert_eq!(post(&[("Origin", &s.url())]).await, 201);
+    assert_eq!(post(&[]).await, 201);
+
+    // The client API takes the cookie too, under the same rule.
+    let out = http
+        .delete(format!(
+            "{}/api/v1/me/tokens/00000000-0000-4000-8000-000000000001",
+            s.url()
+        ))
+        .header("Sec-Fetch-Site", "cross-site")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(out.status().as_u16(), 403);
+    let token = s.token(&admin, "cross-site").await;
+    let out = reqwest::Client::new()
+        .delete(format!(
+            "{}/api/v1/me/tokens/00000000-0000-4000-8000-000000000001",
+            s.url()
+        ))
+        .header("Sec-Fetch-Site", "cross-site")
+        .bearer_auth(&token);
+    let out = s.http().execute(out.build().unwrap()).await.unwrap();
+    assert_eq!(
+        out.status().as_u16(),
+        404,
+        "a token's request refused as cross-site"
+    );
 }

@@ -11,6 +11,8 @@ pub enum Fail {
     Conflict(String),
     /// There is no such thing, or none the asker may see (404).
     NotFound(String),
+    /// The asker may not (403).
+    Forbidden(String),
     /// The store failed (500).
     Store(store::Error),
 }
@@ -29,4 +31,8 @@ pub fn invalid<T>(why: impl Into<String>) -> Result<T> {
 
 pub fn conflict<T>(why: impl Into<String>) -> Result<T> {
     Err(Fail::Conflict(format!("conflict: {}", why.into())))
+}
+
+pub fn forbidden<T>(why: impl Into<String>) -> Result<T> {
+    Err(Fail::Forbidden(format!("forbidden: {}", why.into())))
 }

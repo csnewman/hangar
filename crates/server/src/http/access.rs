@@ -75,6 +75,17 @@ pub async fn enforce(
         return next.run(req).await;
     };
     let path = matched.as_str();
+    // A browser sends the session's cookie with requests other sites
+    // cause, so a change it carries must come from this server's pages:
+    // every change to the web UI's API, and the client API's by cookie.
+    let by_cookie = path.starts_with("/api/v1/")
+        && super::bearer(req.headers()).is_none()
+        && super::cookie(req.headers(), super::SESSION_COOKIE).is_some();
+    if (path.starts_with("/api/frontend/") || by_cookie)
+        && let Some(why) = cross_site(&req)
+    {
+        return ApiError::new(StatusCode::FORBIDDEN, why).into_response();
+    }
     let Some(access) = app.rules.get(req.method(), path) else {
         if path.starts_with("/api/frontend/") || path.starts_with("/api/v1/") {
             eprintln!("hangar-server: no access rule for {} {path}", req.method());
@@ -96,4 +107,32 @@ pub async fn enforce(
         req = Request::from_parts(parts, body);
     }
     next.run(req).await
+}
+
+/// Why a request that changes something is refused as another site's: the
+/// browser says so, or its Origin is not this server. The session's cookie
+/// is SameSite=Lax, which keeps it off such requests already; this is the
+/// second lock, which does not depend on the browser honouring that.
+fn cross_site(req: &Request) -> Option<&'static str> {
+    if matches!(*req.method(), Method::GET | Method::HEAD | Method::OPTIONS) {
+        return None;
+    }
+    let h = req.headers();
+    let header = |name: &str| h.get(name).and_then(|v| v.to_str().ok());
+    if let Some(site) = header("sec-fetch-site")
+        && !site.is_empty()
+        && site != "same-origin"
+        && site != "none"
+    {
+        return Some("cross-site request refused");
+    }
+    if let Some(origin) = header("origin")
+        && !origin.is_empty()
+    {
+        let host = origin.split_once("://").map(|(_, rest)| rest);
+        if host.is_none() || host != header("host") {
+            return Some("cross-origin request refused");
+        }
+    }
+    None
 }

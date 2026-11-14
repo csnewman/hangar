@@ -9,7 +9,7 @@ use uuid::Uuid;
 use super::rows::{Environment, ImageRemoval, Worker};
 use super::{Backend, Result, Tx};
 
-const WORKER_COLUMNS: &str = "id, name, credential_hash, labels, cpus, memory_mib, unknown, stats, \
+pub(super) const WORKER_COLUMNS: &str = "id, name, credential_hash, labels, cpus, memory_mib, unknown, stats, \
      images, gpu, desired_version, last_seen_at, revoked_at, created_at, monitor, suspends";
 
 pub const ENVIRONMENT_COLUMNS: &str = "id, short_id, owner_id, name, template_id, template_name, \
@@ -17,7 +17,7 @@ pub const ENVIRONMENT_COLUMNS: &str = "id, short_id, owner_id, name, template_id
      image_rollback, ports_public, cpus, memory_mib, desired, worker_id, phase, reason, stats, progress, \
      created_at, updated_at";
 
-fn worker(r: &PgRow) -> Result<Worker> {
+pub(super) fn worker(r: &PgRow) -> Result<Worker> {
     Ok(Worker {
         id: r.try_get("id")?,
         name: r.try_get("name")?,
@@ -248,7 +248,7 @@ impl Tx {
     /// Asks a worker for its desired set again: bumps its version, and wakes
     /// it once this commits.
     pub async fn bump(&mut self, id: Uuid) -> Result<()> {
-        self.bumped(id);
+        self.signal(super::signals::Signal::Worker(id));
         match &mut self.inner {
             Backend::Pg(tx) => {
                 sqlx::query(
