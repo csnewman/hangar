@@ -567,6 +567,17 @@ impl Instance {
         }
     }
 
+    /// Tells hangar-krun to stop, once its snapshot is recorded. It takes
+    /// its turn behind a request already in flight, such as the sampler's
+    /// asking after the memory, which hangar-krun answers paused as it is:
+    /// a machine never told stays up until the caller gives up waiting.
+    async fn exit_krun(&self) {
+        let Some(k) = &self.krun else { return };
+        if let Ok(mut k) = tokio::time::timeout(Duration::from_secs(15), k.lock()).await {
+            let _ = writeln!(k.requests, "exit");
+        }
+    }
+
     /// The memory of a machine under libkrun: what it booted with and,
     /// with a virtio-mem region, what hangar-krun says of the region.
     async fn krun_memory(&self) -> io::Result<Memory> {
@@ -674,22 +685,15 @@ impl Instance {
             });
             suspend::mark(&c.dir, &rec)
         })();
-        let exit = || {
-            if let Some(k) = &self.krun
-                && let Ok(mut k) = k.try_lock()
-            {
-                let _ = writeln!(k.requests, "exit");
-            }
-        };
         if let Err(e) = recorded {
             // The machine is paused, written down and of no further use:
             // the guest boots afresh next time.
             suspend::discard(&c.dir);
-            exit();
+            self.exit_krun().await;
             return Err(e);
         }
         // Recorded, so stopping the machine keeps its swap.
-        exit();
+        self.exit_krun().await;
         self.process.wait_for(Duration::from_secs(15)).await;
         self.close().await;
         Ok(())
