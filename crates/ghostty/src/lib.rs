@@ -141,6 +141,9 @@ pub struct Cell {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Row {
     pub cells: Vec<Cell>,
+    /// Whether its cells were read: every row's are in `frame`, and in
+    /// `changes` only those of the rows that changed.
+    pub changed: bool,
 }
 
 /// The screen as it is to be drawn: its rows, its colours, the cursor, and
@@ -408,6 +411,9 @@ pub struct Terminal {
     images: sys::GhosttyRenderStateImageIterator,
     search: sys::GhosttySearch,
     state: Box<State>,
+    /// The viewport's rows changed since `changes` last read them; None
+    /// for every row.
+    changed: Option<Vec<bool>>,
 }
 
 /// A failure of libghostty-vt.
@@ -462,6 +468,7 @@ impl Terminal {
                 size: (rows, columns, 0, 0),
                 ..State::default()
             }),
+            changed: None,
         };
         // SAFETY: each handle is made once, freed by Drop, and used only
         // from this thread; the state the callbacks write lives in a Box
@@ -586,6 +593,7 @@ impl Terminal {
     /// names none, and the 256 the palette's indices name.
     pub fn set_colours(&mut self, fg: Rgb, bg: Rgb, palette: &[Rgb; 256]) {
         use sys::GhosttyTerminalOption::*;
+        self.changed = None;
         let fg: sys::GhosttyColorRgb = fg.into();
         let bg: sys::GhosttyColorRgb = bg.into();
         let palette: [sys::GhosttyColorRgb; 256] = palette.map(Into::into);
@@ -650,6 +658,7 @@ impl Terminal {
     /// the bright eight.
     pub fn set_bold_is_bright(&mut self, on: bool) {
         self.state.bold_is_bright = on;
+        self.changed = None;
     }
 
     /// Whether the terminal is dark, as a program that asks is told
@@ -801,6 +810,18 @@ impl Terminal {
 
     /// The screen as it is to be drawn.
     pub fn frame(&mut self) -> Frame {
+        self.read(false)
+    }
+
+    /// The screen as `frame` reads it, with the cells of only the rows
+    /// that changed since this was last called, the others left empty:
+    /// every row's the first time, and whenever the screen is drawn
+    /// afresh (resized, scrolled, its selection or its colours changed).
+    pub fn changes(&mut self) -> Frame {
+        self.read(true)
+    }
+
+    fn read(&mut self, changes: bool) -> Frame {
         self.refresh_search();
         let mut frame = Frame::default();
         // SAFETY: the render state is read only between its update and
@@ -840,23 +861,68 @@ impl Terminal {
             if cursor.viewport_has_value {
                 frame.cursor = Some((cursor.viewport_y as usize, cursor.viewport_x as usize));
             }
+            use sys::GhosttyRenderStateDirty::*;
+            let mut dirty: sys::GhosttyRenderStateDirty::Type = GHOSTTY_RENDER_STATE_DIRTY_FULL;
+            sys::ghostty_render_state_get(
+                self.render,
+                GHOSTTY_RENDER_STATE_DATA_DIRTY,
+                &mut dirty as *mut _ as *mut c_void,
+            );
+            if dirty == GHOSTTY_RENDER_STATE_DIRTY_FULL {
+                self.changed = None;
+            }
             sys::ghostty_render_state_get(
                 self.render,
                 GHOSTTY_RENDER_STATE_DATA_ROW_ITERATOR,
                 &mut self.rows as *mut _ as *mut c_void,
             );
             let mut codepoints = [0u32; 32];
+            let mut y = 0;
             while sys::ghostty_render_state_row_iterator_next(self.rows) {
-                let mut row = Row::default();
-                sys::ghostty_render_state_row_get(
-                    self.rows,
-                    sys::GhosttyRenderStateRowData::GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
-                    &mut self.cells as *mut _ as *mut c_void,
-                );
-                while sys::ghostty_render_state_row_cells_next(self.cells) {
-                    row.cells.push(self.cell(&mut codepoints, &colours.palette));
+                let mut row_dirty = false;
+                if dirty == GHOSTTY_RENDER_STATE_DIRTY_PARTIAL {
+                    sys::ghostty_render_state_row_get(
+                        self.rows,
+                        sys::GhosttyRenderStateRowData::GHOSTTY_RENDER_STATE_ROW_DATA_DIRTY,
+                        &mut row_dirty as *mut bool as *mut c_void,
+                    );
+                }
+                // A row is read if it changed since `changes` last read it,
+                // which `frame` keeps track of too.
+                let changed = match &mut self.changed {
+                    None => true,
+                    Some(c) => match c.get_mut(y) {
+                        Some(was) => {
+                            *was |= row_dirty;
+                            *was
+                        }
+                        None => {
+                            c.resize(y + 1, true);
+                            true
+                        }
+                    },
+                };
+                let mut row = Row {
+                    cells: vec![],
+                    changed: changed || !changes,
+                };
+                if row.changed {
+                    sys::ghostty_render_state_row_get(
+                        self.rows,
+                        sys::GhosttyRenderStateRowData::GHOSTTY_RENDER_STATE_ROW_DATA_CELLS,
+                        &mut self.cells as *mut _ as *mut c_void,
+                    );
+                    while sys::ghostty_render_state_row_cells_next(self.cells) {
+                        row.cells.push(self.cell(&mut codepoints, &colours.palette));
+                    }
                 }
                 frame.rows.push(row);
+                y += 1;
+            }
+            if changes {
+                self.changed = Some(vec![false; y]);
+            } else if self.changed.as_ref().is_some_and(|c| c.len() != y) {
+                self.changed = None;
             }
             frame.placements = self.placements();
             sys::ghostty_render_state_clean(self.render);

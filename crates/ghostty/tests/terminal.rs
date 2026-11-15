@@ -438,3 +438,71 @@ fn base64(bytes: &[u8]) -> String {
     }
     out
 }
+
+fn row_text(row: &hangar_ghostty::Row) -> String {
+    row.cells
+        .iter()
+        .map(|c| {
+            if c.text.is_empty() {
+                " "
+            } else {
+                c.text.as_str()
+            }
+        })
+        .collect::<String>()
+        .trim_end()
+        .to_string()
+}
+
+#[test]
+fn changes_read_only_the_rows_that_changed() {
+    let mut t = Terminal::new(20, 4, "").unwrap();
+    t.feed(b"one\r\ntwo\r\nthree");
+    let first = t.changes();
+    assert!(first.rows.iter().all(|r| r.changed), "the first reads all");
+    assert_eq!(row_text(&first.rows[1]), "two");
+    t.feed(b"\x1b[2;1HTWO");
+    let next = t.changes();
+    assert!(!next.rows[0].changed, "the top row is as it was");
+    assert!(next.rows[0].cells.is_empty());
+    assert!(next.rows[1].changed);
+    assert_eq!(row_text(&next.rows[1]), "TWO");
+    let still = t.changes();
+    assert!(still.rows.iter().all(|r| !r.changed), "nothing has changed");
+    assert_eq!(still.rows.len(), 4);
+}
+
+#[test]
+fn a_frame_between_changes_loses_none() {
+    let mut t = Terminal::new(20, 3, "").unwrap();
+    t.feed(b"a\r\nb\r\nc");
+    t.changes();
+    t.feed(b"\x1b[1;1HA");
+    assert_eq!(text(&mut t, 0), "A");
+    assert!(
+        t.frame().rows.iter().all(|r| r.changed),
+        "a frame reads every row"
+    );
+    let next = t.changes();
+    assert!(
+        next.rows[0].changed,
+        "the change the frame saw is still told"
+    );
+    assert_eq!(row_text(&next.rows[0]), "A");
+}
+
+#[test]
+fn changes_read_every_row_when_the_screen_is_drawn_afresh() {
+    let mut t = Terminal::new(20, 3, "").unwrap();
+    t.feed(b"a\r\nb\r\nc");
+    t.changes();
+    t.resize(30, 3, 8, 16);
+    assert!(t.changes().rows.iter().all(|r| r.changed), "resized");
+    t.select((0, 0), (0, 0));
+    assert!(t.changes().rows.iter().all(|r| r.changed), "selected");
+    t.set_bold_is_bright(true);
+    assert!(
+        t.changes().rows.iter().all(|r| r.changed),
+        "colours changed"
+    );
+}
