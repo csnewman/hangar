@@ -2,16 +2,19 @@
 //! the Go server is (cmd/hangar-server), so either serves a deployment.
 
 mod audit;
+mod blob;
 mod config;
 mod environments;
 mod fail;
 mod http;
 mod keys;
+mod maintain;
 mod packs;
 mod placement;
 mod ports;
 mod profile;
 mod publichost;
+mod registry;
 mod root;
 mod seal;
 mod sshgw;
@@ -63,11 +66,20 @@ async fn run() -> Result<(), String> {
     };
     let root = root::Root::open(&cfg.files)
         .map_err(|e| format!("the files root {}: {e}", cfg.files.display()))?;
-    let app = Arc::new(http::App::new(store, cfg, host_key.as_ref(), root));
+    let blobs = match &cfg.blobs {
+        Some(b) => Some(
+            blob::Blobs::open(b, registry::EXPIRIES)
+                .await
+                .map_err(|e| format!("the blob store: {e}"))?,
+        ),
+        None => None,
+    };
+    let app = Arc::new(http::App::new(store, cfg, host_key.as_ref(), root, blobs));
     if let (Some(ssh), Some(key)) = (&app.cfg.ssh, host_key) {
         tokio::spawn(sshgw::serve(app.clone(), ssh.listen.clone(), key));
     }
     tokio::spawn(profile::run(app.clone()));
+    tokio::spawn(maintain::run(app.clone()));
     let app = http::router(app);
     axum::serve(
         listener,

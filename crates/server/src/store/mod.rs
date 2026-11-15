@@ -14,6 +14,7 @@ mod json;
 pub mod keys;
 mod packs;
 mod pg;
+mod registry;
 pub mod report;
 pub mod rows;
 pub mod signals;

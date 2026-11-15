@@ -200,7 +200,15 @@ async fn create_template(
     s: Signed,
     Body(b): Body<types::TemplateInput>,
 ) -> Result<(StatusCode, Json<types::Template>), ApiError> {
-    let v = templates::create(&app.store, &s.principal, &s.ip, input(b)?).await?;
+    let registry = crate::registry::host(&app);
+    let v = templates::create(
+        &app.store,
+        registry.as_deref(),
+        &s.principal,
+        &s.ip,
+        input(b)?,
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(template_of(&v)?)))
 }
 
@@ -210,12 +218,14 @@ async fn update_template(
     Path(t): Path<String>,
     Body(b): Body<types::TemplateInput>,
 ) -> Result<Json<types::Template>, ApiError> {
+    let registry = crate::registry::host(&app);
     let v = templates::update(
         &app.store,
         &s.principal,
         &s.ip,
         id(&t, "template")?,
         input(b)?,
+        registry.as_deref(),
     )
     .await?;
     Ok(Json(template_of(&v)?))

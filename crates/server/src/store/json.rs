@@ -12,9 +12,10 @@ use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::rows::{
     AccessToken, AgentSession, AuditEvent, Collaborator, Conflict, Copy, Environment,
-    EnvironmentCopy, EnvironmentRemoval, EnvironmentRouted, HostSession, ImageRemoval, LoginKey,
-    Pack, PackDefault, PackPath, ServerKey, Session, SshKey, Task, Team, TeamMember, Template,
-    User, Worker,
+    EnvironmentCopy, EnvironmentRemoval, EnvironmentRouted, HostSession, ImageRemoval,
+    ImageRepository, ImageTag, LoginKey, Manifest, ManifestRef, Pack, PackDefault, PackPath,
+    RegistryBlob, RegistryUpload, RepositoryBlob, RepositoryCollaborator, ServerKey, Session,
+    SshKey, Task, Team, TeamMember, Template, User, Worker,
 };
 use super::{Error, Result};
 
@@ -50,6 +51,15 @@ pub struct State {
     pub environment_copies: Vec<EnvironmentCopy>,
     pub environment_routed: Vec<EnvironmentRouted>,
     pub environment_conflicts: Vec<Conflict>,
+    pub image_repositories: Vec<ImageRepository>,
+    pub image_repository_collaborators: Vec<RepositoryCollaborator>,
+    pub image_repository_team_collaborators: Vec<RepositoryCollaborator>,
+    pub registry_blobs: Vec<RegistryBlob>,
+    pub image_repository_blobs: Vec<RepositoryBlob>,
+    pub image_manifests: Vec<Manifest>,
+    pub image_manifest_refs: Vec<ManifestRef>,
+    pub image_tags: Vec<ImageTag>,
+    pub registry_uploads: Vec<RegistryUpload>,
 }
 
 impl State {

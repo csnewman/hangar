@@ -10,22 +10,31 @@
 # HOST=hangar.localhost needs nothing, since *.localhost is this machine.
 #
 #   HANGAR_DATABASE_URL=postgres://... HANGAR_BLOB_URL=http://key:secret@host:port/bucket \
-#       [HOST=hangar.localhost] dev/registry-conformance.sh
+#       [HOST=hangar.localhost] [HANGAR_SERVER=path/to/hangar-server] dev/registry-conformance.sh
+#
+# HANGAR_SERVER names a server binary to test; without it, one is built.
+# A server keeping its state in a file (HANGAR_STATE_FILE) keeps its blobs
+# beside it unless HANGAR_BLOB_URL says otherwise.
 #
 # The database must have no users, as a new installation has none: the
 # first administrator is made only then.
 set -eu
 
-: "${HANGAR_DATABASE_URL:?}" "${HANGAR_BLOB_URL:?}"
+: "${HANGAR_DATABASE_URL:-${HANGAR_STATE_FILE:?set HANGAR_DATABASE_URL, or HANGAR_STATE_FILE for a server keeping its state in a file}}"
+[ -n "${HANGAR_STATE_FILE:-}" ] || : "${HANGAR_BLOB_URL:?}"
 version=v1.1.1
 host=${HOST:-hangar.test}:8099
 work=$(mktemp -d)
 trap 'kill "$server" 2>/dev/null; rm -rf "$work"' EXIT
 
-go build -o "$work/hangar-server" ./cmd/hangar-server
-HANGAR_PUBLIC_URL="http://$host" HANGAR_FILES_DIR="$work/files" \
+bin=${HANGAR_SERVER:-}
+if [ -z "$bin" ]; then
+	go build -o "$work/hangar-server" ./cmd/hangar-server
+	bin=$work/hangar-server
+fi
+HANGAR_PUBLIC_URL="http://$host" HANGAR_FILES_DIR="$work/files" HANGAR_LISTEN=127.0.0.1:8099 \
 	HANGAR_INITIAL_ADMIN_USERNAME=admin HANGAR_INITIAL_ADMIN_PASSWORD=conformance-password \
-	"$work/hangar-server" -listen 127.0.0.1:8099 > "$work/server.log" 2>&1 &
+	"$bin" > "$work/server.log" 2>&1 &
 server=$!
 until curl -sf "http://$host/api/healthz" > /dev/null; do
 	kill -0 "$server" 2>/dev/null || { cat "$work/server.log"; exit 1; }

@@ -264,8 +264,15 @@ fn related(v: &View, e: Event) -> Event {
     }
 }
 
-pub async fn create(store: &Store, p: &Principal, ip: &str, input: Input) -> fail::Result<View> {
+pub async fn create(
+    store: &Store,
+    registry: Option<&str>,
+    p: &Principal,
+    ip: &str,
+    input: Input,
+) -> fail::Result<View> {
     let input = normalise(input)?;
+    crate::registry::check_pull(store, registry, p, &input.spec.spec.image).await?;
     let mut tx = store.begin().await?;
     let w = World::load(&mut tx).await?;
     let team = match input.team.as_deref().filter(|t| !t.is_empty()) {
@@ -314,8 +321,20 @@ pub async fn update(
     ip: &str,
     id: Uuid,
     input: Input,
+    registry: Option<&str>,
 ) -> fail::Result<View> {
     let input = normalise(input)?;
+    // A template saved with a new image is checked: workers pull whatever
+    // a template names, so its saver must reach it.
+    let before = store.begin().await?.template(id).await?;
+    let image_of = |t: &Template| {
+        serde_json::from_value::<TemplateSpec>(t.spec.clone())
+            .map(|s| s.spec.image)
+            .unwrap_or_default()
+    };
+    if before.as_ref().map(image_of).as_deref() != Some(input.spec.spec.image.as_str()) {
+        crate::registry::check_pull(store, registry, p, &input.spec.spec.image).await?;
+    }
     let mut tx = store.begin().await?;
     let Some(cur) = tx.template(id).await? else {
         return not_found();

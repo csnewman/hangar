@@ -8,6 +8,7 @@ mod catalog;
 mod client;
 mod environments;
 mod frontend;
+mod images;
 mod keys;
 mod packs;
 mod streams;
@@ -38,6 +39,8 @@ pub struct App {
     pub ssh_host_key: Option<String>,
     /// The files root, where copies keep their files.
     pub root: crate::root::Root,
+    /// The registry's blob store, when it runs.
+    pub blobs: Option<crate::blob::Blobs>,
 }
 
 impl App {
@@ -46,9 +49,11 @@ impl App {
         cfg: Config,
         host_key: Option<&russh::keys::PrivateKey>,
         root: crate::root::Root,
+        blobs: Option<crate::blob::Blobs>,
     ) -> App {
         App {
             root,
+            blobs,
             store,
             cfg,
             rules: access::Rules::from_specs(),
@@ -82,7 +87,8 @@ pub fn router(app: Shared) -> Router {
                 .merge(environments::frontend())
                 .merge(streams::frontend())
                 .merge(keys::frontend())
-                .merge(packs::frontend()),
+                .merge(packs::frontend())
+                .merge(images::frontend()),
         )
         .nest(
             "/api/v1",
@@ -111,15 +117,26 @@ async fn hosts(
     req: Request,
     next: axum::middleware::Next,
 ) -> Response {
-    if let Some(public) = &app.cfg.public {
-        let host = req
-            .headers()
-            .get(header::HOST)
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if crate::ports::owns(public, host).is_some() {
-            return crate::ports::serve(app.clone(), req).await;
-        }
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+    if crate::registry::host(&app).is_some_and(|r| r.eq_ignore_ascii_case(&host)) {
+        let path = req.uri().path().to_string();
+        return crate::registry::serve(app.clone(), req, &path).await;
+    }
+    if app.cfg.registry
+        && let Some(path) = req.uri().path().strip_prefix(crate::registry::WORKER_PATH)
+    {
+        let path = path.to_string();
+        return crate::registry::serve(app.clone(), req, &path).await;
+    }
+    if let Some(public) = &app.cfg.public
+        && crate::ports::owns(public, &host).is_some()
+    {
+        return crate::ports::serve(app.clone(), req).await;
     }
     next.run(req).await
 }

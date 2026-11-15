@@ -41,6 +41,59 @@ pub struct Config {
     /// Where copies of packs keep their files (`HANGAR_FILES_DIR`), which
     /// workers serve environments.
     pub files: PathBuf,
+    /// Where the registry's blobs are kept, when it runs.
+    pub blobs: Option<crate::blob::Config>,
+}
+
+/// The blob store: HANGAR_BLOB_URL, its keys there or in
+/// HANGAR_BLOB_ACCESS_KEY and HANGAR_BLOB_SECRET_KEY(_FILE), and without a
+/// secret key the one derived from the server's own: the SHA-256, in hex,
+/// of "hangar-blob-access\n" and the key file's contents, trimmed, as the
+/// compose file derives it for RustFS. A server keeping its state in a
+/// file keeps its blobs in a directory beside it unless told otherwise.
+fn blob_config(
+    var: &dyn Fn(&str) -> Option<String>,
+    storage: &Storage,
+) -> Result<crate::blob::Config, String> {
+    let url = match (var("HANGAR_BLOB_URL"), storage) {
+        (Some(u), _) => u,
+        (None, Storage::Json(state)) => {
+            format!("file://{}", state.with_extension("blobs").display())
+        }
+        (None, Storage::Postgres(_)) => {
+            return Err("HANGAR_BLOB_URL is not set: the server keeps files in an S3-compatible object store".into());
+        }
+    };
+    let mut secret = var("HANGAR_BLOB_SECRET_KEY");
+    if let Some(f) = var("HANGAR_BLOB_SECRET_KEY_FILE") {
+        secret = Some(
+            std::fs::read_to_string(&f)
+                .map_err(|e| format!("HANGAR_BLOB_SECRET_KEY_FILE: {e}"))?
+                .trim()
+                .to_string(),
+        );
+    }
+    let in_url = url::Url::parse(&url)
+        .ok()
+        .and_then(|u| u.password().map(str::to_string))
+        .is_some_and(|p| !p.is_empty());
+    if secret.is_none() && !in_url && !url.starts_with("file://") {
+        let f = var("HANGAR_SECRET_KEY_FILE").ok_or(
+            "no secret key for the object store: HANGAR_BLOB_SECRET_KEY, or HANGAR_SECRET_KEY_FILE to derive it from",
+        )?;
+        let key =
+            std::fs::read_to_string(&f).map_err(|e| format!("HANGAR_SECRET_KEY_FILE: {e}"))?;
+        use sha2::Digest;
+        let sum = sha2::Sha256::digest(format!("hangar-blob-access\n{}", key.trim()).as_bytes());
+        secret = Some(sum.iter().map(|b| format!("{b:02x}")).collect());
+    }
+    Ok(crate::blob::Config {
+        url,
+        access: var("HANGAR_BLOB_ACCESS_KEY"),
+        secret,
+        region: var("HANGAR_BLOB_REGION").unwrap_or_default(),
+        encrypt: var("HANGAR_BLOB_ENCRYPT").as_deref() == Some("true"),
+    })
 }
 
 /// The SSH gateway's addresses.
@@ -148,6 +201,11 @@ impl Config {
             }
             None => None,
         };
+        let blobs = if registry {
+            Some(blob_config(&var, &storage)?)
+        } else {
+            None
+        };
         Ok(Config {
             listen,
             storage,
@@ -160,6 +218,7 @@ impl Config {
             files: var("HANGAR_FILES_DIR")
                 .unwrap_or_else(|| "/var/lib/hangar/files".into())
                 .into(),
+            blobs,
         })
     }
 }

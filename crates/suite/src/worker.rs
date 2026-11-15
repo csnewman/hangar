@@ -118,6 +118,14 @@ impl Worker {
         self.machines.specs.lock().unwrap().get(id).cloned()
     }
 
+    /// The credential the worker registered with, once it has.
+    pub fn credential(&self) -> Option<String> {
+        std::fs::read_to_string(self.dir.join("credential"))
+            .ok()
+            .map(|c| c.trim().to_string())
+            .filter(|c| !c.is_empty())
+    }
+
     /// Every message an environment's guest has been sent on its profile
     /// sessions, and each answer to its own requests, in order.
     pub fn profile(&self, id: &str) -> Vec<serde_json::Value> {

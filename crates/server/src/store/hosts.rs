@@ -183,4 +183,42 @@ impl Tx {
                 .cloned()),
         }
     }
+
+    /// Deletes the tickets and cookies that have expired, giving how many.
+    pub async fn prune_host_sessions(&mut self, now: DateTime<Utc>) -> Result<u64> {
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query(
+                "DELETE FROM editor_sessions WHERE expires_at <= $1",
+            )
+            .bind(now)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected()),
+            Backend::Json(tx) => {
+                let w = &mut tx.work.editor_sessions;
+                let before = w.len();
+                w.retain(|s| s.expires_at > now);
+                Ok((before - w.len()) as u64)
+            }
+        }
+    }
+
+    /// Deletes the sessions that have expired, giving how many.
+    pub async fn prune_sessions(&mut self, now: DateTime<Utc>) -> Result<u64> {
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query("DELETE FROM sessions WHERE expires_at <= $1")
+                .bind(now)
+                .execute(&mut **tx)
+                .await?
+                .rows_affected()),
+            Backend::Json(tx) => {
+                let w = &mut tx.work;
+                let before = w.sessions.len();
+                w.sessions.retain(|s| s.expires_at > now);
+                let live: Vec<Vec<u8>> = w.sessions.iter().map(|s| s.token_hash.clone()).collect();
+                w.editor_sessions.retain(|e| live.contains(&e.session_hash));
+                Ok((before - w.sessions.len()) as u64)
+            }
+        }
+    }
 }

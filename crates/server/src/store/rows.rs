@@ -359,3 +359,82 @@ pub struct Conflict {
     /// shared or environment, until the environment's agent has done it.
     pub resolution: Option<String>,
 }
+
+/// `image_repositories`: a repository of the registry, a person's or a
+/// team's.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageRepository {
+    pub id: Uuid,
+    pub path: String,
+    pub owner_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    /// private or shared.
+    pub visibility: String,
+    pub description: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// `image_repository_collaborators` (who: a user) and
+/// `image_repository_team_collaborators` (who: a team).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RepositoryCollaborator {
+    pub repository_id: Uuid,
+    pub who: Uuid,
+}
+
+/// `registry_blobs`: a blob the blob store holds, by digest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryBlob {
+    pub digest: String,
+    pub size: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `image_repository_blobs`: a blob a repository may use.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RepositoryBlob {
+    pub repository_id: Uuid,
+    pub digest: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `image_manifests`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Manifest {
+    pub repository_id: Uuid,
+    pub digest: String,
+    pub media_type: String,
+    pub artifact_type: String,
+    /// The manifest it refers to, by digest.
+    pub subject: Option<String>,
+    pub annotations: Option<serde_json::Value>,
+    #[serde(with = "hex_bytes")]
+    pub content: Vec<u8>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `image_manifest_refs`: a blob or manifest a manifest names.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ManifestRef {
+    pub repository_id: Uuid,
+    pub digest: String,
+    pub r#ref: String,
+}
+
+/// `image_tags`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImageTag {
+    pub repository_id: Uuid,
+    pub tag: String,
+    pub digest: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// `registry_uploads`: an upload begun, its chunks in the blob store.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegistryUpload {
+    pub id: Uuid,
+    pub repository_id: Uuid,
+    pub created_at: DateTime<Utc>,
+}
