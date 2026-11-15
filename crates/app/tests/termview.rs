@@ -417,7 +417,10 @@ fn shared(
                         e.kind(),
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                     ) => {}
-                Err(_) => return,
+                Err(e) => {
+                    eprintln!("the session's server stopped: {e}");
+                    return;
+                }
             }
         }
     });
@@ -444,7 +447,10 @@ fn the_size_another_window_holds_is_said(cx: &mut TestAppContext) {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         };
-    to.send(vec![b's', 0, 100, 0, 30, 0, 2, 0]).unwrap();
+    if to.send(vec![b's', 0, 100, 0, 30, 0, 2, 0]).is_err() {
+        let state = term.read_with(cx, |t, _| t.state().clone());
+        panic!("the session's server stopped; the terminal is {state:?}");
+    }
     until(cx, "the bar says so", &|cx| {
         cx.debug_bounds("term-fit").is_some()
     });
