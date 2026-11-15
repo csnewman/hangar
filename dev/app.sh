@@ -46,7 +46,8 @@ if [ "${1:-}" = release ]; then
     profile=release
     flags=--release
 fi
-(cd "$repo/crates" && cargo build -q $flags -p hangar-app)
+# With the control port (src/control.rs, dev/appctl), the dev channel's alone.
+(cd "$repo/crates" && cargo build -q $flags -p hangar-app --features control)
 
 stop
 version=$(sed -n 's/^version = "\(.*\)"/\1/p' "$repo/crates/app/Cargo.toml" | head -1)

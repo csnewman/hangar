@@ -1538,6 +1538,7 @@ fn rows(
 
 impl Render for ProjectView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::renderstats::count(crate::renderstats::PROJECT);
         let p = palette::of(cx);
         self.shown = Shown::of(cx);
         let scope = self.scope;

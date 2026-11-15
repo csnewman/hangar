@@ -314,6 +314,11 @@ impl Shell {
         cx.notify();
     }
 
+    /// The places the window shows.
+    pub fn places(&self) -> &Entity<Places> {
+        &self.places
+    }
+
     /// The view of the tab shown, if an environment's is.
     pub fn active_view(&self) -> Option<Entity<EnvTab>> {
         self.active.and_then(|i| self.views.get(i)).cloned()
@@ -889,6 +894,7 @@ impl Shell {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::renderstats::count(crate::renderstats::SHELL);
         // The settings may have changed what the Dock icon counts.
         self.show_badge(cx);
         let p = palette::of(cx);

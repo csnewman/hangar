@@ -45,6 +45,8 @@ fn main() {
                 },
             )
             .expect("opening the window");
+            #[cfg(feature = "control")]
+            hangar_app::control::start(cx);
             cx.activate(true);
         });
 }

@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""Drives the running dev build of the desktop app (Hangar Dev) through its
+control port (crates/app/src/control.rs): dev/app.sh builds it with the port,
+which listens on the loopback alone, behind the token control.json in the
+app's config folder says.
+
+  dev/appctl state                    the window, its tabs, the terminals
+  dev/appctl open ENV [PLACE]         opens an environment's tab
+  dev/appctl tool NAME                opens a tool window (Terminal, Project, ...)
+  dev/appctl terminal N               shows terminal tab N (from 0)
+  dev/appctl action NAME [JSON]       dispatches an action ("terminal::Find")
+  dev/appctl click X Y [right|middle] [COUNT] [MODIFIERS]
+  dev/appctl move X Y                 moves the pointer
+  dev/appctl keys "cmd-k enter"       presses keys
+  dev/appctl type TEXT                types text (\\n for Enter)
+  dev/appctl screenshot OUT.png       a picture of the window
+  dev/appctl stats                    draws per view since last asked
+  dev/appctl bench [terminal|full] [FRAMES]
+                                      frames drawn on demand, timed: as the
+                                      shown terminal's output asks, or all
+                                      views afresh
+  dev/appctl settings JSON            sets settings, objects merged
+  dev/appctl quit
+"""
+
+import json
+import os
+import socket
+import sys
+
+
+def control_file():
+    if sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support")
+    elif sys.platform == "win32":
+        base = os.environ.get("APPDATA", "")
+    else:
+        base = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
+    return os.path.join(base, "Hangar Dev", "control.json")
+
+
+def request(info, req):
+    req["token"] = info["token"]
+    with socket.create_connection(("127.0.0.1", info["port"]), timeout=300) as s:
+        s.sendall((json.dumps(req) + "\n").encode())
+        data = b""
+        while not data.endswith(b"\n"):
+            chunk = s.recv(65536)
+            if not chunk:
+                break
+            data += chunk
+    return json.loads(data)
+
+
+def main(argv):
+    if len(argv) < 1 or argv[0] in ("-h", "--help"):
+        print(__doc__.strip())
+        return 0
+    try:
+        info = json.load(open(control_file()))
+    except OSError:
+        print("no control.json: is Hangar Dev running (dev/app.sh)?", file=sys.stderr)
+        return 1
+    cmd, args = argv[0], argv[1:]
+    req = {"cmd": cmd}
+    if cmd == "open":
+        req["env"] = args[0]
+        if len(args) > 1:
+            req["place"] = args[1]
+    elif cmd == "tool":
+        req["tool"] = args[0]
+    elif cmd == "terminal":
+        req["tab"] = int(args[0])
+    elif cmd == "action":
+        req["name"] = args[0]
+        if len(args) > 1:
+            req["data"] = json.loads(args[1])
+    elif cmd in ("click", "move"):
+        req["x"], req["y"] = float(args[0]), float(args[1])
+        rest = args[2:]
+        if rest and rest[0] in ("left", "right", "middle"):
+            req["button"] = rest.pop(0)
+        if rest and rest[0].isdigit():
+            req["count"] = int(rest.pop(0))
+        if rest:
+            req["modifiers"] = rest.pop(0)
+    elif cmd == "keys":
+        req["keys"] = " ".join(args)
+    elif cmd == "type":
+        req["text"] = " ".join(args).encode().decode("unicode_escape")
+    elif cmd == "screenshot":
+        req["path"] = os.path.abspath(args[0])
+    elif cmd == "bench":
+        if args:
+            req["mode"] = args[0]
+        if len(args) > 1:
+            req["frames"] = int(args[1])
+    elif cmd == "settings":
+        req["settings"] = json.loads(args[0])
+    try:
+        out = request(info, req)
+    except OSError as e:
+        print(f"the app's port: {e}: is Hangar Dev running?", file=sys.stderr)
+        return 1
+    if "error" in out:
+        print(out["error"], file=sys.stderr)
+        return 1
+    if out.get("ok") is not None:
+        print(json.dumps(out["ok"], indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

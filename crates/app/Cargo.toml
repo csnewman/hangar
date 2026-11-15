@@ -48,6 +48,11 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
 objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSDockTile", "NSGraphics", "NSResponder", "NSSound"] }
 
+[features]
+# The dev build's control port (src/control.rs), and what it needs of gpui:
+# a picture of the window.
+control = ["gpui/test-support", "gpui_platform/test-support"]
+
 [dev-dependencies]
 gpui = { package = "gpui-pre", version = "=0.3.11", features = ["test-support"] }
 gpui-component = { version = "=0.9.0", features = ["test-support"] }

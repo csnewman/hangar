@@ -15,6 +15,8 @@ pub mod changes;
 pub mod channel;
 pub mod code;
 pub mod commit;
+#[cfg(feature = "control")]
+pub mod control;
 pub mod deskview;
 pub mod diff;
 pub mod docedit;
@@ -55,6 +57,7 @@ pub mod presence;
 pub mod problems;
 pub mod project;
 pub mod props;
+pub mod renderstats;
 pub mod rfb;
 pub mod search;
 pub mod settings;

@@ -1567,6 +1567,7 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::renderstats::count(crate::renderstats::TERMINAL);
         self.drawn = Instant::now();
         let p = palette::of(cx);
         let settings = Settings::get(cx);

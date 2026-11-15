@@ -1005,6 +1005,37 @@ impl EnvTab {
         cx.notify();
     }
 
+    /// The terminal shown in the Terminal window, if any.
+    pub fn active_terminal(&self) -> Option<Entity<TerminalView>> {
+        self.terms
+            .active
+            .and_then(|i| self.terms.tabs.get(i))
+            .and_then(|t| t.view.clone())
+    }
+
+    /// The terminal tabs' labels, and which is shown.
+    pub fn terminal_tabs(&self, cx: &App) -> (Vec<String>, Option<usize>) {
+        let labels = self.terms.tabs.iter().map(|t| t.label(cx)).collect();
+        (labels, self.terms.active)
+    }
+
+    /// Shows a terminal tab, the Terminal window opened if it is closed.
+    pub fn show_terminal_tab(
+        &mut self,
+        i: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if i >= self.terms.tabs.len() {
+            return Err(format!("{} terminal tabs", self.terms.tabs.len()));
+        }
+        if !self.is_open(Tool::Terminal) {
+            self.toggle(Tool::Terminal, cx);
+        }
+        self.select_terminal(i, true, window, cx);
+        Ok(())
+    }
+
     /// Whether a terminal tab holds a coding agent's session the plugin
     /// reports.
     fn agent_in(&self, i: usize, cx: &App) -> bool {
@@ -3137,6 +3168,7 @@ impl Focusable for EnvTab {
 
 impl Render for EnvTab {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::renderstats::count(crate::renderstats::ENV_TAB);
         for ask in std::mem::take(&mut self.pending_asks) {
             match ask {
                 crate::lsppanel::Ask::Run(command) => {

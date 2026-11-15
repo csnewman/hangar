@@ -117,6 +117,7 @@ fn metrics(s: &Screen, window: &Window) -> Metrics {
 }
 
 pub fn paint(s: &Screen, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+    crate::renderstats::count(crate::renderstats::TERMINAL_PAINT);
     let origin = bounds.origin;
     let (cw, lh) = (s.cell, s.line_height);
     let at = |row: usize, col: usize| point(origin.x + cw * col as f32, origin.y + lh * row as f32);
