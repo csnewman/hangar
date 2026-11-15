@@ -133,6 +133,9 @@ fn frontend_json(v: &View) -> Value {
     if let Some(rb) = &v.image_rollback {
         o.insert("image_rollback".into(), json!(rb));
     }
+    if let Some(a) = &r.guest_agent {
+        o.insert("guest_agent".into(), a.clone());
+    }
     if let Some(c) = v.image_change {
         o.insert("image_change".into(), json!(c));
     }
@@ -229,6 +232,9 @@ fn client_json(v: &View) -> Value {
     }
     if let Some(rb) = &v.image_rollback {
         o.insert("image_rollback".into(), json!(rb));
+    }
+    if let Some(a) = &r.guest_agent {
+        o.insert("guest_agent".into(), a.clone());
     }
     some_if(o, "editor_path", !s.editor_path.is_empty(), &s.editor_path);
     if let Some(st) = &v.stats {

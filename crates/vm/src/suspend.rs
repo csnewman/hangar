@@ -32,6 +32,10 @@ pub struct Record {
     /// RAM and a virtio-mem region of these sizes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub krun_memory: Option<KrunMemory>,
+    /// The agent the guest booted with, as `fingerprint` has it: the guest
+    /// keeps it across the suspend, whatever the worker's is by then.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent: String,
 }
 
 /// A machine's RAM from boot and its virtio-mem region beyond, in MiB.

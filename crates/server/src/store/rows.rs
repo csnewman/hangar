@@ -142,6 +142,10 @@ pub struct Environment {
     pub reason: String,
     pub stats: Option<serde_json::Value>,
     pub progress: Option<serde_json::Value>,
+    /// The guest agent of a running one, as its worker reports it:
+    /// hangar_api's GuestAgent.
+    #[serde(default)]
+    pub guest_agent: Option<serde_json::Value>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

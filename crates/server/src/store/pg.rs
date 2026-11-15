@@ -46,6 +46,10 @@ const MIGRATIONS: &[(i32, &str)] = &[
         18,
         include_str!("../../migrations/0018_worker_features.sql"),
     ),
+    (
+        19,
+        include_str!("../../migrations/0019_environment_guest_agent.sql"),
+    ),
 ];
 
 /// Connects to the database at url and brings its schema up to date.

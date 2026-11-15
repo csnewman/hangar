@@ -289,7 +289,15 @@ fn suspend_record() {
         image: "disk:false:x".into(),
         read_only: vec!["r".into()],
         krun_memory: None,
+        agent: "a".into(),
     };
+    assert!(
+        r.same_machine(&Record {
+            agent: "another".into(),
+            ..r.clone()
+        }),
+        "the agent it booted with is no reason to boot afresh"
+    );
     let pulled = Record {
         base: String::new(),
         ..r.clone()

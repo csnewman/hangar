@@ -1488,6 +1488,18 @@ export interface components {
             /** @description Whether anyone may reach the environment's own web servers without signing in to Hangar. */
             ports_public?: boolean;
             image_update?: components["schemas"]["ImageUpdate"];
+            /** @description The Hangar agent in a running environment's machine, as its worker reports it. */
+            guest_agent?: {
+                /**
+                 * Format: int64
+                 * @description The version of the protocol its worker speaks to it in.
+                 */
+                protocol: number;
+                /** @description Its build. */
+                build?: string;
+                /** @description It is not the agent its worker boots machines with, which it takes at its next boot: a restart, since resuming from a suspend keeps the agent it had. */
+                outdated?: boolean;
+            };
             image_rollback?: components["schemas"]["ImageRollback"];
             /**
              * @description What the environment's next start does to its image.

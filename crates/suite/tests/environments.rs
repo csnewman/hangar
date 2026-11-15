@@ -62,9 +62,22 @@ async fn an_environment_lives_on_a_worker() {
     assert_eq!(w.desired(&e.id), Some(DesiredState::Running));
     let placed = admin.get_environment(&e.id).await.unwrap().into_inner();
     assert_eq!(placed.worker.as_deref(), Some("suite-worker"));
+    // Its guest's agent, as the worker reports it, while it runs.
+    let agent = eventually("its guest agent", || async {
+        admin
+            .get_environment(&e.id)
+            .await
+            .ok()?
+            .into_inner()
+            .guest_agent
+    })
+    .await;
+    assert_eq!((agent.protocol, agent.outdated), (1, Some(true)));
 
     admin.stop_environment(&e.id).await.expect("stopping it");
     reaches(&admin, &e.id, "stopped").await;
+    let stopped = admin.get_environment(&e.id).await.unwrap().into_inner();
+    assert!(stopped.guest_agent.is_none(), "a stopped one has no agent");
     assert_eq!(w.desired(&e.id), Some(DesiredState::Stopped));
 
     admin.start_environment(&e.id).await.expect("starting it");

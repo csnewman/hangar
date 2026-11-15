@@ -34,8 +34,15 @@ use crate::vsock::HybridListener;
 pub const PORT: u32 = 8100;
 
 /// Sent in Hello and checked here: the agent and the host are built at
-/// different times and must be able to say so.
+/// different times and must be able to say so. The host takes an agent
+/// speaking any version from MIN_PROTOCOL_VERSION to this, so raising it
+/// leaves running guests reachable until MIN_PROTOCOL_VERSION is raised
+/// too; a guest whose agent is older than that is reached again only once
+/// it boots with the host's agent (a resume keeps the agent it had).
 pub const PROTOCOL_VERSION: i64 = 1;
+
+/// The oldest version the host takes.
+pub const MIN_PROTOCOL_VERSION: i64 = 1;
 
 /// The first line the agent sends, unasked. Every field is ADVISORY: it is
 /// whatever the guest chose to say about itself, and nothing may key an
@@ -44,6 +51,9 @@ pub const PROTOCOL_VERSION: i64 = 1;
 pub struct Hello {
     pub kind: String,
     pub version: i64,
+    /// The agent's build, for people.
+    #[serde(default)]
+    pub build: String,
     #[serde(default)]
     pub hostname: String,
     #[serde(default)]
@@ -180,9 +190,9 @@ impl Session {
                 hello.kind
             )));
         }
-        if hello.version != PROTOCOL_VERSION {
+        if !(MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(&hello.version) {
             return Err(err(format!(
-                "agent speaks protocol {}, host speaks {PROTOCOL_VERSION}",
+                "agent speaks protocol {}, host speaks {MIN_PROTOCOL_VERSION} to {PROTOCOL_VERSION}",
                 hello.version
             )));
         }

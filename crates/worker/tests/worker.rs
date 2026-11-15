@@ -369,6 +369,7 @@ impl Runtime for Fake {
                 image_pinned: false,
                 image_update: None,
                 image_rollback: None,
+                guest_agent: None,
             })
             .collect()
     }

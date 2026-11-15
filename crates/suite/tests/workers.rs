@@ -128,6 +128,7 @@ async fn a_worker_is_asked_to_remove_an_image_and_a_stray() {
             image_pinned: false,
             image_update: None,
             image_rollback: None,
+            guest_agent: None,
         }],
         stats: None,
         images: vec![LocalImage {

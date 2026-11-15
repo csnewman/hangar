@@ -272,7 +272,8 @@ function driftNames(env: Environment): string {
 
 // Banners are what needs deciding about the environment: a newer build of
 // its image, an upgrade to keep or roll back, a change waiting for its next
-// start, and how it differs from its template.
+// start, an agent older than its worker's, and how it differs from its
+// template.
 function Banners({ env }: { env: Environment }) {
   const image = useImageChange(env)
   const reset = useResetToTemplate(env)
@@ -406,6 +407,17 @@ function Banners({ env }: { env: Environment }) {
         </Banner>,
       )
     }
+  }
+  const agentKey = `agent:${env.guest_agent?.build ?? ''}`
+  if (env.guest_agent?.outdated && !hidden.includes(agentKey)) {
+    out.push(
+      <Banner key="agent" tone="info" onDismiss={hide(agentKey)}>
+        Its Hangar agent is older than its worker&rsquo;s.{' '}
+        <span className="muted">
+          Stop and start it to take the newer one; resuming from a suspend keeps the agent it has.
+        </span>
+      </Banner>,
+    )
   }
   if (drift && env.template_id && !hidden.includes(driftKey)) {
     const ok = changeable(env)

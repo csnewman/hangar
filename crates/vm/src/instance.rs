@@ -12,6 +12,8 @@ use std::time::{Duration, SystemTime};
 
 use tokio::sync::{mpsc, watch};
 
+use hangar_api::GuestAgent;
+
 use crate::agent;
 use crate::ch::{self, Api, GpuBackend, Memory, Passt};
 use crate::err;
@@ -171,6 +173,7 @@ impl InstanceConfig {
                 .map(|d| suspend::fingerprint(&d.path))
                 .collect(),
             krun_memory: None,
+            agent: String::new(),
         }
     }
 
@@ -260,6 +263,8 @@ pub struct Instance {
     krun_region: u32,
     krun_dir: Option<PathBuf>,
     closed: tokio::sync::Mutex<bool>,
+    /// The agent the guest booted with (`suspend::fingerprint`).
+    agent_booted: String,
 }
 
 /// What a boot has started so far, torn down again if it fails.
@@ -322,9 +327,13 @@ impl Instance {
         set_mode(&run, 0o700)?;
 
         let mut resuming = false;
+        // The agent the guest will have: the worker's for a boot, the one
+        // it booted with for a resume.
+        let mut agent_booted = suspend::fingerprint(&cfg.agent);
         if let Some(rec) = suspend::suspended(&cfg.dir) {
             if rec.same_machine(&cfg.record()) {
                 resuming = true;
+                agent_booted = rec.agent;
             } else {
                 // The guest would find files it holds open replaced. Its
                 // memory is given up and it boots from its disks.
@@ -429,6 +438,7 @@ impl Instance {
             krun_region: parts.krun_region,
             krun_dir: parts.krun_dir.take(),
             closed: tokio::sync::Mutex::new(false),
+            agent_booted,
             cfg,
         })
     }
@@ -441,6 +451,17 @@ impl Instance {
     /// Whether the machine came back from a suspend rather than booting.
     pub fn resumed(&self) -> bool {
         self.resumed
+    }
+
+    /// The guest's agent, as its hello says, and whether it is other than
+    /// the worker's, which it takes at its next boot.
+    pub fn guest_agent(&self) -> GuestAgent {
+        let hello = &self.session.hello;
+        GuestAgent {
+            protocol: hello.version,
+            build: hello.build.clone(),
+            outdated: self.agent_booted != suspend::fingerprint(&self.cfg.agent),
+        }
     }
 
     pub fn monitor(&self) -> Monitor {
@@ -635,7 +656,9 @@ impl Instance {
                 .map_err(|e| err(format!("taking the snapshot: {e}")))?;
             let _ = std::fs::remove_dir_all(&snap);
             std::fs::rename(&partial, &snap)?;
-            suspend::mark(&c.dir, &c.record())
+            let mut rec = c.record();
+            rec.agent = self.agent_booted.clone();
+            suspend::mark(&c.dir, &rec)
         }
         .await;
         if let Err(e) = written {
@@ -683,6 +706,7 @@ impl Instance {
                 boot: self.krun_boot,
                 region: self.krun_region,
             });
+            rec.agent = self.agent_booted.clone();
             suspend::mark(&c.dir, &rec)
         })();
         if let Err(e) = recorded {

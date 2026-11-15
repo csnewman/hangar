@@ -27,9 +27,16 @@ use crate::user;
 
 pub const PORT: u32 = 8100;
 
-/// The protocol's version, which the host checks: the agent and the host
-/// are built at different times.
+/// The protocol's version, which the host checks against the range it
+/// speaks: the agent and the host are built at different times.
 const PROTOCOL_VERSION: i32 = 1;
+
+/// This build, as the hello says it: HANGAR_VERSION when it was compiled,
+/// as images are built, else the crate's version.
+const BUILD: &str = match option_env!("HANGAR_VERSION") {
+    Some(v) => v,
+    None => env!("CARGO_PKG_VERSION"),
+};
 
 /// How long the agent waits between tries at the host.
 #[cfg(target_os = "linux")]
@@ -52,6 +59,7 @@ const OUTPUT_GRACE: Duration = Duration::from_millis(500);
 struct Hello {
     kind: &'static str,
     version: i32,
+    build: &'static str,
     hostname: String,
     kernel: String,
     /// How long the guest took to reach the agent, from the kernel's clock.
@@ -131,6 +139,7 @@ pub async fn serve<S: AsyncRead + AsyncWrite + Send + 'static>(conn: S) {
     let hello = Hello {
         kind: "hello",
         version: PROTOCOL_VERSION,
+        build: BUILD,
         hostname: hostname(),
         kernel: kernel(),
         boot_micros: uptime_micros(),

@@ -183,6 +183,7 @@ impl Tx {
     ) -> Result<()> {
         let (stats, progress) = (json(&o.stats), json(&o.progress));
         let (update, rollback) = (json(&o.image_update), json(&o.image_rollback));
+        let guest_agent = json(&o.guest_agent);
         let mut changed = false;
         match &mut self.inner {
             Backend::Pg(tx) => {
@@ -192,7 +193,8 @@ impl Tx {
                         image_pin_want = CASE WHEN $7 AND image_pin_want = $6 THEN NULL ELSE image_pin_want END,
                         image_update = $8, image_rollback = $9,
                         image_drop_rollback = image_drop_rollback AND $9::jsonb IS NOT NULL,
-                        updated_at = CASE WHEN (phase, reason) IS DISTINCT FROM ($2, $3) THEN $10 ELSE updated_at END
+                        updated_at = CASE WHEN (phase, reason) IS DISTINCT FROM ($2, $3) THEN $10 ELSE updated_at END,
+                        guest_agent = $11
                      WHERE id = $1",
                 )
                 .bind(id)
@@ -205,6 +207,7 @@ impl Tx {
                 .bind(&update)
                 .bind(&rollback)
                 .bind(now)
+                .bind(&guest_agent)
                 .execute(&mut **tx)
                 .await?;
                 if !keeps_agents(phase) {
@@ -238,6 +241,7 @@ impl Tx {
                     e.image_drop_rollback = e.image_drop_rollback && rollback.is_some();
                     e.image_update = update;
                     e.image_rollback = rollback;
+                    e.guest_agent = guest_agent;
                     // As Postgres's trigger has it: usage alone is no change.
                     let unchanged = (
                         &before.phase,
@@ -248,6 +252,7 @@ impl Tx {
                         before.image_drop_rollback,
                         &before.image_update,
                         &before.image_rollback,
+                        &before.guest_agent,
                     ) == (
                         &e.phase,
                         &e.reason,
@@ -257,6 +262,7 @@ impl Tx {
                         e.image_drop_rollback,
                         &e.image_update,
                         &e.image_rollback,
+                        &e.guest_agent,
                     );
                     changed = !unchanged;
                 }

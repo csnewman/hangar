@@ -712,6 +712,23 @@ pub struct ObservedEnvironment {
     pub image_update: Option<ImageUpdate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_rollback: Option<ImageRollback>,
+    /// The guest agent of a running one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest_agent: Option<GuestAgent>,
+}
+
+/// The guest agent of a running environment's machine.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuestAgent {
+    /// The control channel's protocol version it speaks.
+    pub protocol: i64,
+    /// Its build, as it says.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub build: String,
+    /// It is not the agent the worker boots machines with, which it takes
+    /// at its next boot: a restart, since a resume keeps the agent it had.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub outdated: bool,
 }
 
 /// One step of starting an environment. They happen in the order declared;

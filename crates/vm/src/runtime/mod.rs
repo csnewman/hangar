@@ -347,12 +347,14 @@ impl Runtime {
                     image_pinned: false,
                     image_update: None,
                     image_rollback: None,
+                    guest_agent: None,
                 };
                 if st.phase == Phase::Starting {
                     o.progress = st.progress.clone();
                 }
                 if st.phase == Phase::Running {
                     o.stats = st.stats.clone();
+                    o.guest_agent = st.running.as_ref().map(|i| i.guest_agent());
                 }
                 drop(st);
                 m.image_state(&mut o);

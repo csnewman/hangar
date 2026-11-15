@@ -1334,6 +1334,24 @@ components:
           description: The copy of the image it runs.
         task: { $ref: "#/components/schemas/Task" }
         image_update: { $ref: "#/components/schemas/ImageUpdate" }
+        guest_agent:
+          type: object
+          description: >-
+            The Hangar agent in a running environment's machine, as its
+            worker reports it.
+          required: [protocol]
+          properties:
+            protocol:
+              type: integer
+              format: int64
+              description: The version of the protocol its worker speaks to it in.
+            build: { type: string, description: Its build. }
+            outdated:
+              type: boolean
+              description: >-
+                It is not the agent its worker boots machines with, which
+                it takes at its next boot: a restart, since resuming from a
+                suspend keeps the agent it had.
         image_rollback: { $ref: "#/components/schemas/ImageRollback" }
         image_change:
           type: string

@@ -476,6 +476,7 @@ pub async fn create(store: &Store, p: &Principal, ip: &str, req: Create) -> fail
             reason: String::new(),
             stats: None,
             progress: None,
+            guest_agent: None,
             created_at: now,
             updated_at: now,
         };

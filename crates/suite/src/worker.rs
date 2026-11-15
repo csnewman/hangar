@@ -9,7 +9,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use hangar_api::{DesiredState, EnvironmentSpec, ObservedEnvironment, Phase};
+use hangar_api::{DesiredState, EnvironmentSpec, GuestAgent, ObservedEnvironment, Phase};
 use hangar_vm::log::Log;
 use hangar_worker::config::Config;
 use hangar_worker::{Runtime, Worker as RealWorker};
@@ -201,6 +201,13 @@ impl Runtime for Machines {
                 image_pinned: false,
                 image_update: None,
                 image_rollback: None,
+                // A running one's agent is one release behind, as a guest
+                // booted before its worker was upgraded would be.
+                guest_agent: (*desired == DesiredState::Running).then(|| GuestAgent {
+                    protocol: 1,
+                    build: "suite".into(),
+                    outdated: true,
+                }),
             })
             .collect()
     }
