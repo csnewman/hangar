@@ -136,6 +136,7 @@ pub async fn add_ssh_key(
     };
     let mut tx = store.begin().await?;
     tx.insert_ssh_key(&k).await?;
+    tx.signal(crate::store::signals::Signal::Shared);
     audit::record(
         &mut tx,
         &p.actor(ip),
@@ -153,6 +154,7 @@ pub async fn delete_ssh_key(store: &Store, p: &Principal, ip: &str, id: Uuid) ->
     let Some(name) = tx.delete_ssh_key(p.user_id, id).await? else {
         return Err(Fail::NotFound("no such key".into()));
     };
+    tx.signal(crate::store::signals::Signal::Shared);
     audit::record(
         &mut tx,
         &p.actor(ip),

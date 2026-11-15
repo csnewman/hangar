@@ -182,7 +182,17 @@ async fn delete_user(
     s: Signed,
     Path(id): Path<String>,
 ) -> Result<StatusCode, ApiError> {
-    users::delete(&app.store, &s.principal, &s.ip, user_id(&id)?).await?;
+    let id = user_id(&id)?;
+    // Found before their rows go with the person; the files are on the
+    // files root, where nothing else would delete them.
+    let copies = crate::packs::copies_of(&app.store, id).await;
+    users::delete(&app.store, &s.principal, &s.ip, id).await?;
+    if let Err(e) = copies
+        .map_err(crate::fail::Fail::from)
+        .and_then(|c| crate::packs::remove_copies(&app.root, &c))
+    {
+        eprintln!("hangar-server: deleting a deleted user's files: {e:?}");
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

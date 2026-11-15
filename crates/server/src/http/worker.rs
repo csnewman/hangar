@@ -139,23 +139,13 @@ async fn files(
     WorkerId(worker): WorkerId,
     Path(env): Path<String>,
 ) -> Result<Json<EnvironmentFiles>, ApiError> {
-    let on_it = match Uuid::parse_str(&env) {
-        Ok(env) => app
-            .store
-            .begin()
-            .await?
-            .desired(worker)
-            .await?
-            .is_some_and(|(_, envs, _, _)| envs.iter().any(|e| e.id == env)),
-        Err(_) => false,
-    };
-    if !on_it {
-        return Err(ApiError::new(
-            StatusCode::NOT_FOUND,
-            "no such environment on this worker",
-        ));
+    let gone = || ApiError::new(StatusCode::NOT_FOUND, "no such environment on this worker");
+    let env = Uuid::parse_str(&env).map_err(|_| gone())?;
+    match crate::packs::environment_files(&app.store, worker, env).await {
+        Ok(files) => Ok(Json(files)),
+        Err(crate::fail::Fail::NotFound(_)) => Err(gone()),
+        Err(e) => Err(e.into()),
     }
-    Ok(Json(EnvironmentFiles::default()))
 }
 
 async fn tunnel(

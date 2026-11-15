@@ -38,6 +38,9 @@ pub struct Config {
     /// The SSH gateway: where it listens (`HANGAR_SSH_LISTEN`), and where
     /// people reach it, host and port.
     pub ssh: Option<Ssh>,
+    /// Where copies of packs keep their files (`HANGAR_FILES_DIR`), which
+    /// workers serve environments.
+    pub files: PathBuf,
 }
 
 /// The SSH gateway's addresses.
@@ -154,6 +157,9 @@ impl Config {
             registry,
             sealer,
             ssh,
+            files: var("HANGAR_FILES_DIR")
+                .unwrap_or_else(|| "/var/lib/hangar/files".into())
+                .into(),
         })
     }
 }

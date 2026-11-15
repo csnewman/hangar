@@ -34,6 +34,7 @@ pub const KIND_PROCESSES: &str = "processes";
 pub const KIND_PORTS: &str = "ports";
 pub const KIND_LOGS: &str = "logs";
 pub const KIND_SSH: &str = "ssh";
+pub const KIND_PROFILE: &str = "profile";
 
 /// How often the server pings a tunnel: often enough to keep it through a
 /// proxy's idle timeout, and for the worker, which drops one it has heard
@@ -76,6 +77,11 @@ type Opener = mpsc::Sender<oneshot::Sender<Result<yamux::Stream, String>>>;
 pub struct Tunnels(Mutex<HashMap<Uuid, (u64, Opener)>>);
 
 impl Tunnels {
+    /// The workers whose tunnels this server holds.
+    pub fn connected(&self) -> Vec<Uuid> {
+        self.0.lock().unwrap().keys().copied().collect()
+    }
+
     /// Opens a stream to the worker with id, header written.
     pub async fn open(&self, worker: Uuid, header: &Header<'_>) -> Result<Conn, OpenError> {
         let opener = self

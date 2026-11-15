@@ -283,3 +283,79 @@ pub struct ServerKey {
     pub sealed: bool,
     pub created_at: DateTime<Utc>,
 }
+
+/// `packs`: a named list of paths, a person's, a team's, or built in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Pack {
+    pub id: Uuid,
+    pub name: String,
+    pub description: String,
+    pub owner_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    pub builtin: bool,
+    /// listed, owner, team or everyone.
+    pub attach: String,
+    /// all_squash, root_squash or no_root_squash.
+    pub squash: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// `pack_paths`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackPath {
+    pub pack_id: Uuid,
+    pub path: String,
+    pub sensitive: bool,
+}
+
+/// `copies`: one set of a pack's files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Copy {
+    pub id: Uuid,
+    pub pack_id: Uuid,
+    pub owner_id: Option<Uuid>,
+    pub team_id: Option<Uuid>,
+    /// A person's own, one each.
+    pub personal: bool,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// `pack_defaults`: the copy a person uses of a pack unless told otherwise.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PackDefault {
+    pub user_id: Uuid,
+    pub pack_id: Uuid,
+    pub copy_id: Uuid,
+}
+
+/// `environment_copies`: the copy an environment uses of a pack, chosen on
+/// it or kept from when it was first given one.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnvironmentCopy {
+    pub environment_id: Uuid,
+    pub pack_id: Uuid,
+    pub copy_id: Uuid,
+    pub chosen: bool,
+}
+
+/// `environment_routed`: a copy an environment's agent routes to.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EnvironmentRouted {
+    pub environment_id: Uuid,
+    pub copy_id: Uuid,
+}
+
+/// `environment_conflicts`: a path an environment had a file of its own
+/// at, differing from its copy's, when the path became shared.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Conflict {
+    pub environment_id: Uuid,
+    pub copy_id: Uuid,
+    pub path: String,
+    pub found_at: DateTime<Utc>,
+    /// shared or environment, until the environment's agent has done it.
+    pub resolution: Option<String>,
+}

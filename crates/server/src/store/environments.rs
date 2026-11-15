@@ -89,6 +89,10 @@ pub(super) fn json_delete(work: &mut State, id: Uuid) {
     work.environment_tasks.retain(|t| t.environment_id != id);
     work.agent_sessions.retain(|a| a.environment_id != id);
     work.editor_sessions.retain(|s| s.environment_id != id);
+    work.environment_copies.retain(|e| e.environment_id != id);
+    work.environment_routed.retain(|r| r.environment_id != id);
+    work.environment_conflicts
+        .retain(|c| c.environment_id != id);
 }
 
 impl Tx {
@@ -467,6 +471,97 @@ impl Tx {
                 Ok(out)
             }
         }
+    }
+
+    /// Keeps the coding agents' sessions an environment's guest reports,
+    /// all of them: one left out is gone. Whether its owner has seen each
+    /// is kept, and an unchanged one is left as it is, so it signals no
+    /// change.
+    pub async fn report_agents(&mut self, env: Uuid, sessions: &[AgentSession]) -> Result<()> {
+        let ids: Vec<&str> = sessions.iter().map(|a| a.id.as_str()).collect();
+        let mut changed = false;
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                sqlx::query(
+                    "DELETE FROM agent_sessions WHERE environment_id = $1 AND NOT (id = ANY($2))",
+                )
+                .bind(env)
+                .bind(&ids)
+                .execute(&mut **tx)
+                .await?;
+                for a in sessions {
+                    sqlx::query(
+                        "INSERT INTO agent_sessions AS a (environment_id, id, agent, terminal, state, step, message, since)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                         ON CONFLICT (environment_id, id) DO UPDATE SET agent = $3, terminal = $4, state = $5, step = $6,
+                            message = $7, since = $8
+                         WHERE (a.agent, a.terminal, a.state, a.step, a.message, a.since)
+                            IS DISTINCT FROM ($3, $4, $5, $6, $7, $8)",
+                    )
+                    .bind(env)
+                    .bind(&a.id)
+                    .bind(&a.agent)
+                    .bind(&a.terminal)
+                    .bind(&a.state)
+                    .bind(&a.step)
+                    .bind(&a.message)
+                    .bind(a.since)
+                    .execute(&mut **tx)
+                    .await?;
+                }
+            }
+            Backend::Json(tx) => {
+                let w = &mut tx.work.agent_sessions;
+                let before = w.len();
+                w.retain(|a| a.environment_id != env || ids.contains(&a.id.as_str()));
+                changed |= w.len() != before;
+                for a in sessions {
+                    match w
+                        .iter_mut()
+                        .find(|o| o.environment_id == env && o.id == a.id)
+                    {
+                        Some(o) => {
+                            let same = (
+                                &o.agent,
+                                &o.terminal,
+                                &o.state,
+                                &o.step,
+                                &o.message,
+                                o.since,
+                            ) == (
+                                &a.agent,
+                                &a.terminal,
+                                &a.state,
+                                &a.step,
+                                &a.message,
+                                a.since,
+                            );
+                            if !same {
+                                let seen = o.seen_at;
+                                *o = AgentSession {
+                                    environment_id: env,
+                                    seen_at: seen,
+                                    ..a.clone()
+                                };
+                                changed = true;
+                            }
+                        }
+                        None => {
+                            w.push(AgentSession {
+                                environment_id: env,
+                                seen_at: None,
+                                ..a.clone()
+                            });
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if changed {
+            self.signal(Signal::Environment(env));
+        }
+        Ok(())
     }
 
     /// Notes that an environment's owner has looked at one of its agents'

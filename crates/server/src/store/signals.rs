@@ -19,6 +19,9 @@ pub enum Signal {
     Placement,
     /// Something a client shows of an environment.
     Environment(Uuid),
+    /// What profile sessions send: a person's keys, packs and copies, and
+    /// conflicts' resolutions.
+    Shared,
 }
 
 /// The channels a signal goes out on to other servers, and comes in on.
@@ -26,6 +29,8 @@ pub const WORKER_CHANNEL: &str = "hangar_worker";
 pub const PLACEMENT_CHANNEL: &str = "hangar_placement";
 pub const CAPACITY_CHANNEL: &str = "hangar_capacity";
 pub const ENVIRONMENT_CHANNEL: &str = "environment_changed";
+pub const PACKS_CHANNEL: &str = "packs";
+pub const PROFILE_CHANNEL: &str = "hangar_profile";
 
 /// Everyone waiting on a signal in this process.
 #[derive(Default)]
@@ -33,6 +38,8 @@ pub struct Signals {
     workers: Mutex<HashMap<Uuid, Arc<Notify>>>,
     /// Wakes placement.
     pub placement: Notify,
+    /// Wakes profile sessions to send again what has changed.
+    pub shared: Notify,
     pub changes: Changes,
 }
 
@@ -51,6 +58,7 @@ impl Signals {
             }
             Signal::Placement => self.placement.notify_one(),
             Signal::Environment(id) => self.changes.publish(Some(id)),
+            Signal::Shared => self.shared.notify_waiters(),
         }
     }
 
@@ -61,6 +69,7 @@ impl Signals {
         }
         self.placement.notify_one();
         self.changes.publish(None);
+        self.shared.notify_waiters();
     }
 
     /// The signal a notification from another server is.
@@ -69,6 +78,7 @@ impl Signals {
             WORKER_CHANNEL => Uuid::parse_str(payload).ok().map(Signal::Worker),
             PLACEMENT_CHANNEL | CAPACITY_CHANNEL => Some(Signal::Placement),
             ENVIRONMENT_CHANNEL => Uuid::parse_str(payload).ok().map(Signal::Environment),
+            PACKS_CHANNEL | PROFILE_CHANNEL => Some(Signal::Shared),
             _ => None,
         }
     }
@@ -176,6 +186,8 @@ pub async fn listen(pool: sqlx::PgPool, signals: Arc<Signals>) {
                 PLACEMENT_CHANNEL,
                 CAPACITY_CHANNEL,
                 ENVIRONMENT_CHANNEL,
+                PACKS_CHANNEL,
+                PROFILE_CHANNEL,
             ])
             .await
         {

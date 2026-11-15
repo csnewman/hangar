@@ -12,6 +12,7 @@ pub mod environments;
 mod hosts;
 mod json;
 pub mod keys;
+mod packs;
 mod pg;
 pub mod report;
 pub mod rows;
@@ -109,6 +110,7 @@ impl Tx {
                     let (channel, payload) = match s {
                         Signal::Worker(id) => (signals::WORKER_CHANNEL, id.to_string()),
                         Signal::Placement => (signals::PLACEMENT_CHANNEL, String::new()),
+                        Signal::Shared => (signals::PACKS_CHANNEL, String::new()),
                         Signal::Environment(_) => continue,
                     };
                     sqlx::query("SELECT pg_notify($1, $2)")

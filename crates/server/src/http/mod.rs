@@ -9,6 +9,7 @@ mod client;
 mod environments;
 mod frontend;
 mod keys;
+mod packs;
 mod streams;
 mod worker;
 
@@ -35,11 +36,19 @@ pub struct App {
     pub tunnels: crate::tunnel::Tunnels,
     /// The SSH gateway's host key, in known_hosts form, when it runs.
     pub ssh_host_key: Option<String>,
+    /// The files root, where copies keep their files.
+    pub root: crate::root::Root,
 }
 
 impl App {
-    pub fn new(store: Store, cfg: Config, host_key: Option<&russh::keys::PrivateKey>) -> App {
+    pub fn new(
+        store: Store,
+        cfg: Config,
+        host_key: Option<&russh::keys::PrivateKey>,
+        root: crate::root::Root,
+    ) -> App {
         App {
+            root,
             store,
             cfg,
             rules: access::Rules::from_specs(),
@@ -72,7 +81,8 @@ pub fn router(app: Shared) -> Router {
                 .merge(catalog::frontend())
                 .merge(environments::frontend())
                 .merge(streams::frontend())
-                .merge(keys::frontend()),
+                .merge(keys::frontend())
+                .merge(packs::frontend()),
         )
         .nest(
             "/api/v1",
@@ -81,7 +91,8 @@ pub fn router(app: Shared) -> Router {
                 .merge(catalog::client())
                 .merge(environments::client())
                 .merge(streams::client())
-                .merge(keys::client()),
+                .merge(keys::client())
+                .merge(packs::client()),
         )
         .nest("/api/worker/v1", worker::routes())
         .route_layer(axum::middleware::from_fn_with_state(

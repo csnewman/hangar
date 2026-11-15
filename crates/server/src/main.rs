@@ -7,9 +7,12 @@ mod environments;
 mod fail;
 mod http;
 mod keys;
+mod packs;
 mod placement;
 mod ports;
+mod profile;
 mod publichost;
+mod root;
 mod seal;
 mod sshgw;
 mod store;
@@ -58,10 +61,13 @@ async fn run() -> Result<(), String> {
         ),
         None => None,
     };
-    let app = Arc::new(http::App::new(store, cfg, host_key.as_ref()));
+    let root = root::Root::open(&cfg.files)
+        .map_err(|e| format!("the files root {}: {e}", cfg.files.display()))?;
+    let app = Arc::new(http::App::new(store, cfg, host_key.as_ref(), root));
     if let (Some(ssh), Some(key)) = (&app.cfg.ssh, host_key) {
         tokio::spawn(sshgw::serve(app.clone(), ssh.listen.clone(), key));
     }
+    tokio::spawn(profile::run(app.clone()));
     let app = http::router(app);
     axum::serve(
         listener,

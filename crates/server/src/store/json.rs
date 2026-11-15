@@ -11,9 +11,10 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::rows::{
-    AccessToken, AgentSession, AuditEvent, Collaborator, Environment, EnvironmentRemoval,
-    HostSession, ImageRemoval, LoginKey, ServerKey, Session, SshKey, Task, Team, TeamMember,
-    Template, User, Worker,
+    AccessToken, AgentSession, AuditEvent, Collaborator, Conflict, Copy, Environment,
+    EnvironmentCopy, EnvironmentRemoval, EnvironmentRouted, HostSession, ImageRemoval, LoginKey,
+    Pack, PackDefault, PackPath, ServerKey, Session, SshKey, Task, Team, TeamMember, Template,
+    User, Worker,
 };
 use super::{Error, Result};
 
@@ -42,6 +43,13 @@ pub struct State {
     pub ssh_keys: Vec<SshKey>,
     pub ssh_login_keys: Vec<LoginKey>,
     pub server_keys: Vec<ServerKey>,
+    pub packs: Vec<Pack>,
+    pub pack_paths: Vec<PackPath>,
+    pub copies: Vec<Copy>,
+    pub pack_defaults: Vec<PackDefault>,
+    pub environment_copies: Vec<EnvironmentCopy>,
+    pub environment_routed: Vec<EnvironmentRouted>,
+    pub environment_conflicts: Vec<Conflict>,
 }
 
 impl State {
@@ -59,6 +67,8 @@ impl State {
             created_at: chrono::Utc::now(),
             theme: "system".into(),
         };
+        let now = chrono::Utc::now();
+        let profile = uuid::Uuid::new_v4();
         State {
             users: vec![
                 user(crate::audit::SYSTEM_HANGAR, "hangar", "Hangar"),
@@ -68,6 +78,26 @@ impl State {
                     "Hangar placement",
                 ),
             ],
+            packs: vec![Pack {
+                id: profile,
+                name: "Profile".into(),
+                description: "Claude's settings and sign-in, git and VS Code settings, and CLI sign-ins, in every environment.".into(),
+                owner_id: None,
+                team_id: None,
+                builtin: true,
+                attach: "everyone".into(),
+                squash: "all_squash".into(),
+                created_at: now,
+                updated_at: now,
+            }],
+            pack_paths: crate::packs::profile_defaults()
+                .into_iter()
+                .map(|p| PackPath {
+                    pack_id: profile,
+                    path: p.path,
+                    sensitive: p.sensitive,
+                })
+                .collect(),
             ..State::default()
         }
     }

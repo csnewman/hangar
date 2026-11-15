@@ -7,6 +7,7 @@ publish = false
 description = "Black-box tests of a Hangar server binary"
 
 [dependencies]
+base64.workspace = true
 futures-util = { version = "0.3", features = ["sink"] }
 bytes = "1"
 futures-core = "0.3"
@@ -19,5 +20,6 @@ russh = { version = "0.65", default-features = false, features = ["ring"] }
 reqwest = { version = "0.13", default-features = false, features = ["cookies", "json"] }
 serde.workspace = true
 serde_json.workspace = true
+signature = "3.0.0"
 tokio.workspace = true
 tokio-tungstenite = "0.26"

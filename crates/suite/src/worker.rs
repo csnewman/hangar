@@ -34,6 +34,19 @@ const CODE: u32 = 104;
 /// The vsock port the agent serves the process list on.
 const PROCESSES: u32 = 106;
 
+/// The vsock port the agent holds its profile session on.
+const PROFILE: u32 = 105;
+
+/// The task the suite's guests set, as their coding agent.
+pub const AGENT_TASK: &str = "Reading the suite's code";
+
+/// The path the suite's guests find a conflict at, in the first copy they
+/// are given.
+pub const CONFLICTED: &str = "~/.gitconfig";
+
+/// What the suite's guests sign with their owner's first key.
+pub const SIGNED: &[u8] = b"signed by the suite's guest";
+
 /// The guest ports the suite's guests serve a web page on.
 pub const WEB_PORTS: [u16; 2] = [80, 8080];
 
@@ -104,6 +117,18 @@ impl Worker {
     pub fn spec(&self, id: &str) -> Option<EnvironmentSpec> {
         self.machines.specs.lock().unwrap().get(id).cloned()
     }
+
+    /// Every message an environment's guest has been sent on its profile
+    /// sessions, and each answer to its own requests, in order.
+    pub fn profile(&self, id: &str) -> Vec<serde_json::Value> {
+        self.machines
+            .profile
+            .lock()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
 impl Drop for Worker {
@@ -122,6 +147,7 @@ struct Machines {
     specs: Arc<Mutex<BTreeMap<String, EnvironmentSpec>>>,
     terminals: Terminals,
     changed: Arc<Notify>,
+    profile: Arc<Mutex<BTreeMap<String, Vec<serde_json::Value>>>>,
 }
 
 impl Machines {
@@ -202,6 +228,10 @@ impl Runtime for Machines {
         }
         if port == PROCESSES {
             tokio::spawn(processes(guest));
+            return Ok(ours);
+        }
+        if port == PROFILE {
+            tokio::spawn(profile(guest, id.to_string(), self.profile.clone()));
             return Ok(ours);
         }
         tokio::spawn(async move {
@@ -309,6 +339,95 @@ async fn code(conn: DuplexStream) {
             return;
         }
         if conn.write_all(&len).await.is_err() || conn.write_all(&body).await.is_err() {
+            return;
+        }
+    }
+}
+
+/// A profile session as the agent holds it (crates/agent/src/profile):
+/// every message it is sent is kept, as are the answers to its requests.
+/// It reports one coding agent's session asking for its owner, sets its
+/// task as that agent, says it routes to each copy it is given, finds a
+/// conflict at CONFLICTED in the first and does as it is told with it, and
+/// asks for SIGNED to be signed with the first key it is offered.
+async fn profile(
+    conn: DuplexStream,
+    env: String,
+    kept: Arc<Mutex<BTreeMap<String, Vec<serde_json::Value>>>>,
+) {
+    use tokio::io::AsyncBufReadExt;
+    let (r, mut w) = tokio::io::split(conn);
+    let mut r = tokio::io::BufReader::new(r);
+    let line = |v: serde_json::Value| format!("{v}\n");
+    let hello = [
+        serde_json::json!({ "type": "agents", "agents": [{
+            "id": "suite-session", "agent": "claude", "state": "asking",
+            "message": "May I run the tests?", "since": "2026-11-14T12:00:00Z",
+        }]}),
+        serde_json::json!({ "type": "set_task", "id": 1, "text": AGENT_TASK }),
+    ];
+    for m in hello {
+        if w.write_all(line(m).as_bytes()).await.is_err() {
+            return;
+        }
+    }
+    let (mut asked, mut conflicted) = (false, false);
+    let mut buf = String::new();
+    loop {
+        buf.clear();
+        if r.read_line(&mut buf).await.unwrap_or(0) == 0 {
+            return;
+        }
+        let Ok(m) = serde_json::from_str::<serde_json::Value>(&buf) else {
+            return;
+        };
+        kept.lock()
+            .unwrap()
+            .entry(env.clone())
+            .or_default()
+            .push(m.clone());
+        let reply = match m["type"].as_str() {
+            Some("paths") => {
+                let routed: Vec<serde_json::Value> = m["sets"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(|s| s["id"].clone())
+                    .collect();
+                // Its own ~/.gitconfig differs from the first copy's.
+                if let Some(first) = routed.first()
+                    && !conflicted
+                {
+                    conflicted = true;
+                    let c = serde_json::json!({ "type": "conflict", "copy": first, "path": CONFLICTED });
+                    if w.write_all(line(c).as_bytes()).await.is_err() {
+                        return;
+                    }
+                }
+                Some(serde_json::json!({ "type": "routed", "routed": routed }))
+            }
+            Some("resolve") => Some(serde_json::json!({
+                "type": "resolved", "copy": m["copy"], "path": m["path"],
+            })),
+            Some("keys") if !asked => {
+                let first = m["keys"]
+                    .as_array()
+                    .and_then(|k| k.first())
+                    .and_then(|k| k.as_str());
+                first.and_then(|k| k.split_whitespace().nth(1)).map(|wire| {
+                    asked = true;
+                    use base64::Engine;
+                    serde_json::json!({
+                        "type": "sign", "id": 2, "key": wire,
+                        "data": base64::engine::general_purpose::STANDARD.encode(SIGNED),
+                    })
+                })
+            }
+            _ => None,
+        };
+        if let Some(reply) = reply
+            && w.write_all(line(reply).as_bytes()).await.is_err()
+        {
             return;
         }
     }

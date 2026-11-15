@@ -219,6 +219,7 @@ impl Tx {
                 tx.work.access_tokens.retain(|t| t.user_id != id);
                 tx.work.ssh_keys.retain(|k| k.user_id != id);
                 tx.work.ssh_login_keys.retain(|k| k.user_id != id);
+                super::packs::json_delete_owner(&mut tx.work, id);
                 Ok(Some(u.username))
             }
         }

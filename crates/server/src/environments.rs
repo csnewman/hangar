@@ -1152,6 +1152,20 @@ pub async fn set_task(store: &Store, p: &Principal, id: Uuid, text: &str) -> fai
     Ok(t)
 }
 
+/// Sets an environment's task as its coding agent does, from inside it;
+/// an empty text marks the task done, leaving it none.
+pub async fn agent_set_task(store: &Store, env: Uuid, text: &str) -> fail::Result<Option<Task>> {
+    let mut tx = store.begin().await?;
+    if text.is_empty() {
+        tx.end_task(env, Utc::now()).await?;
+        tx.commit().await?;
+        return Ok(None);
+    }
+    let t = put_task(&mut tx, env, text, "agent").await?;
+    tx.commit().await?;
+    Ok(Some(t))
+}
+
 /// Marks the task of an environment p may reach done.
 pub async fn end_task(store: &Store, p: &Principal, id: Uuid) -> fail::Result<()> {
     let mut tx = store.begin().await?;
