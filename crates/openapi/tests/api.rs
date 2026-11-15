@@ -73,7 +73,11 @@ async fn sign_in_token() {
 
 #[tokio::test]
 async fn sign_in_waiting() {
-    let url = answer_once("202 Accepted", r#"{"error":"not yet approved"}"#).await;
+    let url = answer_once(
+        "202 Accepted",
+        r#"{"error":"not yet approved","code":"sign_in_pending"}"#,
+    )
+    .await;
     let c = client(&url);
     let step = c
         .finish_sign_in_step(&clientapi::types::FinishSignIn {
@@ -84,7 +88,8 @@ async fn sign_in_waiting() {
     assert_eq!(
         step,
         SignInStep::Waiting(clientapi::types::Error {
-            error: "not yet approved".into()
+            error: "not yet approved".into(),
+            code: Some("sign_in_pending".into()),
         })
     );
 }

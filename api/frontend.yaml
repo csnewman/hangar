@@ -2067,8 +2067,9 @@ components:
             (409), too_large (413), refused (another 4xx), internal (5xx),
             unavailable (503). Some refusals have one of their own instead:
             environment_not_running (409), worker_unreachable (503),
-            environment_not_placed (409). More may come; treat one you do
-            not know as its status's.
+            environment_not_placed (409). A sign-in still waiting to be
+            approved answers 202 with sign_in_pending. More may come; treat
+            one you do not know as its status's.
 
     DesiredState:
       type: string

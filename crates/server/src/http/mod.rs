@@ -206,6 +206,8 @@ pub mod code {
     pub const UNREACHABLE: &str = "worker_unreachable";
     /// The environment is on no worker yet.
     pub const NOT_PLACED: &str = "environment_not_placed";
+    /// A sign-in waits to be approved (202, not a refusal).
+    pub const SIGN_IN_PENDING: &str = "sign_in_pending";
 }
 
 /// The code a refusal with this status has unless it is given its own.

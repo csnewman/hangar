@@ -114,6 +114,7 @@ async fn finish(
                 StatusCode::ACCEPTED,
                 "waiting for the sign-in to be approved",
             )
+            .code(super::code::SIGN_IN_PENDING)
             .into_response(),
             Collected::Refused => {
                 ApiError::new(StatusCode::FORBIDDEN, "the sign-in was refused").into_response()
