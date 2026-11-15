@@ -134,6 +134,9 @@ pub struct Reply {
     /// For an attach, whether this connection holds the size.
     #[serde(default, skip_serializing_if = "is_false")]
     pub owner: bool,
+    /// The service, in every reply (`crate::service`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<crate::service::Service>,
 }
 
 fn is_zero<T: Default + PartialEq>(n: &T) -> bool {
@@ -778,7 +781,11 @@ fn random_id() -> String {
 }
 
 async fn write_reply<W: AsyncWrite + Unpin>(w: &mut W, r: &Reply) -> io::Result<()> {
-    let mut b = serde_json::to_vec(r).map_err(io::Error::other)?;
+    let r = Reply {
+        service: Some(crate::service::terminal()),
+        ..r.clone()
+    };
+    let mut b = serde_json::to_vec(&r).map_err(io::Error::other)?;
     b.push(b'\n');
     w.write_all(&b).await
 }

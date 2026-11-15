@@ -195,7 +195,12 @@ test('files, git and a shared document', async () => {
 	try {
 		const settings = join(dir, '.config', 'hangar', 'code.json')
 		// A service told of no trust list trusts every folder.
-		assert.deepEqual(await a.call('hello'), { root, home: root, settings, trusted: true })
+		const { service, ...hello } = await a.call('hello')
+		assert.deepEqual(hello, { root, home: root, settings, trusted: true })
+		// The service says what it is: its protocol, its build and its features.
+		assert.equal(service.protocol, 1)
+		assert.ok(service.build)
+		assert.ok(service.features.includes('ping'))
 		const list = await a.call('fs.list', { path: '.' })
 		assert.ok(list.some((e: any) => e.name === 'a.txt' && !e.dir))
 
@@ -496,7 +501,8 @@ test('a tab working in another folder, searching it', async () => {
 	try {
 		await assert.rejects(a.call('hello', { root: 'sub' }), /absolute/)
 		await assert.rejects(a.call('hello', { root: join(root, 'missing') }), /does not exist/)
-		assert.deepEqual(await a.call('hello', { root: join(root, 'sub') }), {
+		const { service: _, ...sub } = await a.call('hello', { root: join(root, 'sub') })
+		assert.deepEqual(sub, {
 			root: join(root, 'sub'),
 			home: root,
 			settings: join(dir, '.config', 'hangar', 'code.json'),

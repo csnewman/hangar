@@ -15,6 +15,7 @@ pub mod memory;
 pub mod procs;
 pub mod profile;
 pub mod serve;
+pub mod service;
 pub mod sftp;
 pub mod sshd;
 pub mod terminal;

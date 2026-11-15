@@ -15,6 +15,10 @@ import { Heartbeat, onReturn } from '../heartbeat'
 import { CollabFile, type Opened } from './collab'
 import type { DocTransport, SharedFile } from './shared'
 
+// CodeService is what a Code service says of itself (the agent's
+// crates/agent/src/service.rs).
+export type CodeService = { protocol: number; build: string; features: string[] }
+
 export type { SharedFile } from './shared'
 
 const CHANNEL_JSON = 0x72 // 'r'
@@ -334,6 +338,11 @@ export class CodeClient {
   // trusted is whether this tab's folder may run its code: whether its
   // language servers start.
   trusted = true
+  // service is what the Code service said of itself in its hello: its
+  // protocol, the agent's build, and what it does beyond what that
+  // protocol promises. A service that says nothing is at protocol 1 with no
+  // features, as an agent older than these is.
+  service: CodeService = { protocol: 1, build: '', features: [] }
   private env: string
   private want: string
 
@@ -378,6 +387,12 @@ export class CodeClient {
           home: string
           settings?: string
           trusted?: boolean
+          service?: Partial<CodeService>
+        }
+        this.service = {
+          protocol: hello.service?.protocol ?? 1,
+          build: hello.service?.build ?? '',
+          features: hello.service?.features ?? [],
         }
         this.root = hello.root
         this.home = hello.home
@@ -503,17 +518,22 @@ export class CodeClient {
     return (await this.call(method, params)) as T
   }
 
+  // has says whether the service does what feature names.
+  has(feature: string): boolean {
+    return this.service.features.includes(feature)
+  }
+
   // ping is how long, in milliseconds, a request takes to reach the service
   // and be answered: through Hangar's server and the worker's tunnel to the
-  // environment, and back. A service too old to know the request answers
-  // that it does not, which takes as long.
+  // environment, and back. A service without ping answers that it does not
+  // know the request, which takes as long.
   async ping(): Promise<number> {
     await this.ready
     const start = performance.now()
-    try {
+    if (this.has('ping')) {
       await this.call('ping')
-    } catch (e) {
-      if (!(e instanceof Error && e.message.startsWith('no such method'))) throw e
+    } else {
+      await this.call('ping').catch(() => undefined)
     }
     return performance.now() - start
   }

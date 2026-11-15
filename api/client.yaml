@@ -22,7 +22,8 @@ info:
     terminals list gives them), or a new one starts, in ?dir= if given, at
     ?cols= and ?rows=. The first message from the server is the attach's
     reply as JSON text: {"session": {"id", "title", "created", "clients",
-    "cols", "rows"}, "history": N, "owner": bool}, or {"err": "..."}. After it every message is binary, one frame
+    "cols", "rows"}, "history": N, "owner": bool, "service": {"protocol",
+    "build", "features"}}, or {"err": "..."}. After it every message is binary, one frame
     each: a type byte, then its payload. From the server: 'o' what the shell
     wrote (the first "history" bytes of it are recent output replayed,
     which a terminal must not answer), 's' the size (columns, rows and
@@ -40,8 +41,12 @@ info:
     channel byte then its payload; 'r' carries JSON requests ({"id",
     "method", "params"}), their replies ({"id", "result"} or {"id",
     "error"}) and events ({"event", "params"}). The service's own
-    documentation (crates/agent) says what each method does. It is refused
-    as the terminal is.
+    documentation (crates/agent) says what each method does. Its hello's
+    result says, as "service", the protocol it speaks, its build and its
+    features: what it does beyond what its protocol promises (ping, and in
+    time more). A service that says none is at protocol 1 with no
+    features, and a client asks nothing of it that those do not promise.
+    It is refused as the terminal is.
 
 
     Desktop. GET /api/v1/environments/{id}/desktop is a WebSocket to the

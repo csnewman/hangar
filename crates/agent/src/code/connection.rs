@@ -492,6 +492,7 @@ impl Connection {
             "home": self.s.root.display().to_string(),
             "settings": self.s.settings.path().display().to_string(),
             "trusted": self.s.trust.trusts(&root).await,
+            "service": hangar_agent::service::code(),
         }))
     }
 

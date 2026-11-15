@@ -98,6 +98,8 @@ pub const TYPE_AGENTS: &str = "agents";
 /// Set the environment's task to text, as its coding agent; an empty text
 /// marks it done.
 pub const TYPE_SET_TASK: &str = "set_task";
+/// The agent's first message: what its side of the session is.
+pub const TYPE_HELLO: &str = "hello";
 
 /// The environment's file replaces the copy's, resolving a conflict; the
 /// other resolution drops it.
@@ -108,6 +110,11 @@ pub const RESOLVE_ENVIRONMENT: &str = "environment";
 pub struct Message {
     #[serde(rename = "type", default)]
     pub kind: String,
+
+    /// What the agent's side of the session is (`crate::service`), in the
+    /// hello it sends first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<crate::service::Service>,
 
     /// The copies the environment uses, in order, with the paths each
     /// shares; `routed` the IDs of those the agent routes to.
@@ -358,6 +365,11 @@ impl<F: Files> Guest<F> {
             replaced: Notify::new(),
         });
         self.set_current(Some(s.clone()), None);
+        s.send(&Message {
+            kind: TYPE_HELLO.into(),
+            service: Some(crate::service::profile()),
+            ..Message::default()
+        });
         let agents = self.state.lock().unwrap().agents.clone();
         if let Some(agents) = agents {
             s.send(&Message {

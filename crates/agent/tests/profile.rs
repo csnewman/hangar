@@ -344,6 +344,9 @@ async fn files_move_as_sharing_changes() {
 async fn a_shared_files_directory_is_made() {
     let e = env();
     let mut s = e.session();
+    // The agent says first what its side of the session is.
+    let hello = s.next("hello").await;
+    assert_eq!(hello["service"]["protocol"], 1, "{hello}");
     s.paths(json!([{"id": "c1", "paths": ["~/.aws/config", "~/.cache/tool/state/"]}]))
         .await;
     s.next("routed").await;

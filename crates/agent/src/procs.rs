@@ -67,6 +67,9 @@ pub struct Reply {
     pub memory_bytes: i64,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub error: String,
+    /// The service, in every reply (`crate::service`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub service: Option<crate::service::Service>,
 }
 
 fn is_zero<T: Default + PartialEq>(n: &T) -> bool {
@@ -96,13 +99,14 @@ impl Server {
         let (rd, mut wr) = tokio::io::split(conn);
         let mut lines = BufReader::new(rd).lines();
         while let Ok(Some(line)) = lines.next_line().await {
-            let reply = match serde_json::from_str::<Request>(&line) {
+            let mut reply = match serde_json::from_str::<Request>(&line) {
                 Ok(req) => self.handle(&req),
                 Err(_) => Reply {
                     error: "a malformed request".into(),
                     ..Reply::default()
                 },
             };
+            reply.service = Some(crate::service::processes());
             let mut b = serde_json::to_vec(&reply).unwrap_or_default();
             b.push(b'\n');
             if wr.write_all(&b).await.is_err() {

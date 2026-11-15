@@ -128,6 +128,7 @@ async fn sessions_outlive_connections() {
 
     let (mut first, r) = dial(&m, attach("", 100, 30)).await;
     assert!(r.err.is_empty(), "attach: {r:?}");
+    assert_eq!(r.service.as_ref().map(|s| s.protocol), Some(1), "{r:?}");
     let id = r.session.expect("a session").id;
     first.until("hello").await;
     first.send("one\n").await;
