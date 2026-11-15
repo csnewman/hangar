@@ -354,6 +354,8 @@ pub struct EnvTab {
     place: String,
     env: String,
     focus: FocusHandle,
+    /// The views drawing the tab's parts, made as they are first shown.
+    parts: HashMap<Part, Entity<TabPart>>,
     /// The tool window open in each slot.
     open: HashMap<Slot, Tool>,
     /// The task, while it is being edited.
@@ -655,6 +657,7 @@ impl EnvTab {
             place: place.into(),
             env: env.into(),
             focus: cx.focus_handle(),
+            parts: HashMap::new(),
             open,
             task_edit: None,
             hidden: None,
@@ -880,7 +883,6 @@ impl EnvTab {
             }
             v
         });
-        cx.observe(&view, |_, _, cx| cx.notify()).detach();
         self.follow_terminal(&view, window, cx);
         self.terms.tabs.push(TermTab {
             session: None,
@@ -910,7 +912,6 @@ impl EnvTab {
         if tab.view.is_none() {
             let (env, session) = (self.env.clone(), tab.session.clone());
             let view = cx.new(|cx| TerminalView::new(&client, &env, session.as_deref(), cx));
-            cx.observe(&view, |_, _, cx| cx.notify()).detach();
             self.follow_terminal(&view, window, cx);
             self.terms.tabs[i].view = Some(view);
         }
@@ -949,7 +950,8 @@ impl EnvTab {
     /// bounces its Dock icon, as Ghostty's does; a notification its program
     /// posts goes to the window's, unless the terminal holds a coding
     /// agent's session, whose plugin says what it needs; a change in what
-    /// its programs are doing redraws the marks.
+    /// its programs are doing redraws the marks, and in its title, session
+    /// or state its tab, wherever it is.
     fn terminal_signal(
         &mut self,
         view: &Entity<TerminalView>,
@@ -957,6 +959,10 @@ impl EnvTab {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if *e == Signal::Shown {
+            cx.notify();
+            return;
+        }
         let Some(i) = self
             .terms
             .tabs
@@ -989,6 +995,7 @@ impl EnvTab {
                 });
             }
             Signal::Status => cx.emit(EnvSignal::Marks),
+            Signal::Shown => {}
         }
         cx.notify();
     }
@@ -2891,6 +2898,8 @@ impl EnvTab {
                     cx.notify();
                 }
                 if let languages::Event::Diagnostics(abs) = e {
+                    // The stripes count the errors.
+                    cx.notify();
                     let d = l.read(cx).diagnostics_of(abs).to_vec();
                     for f in t.all_tabs() {
                         if let Tab::Doc(doc) = f
@@ -3198,19 +3207,16 @@ impl Render for EnvTab {
             });
         }
         let p = palette::of(cx);
-        let places = self.places.read(cx);
-        let Some((config, state)) = places.get(&self.place) else {
+        if self.places.read(cx).get(&self.place).is_none() {
             return div().p_4().child("This place is gone.").into_any_element();
-        };
-        let Some(env) = state.environment(&self.env).cloned() else {
+        }
+        let Some((_, env)) = self.shown(cx) else {
             return div()
                 .p_4()
                 .text_color(p.muted)
                 .child("This environment has been deleted, or is out of reach.")
                 .into_any_element();
         };
-        let config = config.clone();
-        let card = model::card(&config, &env, chrono::Utc::now());
 
         let stripes = Layout::stripes(cx);
         self.settle(&stripes);
@@ -3223,10 +3229,6 @@ impl Render for EnvTab {
         let right = self.open.get(&Slot::Right).copied();
         let right_below = self.open.get(&Slot::RightBelow).copied();
         let bottom = self.open.get(&Slot::Bottom).copied();
-        let waiting = env.agents.iter().filter(|a| a.needs_you).count();
-        let errors = self.languages.as_ref().map_or(0, |l| {
-            crate::problems::errors_in(l.read(cx).diagnostics().values())
-        });
         let shown = self.active_file().map(|d| d.read(cx).asked().to_string());
         if let Some(view) = self.problems.clone() {
             let shown = shown.clone();
@@ -3536,14 +3538,25 @@ impl Render for EnvTab {
             .on_action(
                 cx.listener(|t, _: &crate::docedit::Reformat, window, cx| t.reformat(window, cx)),
             )
-            .child(self.toolbar(&config, &env, &card, &p, cx))
+            .child(
+                div()
+                    .w_full()
+                    .h(TOOLBAR_HEIGHT)
+                    .flex_none()
+                    .child(self.cached_part(Part::Toolbar, cx)),
+            )
             .children(self.banners(&env, &p, cx))
             .child(
                 h_flex()
                     .flex_1()
                     .min_h_0()
                     .items_stretch()
-                    .child(self.stripe(&stripes, true, (waiting, errors), &p, cx))
+                    .child(
+                        div()
+                            .w(STRIPE_WIDTH)
+                            .flex_none()
+                            .child(self.cached_part(Part::Stripe(true), cx)),
+                    )
                     .child(
                         // As IntelliJ: the side windows end above the bottom
                         // one, which takes the width between the stripes.
@@ -3559,26 +3572,25 @@ impl Render for EnvTab {
                                     .items_stretch()
                                     .when(left.is_some() || left_below.is_some(), |d| {
                                         d.child(
-                                            self.side(true, left, left_below, &env, &card, &p, cx),
+                                            div()
+                                                .w(sizes.get(Edge::Left))
+                                                .flex_none()
+                                                .child(self.cached_part(Part::Side(true), cx)),
                                         )
                                     })
                                     .child(
                                         v_flex()
                                             .flex_1()
                                             .min_w_0()
-                                            .bg(p.surface)
-                                            .child(self.editors(&p, cx)),
+                                            .child(self.cached_part(Part::Editors, cx)),
                                     )
                                     .when(right.is_some() || right_below.is_some(), |d| {
-                                        d.child(self.side(
-                                            false,
-                                            right,
-                                            right_below,
-                                            &env,
-                                            &card,
-                                            &p,
-                                            cx,
-                                        ))
+                                        d.child(
+                                            div()
+                                                .w(sizes.get(Edge::Right))
+                                                .flex_none()
+                                                .child(self.cached_part(Part::Side(false), cx)),
+                                        )
                                     }),
                             )
                             .when_some(bottom, |d, t| {
@@ -3593,10 +3605,21 @@ impl Render for EnvTab {
                             }),
                     )
                     .when(!stripes.side_empty(false) || self.dragging, |d| {
-                        d.child(self.stripe(&stripes, false, (waiting, errors), &p, cx))
+                        d.child(
+                            div()
+                                .w(STRIPE_WIDTH)
+                                .flex_none()
+                                .child(self.cached_part(Part::Stripe(false), cx)),
+                        )
                     }),
             )
-            .child(self.status_bar(&config, &env, &p, cx))
+            .child(
+                div()
+                    .w_full()
+                    .h(STATUS_BAR_HEIGHT)
+                    .flex_none()
+                    .child(self.cached_part(Part::StatusBar, cx)),
+            )
             .when_some(find_popup, |d, popup| {
                 d.child(
                     div()
@@ -3975,6 +3998,7 @@ impl EnvTab {
             };
 
         h_flex()
+            .size_full()
             .gap(px(10.))
             .px(px(12.))
             .py(px(8.))
@@ -4176,7 +4200,8 @@ impl EnvTab {
                 }))
         };
         let mut s = v_flex()
-            .w(px(38.))
+            .w(STRIPE_WIDTH)
+            .h_full()
             .flex_none()
             .items_center()
             .py(px(4.))
@@ -5389,7 +5414,8 @@ impl EnvTab {
             _ => String::new(),
         };
         h_flex()
-            .h(px(24.))
+            .w_full()
+            .h(STATUS_BAR_HEIGHT)
             .flex_none()
             .gap(px(14.))
             .px(px(12.))
@@ -5463,6 +5489,118 @@ fn capital(s: &str) -> String {
     c.next()
         .map(|f| f.to_uppercase().chain(c).collect())
         .unwrap_or_default()
+}
+
+/// How tall the toolbar is, its line under it included, how wide a stripe
+/// of tool windows' buttons is, and how tall the status bar: the parts
+/// drawn as views of their own have sizes of their own.
+const TOOLBAR_HEIGHT: gpui::Pixels = px(42.);
+const STRIPE_WIDTH: gpui::Pixels = px(38.);
+const STATUS_BAR_HEIGHT: gpui::Pixels = px(24.);
+
+/// The parts of the tab drawn as views of their own: the toolbar, the
+/// stripes and side windows (left or right), the editors and the status
+/// bar. The bottom window is drawn with the tab, the terminal it holds
+/// being drawn for its every output anyway.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Part {
+    Toolbar,
+    Stripe(bool),
+    Side(bool),
+    Editors,
+    StatusBar,
+}
+
+/// A part of the tab, drawn from the tab's state as a view of its own and
+/// embedded with `cached`: a frame another part asks for, a terminal's
+/// output say, leaves it as it was drawn. The tab's every notifying draws
+/// it again, and a view it holds notifying draws it with that view.
+struct TabPart {
+    tab: gpui::WeakEntity<EnvTab>,
+    part: Part,
+    _tab: gpui::Subscription,
+}
+
+impl Render for TabPart {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::renderstats::count(crate::renderstats::TAB_PARTS);
+        let part = self.part;
+        self.tab
+            .update(cx, |t, cx| t.render_part(part, cx))
+            .unwrap_or_else(|_| div().into_any_element())
+    }
+}
+
+impl EnvTab {
+    /// The place's settings and the environment, while both are there.
+    fn shown(&self, cx: &App) -> Option<(PlaceConfig, Environment)> {
+        let (config, state) = self.places.read(cx).get(&self.place)?;
+        Some((config.clone(), state.environment(&self.env)?.clone()))
+    }
+
+    /// How many coding agents wait for the user, and how many errors the
+    /// language servers report: the stripes mark both.
+    fn counts(&self, env: &Environment, cx: &App) -> (usize, usize) {
+        let waiting = env.agents.iter().filter(|a| a.needs_you).count();
+        let errors = self.languages.as_ref().map_or(0, |l| {
+            crate::problems::errors_in(l.read(cx).diagnostics().values())
+        });
+        (waiting, errors)
+    }
+
+    /// A part of the tab as its view draws it, filling what holds it.
+    fn cached_part(&mut self, part: Part, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let view = match self.parts.get(&part) {
+            Some(v) => v.clone(),
+            None => {
+                let tab = cx.entity();
+                let view = cx.new(|cx| TabPart {
+                    tab: tab.downgrade(),
+                    part,
+                    _tab: cx.observe(&tab, |_, _, cx| cx.notify()),
+                });
+                self.parts.insert(part, view.clone());
+                view
+            }
+        };
+        cached(view, cx)
+    }
+
+    fn render_part(&mut self, part: Part, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let p = palette::of(cx);
+        let Some((config, env)) = self.shown(cx) else {
+            return div().into_any_element();
+        };
+        let card = model::card(&config, &env, chrono::Utc::now());
+        match part {
+            Part::Toolbar => self
+                .toolbar(&config, &env, &card, &p, cx)
+                .into_any_element(),
+            Part::Stripe(left) => {
+                let stripes = Layout::stripes(cx);
+                let counts = self.counts(&env, cx);
+                self.stripe(&stripes, left, counts, &p, cx)
+                    .into_any_element()
+            }
+            Part::Side(left) => {
+                let (top, below) = if left {
+                    (Slot::Left, Slot::LeftBelow)
+                } else {
+                    (Slot::Right, Slot::RightBelow)
+                };
+                let top = self.open.get(&top).copied();
+                let below = self.open.get(&below).copied();
+                self.side(left, top, below, &env, &card, &p, cx)
+                    .into_any_element()
+            }
+            Part::Editors => v_flex()
+                .size_full()
+                .bg(p.surface)
+                .child(self.editors(&p, cx))
+                .into_any_element(),
+            Part::StatusBar => self.status_bar(&config, &env, &p, cx).into_any_element(),
+        }
+    }
 }
 
 /// A view drawn from its last frame until it is notified or the window

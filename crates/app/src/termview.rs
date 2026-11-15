@@ -451,6 +451,7 @@ impl TerminalView {
         self.history = 0;
         self.sizing = None;
         self.connect(None, cx);
+        cx.emit(Signal::Shown);
         cx.notify();
     }
 
@@ -664,7 +665,11 @@ impl TerminalView {
     }
 
     fn take(&mut self, e: Event, cx: &mut Context<Self>) {
+        let was = (self.session.clone(), self.title.clone(), self.state.clone());
         self.take_event(e);
+        if (&self.session, &self.title, &self.state) != (&was.0, &was.1, &was.2) {
+            self.signals.push(Signal::Shown);
+        }
         for targets in std::mem::take(&mut self.reads) {
             self.answer_read(&targets, cx);
         }
@@ -1548,13 +1553,16 @@ pub struct OpenLink {
 impl gpui::EventEmitter<OpenLink> for TerminalView {}
 
 /// What a terminal tells the window around it beyond its screen: its bell
-/// rang, its program posted a notification (OSC 9, OSC 777), or what its
-/// programs say they are doing changed (`TerminalView::status`).
+/// rang, its program posted a notification (OSC 9, OSC 777), what its
+/// programs say they are doing changed (`TerminalView::status`), or its
+/// title, session or state did. Its output alone tells nothing: the window
+/// around it is not drawn again for it.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Signal {
     Bell,
     Notification { title: String, body: String },
     Status,
+    Shown,
 }
 
 impl gpui::EventEmitter<Signal> for TerminalView {}

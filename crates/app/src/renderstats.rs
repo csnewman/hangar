@@ -10,11 +10,20 @@ pub const ENV_TAB: usize = 1;
 pub const TERMINAL: usize = 2;
 pub const PROJECT: usize = 3;
 pub const TERMINAL_PAINT: usize = 4;
+/// The environment tab's parts drawn as views of their own, all together.
+pub const TAB_PARTS: usize = 5;
 #[cfg(feature = "control")]
-const NAMES: [&str; 5] = ["shell", "env_tab", "terminal", "project", "terminal_paint"];
+const NAMES: [&str; 6] = [
+    "shell",
+    "env_tab",
+    "terminal",
+    "project",
+    "terminal_paint",
+    "tab_parts",
+];
 
 #[cfg(feature = "control")]
-static COUNTS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+static COUNTS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
 #[cfg(feature = "control")]
 static SINCE: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
 
