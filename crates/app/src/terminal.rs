@@ -10,7 +10,7 @@ use alacritty_terminal::index::{Column, Direction, Line as GridLine, Point, Side
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
-use alacritty_terminal::term::{Config, Term, TermMode};
+use alacritty_terminal::term::{ClipboardType, Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 
 /// What names a link that anchors something drawn over the text rather
@@ -47,11 +47,18 @@ impl EventListener for Quiet {
 
 /// What a terminal says back to the shell, and what it calls itself, as
 /// the program in it asks: the replies to its queries (its size, its
-/// colours, the device's attributes), which a terminal must write back, and
-/// the window title it sets.
+/// colours, the device's attributes), which a terminal must write back, the
+/// window title it sets, and the text it copies to the clipboard (OSC 52).
 #[derive(Clone, Default)]
 pub struct Replies {
-    pending: std::sync::Arc<std::sync::Mutex<(Vec<Reply>, Option<String>)>>,
+    pending: std::sync::Arc<std::sync::Mutex<Pending>>,
+}
+
+#[derive(Default)]
+struct Pending {
+    replies: Vec<Reply>,
+    title: Option<String>,
+    copied: Option<String>,
 }
 
 /// A reply as the program asked for it: written as it is, or a colour
@@ -70,13 +77,20 @@ impl Replies {
     pub fn take(&self, colour: impl Fn(usize) -> Rgb) -> (Vec<u8>, Option<String>) {
         let mut p = self.pending.lock().unwrap();
         let mut out = vec![];
-        for r in std::mem::take(&mut p.0) {
+        for r in std::mem::take(&mut p.replies) {
             match r {
                 Reply::Bytes(b) => out.extend(b),
                 Reply::Colour(i, f) => out.extend(f(colour(i)).into_bytes()),
             }
         }
-        (out, p.1.take())
+        (out, p.title.take())
+    }
+
+    /// The text the program last copied to the clipboard since this was
+    /// last called. A copy to the primary selection, which a Mac has none
+    /// of, is passed over.
+    pub fn copied(&self) -> Option<String> {
+        self.pending.lock().unwrap().copied.take()
     }
 }
 
@@ -84,9 +98,10 @@ impl EventListener for Replies {
     fn send_event(&self, e: Event) {
         let mut p = self.pending.lock().unwrap();
         match e {
-            Event::PtyWrite(s) => p.0.push(Reply::Bytes(s.into_bytes())),
-            Event::ColorRequest(i, f) => p.0.push(Reply::Colour(i, f)),
-            Event::Title(t) => p.1 = Some(t),
+            Event::PtyWrite(s) => p.replies.push(Reply::Bytes(s.into_bytes())),
+            Event::ColorRequest(i, f) => p.replies.push(Reply::Colour(i, f)),
+            Event::Title(t) => p.title = Some(t),
+            Event::ClipboardStore(ClipboardType::Clipboard, text) => p.copied = Some(text),
             _ => {}
         }
     }
@@ -193,6 +208,11 @@ impl<L: EventListener> Screen<L> {
             term: Term::new(
                 Config {
                     kitty_keyboard: true,
+                    // A program may copy to the clipboard, as Claude Code
+                    // does what is selected in it, but never read it: a
+                    // read would hand it whatever was last copied,
+                    // anywhere.
+                    osc52: Osc52::OnlyCopy,
                     ..Config::default()
                 },
                 &Size { columns, lines },

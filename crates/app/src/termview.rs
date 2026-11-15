@@ -124,6 +124,9 @@ pub struct TerminalView {
     title: String,
     /// How many more bytes of output replay the session's past.
     history: usize,
+    /// The text the program last copied to the clipboard (OSC 52), to be
+    /// written to it: never one replayed, which was copied long ago.
+    copied: Option<String>,
     cols: u16,
     rows: u16,
     font: Font,
@@ -248,6 +251,7 @@ impl TerminalView {
             session: session.map(str::to_string),
             title: String::new(),
             history: 0,
+            copied: None,
             cols,
             rows,
             font: mono(),
@@ -301,6 +305,9 @@ impl TerminalView {
                     while start.elapsed() < FEED_BUDGET {
                         let Ok(more) = rx.try_recv() else { break };
                         t.take(more);
+                    }
+                    if let Some(text) = t.copied.take() {
+                        cx.write_to_clipboard(ClipboardItem::new_string(text));
                     }
                     cx.notify();
                 });
@@ -478,6 +485,10 @@ impl TerminalView {
                 let screen = &self.screen;
                 let (mut replies, title) = self.replies.take(|i| screen.colour(i));
                 replies.extend(extra);
+                let copied = self.replies.copied();
+                if replayed == 0 && copied.is_some() {
+                    self.copied = copied;
+                }
                 // What the past asked was answered then; what the program
                 // asks is answered by the window holding the size alone,
                 // since every window watching would answer, and the program

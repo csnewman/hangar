@@ -295,6 +295,27 @@ fn colour_queries_are_answered_with_the_screens_colours() {
     assert_eq!(out, b"\x1b]11;rgb:0000/0000/0000\x07");
 }
 
+/// A program copies to the clipboard with OSC 52, as Claude Code's full
+/// screen does what is selected in it, its mouse being the program's; it
+/// may not read the clipboard, and a copy to the primary selection is
+/// passed over.
+#[test]
+fn a_program_copies_to_the_clipboard_but_cannot_read_it() {
+    let replies = Replies::default();
+    let mut s = Screen::with_listener(20, 2, replies.clone());
+    // "héllo", in base64, ended by BEL; then by ST.
+    s.feed(b"\x1b]52;c;aMOpbGxv\x07");
+    assert_eq!(replies.copied().as_deref(), Some("h\u{e9}llo"));
+    assert_eq!(replies.copied(), None, "taken once");
+    s.feed(b"\x1b]52;c;d29ybGQ=\x1b\\");
+    assert_eq!(replies.copied().as_deref(), Some("world"));
+    s.feed(b"\x1b]52;p;aWdub3JlZA==\x07");
+    assert_eq!(replies.copied(), None, "the primary selection");
+    s.feed(b"\x1b]52;c;?\x07");
+    let (out, _) = replies.take(|i| s.colour(i));
+    assert!(out.is_empty(), "the clipboard was read: {out:?}");
+}
+
 /// A program that hides the cursor, to draw its own, is drawn without ours.
 #[test]
 fn a_hidden_cursor_is_not_shown() {
