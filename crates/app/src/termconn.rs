@@ -99,15 +99,18 @@ pub fn attach(
     rows: u16,
     events: impl Fn(Event) -> bool + Send + 'static,
 ) -> Connection {
-    attach_in(client, env, session, None, cols, rows, events)
+    attach_in(client, env, session, None, None, cols, rows, events)
 }
 
-/// As attach, a new session starting in dir.
+/// As attach, a new session starting in dir, its shell told it runs in
+/// the terminal emulator term names, and that version.
+#[allow(clippy::too_many_arguments)]
 pub fn attach_in(
     client: &Client,
     env: &str,
     session: Option<&str>,
     dir: Option<&str>,
+    term: Option<(String, String)>,
     cols: u16,
     rows: u16,
     events: impl Fn(Event) -> bool + Send + 'static,
@@ -125,8 +128,9 @@ pub fn attach_in(
                 // The folder is the new session's; attached again, it is
                 // the session's own.
                 let dir = dir.as_deref().filter(|_| session.is_none());
+                let term = term.as_ref().map(|(n, v)| (n.as_str(), v.as_str()));
                 let (url, auth) =
-                    client.terminal_socket_in(&env, session.as_deref(), size.0, size.1, dir);
+                    client.terminal_socket_in(&env, session.as_deref(), size.0, size.1, dir, term);
                 let why = match run(&url, &auth, &rx, &events, &mut session, &mut size) {
                     Ok(End::Done) => return,
                     Ok(End::Lost { attached, why }) => {

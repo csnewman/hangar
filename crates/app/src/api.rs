@@ -384,10 +384,11 @@ impl Client {
         cols: u16,
         rows: u16,
     ) -> (String, String) {
-        self.terminal_socket_in(id, session, cols, rows, None)
+        self.terminal_socket_in(id, session, cols, rows, None, None)
     }
 
-    /// As terminal_socket, a new session starting in dir.
+    /// As terminal_socket, a new session starting in dir, its shell told
+    /// it runs in the terminal emulator term names, and that version.
     pub fn terminal_socket_in(
         &self,
         id: &str,
@@ -395,6 +396,7 @@ impl Client {
         cols: u16,
         rows: u16,
         dir: Option<&str>,
+        term: Option<(&str, &str)>,
     ) -> (String, String) {
         let base = match self.base.split_once("://") {
             Some(("https", rest)) => format!("wss://{rest}"),
@@ -409,6 +411,12 @@ impl Client {
         if let Some(d) = dir {
             url.push_str("&dir=");
             url.push_str(&encode(d));
+        }
+        if let Some((name, version)) = term {
+            url.push_str("&term=");
+            url.push_str(&encode(name));
+            url.push_str("&term_version=");
+            url.push_str(&encode(version));
         }
         (url, self.auth())
     }

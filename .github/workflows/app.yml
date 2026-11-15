@@ -20,6 +20,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+      # libghostty-vt (crates/ghostty) is built from source, with Zig.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates

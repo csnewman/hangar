@@ -648,8 +648,49 @@ impl SettingsView {
     }
 
     fn terminal(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::settings::TerminalEmulator;
+        let choice = self.draft.terminal_emulator;
+        let seg = |id: &'static str,
+                   label: &'static str,
+                   value: TerminalEmulator,
+                   cx: &mut Context<Self>| {
+            let on = choice == value;
+            div()
+                .id(id)
+                .px(px(12.))
+                .py(px(3.))
+                .cursor_pointer()
+                .when(on, |d| d.bg(p.accent).text_color(p.on_accent))
+                .when(!on, |d| d.hover(|s| s.bg(p.surface_2)))
+                .child(label)
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.draft.terminal_emulator = value;
+                    cx.notify();
+                }))
+        };
         v_flex()
             .gap(px(10.))
+            .child(section("Emulator", p))
+            .child(
+                field("Emulator", p).child(
+                    h_flex()
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(p.border_strong)
+                        .overflow_hidden()
+                        .child(seg("emulator-ghostty", "Ghostty", TerminalEmulator::Ghostty, cx))
+                        .child(seg(
+                            "emulator-alacritty",
+                            "Alacritty",
+                            TerminalEmulator::Alacritty,
+                            cx,
+                        )),
+                ),
+            )
+            .child(note(
+                "Ghostty is libghostty-vt, Ghostty's terminal emulation; a session a Ghostty terminal starts is told it runs in Ghostty, so programs such as Claude Code use what Ghostty can do. Terminals opened after the choice use it.",
+                p,
+            ))
             .child(section("Font", p))
             .child(field("Size", p).child(self.stepper(
                 "terminal-font",

@@ -20,8 +20,9 @@ use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
 
 use crate::api::Client;
 use crate::palette;
+use crate::settings::TerminalEmulator;
 use crate::termconn::{self, Command, Connection, Event};
-use crate::terminal::{Link, LinkKind, Mark, Replies, Screen, Select};
+use crate::terminal::{Alacritty, Emulator, Link, LinkKind, Mark, Select};
 
 /// A line's height for each point of the text's size.
 const LINE_SPACING: f32 = 1.36;
@@ -109,8 +110,10 @@ pub enum State {
 }
 
 pub struct TerminalView {
-    screen: Screen<Replies>,
-    replies: Replies,
+    screen: Box<dyn Emulator>,
+    /// Which emulator keeps the screen, as the settings chose when the
+    /// terminal opened.
+    emulator: TerminalEmulator,
     /// The default foreground and background, for a screen made afresh.
     colours: (
         alacritty_terminal::vte::ansi::Rgb,
@@ -187,6 +190,27 @@ struct Shown {
 /// so it scrolls and clears with the text around it.
 const PICTURE: &str = "hangar-picture:";
 
+/// A screen kept by an emulator, of a size, in the default colours.
+fn screen(
+    emulator: TerminalEmulator,
+    cols: u16,
+    rows: u16,
+    colours: (
+        alacritty_terminal::vte::ansi::Rgb,
+        alacritty_terminal::vte::ansi::Rgb,
+    ),
+) -> Box<dyn Emulator> {
+    let mut s: Box<dyn Emulator> = match emulator {
+        TerminalEmulator::Ghostty => Box::new(crate::termghostty::Ghostty::new(
+            cols as usize,
+            rows as usize,
+        )),
+        TerminalEmulator::Alacritty => Box::new(Alacritty::new(cols as usize, rows as usize)),
+    };
+    s.set_default_colours(colours.0, colours.1);
+    s
+}
+
 fn mono() -> Font {
     font(if cfg!(target_os = "macos") {
         "Menlo"
@@ -236,14 +260,15 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
-        let replies = Replies::default();
         let p = palette::of(cx);
         let colours = (rgb(p.term_fg), rgb(p.term_tab));
-        let mut screen = Screen::with_listener(cols as usize, rows as usize, replies.clone());
-        screen.set_default_colours(colours.0, colours.1);
+        let emulator = crate::settings::Settings::get(cx).terminal_emulator;
+        let screen = screen(emulator, cols, rows, colours);
+        let mut extract = crate::termimage::Extract::default();
+        extract.kitty_passes = screen.takes_kitty_graphics();
         let mut view = TerminalView {
             screen,
-            replies,
+            emulator,
             colours,
             conn: None,
             focus: cx.focus_handle(),
@@ -274,7 +299,7 @@ impl TerminalView {
             env: env.to_string(),
             dir: dir.map(str::to_string),
             _find: None,
-            extract: Default::default(),
+            extract,
             pictures: HashMap::new(),
             next_picture: 0,
             progress: None,
@@ -293,6 +318,7 @@ impl TerminalView {
             &self.env,
             session,
             self.dir.as_deref(),
+            self.screen.identity(),
             self.cols,
             self.rows,
             move |e| tx.send_blocking(e).is_ok(),
@@ -326,10 +352,10 @@ impl TerminalView {
         if !matches!(self.state, State::Exited(_) | State::Failed(_)) {
             return;
         }
-        let mut screen =
-            Screen::with_listener(self.cols as usize, self.rows as usize, self.replies.clone());
-        screen.set_default_colours(self.colours.0, self.colours.1);
-        self.screen = screen;
+        self.screen = screen(self.emulator, self.cols, self.rows, self.colours);
+        let cell = self.cell_pixels();
+        self.screen
+            .resize(self.cols as usize, self.rows as usize, cell);
         self.state = State::Connecting;
         self.session = None;
         self.title.clear();
@@ -374,7 +400,9 @@ impl TerminalView {
             && !s.owner
         {
             s.owner = true;
-            self.screen.resize(self.cols as usize, self.rows as usize);
+            let cell = self.cell_pixels();
+            self.screen
+                .resize(self.cols as usize, self.rows as usize, cell);
             self.send(Command::Resize(self.cols, self.rows));
         }
     }
@@ -425,6 +453,13 @@ impl TerminalView {
         self.screen.feed(&anchor);
     }
 
+    /// A cell's size in the screen's pixels, for programs that ask.
+    fn cell_pixels(&self) -> (u32, u32) {
+        let w = f32::from(self.cell.unwrap_or(px(7.5))) * self.scale;
+        let h = f32::from(self.line_height) * self.scale;
+        (w.round() as u32, h.round() as u32)
+    }
+
     fn send(&self, c: Command) {
         if let Some(conn) = &self.conn {
             conn.send(c);
@@ -442,13 +477,10 @@ impl TerminalView {
                 // Attached again, the session's past is replayed: drawn on
                 // a clean screen, not over what was shown.
                 if self.session.is_some() && self.state != State::Connecting {
-                    let mut screen = Screen::with_listener(
-                        self.cols as usize,
-                        self.rows as usize,
-                        self.replies.clone(),
-                    );
-                    screen.set_default_colours(self.colours.0, self.colours.1);
-                    self.screen = screen;
+                    self.screen = screen(self.emulator, self.cols, self.rows, self.colours);
+                    let cell = self.cell_pixels();
+                    self.screen
+                        .resize(self.cols as usize, self.rows as usize, cell);
                 }
                 self.session = Some(session);
                 self.title = title;
@@ -482,12 +514,11 @@ impl TerminalView {
                         crate::termimage::Piece::Directory(d) => self.cwd = Some(d),
                     }
                 }
-                let screen = &self.screen;
-                let (mut replies, title) = self.replies.take(|i| screen.colour(i));
+                let effects = self.screen.effects();
+                let (mut replies, title) = (effects.reply, effects.title);
                 replies.extend(extra);
-                let copied = self.replies.copied();
-                if replayed == 0 && copied.is_some() {
-                    self.copied = copied;
+                if replayed == 0 && effects.copied.is_some() {
+                    self.copied = effects.copied;
                 }
                 // What the past asked was answered then; what the program
                 // asks is answered by the window holding the size alone,
@@ -519,7 +550,8 @@ impl TerminalView {
                 } else {
                     (cols, rows)
                 };
-                self.screen.resize(c as usize, r as usize);
+                let cell = self.cell_pixels();
+                self.screen.resize(c as usize, r as usize, cell);
             }
             Event::Reconnecting { why, retry_in } => {
                 self.state =
@@ -557,7 +589,8 @@ impl TerminalView {
         if (cols, rows) != (self.cols, self.rows) {
             (self.cols, self.rows) = (cols, rows);
             if self.holds_size() {
-                self.screen.resize(cols as usize, rows as usize);
+                let cell = self.cell_pixels();
+                self.screen.resize(cols as usize, rows as usize, cell);
             }
             self.send(Command::Prefer(cols, rows));
             cx.notify();

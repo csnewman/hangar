@@ -15,7 +15,7 @@ use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 
 /// What names a link that anchors something drawn over the text rather
 /// than a link to follow.
-const ANCHOR: &str = "hangar-";
+pub(crate) const ANCHOR: &str = "hangar-";
 
 /// What the grid is told it measures.
 struct Size {
@@ -166,7 +166,16 @@ pub struct Screen<L: EventListener = Quiet> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Link {
     pub kind: LinkKind,
-    range: Match,
+    pub(crate) range: Cells,
+}
+
+/// The cells a link takes, as the emulator keeping the screen places them:
+/// alacritty_terminal's grid, or Ghostty's whole screen, as (row, column)
+/// from its top, both ends included.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Cells {
+    Grid(Match),
+    Screen((usize, usize), (usize, usize)),
 }
 
 /// What a link opens.
@@ -230,7 +239,10 @@ impl<L: EventListener> Screen<L> {
 
     /// Underlines the link given, the one the pointer is on.
     pub fn set_hover(&mut self, link: Option<&Link>) {
-        self.hover = link.map(|l| l.range.clone());
+        self.hover = link.and_then(|l| match &l.range {
+            Cells::Grid(m) => Some(m.clone()),
+            Cells::Screen(..) => None,
+        });
     }
 
     /// Sets the colours text and background take when the shell names none;
@@ -447,7 +459,7 @@ impl<L: EventListener> Screen<L> {
                     uri: link.uri().to_string(),
                     text,
                 },
-                range,
+                range: Cells::Grid(range),
             });
         }
         if self.links.is_none() {
@@ -457,14 +469,14 @@ impl<L: EventListener> Screen<L> {
         if let Some((range, text)) = match_at(&self.term, url, point) {
             return Some(Link {
                 kind: LinkKind::Url(text),
-                range,
+                range: Cells::Grid(range),
             });
         }
         let (range, text) = match_at(&self.term, path, point)?;
         let (path, line, column) = path_and_place(&text)?;
         Some(Link {
             kind: LinkKind::Path { path, line, column },
-            range,
+            range: Cells::Grid(range),
         })
     }
 
@@ -648,7 +660,7 @@ impl<L: EventListener> Screen<L> {
 
 /// A URL in a terminal's text: a scheme a browser or the system opens,
 /// then anything up to a space, a quote or an angle bracket.
-const URL: &str = r#"(https?|file|ftp)://[^\s<>"'`\x00-\x1f\x7f]+"#;
+pub(crate) const URL: &str = r#"(https?|file|ftp)://[^\s<>"'`\x00-\x1f\x7f]+"#;
 
 /// The text a pattern matches across a point, from the line above it to
 /// the line below: an address wraps.
@@ -672,10 +684,10 @@ fn match_at<L: EventListener>(
 /// A file and a place in it, as compilers, linters and test runners write
 /// them: a path ending in a name with an extension, then a line, and maybe
 /// a column (src/store/redis.rs:31:9, ./main.go:12, /srv/app/x.ts:3:1).
-const PATH: &str = r"(\.{1,2}/|/)?([A-Za-z0-9_@+-][A-Za-z0-9_.@+-]*/)*[A-Za-z0-9_@+-][A-Za-z0-9_.@+-]*\.[A-Za-z0-9]+:[0-9]+(:[0-9]+)?";
+pub(crate) const PATH: &str = r"(\.{1,2}/|/)?([A-Za-z0-9_@+-][A-Za-z0-9_.@+-]*/)*[A-Za-z0-9_@+-][A-Za-z0-9_.@+-]*\.[A-Za-z0-9]+:[0-9]+(:[0-9]+)?";
 
 /// A path match's path, line and column (0 when not given).
-fn path_and_place(text: &str) -> Option<(String, u32, u32)> {
+pub(crate) fn path_and_place(text: &str) -> Option<(String, u32, u32)> {
     let mut parts = text.rsplitn(3, ':');
     let last = parts.next()?;
     let middle = parts.next()?;
@@ -726,7 +738,7 @@ fn named_in(n: NamedColor, light: bool) -> Rgb {
 
 /// xterm's 256 colours: 16 named, from a light theme's or a dark one's
 /// (VS Code's Light+ and Dark+), a 6x6x6 cube, then 24 greys.
-fn indexed_in(i: u8, light: bool) -> Rgb {
+pub(crate) fn indexed_in(i: u8, light: bool) -> Rgb {
     const LIGHT: [(u8, u8, u8); 16] = [
         (0x00, 0x00, 0x00),
         (0xcd, 0x31, 0x31),
@@ -780,6 +792,154 @@ fn indexed_in(i: u8, light: bool) -> Rgb {
         _ => {
             let v = 8 + (i - 232) * 10;
             Rgb { r: v, g: v, b: v }
+        }
+    }
+}
+
+/// What the program asked of the terminal since it was last taken: the
+/// replies to write back to it, the title it set, the text it copied.
+#[derive(Debug, Default)]
+pub struct Effects {
+    pub reply: Vec<u8>,
+    pub title: Option<String>,
+    pub copied: Option<String>,
+}
+
+/// A terminal's screen as the view drawing it uses it, whichever emulator
+/// keeps it (the settings' terminal_emulator). Rows and columns are the
+/// screen's, from its top left, unless said otherwise.
+pub trait Emulator {
+    /// Takes what the shell wrote.
+    fn feed(&mut self, bytes: &[u8]);
+    /// Sets the size in cells, and a cell's size in pixels.
+    fn resize(&mut self, columns: usize, lines: usize, cell: (u32, u32));
+    /// Sets the colours text and background take when the shell names none.
+    fn set_default_colours(&mut self, fg: Rgb, bg: Rgb);
+    /// Underlines the link given, the one the pointer is on.
+    fn set_hover(&mut self, link: Option<&Link>);
+    /// Scrolls the view through the scrollback by lines, up for positive.
+    fn scroll(&mut self, lines: i32);
+    /// How far the view is scrolled back from the bottom, in lines.
+    fn scrolled_back(&self) -> usize;
+    fn bracketed_paste(&self) -> bool;
+    fn key_modes(&self, alt_is_meta: bool) -> crate::termkeys::KeyModes;
+    fn mouse_modes(&self) -> crate::termkeys::MouseModes;
+    fn wheel_is_arrows(&self) -> bool;
+    fn select(&mut self, row: usize, col: usize, right_half: bool, how: Select);
+    fn select_to(&mut self, row: usize, col: usize, right_half: bool);
+    fn clear_selection(&mut self);
+    fn select_all(&mut self);
+    fn clear_buffer(&mut self);
+    fn selection(&self) -> Option<String>;
+    fn find(&mut self, query: &str, up: bool) -> bool;
+    fn link_at(&mut self, row: usize, col: usize) -> Option<Link>;
+    fn anchors(&self, prefix: &str, above: usize) -> Vec<(i32, usize, String)>;
+    fn cursor(&self) -> (usize, usize);
+    fn cursor_shown(&self) -> bool;
+    fn lines(&mut self) -> Vec<Line>;
+    fn effects(&mut self) -> Effects;
+    /// Whether kitty graphics commands are the emulator's to keep, rather
+    /// than the view's to draw (termimage's).
+    fn takes_kitty_graphics(&self) -> bool {
+        false
+    }
+    /// The terminal emulator a session it starts is told it runs in, and
+    /// its version.
+    fn identity(&self) -> Option<(String, String)> {
+        None
+    }
+}
+
+/// alacritty_terminal's screen, as an Emulator.
+pub struct Alacritty {
+    screen: Screen<Replies>,
+    replies: Replies,
+}
+
+impl Alacritty {
+    pub fn new(columns: usize, lines: usize) -> Alacritty {
+        let replies = Replies::default();
+        Alacritty {
+            screen: Screen::with_listener(columns, lines, replies.clone()),
+            replies,
+        }
+    }
+}
+
+impl Emulator for Alacritty {
+    fn feed(&mut self, bytes: &[u8]) {
+        self.screen.feed(bytes)
+    }
+    fn resize(&mut self, columns: usize, lines: usize, _: (u32, u32)) {
+        self.screen.resize(columns, lines)
+    }
+    fn set_default_colours(&mut self, fg: Rgb, bg: Rgb) {
+        self.screen.set_default_colours(fg, bg)
+    }
+    fn set_hover(&mut self, link: Option<&Link>) {
+        self.screen.set_hover(link)
+    }
+    fn scroll(&mut self, lines: i32) {
+        self.screen.scroll(lines)
+    }
+    fn scrolled_back(&self) -> usize {
+        self.screen.scrolled_back()
+    }
+    fn bracketed_paste(&self) -> bool {
+        self.screen.bracketed_paste()
+    }
+    fn key_modes(&self, alt_is_meta: bool) -> crate::termkeys::KeyModes {
+        self.screen.key_modes(alt_is_meta)
+    }
+    fn mouse_modes(&self) -> crate::termkeys::MouseModes {
+        self.screen.mouse_modes()
+    }
+    fn wheel_is_arrows(&self) -> bool {
+        self.screen.wheel_is_arrows()
+    }
+    fn select(&mut self, row: usize, col: usize, right_half: bool, how: Select) {
+        self.screen.select(row, col, right_half, how)
+    }
+    fn select_to(&mut self, row: usize, col: usize, right_half: bool) {
+        self.screen.select_to(row, col, right_half)
+    }
+    fn clear_selection(&mut self) {
+        self.screen.clear_selection()
+    }
+    fn select_all(&mut self) {
+        self.screen.select_all()
+    }
+    fn clear_buffer(&mut self) {
+        self.screen.clear_buffer()
+    }
+    fn selection(&self) -> Option<String> {
+        self.screen.selection()
+    }
+    fn find(&mut self, query: &str, up: bool) -> bool {
+        self.screen.find(query, up)
+    }
+    fn link_at(&mut self, row: usize, col: usize) -> Option<Link> {
+        self.screen.link_at(row, col)
+    }
+    fn anchors(&self, prefix: &str, above: usize) -> Vec<(i32, usize, String)> {
+        self.screen.anchors(prefix, above)
+    }
+    fn cursor(&self) -> (usize, usize) {
+        self.screen.cursor()
+    }
+    fn cursor_shown(&self) -> bool {
+        self.screen.cursor_shown()
+    }
+    fn lines(&mut self) -> Vec<Line> {
+        self.screen.lines()
+    }
+    fn effects(&mut self) -> Effects {
+        let screen = &self.screen;
+        let (reply, title) = self.replies.take(|i| screen.colour(i));
+        Effects {
+            reply,
+            title,
+            copied: self.replies.copied(),
         }
     }
 }

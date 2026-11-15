@@ -26,6 +26,9 @@ pub struct Values {
     pub editor_font_size: f32,
     /// The terminal's text, in points.
     pub terminal_font_size: f32,
+    /// What keeps a terminal's screen, for terminals opened after it is
+    /// chosen.
+    pub terminal_emulator: TerminalEmulator,
     pub notify: Notify,
 }
 
@@ -40,6 +43,7 @@ impl Default for Values {
             theme: ThemeChoice::System,
             editor_font_size: EDITOR_FONT_SIZE,
             terminal_font_size: TERMINAL_FONT_SIZE,
+            terminal_emulator: TerminalEmulator::default(),
             notify: Notify::default(),
         }
     }
@@ -68,6 +72,18 @@ fn clamp_font(size: f32, default: f32) -> f32 {
     } else {
         default
     }
+}
+
+/// The terminal emulator a terminal's screen is kept by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalEmulator {
+    /// Ghostty's, libghostty-vt (crates/ghostty); a session it starts is
+    /// told it runs in Ghostty.
+    #[default]
+    Ghostty,
+    /// alacritty_terminal's.
+    Alacritty,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]

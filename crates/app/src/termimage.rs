@@ -67,6 +67,9 @@ const LIMIT: usize = 64 << 20;
 /// Takes pictures and progress out of a terminal's output.
 #[derive(Debug, Default)]
 pub struct Extract {
+    /// Kitty graphics commands passed on with the text, for an emulator
+    /// that keeps them itself.
+    pub kitty_passes: bool,
     at: At,
     body: Vec<u8>,
     /// A kitty image being sent in chunks: its keys and its data so far.
@@ -91,6 +94,10 @@ impl Extract {
                     }
                 }
                 At::Escape => match b {
+                    b'_' if self.kitty_passes => {
+                        text.extend([0x1b, b]);
+                        self.at = At::Text;
+                    }
                     b']' | b'_' | b'P' => {
                         self.at = At::In(b, false);
                         self.body.clear();
