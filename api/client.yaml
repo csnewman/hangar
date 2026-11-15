@@ -59,6 +59,12 @@ info:
     desktop.
 
 
+    Lists. Every list is an object: items, a page of the list, and next,
+    the path and query to GET for the page after it, absent on the last
+    page. A server may page any list, so a client that wants all of one
+    follows next until there is none.
+
+
     A client asks /api/v1/version first. It needs no sign-in, and says which
     versions the server serves and which build it is, so a client can tell
     "this server is too old for me" from "I am too old for this server".
@@ -161,9 +167,7 @@ paths:
           description: The keys.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/LoginKey" }
+              schema: { $ref: "#/components/schemas/LoginKeyList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       operationId: addLoginKey
@@ -202,9 +206,7 @@ paths:
           description: The tokens, oldest first.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/AccessToken" }
+              schema: { $ref: "#/components/schemas/AccessTokenList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /me/tokens/{id}:
@@ -229,9 +231,7 @@ paths:
           description: The keys.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/SSHKey" }
+              schema: { $ref: "#/components/schemas/SSHKeyList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       operationId: generateSSHKey
@@ -270,9 +270,7 @@ paths:
           description: The environments.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Environment" }
+              schema: { $ref: "#/components/schemas/EnvironmentList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
     post:
       operationId: createEnvironment
@@ -305,9 +303,7 @@ paths:
           description: The templates.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Template" }
+              schema: { $ref: "#/components/schemas/TemplateList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /environments/{id}:
@@ -451,9 +447,7 @@ paths:
           description: Its packs, in the order a path two of them name goes to the first.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/EnvironmentPack" }
+              schema: { $ref: "#/components/schemas/EnvironmentPackList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -536,9 +530,7 @@ paths:
           description: The sizes.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Resources" }
+              schema: { $ref: "#/components/schemas/WorkerSizeList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
   /environments/{id}/task:
@@ -583,9 +575,7 @@ paths:
           description: The tasks.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/Task" }
+              schema: { $ref: "#/components/schemas/TaskList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -619,9 +609,7 @@ paths:
           description: The sessions.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/TerminalSession" }
+              schema: { $ref: "#/components/schemas/TerminalSessionList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
@@ -774,9 +762,7 @@ paths:
           description: The events.
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/ActivityEvent" }
+              schema: { $ref: "#/components/schemas/ActivityList" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
@@ -883,6 +869,146 @@ components:
             until it is upgraded). A sign-in still waiting to be
             approved answers 202 with sign_in_pending. More may come; treat
             one you do not know as its status's.
+
+    LoginKeyList:
+      type: object
+      description: "Sign-in keys: a page of them, and where the next is."
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/LoginKey" }
+        next:
+          type: string
+          description: >-
+            The path and query to GET for the page after this one, beneath
+            the server (/api/v1/...); absent on the last page.
+
+    AccessTokenList:
+      type: object
+      description: "Access tokens: a page of them, and where the next is."
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/AccessToken" }
+        next:
+          type: string
+          description: >-
+            The path and query to GET for the page after this one, beneath
+            the server (/api/v1/...); absent on the last page.
+
+    SSHKeyList:
+      type: object
+      description: "SSH keys: a page of them, and where the next is."
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/SSHKey" }
+        next:
+          type: string
+          description: >-
+            The path and query to GET for the page after this one, beneath
+            the server (/api/v1/...); absent on the last page.
+
+    EnvironmentList:
+      type: object
+      description: "Environments: a page of them, and where the next is."
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Environment" }
+        next:
+          type: string
+          description: >-
+            The path and query to GET for the page after this one, beneath
+            the server (/api/v1/...); absent on the last page.
+
+    TemplateList:
+      type: object
+      description: "Templates: a page of them, and where the next is."
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Template" }
+        next:
+          type: string
+          description: >-
+            The path and query to GET for the page after this one, beneath
+            the server (/api/v1/...); absent on the last page.
+
+    EnvironmentPackList:
+      type: object
+      description: "An environment's packs: a page of them, and where the next is."
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/EnvironmentPack" }
+        next:
+          type: string
+          description: >-
+            The path and query to GET for the page after this one, beneath
+            the server (/api/v1/...); absent on the last page.
+
+    WorkerSizeList:
+      type: object
+      description: "Worker sizes: a page of them, and where the next is."
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Resources" }
+        next:
+          type: string
+          description: >-
+            The path and query to GET for the page after this one, beneath
+            the server (/api/v1/...); absent on the last page.
+
+    TaskList:
+      type: object
+      description: "Tasks: a page of them, and where the next is."
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Task" }
+        next:
+          type: string
+          description: >-
+            The path and query to GET for the page after this one, beneath
+            the server (/api/v1/...); absent on the last page.
+
+    TerminalSessionList:
+      type: object
+      description: "Terminal sessions: a page of them, and where the next is."
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/TerminalSession" }
+        next:
+          type: string
+          description: >-
+            The path and query to GET for the page after this one, beneath
+            the server (/api/v1/...); absent on the last page.
+
+    ActivityList:
+      type: object
+      description: "Activity: a page of them, and where the next is."
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/ActivityEvent" }
+        next:
+          type: string
+          description: >-
+            The path and query to GET for the page after this one, beneath
+            the server (/api/v1/...); absent on the last page.
 
     Version:
       type: object

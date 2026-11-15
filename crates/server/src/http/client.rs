@@ -7,7 +7,7 @@ use axum::routing::{delete, get};
 use axum::{Json, Router};
 use hangar_openapi::clientapi::types;
 
-use super::{ApiError, Shared, Signed, Via, spec};
+use super::{ApiError, List, Shared, Signed, Via, spec};
 use crate::users;
 
 /// The versions of this API the server serves.
@@ -48,13 +48,13 @@ async fn me(State(app): State<Shared>, s: Signed) -> Result<Json<types::Me>, Api
 async fn list_tokens(
     State(app): State<Shared>,
     s: Signed,
-) -> Result<Json<Vec<types::AccessToken>>, ApiError> {
+) -> Result<List<types::AccessToken>, ApiError> {
     let current = match &s.via {
         Via::Token(t) => Some(t.clone()),
         Via::Session(_) => None,
     };
     let ts = users::tokens(&app.store, &s.principal).await?;
-    Ok(Json(
+    Ok(List::all(
         ts.into_iter()
             .map(|t| types::AccessToken {
                 current: current.as_deref().is_some_and(|c| users::is_token(c, &t)),

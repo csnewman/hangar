@@ -46,13 +46,13 @@ fn a_templates_variables_are_filled_in() {
 
 type Seen = Arc<Mutex<Vec<(String, String, String)>>>;
 
-const TEMPLATES: &str = r#"[
+const TEMPLATES: &str = r#"{"items":[
   {"id":"t-web","name":"Web app","description":"","owner":"bob","cpus":4,"memory_mib":8192,
    "display":"desktop","gpu":"virtual","image":"img","repos":[]},
   {"id":"t-svc","name":"Rust service","description":"","owner":"alice","cpus":2,"memory_mib":4096,
    "display":"none","gpu":"none","image":"img",
    "repos":[{"url":"https://example.com/acme/svc.git","path":"/workspace/svc","branch":"feat/{name}"}]}
-]"#;
+]}"#;
 
 /// A server with two templates, which makes whatever it is asked to.
 fn server() -> (String, Seen) {

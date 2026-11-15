@@ -51,7 +51,7 @@ async fn a_task_is_set_replaced_and_ended() {
         .unwrap()
         .into_inner();
     assert_ne!(second.id, first.id);
-    let tasks = c.list_tasks(&e.id).await.unwrap().into_inner();
+    let tasks = c.list_tasks(&e.id).await.unwrap().into_inner().items;
     assert_eq!(
         tasks.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
         ["Write the tests", "Fix the login bug"]
@@ -78,6 +78,6 @@ async fn a_task_is_set_replaced_and_ended() {
     c.end_task(&e.id).await.expect("ending the task");
     let now = c.get_environment(&e.id).await.unwrap().into_inner();
     assert!(now.task.is_none(), "a task left after it ended");
-    let tasks = c.list_tasks(&e.id).await.unwrap().into_inner();
+    let tasks = c.list_tasks(&e.id).await.unwrap().into_inner().items;
     assert!(tasks.iter().all(|t| t.done_at.is_some()));
 }

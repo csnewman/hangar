@@ -64,7 +64,12 @@ async fn a_token_signs_in_until_revoked() {
         .into_inner();
     assert!(version.versions.iter().any(|v| v == "v1"), "{version:?}");
 
-    let tokens = c.list_tokens().await.expect("the tokens").into_inner();
+    let tokens = c
+        .list_tokens()
+        .await
+        .expect("the tokens")
+        .into_inner()
+        .items;
     let mine = tokens
         .iter()
         .find(|t| t.name == "suite")

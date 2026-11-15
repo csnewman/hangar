@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-use super::{ApiError, Body, Shared, Signed, Via, code};
+use super::{ApiError, Body, List, Shared, Signed, Via, code};
 use crate::environments::{self as envs, View};
 use crate::tunnel::{self, Conn, Header, OpenError};
 
@@ -44,7 +44,7 @@ pub fn frontend() -> Router<Shared> {
 
 pub fn client() -> Router<Shared> {
     Router::new()
-        .route("/environments/{id}/terminals", get(list_terminals))
+        .route("/environments/{id}/terminals", get(client_terminals))
         .route(
             "/environments/{id}/terminals/{session}",
             delete(close_terminal),
@@ -413,27 +413,38 @@ async fn list_terminals(
     s: Signed,
     Path(id): Path<String>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    let (_, _, _, reply) = terminal(&app, &s, &id, json!({ "op": "list" })).await?;
+    Ok(Json(terminal_sessions(&app, &s, &id).await?))
+}
+
+async fn client_terminals(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(id): Path<String>,
+) -> Result<List<Value>, ApiError> {
+    Ok(List::all(terminal_sessions(&app, &s, &id).await?))
+}
+
+/// The environment's terminal sessions.
+async fn terminal_sessions(app: &Shared, s: &Signed, id: &str) -> Result<Vec<Value>, ApiError> {
+    let (_, _, _, reply) = terminal(app, s, id, json!({ "op": "list" })).await?;
     let sessions = reply
         .get("sessions")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    Ok(Json(
-        sessions
-            .iter()
-            .map(|t| {
-                json!({
-                    "id": t.get("id").cloned().unwrap_or_default(),
-                    "title": t.get("title").cloned().unwrap_or(json!("")),
-                    "created_at": t.get("created").cloned().unwrap_or_default(),
-                    "clients": t.get("clients").cloned().unwrap_or(json!(0)),
-                    "cols": t.get("cols").cloned().unwrap_or(json!(0)),
-                    "rows": t.get("rows").cloned().unwrap_or(json!(0)),
-                })
+    Ok(sessions
+        .iter()
+        .map(|t| {
+            json!({
+                "id": t.get("id").cloned().unwrap_or_default(),
+                "title": t.get("title").cloned().unwrap_or(json!("")),
+                "created_at": t.get("created").cloned().unwrap_or_default(),
+                "clients": t.get("clients").cloned().unwrap_or(json!(0)),
+                "cols": t.get("cols").cloned().unwrap_or(json!(0)),
+                "rows": t.get("rows").cloned().unwrap_or(json!(0)),
             })
-            .collect(),
-    ))
+        })
+        .collect())
 }
 
 async fn close_terminal(

@@ -8,7 +8,7 @@ use axum::{Json, Router};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{ApiError, Body, Shared, Signed};
+use super::{ApiError, Body, List, Shared, Signed};
 use crate::keys::{self, View};
 
 pub fn frontend() -> Router<Shared> {
@@ -66,9 +66,9 @@ async fn profile(State(app): State<Shared>, s: Signed) -> Result<Json<Value>, Ap
     })))
 }
 
-async fn list_ssh_keys(State(app): State<Shared>, s: Signed) -> Result<Json<Vec<Value>>, ApiError> {
+async fn list_ssh_keys(State(app): State<Shared>, s: Signed) -> Result<List<Value>, ApiError> {
     let keys = keys::ssh_keys(&app.store, &s.principal).await?;
-    Ok(Json(keys.iter().map(key_json).collect()))
+    Ok(List::all(keys.iter().map(key_json).collect()))
 }
 
 /// Keeps an SSH key: the private key given, or a new one.
@@ -102,12 +102,9 @@ async fn delete_ssh_key(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn list_login_keys(
-    State(app): State<Shared>,
-    s: Signed,
-) -> Result<Json<Vec<Value>>, ApiError> {
+async fn list_login_keys(State(app): State<Shared>, s: Signed) -> Result<List<Value>, ApiError> {
     let keys = keys::login_keys(&app.store, &s.principal).await?;
-    Ok(Json(keys.iter().map(login_json).collect()))
+    Ok(List::all(keys.iter().map(login_json).collect()))
 }
 
 async fn add_login_key(

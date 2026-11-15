@@ -10,7 +10,7 @@ use hangar_openapi::{clientapi, frontendapi::types};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{ApiError, Body, Shared, Signed, spec as to_spec};
+use super::{ApiError, Body, List, Shared, Signed, spec as to_spec};
 use crate::{teams, templates};
 
 pub fn frontend() -> Router<Shared> {
@@ -404,7 +404,7 @@ async fn remove_member(
 async fn client_templates(
     State(app): State<Shared>,
     s: Signed,
-) -> Result<Json<Vec<clientapi::types::Template>>, ApiError> {
+) -> Result<List<clientapi::types::Template>, ApiError> {
     let ts = templates::list(&app.store, &s.principal).await?;
     let out = ts
         .iter()
@@ -446,5 +446,5 @@ async fn client_templates(
             to_spec(t)
         })
         .collect::<Result<_, _>>()?;
-    Ok(Json(out))
+    Ok(List::all(out))
 }

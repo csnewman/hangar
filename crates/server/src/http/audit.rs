@@ -6,7 +6,7 @@ use axum::routing::get;
 use axum::{Json, Router};
 use serde_json::{Value, json};
 
-use super::{ApiError, Shared, Signed};
+use super::{ApiError, List, Shared, Signed};
 use crate::audit::{self, Entry};
 
 pub fn frontend() -> Router<Shared> {
@@ -99,7 +99,7 @@ async fn activity(
     s: Signed,
     Path(id): Path<String>,
     RawQuery(q): RawQuery,
-) -> Result<Json<Vec<Value>>, ApiError> {
+) -> Result<List<Value>, ApiError> {
     let id = uuid::Uuid::parse_str(&id).map_err(|_| ApiError::not_found("environment"))?;
     if crate::environments::get(&app.store, &s.principal, id)
         .await?
@@ -110,8 +110,19 @@ async fn activity(
     let q = params(q)?;
     let subject = [format!("environment:{id}")];
     let entries = audit::list(&app.store, &s.principal, &subject, q.before, q.limit).await?;
-    Ok(Json(
-        entries
+    // A full page may have more after it, from before its last.
+    let limit = audit::page_size(q.limit);
+    let next = entries
+        .last()
+        .filter(|_| entries.len() as i64 >= limit)
+        .map(|e| {
+            format!(
+                "/api/v1/environments/{id}/activity?before={}&limit={limit}",
+                e.event.id
+            )
+        });
+    Ok(List {
+        items: entries
             .iter()
             .map(|e| {
                 json!({
@@ -124,5 +135,6 @@ async fn activity(
                 })
             })
             .collect(),
-    ))
+        next,
+    })
 }

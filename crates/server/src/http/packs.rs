@@ -9,7 +9,7 @@ use axum::{Json, Router};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use super::{ApiError, Body, Shared, Signed};
+use super::{ApiError, Body, List, Shared, Signed};
 use crate::packs::{self, CopyView, File, PackInput, PackView};
 
 pub fn frontend() -> Router<Shared> {
@@ -433,7 +433,7 @@ async fn client_environment_packs(
     State(app): State<Shared>,
     s: Signed,
     Path(env): Path<String>,
-) -> Result<Json<Vec<Value>>, ApiError> {
+) -> Result<List<Value>, ApiError> {
     let env = visible(&app, &s, &env).await?;
     let attached = packs::environment_packs(&app.store, env).await?;
     let mut out = Vec::with_capacity(attached.len());
@@ -461,7 +461,7 @@ async fn client_environment_packs(
         }
         out.push(x);
     }
-    Ok(Json(out))
+    Ok(List::all(out))
 }
 
 async fn choose_copy(

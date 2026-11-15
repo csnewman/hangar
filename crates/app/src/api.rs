@@ -179,7 +179,8 @@ impl Client {
     }
 
     pub fn login_keys(&self) -> Result<Vec<LoginKey>, Error> {
-        self.call(|c| c.list_login_keys())
+        let first = self.call(|c| c.list_login_keys())?;
+        self.all(first)
     }
 
     /// Adds a public key, in authorized_keys form, that signs the user in
@@ -197,7 +198,8 @@ impl Client {
     }
 
     pub fn tokens(&self) -> Result<Vec<AccessToken>, Error> {
-        self.call(|c| c.list_tokens())
+        let first = self.call(|c| c.list_tokens())?;
+        self.all(first)
     }
 
     pub fn revoke_token(&self, id: &str) -> Result<(), Error> {
@@ -205,7 +207,8 @@ impl Client {
     }
 
     pub fn ssh_keys(&self) -> Result<Vec<SshKey>, Error> {
-        self.call(|c| c.list_ssh_keys())
+        let first = self.call(|c| c.list_ssh_keys())?;
+        self.all(first)
     }
 
     pub fn generate_ssh_key(&self, name: &str) -> Result<SshKey, Error> {
@@ -220,7 +223,8 @@ impl Client {
     }
 
     pub fn environments(&self) -> Result<Vec<Environment>, Error> {
-        self.call(|c| c.list_environments())
+        let first = self.call(|c| c.list_environments())?;
+        self.all(first)
     }
 
     pub fn start(&self, id: &str) -> Result<Environment, Error> {
@@ -259,7 +263,8 @@ impl Client {
 
     /// The environment's terminal sessions.
     pub fn terminals(&self, id: &str) -> Result<Vec<TerminalSession>, Error> {
-        self.call(|c| c.list_terminals(id))
+        let first = self.call(|c| c.list_terminals(id))?;
+        self.all(first)
     }
 
     /// Part of one of the environment's logs, kept by its worker: what
@@ -301,11 +306,13 @@ impl Client {
         limit: usize,
     ) -> Result<Vec<ActivityEvent>, Error> {
         self.call(|c| c.list_activity(id, before, Some(limit as i64)))
+            .map(|page: types::ActivityList| page.items)
     }
 
     /// The templates the user may make an environment from.
     pub fn templates(&self) -> Result<Vec<Template>, Error> {
-        self.call(|c| c.list_templates())
+        let first = self.call(|c| c.list_templates())?;
+        self.all(first)
     }
 
     /// Makes an environment; it starts once a worker takes it.
@@ -326,12 +333,14 @@ impl Client {
 
     /// Each online worker's capacity, largest first.
     pub fn worker_sizes(&self) -> Result<Vec<Resources>, Error> {
-        self.call(|c| c.list_worker_sizes())
+        let first = self.call(|c| c.list_worker_sizes())?;
+        self.all(first)
     }
 
     /// The packs an environment has, each with the copy it uses.
     pub fn environment_packs(&self, id: &str) -> Result<Vec<EnvironmentPack>, Error> {
-        self.call(|c| c.list_environment_packs(id))
+        let first = self.call(|c| c.list_environment_packs(id))?;
+        self.all(first)
     }
 
     /// Chooses the copy of a pack an environment uses; None undoes the
@@ -474,6 +483,52 @@ impl Client {
         })
     }
 
+    /// Every item of a list, from its first page on: a server may page any
+    /// list, saying where each next page is.
+    fn all<P: Page>(&self, first: P) -> Result<Vec<P::Item>, Error> {
+        let (mut items, mut next) = first.parts();
+        let mut pages = 1;
+        while let Some(path) = next.take() {
+            pages += 1;
+            if pages > MAX_PAGES {
+                return Err(Error::Decode(format!(
+                    "a list of more than {MAX_PAGES} pages"
+                )));
+            }
+            let (more, after) = self.page::<P>(&path)?.parts();
+            items.extend(more);
+            next = after;
+        }
+        Ok(items)
+    }
+
+    /// The page of a list at path, beneath the server.
+    fn page<P: Page>(&self, path: &str) -> Result<P, Error> {
+        use generated::ClientInfo;
+        let (calls, _) = self.api.as_ref().map_err(|e| Error::Transport(e.clone()))?;
+        let root = self.base.trim_end_matches(&format!("/api/{VERSION}"));
+        let url = format!("{root}{path}");
+        let http = calls.client().clone();
+        runtime().block_on(async move {
+            let r = http
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| Error::Transport(e.to_string()))?;
+            let status = r.status().as_u16();
+            if status == 401 {
+                return Err(Error::Unauthorized);
+            }
+            if !r.status().is_success() {
+                let said = r.json::<types::Error>().await.map(|e| e.error);
+                return Err(Error::Status(status, said.unwrap_or_default()));
+            }
+            r.json::<P>()
+                .await
+                .map_err(|e| Error::Decode(e.to_string()))
+        })
+    }
+
     /// Runs a call that gives its answer as it is (hangar-openapi's calls
     /// for the operations that answer two ways) to its end.
     fn answer<'a, T, E: Message, F>(
@@ -493,6 +548,39 @@ impl Client {
         })
     }
 }
+
+/// The most pages a list is followed through, against a server that
+/// names a next page for ever.
+const MAX_PAGES: usize = 1000;
+
+/// A page of a list (api/client.yaml's Lists): its items, and the path of
+/// the next page.
+trait Page: serde::de::DeserializeOwned + Send + 'static {
+    type Item;
+    fn parts(self) -> (Vec<Self::Item>, Option<String>);
+}
+
+macro_rules! pages {
+    ($($list:ident => $item:ident),* $(,)?) => {$(
+        impl Page for types::$list {
+            type Item = types::$item;
+            fn parts(self) -> (Vec<types::$item>, Option<String>) {
+                (self.items, self.next)
+            }
+        }
+    )*};
+}
+
+pages!(
+    LoginKeyList => LoginKey,
+    AccessTokenList => AccessToken,
+    SshKeyList => SshKey,
+    EnvironmentList => Environment,
+    TemplateList => Template,
+    EnvironmentPackList => EnvironmentPack,
+    WorkerSizeList => Resources,
+    TerminalSessionList => TerminalSession,
+);
 
 /// What an error answer says: the spec's Error body, or nothing for a call
 /// the spec gives no error body.

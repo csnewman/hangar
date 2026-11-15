@@ -34,7 +34,7 @@ async fn sign_in_keys_are_added_listed_and_removed() {
         .into_inner();
     assert_eq!(added.name, "laptop", "the key's own comment names it");
     assert_eq!(added.fingerprint, fingerprint);
-    let listed = c.list_login_keys().await.unwrap().into_inner();
+    let listed = c.list_login_keys().await.unwrap().into_inner().items;
     assert_eq!(listed.len(), 1);
     let profile = admin.get_profile().await.unwrap().into_inner();
     assert_eq!(profile.login_keys.len(), 1);
@@ -56,7 +56,14 @@ async fn sign_in_keys_are_added_listed_and_removed() {
         Some(400)
     );
     c.delete_login_key(&added.id).await.expect("removing it");
-    assert!(c.list_login_keys().await.unwrap().into_inner().is_empty());
+    assert!(
+        c.list_login_keys()
+            .await
+            .unwrap()
+            .into_inner()
+            .items
+            .is_empty()
+    );
     assert_eq!(
         client_status(c.delete_login_key(&added.id).await),
         Some(404)
@@ -107,7 +114,7 @@ async fn ssh_keys_are_made_imported_and_removed() {
         ),
         Some(400)
     );
-    let keys = c.list_ssh_keys().await.unwrap().into_inner();
+    let keys = c.list_ssh_keys().await.unwrap().into_inner().items;
     assert_eq!(
         keys.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(),
         ["deploy", "imported"]
@@ -117,5 +124,12 @@ async fn ssh_keys_are_made_imported_and_removed() {
         .delete_ssh_key(&imported.id)
         .await
         .expect("removing the other");
-    assert!(c.list_ssh_keys().await.unwrap().into_inner().is_empty());
+    assert!(
+        c.list_ssh_keys()
+            .await
+            .unwrap()
+            .into_inner()
+            .items
+            .is_empty()
+    );
 }

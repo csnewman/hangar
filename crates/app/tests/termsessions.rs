@@ -104,7 +104,7 @@ fn serve(tcp: TcpStream, ended: Sender<String>) {
     let (status, body) = match (method, path) {
         ("GET", "/api/v1/environments/e1/terminals") => (
             "200 OK",
-            r#"[{"id":"s1","title":"s1","created_at":"2026-11-07T10:00:00Z","clients":0,"cols":80,"rows":24},{"id":"s2","title":"s2","created_at":"2026-11-07T10:01:00Z","clients":0,"cols":80,"rows":24}]"#,
+            r#"{"items":[{"id":"s1","title":"s1","created_at":"2026-11-07T10:00:00Z","clients":0,"cols":80,"rows":24},{"id":"s2","title":"s2","created_at":"2026-11-07T10:01:00Z","clients":0,"cols":80,"rows":24}]}"#,
         ),
         ("DELETE", p) if p.starts_with("/api/v1/environments/e1/terminals/") => {
             ended.send(p.to_string()).unwrap();

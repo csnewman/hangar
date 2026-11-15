@@ -109,6 +109,16 @@ export async function call<T>(s: Server, method: string, path: string): Promise<
 }
 
 export const me = (s: Server) => call<Me>(s, 'GET', '/me')
-export const environments = (s: Server) => call<Environment[]>(s, 'GET', '/environments')
+// environments is every environment, following the list's pages.
+export async function environments(s: Server): Promise<Environment[]> {
+  const out: Environment[] = []
+  let path: string | undefined = '/environments'
+  for (let pages = 0; path && pages < 1000; pages++) {
+    const page: { items: Environment[]; next?: string } = await call(s, 'GET', path)
+    out.push(...page.items)
+    path = page.next?.replace(`/api/${apiVersion}`, '')
+  }
+  return out
+}
 export const act = (s: Server, id: string, action: 'start' | 'stop' | 'suspend') =>
   call<Environment>(s, 'POST', `/environments/${encodeURIComponent(id)}/${action}`)

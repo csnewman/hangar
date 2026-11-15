@@ -301,6 +301,30 @@ impl From<crate::fail::Fail> for ApiError {
     }
 }
 
+/// A list as the client API answers it (api/client.yaml's Lists): a page
+/// of items, and the path and query of the page after it, if there is one.
+pub struct List<T> {
+    pub items: Vec<T>,
+    pub next: Option<String>,
+}
+
+impl<T> List<T> {
+    /// A whole list, in one page.
+    pub fn all(items: Vec<T>) -> List<T> {
+        List { items, next: None }
+    }
+}
+
+impl<T: serde::Serialize> IntoResponse for List<T> {
+    fn into_response(self) -> Response {
+        let mut o = serde_json::json!({ "items": self.items });
+        if let Some(n) = self.next {
+            o["next"] = n.into();
+        }
+        Json(o).into_response()
+    }
+}
+
 /// A JSON body, refused as invalid (400) when it is not what the spec says.
 pub struct Body<T>(pub T);
 

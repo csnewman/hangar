@@ -118,13 +118,39 @@ async fn the_audit_log_says_who_did_what() {
         .list_activity(&e.id, None, None)
         .await
         .expect("the environment's activity")
-        .into_inner();
+        .into_inner()
+        .items;
     let stop = activity
         .iter()
         .find(|x| x.action == "environment.stop")
         .expect("the stop");
     assert_eq!(stop.details["via"], json!("access token bobs-laptop"));
     assert_eq!(stop.actor.name, "bob");
+    // A full page says where the next is, and following it carries on
+    // from there; the last page says nothing.
+    assert!(activity.len() >= 2, "{activity:?}");
+    let first = c
+        .list_activity(&e.id, None, Some(1))
+        .await
+        .unwrap()
+        .into_inner();
+    assert_eq!(first.items.len(), 1);
+    let next = first.next.expect("a page that is not the last says so");
+    let r = s
+        .http()
+        .get(format!("{}{next}", s.url()))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    let second: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(second["items"][0]["id"], json!(activity[1].id), "{second}");
+    let all = c
+        .list_activity(&e.id, None, Some(500))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(all.next.is_none(), "the last page names a next");
     let carol_c = s.client(&s.token(&carol, "carols").await);
     let refused = carol_c.list_activity(&e.id, None, None).await;
     assert_eq!(

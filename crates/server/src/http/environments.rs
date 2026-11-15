@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use super::catalog::spec_json;
-use super::{ApiError, Body, OptionalBody, Shared, Signed, spec as to_spec};
+use super::{ApiError, Body, List, OptionalBody, Shared, Signed, spec as to_spec};
 use crate::environments::{self as envs, Create, Machine, View};
 use crate::users::Principal;
 
@@ -55,7 +55,7 @@ pub fn client() -> Router<Shared> {
         .route("/environments/{id}/task", put(set_task).delete(end_task))
         .route("/environments/{id}/tasks", get(tasks))
         .route("/environments/{id}/agents/{session}/seen", post(see_agent))
-        .route("/worker-sizes", get(sizes))
+        .route("/worker-sizes", get(client_sizes))
         .route("/events", get(events))
 }
 
@@ -423,7 +423,7 @@ async fn list_client(State(app): State<Shared>, s: Signed) -> Result<Response, A
         .filter(|v| v.row.desired != "deleted")
         .map(|v| to_spec(client_json(v)))
         .collect::<Result<_, _>>()?;
-    Ok(Json(out).into_response())
+    Ok(List::<clientapi::types::Environment>::all(out).into_response())
 }
 
 async fn found(app: &Shared, p: &Principal, id: &str) -> Result<View, ApiError> {
@@ -746,7 +746,7 @@ async fn tasks(
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
     let ts = envs::tasks(&app.store, &s.principal, env_id(&id)?).await?;
-    Ok(Json(ts.iter().map(task_json).collect::<Vec<_>>()).into_response())
+    Ok(List::all(ts.iter().map(task_json).collect::<Vec<_>>()).into_response())
 }
 
 async fn see_agent(
@@ -763,6 +763,14 @@ async fn see_agent(
 /// How big an environment may be: each online worker's capacity, largest
 /// first, not saying which is which.
 async fn sizes(State(app): State<Shared>, _s: Signed) -> Result<Response, ApiError> {
+    Ok(Json(worker_sizes(&app).await?).into_response())
+}
+
+async fn client_sizes(State(app): State<Shared>, _s: Signed) -> Result<Response, ApiError> {
+    Ok(List::all(worker_sizes(&app).await?).into_response())
+}
+
+async fn worker_sizes(app: &Shared) -> Result<Vec<Value>, ApiError> {
     let mut out: Vec<(i64, i64)> = crate::workers::list(&app.store)
         .await?
         .iter()
@@ -770,12 +778,10 @@ async fn sizes(State(app): State<Shared>, _s: Signed) -> Result<Response, ApiErr
         .map(|l| (l.worker.cpus as i64, l.worker.memory_mib as i64))
         .collect();
     out.sort_by(|a, b| b.cmp(a));
-    Ok(Json(
-        out.into_iter()
-            .map(|(cpus, memory_mib)| json!({ "cpus": cpus, "memory_mib": memory_mib }))
-            .collect::<Vec<_>>(),
-    )
-    .into_response())
+    Ok(out
+        .into_iter()
+        .map(|(cpus, memory_mib)| json!({ "cpus": cpus, "memory_mib": memory_mib }))
+        .collect())
 }
 
 /// How often an idle stream says it is alive.

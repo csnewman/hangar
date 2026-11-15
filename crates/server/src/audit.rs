@@ -117,6 +117,12 @@ pub struct Entry {
 
 /// Events about every one of subjects, newest first, before an ID if
 /// given, at most limit (100 when not given or out of 1 to 500). An
+/// How many events a page holds when limit is asked for: it, from 1 to 500,
+/// else 100.
+pub fn page_size(limit: Option<i64>) -> i64 {
+    limit.filter(|l| (1..=500).contains(l)).unwrap_or(100)
+}
+
 /// administrator sees every event, anyone else those about what they own,
 /// about them, or by them.
 pub async fn list(
@@ -135,7 +141,7 @@ pub async fn list(
         subjects,
         any_of: (!p.admin).then_some(&mine[..]),
         before: before.filter(|b| *b > 0).unwrap_or(i64::MAX),
-        limit: limit.filter(|l| (1..=500).contains(l)).unwrap_or(100),
+        limit: page_size(limit),
     };
     Ok(store
         .begin()

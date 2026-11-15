@@ -87,11 +87,12 @@ async fn a_terminal_is_attached_typed_into_and_closed() {
         .list_terminals(&e.id)
         .await
         .expect("the terminals")
-        .into_inner();
+        .into_inner()
+        .items;
     assert!(listed.iter().any(|t| t.id == session), "{listed:?}");
     drop(ws);
     c.close_terminal(&e.id, &session).await.expect("closing it");
-    let listed = c.list_terminals(&e.id).await.unwrap().into_inner();
+    let listed = c.list_terminals(&e.id).await.unwrap().into_inner().items;
     assert!(listed.iter().all(|t| t.id != session), "{listed:?}");
 }
 
