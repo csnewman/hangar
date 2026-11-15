@@ -60,6 +60,21 @@ fn faint_text_fades_towards_its_background() {
     assert_eq!(spans[1].fg.r, 0xd4, "the rest as it was");
 }
 
+/// The scrollback keeps thousands of lines, as Ghostty's own does.
+#[test]
+fn the_scrollback_keeps_thousands_of_lines() {
+    let mut s = screen(80, 24);
+    for i in 0..5000 {
+        s.feed(format!("line {i}, with some more text after it\r\n").as_bytes());
+    }
+    s.scroll(10_000);
+    assert_eq!(s.scrolled_back(), 5000 + 1 - 24);
+    assert_eq!(
+        s.lines()[0].text.trim_end(),
+        "line 0, with some more text after it"
+    );
+}
+
 #[test]
 fn a_drag_selects_the_cells_it_passes() {
     let mut s = screen(20, 2);

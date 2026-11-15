@@ -429,6 +429,20 @@ impl Terminal {
         }
     }
 
+    /// How many bytes of rows the scrollback keeps, the oldest dropped past
+    /// it; None keeps all of it. Ghostty prunes whole pages of rows, so it
+    /// keeps a little more.
+    pub fn set_scrollback(&mut self, bytes: Option<usize>) {
+        let bytes = bytes.unwrap_or(usize::MAX);
+        // SAFETY: the option takes a pointer to a size_t, read in the call.
+        unsafe {
+            let _ = self.set(
+                sys::GhosttyTerminalOption::GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_BYTES,
+                &bytes as *const usize as *const c_void,
+            );
+        }
+    }
+
     /// Whether the terminal is dark, as a program that asks is told
     /// (CSI ? 996 n).
     pub fn set_dark(&mut self, dark: bool) {

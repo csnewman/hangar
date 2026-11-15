@@ -138,6 +138,23 @@ fn the_scrollback_scrolls() {
     assert_eq!(text(&mut t, 0), "line 8");
 }
 
+/// The scrollback keeps what it is let keep: by default about a page.
+#[test]
+fn the_scrollback_keeps_what_it_is_let() {
+    let fill = |t: &mut Terminal| {
+        for i in 0..5000 {
+            t.feed(format!("line {i}, with some more text after it\r\n").as_bytes());
+        }
+    };
+    let mut small = Terminal::new(80, 24, "").unwrap();
+    fill(&mut small);
+    let mut large = Terminal::new(80, 24, "").unwrap();
+    large.set_scrollback(Some(50_000_000));
+    fill(&mut large);
+    assert!(small.above_viewport() < 2000, "{}", small.above_viewport());
+    assert_eq!(large.above_viewport(), 5000 + 1 - 24);
+}
+
 #[test]
 fn a_selection_is_marked_and_read() {
     let mut t = Terminal::new(20, 3, "").unwrap();

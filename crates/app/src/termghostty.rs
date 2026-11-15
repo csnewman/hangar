@@ -87,6 +87,10 @@ pub struct Ghostty {
 /// How many bytes of pictures a screen keeps, the oldest deleted past it.
 const PICTURE_STORAGE: u64 = 64 << 20;
 
+/// How many bytes of rows the scrollback keeps: Ghostty's own default, many
+/// thousands of lines.
+const SCROLLBACK: usize = 50_000_000;
+
 #[derive(Debug, Clone, Copy)]
 enum Anchor {
     Cell(At, bool),
@@ -107,6 +111,7 @@ impl Ghostty {
         )
         .expect("making a Ghostty terminal");
         t.set_kitty_image_limit(PICTURE_STORAGE);
+        t.set_scrollback(Some(SCROLLBACK));
         Ghostty {
             t,
             columns,
