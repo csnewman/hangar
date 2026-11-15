@@ -1,7 +1,10 @@
 //! The terminal as Hangar's app uses it: fed what a shell writes, read
 //! back as rows of cells, and what the program asks of it taken as effects.
 
-use hangar_ghostty::{CursorStyle, Layer, Mouse, Progress, Rgb, Terminal, Underline, Wide};
+use hangar_ghostty::{
+    CursorStyle, Layer, Mouse, Pointer, Progress, Rgb, StatusKind, StatusState, Terminal,
+    Underline, Wide,
+};
 
 fn text(t: &mut Terminal, row: usize) -> String {
     t.frame().rows[row]
@@ -96,6 +99,41 @@ fn the_cursor_is_drawn_as_asked() {
     let f = t.frame();
     assert_eq!(f.cursor_style, CursorStyle::Underline);
     assert!(f.cursor_blinking);
+}
+
+/// The pointer is text's until the program asks for another, and a full
+/// reset is said.
+#[test]
+fn the_pointer_and_a_reset_are_told() {
+    let mut t = Terminal::new(10, 2, "").unwrap();
+    assert_eq!(t.pointer(), Pointer::Text);
+    t.feed(b"\x1b]22;pointer\x1b\\");
+    assert_eq!(t.pointer(), Pointer::Pointer);
+    t.feed(b"\x1b]22;ew-resize\x07");
+    assert_eq!(t.pointer(), Pointer::EwResize);
+    assert!(!t.take_effects().reset);
+    t.feed(b"\x1bc");
+    assert!(t.take_effects().reset);
+}
+
+/// A program that asks is told the terminal takes its status reports
+/// (OSC 7501), and each report is said, as is a shell's new prompt.
+#[test]
+fn a_programs_status_is_said() {
+    let mut t = Terminal::new(10, 2, "").unwrap();
+    t.feed(b"\x1b]7501;?\x1b\\");
+    let reply = String::from_utf8(t.take_effects().reply).unwrap();
+    assert!(reply.starts_with("\x1b]7501;?:states="), "{reply:?}");
+    // Its message is base64: "May I?".
+    t.feed(b"\x1b]7501;state=blocked:kind=permission:app=cargo:msg=TWF5IEk/\x1b\\");
+    t.feed(b"\x1b]133;A\x07");
+    let e = t.take_effects();
+    assert_eq!(e.statuses.len(), 1, "{:?}", e.statuses);
+    let s = &e.statuses[0];
+    assert_eq!(s.state, StatusState::Blocked);
+    assert_eq!(s.kind, Some(StatusKind::Permission));
+    assert_eq!((s.app.as_str(), s.message.as_str()), ("cargo", "May I?"));
+    assert!(e.prompt_started);
 }
 
 #[test]
@@ -208,6 +246,24 @@ fn the_scrollback_keeps_what_it_is_let() {
     fill(&mut large);
     assert!(small.above_viewport() < 2000, "{}", small.above_viewport());
     assert_eq!(large.above_viewport(), 5000 + 1 - 24);
+}
+
+/// The viewport moves from prompt to prompt the shell marked (OSC 133).
+#[test]
+fn the_viewport_moves_by_prompts() {
+    let mut t = Terminal::new(20, 3, "").unwrap();
+    for cmd in ["one", "two", "three"] {
+        t.feed(format!("\x1b]133;A\x07$ {cmd}\r\n\x1b]133;C\x07").as_bytes());
+        for i in 0..5 {
+            t.feed(format!("{cmd} out {i}\r\n").as_bytes());
+        }
+    }
+    t.scroll_prompts(-1);
+    assert_eq!(text(&mut t, 0), "$ three");
+    t.scroll_prompts(-1);
+    assert_eq!(text(&mut t, 0), "$ two");
+    t.scroll_prompts(1);
+    assert_eq!(text(&mut t, 0), "$ three");
 }
 
 #[test]

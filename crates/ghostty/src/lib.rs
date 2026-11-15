@@ -259,7 +259,133 @@ pub struct Effects {
     /// last.
     pub pwd: Option<String>,
     pub bell: bool,
+    /// The program reset the terminal (RIS): its title is gone, and what
+    /// it said of its status.
+    pub reset: bool,
+    /// What programs said they are doing (OSC 7501), in order.
+    pub statuses: Vec<ProgramStatus>,
+    /// Whether a shell prompt started (OSC 133;A): the command before it,
+    /// if any, is over.
+    pub prompt_started: bool,
 }
+
+/// One report of what a program is doing (OSC 7501's program status),
+/// about the record its id names: empty for the program itself.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProgramStatus {
+    pub state: StatusState,
+    /// What a blocked program needs from the user.
+    pub kind: Option<StatusKind>,
+    /// How far along, out of 100, where it says.
+    pub progress: Option<u8>,
+    pub id: String,
+    /// A stable name for the program ("cargo", "claude-code"), for
+    /// matching, not showing.
+    pub app: String,
+    /// A short label for people.
+    pub title: String,
+    /// A line for people of what it is doing or waiting for.
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum StatusState {
+    #[default]
+    Idle,
+    Working,
+    Done,
+    /// Waiting on the user.
+    Blocked,
+    Error,
+    /// The record is gone, and those beneath it.
+    Clear,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StatusKind {
+    Permission,
+    Question,
+    Auth,
+}
+
+/// The mouse pointer a program asks for over the terminal (OSC 22), by
+/// the W3C's names for them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Pointer {
+    Default,
+    ContextMenu,
+    Help,
+    Pointer,
+    Progress,
+    Wait,
+    Cell,
+    Crosshair,
+    #[default]
+    Text,
+    VerticalText,
+    Alias,
+    Copy,
+    Move,
+    NoDrop,
+    NotAllowed,
+    Grab,
+    Grabbing,
+    AllScroll,
+    ColResize,
+    RowResize,
+    NResize,
+    EResize,
+    SResize,
+    WResize,
+    NeResize,
+    NwResize,
+    SeResize,
+    SwResize,
+    EwResize,
+    NsResize,
+    NeswResize,
+    NwseResize,
+    ZoomIn,
+    ZoomOut,
+}
+
+/// The pointers in the order Ghostty numbers them (GhosttyMouseShape).
+const POINTERS: [Pointer; 34] = [
+    Pointer::Default,
+    Pointer::ContextMenu,
+    Pointer::Help,
+    Pointer::Pointer,
+    Pointer::Progress,
+    Pointer::Wait,
+    Pointer::Cell,
+    Pointer::Crosshair,
+    Pointer::Text,
+    Pointer::VerticalText,
+    Pointer::Alias,
+    Pointer::Copy,
+    Pointer::Move,
+    Pointer::NoDrop,
+    Pointer::NotAllowed,
+    Pointer::Grab,
+    Pointer::Grabbing,
+    Pointer::AllScroll,
+    Pointer::ColResize,
+    Pointer::RowResize,
+    Pointer::NResize,
+    Pointer::EResize,
+    Pointer::SResize,
+    Pointer::WResize,
+    Pointer::NeResize,
+    Pointer::NwResize,
+    Pointer::SeResize,
+    Pointer::SwResize,
+    Pointer::EwResize,
+    Pointer::NsResize,
+    Pointer::NeswResize,
+    Pointer::NwseResize,
+    Pointer::ZoomIn,
+    Pointer::ZoomOut,
+];
 
 /// What the callbacks write to, which the terminal holds a pointer to.
 #[derive(Default)]
@@ -365,6 +491,15 @@ impl Terminal {
             t.set(GHOSTTY_TERMINAL_OPT_USERDATA, state as *const c_void)?;
             t.set(GHOSTTY_TERMINAL_OPT_WRITE_PTY, write_pty as *const c_void)?;
             t.set(GHOSTTY_TERMINAL_OPT_BELL, bell as *const c_void)?;
+            t.set(GHOSTTY_TERMINAL_OPT_RESET, reset as *const c_void)?;
+            t.set(
+                GHOSTTY_TERMINAL_OPT_PROGRAM_STATUS,
+                program_status as *const c_void,
+            )?;
+            t.set(
+                GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT,
+                semantic_prompt as *const c_void,
+            )?;
             t.set(GHOSTTY_TERMINAL_OPT_XTVERSION, xtversion as *const c_void)?;
             t.set(
                 GHOSTTY_TERMINAL_OPT_TITLE_CHANGED,
@@ -414,6 +549,15 @@ impl Terminal {
         let r =
             unsafe { sys::ghostty_terminal_get(self.raw, data, &mut out as *mut T as *mut c_void) };
         (r == GHOSTTY_SUCCESS).then_some(out)
+    }
+
+    /// The pointer the program asks for (OSC 22): text's by default.
+    pub fn pointer(&self) -> Pointer {
+        self.get::<sys::GhosttyMouseShape::Type>(
+            sys::GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_MOUSE_SHAPE,
+        )
+        .and_then(|n| POINTERS.get(n as usize).copied())
+        .unwrap_or_default()
     }
 
     /// Takes what the shell wrote.
@@ -489,6 +633,20 @@ impl Terminal {
             value: sys::GhosttyTerminalScrollViewportValue { _padding: [0; 2] },
         };
         how.value.delta = -lines;
+        // SAFETY: a plain call on the terminal.
+        let _ = unsafe { sys::ghostty_terminal_scroll_viewport(self.raw, how) };
+    }
+
+    /// Scrolls the viewport by the shell's prompts (OSC 133): to an earlier
+    /// one for negative, a later one for positive, the last there is if
+    /// fewer remain.
+    pub fn scroll_prompts(&mut self, prompts: isize) {
+        let mut how = sys::GhosttyTerminalScrollViewport {
+            tag:
+                sys::GhosttyTerminalScrollViewportTag::GHOSTTY_TERMINAL_SCROLL_VIEWPORT_DELTA_PROMPT,
+            value: sys::GhosttyTerminalScrollViewportValue { _padding: [0; 2] },
+        };
+        how.value.delta_prompt = prompts;
         // SAFETY: a plain call on the terminal.
         let _ = unsafe { sys::ghostty_terminal_scroll_viewport(self.raw, how) };
     }
@@ -1044,13 +1202,23 @@ impl Terminal {
     /// Selects from one point of the whole screen to another, both
     /// included, as text runs.
     pub fn select(&mut self, from: (usize, usize), to: (usize, usize)) {
+        self.set_selection(from, to, false)
+    }
+
+    /// Selects the rectangle of cells with corners at two points of the
+    /// whole screen: on each row, the columns between theirs.
+    pub fn select_rectangle(&mut self, from: (usize, usize), to: (usize, usize)) {
+        self.set_selection(from, to, true)
+    }
+
+    fn set_selection(&mut self, from: (usize, usize), to: (usize, usize), rectangle: bool) {
         let (Some(start), Some(end)) = (self.on_screen(from), self.on_screen(to)) else {
             return;
         };
         let s = sys::GhosttySelection {
             start,
             end,
-            rectangle: false,
+            rectangle,
         };
         // SAFETY: the selection's references are fresh.
         unsafe {
@@ -1456,6 +1624,57 @@ unsafe extern "C" fn write_pty(
 
 unsafe extern "C" fn bell(_: sys::GhosttyTerminal, userdata: *mut c_void) {
     unsafe { state(userdata) }.effects.bell = true;
+}
+
+unsafe extern "C" fn reset(_: sys::GhosttyTerminal, userdata: *mut c_void) {
+    unsafe { state(userdata) }.effects.reset = true;
+}
+
+unsafe extern "C" fn program_status(
+    _: sys::GhosttyTerminal,
+    userdata: *mut c_void,
+    r: *const sys::GhosttyTerminalProgramStatus,
+) {
+    let Some(r) = (unsafe { r.as_ref() }) else {
+        return;
+    };
+    use sys::GhosttyProgramStatusKind::*;
+    use sys::GhosttyProgramStatusState::*;
+    let status = ProgramStatus {
+        state: match r.state {
+            GHOSTTY_PROGRAM_STATUS_STATE_WORKING => StatusState::Working,
+            GHOSTTY_PROGRAM_STATUS_STATE_DONE => StatusState::Done,
+            GHOSTTY_PROGRAM_STATUS_STATE_BLOCKED => StatusState::Blocked,
+            GHOSTTY_PROGRAM_STATUS_STATE_ERROR => StatusState::Error,
+            GHOSTTY_PROGRAM_STATUS_STATE_CLEAR => StatusState::Clear,
+            _ => StatusState::Idle,
+        },
+        kind: match r.kind {
+            GHOSTTY_PROGRAM_STATUS_KIND_PERMISSION => Some(StatusKind::Permission),
+            GHOSTTY_PROGRAM_STATUS_KIND_QUESTION => Some(StatusKind::Question),
+            GHOSTTY_PROGRAM_STATUS_KIND_AUTH => Some(StatusKind::Auth),
+            _ => None,
+        },
+        progress: u8::try_from(r.progress).ok(),
+        id: unsafe { text(&r.id) },
+        app: unsafe { text(&r.app) },
+        title: unsafe { text(&r.title) },
+        message: unsafe { text(&r.message) },
+    };
+    unsafe { state(userdata) }.effects.statuses.push(status);
+}
+
+unsafe extern "C" fn semantic_prompt(
+    _: sys::GhosttyTerminal,
+    userdata: *mut c_void,
+    e: *const sys::GhosttyTerminalSemanticPrompt,
+) {
+    let Some(e) = (unsafe { e.as_ref() }) else {
+        return;
+    };
+    if e.kind == sys::GhosttySemanticPromptKind::GHOSTTY_SEMANTIC_PROMPT_PROMPT_START {
+        unsafe { state(userdata) }.effects.prompt_started = true;
+    }
 }
 
 unsafe extern "C" fn xtversion(
