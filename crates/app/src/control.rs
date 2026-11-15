@@ -268,6 +268,7 @@ fn run(cmd: &str, req: &Value, window: &mut Window, cx: &mut App) -> Result<Valu
             if !full && term.is_none() {
                 return Err("no terminal shown".into());
             }
+            let _awake = Awake::begin();
             let (start, cpu) = (std::time::Instant::now(), thread_cpu());
             for _ in 0..frames {
                 match &term {
@@ -290,6 +291,41 @@ fn run(cmd: &str, req: &Value, window: &mut Window, cx: &mut App) -> Result<Valu
             Ok(Value::Null)
         }
         other => Err(format!("no command {other}")),
+    }
+}
+
+/// Keeps the app out of App Nap while it lasts. A window that cannot be
+/// seen naps its app: its threads run throttled, on the efficiency cores,
+/// and a frame timed so costs several times what it does in front.
+struct Awake {
+    #[cfg(target_os = "macos")]
+    activity:
+        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_foundation::NSObjectProtocol>>,
+}
+
+impl Awake {
+    fn begin() -> Awake {
+        #[cfg(target_os = "macos")]
+        {
+            use objc2_foundation::{NSActivityOptions, NSProcessInfo, NSString};
+            let activity = NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+                NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical,
+                &NSString::from_str("Timing frames"),
+            );
+            Awake { activity }
+        }
+        #[cfg(not(target_os = "macos"))]
+        Awake {}
+    }
+}
+
+impl Drop for Awake {
+    fn drop(&mut self) {
+        // SAFETY: the activity is the one beginActivity returned.
+        #[cfg(target_os = "macos")]
+        unsafe {
+            objc2_foundation::NSProcessInfo::processInfo().endActivity(&self.activity)
+        };
     }
 }
 
