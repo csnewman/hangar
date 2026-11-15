@@ -89,6 +89,30 @@ pub enum Wide {
     SpacerHead,
 }
 
+/// How a cell's text is underlined (SGR 4 and its styles, 4:1 to 4:5).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Underline {
+    #[default]
+    None,
+    Single,
+    Double,
+    Curly,
+    Dotted,
+    Dashed,
+}
+
+/// How the cursor is drawn, as the program asks (DECSCUSR).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum CursorStyle {
+    #[default]
+    Block,
+    /// A block's outline.
+    HollowBlock,
+    /// A bar before the cell.
+    Bar,
+    Underline,
+}
+
 /// One cell of the screen as it is drawn.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Cell {
@@ -102,10 +126,13 @@ pub struct Cell {
     pub bold: bool,
     pub italic: bool,
     pub faint: bool,
-    pub underline: bool,
+    pub underline: Underline,
+    /// The underline's own colour (SGR 58), if it has one; else the text's.
+    pub underline_colour: Option<Rgb>,
     pub inverse: bool,
     pub invisible: bool,
     pub strikethrough: bool,
+    pub overline: bool,
     /// Within the selection.
     pub selected: bool,
 }
@@ -127,6 +154,11 @@ pub struct Frame {
     /// program shows it.
     pub cursor: Option<(usize, usize)>,
     pub cursor_visible: bool,
+    pub cursor_style: CursorStyle,
+    /// Whether the program asks for the cursor to blink.
+    pub cursor_blinking: bool,
+    /// The cursor's colour, if the program set one (OSC 12).
+    pub cursor_colour: Option<Rgb>,
     /// The pictures on the viewport, in the order they are drawn.
     pub placements: Vec<Placement>,
 }
@@ -605,6 +637,15 @@ impl Terminal {
                 &mut cursor as *mut _ as *mut c_void,
             );
             frame.cursor_visible = cursor.visible;
+            frame.cursor_blinking = cursor.blinking;
+            frame.cursor_colour = colours.cursor_has_value.then(|| colours.cursor.into());
+            use sys::GhosttyCursorStyle::*;
+            frame.cursor_style = match cursor.visual_style {
+                GHOSTTY_CURSOR_STYLE_BAR => CursorStyle::Bar,
+                GHOSTTY_CURSOR_STYLE_UNDERLINE => CursorStyle::Underline,
+                GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW => CursorStyle::HollowBlock,
+                _ => CursorStyle::Block,
+            };
             if cursor.viewport_has_value {
                 frame.cursor = Some((cursor.viewport_y as usize, cursor.viewport_x as usize));
             }
@@ -622,7 +663,7 @@ impl Terminal {
                     &mut self.cells as *mut _ as *mut c_void,
                 );
                 while sys::ghostty_render_state_row_cells_next(self.cells) {
-                    row.cells.push(self.cell(&mut codepoints));
+                    row.cells.push(self.cell(&mut codepoints, &colours.palette));
                 }
                 frame.rows.push(row);
             }
@@ -826,7 +867,11 @@ impl Terminal {
     ///
     /// # Safety
     /// The iterator must be on a cell, of a render state just updated.
-    unsafe fn cell(&mut self, codepoints: &mut [u32; 32]) -> Cell {
+    unsafe fn cell(
+        &mut self,
+        codepoints: &mut [u32; 32],
+        palette: &[sys::GhosttyColorRgb; 256],
+    ) -> Cell {
         use sys::GhosttyRenderStateRowCellsData::*;
         let get = |data, out: *mut c_void| unsafe {
             sys::ghostty_render_state_row_cells_get(self.cells, data, out)
@@ -896,14 +941,35 @@ impl Terminal {
                 style.as_mut_ptr() as *mut c_void,
             ) == GHOSTTY_SUCCESS
             {
-                let f = unsafe { style.assume_init() }.flags;
+                let style = unsafe { style.assume_init() };
+                let f = style.flags;
                 cell.bold = f & (1 << 0) != 0;
                 cell.italic = f & (1 << 1) != 0;
                 cell.faint = f & (1 << 2) != 0;
                 cell.inverse = f & (1 << 4) != 0;
                 cell.invisible = f & (1 << 5) != 0;
                 cell.strikethrough = f & (1 << 6) != 0;
-                cell.underline = (f >> 8) & 0x7 != 0;
+                cell.overline = f & (1 << 7) != 0;
+                use sys::GhosttySgrUnderline::*;
+                cell.underline = match ((f >> 8) & 0x7) as sys::GhosttySgrUnderline::Type {
+                    GHOSTTY_SGR_UNDERLINE_NONE => Underline::None,
+                    GHOSTTY_SGR_UNDERLINE_DOUBLE => Underline::Double,
+                    GHOSTTY_SGR_UNDERLINE_CURLY => Underline::Curly,
+                    GHOSTTY_SGR_UNDERLINE_DOTTED => Underline::Dotted,
+                    GHOSTTY_SGR_UNDERLINE_DASHED => Underline::Dashed,
+                    _ => Underline::Single,
+                };
+                let c = style.underline_color;
+                // SAFETY: the tag says which of the union's fields is set.
+                cell.underline_colour = match c.tag as u32 {
+                    sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_PALETTE => {
+                        Some(palette[unsafe { c.value.palette } as usize].into())
+                    }
+                    sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_RGB => {
+                        Some(unsafe { c.value.rgb }.into())
+                    }
+                    _ => None,
+                };
             }
         }
         get(

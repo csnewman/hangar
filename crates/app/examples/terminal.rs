@@ -85,33 +85,34 @@ mod unix {
                 .into_iter()
                 .enumerate()
                 .map(|(row, line)| {
-                    let mut runs: Vec<TextRun> = line
-                        .spans
-                        .iter()
-                        .map(|s| TextRun {
-                            len: s.len,
-                            font: Font {
-                                weight: if s.bold {
-                                    gpui::FontWeight::BOLD
-                                } else {
-                                    Default::default()
+                    let mut runs: Vec<TextRun> =
+                        line.spans
+                            .iter()
+                            .map(|s| TextRun {
+                                len: s.len,
+                                font: Font {
+                                    weight: if s.bold {
+                                        gpui::FontWeight::BOLD
+                                    } else {
+                                        Default::default()
+                                    },
+                                    style: if s.italic {
+                                        gpui::FontStyle::Italic
+                                    } else {
+                                        Default::default()
+                                    },
+                                    ..self.font.clone()
                                 },
-                                style: if s.italic {
-                                    gpui::FontStyle::Italic
-                                } else {
-                                    Default::default()
-                                },
-                                ..self.font.clone()
-                            },
-                            color: hsla(s.fg),
-                            background_color: Some(hsla(s.bg)),
-                            underline: s.underline.then(|| UnderlineStyle {
-                                thickness: px(1.),
-                                ..Default::default()
-                            }),
-                            strikethrough: None,
-                        })
-                        .collect();
+                                color: hsla(s.fg),
+                                background_color: Some(hsla(s.bg)),
+                                underline: (s.underline != hangar_app::terminal::Underline::None)
+                                    .then(|| UnderlineStyle {
+                                        thickness: px(1.),
+                                        ..Default::default()
+                                    }),
+                                strikethrough: None,
+                            })
+                            .collect();
                     // The cursor: its cell drawn inverted.
                     if row == cursor_row {
                         let at = line.text.char_indices().nth(cursor_col).map(|(i, _)| i);

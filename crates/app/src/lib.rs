@@ -70,6 +70,8 @@ pub mod termghostty;
 pub mod termimage;
 pub mod terminal;
 pub mod termkeys;
+pub mod termpaint;
+pub mod termsprite;
 pub mod termview;
 pub mod tools;
 pub mod transfer;

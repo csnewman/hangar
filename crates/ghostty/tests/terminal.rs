@@ -1,7 +1,7 @@
 //! The terminal as Hangar's app uses it: fed what a shell writes, read
 //! back as rows of cells, and what the program asks of it taken as effects.
 
-use hangar_ghostty::{Layer, Mouse, Progress, Rgb, Terminal, Wide};
+use hangar_ghostty::{CursorStyle, Layer, Mouse, Progress, Rgb, Terminal, Underline, Wide};
 
 fn text(t: &mut Terminal, row: usize) -> String {
     t.frame().rows[row]
@@ -41,6 +41,61 @@ fn text_and_its_style_are_drawn() {
     assert_eq!(f2.rows[1].cells[1].wide, Wide::SpacerTail);
     assert_eq!(f2.rows[1].cells[2].text, "x");
     assert_eq!(f2.cursor, Some((1, 3)));
+}
+
+/// Underlines in each style and a colour of their own, overlines and
+/// strikethroughs are kept.
+#[test]
+fn every_line_through_the_text_is_kept() {
+    let mut t = Terminal::new(20, 2, "").unwrap();
+    let mut palette = [Rgb::default(); 256];
+    palette[5] = Rgb { r: 5, g: 6, b: 7 };
+    t.set_colours(Rgb::default(), Rgb::default(), &palette);
+    t.feed(b"\x1b[4ma\x1b[4:2mb\x1b[4:3mc\x1b[4:4md\x1b[4:5me\x1b[0m");
+    t.feed(b"\x1b[4;58:2::1:2:3mf\x1b[58;5;5mg\x1b[0m\x1b[53mh\x1b[0;9mi");
+    let f = t.frame();
+    let c = &f.rows[0].cells;
+    let styles: Vec<Underline> = c[..5].iter().map(|c| c.underline).collect();
+    assert_eq!(
+        styles,
+        [
+            Underline::Single,
+            Underline::Double,
+            Underline::Curly,
+            Underline::Dotted,
+            Underline::Dashed
+        ]
+    );
+    assert_eq!(c[0].underline_colour, None, "the text's colour");
+    assert_eq!(c[5].underline_colour, Some(Rgb { r: 1, g: 2, b: 3 }));
+    assert_eq!(c[6].underline_colour, Some(Rgb { r: 5, g: 6, b: 7 }));
+    assert!(c[7].overline && c[7].underline == Underline::None);
+    assert!(c[8].strikethrough);
+}
+
+/// The cursor is drawn as the program asks, in the colour it sets.
+#[test]
+fn the_cursor_is_drawn_as_asked() {
+    let mut t = Terminal::new(10, 2, "").unwrap();
+    let f = t.frame();
+    assert_eq!(f.cursor_style, CursorStyle::Block);
+    assert_eq!(f.cursor_colour, None);
+    t.feed(b"\x1b[6 q\x1b]12;rgb:ff/00/80\x07");
+    let f = t.frame();
+    assert_eq!(f.cursor_style, CursorStyle::Bar);
+    assert!(!f.cursor_blinking);
+    assert_eq!(
+        f.cursor_colour,
+        Some(Rgb {
+            r: 255,
+            g: 0,
+            b: 128
+        })
+    );
+    t.feed(b"\x1b[3 q");
+    let f = t.frame();
+    assert_eq!(f.cursor_style, CursorStyle::Underline);
+    assert!(f.cursor_blinking);
 }
 
 #[test]

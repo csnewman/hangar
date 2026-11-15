@@ -4,7 +4,7 @@
 
 use alacritty_terminal::vte::ansi::Rgb;
 use hangar_app::termghostty::Ghostty;
-use hangar_app::terminal::{Emulator, LinkKind, Mark, Select};
+use hangar_app::terminal::{CursorStyle, Emulator, LinkKind, Mark, Select, Underline};
 
 fn screen(cols: usize, rows: usize) -> Ghostty {
     let mut s = Ghostty::new(cols, rows);
@@ -58,6 +58,36 @@ fn faint_text_fades_towards_its_background() {
         }
     );
     assert_eq!(spans[1].fg.r, 0xd4, "the rest as it was");
+}
+
+/// Underlines keep their style and colour, and struck-through and
+/// overlined text is so; each column names where its character starts.
+#[test]
+fn every_line_through_the_text_is_kept() {
+    let mut s = screen(20, 1);
+    s.feed("\x1b[4:3;58:2::1:2:3ma\x1b[0;4:5mb\x1b[0;9mc\x1b[0;53md\x1b[0m\u{4e16}e".as_bytes());
+    let line = s.lines().remove(0);
+    let sp = &line.spans;
+    assert_eq!(sp[0].underline, Underline::Curly);
+    assert_eq!(
+        sp[0].underline_colour.map(|c| (c.r, c.g, c.b)),
+        Some((1, 2, 3))
+    );
+    assert_eq!(sp[1].underline, Underline::Dashed);
+    assert!(sp[2].strikethrough);
+    assert!(sp[3].overline);
+    assert_eq!(&line.cells[..7], &[0, 1, 2, 3, 4, 4, 7]);
+}
+
+/// The cursor is drawn as the program asks, in the colour it sets.
+#[test]
+fn the_cursor_is_drawn_as_asked() {
+    let mut s = screen(10, 1);
+    s.feed(b"\x1b[4 q\x1b]12;#00ff00\x07");
+    s.lines();
+    let look = s.cursor_look();
+    assert_eq!((look.style, look.blinking), (CursorStyle::Underline, false));
+    assert_eq!(look.colour.map(|c| (c.r, c.g, c.b)), Some((0, 255, 0)));
 }
 
 /// The scrollback keeps thousands of lines, as Ghostty's own does.

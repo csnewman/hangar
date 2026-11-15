@@ -14,6 +14,8 @@ use alacritty_terminal::term::{ClipboardType, Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 use std::time::Duration;
 
+pub use hangar_ghostty::{CursorStyle, Underline};
+
 /// What names a link that anchors something drawn over the text rather
 /// than a link to follow.
 pub(crate) const ANCHOR: &str = "hangar-";
@@ -146,9 +148,16 @@ pub struct Span {
     pub len: usize,
     pub fg: Rgb,
     pub bg: Rgb,
+    /// Whether the cells have a background of their own rather than the
+    /// screen's: a picture under the background shows through the others.
+    pub own_bg: bool,
     pub bold: bool,
     pub italic: bool,
-    pub underline: bool,
+    pub underline: Underline,
+    /// The underline's colour, if not the text's.
+    pub underline_colour: Option<Rgb>,
+    pub strikethrough: bool,
+    pub overline: bool,
     pub mark: Mark,
 }
 
@@ -157,6 +166,41 @@ pub struct Span {
 pub struct Line {
     pub text: String,
     pub spans: Vec<Span>,
+    /// Where each column's character starts in the text: both columns of a
+    /// wide character name its start.
+    pub cells: Vec<usize>,
+}
+
+impl Line {
+    /// The characters of the row and the columns each starts at and
+    /// takes: (start, width, text).
+    pub fn graphemes(&self) -> impl Iterator<Item = (usize, usize, &str)> {
+        let mut col = 0;
+        std::iter::from_fn(move || {
+            let start = *self.cells.get(col)?;
+            let width = self.cells[col..]
+                .iter()
+                .take_while(|&&at| at == start)
+                .count();
+            let end = self
+                .cells
+                .get(col + width)
+                .copied()
+                .unwrap_or(self.text.len());
+            let at = col;
+            col += width;
+            Some((at, width, &self.text[start..end]))
+        })
+    }
+}
+
+/// How the cursor is drawn: the shape and colour the program asks for,
+/// and whether it blinks.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CursorLook {
+    pub style: CursorStyle,
+    pub blinking: bool,
+    pub colour: Option<Rgb>,
 }
 
 pub struct Screen<L: EventListener = Quiet> {
@@ -558,6 +602,22 @@ impl<L: EventListener> Screen<L> {
         self.term.mode().contains(TermMode::SHOW_CURSOR)
     }
 
+    /// How the program asks for the cursor to be drawn.
+    pub fn cursor_look(&self) -> CursorLook {
+        use alacritty_terminal::vte::ansi::CursorShape;
+        let c = self.term.cursor_style();
+        CursorLook {
+            style: match c.shape {
+                CursorShape::Beam => CursorStyle::Bar,
+                CursorShape::Underline => CursorStyle::Underline,
+                CursorShape::HollowBlock => CursorStyle::HollowBlock,
+                _ => CursorStyle::Block,
+            },
+            blinking: c.blinking,
+            colour: self.term.colors()[NamedColor::Cursor],
+        }
+    }
+
     /// A colour by the index a program asks after it (OSC 4's 0 to 255,
     /// then the foreground, background and cursor, OSC 10 to 12): the one
     /// the program set, else the screen's own. A program learns from the
@@ -607,15 +667,35 @@ impl<L: EventListener> Screen<L> {
                 for col in 0..columns {
                     let cell = &row[Column(col)];
                     if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                        let start = line.cells.last().copied().unwrap_or(0);
+                        line.cells.push(start);
                         continue;
                     }
+                    line.cells.push(line.text.len());
                     let (mut fg, mut bg) = (self.rgb(cell.fg), self.rgb(cell.bg));
-                    if cell.flags.contains(Flags::INVERSE) {
+                    let inverse = cell.flags.contains(Flags::INVERSE);
+                    if inverse {
                         std::mem::swap(&mut fg, &mut bg);
                     }
                     if cell.flags.contains(Flags::DIM) {
                         fg = faded(fg, bg);
                     }
+                    if cell.flags.contains(Flags::HIDDEN) {
+                        fg = bg;
+                    }
+                    let underline = if cell.flags.contains(Flags::DOUBLE_UNDERLINE) {
+                        Underline::Double
+                    } else if cell.flags.contains(Flags::UNDERCURL) {
+                        Underline::Curly
+                    } else if cell.flags.contains(Flags::DOTTED_UNDERLINE) {
+                        Underline::Dotted
+                    } else if cell.flags.contains(Flags::DASHED_UNDERLINE) {
+                        Underline::Dashed
+                    } else if cell.flags.contains(Flags::UNDERLINE) {
+                        Underline::Single
+                    } else {
+                        Underline::None
+                    };
                     let point = Point::new(line_at, Column(col));
                     let mark = if found.as_ref().is_some_and(|m| m.contains(&point)) {
                         Mark::Current
@@ -626,18 +706,27 @@ impl<L: EventListener> Screen<L> {
                     } else {
                         Mark::None
                     };
+                    let hovered = hover.as_ref().is_some_and(|h| h.contains(&point));
                     let span = Span {
                         len: 0,
                         fg,
                         bg,
+                        own_bg: inverse || cell.bg != Color::Named(NamedColor::Background),
                         bold: cell.flags.contains(Flags::BOLD),
                         italic: cell.flags.contains(Flags::ITALIC),
-                        underline: cell.flags.intersects(Flags::ALL_UNDERLINES)
-                            || hover.as_ref().is_some_and(|h| h.contains(&point)),
+                        underline: if hovered && underline == Underline::None {
+                            Underline::Single
+                        } else {
+                            underline
+                        },
+                        underline_colour: cell.underline_color().map(|c| self.rgb(c)),
+                        strikethrough: cell.flags.contains(Flags::STRIKEOUT),
+                        overline: false,
                         mark,
                     };
                     let start = line.text.len();
                     line.text.push(cell.c);
+                    line.text.extend(cell.zerowidth().into_iter().flatten());
                     let len = line.text.len() - start;
                     match line.spans.last_mut() {
                         Some(last)
@@ -853,6 +942,8 @@ pub trait Emulator {
     fn anchors(&self, prefix: &str, above: usize) -> Vec<(i32, usize, String)>;
     fn cursor(&self) -> (usize, usize);
     fn cursor_shown(&self) -> bool;
+    /// How the cursor is drawn, as of the lines last read.
+    fn cursor_look(&self) -> CursorLook;
     fn lines(&mut self) -> Vec<Line>;
     fn effects(&mut self) -> Effects;
     /// Whether kitty graphics commands are the emulator's to keep, rather
@@ -966,6 +1057,9 @@ impl Emulator for Alacritty {
     }
     fn cursor_shown(&self) -> bool {
         self.screen.cursor_shown()
+    }
+    fn cursor_look(&self) -> CursorLook {
+        self.screen.cursor_look()
     }
     fn lines(&mut self) -> Vec<Line> {
         self.screen.lines()

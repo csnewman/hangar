@@ -17,8 +17,8 @@ use hangar_ghostty::{Mouse, Picture, Placement, Terminal, Wide};
 use regex::Regex;
 
 use crate::terminal::{
-    ANCHOR, Cells, Effects, Emulator, Line, Link, LinkKind, Mark, PATH, Select, Span, URL, faded,
-    indexed_in, path_and_place,
+    ANCHOR, Cells, CursorLook, Effects, Emulator, Line, Link, LinkKind, Mark, PATH, Select, Span,
+    URL, Underline, faded, indexed_in, path_and_place,
 };
 
 /// A point of Ghostty's whole screen, scrollback and all: (row, column).
@@ -78,8 +78,9 @@ pub struct Ghostty {
     anchor: Option<Anchor>,
     /// The patterns links are found by, made once.
     links: Option<(Regex, Regex)>,
-    /// The pictures on the lines last read.
+    /// The pictures on the lines last read, and how the cursor is drawn.
     placed: Vec<Placement>,
+    cursor_look: CursorLook,
     /// What animations' frames are timed from.
     started: Instant,
 }
@@ -120,6 +121,7 @@ impl Ghostty {
             anchor: None,
             links: None,
             placed: vec![],
+            cursor_look: CursorLook::default(),
             started: Instant::now(),
         }
     }
@@ -410,11 +412,20 @@ impl Emulator for Ghostty {
         self.t.cursor().1
     }
 
+    fn cursor_look(&self) -> CursorLook {
+        self.cursor_look
+    }
+
     /// The visible rows, each a line of text with its spans, the selection
     /// and Find's matches marked.
     fn lines(&mut self) -> Vec<Line> {
         let mut frame = self.t.frame();
         self.placed = joined(std::mem::take(&mut frame.placements));
+        self.cursor_look = CursorLook {
+            style: frame.cursor_style,
+            blinking: frame.cursor_blinking,
+            colour: frame.cursor_colour.map(theirs),
+        };
         let found = self.t.found();
         let matches = self.t.matches();
         let top = self.t.above_viewport();
@@ -426,8 +437,11 @@ impl Emulator for Ghostty {
                 let mut line = Line::default();
                 for (c, cell) in row.cells.iter().enumerate() {
                     if cell.wide == Wide::SpacerTail {
+                        let start = line.cells.last().copied().unwrap_or(0);
+                        line.cells.push(start);
                         continue;
                     }
+                    line.cells.push(line.text.len());
                     let mut fg = theirs(cell.fg.unwrap_or(frame.fg));
                     let mut bg = theirs(cell.bg.unwrap_or(frame.bg));
                     if cell.inverse {
@@ -448,14 +462,22 @@ impl Emulator for Ghostty {
                     } else {
                         Mark::None
                     };
+                    let hovered = self.hover.is_some_and(|h| within((top + r, c), h));
                     let span = Span {
                         len: 0,
                         fg,
                         bg,
+                        own_bg: cell.inverse || cell.bg.is_some(),
                         bold: cell.bold,
                         italic: cell.italic,
-                        underline: cell.underline
-                            || self.hover.is_some_and(|h| within((top + r, c), h)),
+                        underline: if hovered && cell.underline == Underline::None {
+                            Underline::Single
+                        } else {
+                            cell.underline
+                        },
+                        underline_colour: cell.underline_colour.map(theirs),
+                        strikethrough: cell.strikethrough,
+                        overline: cell.overline,
                         mark,
                     };
                     // A kitty placeholder cell, with the diacritics saying

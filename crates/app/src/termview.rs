@@ -12,19 +12,20 @@ use std::time::{Duration, Instant};
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Font, Hsla, IntoElement,
     KeyBinding, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Point, Render, Rgba, ScrollEvent, Styled, StyledText, Subscription,
-    Task, TextRun, UnderlineStyle, WeakEntity, Window, actions, canvas, div, font, prelude::*, px,
+    ParentElement, Pixels, Point, Render, Rgba, ScrollEvent, Styled, Subscription, Task,
+    WeakEntity, Window, actions, canvas, div, font, point, prelude::*, px, size,
 };
 use gpui_component::Sizable;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
-use hangar_ghostty::{Layer, Placement};
+use hangar_ghostty::Placement;
 
 use crate::api::Client;
 use crate::palette;
 use crate::settings::TerminalEmulator;
 use crate::termconn::{self, Command, Connection, Event};
-use crate::terminal::{Alacritty, Emulator, Link, LinkKind, Mark, Select};
+use crate::terminal::{Alacritty, CursorStyle, Emulator, Link, LinkKind, Select};
+use crate::termpaint::{self, hsla};
 
 /// A line's height for each point of the text's size.
 const LINE_SPACING: f32 = 1.36;
@@ -182,21 +183,15 @@ pub struct TerminalView {
     /// and the part shown.
     kitty: HashMap<KittyKey, Arc<gpui::RenderImage>>,
     screens: u64,
-    /// A redraw due later, and when: an animation's next frame, or a
-    /// synchronized update the program has not yet ended.
+    /// A redraw due later, and when: an animation's next frame, a
+    /// synchronized update the program has not yet ended, or a blinking
+    /// cursor's next turn.
     redraw: Option<(Instant, Task<()>)>,
+    /// When a blinking cursor last came on: at the last key or output.
+    blink: Instant,
 }
 
 type KittyKey = (u64, u32, u64, (u32, u32, u32, u32));
-
-/// What of the text a row draws: all of it, or its cells' backgrounds or
-/// its text alone, when pictures go between the two.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Pass {
-    Both,
-    Grounds,
-    Text,
-}
 
 /// A picture drawn in the terminal, and its size where it is drawn.
 struct Shown {
@@ -252,16 +247,6 @@ fn rgb(c: Hsla) -> alacritty_terminal::vte::ansi::Rgb {
         g: (c.g * 255.) as u8,
         b: (c.b * 255.) as u8,
     }
-}
-
-fn hsla(c: alacritty_terminal::vte::ansi::Rgb) -> Hsla {
-    Rgba {
-        r: c.r as f32 / 255.,
-        g: c.g as f32 / 255.,
-        b: c.b as f32 / 255.,
-        a: 1.,
-    }
-    .into()
 }
 
 impl TerminalView {
@@ -330,6 +315,7 @@ impl TerminalView {
             kitty: HashMap::new(),
             screens: 0,
             redraw: None,
+            blink: Instant::now(),
         };
         view.connect(session, cx);
         view
@@ -497,10 +483,10 @@ impl TerminalView {
         placed: &[Placement],
         window: &mut Window,
         cx: &mut App,
-    ) -> (Vec<gpui::AnyElement>, Vec<gpui::AnyElement>) {
-        let (mut below, mut above) = (vec![], vec![]);
+    ) -> Vec<termpaint::Picture> {
+        let mut out = vec![];
         if placed.is_empty() && self.kitty.is_empty() {
-            return (below, above);
+            return out;
         }
         // Placements are in pixels of the cell size the emulator was
         // given, the screen's, which a cell's points are rounded from.
@@ -525,24 +511,34 @@ impl TerminalView {
                 continue;
             };
             shown.insert(key, Arc::clone(&image));
-            let el = gpui::img(image)
-                .absolute()
-                .left(cell * p.col as f32 + px(p.offset.0 as f32 * x))
-                .top(self.line_height * p.row as f32 + px(p.offset.1 as f32 * y))
-                .w(px(p.width as f32 * x))
-                .h(px(p.height as f32 * y))
-                .object_fit(gpui::ObjectFit::Fill)
-                .into_any_element();
-            if p.layer == Layer::AboveText {
-                above.push(el);
-            } else {
-                below.push(el);
-            }
+            let at = Bounds::new(
+                point(
+                    cell * p.col as f32 + px(p.offset.0 as f32 * x),
+                    self.line_height * p.row as f32 + px(p.offset.1 as f32 * y),
+                ),
+                size(px(p.width as f32 * x), px(p.height as f32 * y)),
+            );
+            out.push(termpaint::Picture {
+                layer: p.layer,
+                at,
+                image,
+            });
         }
         for (_, gone) in std::mem::replace(&mut self.kitty, shown) {
             cx.drop_image(gone, Some(window));
         }
-        (below, above)
+        out
+    }
+
+    /// Whether a blinking cursor is lit: the first half of each 1.2 s
+    /// since the last key or output, as Ghostty blinks it, with the view
+    /// drawn again at the turn.
+    fn blink_lit(&mut self, cx: &mut Context<Self>) -> bool {
+        const HALF: Duration = Duration::from_millis(600);
+        let since = self.blink.elapsed();
+        let turns = since.as_millis() / HALF.as_millis();
+        self.redraw_in(HALF * (turns as u32 + 1) - since, cx);
+        turns.is_multiple_of(2)
     }
 
     /// Draws the view again after a while, unless a redraw is due sooner.
@@ -614,6 +610,7 @@ impl TerminalView {
                 }
             }
             Event::Output(b) => {
+                self.blink = Instant::now();
                 // What was under the pointer may have moved; the next move
                 // finds it again.
                 if self.hover.take().is_some() {
@@ -740,6 +737,7 @@ impl TerminalView {
 
     /// Sends what a key types, back at the bottom of the screen.
     fn input(&mut self, b: Vec<u8>) {
+        self.blink = Instant::now();
         self.claim();
         if self.screen.scrolled_back() > 0 {
             self.screen.scroll(-(self.screen.scrolled_back() as i32));
@@ -1271,39 +1269,6 @@ pub struct OpenLink {
 
 impl gpui::EventEmitter<OpenLink> for TerminalView {}
 
-/// Splits the runs at the cursor's cell and swaps that cell's colours.
-fn cursor_runs(runs: Vec<TextRun>, at: usize, len: usize, ground: Hsla) -> Vec<TextRun> {
-    let mut out = Vec::new();
-    let mut pos = 0;
-    for r in runs {
-        let (start, end) = (pos, pos + r.len);
-        pos = end;
-        if end <= at || start >= at + len {
-            out.push(r);
-            continue;
-        }
-        if at > start {
-            out.push(TextRun {
-                len: at - start,
-                ..r.clone()
-            });
-        }
-        out.push(TextRun {
-            len,
-            color: r.background_color.unwrap_or(ground),
-            background_color: Some(r.color),
-            ..r.clone()
-        });
-        if end > at + len {
-            out.push(TextRun {
-                len: end - at - len,
-                ..r
-            });
-        }
-    }
-    out
-}
-
 impl Focusable for TerminalView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -1323,85 +1288,49 @@ impl Render for TerminalView {
             self.cell = None;
         }
         let focused = self.focus.is_focused(window);
-        // The selection in the accent, Find's matches in amber, the one it
-        // is on in solid amber.
-        let selected = p.accent.opacity(0.35);
-        let found = p.busy.opacity(0.3);
-        let current = p.busy;
-        let mark_text = p.term_bg;
-        let show_cursor = focused && self.screen.scrolled_back() == 0 && self.screen.cursor_shown();
-        let (cursor_row, cursor_col) = self.screen.cursor();
         if let Some(due) = self.screen.tick_animations() {
             self.redraw_in(due, cx);
         }
         let lines = self.screen.lines();
-        let placed = self.screen.placements();
-        // Pictures under the text go between the cells' backgrounds and
-        // their text, each drawn apart.
-        let under = placed.iter().any(|p| p.layer != Layer::AboveText);
-        let ground = hsla(rgb(p.term_tab));
-        let styled = |row: usize, line: &crate::terminal::Line, pass: Pass| {
-            let mut runs: Vec<TextRun> = line
-                .spans
-                .iter()
-                .map(|s| TextRun {
-                    len: s.len,
-                    font: Font {
-                        weight: if s.bold {
-                            gpui::FontWeight::BOLD
-                        } else {
-                            Default::default()
-                        },
-                        style: if s.italic {
-                            gpui::FontStyle::Italic
-                        } else {
-                            Default::default()
-                        },
-                        ..self.font.clone()
+        let look = self.screen.cursor_look();
+        let (row, col) = self.screen.cursor();
+        // The cursor the program shows, at the bottom of the scrollback: as
+        // it asks while the window has the keys, else a hollow block, as
+        // Ghostty draws it.
+        let lit = !focused || !look.blinking || self.blink_lit(cx);
+        let cursor =
+            (self.screen.scrolled_back() == 0 && self.screen.cursor_shown() && lit).then(|| {
+                termpaint::Cursor {
+                    row,
+                    col,
+                    style: if focused {
+                        look.style
+                    } else {
+                        CursorStyle::HollowBlock
                     },
-                    color: match (pass, s.mark) {
-                        (Pass::Grounds, _) => gpui::transparent_black(),
-                        (_, Mark::Current) => mark_text,
-                        _ => hsla(s.fg),
-                    },
-                    background_color: match (pass, s.mark) {
-                        (Pass::Text, Mark::None) => None,
-                        (_, Mark::None) => Some(hsla(s.bg)),
-                        (_, Mark::Selected) => Some(selected),
-                        (_, Mark::Match) => Some(found),
-                        (_, Mark::Current) => Some(current),
-                    },
-                    underline: (s.underline && pass != Pass::Grounds).then(|| UnderlineStyle {
-                        thickness: px(1.),
-                        ..Default::default()
-                    }),
-                    strikethrough: None,
-                })
-                .collect();
-            if show_cursor && row == cursor_row && pass != Pass::Grounds {
-                let at = line.text.char_indices().nth(cursor_col).map(|(i, _)| i);
-                if let Some(at) = at {
-                    let len = line.text[at..].chars().next().map_or(1, char::len_utf8);
-                    runs = cursor_runs(runs, at, len, ground);
+                    colour: look.colour.map(hsla),
                 }
-            }
-            StyledText::new(line.text.clone()).with_runs(runs)
+            });
+        let placed = self.screen.placements();
+        let kitty = self.kitty(&placed, window, cx);
+        let painting = termpaint::Screen {
+            lines,
+            cell: self.cell.unwrap_or(px(7.5)),
+            line_height: self.line_height,
+            font: self.font.clone(),
+            font_size: self.font_size,
+            // The selection in the accent, Find's matches in amber, the one
+            // it is on in solid amber.
+            colours: termpaint::Colours {
+                selected: p.accent.opacity(0.35),
+                found: p.busy.opacity(0.3),
+                current: p.busy,
+                mark_text: p.term_bg,
+                fg: p.term_fg,
+            },
+            cursor,
+            pictures: kitty,
         };
-        let rows: Vec<_> = lines
-            .iter()
-            .enumerate()
-            .map(|(r, l)| styled(r, l, if under { Pass::Text } else { Pass::Both }))
-            .collect();
-        let grounds: Vec<_> = if under {
-            lines
-                .iter()
-                .enumerate()
-                .map(|(r, l)| styled(r, l, Pass::Grounds))
-                .collect()
-        } else {
-            vec![]
-        };
-        let (below, above) = self.kitty(&placed, window, cx);
         // The pictures on the screen, or starting above it: each where its
         // anchor is.
         let cell = self.cell.unwrap_or(px(7.5));
@@ -1547,20 +1476,6 @@ impl Render for TerminalView {
                 div()
                     .size_full()
                     .relative()
-                    // A row is the screen's width. A glyph from a fallback
-                    // font can be wider than a cell; wrapped, its row would
-                    // take two lines and push the rows below off the end.
-                    .whitespace_nowrap()
-                    .font(self.font.clone())
-                    .text_size(self.font_size)
-                    .line_height(self.line_height)
-                    .when(under, |d| {
-                        d.child(div().absolute().top_0().left_0().children(grounds))
-                            .children(below)
-                    })
-                    .children(rows)
-                    .children(above)
-                    .children(pictures)
                     .child(
                         canvas(
                             move |bounds, window, cx| {
@@ -1568,16 +1483,16 @@ impl Render for TerminalView {
                                     me.update(cx, |t, cx| t.fit(bounds, window, cx));
                                 }
                             },
-                            |_, _, _, _| {},
+                            move |bounds, _, window, cx| {
+                                termpaint::paint(&painting, bounds, window, cx)
+                            },
                         )
-                        // Pinned to the top left, so its bounds are the
-                        // text's: an absolute box with no offsets sits
-                        // after the rows.
                         .absolute()
                         .top_0()
                         .left_0()
                         .size_full(),
-                    ),
+                    )
+                    .children(pictures),
             )
             // A program's progress, along the top, as the web's terminal
             // shows it: red when it failed, amber paused, full and faint

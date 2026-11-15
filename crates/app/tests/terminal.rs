@@ -4,7 +4,7 @@
 
 use std::time::Instant;
 
-use hangar_app::terminal::{LinkKind, Mark, Replies, Screen, Select};
+use hangar_app::terminal::{CursorStyle, LinkKind, Mark, Replies, Screen, Select, Underline};
 
 #[test]
 fn colours_and_attributes_become_spans() {
@@ -49,6 +49,47 @@ fn faint_text_fades_towards_its_background() {
         }
     );
     assert_eq!(spans[1].fg.r, 0x10, "the rest as it was");
+}
+
+/// Underlines keep their style and colour, struck-through text is struck,
+/// hidden text is not shown, and combining marks stay with their letter.
+#[test]
+fn every_line_through_the_text_and_every_mark_is_kept() {
+    let mut s = Screen::new(20, 1);
+    s.feed("\x1b[4:3;58:2::1:2:3ma\x1b[0;4:2mb\x1b[0;9mc\x1b[0;8md\x1b[0me\u{301}".as_bytes());
+    let line = s.lines().remove(0);
+    let sp = &line.spans;
+    assert_eq!(sp[0].underline, Underline::Curly);
+    assert_eq!(
+        sp[0].underline_colour.map(|c| (c.r, c.g, c.b)),
+        Some((1, 2, 3))
+    );
+    assert_eq!(sp[1].underline, Underline::Double);
+    assert!(sp[2].strikethrough);
+    assert_eq!(sp[3].fg, sp[3].bg, "hidden");
+    assert!(line.text.starts_with("abcde\u{301}"), "{:?}", line.text);
+}
+
+/// Each column names where its character starts in the row's text, both
+/// of a wide character's columns its start.
+#[test]
+fn columns_name_their_characters() {
+    let mut s = Screen::new(6, 1);
+    s.feed("a\u{4e16}b".as_bytes());
+    let line = s.lines().remove(0);
+    assert_eq!(&line.cells[..4], &[0, 1, 1, 4]);
+    let g: Vec<_> = line.graphemes().take(3).collect();
+    assert_eq!(g, [(0, 1, "a"), (1, 2, "\u{4e16}"), (3, 1, "b")]);
+}
+
+/// The cursor is drawn as the program asks.
+#[test]
+fn the_cursor_is_drawn_as_asked() {
+    let mut s = Screen::new(10, 1);
+    assert_eq!(s.cursor_look().style, CursorStyle::Block);
+    s.feed(b"\x1b[5 q");
+    let look = s.cursor_look();
+    assert_eq!((look.style, look.blinking), (CursorStyle::Bar, true));
 }
 
 /// On a light background the sixteen named colours are a light theme's,
@@ -277,7 +318,7 @@ fn the_hovered_link_is_underlined() {
         let line = s.lines().remove(0);
         let (mut at, mut out) = (0, String::new());
         for sp in &line.spans {
-            if sp.underline {
+            if sp.underline != Underline::None {
                 out += &line.text[at..at + sp.len];
             }
             at += sp.len;
