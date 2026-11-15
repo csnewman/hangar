@@ -43,6 +43,23 @@ fn styled_text_is_drawn_in_runs() {
     assert!(s.cursor_shown());
 }
 
+/// Faint text is halfway from its colour to its background.
+#[test]
+fn faint_text_fades_towards_its_background() {
+    let mut s = screen(20, 1);
+    s.feed(b"\x1b[2mhint\x1b[0m text");
+    let spans = &s.lines()[0].spans;
+    assert_eq!(
+        spans[0].fg,
+        Rgb {
+            r: 0x79,
+            g: 0x79,
+            b: 0x79
+        }
+    );
+    assert_eq!(spans[1].fg.r, 0xd4, "the rest as it was");
+}
+
 #[test]
 fn a_drag_selects_the_cells_it_passes() {
     let mut s = screen(20, 2);
@@ -173,4 +190,37 @@ fn a_programs_pictures_are_kept_and_placed() {
     s.feed(b"\x1b_Ga=T,t=f,i=8,q=2;L2V0Yy9wYXNzd2Q=\x1b\\");
     s.lines();
     assert!(s.picture(8).is_none());
+}
+
+/// A picture a program shows with kitty's Unicode placeholders is placed
+/// over the placeholder cells, a row at a time, and the cells are blank.
+#[test]
+fn a_picture_is_placed_where_its_placeholders_are() {
+    let mut s = screen(20, 4);
+    // Image 9, two by two pixels, to be shown four cells wide and two
+    // rows tall wherever its placeholders are (U=1).
+    s.feed(b"\x1b_Ga=T,U=1,f=32,s=2,v=2,i=9,c=4,r=2,q=2;/wAA/wD/AP8AAP//////gA==\x1b\\");
+    // Each placeholder cell names the image by its colour, and its row and
+    // column by diacritics.
+    let marks = ['\u{305}', '\u{30d}', '\u{30e}', '\u{310}'];
+    let mut text = String::from("\x1b[38;5;9m");
+    for row in 0..2 {
+        for col in 0..4 {
+            text.extend(['\u{10EEEE}', marks[row], marks[col]]);
+        }
+        text.push_str("\r\n");
+    }
+    text.push_str("\x1b[39mafter");
+    s.feed(text.as_bytes());
+    let lines = s.lines();
+    assert_eq!(lines[0].text.trim_end(), "", "{:?}", lines[0].text);
+    assert_eq!(lines[1].text.trim_end(), "");
+    assert_eq!(lines[2].text.trim_end(), "after");
+    // Ghostty gives it a row at a time; the rows are drawn as one.
+    let placed = s.placements();
+    assert_eq!(placed.len(), 1, "{placed:?}");
+    let p = placed[0];
+    assert_eq!((p.image, p.row, p.col), (9, 0, 0));
+    assert_eq!((p.width, p.height), (32, 32), "four cells by two rows");
+    assert_eq!(p.source, (0, 0, 2, 2), "the whole image");
 }

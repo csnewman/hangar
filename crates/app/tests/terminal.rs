@@ -21,6 +21,36 @@ fn colours_and_attributes_become_spans() {
     assert_eq!(s.cursor(), (1, 3));
 }
 
+/// Faint text is halfway from its colour to its background.
+#[test]
+fn faint_text_fades_towards_its_background() {
+    use alacritty_terminal::vte::ansi::Rgb;
+    let mut s = Screen::new(20, 1);
+    s.set_default_colours(
+        Rgb {
+            r: 0x10,
+            g: 0x20,
+            b: 0x30,
+        },
+        Rgb {
+            r: 0xf0,
+            g: 0xe0,
+            b: 0xd0,
+        },
+    );
+    s.feed(b"\x1b[2mhint\x1b[0m text");
+    let spans = &s.lines()[0].spans;
+    assert_eq!(
+        spans[0].fg,
+        Rgb {
+            r: 0x80,
+            g: 0x80,
+            b: 0x80
+        }
+    );
+    assert_eq!(spans[1].fg.r, 0x10, "the rest as it was");
+}
+
 /// On a light background the sixteen named colours are a light theme's,
 /// yellow and white dark enough to read; on a dark one they are a dark
 /// theme's. Colours the shell gives exactly are its own either way.

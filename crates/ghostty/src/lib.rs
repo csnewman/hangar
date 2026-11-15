@@ -164,6 +164,9 @@ pub struct Placement {
     pub height: u32,
     /// The part of the image shown, in its pixels: x, y, width, height.
     pub source: (u32, u32, u32, u32),
+    /// One row's run of the cells of a picture a program shows with
+    /// Unicode placeholders, which come a row at a time.
+    pub strip: bool,
 }
 
 /// An image's pixels: RGBA, a byte a channel, row by row from the top left.
@@ -701,6 +704,14 @@ impl Terminal {
                 _ => Layer::BelowText,
             };
             p.source = (sx, sy, sw, sh);
+            let mut kind: sys::GhosttyRenderStateKittyPlacementKind::Type =
+                sys::GhosttyRenderStateKittyPlacementKind::GHOSTTY_RENDER_STATE_KITTY_PLACEMENT_KIND_FIXED;
+            get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_KITTY_KIND,
+                &mut kind as *mut _ as *mut c_void,
+            );
+            p.strip = kind
+                == sys::GhosttyRenderStateKittyPlacementKind::GHOSTTY_RENDER_STATE_KITTY_PLACEMENT_KIND_VIRTUAL;
             out.push(p);
         }
         out.sort_by_key(|p| (p.layer, p.z));

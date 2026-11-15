@@ -128,6 +128,18 @@ pub enum Select {
     Lines,
 }
 
+/// Faint text's colour (SGR 2): halfway from its own colour to its
+/// background, as Ghostty draws it at its default faint-opacity of 0.5, so
+/// it fades towards the background in a light theme and a dark one alike.
+pub fn faded(fg: Rgb, bg: Rgb) -> Rgb {
+    let mix = |a: u8, b: u8| ((a as u16 + b as u16) / 2) as u8;
+    Rgb {
+        r: mix(fg.r, bg.r),
+        g: mix(fg.g, bg.g),
+        b: mix(fg.b, bg.b),
+    }
+}
+
 /// A run of cells drawn alike, `len` bytes of its line's text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Span {
@@ -600,6 +612,9 @@ impl<L: EventListener> Screen<L> {
                     let (mut fg, mut bg) = (self.rgb(cell.fg), self.rgb(cell.bg));
                     if cell.flags.contains(Flags::INVERSE) {
                         std::mem::swap(&mut fg, &mut bg);
+                    }
+                    if cell.flags.contains(Flags::DIM) {
+                        fg = faded(fg, bg);
                     }
                     let point = Point::new(line_at, Column(col));
                     let mark = if found.as_ref().is_some_and(|m| m.contains(&point)) {

@@ -17,12 +17,54 @@ use hangar_ghostty::{Mouse, Picture, Placement, Terminal, Wide};
 use regex::Regex;
 
 use crate::terminal::{
-    ANCHOR, Cells, Effects, Emulator, Line, Link, LinkKind, Mark, PATH, Select, Span, URL,
+    ANCHOR, Cells, Effects, Emulator, Line, Link, LinkKind, Mark, PATH, Select, Span, URL, faded,
     indexed_in, path_and_place,
 };
 
 /// A point of Ghostty's whole screen, scrollback and all: (row, column).
 type At = (usize, usize);
+
+/// The character a program writes where a kitty picture's virtual
+/// placement is to show (kitty's Unicode placeholders).
+const PLACEHOLDER: char = '\u{10EEEE}';
+
+/// Placements with the strips of one picture that meet joined into one.
+/// Ghostty gives a picture shown with placeholders a row of cells at a
+/// time, and drawn apart the strips show a seam where each meets the next.
+/// A strip joins the one above it when it is on the next row, from that
+/// row's top, over the same cells, and shows the image's next rows.
+fn joined(strips: Vec<Placement>) -> Vec<Placement> {
+    // Each placement, and the last row it covers.
+    let mut out: Vec<(Placement, i32)> = Vec::with_capacity(strips.len());
+    'strips: for p in strips {
+        // Placements come ordered by layer and z: one that meets p is
+        // among the last of p's layer and z.
+        for (q, last) in out.iter_mut().rev() {
+            if (q.layer, q.z) != (p.layer, p.z) {
+                break;
+            }
+            let (qx, qy, qw, qh) = q.source;
+            let (px, py, pw, ph) = p.source;
+            if q.strip
+                && p.strip
+                && (q.image, q.generation) == (p.image, p.generation)
+                && (q.col, q.offset.0, q.width) == (p.col, p.offset.0, p.width)
+                && p.row == *last + 1
+                && p.offset.1 == 0
+                && (qx, qw) == (px, pw)
+                && qy + qh == py
+            {
+                q.height += p.height;
+                q.source.3 += ph;
+                *last = p.row;
+                continue 'strips;
+            }
+        }
+        let row = p.row;
+        out.push((p, row));
+    }
+    out.into_iter().map(|(p, _)| p).collect()
+}
 
 pub struct Ghostty {
     t: Terminal,
@@ -367,7 +409,7 @@ impl Emulator for Ghostty {
     /// and Find's matches marked.
     fn lines(&mut self) -> Vec<Line> {
         let mut frame = self.t.frame();
-        self.placed = std::mem::take(&mut frame.placements);
+        self.placed = joined(std::mem::take(&mut frame.placements));
         let found = self.t.found();
         let matches = self.t.matches();
         let top = self.t.above_viewport();
@@ -385,6 +427,9 @@ impl Emulator for Ghostty {
                     let mut bg = theirs(cell.bg.unwrap_or(frame.bg));
                     if cell.inverse {
                         std::mem::swap(&mut fg, &mut bg);
+                    }
+                    if cell.faint {
+                        fg = faded(fg, bg);
                     }
                     if cell.invisible {
                         fg = bg;
@@ -408,12 +453,17 @@ impl Emulator for Ghostty {
                             || self.hover.is_some_and(|h| within((top + r, c), h)),
                         mark,
                     };
+                    // A kitty placeholder cell, with the diacritics saying
+                    // which part of a picture it holds, is blank under the
+                    // picture Ghostty places there.
                     let start = line.text.len();
-                    line.text.push_str(if cell.text.is_empty() {
-                        " "
-                    } else {
-                        &cell.text
-                    });
+                    line.text.push_str(
+                        if cell.text.is_empty() || cell.text.starts_with(PLACEHOLDER) {
+                            " "
+                        } else {
+                            &cell.text
+                        },
+                    );
                     let len = line.text.len() - start;
                     match line.spans.last_mut() {
                         Some(last)
