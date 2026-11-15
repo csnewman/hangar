@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hangar_api::{
-    DesiredSet, DesiredState, EnvironmentFiles, EnvironmentSpec, ObservedEnvironment, Phase,
+    API_LEVEL, DesiredSet, DesiredState, EnvironmentFiles, EnvironmentSpec, LEVELS_HEADER, Levels,
+    ObservedEnvironment, Phase, STREAM_UNKNOWN_KIND, STREAM_UNREACHABLE, StreamAnswer,
     WorkerStatus,
 };
 use hangar_images::HangarRegistry;
@@ -41,6 +42,8 @@ struct State {
     reject: bool,
     opener: Option<mpsc::Sender<oneshot::Sender<yamux::Stream>>>,
     tunnels: usize,
+    /// The worker API level each request named.
+    levels: Vec<String>,
 }
 
 #[derive(Clone, Default)]
@@ -101,7 +104,7 @@ impl Server {
                 parts.next().unwrap_or("").to_string(),
                 parts.next().unwrap_or("").to_string(),
             );
-            let (mut length, mut auth) = (0usize, String::new());
+            let (mut length, mut auth, mut level) = (0usize, String::new(), String::new());
             loop {
                 let mut h = String::new();
                 r.read_line(&mut h).await.unwrap();
@@ -113,14 +116,17 @@ impl Server {
                 match k.to_ascii_lowercase().as_str() {
                     "content-length" => length = v.trim().parse().unwrap(),
                     "authorization" => auth = v.trim().to_string(),
+                    "hangar-worker-api" => level = v.trim().to_string(),
                     _ => {}
                 }
             }
             let mut body = vec![0; length];
             r.read_exact(&mut body).await.unwrap();
+            self.st.lock().unwrap().levels.push(level);
             let (status, reply) = self.answer(&method, &path, &auth, &body).await;
             let out = format!(
-                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{reply}",
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\n{LEVELS_HEADER}: {}\r\nContent-Length: {}\r\n\r\n{reply}",
+                Levels::SERVED.header(),
                 reply.len()
             );
             if r.get_mut().write_all(out.as_bytes()).await.is_err() {
@@ -174,6 +180,9 @@ impl Server {
                 .get("authorization")
                 .is_some_and(|v| v == &format!("Bearer {CREDENTIAL}")[..]);
             if ok {
+                let mut resp = resp;
+                resp.headers_mut()
+                    .insert(LEVELS_HEADER, Levels::SERVED.header().parse().unwrap());
                 Ok(resp)
             } else {
                 let mut e = ErrorResponse::new(None);
@@ -221,8 +230,13 @@ impl Server {
         self.st.lock().unwrap().opener = None;
     }
 
-    /// Opens a stream to the worker, its header written.
-    async fn open(&self, kind: &str, env: &str) -> tokio_util::compat::Compat<yamux::Stream> {
+    /// Opens a stream to the worker, its header written and the worker's
+    /// answer to it read: the answer, and the stream past it.
+    async fn ask(
+        &self,
+        kind: &str,
+        env: &str,
+    ) -> (StreamAnswer, tokio_util::compat::Compat<yamux::Stream>) {
         let opener = wait(|| self.st.lock().unwrap().opener.clone()).await;
         let (tx, rx) = oneshot::channel();
         opener.send(tx).await.unwrap();
@@ -230,6 +244,21 @@ impl Server {
         s.write_all(format!("{{\"kind\":\"{kind}\",\"environment\":\"{env}\"}}\n").as_bytes())
             .await
             .unwrap();
+        let mut line = Vec::new();
+        loop {
+            let b = s.read_u8().await.unwrap();
+            if b == b'\n' {
+                break;
+            }
+            line.push(b);
+        }
+        (serde_json::from_slice(&line).unwrap(), s)
+    }
+
+    /// Opens a stream the worker answers ok.
+    async fn open(&self, kind: &str, env: &str) -> tokio_util::compat::Compat<yamux::Stream> {
+        let (a, s) = self.ask(kind, env).await;
+        assert_eq!(a, StreamAnswer::ok(), "{kind} to {env}");
         s
     }
 }
@@ -495,6 +524,12 @@ async fn holds_the_desired_set() {
 
     let reg = wait(|| srv.st.lock().unwrap().registered.first().cloned()).await;
     assert_eq!(reg.name, "test-worker");
+    // It names its worker API level in every request.
+    let levels = srv.st.lock().unwrap().levels.clone();
+    assert!(
+        !levels.is_empty() && levels.iter().all(|l| *l == API_LEVEL.to_string()),
+        "{levels:?}"
+    );
     assert_eq!(reg.labels.get("runtime").map(String::as_str), Some("fake"));
     let cred = dir.join("state/credential");
     let saved = wait(|| std::fs::read_to_string(&cred).ok()).await;
@@ -631,9 +666,14 @@ async fn relays_streams() {
     assert_eq!(line, "port 107\n");
 
     // An environment the runtime cannot reach, and a kind there is no
-    // such thing as, close the stream.
-    for (kind, env) in [("code", "nowhere"), ("teleport", "e1")] {
-        let mut s = within("opening", srv.open(kind, env)).await;
+    // such thing as, are answered with why, and the stream closed.
+    for (kind, env, code) in [
+        ("code", "nowhere", STREAM_UNREACHABLE),
+        ("teleport", "e1", STREAM_UNKNOWN_KIND),
+    ] {
+        let (a, mut s) = within("opening", srv.ask(kind, env)).await;
+        assert_eq!((a.ok, a.code.as_str()), (false, code), "{kind}: {a:?}");
+        assert!(!a.error.is_empty(), "{kind}: {a:?}");
         let mut rest = Vec::new();
         tokio::time::timeout(Duration::from_secs(5), s.read_to_end(&mut rest))
             .await
