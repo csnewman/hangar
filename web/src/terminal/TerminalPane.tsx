@@ -332,9 +332,26 @@ export function TerminalPane({
       typedAt = performance.now()
       if (size && !size.mine && want) conn?.claim(want.cols, want.rows)
     }
-    for (const ev of ['keydown', 'paste', 'compositionend'] as const) el.addEventListener(ev, typed, true)
+    const typing = ['keydown', 'paste', 'compositionend'] as const
+    for (const ev of typing) el.addEventListener(ev, typed, true)
     typedRef.current = typed
-    const sending = () => !replaying && (size === null || size.mine || performance.now() - typedAt < 100)
+    // A click or a scroll in a program that has the mouse -- Claude Code's
+    // full screen selects and scrolls by it -- is the person's too: sent
+    // from any window, as typing is, for as long as the button is held.
+    let pressed = false
+    const pointed = (e: Event) => {
+      if (term.modes.mouseTrackingMode === 'none') return
+      typed()
+      if (e.type === 'mousedown') pressed = true
+    }
+    const released = () => {
+      pressed = false
+    }
+    el.addEventListener('mousedown', pointed, true)
+    el.addEventListener('wheel', pointed, { capture: true, passive: true })
+    window.addEventListener('mouseup', released, true)
+    const sending = () =>
+      !replaying && (size === null || size.mine || pressed || performance.now() - typedAt < 100)
     term.onData((d) => {
       if (!sending()) return
       // A character typed with the phone's Ctrl held.
@@ -400,6 +417,10 @@ export function TerminalPane({
 
     return () => {
       disposed = true
+      for (const ev of typing) el.removeEventListener(ev, typed, true)
+      el.removeEventListener('mousedown', pointed, true)
+      el.removeEventListener('wheel', pointed, true)
+      window.removeEventListener('mouseup', released, true)
       clearTimeout(start)
       clearTimeout(retry)
       offScheme()
