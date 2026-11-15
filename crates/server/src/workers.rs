@@ -288,3 +288,107 @@ pub async fn delete(store: &Store, by: &Principal, ip: &str, id: Uuid) -> fail::
     tx.commit().await?;
     Ok(())
 }
+
+/// Asks a worker to delete a copy of an image from its store, refused
+/// while an environment on it uses the copy: one the worker says uses it,
+/// or one pinned to it (or to the reference's current copy, when pinned to
+/// none yet).
+pub async fn remove_image(
+    store: &Store,
+    by: &Principal,
+    ip: &str,
+    id: Uuid,
+    c: &ImageCopy,
+) -> fail::Result<()> {
+    let mut tx = store.begin().await?;
+    // Environments before workers, as everywhere.
+    let envs = tx.placed_for_update(id).await?;
+    let Some(w) = tx.worker_for_update(id).await? else {
+        return Err(Fail::NotFound("worker not found".into()));
+    };
+    let images: Vec<hangar_api::LocalImage> =
+        serde_json::from_value(w.images.clone()).unwrap_or_default();
+    let Some(held) = images
+        .iter()
+        .find(|i| i.r#ref == c.r#ref && i.digest == c.digest)
+    else {
+        return Err(Fail::NotFound(format!(
+            "the worker does not hold {} at {}",
+            c.r#ref, c.digest
+        )));
+    };
+    let users: Vec<&str> = envs
+        .iter()
+        .filter(|e| {
+            held.environments.contains(&e.id.to_string())
+                || (e.image == c.r#ref
+                    && (e.image_digest == c.digest || (e.image_digest.is_empty() && held.current)))
+        })
+        .map(|e| e.name.as_str())
+        .collect();
+    if !users.is_empty() {
+        return fail::conflict(format!("used by {}", users.join(", ")));
+    }
+    tx.add_image_removal(&crate::store::rows::ImageRemoval {
+        worker_id: id,
+        r#ref: c.r#ref.clone(),
+        digest: c.digest.clone(),
+    })
+    .await?;
+    audit::record(
+        &mut tx,
+        &by.actor(ip),
+        Event::new("image.remove", "image", &c.r#ref, &c.r#ref)
+            .related("worker", id)
+            .details(serde_json::json!({ "digest": c.digest })),
+    )
+    .await?;
+    tx.bump(id).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Asks a worker to delete environments it runs that the server has no
+/// record of: each must be one the worker reports as such, since one the
+/// server knows is deleted through the environment.
+pub async fn remove_unknown(
+    store: &Store,
+    by: &Principal,
+    ip: &str,
+    id: Uuid,
+    ids: &[String],
+) -> fail::Result<()> {
+    let mut tx = store.begin().await?;
+    let Some(w) = tx.worker_for_update(id).await? else {
+        return Err(Fail::NotFound("worker not found".into()));
+    };
+    let unknown: Vec<String> = serde_json::from_value(w.unknown.clone()).unwrap_or_default();
+    for env in ids {
+        if !unknown.contains(env) {
+            return Err(Fail::Invalid(format!(
+                "the worker does not report {env} as unknown to the server"
+            )));
+        }
+        if let Ok(known) = env.parse::<Uuid>()
+            && tx.environment_known(known).await?
+        {
+            return Err(Fail::Invalid(format!(
+                "{env} is an environment the server knows"
+            )));
+        }
+        tx.add_environment_removal(&crate::store::rows::EnvironmentRemoval {
+            worker_id: id,
+            environment: env.clone(),
+        })
+        .await?;
+        audit::record(
+            &mut tx,
+            &by.actor(ip),
+            Event::new("environment.remove_unknown", "environment", env, "").related("worker", id),
+        )
+        .await?;
+    }
+    tx.bump(id).await?;
+    tx.commit().await?;
+    Ok(())
+}

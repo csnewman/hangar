@@ -45,6 +45,9 @@ pub struct Config {
     pub blobs: Option<crate::blob::Config>,
     /// What faces the internet directly, each part only when configured.
     pub edge: Edge,
+    /// For development only: every visitor to the web UI without a session
+    /// is signed in as this person (`HANGAR_DEV_AUTO_SIGN_IN`).
+    pub auto_sign_in: Option<String>,
 }
 
 /// What faces the internet directly: the zone's DNS server
@@ -362,6 +365,7 @@ impl Config {
         let edge = edge(&var, public.as_ref())?;
         Ok(Config {
             edge,
+            auto_sign_in: var("HANGAR_DEV_AUTO_SIGN_IN"),
             listen,
             storage,
             bootstrap_token,

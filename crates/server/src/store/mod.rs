@@ -19,6 +19,7 @@ mod registry;
 pub mod report;
 pub mod rows;
 pub mod signals;
+mod signin;
 mod users;
 pub mod workers;
 

@@ -15,7 +15,7 @@ use super::rows::{
     EnvironmentCopy, EnvironmentRemoval, EnvironmentRouted, HostSession, ImageRemoval,
     ImageRepository, ImageTag, LoginKey, Manifest, ManifestRef, Pack, PackDefault, PackPath,
     RegistryBlob, RegistryUpload, RepositoryBlob, RepositoryCollaborator, ServerKey, Session,
-    SshKey, Task, Team, TeamMember, Template, TlsEntry, TlsLock, User, Worker,
+    SignInGrant, SshKey, Task, Team, TeamMember, Template, TlsEntry, TlsLock, User, Worker,
 };
 use super::{Error, Result};
 
@@ -63,6 +63,7 @@ pub struct State {
     pub dns_records: Vec<DnsRecord>,
     pub tls_storage: Vec<TlsEntry>,
     pub tls_locks: Vec<TlsLock>,
+    pub sign_in_grants: Vec<SignInGrant>,
 }
 
 impl State {

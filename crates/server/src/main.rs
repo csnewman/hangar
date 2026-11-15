@@ -54,6 +54,11 @@ async fn run() -> Result<(), String> {
     {
         eprintln!("hangar-server: created the initial administrator {name}");
     }
+    if let Some(name) = &cfg.auto_sign_in {
+        eprintln!(
+            "hangar-server: AUTHENTICATION IS OFF: every visitor is signed in as {name} (HANGAR_DEV_AUTO_SIGN_IN)"
+        );
+    }
     let listener = tokio::net::TcpListener::bind(&cfg.listen)
         .await
         .map_err(|e| format!("listening on {}: {e}", cfg.listen))?;

@@ -28,6 +28,51 @@ pub fn routes() -> Router<Shared> {
         .route("/workers", get(list_workers))
         .route("/workers/{id}", get(get_worker).delete(delete_worker))
         .route("/workers/{id}/revoke", post(revoke_worker))
+        .route("/workers/{id}/images/remove", post(remove_worker_image))
+        .route("/workers/{id}/unknown/remove", post(remove_unknown))
+        .route("/me/preferences", axum::routing::put(set_preferences))
+}
+
+async fn remove_worker_image(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(id): Path<String>,
+    Body(b): Body<types::ImageCopy>,
+) -> Result<StatusCode, ApiError> {
+    let c = hangar_api::ImageCopy {
+        r#ref: b.ref_.to_string(),
+        digest: b.digest,
+    };
+    crate::workers::remove_image(&app.store, &s.principal, &s.ip, worker_id(&id)?, &c).await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn remove_unknown(
+    State(app): State<Shared>,
+    s: Signed,
+    Path(id): Path<String>,
+    Body(b): Body<types::RemoveUnknownEnvironments>,
+) -> Result<StatusCode, ApiError> {
+    crate::workers::remove_unknown(
+        &app.store,
+        &s.principal,
+        &s.ip,
+        worker_id(&id)?,
+        &b.environments,
+    )
+    .await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+async fn set_preferences(
+    State(app): State<Shared>,
+    s: Signed,
+    Body(b): Body<types::Preferences>,
+) -> Result<StatusCode, ApiError> {
+    if !users::set_theme(&app.store, &s.principal, &b.theme.to_string()).await? {
+        return Err(ApiError::unauthorized());
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// A worker as the web UI shows it.

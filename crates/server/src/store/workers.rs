@@ -6,7 +6,7 @@ use sqlx::Row;
 use sqlx::postgres::PgRow;
 use uuid::Uuid;
 
-use super::rows::{Environment, ImageRemoval, Worker};
+use super::rows::{Environment, EnvironmentRemoval, ImageRemoval, Worker};
 use super::{Backend, Result, Tx};
 
 pub(super) const WORKER_COLUMNS: &str = "id, name, credential_hash, labels, cpus, memory_mib, unknown, stats, \
@@ -437,5 +437,112 @@ impl Tx {
                 Ok(Some((version, envs, images, forget)))
             }
         }
+    }
+}
+
+impl Tx {
+    /// The environments placed on a worker and not deleted, by name, held
+    /// for the rest of the transaction.
+    pub async fn placed_for_update(&mut self, worker_id: Uuid) -> Result<Vec<Environment>> {
+        match &mut self.inner {
+            Backend::Pg(tx) => sqlx::query(&format!(
+                "SELECT {ENVIRONMENT_COLUMNS} FROM environments
+                 WHERE worker_id = $1 AND desired <> 'deleted' ORDER BY name FOR UPDATE"
+            ))
+            .bind(worker_id)
+            .fetch_all(&mut **tx)
+            .await?
+            .iter()
+            .map(environment)
+            .collect(),
+            Backend::Json(tx) => {
+                let mut out: Vec<Environment> = tx
+                    .work
+                    .environments
+                    .iter()
+                    .filter(|e| e.worker_id == Some(worker_id) && e.desired != "deleted")
+                    .cloned()
+                    .collect();
+                out.sort_by(|a, b| a.name.cmp(&b.name));
+                Ok(out)
+            }
+        }
+    }
+
+    /// A worker's row, held for the rest of the transaction.
+    pub async fn worker_for_update(&mut self, id: Uuid) -> Result<Option<Worker>> {
+        match &mut self.inner {
+            Backend::Pg(tx) => sqlx::query(&format!(
+                "SELECT {WORKER_COLUMNS} FROM workers WHERE id = $1 FOR UPDATE"
+            ))
+            .bind(id)
+            .fetch_optional(&mut **tx)
+            .await?
+            .map(|r| worker(&r))
+            .transpose(),
+            Backend::Json(tx) => Ok(tx.work.workers.iter().find(|w| w.id == id).cloned()),
+        }
+    }
+
+    /// Whether the server has an environment with id, whatever it is doing.
+    pub async fn environment_known(&mut self, id: Uuid) -> Result<bool> {
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM environments WHERE id = $1)",
+            )
+            .bind(id)
+            .fetch_one(&mut **tx)
+            .await?),
+            Backend::Json(tx) => Ok(tx.work.environments.iter().any(|e| e.id == id)),
+        }
+    }
+
+    /// Asks a worker to delete a copy of an image, if it is not asked
+    /// already.
+    pub async fn add_image_removal(&mut self, r: &ImageRemoval) -> Result<()> {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                sqlx::query(
+                    "INSERT INTO worker_image_removals (worker_id, ref, digest) VALUES ($1, $2, $3)
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(r.worker_id)
+                .bind(&r.r#ref)
+                .bind(&r.digest)
+                .execute(&mut **tx)
+                .await?;
+            }
+            Backend::Json(tx) => {
+                let w = &mut tx.work.worker_image_removals;
+                if !w.contains(r) {
+                    w.push(r.clone());
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Asks a worker to delete an environment the server has no record of,
+    /// if it is not asked already.
+    pub async fn add_environment_removal(&mut self, r: &EnvironmentRemoval) -> Result<()> {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                sqlx::query(
+                    "INSERT INTO worker_environment_removals (worker_id, environment) VALUES ($1, $2)
+                     ON CONFLICT DO NOTHING",
+                )
+                .bind(r.worker_id)
+                .bind(&r.environment)
+                .execute(&mut **tx)
+                .await?;
+            }
+            Backend::Json(tx) => {
+                let w = &mut tx.work.worker_environment_removals;
+                if !w.contains(r) {
+                    w.push(r.clone());
+                }
+            }
+        }
+        Ok(())
     }
 }

@@ -116,8 +116,11 @@ pub async fn enforce(
         if access == Access::Admin && !signed.principal.admin {
             return ApiError::new(StatusCode::FORBIDDEN, "forbidden").into_response();
         }
-        parts.extensions.insert(signed);
+        parts.extensions.insert(signed.clone());
         req = Request::from_parts(parts, body);
+        let mut resp = next.run(req).await;
+        signed.set_issued(&app, &mut resp);
+        return resp;
     }
     next.run(req).await
 }

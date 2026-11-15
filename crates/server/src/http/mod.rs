@@ -11,7 +11,9 @@ mod frontend;
 mod images;
 mod keys;
 mod packs;
+mod signin;
 mod streams;
+mod web;
 mod worker;
 
 use std::sync::Arc;
@@ -78,7 +80,7 @@ pub type Shared = Arc<App>;
 /// Everything the server serves.
 pub fn router(app: Shared) -> Router {
     Router::new()
-        .route("/api/healthz", get(|| async { "ok" }))
+        .route("/api/healthz", get(healthz))
         .nest(
             "/api/frontend",
             frontend::routes()
@@ -88,7 +90,8 @@ pub fn router(app: Shared) -> Router {
                 .merge(streams::frontend())
                 .merge(keys::frontend())
                 .merge(packs::frontend())
-                .merge(images::frontend()),
+                .merge(images::frontend())
+                .merge(signin::frontend()),
         )
         .nest(
             "/api/v1",
@@ -98,16 +101,60 @@ pub fn router(app: Shared) -> Router {
                 .merge(environments::client())
                 .merge(streams::client())
                 .merge(keys::client())
-                .merge(packs::client()),
+                .merge(packs::client())
+                .merge(signin::client()),
         )
         .nest("/api/worker/v1", worker::routes())
         .route_layer(axum::middleware::from_fn_with_state(
             app.clone(),
             access::enforce,
         ))
-        .fallback(|| async { ApiError::new(StatusCode::NOT_FOUND, "not found") })
+        .fallback(|uri: axum::http::Uri| async move {
+            if uri.path().starts_with("/api/") {
+                return ApiError::new(StatusCode::NOT_FOUND, "no such endpoint").into_response();
+            }
+            web::serve(uri).await
+        })
+        .layer(axum::middleware::from_fn(log_requests))
         .layer(axum::middleware::from_fn_with_state(app.clone(), hosts))
         .with_state(app)
+}
+
+/// Whether the server can reach its store.
+async fn healthz(axum::extract::State(app): axum::extract::State<Shared>) -> Response {
+    let reached = async {
+        let tx = app.store.begin().await?;
+        tx.commit().await
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(2), reached).await {
+        Ok(Ok(())) => Json(serde_json::json!({ "status": "ok" })).into_response(),
+        _ => ApiError::new(StatusCode::SERVICE_UNAVAILABLE, "database unreachable").into_response(),
+    }
+}
+
+/// Logs each API request but the long polls, health checks and reads that
+/// arrive constantly and would drown everything else, unless it failed.
+async fn log_requests(req: Request, next: axum::middleware::Next) -> Response {
+    let path = req.uri().path().to_string();
+    if !path.starts_with("/api/") {
+        return next.run(req).await;
+    }
+    let method = req.method().clone();
+    let start = std::time::Instant::now();
+    let resp = next.run(req).await;
+    let status = resp.status();
+    let quiet = matches!(
+        path.as_str(),
+        "/api/worker/v1/desired" | "/api/healthz" | "/api/worker/v1/status"
+    ) || method == axum::http::Method::GET;
+    if status.as_u16() >= 400 || !quiet {
+        eprintln!(
+            "hangar-server: {method} {path} {} {}ms",
+            status.as_u16(),
+            start.elapsed().as_millis()
+        );
+    }
+    resp
 }
 
 /// Sends a request for a host of its own, one of an environment's web
@@ -247,6 +294,9 @@ pub struct Signed {
     pub principal: Principal,
     pub via: Via,
     pub ip: String,
+    /// A session opened for this request, by the development stack's
+    /// automatic sign-in, whose cookie the response sets.
+    pub issued: Option<String>,
 }
 
 impl FromRequestParts<Shared> for Signed {
@@ -272,20 +322,53 @@ impl Signed {
                     principal,
                     via: Via::Token(token),
                     ip,
+                    issued: None,
                 }),
                 None => Err(ApiError::unauthorized()),
             };
         }
-        let Some(token) = cookie(&parts.headers, SESSION_COOKIE) else {
-            return Err(ApiError::unauthorized());
-        };
-        match users::session(&app.store, &token).await? {
-            Some(principal) => Ok(Signed {
+        if let Some(token) = cookie(&parts.headers, SESSION_COOKIE)
+            && let Some(principal) = users::session(&app.store, &token).await?
+        {
+            return Ok(Signed {
                 principal,
                 via: Via::Session(token),
                 ip,
-            }),
-            None => Err(ApiError::unauthorized()),
+                issued: None,
+            });
+        }
+        let web_ui = parts
+            .extensions
+            .get::<axum::extract::MatchedPath>()
+            .is_some_and(|m| m.as_str().starts_with("/api/frontend/"));
+        match &app.cfg.auto_sign_in {
+            Some(name) if web_ui => match users::sign_in_as(&app.store, &ip, name).await? {
+                Some((token, principal)) => Ok(Signed {
+                    principal,
+                    via: Via::Session(token.clone()),
+                    ip,
+                    issued: Some(token),
+                }),
+                None => {
+                    eprintln!(
+                        "hangar-server: signing in automatically as {name}: there is no such enabled person"
+                    );
+                    Err(ApiError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "automatic sign-in failed",
+                    ))
+                }
+            },
+            _ => Err(ApiError::unauthorized()),
+        }
+    }
+
+    /// Sets the cookie of a session opened for the request on its response.
+    pub fn set_issued(&self, app: &App, resp: &mut Response) {
+        if let Some(token) = &self.issued
+            && let Ok(v) = header::HeaderValue::from_str(&session_cookie(app, Some(token)))
+        {
+            resp.headers_mut().append(header::SET_COOKIE, v);
         }
     }
 }

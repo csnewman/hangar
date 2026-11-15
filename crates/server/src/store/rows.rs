@@ -468,3 +468,20 @@ pub struct TlsLock {
     pub name: String,
     pub expires_at: DateTime<Utc>,
 }
+
+/// `sign_in_grants`: an app signing in through the browser, waiting for a
+/// person to approve it and then to collect its token.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SignInGrant {
+    pub id: Uuid,
+    /// The SHA-256 of the device code the app holds.
+    #[serde(with = "hex_bytes")]
+    pub device_hash: Vec<u8>,
+    /// XXXX-XXXX.
+    pub user_code: String,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub approved_by: Option<Uuid>,
+    pub denied: bool,
+}

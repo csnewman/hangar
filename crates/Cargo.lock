@@ -3869,6 +3869,7 @@ dependencies = [
  "reqwest",
  "ring",
  "russh",
+ "rust-embed",
  "rustix",
  "rustls",
  "serde",
@@ -7769,6 +7770,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d84e8ba78bd384263e5922f084cbe1b081c3b7e69add59c8fb097b879ba968a"
 dependencies = [
  "globset",
+ "mime_guess",
  "sha2 0.11.1",
  "walkdir",
 ]

@@ -316,7 +316,12 @@ async fn https_serves_the_certificate_in_files() {
         .send()
         .await
         .expect("the wildcard covers an environment's host");
-    assert_eq!(r.status(), 404, "there is no such environment");
+    assert_eq!(r.status(), 404);
+    assert_eq!(r.version(), reqwest::Version::HTTP_2);
+    assert!(
+        r.text().await.unwrap().contains("There is no such environment."),
+        "an environment's host is told apart over HTTP/2"
+    );
 
     let (h1, _) = client(Some(&root), &[b"http/1.1"], &[HOST], tls);
     let r = h1
@@ -365,6 +370,7 @@ async fn https_serves_the_certificate_in_files() {
         404,
         "an environment's host is served, not redirected"
     );
+    assert!(r.text().await.unwrap().contains("There is no such environment."));
     let _ = std::fs::remove_dir_all(dir);
 }
 

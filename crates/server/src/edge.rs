@@ -145,6 +145,16 @@ async fn serve_tls(
                 req.extensions_mut().insert(ConnectInfo(peer));
                 req.headers_mut()
                     .insert("x-forwarded-proto", HeaderValue::from_static("https"));
+                // HTTP/2 names the host in the request's authority, not a
+                // Host header, which is what everything else reads.
+                if !req.headers().contains_key(header::HOST)
+                    && let Some(v) = req
+                        .uri()
+                        .authority()
+                        .and_then(|a| HeaderValue::from_str(a.as_str()).ok())
+                {
+                    req.headers_mut().insert(header::HOST, v);
+                }
                 let mut r = router.clone();
                 tower_service::Service::call(&mut r, req.map(axum::body::Body::new))
             });

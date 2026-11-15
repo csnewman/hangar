@@ -241,6 +241,51 @@ pub async fn logout(store: &Store, p: &Principal, ip: &str, token: &str) -> Resu
     tx.commit().await
 }
 
+/// Sets p's own theme: system, light or dark.
+pub async fn set_theme(store: &Store, p: &Principal, theme: &str) -> Result<bool> {
+    let mut tx = store.begin().await?;
+    let found = tx.set_theme(p.user_id, theme).await?;
+    tx.commit().await?;
+    Ok(found)
+}
+
+/// Opens a session for the enabled person named username, with no
+/// password: what the development stack's automatic sign-in does. None if
+/// there is no such person.
+pub async fn sign_in_as(
+    store: &Store,
+    ip: &str,
+    username: &str,
+) -> Result<Option<(String, Principal)>> {
+    let mut tx = store.begin().await?;
+    let Some(user) = tx
+        .person_by_name(username)
+        .await?
+        .filter(|u| u.disabled_at.is_none())
+    else {
+        return Ok(None);
+    };
+    let token = secret();
+    let now = Utc::now();
+    tx.insert_session(&Session {
+        token_hash: sha256(&token),
+        user_id: user.id,
+        created_at: now,
+        last_seen_at: now,
+        expires_at: now + SESSION_LIFETIME,
+    })
+    .await?;
+    let p = Principal::of(&user);
+    audit::record(
+        &mut tx,
+        &p.actor(ip),
+        Event::new("auth.login_automatic", "user", user.id, &user.username),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Some((token, p)))
+}
+
 /// The user signed in as p.
 pub async fn me(store: &Store, p: &Principal) -> Result<Option<User>> {
     store.begin().await?.user(p.user_id).await
@@ -255,29 +300,199 @@ pub async fn create_token(
     name: &str,
     days: Option<u64>,
 ) -> Result<(String, AccessToken)> {
+    let mut tx = store.begin().await?;
+    let made = new_token(&mut tx, &p.actor(ip), p.user_id, name, days).await?;
+    tx.commit().await?;
+    Ok(made)
+}
+
+/// Makes an access token for user_id in tx, recorded as by who.
+async fn new_token(
+    tx: &mut crate::store::Tx,
+    who: &Actor,
+    user_id: Uuid,
+    name: &str,
+    days: Option<u64>,
+) -> Result<(String, AccessToken)> {
     let token = format!("{TOKEN_PREFIX}{}", secret());
     let now = Utc::now();
     let t = AccessToken {
         id: Uuid::new_v4(),
-        user_id: p.user_id,
+        user_id,
         name: name.to_string(),
         token_hash: sha256(&token),
         created_at: now,
         last_used_at: None,
         expires_at: days.map(|d| now + Duration::days(d as i64)),
     };
-    let mut tx = store.begin().await?;
     tx.insert_token(&t).await?;
+    audit::record(
+        tx,
+        who,
+        Event::new("token.create", "token", t.id, name)
+            .related("user", user_id)
+            .related("owner", user_id),
+    )
+    .await?;
+    Ok((token, t))
+}
+
+/// How long an app has to be approved and to collect its token.
+pub const GRANT_LIFETIME: Duration = Duration::minutes(10);
+
+/// The letters a sign-in code is made of: no vowels, so no words, and
+/// nothing read as another (no 0, O, 1, I).
+const CODE_ALPHABET: &[u8] = b"BCDFGHJKLMNPQRSTVWXZ23456789";
+
+fn new_code() -> String {
+    let mut b = [0u8; 8];
+    rand::thread_rng().fill_bytes(&mut b);
+    let mut out = String::with_capacity(9);
+    for (i, c) in b.iter().enumerate() {
+        if i == 4 {
+            out.push('-');
+        }
+        // 256 is not a multiple of the alphabet's length; the bias it leaves
+        // (under 4%) costs a fraction of a bit of a code that lives ten
+        // minutes and needs a signed-in person to use.
+        out.push(CODE_ALPHABET[*c as usize % CODE_ALPHABET.len()] as char);
+    }
+    out
+}
+
+/// A code as a person may type it (lower case, without the hyphen, with
+/// spaces) in the form codes are kept in.
+fn normalise_code(s: &str) -> String {
+    let c: String = s
+        .to_uppercase()
+        .chars()
+        .filter(|c| c.is_ascii() && CODE_ALPHABET.contains(&(*c as u8)))
+        .collect();
+    if c.len() != 8 {
+        return c;
+    }
+    format!("{}-{}", &c[..4], &c[4..])
+}
+
+/// An app's request to sign in through the browser.
+pub struct Grant {
+    /// The device code the app collects its token with, shown this once.
+    pub device: String,
+    pub row: crate::store::rows::SignInGrant,
+}
+
+/// Makes a grant for an app that calls itself name.
+pub async fn start_sign_in(store: &Store, name: &str) -> crate::fail::Result<Grant> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 100 {
+        return crate::fail::invalid("an app signing in needs a name of up to 100 characters");
+    }
+    let device = secret();
+    let now = Utc::now();
+    let mut tx = store.begin().await?;
+    tx.prune_sign_in_grants(now).await?;
+    // A code already in use, unlikely as it is, is drawn again.
+    for _ in 0..5 {
+        let row = crate::store::rows::SignInGrant {
+            id: Uuid::new_v4(),
+            device_hash: sha256(&device),
+            user_code: new_code(),
+            name: name.to_string(),
+            created_at: now,
+            expires_at: now + GRANT_LIFETIME,
+            approved_by: None,
+            denied: false,
+        };
+        if tx.insert_sign_in_grant(&row).await? {
+            tx.commit().await?;
+            return Ok(Grant { device, row });
+        }
+    }
+    Err(crate::store::Error("no free sign-in code".into()).into())
+}
+
+/// The grant waiting under code, for the person asked to approve it.
+pub async fn waiting_grant(
+    store: &Store,
+    code: &str,
+) -> Result<Option<crate::store::rows::SignInGrant>> {
+    store
+        .begin()
+        .await?
+        .waiting_sign_in_grant(&normalise_code(code), Utc::now())
+        .await
+}
+
+/// Lets the app waiting under code sign in as p, or turns it away; false
+/// if no app is waiting under it.
+pub async fn decide_sign_in(
+    store: &Store,
+    p: &Principal,
+    ip: &str,
+    code: &str,
+    refuse: bool,
+) -> Result<bool> {
+    let mut tx = store.begin().await?;
+    let Some((id, name)) = tx
+        .decide_sign_in_grant(&normalise_code(code), p.user_id, refuse, Utc::now())
+        .await?
+    else {
+        return Ok(false);
+    };
+    let action = if refuse {
+        "sign_in.refuse"
+    } else {
+        "sign_in.approve"
+    };
     audit::record(
         &mut tx,
         &p.actor(ip),
-        Event::new("token.create", "token", t.id, name)
+        Event::new(action, "sign_in", id, &name)
             .related("user", p.user_id)
             .related("owner", p.user_id),
     )
     .await?;
     tx.commit().await?;
-    Ok((token, t))
+    Ok(true)
+}
+
+/// How an app's asking for its token went.
+pub enum Collected {
+    /// An access token named as the app, for the person who approved it.
+    Token(String, AccessToken),
+    /// Not yet approved or refused: ask again shortly.
+    Pending,
+    Refused,
+    /// Unknown, expired or collected.
+    Gone,
+}
+
+/// The app collecting its token with its device code, once.
+pub async fn finish_sign_in(store: &Store, ip: &str, device: &str) -> Result<Collected> {
+    let mut tx = store.begin().await?;
+    let Some(g) = tx
+        .sign_in_grant_for_device(&sha256(device), Utc::now())
+        .await?
+    else {
+        return Ok(Collected::Gone);
+    };
+    if !g.denied && g.approved_by.is_none() {
+        return Ok(Collected::Pending);
+    }
+    tx.delete_sign_in_grant(g.id).await?;
+    let out = match g.approved_by {
+        Some(user) if !g.denied => {
+            let who = Actor {
+                ip: ip.to_string(),
+                ..Actor::default()
+            };
+            let (token, t) = new_token(&mut tx, &who, user, &g.name, None).await?;
+            Collected::Token(token, t)
+        }
+        _ => Collected::Refused,
+    };
+    tx.commit().await?;
+    Ok(out)
 }
 
 /// p's access tokens, newest first.

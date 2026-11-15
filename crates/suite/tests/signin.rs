@@ -2,7 +2,7 @@
 //! the client API.
 
 use hangar_suite::clientapi::ClientInfo;
-use hangar_suite::{ADMIN, Server, frontendapi};
+use hangar_suite::{ADMIN, Server, frontendapi, status};
 
 /// The administrator signs in with their password and is who the server
 /// says; a wrong password is refused, and signing out ends the session.
@@ -125,4 +125,97 @@ async fn cross_site_changes_are_refused() {
         404,
         "a token's request refused as cross-site"
     );
+}
+
+/// An app signs in through the browser: it asks for a grant, the person
+/// approves its code signed in as themselves, and the app collects a
+/// token for them, once. A refused grant gives no token, and a grant needs
+/// a name.
+#[tokio::test]
+async fn an_app_signs_in_through_the_browser() {
+    let Some(s) = Server::start() else { return };
+    let http = s.http();
+    let start = |name: &str| {
+        let (http, url, name) = (
+            http.clone(),
+            format!("{}/api/v1/sign-in", s.url()),
+            name.to_string(),
+        );
+        async move {
+            http.post(url)
+                .json(&serde_json::json!({ "name": name }))
+                .send()
+                .await
+                .expect("starting a sign-in")
+        }
+    };
+    let finish = |device: &str| {
+        let (http, url, device) = (
+            http.clone(),
+            format!("{}/api/v1/sign-in/token", s.url()),
+            device.to_string(),
+        );
+        async move {
+            http.post(url)
+                .json(&serde_json::json!({ "device_code": device }))
+                .send()
+                .await
+                .expect("collecting a token")
+        }
+    };
+
+    let r = start("Hangar Desktop").await;
+    assert_eq!(r.status(), 201);
+    let g: serde_json::Value = r.json().await.unwrap();
+    let code = g["user_code"].as_str().unwrap().to_string();
+    let device = g["device_code"].as_str().unwrap().to_string();
+    assert_eq!(code.len(), 9, "{code}");
+    assert_eq!(&code[4..5], "-");
+    assert_eq!(
+        g["verification_path"],
+        format!("/connect/desktop?code={code}")
+    );
+    assert_eq!(g["interval"], 2);
+    assert_eq!(finish(&device).await.status(), 202, "not yet approved");
+
+    // The code as a person might type it.
+    let typed = code.replace('-', " ").to_lowercase();
+    assert_eq!(status(s.frontend().get_sign_in(&typed).await), Some(401));
+    let admin = s.admin().await;
+    let waiting = admin
+        .get_sign_in(&typed)
+        .await
+        .expect("the grant")
+        .into_inner();
+    assert_eq!(waiting.code, code);
+    assert_eq!(waiting.name, "Hangar Desktop");
+    admin.approve_sign_in(&code).await.expect("approving");
+    assert_eq!(status(admin.approve_sign_in(&code).await), Some(404));
+    assert_eq!(status(admin.get_sign_in(&code).await), Some(404));
+
+    let r = finish(&device).await;
+    assert_eq!(r.status(), 200);
+    let t: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(t["name"], "Hangar Desktop");
+    let token = t["token"].as_str().unwrap();
+    assert!(token.starts_with("hgr_"), "{token}");
+    let me = s
+        .client(token)
+        .get_me()
+        .await
+        .expect("signed in")
+        .into_inner();
+    assert_eq!(me.username, ADMIN);
+    assert_eq!(finish(&device).await.status(), 404, "collected once");
+
+    let r = start("Another app").await;
+    let g: serde_json::Value = r.json().await.unwrap();
+    let code = g["user_code"].as_str().unwrap();
+    admin.refuse_sign_in(code).await.expect("refusing");
+    let device = g["device_code"].as_str().unwrap();
+    assert_eq!(finish(device).await.status(), 403);
+    assert_eq!(finish(device).await.status(), 404);
+
+    assert_eq!(start("  ").await.status(), 400);
+    assert_eq!(finish("not-a-device-code").await.status(), 404);
 }

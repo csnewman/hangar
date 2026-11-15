@@ -332,7 +332,9 @@ async fn sign_in_ports(
         json!({ "url": to }),
     )
     .await;
-    Ok(see_other(&loc))
+    let mut resp = see_other(&loc);
+    s.set_issued(&app, &mut resp);
+    Ok(resp)
 }
 
 fn see_other(to: &str) -> Response {

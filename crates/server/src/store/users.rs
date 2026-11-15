@@ -219,6 +219,7 @@ impl Tx {
                 tx.work.access_tokens.retain(|t| t.user_id != id);
                 tx.work.ssh_keys.retain(|k| k.user_id != id);
                 tx.work.ssh_login_keys.retain(|k| k.user_id != id);
+                tx.work.sign_in_grants.retain(|g| g.approved_by != Some(id));
                 super::packs::json_delete_owner(&mut tx.work, id);
                 Ok(Some(u.username))
             }
@@ -263,6 +264,26 @@ impl Tx {
                 .iter()
                 .find(|u| u.kind == "person" && u.username.to_lowercase() == name.to_lowercase())
                 .cloned()),
+        }
+    }
+
+    /// Sets a user's theme, saying whether there is such a user.
+    pub async fn set_theme(&mut self, id: Uuid, theme: &str) -> Result<bool> {
+        match &mut self.inner {
+            Backend::Pg(tx) => Ok(sqlx::query("UPDATE users SET theme = $2 WHERE id = $1")
+                .bind(id)
+                .bind(theme)
+                .execute(&mut **tx)
+                .await?
+                .rows_affected()
+                == 1),
+            Backend::Json(tx) => match tx.work.users.iter_mut().find(|u| u.id == id) {
+                Some(u) => {
+                    u.theme = theme.into();
+                    Ok(true)
+                }
+                None => Ok(false),
+            },
         }
     }
 
