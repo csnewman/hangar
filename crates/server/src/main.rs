@@ -3,7 +3,9 @@
 
 mod audit;
 mod blob;
+mod certs;
 mod config;
+mod edge;
 mod environments;
 mod fail;
 mod http;
@@ -24,6 +26,7 @@ mod templates;
 mod tunnel;
 mod users;
 mod workers;
+mod zone;
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -80,11 +83,15 @@ async fn run() -> Result<(), String> {
     }
     tokio::spawn(profile::run(app.clone()));
     tokio::spawn(maintain::run(app.clone()));
-    let app = http::router(app);
-    axum::serve(
+    let router = http::router(app.clone());
+    let (failed, mut failure) = tokio::sync::mpsc::channel(4);
+    edge::start(&app, &router, failed).await?;
+    let serving = axum::serve(
         listener,
-        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-    )
-    .await
-    .map_err(|e| format!("serving: {e}"))
+        router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    );
+    tokio::select! {
+        r = serving => r.map_err(|e| format!("serving: {e}")),
+        Some(e) = failure.recv() => Err(e),
+    }
 }

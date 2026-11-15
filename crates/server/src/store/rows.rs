@@ -438,3 +438,33 @@ pub struct RegistryUpload {
     pub repository_id: Uuid,
     pub created_at: DateTime<Utc>,
 }
+
+/// `dns_records`: a record the zone serves beyond those its configuration
+/// implies, an ACME challenge's TXT record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DnsRecord {
+    /// Fully qualified, lower case, without the trailing dot.
+    pub name: String,
+    pub r#type: String,
+    pub value: String,
+    /// Seconds.
+    pub ttl: i32,
+    pub created_at: DateTime<Utc>,
+}
+
+/// `tls_storage`: what certificate management keeps, by key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsEntry {
+    pub key: String,
+    #[serde(with = "hex_bytes")]
+    pub value: Vec<u8>,
+    pub modified: DateTime<Utc>,
+}
+
+/// `tls_locks`: held while a certificate is obtained or renewed, so two
+/// servers do not both do it; one whose holder died expires.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsLock {
+    pub name: String,
+    pub expires_at: DateTime<Utc>,
+}

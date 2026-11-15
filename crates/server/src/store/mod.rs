@@ -8,6 +8,7 @@
 
 pub mod audit;
 mod catalog;
+mod edge;
 pub mod environments;
 mod hosts;
 mod json;

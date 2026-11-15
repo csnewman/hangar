@@ -11,11 +11,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, OwnedMutexGuard};
 
 use super::rows::{
-    AccessToken, AgentSession, AuditEvent, Collaborator, Conflict, Copy, Environment,
+    AccessToken, AgentSession, AuditEvent, Collaborator, Conflict, Copy, DnsRecord, Environment,
     EnvironmentCopy, EnvironmentRemoval, EnvironmentRouted, HostSession, ImageRemoval,
     ImageRepository, ImageTag, LoginKey, Manifest, ManifestRef, Pack, PackDefault, PackPath,
     RegistryBlob, RegistryUpload, RepositoryBlob, RepositoryCollaborator, ServerKey, Session,
-    SshKey, Task, Team, TeamMember, Template, User, Worker,
+    SshKey, Task, Team, TeamMember, Template, TlsEntry, TlsLock, User, Worker,
 };
 use super::{Error, Result};
 
@@ -60,6 +60,9 @@ pub struct State {
     pub image_manifest_refs: Vec<ManifestRef>,
     pub image_tags: Vec<ImageTag>,
     pub registry_uploads: Vec<RegistryUpload>,
+    pub dns_records: Vec<DnsRecord>,
+    pub tls_storage: Vec<TlsEntry>,
+    pub tls_locks: Vec<TlsLock>,
 }
 
 impl State {

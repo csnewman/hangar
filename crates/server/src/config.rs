@@ -43,6 +43,163 @@ pub struct Config {
     pub files: PathBuf,
     /// Where the registry's blobs are kept, when it runs.
     pub blobs: Option<crate::blob::Config>,
+    /// What faces the internet directly, each part only when configured.
+    pub edge: Edge,
+}
+
+/// What faces the internet directly: the zone's DNS server
+/// (`HANGAR_DNS_LISTEN`), HTTPS (`HANGAR_TLS_LISTEN`), and a redirect from
+/// HTTP to it (`HANGAR_REDIRECT_LISTEN`). The zone is the public URL's host.
+#[derive(Debug, Clone, Default)]
+pub struct Edge {
+    pub dns: Option<Dns>,
+    pub tls: Option<Tls>,
+    pub redirect: Option<String>,
+}
+
+/// The zone's DNS server.
+#[derive(Debug, Clone)]
+pub struct Dns {
+    pub listen: String,
+    /// Where every name in the zone points (`HANGAR_DNS_ADDRESSES`).
+    pub addresses: Vec<std::net::IpAddr>,
+    /// The zone's nameservers as the parent's delegation names them
+    /// (`HANGAR_DNS_NAMESERVERS`; ns1.<zone> unless set).
+    pub nameservers: Vec<String>,
+    /// The SOA's responsible mailbox, as an address
+    /// (`HANGAR_DNS_HOSTMASTER`; hostmaster@<zone> unless set).
+    pub hostmaster: String,
+}
+
+/// HTTPS, and the certificates it serves.
+#[derive(Debug, Clone)]
+pub struct Tls {
+    pub listen: String,
+    pub certs: Certs,
+}
+
+#[derive(Debug, Clone)]
+pub enum Certs {
+    /// A certificate and key someone else issues and renews
+    /// (`HANGAR_TLS_CERT_FILE`, `HANGAR_TLS_KEY_FILE`).
+    Files { cert: PathBuf, key: PathBuf },
+    /// Certificates an ACME CA issues for the zone and every name under
+    /// it, against DNS-01 challenges the zone answers.
+    Acme {
+        /// The account's contact (`HANGAR_ACME_EMAIL`).
+        email: Option<String>,
+        /// The directory (`HANGAR_ACME_CA`; Let's Encrypt unless set).
+        ca: String,
+        /// PEM roots to trust for the CA itself (`HANGAR_ACME_CA_ROOTS`).
+        roots: Option<PathBuf>,
+    },
+}
+
+/// Let's Encrypt's production directory.
+const LETS_ENCRYPT: &str = "https://acme-v02.api.letsencrypt.org/directory";
+
+/// An address to listen on, where `:port` is every interface's.
+fn listen_addr(l: String) -> String {
+    match l.strip_prefix(':') {
+        Some(port) => format!("0.0.0.0:{port}"),
+        None => l,
+    }
+}
+
+/// A list of values separated by commas or spaces.
+fn split_list(s: &str) -> Vec<String> {
+    s.split([',', ' '])
+        .filter(|v| !v.is_empty())
+        .map(String::from)
+        .collect()
+}
+
+fn edge(var: &dyn Fn(&str) -> Option<String>, public: Option<&Public>) -> Result<Edge, String> {
+    let dns = var("HANGAR_DNS_LISTEN");
+    let tls = var("HANGAR_TLS_LISTEN");
+    let redirect = var("HANGAR_REDIRECT_LISTEN");
+    let (cert, key) = (var("HANGAR_TLS_CERT_FILE"), var("HANGAR_TLS_KEY_FILE"));
+    if (cert.is_some() || key.is_some()) && tls.is_none() {
+        return Err("HANGAR_TLS_CERT_FILE and HANGAR_TLS_KEY_FILE are served by HANGAR_TLS_LISTEN, which is not set".into());
+    }
+    if cert.is_some() != key.is_some() {
+        return Err("HANGAR_TLS_CERT_FILE and HANGAR_TLS_KEY_FILE are set together: the certificate and its key".into());
+    }
+    if dns.is_none() && tls.is_none() && redirect.is_none() {
+        return Ok(Edge::default());
+    }
+    let Some(public) = public else {
+        return Err("HANGAR_DNS_LISTEN, HANGAR_TLS_LISTEN and HANGAR_REDIRECT_LISTEN need HANGAR_PUBLIC_URL, whose host is the zone".into());
+    };
+    let zone = crate::zone::canonical(public.hostname());
+    let prefix = public.style == Style::Prefix;
+    let dns = match dns {
+        Some(_) if prefix => {
+            return Err("HANGAR_DNS_LISTEN serves a zone under the public host, and prefix host names (HANGAR_HOST_STYLE) are outside it, in a domain whose own DNS already answers for them; leave it unset".into());
+        }
+        Some(listen) => {
+            if zone.parse::<std::net::IpAddr>().is_ok() {
+                return Err(format!("the DNS zone must be a name, not {zone:?}"));
+            }
+            let addresses = split_list(&var("HANGAR_DNS_ADDRESSES").unwrap_or_default())
+                .iter()
+                .map(|a| {
+                    a.parse()
+                        .map_err(|_| format!("HANGAR_DNS_ADDRESSES: {a:?} is not an IP address"))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if addresses.is_empty() {
+                return Err("the DNS zone needs at least one address for its names to point at (HANGAR_DNS_ADDRESSES)".into());
+            }
+            let mut nameservers: Vec<String> =
+                split_list(&var("HANGAR_DNS_NAMESERVERS").unwrap_or_default())
+                    .iter()
+                    .map(|n| crate::zone::canonical(n))
+                    .collect();
+            if nameservers.is_empty() {
+                nameservers.push(format!("ns1.{zone}"));
+            }
+            Some(Dns {
+                listen: listen_addr(listen),
+                addresses,
+                nameservers,
+                hostmaster: var("HANGAR_DNS_HOSTMASTER")
+                    .unwrap_or_else(|| format!("hostmaster@{zone}")),
+            })
+        }
+        None => None,
+    };
+    let tls = match tls {
+        Some(listen) => {
+            if !public.secure() {
+                return Err("HANGAR_TLS_LISTEN needs an https HANGAR_PUBLIC_URL".into());
+            }
+            let certs = match (cert, key) {
+                (Some(cert), Some(key)) => Certs::Files {
+                    cert: cert.into(),
+                    key: key.into(),
+                },
+                _ if prefix => {
+                    return Err("HTTPS for prefix host names (HANGAR_HOST_STYLE) needs a certificate that covers them, such as one for *.<domain>, in HANGAR_TLS_CERT_FILE and HANGAR_TLS_KEY_FILE: ACME certificates are only issued for the zone Hangar serves".into());
+                }
+                _ => Certs::Acme {
+                    email: var("HANGAR_ACME_EMAIL"),
+                    ca: var("HANGAR_ACME_CA").unwrap_or_else(|| LETS_ENCRYPT.into()),
+                    roots: var("HANGAR_ACME_CA_ROOTS").map(PathBuf::from),
+                },
+            };
+            Some(Tls {
+                listen: listen_addr(listen),
+                certs,
+            })
+        }
+        None => None,
+    };
+    Ok(Edge {
+        dns,
+        tls,
+        redirect: redirect.map(listen_addr),
+    })
 }
 
 /// The blob store: HANGAR_BLOB_URL, its keys there or in
@@ -180,11 +337,7 @@ impl Config {
         let public = var("HANGAR_PUBLIC_URL")
             .map(|url| Public::parse(&url, style).map_err(|e| format!("HANGAR_PUBLIC_URL: {e}")))
             .transpose()?;
-        let listen = var("HANGAR_LISTEN").unwrap_or_else(|| ":8081".into());
-        let listen = match listen.strip_prefix(':') {
-            Some(port) => format!("0.0.0.0:{port}"),
-            None => listen,
-        };
+        let listen = listen_addr(var("HANGAR_LISTEN").unwrap_or_else(|| ":8081".into()));
         let registry =
             public.is_some() && var("HANGAR_REGISTRY_ENABLED").as_deref() != Some("false");
         let sealer = var("HANGAR_SECRET_KEY_FILE")
@@ -193,11 +346,11 @@ impl Config {
         let ssh = match var("HANGAR_SSH_LISTEN") {
             Some(l) => {
                 let (host, port) = ssh_address(var("HANGAR_SSH_ADDRESS"), &l, public.as_ref())?;
-                let listen = match l.strip_prefix(':') {
-                    Some(port) => format!("0.0.0.0:{port}"),
-                    None => l,
-                };
-                Some(Ssh { listen, host, port })
+                Some(Ssh {
+                    listen: listen_addr(l),
+                    host,
+                    port,
+                })
             }
             None => None,
         };
@@ -206,7 +359,9 @@ impl Config {
         } else {
             None
         };
+        let edge = edge(&var, public.as_ref())?;
         Ok(Config {
+            edge,
             listen,
             storage,
             bootstrap_token,

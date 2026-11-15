@@ -32,7 +32,7 @@ pub const BOOTSTRAP_TOKEN: &str = "suite-bootstrap-token";
 
 /// The name every server is reached by; its subdomains are its
 /// environments' hosts.
-const HOST: &str = "hangar.localhost";
+pub const HOST: &str = "hangar.localhost";
 
 const DEFAULT_BLOB_URL: &str = "http://hangar:hangar-dev-secret@127.0.0.1:59000/hangar-suite";
 
@@ -64,6 +64,12 @@ impl Server {
     /// Starts a server of the test's own, or None when the suite has no
     /// server or database to start one with.
     pub fn start() -> Option<Server> {
+        Server::start_with(&[])
+    }
+
+    /// As start, with settings of the test's own besides, or in place of,
+    /// the suite's.
+    pub fn start_with(settings: &[(&str, String)]) -> Option<Server> {
         let bin = std::env::var("HANGAR_SUITE_SERVER").ok()?;
         let json = std::env::var("HANGAR_SUITE_STORAGE").is_ok_and(|s| s == "json");
         let admin_db = match json {
@@ -106,6 +112,7 @@ impl Server {
             .env("HANGAR_PUBLIC_URL", format!("http://{HOST}:{port}"))
             .env("HANGAR_SSH_LISTEN", format!("127.0.0.1:{ssh_port}"))
             .env("HANGAR_SSH_ADDRESS", format!("{HOST}:{ssh_port}"))
+            .envs(settings.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
             .stdout(out.try_clone().expect("the log"))
             .stderr(out)
@@ -337,7 +344,8 @@ fn unique(prefix: &str) -> String {
 }
 
 /// A port nothing listens on, a moment ago.
-fn free_port() -> u16 {
+/// A port nothing listens on.
+pub fn free_port() -> u16 {
     TcpListener::bind("127.0.0.1:0")
         .and_then(|l| l.local_addr())
         .map(|a| a.port())
