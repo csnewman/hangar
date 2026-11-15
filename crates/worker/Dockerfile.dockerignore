@@ -3,8 +3,7 @@
 *
 !crates/
 !cloud-hypervisor/
-!internal/kernel/
-!internal/image/scripts/
+!kernel/
 !gpu/Cargo.toml
 !gpu/Cargo.lock
 !gpu/src/
