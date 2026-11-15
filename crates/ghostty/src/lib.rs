@@ -24,8 +24,13 @@ use std::ptr;
 use sys::GhosttyResult::{GHOSTTY_NO_VALUE, GHOSTTY_OUT_OF_SPACE, GHOSTTY_SUCCESS};
 
 /// The version of Ghostty whose source libghostty-vt was built from
-/// ("1.4.1-dev"), as the build says.
+/// ("1.4.1-dev": its build.zig.zon's), which a terminal says it is.
 pub fn ghostty_version() -> String {
+    env!("HANGAR_GHOSTTY_VERSION").to_string()
+}
+
+/// libghostty-vt's own version ("1.0.1"), as its build says.
+pub fn vt_version() -> String {
     let mut s = sys::GhosttyString {
         ptr: ptr::null(),
         len: 0,

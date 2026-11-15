@@ -68,9 +68,12 @@ fn colours_are_the_ones_set() {
 }
 
 #[test]
-fn it_knows_its_ghostty_version() {
+fn it_knows_its_versions() {
+    // Ghostty's, from the source, and the library's, from the release
+    // pinned, neither with a build's suffix.
     let v = hangar_ghostty::ghostty_version();
-    assert!(v.starts_with("1."), "{v:?}");
+    assert!(v.starts_with("1.") && !v.contains('+'), "{v:?}");
+    assert_eq!(hangar_ghostty::vt_version(), "1.0.1");
 }
 
 #[test]

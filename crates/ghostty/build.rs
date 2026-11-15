@@ -20,11 +20,19 @@ fn main() {
         Ok(dir) if !dir.is_empty() => PathBuf::from(dir),
         _ => fetch(&out),
     };
+    let versions = versions(&source);
+    println!("cargo:rustc-env=HANGAR_GHOSTTY_VERSION={}", versions.0);
     let install = out.join("install");
     let stamp = install.join(".built");
-    let wanted = format!("{}\n{}", source.display(), target());
+    let wanted = format!(
+        "{}\n{}\n{}\n{}",
+        source.display(),
+        target(),
+        versions.0,
+        versions.1
+    );
     if std::fs::read_to_string(&stamp).ok().as_deref() != Some(wanted.as_str()) {
-        build(&source, &install);
+        build(&source, &install, &versions);
         std::fs::write(&stamp, &wanted).expect("writing the build's stamp");
     }
     println!(
@@ -81,8 +89,32 @@ fn fetch(out: &Path) -> PathBuf {
     dir
 }
 
+/// The version of Ghostty the source is (build.zig.zon's), and of
+/// libghostty-vt: the pinned release's, or the source's own for a checkout.
+/// Both are given to the build, which otherwise asks git, and git answers
+/// for whatever repository the source is unpacked inside.
+fn versions(source: &Path) -> (String, String) {
+    let quoted = |file: &str, key: &str| -> String {
+        let text = std::fs::read_to_string(source.join(file)).expect(file);
+        let line = text
+            .lines()
+            .find(|l| l.trim_start().starts_with(key))
+            .unwrap_or_else(|| panic!("{file} names no {key}"));
+        line.split('"')
+            .nth(1)
+            .expect("a quoted version")
+            .to_string()
+    };
+    let app = quoted("build.zig.zon", ".version");
+    let lib = match std::env::var("HANGAR_GHOSTTY_SOURCE") {
+        Ok(dir) if !dir.is_empty() => quoted("build.zig", "const lib_version"),
+        _ => TAG.trim_start_matches("vt-").to_string(),
+    };
+    (app, lib)
+}
+
 /// Builds the library from source into install.
-fn build(source: &Path, install: &Path) {
+fn build(source: &Path, install: &Path, (app, lib): &(String, String)) {
     let mut zig = Command::new(std::env::var("ZIG").unwrap_or_else(|_| "zig".into()));
     zig.current_dir(source).args([
         "build",
@@ -91,6 +123,8 @@ fn build(source: &Path, install: &Path) {
         "-Demit-xcframework=false",
         "-Dapp-runtime=none",
     ]);
+    zig.arg(format!("-Dversion-string={app}"));
+    zig.arg(format!("-Dlib-version-string={lib}"));
     zig.arg("--prefix").arg(install);
     // Zig builds for the machine it runs on unless told otherwise.
     if std::env::var("HOST").unwrap() != target() {
