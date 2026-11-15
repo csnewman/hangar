@@ -61,6 +61,9 @@ impl Made {
     }
 }
 
+/// How often a terminal draws for its output, at most.
+const OUTPUT_FPS: u32 = 30;
+
 /// How long a burst of output is taken in before a frame is drawn.
 const FEED_BUDGET: Duration = Duration::from_millis(4);
 
@@ -226,6 +229,8 @@ pub struct TerminalView {
     redraw: Option<(Instant, Task<()>)>,
     /// When a blinking cursor last came on: at the last key or output.
     blink: Instant,
+    /// When the view was last drawn.
+    drawn: Instant,
     /// What the programs say they are doing (OSC 7501).
     statuses: crate::termstatus::Records,
     /// Signals for the window around, as they come.
@@ -370,6 +375,7 @@ impl TerminalView {
             screens: 0,
             redraw: None,
             blink: Instant::now(),
+            drawn: Instant::now(),
             statuses: Default::default(),
             signals: vec![],
             had_keys: false,
@@ -415,7 +421,7 @@ impl TerminalView {
                     if t.screen.synchronized() {
                         t.redraw_in(Duration::from_secs(1), cx);
                     } else {
-                        cx.notify();
+                        t.draw_output(cx);
                     }
                 });
                 if alive.is_err() {
@@ -601,6 +607,21 @@ impl TerminalView {
         let turns = since.as_millis() / HALF.as_millis();
         self.redraw_in(HALF * (turns as u32 + 1) - since, cx);
         turns.is_multiple_of(2)
+    }
+
+    /// Draws the view again for new output: at once, unless it was drawn
+    /// less than a frame ago at OUTPUT_FPS, then at the end of that frame.
+    /// A program printing fast (Claude Code streaming, its spinner) would
+    /// otherwise have the whole window laid out and painted at the
+    /// display's rate; output after a pause, a key's echo, draws at once.
+    fn draw_output(&mut self, cx: &mut Context<Self>) {
+        let frame = Duration::from_secs(1) / OUTPUT_FPS;
+        let since = self.drawn.elapsed();
+        if since >= frame {
+            cx.notify();
+        } else {
+            self.redraw_in(frame - since, cx);
+        }
     }
 
     /// Draws the view again after a while, unless a redraw is due sooner.
@@ -1546,6 +1567,7 @@ impl Focusable for TerminalView {
 
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.drawn = Instant::now();
         let p = palette::of(cx);
         let settings = Settings::get(cx);
         // What the settings make the screen with, given to the emulator as
