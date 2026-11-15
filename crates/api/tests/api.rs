@@ -6,15 +6,15 @@ use std::time::{Duration, UNIX_EPOCH};
 use hangar_api::*;
 use serde_json::Value;
 
-fn go() -> Vec<Value> {
-    include_str!("data/go.jsonl")
+fn wire() -> Vec<Value> {
+    include_str!("data/wire.jsonl")
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect()
 }
 
 /// Whether two JSON values say the same, null standing for an empty list or
-/// map as the server writes them.
+/// map, as either side may write one.
 fn same(a: &Value, b: &Value) -> bool {
     let empty = |v: &Value| match v {
         Value::Null => true,
@@ -44,13 +44,13 @@ fn same(a: &Value, b: &Value) -> bool {
 fn round<T: serde::de::DeserializeOwned + serde::Serialize>(v: &Value) -> T {
     let t: T = serde_json::from_value(v.clone()).unwrap();
     let back = serde_json::to_value(&t).unwrap();
-    assert!(same(v, &back), "\ngo:   {v}\nrust: {back}");
+    assert!(same(v, &back), "\nwire: {v}\nread: {back}");
     t
 }
 
 #[test]
 fn desired_set() {
-    let g = go();
+    let g = wire();
     let ds: DesiredSet = round(&g[0]);
     assert_eq!(ds.environments.len(), 2);
     let e = &ds.environments[0];
@@ -71,7 +71,7 @@ fn desired_set() {
 
 #[test]
 fn worker_status() {
-    let g = go();
+    let g = wire();
     let ws: WorkerStatus = round(&g[2]);
     assert_eq!(
         ws.environments[0].progress.as_ref().unwrap().step,
@@ -91,7 +91,7 @@ fn worker_status() {
 
 #[test]
 fn files() {
-    let f: EnvironmentFiles = round(&go()[3]);
+    let f: EnvironmentFiles = round(&wire()[3]);
     assert_eq!(f.squash["b"], Squash::Root);
 }
 
@@ -108,7 +108,7 @@ fn unknown_values() {
 
 #[test]
 fn code_trust() {
-    let g = go();
+    let g = wire();
     let ds: DesiredSet = serde_json::from_value(g[0].clone()).unwrap();
     let mut spec = ds.environments[0].spec.clone();
     assert_eq!(serde_json::to_value(spec.code_trust()).unwrap(), g[4]);
