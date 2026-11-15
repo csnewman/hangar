@@ -10,7 +10,7 @@ use super::rows::{Environment, EnvironmentRemoval, ImageRemoval, Worker};
 use super::{Backend, Result, Tx};
 
 pub(super) const WORKER_COLUMNS: &str = "id, name, credential_hash, labels, cpus, memory_mib, unknown, stats, \
-     images, gpu, desired_version, last_seen_at, revoked_at, created_at, monitor, suspends";
+     images, gpu, desired_version, last_seen_at, revoked_at, created_at, monitor, version, features";
 
 pub const ENVIRONMENT_COLUMNS: &str = "id, short_id, owner_id, name, template_id, template_name, \
      template_revision, spec, image, image_digest, image_pin_want, image_drop_rollback, image_update, \
@@ -34,7 +34,8 @@ pub(super) fn worker(r: &PgRow) -> Result<Worker> {
         revoked_at: r.try_get("revoked_at")?,
         created_at: r.try_get("created_at")?,
         monitor: r.try_get("monitor")?,
-        suspends: r.try_get("suspends")?,
+        version: r.try_get("version")?,
+        features: r.try_get("features")?,
     })
 }
 
@@ -84,7 +85,7 @@ impl Tx {
             Backend::Pg(tx) => {
                 let r = sqlx::query(&format!(
                     "INSERT INTO workers ({WORKER_COLUMNS})
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)"
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)"
                 ))
                 .bind(w.id)
                 .bind(&w.name)
@@ -101,7 +102,8 @@ impl Tx {
                 .bind(w.revoked_at)
                 .bind(w.created_at)
                 .bind(&w.monitor)
-                .bind(w.suspends)
+                .bind(&w.version)
+                .bind(&w.features)
                 .execute(&mut **tx)
                 .await;
                 match r {

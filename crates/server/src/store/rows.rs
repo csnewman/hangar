@@ -108,7 +108,10 @@ pub struct Worker {
     pub revoked_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub monitor: String,
-    pub suspends: bool,
+    /// Its build, as it reports it.
+    pub version: String,
+    /// What it can do beyond its API level (`hangar_api::feature`).
+    pub features: Vec<String>,
 }
 
 /// `environments`.

@@ -2704,7 +2704,7 @@ components:
 
     Worker:
       type: object
-      required: [id, name, labels, capacity, allocated, online, revoked, unknown, created_at, images, pending_removals]
+      required: [id, name, labels, capacity, allocated, online, revoked, unknown, created_at, images, features, pending_removals]
       properties:
         id: { type: string }
         name: { type: string }
@@ -2732,6 +2732,16 @@ components:
         gpu: { $ref: "#/components/schemas/GPUInfo" }
         monitor:
           $ref: "#/components/schemas/Monitor"
+        version:
+          type: string
+          description: The worker's build, as it last reported it.
+        features:
+          type: array
+          description: >-
+            What it can do beyond what its worker API level promises, as it
+            last reported: suspend, gpu, and in time more. An environment
+            is placed only on a worker with every feature it needs.
+          items: { type: string }
         pending_removals:
           type: array
           description: Copies of images the worker has been asked to delete and still holds.

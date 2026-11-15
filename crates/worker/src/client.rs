@@ -197,7 +197,8 @@ fn request(
     let mut req = ureq::http::Request::builder()
         .method(method)
         .uri(url)
-        .header("Authorization", format!("Bearer {token}"));
+        .header("Authorization", format!("Bearer {token}"))
+        .header(hangar_api::LEVEL_HEADER, hangar_api::API_LEVEL.to_string());
     if body.is_some() {
         req = req.header("Content-Type", "application/json");
     }
@@ -207,6 +208,19 @@ fn request(
     }
     .map_err(failed)?;
     let status = resp.status();
+    // A server this worker cannot work with fails the request as one that
+    // cannot be reached does: the worker keeps its environments running
+    // and tries again. One that refuses this worker's level says so in its
+    // answer; one that serves it while older than it is caught here.
+    if status.is_success() {
+        let levels = resp
+            .headers()
+            .get(hangar_api::LEVELS_HEADER)
+            .and_then(|v| v.to_str().ok());
+        if let Some(why) = hangar_api::incompatible(levels) {
+            return Err(Error::Failed(why));
+        }
+    }
     if status == ureq::http::StatusCode::UNAUTHORIZED {
         return Err(Error::Rejected);
     }

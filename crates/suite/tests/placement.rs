@@ -140,3 +140,32 @@ async fn an_unplaced_environment_changes_at_once() {
     );
     assert_eq!(status(admin.get_environment(&e.id).await), Some(404));
 }
+
+/// One that needs something no matching worker offers -- here a virtual
+/// GPU -- waits for a worker that offers it, saying what it needs.
+#[tokio::test]
+async fn an_environment_waits_for_a_worker_with_what_it_needs() {
+    let Some(s) = Server::start() else { return };
+    let admin = s.admin().await;
+    let _w = s.worker("w");
+    online(&admin, "w").await;
+    let mut gpu = machine("Gpu", "private");
+    gpu["spec"]["gpu"] = json!("virtual");
+    let t = admin
+        .create_template(&body(gpu))
+        .await
+        .unwrap()
+        .into_inner();
+    let e = admin
+        .create_environment(&body(json!({ "template_id": t.id, "name": "gpu" })))
+        .await
+        .unwrap()
+        .into_inner();
+    waits(
+        &admin,
+        &e.id,
+        "pending",
+        "waiting for a worker that offers what it needs: gpu",
+    )
+    .await;
+}

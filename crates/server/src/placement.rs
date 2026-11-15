@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 
 use chrono::Utc;
+use hangar_api::Spec;
 use uuid::Uuid;
 
 use crate::audit::{self, Event};
@@ -19,6 +20,10 @@ pub const UNPLACEABLE: &str = "waiting for a worker with room for it";
 
 /// Why an environment whose placement rules no online worker meets waits.
 pub const NO_MATCH: &str = "waiting for a worker that matches its placement rules";
+
+/// Why an environment waits whose placement rules online workers meet but
+/// none of them has a feature it needs; the features follow.
+pub const LACKING: &str = "waiting for a worker that offers what it needs";
 
 /// How much of the queue one transaction takes, so a long queue is shared
 /// between servers rather than taken whole by one.
@@ -33,6 +38,7 @@ struct Free {
     cpus: i64,
     memory_mib: i64,
     labels: BTreeMap<String, String>,
+    features: Vec<String>,
 }
 
 /// Places environments that want to run on online workers with room for
@@ -63,6 +69,7 @@ pub async fn place(store: &Store) -> Result<usize> {
                 cpus: w.cpus as i64 - c,
                 memory_mib: w.memory_mib as i64 - m,
                 labels: serde_json::from_value(w.labels).unwrap_or_default(),
+                features: w.features,
             }
         })
         .collect();
@@ -75,8 +82,20 @@ pub async fn place(store: &Store) -> Result<usize> {
             .get("placement")
             .and_then(|p| serde_json::from_value(p.clone()).ok())
             .unwrap_or_default();
-        let allowed: Vec<usize> = (0..free.len())
+        let needs = serde_json::from_value::<Spec>(e.spec.clone())
+            .map(|s| s.needs())
+            .unwrap_or_default();
+        let matching: Vec<usize> = (0..free.len())
             .filter(|&i| rules.iter().all(|(k, v)| free[i].labels.get(k) == Some(v)))
+            .collect();
+        let allowed: Vec<usize> = matching
+            .iter()
+            .copied()
+            .filter(|&i| {
+                needs
+                    .iter()
+                    .all(|n| free[i].features.iter().any(|f| f == n))
+            })
             .collect();
         let mut best: Option<usize> = None;
         for &i in &allowed {
@@ -89,10 +108,15 @@ pub async fn place(store: &Store) -> Result<usize> {
             }
         }
         let Some(best) = best.map(|i| &mut free[i]) else {
-            let matched = !allowed.is_empty();
-            let reason = if matched { UNPLACEABLE } else { NO_MATCH };
+            let reason = if !allowed.is_empty() {
+                UNPLACEABLE.to_string()
+            } else if !matching.is_empty() {
+                format!("{LACKING}: {}", needs.join(", "))
+            } else {
+                NO_MATCH.to_string()
+            };
             if e.reason != reason {
-                e.reason = reason.to_string();
+                e.reason = reason.clone();
                 e.updated_at = Utc::now();
                 tx.save_environment(&e).await?;
                 audit::record(

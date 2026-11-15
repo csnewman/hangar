@@ -189,6 +189,8 @@ async fn dial(url: &str, credential: &str) -> Result<Socket, Failure> {
             .parse()
             .map_err(|_| Failure::Refused)?,
     );
+    req.headers_mut()
+        .insert(hangar_api::LEVEL_HEADER, hangar_api::API_LEVEL.into());
     let connector = if url.starts_with("wss:") {
         use rustls_platform_verifier::ConfigVerifierExt;
         let config =
@@ -203,10 +205,30 @@ async fn dial(url: &str, credential: &str) -> Result<Socket, Failure> {
     match tokio_tungstenite::connect_async_tls_with_config(req, Some(config), true, Some(connector))
         .await
     {
-        Ok((ws, _)) => Ok(ws),
+        Ok((ws, r)) => match hangar_api::incompatible(levels(r.headers())) {
+            Some(why) => Err(dropped(why)),
+            None => Ok(ws),
+        },
         Err(tungstenite::Error::Http(r)) if r.status() == 401 => Err(Failure::Refused),
+        Err(tungstenite::Error::Http(r)) => {
+            let said = r
+                .body()
+                .as_deref()
+                .and_then(|b| serde_json::from_slice::<hangar_api::Error>(b).ok())
+                .map(|e| e.error)
+                .filter(|e| !e.is_empty());
+            Err(dropped(said.unwrap_or_else(|| {
+                format!("the server answered {}", r.status())
+            })))
+        }
         Err(e) => Err(dropped(e.to_string())),
     }
+}
+
+/// The levels of the worker API a response says its server serves.
+fn levels(h: &tungstenite::http::HeaderMap) -> Option<&str> {
+    h.get(hangar_api::LEVELS_HEADER)
+        .and_then(|v| v.to_str().ok())
 }
 
 /// A WebSocket as a stream of bytes: each message written is one binary

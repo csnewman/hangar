@@ -239,6 +239,15 @@ pub struct Spec {
 }
 
 impl Spec {
+    /// The features a worker needs to run it.
+    pub fn needs(&self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if self.gpu == Gpu::Virtual {
+            out.push(feature::GPU);
+        }
+        out
+    }
+
     /// The projects, or for a spec saved with only an editor folder, that
     /// folder.
     pub fn project_folders(&self) -> Vec<String> {
@@ -337,6 +346,111 @@ pub enum Squash {
     None,
     #[serde(other)]
     Other,
+}
+
+/// The worker API's level, which a worker and a server compare before
+/// anything else. It is raised whenever one side comes to need something of
+/// the other that an older one does not do. A worker sends its level with
+/// every request (LEVEL_HEADER); a server answers every request with the
+/// levels it serves (LEVELS_HEADER) and refuses a worker outside them, and a
+/// worker refuses a server whose newest level is older than its own. So a
+/// server is never older than a worker it works with: a deployment upgrades
+/// its servers first.
+pub const API_LEVEL: u32 = 1;
+
+/// The oldest level this side's server serves: older workers are refused,
+/// and are to be upgraded.
+pub const MIN_API_LEVEL: u32 = 1;
+
+/// The request header that carries the worker's API level.
+pub const LEVEL_HEADER: &str = "hangar-worker-api";
+
+/// The response header that carries the levels a server serves, "MIN-MAX".
+pub const LEVELS_HEADER: &str = "hangar-worker-api-levels";
+
+/// The levels of the worker API a server serves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Levels {
+    pub min: u32,
+    pub max: u32,
+}
+
+/// Why a worker and a server cannot work together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mismatch {
+    /// The worker's level is older than the server serves.
+    WorkerTooOld,
+    /// The worker's level is newer than the server serves.
+    ServerTooOld,
+}
+
+impl Levels {
+    /// What this side's server serves.
+    pub const SERVED: Levels = Levels {
+        min: MIN_API_LEVEL,
+        max: API_LEVEL,
+    };
+
+    /// Reads LEVELS_HEADER's value.
+    pub fn parse(s: &str) -> Option<Levels> {
+        let (min, max) = s.trim().split_once('-')?;
+        let l = Levels {
+            min: min.parse().ok()?,
+            max: max.parse().ok()?,
+        };
+        (l.min <= l.max).then_some(l)
+    }
+
+    /// LEVELS_HEADER's value.
+    pub fn header(&self) -> String {
+        format!("{}-{}", self.min, self.max)
+    }
+
+    /// Why a worker at level cannot work with a server serving these, if
+    /// it cannot.
+    pub fn refuses(&self, level: u32) -> Option<Mismatch> {
+        if level < self.min {
+            Some(Mismatch::WorkerTooOld)
+        } else if level > self.max {
+            Some(Mismatch::ServerTooOld)
+        } else {
+            None
+        }
+    }
+}
+
+/// Why this worker cannot work with the server that answered with levels
+/// (LEVELS_HEADER's value, None for a server that sent none), if it cannot.
+pub fn incompatible(levels: Option<&str>) -> Option<String> {
+    let Some(l) = levels.and_then(Levels::parse) else {
+        return Some(format!(
+            "the server does not say which worker API levels it serves, so it is older than \
+             this worker (level {API_LEVEL}): upgrade the server"
+        ));
+    };
+    match l.refuses(API_LEVEL)? {
+        Mismatch::WorkerTooOld => Some(format!(
+            "the server serves worker API levels {} to {}, and this worker speaks {API_LEVEL}: \
+             upgrade the worker",
+            l.min, l.max
+        )),
+        Mismatch::ServerTooOld => Some(format!(
+            "the server serves worker API levels {} to {}, older than this worker's \
+             {API_LEVEL}: upgrade the server",
+            l.min, l.max
+        )),
+    }
+}
+
+/// What a worker can do that its API level does not promise, by name, as
+/// it reports them (`WorkerStatus::features`). The server places an
+/// environment only on a worker with every feature its spec needs
+/// (`Spec::needs`).
+pub mod feature {
+    /// It can suspend its environments.
+    pub const SUSPEND: &str = "suspend";
+    /// It gives environments a virtual GPU.
+    pub const GPU: &str = "gpu";
 }
 
 /// The monitors a worker runs environments under.
@@ -480,9 +594,16 @@ pub struct WorkerStatus {
     /// What runs its environments.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub monitor: String,
-    /// Whether it can suspend its environments.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub suspends: bool,
+    /// The worker's build, for people.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub version: String,
+    /// What it can do beyond what its API level promises (`feature`).
+    #[serde(
+        default,
+        deserialize_with = "null",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub features: Vec<String>,
 }
 
 /// What a worker's virtual GPUs render with, as its GPU backend found when

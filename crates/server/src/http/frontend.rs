@@ -94,6 +94,8 @@ fn worker_of(l: &crate::store::workers::Listed) -> Result<types::Worker, ApiErro
         "images": w.images,
         "gpu": w.gpu,
         "monitor": monitor,
+        "version": (!w.version.is_empty()).then_some(&w.version),
+        "features": w.features,
         "pending_removals": l.removals.iter()
             .map(|r| serde_json::json!({ "ref": r.r#ref, "digest": r.digest }))
             .collect::<Vec<_>>(),

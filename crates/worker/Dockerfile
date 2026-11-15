@@ -62,6 +62,8 @@ ENV PATH=/root/.cargo/bin:$PATH
 # The agent is static, against musl: the guest's own C library is whatever
 # its image has. The worker is against the image's own.
 FROM rust AS crates
+# The build the worker reports itself as.
+ARG VERSION=dev
 WORKDIR /src
 # The whole workspace: only two members are built, but cargo reads every
 # member's manifest and finds each one's targets.
@@ -70,7 +72,7 @@ RUN target="$(uname -m)-unknown-linux-musl" \
  && rustup target add "$target" \
  && cargo build --release --locked --target "$target" -p hangar-agent \
  && install -D "target/$target/release/hangar-agent" /out/hangar-agent \
- && cargo build --release --locked -p hangar-worker \
+ && HANGAR_VERSION="$VERSION" cargo build --release --locked -p hangar-worker \
  && install -D target/release/hangar-worker /out/hangar-worker \
  && cd / && rm -rf /src /root/.cargo/registry /root/.cargo/git
 

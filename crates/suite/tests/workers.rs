@@ -90,14 +90,15 @@ async fn only_an_administrator_sees_workers() {
 #[tokio::test]
 async fn a_worker_is_asked_to_remove_an_image_and_a_stray() {
     use hangar_api::{
-        DesiredSet, ImageState, LocalImage, ObservedEnvironment, Phase, RegisterWorker, Resources,
-        WorkerCredential, WorkerStatus,
+        API_LEVEL, DesiredSet, ImageState, LEVEL_HEADER, LocalImage, ObservedEnvironment, Phase,
+        RegisterWorker, Resources, WorkerCredential, WorkerStatus,
     };
     let Some(s) = Server::start() else { return };
     let admin = s.admin().await;
     let http = s.http();
     let cred: WorkerCredential = http
         .post(format!("{}/api/worker/v1/register", s.url()))
+        .header(LEVEL_HEADER, API_LEVEL)
         .bearer_auth(hangar_suite::BOOTSTRAP_TOKEN)
         .json(&RegisterWorker {
             name: "w1".into(),
@@ -139,10 +140,12 @@ async fn a_worker_is_asked_to_remove_an_image_and_a_stray() {
         }],
         gpu: None,
         monitor: String::new(),
-        suspends: false,
+        version: String::new(),
+        features: Vec::new(),
     };
     let r = http
         .put(format!("{}/api/worker/v1/status", s.url()))
+        .header(LEVEL_HEADER, API_LEVEL)
         .bearer_auth(&cred.credential)
         .json(&report)
         .send()
@@ -201,6 +204,7 @@ async fn a_worker_is_asked_to_remove_an_image_and_a_stray() {
 
     let set: DesiredSet = http
         .get(format!("{}/api/worker/v1/desired", s.url()))
+        .header(LEVEL_HEADER, API_LEVEL)
         .bearer_auth(&cred.credential)
         .send()
         .await
@@ -218,4 +222,59 @@ async fn a_worker_is_asked_to_remove_an_image_and_a_stray() {
         .expect("the worker")
         .into_inner();
     assert_eq!(w.pending_removals.len(), 1, "{w:?}");
+}
+
+/// A worker and a server compare worker API levels before anything else:
+/// the server answers every request with the levels it serves, and refuses
+/// a worker that names none or one outside them, as a conflict that names
+/// which of the two to upgrade.
+#[tokio::test]
+async fn a_worker_outside_the_served_levels_is_refused() {
+    use hangar_api::{API_LEVEL, LEVEL_HEADER, LEVELS_HEADER, Levels, RegisterWorker};
+    let Some(s) = Server::start() else { return };
+    let http = s.http();
+    let register = |level: Option<String>| {
+        let mut r = http
+            .post(format!("{}/api/worker/v1/register", s.url()))
+            .bearer_auth(hangar_suite::BOOTSTRAP_TOKEN)
+            .json(&RegisterWorker {
+                name: "w".into(),
+                labels: Default::default(),
+            });
+        if let Some(l) = level {
+            r = r.header(LEVEL_HEADER, l);
+        }
+        r.send()
+    };
+    for (level, code) in [
+        (None, "worker_too_old"),
+        (Some("0".to_string()), "worker_too_old"),
+        (Some((API_LEVEL + 1).to_string()), "server_too_old"),
+    ] {
+        let r = register(level.clone()).await.unwrap();
+        assert_eq!(r.status(), 409, "level {level:?}");
+        let levels = r.headers()[LEVELS_HEADER].to_str().unwrap().to_string();
+        assert_eq!(Levels::parse(&levels), Some(Levels::SERVED));
+        let body: serde_json::Value = r.json().await.unwrap();
+        assert_eq!(body["code"], code, "level {level:?}: {body}");
+    }
+    let r = register(Some(API_LEVEL.to_string())).await.unwrap();
+    assert_eq!(r.status(), 201);
+    assert!(r.headers().contains_key(LEVELS_HEADER));
+}
+
+/// A worker reports its build and what it can do, which its page shows.
+#[tokio::test]
+async fn a_worker_reports_its_version_and_features() {
+    let Some(s) = Server::start() else { return };
+    let admin = s.admin().await;
+    let _w = s.worker("w");
+    let w = eventually("w reporting", || async {
+        let ws = admin.list_workers().await.ok()?.into_inner();
+        ws.into_iter()
+            .find(|w| w.name == "w" && w.version.is_some())
+    })
+    .await;
+    assert_eq!(w.version.as_deref(), Some(hangar_worker::VERSION));
+    assert_eq!(w.features, ["suspend"]);
 }

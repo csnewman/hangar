@@ -1455,7 +1455,7 @@ export interface components {
         /** @description Why a request was refused. The message is for people; the code is for programs, and stays the same however the message is worded. */
         Error: {
             error: string;
-            /** @description What the refusal is. Each status has its own: invalid (400), unauthorized (401), forbidden (403), not_found (404), conflict (409), too_large (413), refused (another 4xx), internal (5xx), unavailable (503). Some refusals have one of their own instead: environment_not_running (409), worker_unreachable (503), environment_not_placed (409). More may come; treat one you do not know as its status's. */
+            /** @description What the refusal is. Each status has its own: invalid (400), unauthorized (401), forbidden (403), not_found (404), conflict (409), too_large (413), refused (another 4xx), internal (5xx), unavailable (503). Some refusals have one of their own instead: environment_not_running (409), worker_unreachable (503), environment_not_placed (409). A sign-in still waiting to be approved answers 202 with sign_in_pending. More may come; treat one you do not know as its status's. */
             code: string;
         };
         /**
@@ -1825,6 +1825,10 @@ export interface components {
             images: components["schemas"]["LocalImage"][];
             gpu?: components["schemas"]["GPUInfo"];
             monitor?: components["schemas"]["Monitor"];
+            /** @description The worker's build, as it last reported it. */
+            version?: string;
+            /** @description What it can do beyond what its worker API level promises, as it last reported: suspend, gpu, and in time more. An environment is placed only on a worker with every feature it needs. */
+            features: string[];
             /** @description Copies of images the worker has been asked to delete and still holds. */
             pending_removals: components["schemas"]["ImageCopy"][];
         };

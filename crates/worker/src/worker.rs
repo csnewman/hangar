@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use hangar_api::{
     DesiredState, EnvironmentSpec, GpuInfo, ImageCopy, LocalImage, ObservedEnvironment,
-    REGISTRY_PATH, Resources, Spec, WorkerStatus,
+    REGISTRY_PATH, Resources, Spec, WorkerStatus, feature,
 };
 use hangar_images::HangarRegistry;
 use hangar_vm::log::Log;
@@ -258,6 +258,13 @@ impl<R: Runtime> Worker<R> {
         }
         let gpu = self.rt.gpu();
         let (monitor, suspends) = self.rt.monitor();
+        let mut features = Vec::new();
+        if suspends {
+            features.push(feature::SUSPEND.to_string());
+        }
+        if gpu.as_ref().is_some_and(|g| g.unavailable.is_empty()) {
+            features.push(feature::GPU.to_string());
+        }
         WorkerStatus {
             capacity: self.capacity,
             labels: with_renderer_label(&self.cfg.node.labels, gpu.as_ref()),
@@ -266,7 +273,8 @@ impl<R: Runtime> Worker<R> {
             images: self.rt.images(),
             gpu,
             monitor,
-            suspends,
+            version: crate::VERSION.to_string(),
+            features,
         }
     }
 

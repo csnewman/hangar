@@ -208,6 +208,10 @@ pub mod code {
     pub const NOT_PLACED: &str = "environment_not_placed";
     /// A sign-in waits to be approved (202, not a refusal).
     pub const SIGN_IN_PENDING: &str = "sign_in_pending";
+    /// The worker speaks a worker API older than this server serves.
+    pub const WORKER_TOO_OLD: &str = "worker_too_old";
+    /// The worker speaks a worker API newer than this server serves.
+    pub const SERVER_TOO_OLD: &str = "server_too_old";
 }
 
 /// The code a refusal with this status has unless it is given its own.

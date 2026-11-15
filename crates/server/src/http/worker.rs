@@ -9,10 +9,13 @@ use axum::http::{HeaderMap, StatusCode, header, request::Parts};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
-use hangar_api::{DesiredSet, EnvironmentFiles, RegisterWorker, WorkerCredential, WorkerStatus};
+use hangar_api::{
+    DesiredSet, EnvironmentFiles, LEVEL_HEADER, LEVELS_HEADER, Levels, Mismatch, RegisterWorker,
+    WorkerCredential, WorkerStatus,
+};
 use uuid::Uuid;
 
-use super::{ApiError, Body, Shared};
+use super::{ApiError, Body, Shared, code};
 use crate::workers;
 
 pub fn routes() -> Router<Shared> {
@@ -22,6 +25,53 @@ pub fn routes() -> Router<Shared> {
         .route("/status", put(status))
         .route("/environments/{id}/files", get(files))
         .route("/tunnel", get(tunnel))
+        .layer(axum::middleware::from_fn(levels))
+}
+
+/// Refuses a worker whose API level this server does not serve, before
+/// anything else, and tells every worker the levels it does.
+async fn levels(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let served = Levels::SERVED;
+    let level = req
+        .headers()
+        .get(LEVEL_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u32>().ok());
+    let refused = match level {
+        None => Some(Mismatch::WorkerTooOld),
+        Some(l) => served.refuses(l),
+    };
+    let mut resp = match refused {
+        None => next.run(req).await,
+        Some(Mismatch::WorkerTooOld) => ApiError::new(
+            StatusCode::CONFLICT,
+            format!(
+                "this server serves worker API levels {} to {}, and the worker speaks {}: \
+                 upgrade the worker",
+                served.min,
+                served.max,
+                level.map_or("none".to_string(), |l| l.to_string())
+            ),
+        )
+        .code(code::WORKER_TOO_OLD)
+        .into_response(),
+        Some(Mismatch::ServerTooOld) => ApiError::new(
+            StatusCode::CONFLICT,
+            format!(
+                "this server serves worker API levels {} to {}, older than the worker's {}: \
+                 upgrade the server",
+                served.min,
+                served.max,
+                level.unwrap_or_default()
+            ),
+        )
+        .code(code::SERVER_TOO_OLD)
+        .into_response(),
+    };
+    if let Ok(v) = served.header().parse() {
+        resp.headers_mut().insert(LEVELS_HEADER, v);
+    }
+    resp
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {

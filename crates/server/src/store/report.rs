@@ -306,7 +306,8 @@ impl Tx {
             Backend::Pg(tx) => {
                 sqlx::query(
                     "UPDATE workers SET cpus = $2, memory_mib = $3, labels = $4, unknown = $5,
-                        stats = $6, images = $7, gpu = $8, monitor = $9, suspends = $10, last_seen_at = $11
+                        stats = $6, images = $7, gpu = $8, monitor = $9, version = $10, features = $11,
+                        last_seen_at = $12
                      WHERE id = $1",
                 )
                 .bind(id)
@@ -318,7 +319,8 @@ impl Tx {
                 .bind(&images)
                 .bind(&gpu)
                 .bind(&st.monitor)
-                .bind(st.suspends)
+                .bind(&st.version)
+                .bind(&st.features)
                 .bind(now)
                 .execute(&mut **tx)
                 .await?;
@@ -349,7 +351,8 @@ impl Tx {
                     w.images = images;
                     w.gpu = gpu;
                     w.monitor = st.monitor.clone();
-                    w.suspends = st.suspends;
+                    w.version = st.version.clone();
+                    w.features = st.features.clone();
                     w.last_seen_at = Some(now);
                 }
                 tx.work.worker_image_removals.retain(|r| {

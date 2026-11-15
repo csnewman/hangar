@@ -49,6 +49,11 @@ export function WorkerDetail({ id }: { id: string }) {
               </span>
             ))}
             <span>last seen {formatAgo(w.last_seen_at)}</span>
+            {w.version && (
+              <span className="mono" title={w.features.length ? `Can: ${w.features.join(', ')}` : undefined}>
+                {w.version}
+              </span>
+            )}
           </>
         }
         actions={<WorkerRemoval worker={w} />}

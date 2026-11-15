@@ -75,7 +75,8 @@ pub async fn register(
         revoked_at: None,
         created_at: now,
         monitor: String::new(),
-        suspends: false,
+        version: String::new(),
+        features: Vec::new(),
     };
     let mut tx = store.begin().await?;
     if !tx.insert_worker(&w).await? {

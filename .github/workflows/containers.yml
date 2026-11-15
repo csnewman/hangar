@@ -93,6 +93,7 @@ jobs:
           context: .
           file: crates/worker/Dockerfile
           target: worker
+          build-args: VERSION=${{ github.sha }}
           platforms: linux/${{ matrix.arch }}
           push: true
           tags: |

@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use chrono::Utc;
 use hangar_api::{
     Display, EnvironmentStats, Gpu, GpuInfo, ImageRollback, ImageUpdate, Progress, Repo, Spec,
-    TemplateSpec,
+    TemplateSpec, feature,
 };
 use rand::Rng;
 use uuid::Uuid;
@@ -266,7 +266,7 @@ async fn views(tx: &mut Tx, p: Option<&Principal>, only: Only) -> StoreResult<Ve
                 name: w.name.clone(),
                 online: workers::online(w),
                 monitor: w.monitor.clone(),
-                suspends: w.suspends,
+                suspends: w.features.iter().any(|f| f == feature::SUSPEND),
                 gpu,
             }),
             stats,
