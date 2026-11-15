@@ -47,8 +47,14 @@ async fn health_endpoints_and_the_web_ui() {
         "{}",
         header(&r, "content-type")
     );
-    assert_eq!(header(&r, "cache-control"), "no-cache");
-    assert!(r.text().await.unwrap().contains("<title>"));
+    let cache = header(&r, "cache-control");
+    let page = r.text().await.unwrap();
+    assert!(page.contains("<title>"), "{page}");
+    // The UI's page is read afresh each time, so a new build reaches
+    // browsers at once; a binary built without the UI only says so.
+    if !page.contains("not built into this binary") {
+        assert_eq!(cache, "no-cache");
+    }
 }
 
 /// A person's theme is theirs wherever they sign in; one that is not a
