@@ -3,14 +3,17 @@
 
 use hangar_suite::{Server, eventually, frontendapi, status, why};
 
-/// The worker named name, once the server lists it online.
+/// The worker named name, once the server lists it online and it has
+/// reported what it offers. Asking for its desired state is enough to be
+/// online, and a worker asks before its first report; every report says
+/// its version.
 async fn online(admin: &frontendapi::Client, name: &str) -> frontendapi::types::Worker {
     eventually(&format!("{name} online"), || async {
         match admin.list_workers().await {
             Ok(ws) => ws
                 .into_inner()
                 .into_iter()
-                .find(|w| w.name == name && w.online),
+                .find(|w| w.name == name && w.online && w.version.is_some()),
             Err(e) => {
                 eprintln!("listing workers: {}", why(&e));
                 None
