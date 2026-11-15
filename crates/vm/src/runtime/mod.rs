@@ -28,7 +28,8 @@ use std::time::{Duration, Instant};
 
 use hangar_api::{
     DesiredState, Display, EnvironmentSpec, EnvironmentStats, Gpu, GpuDevice, GpuInfo, GpuRenderer,
-    ImageCopy, ImageUpdate, LocalImage, ObservedEnvironment, Phase, Progress, Resources, Step,
+    ImageCopy, ImageState, ImageUpdate, LocalImage, ObservedEnvironment, Phase, Progress,
+    Resources, Step,
 };
 use hangar_images::{Auth, HangarRegistry, Store};
 use tokio::sync::{Notify, watch};
@@ -440,7 +441,11 @@ impl Runtime {
                     r#ref: i.reference,
                     digest: i.digest,
                     size_bytes: i.size_bytes as i64,
-                    state: i.state.to_string(),
+                    state: if i.fetching {
+                        ImageState::Fetching
+                    } else {
+                        ImageState::Ready
+                    },
                     current: i.current,
                 }
             })

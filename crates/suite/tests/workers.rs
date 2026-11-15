@@ -90,7 +90,7 @@ async fn only_an_administrator_sees_workers() {
 #[tokio::test]
 async fn a_worker_is_asked_to_remove_an_image_and_a_stray() {
     use hangar_api::{
-        DesiredSet, LocalImage, ObservedEnvironment, Phase, RegisterWorker, Resources,
+        DesiredSet, ImageState, LocalImage, ObservedEnvironment, Phase, RegisterWorker, Resources,
         WorkerCredential, WorkerStatus,
     };
     let Some(s) = Server::start() else { return };
@@ -133,7 +133,7 @@ async fn a_worker_is_asked_to_remove_an_image_and_a_stray() {
             r#ref: image.into(),
             digest: digest.clone(),
             size_bytes: 1 << 20,
-            state: "ready".into(),
+            state: ImageState::Ready,
             environments: Vec::new(),
             current: true,
         }],

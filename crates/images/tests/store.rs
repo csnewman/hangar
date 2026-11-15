@@ -83,12 +83,9 @@ fn a_workers_store_opens_as_its_disk_holds_it() {
     assert_eq!(list.len(), 2);
     assert_eq!(
         list.iter()
-            .map(|l| (l.digest.as_str(), l.current, l.state))
+            .map(|l| (l.digest.as_str(), l.current, l.fetching))
             .collect::<Vec<_>>(),
-        [
-            ("sha256:new", true, "ready"),
-            ("sha256:old", false, "ready")
-        ]
+        [("sha256:new", true, false), ("sha256:old", false, false)]
     );
     let got = s.get(&old, &mut |_| panic!("held, not fetched")).unwrap();
     assert_eq!(

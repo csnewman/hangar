@@ -74,8 +74,8 @@ pub struct LocalImage {
     pub digest: String,
     /// The space it takes on disk.
     pub size_bytes: u64,
-    /// ready, or fetching.
-    pub state: &'static str,
+    /// Being pulled or copied in, and not yet ready.
+    pub fetching: bool,
     /// Whether it is what its reference names.
     pub current: bool,
 }
@@ -406,24 +406,24 @@ impl Store {
     /// and digest.
     pub fn list(&self) -> Vec<LocalImage> {
         let inner = self.inner.lock().unwrap();
-        let mut entries: Vec<(ImageCopy, PathBuf, &'static str, bool)> = inner
+        let mut entries: Vec<(ImageCopy, PathBuf, bool, bool)> = inner
             .held
             .iter()
-            .map(|(c, h)| (c.clone(), h.dir.clone(), "ready", is_current(&inner, c)))
+            .map(|(c, h)| (c.clone(), h.dir.clone(), false, is_current(&inner, c)))
             .collect();
         for c in inner.fetching.keys() {
             let current = inner.current.get(&c.reference) == Some(&c.digest);
             let dir = PathBuf::from(format!("{}.fetching", self.path(c).display()));
-            entries.push((c.clone(), dir, "fetching", current));
+            entries.push((c.clone(), dir, true, current));
         }
         drop(inner);
         let mut out: Vec<LocalImage> = entries
             .into_iter()
-            .map(|(c, dir, state, current)| LocalImage {
+            .map(|(c, dir, fetching, current)| LocalImage {
                 reference: c.reference,
                 digest: c.digest,
                 size_bytes: allocated(&dir),
-                state,
+                fetching,
                 current,
             })
             .collect();

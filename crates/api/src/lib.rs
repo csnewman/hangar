@@ -6,8 +6,10 @@
 //! holding. Either side can drop any number of messages and the next one
 //! repairs it.
 //!
-//! The server writes an empty list or map as null, which reads here as
-//! empty. A value of an enum this worker does not know reads as its Other.
+//! A list or map may be written as null, which reads here as empty. Every
+//! enum reads a value it does not know as its Other, so a newer side's
+//! values never fail the whole message (tests/enums.rs holds every enum
+//! here to that).
 
 use std::collections::BTreeMap;
 
@@ -70,6 +72,9 @@ pub enum Phase {
     Suspended,
     Failed,
     Deleting,
+    /// A phase this side does not know.
+    #[serde(other)]
+    Other,
 }
 
 /// Whether an environment has a graphical desktop.
@@ -569,6 +574,9 @@ pub enum Step {
     Profile,
     /// Applies the template: the hostname and the clones.
     Workspace,
+    /// A step this side does not know, after those it does.
+    #[serde(other)]
+    Other,
 }
 
 /// The step a starting environment is on and, where it can be measured,
@@ -649,6 +657,18 @@ pub struct ImageCopy {
     pub digest: String,
 }
 
+/// Whether a copy of an image can be booted from.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ImageState {
+    #[default]
+    Ready,
+    /// Being pulled or copied in.
+    Fetching,
+    #[serde(other)]
+    Other,
+}
+
 /// A copy of an image a worker holds in its own store.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalImage {
@@ -657,8 +677,7 @@ pub struct LocalImage {
     /// "build:" and the build's ID for one copied from a local build.
     pub digest: String,
     pub size_bytes: i64,
-    /// "ready", or "fetching" while it is being pulled or copied in.
-    pub state: String,
+    pub state: ImageState,
     /// The environments on the worker using it.
     pub environments: Vec<String>,
     /// Whether the copy is of what the reference named when the worker last

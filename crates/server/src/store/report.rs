@@ -3,7 +3,7 @@
 //! go, and the worker's own capacity and state.
 
 use chrono::{DateTime, Utc};
-use hangar_api::{ObservedEnvironment, WorkerStatus};
+use hangar_api::{ObservedEnvironment, Phase, WorkerStatus};
 use sqlx::Row;
 use uuid::Uuid;
 
@@ -42,7 +42,12 @@ fn json<T: serde::Serialize>(v: &Option<T>) -> Option<serde_json::Value> {
     v.as_ref().and_then(|v| serde_json::to_value(v).ok())
 }
 
-fn phase_name(o: &ObservedEnvironment) -> String {
+/// The phase to record for what a worker reports: a phase this server
+/// does not know leaves the one it has.
+fn phase_name(o: &ObservedEnvironment, had: &str) -> String {
+    if o.phase == Phase::Other {
+        return had.to_string();
+    }
     serde_json::to_value(o.phase)
         .ok()
         .and_then(|v| v.as_str().map(str::to_string))
@@ -77,7 +82,7 @@ impl Tx {
                 continue;
             };
             reported.push(p.id);
-            let to = phase_name(o);
+            let to = phase_name(o, &p.phase);
             if p.phase != to {
                 phases.push(PhaseChange {
                     id: p.id,
