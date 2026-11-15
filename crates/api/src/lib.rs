@@ -442,6 +442,44 @@ pub fn incompatible(levels: Option<&str>) -> Option<String> {
     }
 }
 
+/// A worker's answer to a stream the server opens over its tunnel: the
+/// stream's first line from the worker, after the server's header and
+/// before anything of the stream's own. ok, or why the worker cannot serve
+/// it, as a code (STREAM_*) and a message.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamAnswer {
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub ok: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub error: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub code: String,
+}
+
+/// The worker serves no streams of the kind the header names.
+pub const STREAM_UNKNOWN_KIND: &str = "unknown_kind";
+
+/// The environment is not running on the worker, or its guest did not
+/// answer.
+pub const STREAM_UNREACHABLE: &str = "unreachable";
+
+impl StreamAnswer {
+    pub fn ok() -> StreamAnswer {
+        StreamAnswer {
+            ok: true,
+            ..StreamAnswer::default()
+        }
+    }
+
+    pub fn refused(code: &str, error: impl Into<String>) -> StreamAnswer {
+        StreamAnswer {
+            ok: false,
+            error: error.into(),
+            code: code.to_string(),
+        }
+    }
+}
+
 /// What a worker can do that its API level does not promise, by name, as
 /// it reports them (`WorkerStatus::features`). The server places an
 /// environment only on a worker with every feature its spec needs

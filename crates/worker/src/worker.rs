@@ -20,7 +20,8 @@ use std::time::Duration;
 
 use hangar_api::{
     DesiredState, EnvironmentSpec, GpuInfo, ImageCopy, LocalImage, ObservedEnvironment,
-    REGISTRY_PATH, Resources, Spec, WorkerStatus, feature,
+    REGISTRY_PATH, Resources, STREAM_UNKNOWN_KIND, STREAM_UNREACHABLE, Spec, StreamAnswer,
+    WorkerStatus, feature,
 };
 use hangar_images::HangarRegistry;
 use hangar_vm::log::Log;
@@ -334,10 +335,14 @@ impl<R: Runtime> Worker<R> {
         }
     }
 
-    /// Serves one stream the control plane opens over the tunnel.
+    /// Serves one stream the control plane opens over the tunnel, having
+    /// answered it (`StreamAnswer`): ok once the stream is ready, or why it
+    /// cannot be served, and closed.
     async fn stream(&self, h: Header, mut s: tunnel::Stream) {
         if h.kind == tunnel::KIND_LOGS {
-            self.serve_logs(&mut s).await;
+            if answer(&mut s, &StreamAnswer::ok()).await {
+                self.serve_logs(&mut s).await;
+            }
             let _ = s.shutdown().await;
             return;
         }
@@ -346,6 +351,9 @@ impl<R: Runtime> Worker<R> {
                 "unknown stream from the control plane",
                 &[("kind", &h.kind)],
             );
+            let why = format!("this worker serves no {:?} streams", h.kind);
+            answer(&mut s, &StreamAnswer::refused(STREAM_UNKNOWN_KIND, why)).await;
+            let _ = s.shutdown().await;
             return;
         };
         let guest =
@@ -360,6 +368,8 @@ impl<R: Runtime> Worker<R> {
                             ("err", &e),
                         ],
                     );
+                    let why = StreamAnswer::refused(STREAM_UNREACHABLE, e.to_string());
+                    answer(&mut s, &why).await;
                     let _ = s.shutdown().await;
                     return;
                 }
@@ -372,10 +382,18 @@ impl<R: Runtime> Worker<R> {
                             ("err", &"timed out"),
                         ],
                     );
+                    let why = StreamAnswer::refused(
+                        STREAM_UNREACHABLE,
+                        "the environment's guest did not answer in time",
+                    );
+                    answer(&mut s, &why).await;
                     let _ = s.shutdown().await;
                     return;
                 }
             };
+        if !answer(&mut s, &StreamAnswer::ok()).await {
+            return;
+        }
         relay(s, guest).await;
     }
 
@@ -419,6 +437,13 @@ impl<R: Runtime> Worker<R> {
             }
         }
     }
+}
+
+/// Writes a stream's answer as its first line, saying whether it went.
+async fn answer(s: &mut tunnel::Stream, a: &StreamAnswer) -> bool {
+    let mut line = serde_json::to_vec(a).unwrap_or_default();
+    line.push(b'\n');
+    s.write_all(&line).await.is_ok() && s.flush().await.is_ok()
 }
 
 /// The guest port a kind of stream is served on.

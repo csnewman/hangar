@@ -112,11 +112,25 @@ async fn open(app: &Shared, worker: Uuid, kind: &str, env: &str) -> Result<Conn,
             },
         )
         .await
-        .map_err(|e| {
-            if !matches!(e, OpenError::NoTunnel) {
-                eprintln!("hangar-server: opening a {kind} stream to {env}: {e}");
+        .map_err(|e| match e {
+            OpenError::Refused { code: c, .. } if c == hangar_api::STREAM_UNKNOWN_KIND => {
+                ApiError::new(
+                    StatusCode::CONFLICT,
+                    "the environment's worker is too old to serve this: upgrade it",
+                )
+                .code(code::WORKER_TOO_OLD)
             }
-            ApiError::new(StatusCode::SERVICE_UNAVAILABLE, UNREACHABLE).code(code::UNREACHABLE)
+            OpenError::Refused { message, .. } => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!("the environment did not answer: {message}"),
+            )
+            .code(code::ENVIRONMENT_UNREACHABLE),
+            e => {
+                if !matches!(e, OpenError::NoTunnel) {
+                    eprintln!("hangar-server: opening a {kind} stream to {env}: {e}");
+                }
+                ApiError::new(StatusCode::SERVICE_UNAVAILABLE, UNREACHABLE).code(code::UNREACHABLE)
+            }
         })
 }
 

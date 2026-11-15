@@ -2,7 +2,8 @@
 //! opens (GET /api/worker/v1/tunnel, a WebSocket): the server is yamux's
 //! client on it and opens a stream for each use, which starts with a JSON
 //! line naming what it is for (Header), as the worker's
-//! crates/worker/src/tunnel.rs serves it.
+//! crates/worker/src/tunnel.rs serves it, and the worker's line answering
+//! it (`hangar_api::StreamAnswer`).
 //!
 //! A stream's reads and writes are polled from one task: a yamux stream's
 //! reads send window updates down the same channel its writes use, which
@@ -18,7 +19,8 @@ use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
 use futures_util::{Sink, Stream};
-use tokio::io::AsyncWriteExt;
+use hangar_api::StreamAnswer;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt};
 use uuid::Uuid;
@@ -59,6 +61,9 @@ pub enum OpenError {
     NoTunnel,
     /// It had one, which failed.
     Failed(String),
+    /// The worker answered that it cannot serve the stream: a code
+    /// (`hangar_api::STREAM_*`) and why.
+    Refused { code: String, message: String },
 }
 
 impl std::fmt::Display for OpenError {
@@ -66,8 +71,34 @@ impl std::fmt::Display for OpenError {
         match self {
             OpenError::NoTunnel => f.write_str("the worker is not connected to this server"),
             OpenError::Failed(e) => write!(f, "the worker's tunnel: {e}"),
+            OpenError::Refused { message, .. } => f.write_str(message),
         }
     }
+}
+
+/// How long a worker may take to answer a stream: it dials the guest
+/// first, which it gives 30 seconds.
+const ANSWER_WITHIN: Duration = Duration::from_secs(45);
+
+/// Reads the worker's answer to a stream (`hangar_api::StreamAnswer`), a
+/// byte at a time so nothing of the stream's own past it is taken.
+async fn answer(conn: &mut Conn) -> Result<StreamAnswer, OpenError> {
+    let mut line = Vec::new();
+    loop {
+        let b = conn
+            .read_u8()
+            .await
+            .map_err(|e| OpenError::Failed(format!("reading the worker's answer: {e}")))?;
+        if b == b'\n' {
+            break;
+        }
+        if line.len() >= 64 << 10 {
+            return Err(OpenError::Failed("the worker's answer is too long".into()));
+        }
+        line.push(b);
+    }
+    serde_json::from_slice(&line)
+        .map_err(|e| OpenError::Failed(format!("the worker's answer: {e}")))
 }
 
 type Opener = mpsc::Sender<oneshot::Sender<Result<yamux::Stream, String>>>;
@@ -103,6 +134,15 @@ impl Tunnels {
         conn.write_all(&line)
             .await
             .map_err(|e| OpenError::Failed(e.to_string()))?;
+        let a = tokio::time::timeout(ANSWER_WITHIN, answer(&mut conn))
+            .await
+            .map_err(|_| OpenError::Failed("the worker did not answer the stream".into()))??;
+        if !a.ok {
+            return Err(OpenError::Refused {
+                code: a.code,
+                message: a.error,
+            });
+        }
         Ok(conn)
     }
 

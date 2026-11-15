@@ -393,7 +393,7 @@ async fn dial(app: &Shared, worker: Uuid, env: Uuid, port: u16) -> Result<tunnel
         .await
         .map_err(|e| match e {
             OpenError::NoTunnel => Unreached::NoTunnel,
-            OpenError::Failed(e) => Unreached::Failed(e),
+            e => Unreached::Failed(e.to_string()),
         })?;
     let failed = |e: std::io::Error| {
         Unreached::Failed(format!("asking the environment for port {port}: {e}"))

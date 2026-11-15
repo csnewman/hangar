@@ -204,6 +204,8 @@ pub mod code {
     pub const NOT_RUNNING: &str = "environment_not_running";
     /// The environment's worker is not connected to this server.
     pub const UNREACHABLE: &str = "worker_unreachable";
+    /// Its worker is, but the environment did not answer.
+    pub const ENVIRONMENT_UNREACHABLE: &str = "environment_unreachable";
     /// The environment is on no worker yet.
     pub const NOT_PLACED: &str = "environment_not_placed";
     /// A sign-in waits to be approved (202, not a refusal).
