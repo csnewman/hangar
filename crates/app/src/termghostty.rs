@@ -85,6 +85,7 @@ pub struct Ghostty {
     faint: f32,
     /// What animations' frames are timed from.
     started: Instant,
+    shown: Shown,
 }
 
 /// How many bytes of pictures a screen keeps, the oldest deleted past it.
@@ -128,6 +129,7 @@ impl Ghostty {
             cursor_look: CursorLook::default(),
             faint: 0.5,
             started: Instant::now(),
+            shown: Shown::default(),
         }
     }
 
@@ -460,96 +462,45 @@ impl Emulator for Ghostty {
     }
 
     /// The visible rows, each a line of text with its spans, the selection
-    /// and Find's matches marked.
+    /// and Find's matches marked. Only the rows Ghostty says changed are
+    /// read, and only their lines made again, unless what is marked on
+    /// them or their colours changed.
     fn lines(&mut self) -> Vec<Line> {
-        let mut frame = self.t.frame();
+        let mut frame = self.t.changes();
+        // Rows not read cannot be made from rows the last frame lacked.
+        if frame.rows.len() != self.shown.rows.len() && frame.rows.iter().any(|r| !r.changed) {
+            frame = self.t.frame();
+        }
         self.placed = joined(std::mem::take(&mut frame.placements));
         self.cursor_look = CursorLook {
             style: frame.cursor_style,
             blinking: frame.cursor_blinking,
             colour: frame.cursor_colour.map(theirs),
         };
-        let found = self.t.found();
-        let matches = self.t.matches();
-        let top = self.t.above_viewport();
-        frame
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(r, row)| {
-                let mut line = Line::default();
-                for (c, cell) in row.cells.iter().enumerate() {
-                    if cell.wide == Wide::SpacerTail {
-                        let start = line.cells.last().copied().unwrap_or(0);
-                        line.cells.push(start);
-                        continue;
-                    }
-                    line.cells.push(line.text.len());
-                    let mut fg = theirs(cell.fg.unwrap_or(frame.fg));
-                    let mut bg = theirs(cell.bg.unwrap_or(frame.bg));
-                    if cell.inverse {
-                        std::mem::swap(&mut fg, &mut bg);
-                    }
-                    if cell.faint {
-                        fg = faded(fg, bg, self.faint);
-                    }
-                    if cell.invisible {
-                        fg = bg;
-                    }
-                    let mark = if found.is_some_and(|m| within((r, c), m)) {
-                        Mark::Current
-                    } else if cell.selected {
-                        Mark::Selected
-                    } else if matches.iter().any(|m| within((r, c), *m)) {
-                        Mark::Match
-                    } else {
-                        Mark::None
-                    };
-                    let hovered = self.hover.is_some_and(|h| within((top + r, c), h));
-                    let span = Span {
-                        len: 0,
-                        fg,
-                        bg,
-                        own_bg: cell.inverse || cell.bg.is_some(),
-                        bold: cell.bold,
-                        italic: cell.italic,
-                        underline: if hovered && cell.underline == Underline::None {
-                            Underline::Single
-                        } else {
-                            cell.underline
-                        },
-                        underline_colour: cell.underline_colour.map(theirs),
-                        strikethrough: cell.strikethrough,
-                        overline: cell.overline,
-                        mark,
-                    };
-                    // A kitty placeholder cell, with the diacritics saying
-                    // which part of a picture it holds, is blank under the
-                    // picture Ghostty places there.
-                    let start = line.text.len();
-                    line.text.push_str(
-                        if cell.text.is_empty() || cell.text.starts_with(PLACEHOLDER) {
-                            " "
-                        } else {
-                            &cell.text
-                        },
-                    );
-                    let len = line.text.len() - start;
-                    match line.spans.last_mut() {
-                        Some(last)
-                            if Span {
-                                len: last.len,
-                                ..span
-                            } == *last =>
-                        {
-                            last.len += len
-                        }
-                        _ => line.spans.push(Span { len, ..span }),
-                    }
-                }
-                line
-            })
-            .collect()
+        let marks = Marks {
+            found: self.t.found(),
+            matches: self.t.matches(),
+            hover: self.hover,
+            top: self.t.above_viewport(),
+            faint: self.faint,
+            fg: frame.fg,
+            bg: frame.bg,
+        };
+        let shown = &mut self.shown;
+        let afresh = shown.marks.as_ref() != Some(&marks) || shown.lines.len() != frame.rows.len();
+        shown.rows.resize_with(frame.rows.len(), Default::default);
+        shown.lines.resize_with(frame.rows.len(), Line::default);
+        for (r, row) in frame.rows.into_iter().enumerate() {
+            let changed = row.changed;
+            if changed {
+                shown.rows[r] = row;
+            }
+            if changed || afresh {
+                shown.lines[r] = line(&shown.rows[r], r, &marks);
+            }
+        }
+        shown.marks = Some(marks);
+        shown.lines.clone()
     }
 
     fn effects(&mut self) -> Effects {
@@ -622,6 +573,103 @@ fn ours(c: Rgb) -> hangar_ghostty::Rgb {
         g: c.g,
         b: c.b,
     }
+}
+
+/// What a row's line is drawn with besides its cells: Find's matches and
+/// the link under the pointer (from the row `top` of the whole screen),
+/// faint text's colour, and the colours of cells without their own.
+#[derive(PartialEq)]
+struct Marks {
+    found: Option<(At, At)>,
+    matches: Vec<(At, At)>,
+    hover: Option<(At, At)>,
+    top: usize,
+    faint: f32,
+    fg: hangar_ghostty::Rgb,
+    bg: hangar_ghostty::Rgb,
+}
+
+/// The rows last read, their lines, and the marks they were made with.
+#[derive(Default)]
+struct Shown {
+    rows: Vec<hangar_ghostty::Row>,
+    lines: Vec<Line>,
+    marks: Option<Marks>,
+}
+
+/// Row r of the viewport as a line of text with its spans.
+fn line(row: &hangar_ghostty::Row, r: usize, marks: &Marks) -> Line {
+    let mut line = Line::default();
+    for (c, cell) in row.cells.iter().enumerate() {
+        if cell.wide == Wide::SpacerTail {
+            let start = line.cells.last().copied().unwrap_or(0);
+            line.cells.push(start);
+            continue;
+        }
+        line.cells.push(line.text.len());
+        let mut fg = theirs(cell.fg.unwrap_or(marks.fg));
+        let mut bg = theirs(cell.bg.unwrap_or(marks.bg));
+        if cell.inverse {
+            std::mem::swap(&mut fg, &mut bg);
+        }
+        if cell.faint {
+            fg = faded(fg, bg, marks.faint);
+        }
+        if cell.invisible {
+            fg = bg;
+        }
+        let mark = if marks.found.is_some_and(|m| within((r, c), m)) {
+            Mark::Current
+        } else if cell.selected {
+            Mark::Selected
+        } else if marks.matches.iter().any(|m| within((r, c), *m)) {
+            Mark::Match
+        } else {
+            Mark::None
+        };
+        let hovered = marks.hover.is_some_and(|h| within((marks.top + r, c), h));
+        let span = Span {
+            len: 0,
+            fg,
+            bg,
+            own_bg: cell.inverse || cell.bg.is_some(),
+            bold: cell.bold,
+            italic: cell.italic,
+            underline: if hovered && cell.underline == Underline::None {
+                Underline::Single
+            } else {
+                cell.underline
+            },
+            underline_colour: cell.underline_colour.map(theirs),
+            strikethrough: cell.strikethrough,
+            overline: cell.overline,
+            mark,
+        };
+        // A kitty placeholder cell, with the diacritics saying
+        // which part of a picture it holds, is blank under the
+        // picture Ghostty places there.
+        let start = line.text.len();
+        line.text.push_str(
+            if cell.text.is_empty() || cell.text.starts_with(PLACEHOLDER) {
+                " "
+            } else {
+                &cell.text
+            },
+        );
+        let len = line.text.len() - start;
+        match line.spans.last_mut() {
+            Some(last)
+                if Span {
+                    len: last.len,
+                    ..span
+                } == *last =>
+            {
+                last.len += len
+            }
+            _ => line.spans.push(Span { len, ..span }),
+        }
+    }
+    line
 }
 
 fn theirs(c: hangar_ghostty::Rgb) -> Rgb {
