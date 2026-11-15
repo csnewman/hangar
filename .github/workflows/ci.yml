@@ -6,10 +6,12 @@ on:
   pull_request:
 
 jobs:
-  go:
+  registry:
+    # Hangar's own registry, through a real server on Postgres and an
+    # encrypting object store, against the OCI distribution-spec conformance
+    # suite (which is Go's, hence Go here). The registry is a subdomain of
+    # the server's host, so both names are this machine.
     runs-on: ubuntu-26.04
-    # The control plane's tests run against a real Postgres; without one they
-    # skip, so this is what makes them count.
     services:
       postgres:
         image: postgres:18
@@ -24,8 +26,6 @@ jobs:
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30
-      # The object store the blob tests and the registry's conformance run
-      # use.
       rustfs:
         image: rustfs/rustfs:1.0.1
         env:
@@ -39,54 +39,29 @@ jobs:
           --health-interval 2s
           --health-timeout 3s
           --health-retries 30
-    env:
-      HANGAR_TEST_DATABASE_URL: postgres://hangar:hangar@localhost:5432/hangar?sslmode=disable
-      HANGAR_TEST_S3_URL: http://hangar:hangar-ci-secret@localhost:9000/hangar-test
-      HANGAR_TEST_S3_ENCRYPT: "true"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27'
-      - name: Check formatting
-        run: |
-          unformatted=$(gofmt -l .)
-          if [ -n "$unformatted" ]; then
-            echo "gofmt needed on:"; echo "$unformatted"; exit 1
-          fi
-      # The frontend API's Go side is generated from its spec and committed;
-      # a spec change without a regenerate fails here.
-      - name: Check generated code
-        run: |
-          go generate ./internal/frontendapi ./internal/clientapi
-          git diff --exit-code -- internal/frontendapi internal/clientapi
-      - run: go vet ./...
-      - run: go build ./...
-      - run: go test -race ./...
-      # Hangar's own registry, through a real server, against the OCI
-      # distribution-spec conformance suite. The registry is a subdomain of
-      # the server's host, so both names are this machine.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+          key: registry
       - name: Registry conformance
         run: |
           echo "127.0.0.1 hangar.test registry.hangar.test" | sudo tee -a /etc/hosts
           PGPASSWORD=hangar createdb -h localhost -U hangar conformance
           HANGAR_DATABASE_URL=postgres://hangar:hangar@localhost:5432/conformance?sslmode=disable \
           HANGAR_BLOB_URL=http://hangar:hangar-ci-secret@localhost:9000/conformance \
+          HANGAR_BLOB_ENCRYPT=true \
             dev/registry-conformance.sh
-      # A function no program or test reaches is one a refactor left behind.
-      # deadcode reports them and exits 0 either way, so any output fails.
-      - name: Check for unreachable code
-        run: |
-          go install golang.org/x/tools/cmd/deadcode@v0.50.0
-          unreachable=$(deadcode -test ./...)
-          if [ -n "$unreachable" ]; then
-            echo "Unreachable, and so to be removed:"; echo "$unreachable"; exit 1
-          fi
 
   suite:
-    # The black-box suite (crates/suite) against the Go server, built here:
-    # each test starts a server of its own, with a database on this Postgres
-    # and blobs in this RustFS.
+    # The black-box suite (crates/suite) against the server, built here,
+    # with each storage: each test starts a server of its own, with a
+    # database on this Postgres or a state file, and blobs in this RustFS.
     runs-on: ubuntu-26.04
     services:
       postgres:
@@ -117,21 +92,24 @@ jobs:
     env:
       HANGAR_TEST_DATABASE_URL: postgres://hangar:hangar@localhost:5432/hangar?sslmode=disable
       HANGAR_SUITE_BLOB_URL: http://hangar:hangar-ci-secret@localhost:9000/hangar-suite
+      HANGAR_SUITE_SERVER: ${{ github.workspace }}/crates/target/debug/hangar-server
+    defaults:
+      run:
+        working-directory: crates
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.27'
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates
           key: suite
-      - run: go build -o "$RUNNER_TEMP/hangar-server" ./cmd/hangar-server
-      - run: cargo test -p hangar-suite
-        working-directory: crates
+      - run: cargo build -p hangar-server
+      - name: The suite, on Postgres
+        run: cargo test -p hangar-suite
+      - name: The suite, on a state file
+        run: cargo test -p hangar-suite
         env:
-          HANGAR_SUITE_SERVER: ${{ runner.temp }}/hangar-server
+          HANGAR_SUITE_STORAGE: json
 
   web:
     runs-on: ubuntu-26.04

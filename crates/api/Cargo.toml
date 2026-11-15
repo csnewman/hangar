@@ -3,7 +3,7 @@ name = "hangar-api"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
-description = "The worker API's JSON shapes, as internal/api has them"
+description = "The worker API's JSON shapes"
 
 [lib]
 name = "hangar_api"

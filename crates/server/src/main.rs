@@ -1,5 +1,5 @@
-//! hangar-server: Hangar's control plane. Configured by its environment as
-//! the Go server is (cmd/hangar-server), so either serves a deployment.
+//! hangar-server: Hangar's control plane, configured by its flags and its
+//! environment (config.rs).
 
 mod audit;
 mod blob;
@@ -10,6 +10,7 @@ mod environments;
 mod fail;
 mod http;
 mod keys;
+mod listen;
 mod maintain;
 mod packs;
 mod placement;
@@ -43,10 +44,22 @@ async fn main() -> ExitCode {
 }
 
 async fn run() -> Result<(), String> {
-    let cfg = config::Config::from_env()?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let (cfg, migrate) = match config::Config::from_args(&args)? {
+        config::Command::Help(usage) => {
+            print!("{usage}");
+            return Ok(());
+        }
+        config::Command::Serve(cfg) => (cfg, false),
+        config::Command::Migrate(cfg) => (cfg, true),
+    };
     let store = store::Store::open(&cfg.storage)
         .await
         .map_err(|e| e.to_string())?;
+    if migrate {
+        eprintln!("hangar-server: the schema is up to date");
+        return Ok(());
+    }
     if let Some((name, password)) = &cfg.initial_admin
         && users::ensure_admin(&store, name, password)
             .await
@@ -59,7 +72,7 @@ async fn run() -> Result<(), String> {
             "hangar-server: AUTHENTICATION IS OFF: every visitor is signed in as {name} (HANGAR_DEV_AUTO_SIGN_IN)"
         );
     }
-    let listener = tokio::net::TcpListener::bind(&cfg.listen)
+    let listener = listen::tcp(&cfg.listen)
         .await
         .map_err(|e| format!("listening on {}: {e}", cfg.listen))?;
     eprintln!("hangar-server: serving HTTP on {}", cfg.listen);

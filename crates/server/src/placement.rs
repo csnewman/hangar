@@ -1,4 +1,4 @@
-//! Which worker runs each environment (internal/placement).
+//! Which worker runs each environment.
 //!
 //! Placement is permanent: an environment's disks are local to the worker
 //! it lands on, so it stays there for life, and one whose worker goes

@@ -1,5 +1,4 @@
-//! The JSON shapes a worker exchanges with hangar-server, as the server's
-//! internal/api has them.
+//! The JSON shapes a worker exchanges with hangar-server.
 //!
 //! The worker API is level-triggered. The server never sends a worker a
 //! command; it publishes the complete set of environments the worker should
@@ -589,8 +588,7 @@ pub struct Progress {
 }
 
 /// What an environment is using, measured by its worker. Rates are per
-/// second, averaged since the previous measurement; internal/api says what
-/// each is.
+/// second, averaged since the previous measurement.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct EnvironmentStats {
     pub cpu_percent: f64,

@@ -1,7 +1,5 @@
-//! The server's configuration: its environment, as the Go server's
-//! (cmd/hangar-server) is, so either reads the same deployment. A setting
-//! of the Go server's that this one does not read is passed over, not
-//! refused.
+//! The server's configuration: its flags and its environment. A setting
+//! it does not read is passed over, not refused.
 
 use std::path::PathBuf;
 
@@ -104,7 +102,7 @@ const LETS_ENCRYPT: &str = "https://acme-v02.api.letsencrypt.org/directory";
 /// An address to listen on, where `:port` is every interface's.
 fn listen_addr(l: String) -> String {
     match l.strip_prefix(':') {
-        Some(port) => format!("0.0.0.0:{port}"),
+        Some(port) => format!("{}:{port}", crate::listen::ANY),
         None => l,
     }
 }
@@ -298,10 +296,92 @@ fn ssh_address(
     ))
 }
 
+/// The server's flags, as `-name value`, `-name=value` or `--name`, each
+/// in place of the setting it names.
+const FLAGS: &[(&str, &str, &str)] = &[
+    ("listen", "HANGAR_LISTEN", "address to serve on"),
+    ("database", "HANGAR_DATABASE_URL", "Postgres connection URL"),
+    (
+        "bootstrap-token-file",
+        "HANGAR_BOOTSTRAP_TOKEN_FILE",
+        "file holding the token workers present to register",
+    ),
+];
+
+/// What the command line asks for besides serving.
+pub enum Command {
+    Serve(Config),
+    /// Bring the schema up to date, then exit without serving
+    /// (`-migrate-only`).
+    Migrate(Config),
+    /// Print the flags (`-h`).
+    Help(String),
+}
+
+fn usage() -> String {
+    let mut out = String::from("Usage of hangar-server:\n");
+    for (name, env, what) in FLAGS {
+        out.push_str(&format!("  -{name} string\n    \t{what} (or {env})\n"));
+    }
+    out.push_str("  -migrate-only\n    \tbring the schema up to date, then exit without serving\n");
+    out
+}
+
 impl Config {
-    /// Reads the configuration from the environment.
-    pub fn from_env() -> Result<Config, String> {
-        let var = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+    /// Reads the configuration from the command line's flags and the
+    /// environment.
+    pub fn from_args(args: &[String]) -> Result<Command, String> {
+        let mut given = std::collections::HashMap::new();
+        let mut migrate = false;
+        let mut i = 0;
+        while i < args.len() {
+            let a = args[i].trim_start_matches('-');
+            if a.len() == args[i].len() {
+                return Err(format!("unexpected argument {:?}\n{}", args[i], usage()));
+            }
+            let (name, value) = match a.split_once('=') {
+                Some((n, v)) => (n, Some(v.to_string())),
+                None => (a, None),
+            };
+            match name {
+                "h" | "help" => return Ok(Command::Help(usage())),
+                "migrate-only" => migrate = value.is_none_or(|v| v == "true"),
+                _ => {
+                    let Some((_, env, _)) = FLAGS.iter().find(|(n, _, _)| *n == name) else {
+                        return Err(format!(
+                            "flag provided but not defined: -{name}\n{}",
+                            usage()
+                        ));
+                    };
+                    let v = match value {
+                        Some(v) => v,
+                        None => {
+                            i += 1;
+                            args.get(i).cloned().ok_or_else(|| {
+                                format!("flag needs an argument: -{name}\n{}", usage())
+                            })?
+                        }
+                    };
+                    given.insert(*env, v);
+                }
+            }
+            i += 1;
+        }
+        let cfg = Config::read(&|k: &str| {
+            given
+                .get(k)
+                .cloned()
+                .or_else(|| std::env::var(k).ok())
+                .filter(|v| !v.is_empty())
+        })?;
+        Ok(if migrate {
+            Command::Migrate(cfg)
+        } else {
+            Command::Serve(cfg)
+        })
+    }
+
+    fn read(var: &dyn Fn(&str) -> Option<String>) -> Result<Config, String> {
         let storage = match (var("HANGAR_DATABASE_URL"), var("HANGAR_STATE_FILE")) {
             (Some(url), None) => Storage::Postgres(url),
             (None, Some(path)) => Storage::Json(path.into()),
@@ -358,11 +438,11 @@ impl Config {
             None => None,
         };
         let blobs = if registry {
-            Some(blob_config(&var, &storage)?)
+            Some(blob_config(var, &storage)?)
         } else {
             None
         };
-        let edge = edge(&var, public.as_ref())?;
+        let edge = edge(var, public.as_ref())?;
         Ok(Config {
             edge,
             auto_sign_in: var("HANGAR_DEV_AUTO_SIGN_IN"),

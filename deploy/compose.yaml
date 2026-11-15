@@ -65,7 +65,7 @@ services:
     profiles: [control-plane]
     build:
       context: ..
-      dockerfile: cmd/hangar-server/Dockerfile
+      dockerfile: crates/server/Dockerfile
     image: ${HANGAR_REGISTRY:-ghcr.io/csnewman/hangar}/server:${HANGAR_VERSION:-latest}
     restart: unless-stopped
     # Root, as the workers are: both write the files root (below), and a

@@ -1,5 +1,4 @@
-//! Hangar's SSH gateway: one SSH server in front of every environment
-//! (internal/sshgw).
+//! Hangar's SSH gateway: one SSH server in front of every environment.
 //!
 //!     ssh prof-a@hangar.example.com -p 2222        one of your environments
 //!     ssh alice/prof-a@hangar.example.com -p 2222  someone else's you may reach
@@ -54,7 +53,7 @@ pub async fn serve(app: Shared, addr: String, key: russh::keys::PrivateKey) {
         nodelay: true,
         ..server::Config::default()
     });
-    let listener = match tokio::net::TcpListener::bind(&addr).await {
+    let listener = match crate::listen::tcp(&addr).await {
         Ok(l) => l,
         Err(e) => {
             eprintln!("hangar-server: serving SSH on {addr}: {e}");

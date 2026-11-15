@@ -1,4 +1,4 @@
-//! The client API, /api/v1 (internal/clientapi/openapi.yaml): what the apps
+//! The client API, /api/v1 (api/client.yaml): what the apps
 //! and tools ask of the server, versioned.
 
 use axum::extract::{Path, State};
@@ -23,7 +23,10 @@ pub fn routes() -> Router<Shared> {
 
 async fn version() -> Json<types::Version> {
     Json(types::Version {
-        server: concat!("hangar-server ", env!("CARGO_PKG_VERSION")).into(),
+        server: format!(
+            "hangar-server {}",
+            option_env!("HANGAR_VERSION").unwrap_or(env!("CARGO_PKG_VERSION"))
+        ),
         versions: VERSIONS.iter().map(|v| v.to_string()).collect(),
     })
 }

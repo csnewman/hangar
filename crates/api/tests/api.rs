@@ -1,5 +1,5 @@
-//! The shapes read from and written as internal/api's JSON: tests/data's
-//! lines are what the Go package writes for the same values.
+//! The shapes read from and written as the worker API's JSON: tests/data's
+//! lines are the wire's own for the same values.
 
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -31,7 +31,7 @@ fn same(a: &Value, b: &Value) -> bool {
                 (None, None) => true,
             })
         }
-        // Go writes a float that is whole without its point.
+        // A float that is whole may come without its point.
         (Value::Number(x), Value::Number(y)) => x.as_f64() == y.as_f64(),
         (Value::Array(x), Value::Array(y)) => {
             x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q))
@@ -77,7 +77,7 @@ fn worker_status() {
         ws.environments[0].progress.as_ref().unwrap().step,
         Step::Download
     );
-    // As Go writes a time.
+    // A time as the wire has it.
     let at = UNIX_EPOCH + Duration::new(1_794_558_121, 123_456_000);
     assert_eq!(
         rfc3339(at),

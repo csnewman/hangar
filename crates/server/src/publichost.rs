@@ -1,6 +1,6 @@
 //! Names the parts of Hangar served on hosts of their own, each
 //! environment's web servers and the container registry, after Hangar's
-//! public host (internal/publichost).
+//! public host.
 //!
 //! A name is a label joined to the public host in one of two styles: as a
 //! subdomain (env<short>.hangar.example.com, the default), which needs the

@@ -2,8 +2,7 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// A time in RFC 3339, in UTC, with as many fractional digits as it needs:
-/// what Go's time.Time writes, which the server reads.
+/// A time in RFC 3339, in UTC, with as many fractional digits as it needs.
 pub fn rfc3339(t: SystemTime) -> String {
     let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
     let secs = d.as_secs() as i64;

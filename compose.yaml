@@ -2,8 +2,9 @@
 #
 # Caddy is the only published web port. It sends /api/ to hangar-server and
 # everything else to Vite, so the UI reloads as it is edited while talking to
-# the real API on the same origin. The Go services restart on any change to
-# Go source; `go run` rebuilds them from a cached build.
+# the real API on the same origin. The server restarts on any change to its
+# source, and `cargo run` rebuilds it from the build kept in a volume (the
+# first build takes a few minutes).
 #
 # Environments run on real workers beside the stack: dev/mac-worker.sh on
 # this machine, dev/lima-worker.sh in the Lima VM.
@@ -15,22 +16,6 @@
 
 name: hangar
 
-x-go: &go
-  image: golang:1.27
-  working_dir: /src
-  volumes:
-    - .:/src
-    - gomod:/go/pkg/mod
-    - gocache:/root/.cache/go-build
-  develop:
-    watch:
-      - path: ./internal
-        action: restart
-      - path: ./cmd
-        action: restart
-      - path: ./go.mod
-        action: restart
-
 services:
   postgres:
     image: postgres:18
@@ -41,7 +26,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql
     ports:
-      # For running the Go tests against it from the host.
+      # For running the suite against it from the host.
       - 127.0.0.1:55432:5432
     healthcheck:
       test: [CMD, pg_isready, -U, hangar]
@@ -67,9 +52,23 @@ services:
       retries: 30
 
   server:
-    <<: *go
-    command: [go, run, ./cmd/hangar-server, -listen, ":8081"]
+    image: rust:1
+    working_dir: /src/crates
+    command: [cargo, run, -p, hangar-server, --, -listen, ":8081"]
+    develop:
+      # What the server is built from.
+      watch:
+        - path: ./crates/server
+          action: restart
+        - path: ./crates/api
+          action: restart
+        - path: ./crates/openapi
+          action: restart
+        - path: ./api
+          action: restart
     environment:
+      # Its own target directory: the checkout's is the host's.
+      CARGO_TARGET_DIR: /target
       HANGAR_DATABASE_URL: postgres://hangar:hangar@postgres:5432/hangar?sslmode=disable
       HANGAR_BOOTSTRAP_TOKEN_FILE: /src/dev/bootstrap-token
       # Encrypts users' credentials and SSH keys. Committed, so development
@@ -92,8 +91,8 @@ services:
       HANGAR_BLOB_URL: http://hangar:hangar-dev-secret@rustfs:9000/hangar
     volumes:
       - .:/src
-      - gomod:/go/pkg/mod
-      - gocache:/root/.cache/go-build
+      - cargo:/usr/local/cargo/registry
+      - target:/target
       - files:/var/lib/hangar/files
     ports:
       - 127.0.0.1:2222:2222
@@ -138,7 +137,7 @@ volumes:
       o: addr=host.docker.internal,vers=4.2,port=2049,soft,timeo=50,retrans=2
       device: ":/"
   pgdata:
-  gomod:
-  gocache:
+  cargo:
+  target:
   webmodules:
   blobs:

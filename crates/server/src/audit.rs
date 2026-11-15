@@ -1,5 +1,5 @@
 //! Who did what: every change a person makes, and each decision Hangar
-//! makes on its own, as the Go server's internal/audit records them.
+//! makes on its own.
 
 use uuid::Uuid;
 

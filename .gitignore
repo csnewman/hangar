@@ -11,11 +11,10 @@ docs/
 /crates/target/
 
 # Reference checkouts of other VMMs, for reading only.
-# Underscore-prefixed so the Go toolchain does not walk into them.
 /_refs/
 
-# The built web UI, embedded by internal/webui.
-/internal/webui/dist/app/
+# The built web UI, embedded by hangar-server.
+/web/dist/
 /web/node_modules/
 
 # dev/reset-db.sh keeps its last copy of the data here.

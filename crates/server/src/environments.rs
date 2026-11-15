@@ -1,5 +1,5 @@
 //! Environments as their owners see them: what exists, and what each should
-//! be doing (internal/environments).
+//! be doing.
 //!
 //! A user reaches only the environments they own, an administrator all of
 //! them, and one the asker may not reach is not found, so its existence is

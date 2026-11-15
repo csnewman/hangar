@@ -1,5 +1,5 @@
 //! Workers and what they are asked to run: each read and write for both
-//! backends, as internal/workers does it.
+//! backends.
 
 use chrono::{DateTime, Utc};
 use sqlx::Row;

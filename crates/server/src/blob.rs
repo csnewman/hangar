@@ -1,5 +1,5 @@
 //! Where the server keeps files too large for its store: the registry's
-//! blobs (internal/blob). A deployment keeps them in an S3-compatible
+//! blobs. A deployment keeps them in an S3-compatible
 //! object store (`HANGAR_BLOB_URL`, http(s)://key:secret@host/bucket); a
 //! server on one machine may keep them in a directory instead
 //! (file:///path).

@@ -1,5 +1,5 @@
-//! The environment's task manager, served on vsock port 106 in the protocol
-//! `internal/procs` defines: what runs in the guest, what each process
+//! The environment's task manager, served to the host on vsock port 106:
+//! what runs in the guest, what each process
 //! costs, and stopping one.
 //!
 //! A connection carries requests and replies as JSON lines, one reply per

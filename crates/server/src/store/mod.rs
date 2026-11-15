@@ -3,7 +3,7 @@
 //!
 //! Each domain's reads and writes are methods on `Tx`, written for both
 //! backends (users.rs and the like beside this); the rows are `rows.rs`'s,
-//! the Postgres tables' as `internal/db/migrations` makes them, which the
+//! the Postgres tables' as `migrations/` makes them, which the
 //! JSON file holds as they are.
 
 pub mod audit;

@@ -1,4 +1,4 @@
-//! Hangar's own container registry (internal/registry): the OCI
+//! Hangar's own container registry: the OCI
 //! distribution API on its own host (registry.<host>), and to workers
 //! beneath the worker API, its blobs in the blob store and everything else
 //! in the server's store.

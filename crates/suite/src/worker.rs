@@ -521,8 +521,8 @@ async fn guest_ports(mut conn: DuplexStream) {
     let _ = conn.write_all(response.as_bytes()).await;
 }
 
-/// Terminal sessions as the agent keeps them (crates/agent/src/terminal.rs,
-/// internal/terminal): each environment's, outliving the connections
+/// Terminal sessions as the agent keeps them (crates/agent/src/terminal.rs):
+/// each environment's, outliving the connections
 /// attached to them. Their shells write back what is typed, and exit when
 /// typed "exit".
 #[derive(Clone, Default)]

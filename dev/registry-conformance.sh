@@ -29,8 +29,8 @@ trap 'kill "$server" 2>/dev/null; rm -rf "$work"' EXIT
 
 bin=${HANGAR_SERVER:-}
 if [ -z "$bin" ]; then
-	go build -o "$work/hangar-server" ./cmd/hangar-server
-	bin=$work/hangar-server
+	(cd crates && cargo build -q -p hangar-server)
+	bin=$PWD/crates/target/debug/hangar-server
 fi
 HANGAR_PUBLIC_URL="http://$host" HANGAR_FILES_DIR="$work/files" HANGAR_LISTEN=127.0.0.1:8099 \
 	HANGAR_INITIAL_ADMIN_USERNAME=admin HANGAR_INITIAL_ADMIN_PASSWORD=conformance-password \

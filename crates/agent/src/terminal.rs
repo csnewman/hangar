@@ -1,6 +1,6 @@
-//! Interactive shells that outlive the connections watching them, served on
-//! vsock port 101 in the protocol `internal/terminal` defines for the
-//! worker.
+//! Interactive shells that outlive the connections watching them, served to
+//! the host on vsock port 101, in frames the web UI's terminal
+//! (web/src/terminal/connection.ts) and the apps speak too.
 //!
 //! A session is a shell on a pseudo-terminal. It is started by the first
 //! attach that asks for one and runs until its shell exits; connections come

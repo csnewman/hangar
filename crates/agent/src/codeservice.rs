@@ -1,5 +1,4 @@
-//! The Code tab's service, started for the host on vsock port 104 in the
-//! protocol `internal/code` defines.
+//! The Code tab's service, started for the host on vsock port 104.
 //!
 //! The service is this binary's `code` command (`src/code`), run as the
 //! environment's user, one per root folder, on a unix socket. A connection

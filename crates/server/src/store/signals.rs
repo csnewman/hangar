@@ -1,7 +1,7 @@
 //! What a commit tells whoever waits on it: the workers whose desired sets
 //! changed, placement that an environment may be waiting, and the event
 //! streams which environments changed. With Postgres the same goes to every
-//! server sharing the database, on the Go server's channels.
+//! server sharing the database, by NOTIFY on its channels.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};

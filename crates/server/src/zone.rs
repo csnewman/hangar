@@ -60,10 +60,10 @@ impl Zone {
     /// Answers on the configured address over UDP and TCP.
     pub async fn serve(self: Arc<Self>) -> Result<(), String> {
         let addr = self.cfg.listen.clone();
-        let udp = tokio::net::UdpSocket::bind(&addr)
+        let udp = crate::listen::udp(&addr)
             .await
             .map_err(|e| format!("listening for DNS on {addr} (UDP): {e}"))?;
-        let tcp = tokio::net::TcpListener::bind(&addr)
+        let tcp = crate::listen::tcp(&addr)
             .await
             .map_err(|e| format!("listening for DNS on {addr} (TCP): {e}"))?;
         eprintln!(

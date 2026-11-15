@@ -1,5 +1,6 @@
 // The browser end of a terminal session: a WebSocket to the server, which
-// carries the internal/terminal protocol with each frame as one message.
+// carries the guest agent's terminal frames (crates/agent/src/terminal.rs),
+// each as one message.
 
 import { Heartbeat } from '../heartbeat'
 
@@ -28,7 +29,7 @@ export interface TerminalSize {
   mine: boolean
 }
 
-// Frame types, as internal/terminal defines them.
+// Frame types, as the agent's terminal has them.
 const INPUT = 0x69 // 'i'
 const RESIZE = 0x72 // 'r'
 const OUTPUT = 0x6f // 'o'

@@ -16,7 +16,8 @@ on:
     branches: [master]
   pull_request:
     paths:
-      - 'cmd/hangar-server/**'
+      - 'crates/server/**'
+      - 'api/**'
       - 'crates/worker/Dockerfile'
       - '.github/workflows/containers.yml'
   workflow_dispatch:
@@ -50,7 +51,7 @@ jobs:
       - uses: docker/build-push-action@v6
         with:
           context: .
-          file: cmd/hangar-server/Dockerfile
+          file: crates/server/Dockerfile
           build-args: VERSION=${{ github.sha }}
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}

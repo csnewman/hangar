@@ -43,10 +43,11 @@ export interface PaneEvents {
 // restarted: a new shell is started in its place.
 //
 // The terminal has one size, held by whichever window is using it (see
-// internal/terminal). The pane draws it at that size, not its own: a
-// window larger than it shows it in its corner, a smaller one scrolls, and
-// either says so, offering to fit it to this window. The pane tells the
-// server what size its window would have; typing into it takes the size.
+// crates/agent/src/terminal.rs). The pane draws it at that size, not its
+// own: a window larger than it shows it in its corner, a smaller one
+// scrolls, and either says so, offering to fit it to this window. The pane
+// tells the server what size its window would have; typing into it takes
+// the size.
 // isMac is whether ⌘ is the platform's key for copy and paste.
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform) || /Mac OS X/.test(navigator.userAgent)
 

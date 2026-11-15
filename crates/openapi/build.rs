@@ -1,6 +1,7 @@
 //! Generates Rust for Hangar's two HTTP APIs from their OpenAPI specs, with
-//! progenitor, into OUT_DIR: the specs stay the source of truth, as they
-//! are for the Go server (oapi-codegen) and the web UI (openapi-typescript).
+//! progenitor, into OUT_DIR: the specs (api/) stay the source of truth, as
+//! they are for the server, which reads its access rules from them, and the
+//! web UI (openapi-typescript).
 //!
 //! Two things are changed for the generator alone, the specs read as they
 //! are:
@@ -28,15 +29,15 @@ const CLIENT_SECOND_ANSWERS: &[(&str, &str)] =
 const FRONTEND_SECOND_ANSWERS: &[(&str, &str)] = &[("deleteEnvironment", "204")];
 
 fn main() {
-    let specs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../internal");
+    let specs = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../api");
     generate(
-        &specs.join("clientapi/openapi.yaml"),
+        &specs.join("client.yaml"),
         "clientapi.rs",
         CLIENT_SECOND_ANSWERS,
         true,
     );
     generate(
-        &specs.join("frontendapi/openapi.yaml"),
+        &specs.join("frontend.yaml"),
         "frontendapi.rs",
         FRONTEND_SECOND_ANSWERS,
         false,

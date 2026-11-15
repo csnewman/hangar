@@ -1,4 +1,4 @@
-//! Times as the control plane's Go code reads them.
+//! Times as the control plane's JSON has them.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

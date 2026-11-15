@@ -1,4 +1,4 @@
-//! The files environments share (internal/packs).
+//! The files environments share.
 //!
 //! A pack is a named list of paths and holds no files. A copy is one set
 //! of a pack's files, a directory of the files root named by its ID, which

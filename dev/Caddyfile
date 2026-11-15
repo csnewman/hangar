@@ -1,4 +1,4 @@
-# The development front door, at http://hangar.localhost:8080. The Go server
+# The development front door, at http://hangar.localhost:8080. hangar-server
 # answers the API and every environment's editor; Vite serves the UI with hot
 # reload. The UI and API are on one origin, as they are in production, where
 # hangar-server serves the built UI itself.

@@ -1,6 +1,6 @@
 //! People's SSH keys, kept sealed to sign for them in their environments;
 //! the public keys they sign in to the SSH gateway with; and the gateway's
-//! own host key (internal/profile's store, internal/sshgw's HostKey).
+//! own host key.
 
 use chrono::{DateTime, Utc};
 use rand::RngCore;

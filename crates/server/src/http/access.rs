@@ -1,8 +1,7 @@
 //! Who may do each operation, as the specs say: `security: []` makes one
 //! public, `x-hangar-admin: true` an administrator's, and every other needs
-//! someone signed in. The Go server enforces the same rules from the same
-//! specs (internal/frontendapi auth.go), and a route the specs do not have
-//! is refused, so the server serves the specs and nothing else under them.
+//! someone signed in. A route under the APIs that the specs do not have is
+//! refused, so the server serves the specs and nothing else under them.
 
 use std::collections::HashMap;
 
@@ -13,8 +12,8 @@ use axum::response::{IntoResponse, Response};
 
 use super::{ApiError, Shared, Signed};
 
-const FRONTEND: &str = include_str!("../../../../internal/frontendapi/openapi.yaml");
-const CLIENT: &str = include_str!("../../../../internal/clientapi/openapi.yaml");
+const FRONTEND: &str = include_str!("../../../../api/frontend.yaml");
+const CLIENT: &str = include_str!("../../../../api/client.yaml");
 
 /// What an operation needs.
 #[derive(Debug, Clone, Copy, PartialEq)]

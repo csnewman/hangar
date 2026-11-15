@@ -1,6 +1,6 @@
 //! Templates: recipes for environments, so nobody starts from an empty
 //! machine. Who may see, edit and manage each, their specs' rules, and the
-//! variables a name fills in, as internal/templates has them.
+//! variables a name fills in.
 
 use std::collections::{BTreeMap, HashMap};
 

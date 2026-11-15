@@ -1,5 +1,5 @@
 //! Teams: groups of users that own templates, as a user does, and give each
-//! member a role in what the team owns (internal/teams).
+//! member a role in what the team owns.
 
 use chrono::Utc;
 use uuid::Uuid;

@@ -1,4 +1,4 @@
-//! The web UI's API, /api/frontend (internal/frontendapi/openapi.yaml):
+//! The web UI's API, /api/frontend (api/frontend.yaml):
 //! what the browser asks of the server.
 
 use axum::extract::{Path, State};

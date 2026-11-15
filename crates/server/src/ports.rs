@@ -1,5 +1,4 @@
-//! Each environment's own web servers, on hosts of their own
-//! (internal/editor).
+//! Each environment's own web servers, on hosts of their own.
 //!
 //! What those servers send is the environment's to decide. Served from
 //! Hangar's origin it could call Hangar's API as the signed-in person; on
@@ -375,7 +374,7 @@ enum Unreached {
     Failed(String),
 }
 
-/// Answers asked of the guest's port forwarder (internal/guestport).
+/// Answers the guest's port forwarder gives (crates/agent/src/guestport.rs).
 const CONNECTED: u8 = 0;
 const REFUSED: u8 = 1;
 

@@ -1,5 +1,5 @@
 //! The session the server holds with every running environment whose
-//! worker's tunnel reaches it (internal/profile's sessions), on the
+//! worker's tunnel reaches it, on the
 //! guest agent's port 105: one JSON line per message each way.
 //!
 //! The server sends the public keys the guest's SSH agent offers, the

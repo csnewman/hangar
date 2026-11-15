@@ -1,5 +1,5 @@
 //! A connection to one of an environment's terminal sessions: the client
-//! API's terminal WebSocket (internal/clientapi/openapi.yaml), on a thread
+//! API's terminal WebSocket (api/client.yaml), on a thread
 //! of its own. A connection that drops, or stops answering (as one does
 //! across the machine's sleep), is dialled again to the same session, which
 //! runs on in the environment meanwhile.

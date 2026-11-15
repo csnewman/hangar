@@ -9,7 +9,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "typecheck": "tsc -b",
-    "gen:api": "openapi-typescript ../internal/frontendapi/openapi.yaml -o src/gen/frontend.ts"
+    "gen:api": "openapi-typescript ../api/frontend.yaml -o src/gen/frontend.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.3",

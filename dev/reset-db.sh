@@ -14,8 +14,8 @@
 #     -c 'ALTER DATABASE hangar_prev RENAME TO hangar'
 #
 # The new database is built under another name so that nothing else can
-# write to it meanwhile: compose's watch restarts the server whenever Go
-# files change, stopped or not, and a server that found an empty schema
+# write to it meanwhile: compose's watch restarts the server whenever its
+# source changes, stopped or not, and a server that found an empty schema
 # would create its first administrator, whose username then refuses the
 # real one and every row that belongs to it.
 #
@@ -39,7 +39,7 @@ echo "reset-db: building the new schema"
 psql -d postgres -c 'DROP DATABASE IF EXISTS hangar_new WITH (FORCE)' -c 'CREATE DATABASE hangar_new'
 docker compose run --rm -T \
     -e HANGAR_DATABASE_URL='postgres://hangar:hangar@postgres:5432/hangar_new?sslmode=disable' \
-    server go run ./cmd/hangar-server -migrate-only 2>&1 | grep -v '^go: \|Container' || true
+    server cargo run -q -p hangar-server -- -migrate-only 2>&1 | grep -v 'Container' || true
 
 echo "reset-db: loading the data into it"
 # The schema makes Hangar's system users; the data brings them too.

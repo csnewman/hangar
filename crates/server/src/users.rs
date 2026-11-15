@@ -1,7 +1,7 @@
 //! Who can use Hangar: accounts, how they sign in, the sessions that carry
-//! a signed-in browser, and the access tokens tools sign in with. Hashes
-//! and secrets are the Go server's (internal/users), so each server accepts
-//! the other's.
+//! a signed-in browser, and the access tokens tools sign in with. A
+//! password is kept as its argon2id hash in PHC form, and a session's or
+//! token's secret as its SHA-256.
 
 use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString};
 use argon2::{Algorithm, Argon2, Params, Version};

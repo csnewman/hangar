@@ -1,6 +1,6 @@
 //! The profile session: what of a user follows them into their
-//! environments, carried over a session the server holds with the agent,
-//! in the protocol `internal/profile` defines.
+//! environments, carried over a session the server holds with the agent
+//! (crates/server/src/profile.rs is the server's end).
 //!
 //! # Shared files
 //!
@@ -167,7 +167,7 @@ fn is_zero<T: Default + PartialEq>(n: &T) -> bool {
     *n == T::default()
 }
 
-/// Bytes as Go's JSON has them: standard base64.
+/// Bytes as the session's JSON has them: standard base64.
 mod b64 {
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;

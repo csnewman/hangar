@@ -1,6 +1,5 @@
 //! The machines that run environments: their identity and credentials, what
-//! they report, and what each is asked to run, as internal/workers has
-//! them.
+//! they report, and what each is asked to run.
 
 use std::time::Duration;
 

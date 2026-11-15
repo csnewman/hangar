@@ -28,7 +28,7 @@ use crate::config::Config;
 use crate::store::Store;
 use crate::users::{self, Principal};
 
-/// The session cookie, the Go server's.
+/// The session cookie.
 pub const SESSION_COOKIE: &str = "hangar_session";
 
 /// What every handler shares.

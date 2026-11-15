@@ -1,7 +1,7 @@
 //! Hangar's HTTP APIs, generated from their OpenAPI specs by progenitor:
-//! the client API (`/api/v1`, `internal/clientapi/openapi.yaml`), which the
-//! apps and tools speak, and the web UI's (`/api/frontend`,
-//! `internal/frontendapi/openapi.yaml`). Each module holds its spec's types
+//! the client API (`/api/v1`, `api/client.yaml`), which the apps and tools
+//! speak, and the web UI's (`/api/frontend`, `api/frontend.yaml`). Each
+//! module holds its spec's types
 //! (`types`) and an async client (`Client`); build.rs says what is changed
 //! for the generator.
 

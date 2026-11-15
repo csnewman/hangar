@@ -1,6 +1,5 @@
 //! The Postgres backend: a pool, and the schema brought up to date with
-//! `internal/db/migrations`, recorded in `schema_migrations` as the Go
-//! server records it, so a database moves between the two either way.
+//! `migrations/`, each one applied recorded in `schema_migrations`.
 
 use sqlx::postgres::PgPoolOptions;
 
@@ -8,74 +7,41 @@ use super::{Error, Result};
 
 /// The migrations, in order: each file's version is its name's number.
 const MIGRATIONS: &[(i32, &str)] = &[
-    (
-        1,
-        include_str!("../../../../internal/db/migrations/0001_init.sql"),
-    ),
+    (1, include_str!("../../migrations/0001_init.sql")),
     (
         2,
-        include_str!("../../../../internal/db/migrations/0002_profile_versions.sql"),
+        include_str!("../../migrations/0002_profile_versions.sql"),
     ),
-    (
-        3,
-        include_str!("../../../../internal/db/migrations/0003_profile_blobs.sql"),
-    ),
+    (3, include_str!("../../migrations/0003_profile_blobs.sql")),
     (
         4,
-        include_str!("../../../../internal/db/migrations/0004_drop_profile_data.sql"),
+        include_str!("../../migrations/0004_drop_profile_data.sql"),
     ),
     (
         5,
-        include_str!("../../../../internal/db/migrations/0005_profile_trusted_only.sql"),
+        include_str!("../../migrations/0005_profile_trusted_only.sql"),
     ),
-    (
-        6,
-        include_str!("../../../../internal/db/migrations/0006_file_sets.sql"),
-    ),
-    (
-        7,
-        include_str!("../../../../internal/db/migrations/0007_file_trust.sql"),
-    ),
-    (
-        8,
-        include_str!("../../../../internal/db/migrations/0008_access.sql"),
-    ),
-    (
-        9,
-        include_str!("../../../../internal/db/migrations/0009_packs.sql"),
-    ),
-    (
-        10,
-        include_str!("../../../../internal/db/migrations/0010_pack_squash.sql"),
-    ),
+    (6, include_str!("../../migrations/0006_file_sets.sql")),
+    (7, include_str!("../../migrations/0007_file_trust.sql")),
+    (8, include_str!("../../migrations/0008_access.sql")),
+    (9, include_str!("../../migrations/0009_packs.sql")),
+    (10, include_str!("../../migrations/0010_pack_squash.sql")),
     (
         11,
-        include_str!("../../../../internal/db/migrations/0011_profile_code_settings.sql"),
+        include_str!("../../migrations/0011_profile_code_settings.sql"),
     ),
-    (
-        12,
-        include_str!("../../../../internal/db/migrations/0012_user_theme.sql"),
-    ),
-    (
-        13,
-        include_str!("../../../../internal/db/migrations/0013_worker_monitor.sql"),
-    ),
-    (
-        14,
-        include_str!("../../../../internal/db/migrations/0014_drop_file_sets.sql"),
-    ),
+    (12, include_str!("../../migrations/0012_user_theme.sql")),
+    (13, include_str!("../../migrations/0013_worker_monitor.sql")),
+    (14, include_str!("../../migrations/0014_drop_file_sets.sql")),
     (
         15,
-        include_str!("../../../../internal/db/migrations/0015_worker_suspends.sql"),
+        include_str!("../../migrations/0015_worker_suspends.sql"),
     ),
     (
         16,
-        include_str!("../../../../internal/db/migrations/0016_tasks_and_agents.sql"),
+        include_str!("../../migrations/0016_tasks_and_agents.sql"),
     ),
-    (
-        17,
-        include_str!("../../../../internal/db/migrations/0017_sign_in_grants.sql"),
-    ),
+    (17, include_str!("../../migrations/0017_sign_in_grants.sql")),
 ];
 
 /// Connects to the database at url and brings its schema up to date.
@@ -89,8 +55,8 @@ pub async fn open(url: &str) -> Result<sqlx::PgPool> {
     Ok(pool)
 }
 
-/// The advisory lock migrations are applied under: the Go server's
-/// (internal/db), so neither server applies one the other is applying.
+/// The advisory lock migrations are applied under, so of two servers
+/// starting together neither applies one the other is applying.
 const MIGRATE_LOCK: i64 = 0x68616e676172;
 
 /// Applies each migration the database has not had, each in a transaction

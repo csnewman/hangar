@@ -1,14 +1,13 @@
 //! Black-box tests of a Hangar server binary: the one `HANGAR_SUITE_SERVER`
-//! names, started afresh for each test with the environment the Go server
-//! takes (`cmd/hangar-server`), and spoken to only as a client would, over
-//! its APIs. So the same tests check the Go server and its Rust
-//! replacement (docs/server-rust.md).
+//! names, started afresh for each test with its settings in its
+//! environment, and spoken to only as a client would, over its APIs, its
+//! tunnel and its SSH gateway.
 //!
 //! Without `HANGAR_SUITE_SERVER`, or without `HANGAR_TEST_DATABASE_URL` (a
-//! Postgres to make each server's database on, as the Go tests' dbtest
-//! has), `Server::start` gives None and a test passes over its checks.
-//! `HANGAR_SUITE_STORAGE=json` gives each server a JSON state file
-//! (`HANGAR_STATE_FILE`, the Rust server's) and needs no Postgres.
+//! Postgres to make each server's database on), `Server::start` gives None
+//! and a test passes over its checks. `HANGAR_SUITE_STORAGE=json` gives
+//! each server a JSON state file (`HANGAR_STATE_FILE`) and needs no
+//! Postgres.
 //! Blobs go to `HANGAR_SUITE_BLOB_URL`, the dev stack's RustFS unless set.
 
 use std::fs;

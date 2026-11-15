@@ -1,8 +1,8 @@
 //! Carries streams from the server to a worker over a connection the worker
 //! opens (GET /api/worker/v1/tunnel, a WebSocket): the server is yamux's
 //! client on it and opens a stream for each use, which starts with a JSON
-//! line naming what it is for (internal/tunnel's Header), as the Rust
-//! worker's crates/worker/src/tunnel.rs serves it.
+//! line naming what it is for (Header), as the worker's
+//! crates/worker/src/tunnel.rs serves it.
 //!
 //! A stream's reads and writes are polled from one task: a yamux stream's
 //! reads send window updates down the same channel its writes use, which

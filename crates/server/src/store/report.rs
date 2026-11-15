@@ -1,5 +1,5 @@
-//! A worker's status report taken into the store, as internal/workers'
-//! ReportStatus takes it: each environment it reports, those it has let
+//! A worker's status report taken into the store: each environment it
+//! reports, those it has let
 //! go, and the worker's own capacity and state.
 
 use chrono::{DateTime, Utc};

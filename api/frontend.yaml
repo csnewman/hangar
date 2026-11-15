@@ -3,9 +3,9 @@
 # and changes with the UI. Anything outside that binary -- scripts, other
 # tools, integrations -- belongs on a versioned API instead.
 #
-# Both sides are generated from this file: `go generate ./internal/frontendapi`
-# for the Go server interface, `npm run gen:api` in web/ for the TypeScript
-# types.
+# The web UI's types are generated from this file (`npm run gen:api` in
+# web/), and so are Rust's (crates/openapi), which the suite and the apps
+# speak it with.
 #
 # Access is declared here and enforced from here. Every operation needs a
 # signed-in session unless it sets `security: []`, and an operation marked

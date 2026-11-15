@@ -1,6 +1,6 @@
 //! Secrets kept at rest, sealed with AES-256-GCM under the server's secret
-//! key (`HANGAR_SECRET_KEY_FILE`), as internal/profile's Sealer seals
-//! them, so either server opens what the other sealed. Each value is bound
+//! key (`HANGAR_SECRET_KEY_FILE`): a version byte, a 12-byte nonce, then
+//! the ciphertext and its tag. Each value is bound
 //! to what it is -- the user and path it belongs to -- so a value copied
 //! to another row does not open.
 

@@ -1,5 +1,5 @@
 //! A VNC (RFB 3.8) client for an environment's Linux desktop, over the
-//! client API's desktop WebSocket (internal/clientapi/openapi.yaml) on a
+//! client API's desktop WebSocket (api/client.yaml) on a
 //! thread of its own. The guest's wayvnc asks no password: reaching the
 //! socket is the permission. Pixels come as Raw, CopyRect or ZRLE into one
 //! framebuffer, BGRA as the window draws it; the desktop's size changing

@@ -53,7 +53,7 @@ pub async fn start(
 
     if let Some(tls) = &edge.tls {
         let resolver = resolver(app, &public, tls)?;
-        let listener = tokio::net::TcpListener::bind(&tls.listen)
+        let listener = crate::listen::tcp(&tls.listen)
             .await
             .map_err(|e| format!("listening on {}: {e}", tls.listen))?;
         eprintln!("hangar-server: serving HTTPS on {}", tls.listen);
@@ -68,7 +68,7 @@ pub async fn start(
     }
 
     if let Some(listen) = &edge.redirect {
-        let listener = tokio::net::TcpListener::bind(listen)
+        let listener = crate::listen::tcp(listen)
             .await
             .map_err(|e| format!("listening on {listen}: {e}"))?;
         eprintln!("hangar-server: redirecting HTTP to HTTPS on {listen}");

@@ -51,7 +51,7 @@ fn files() {
     assert_eq!(text(&r), "four\n");
 }
 
-/// A reply is one line of JSON as the Go server reads it: the data in
+/// A reply is one line of JSON as the server reads it: the data in
 /// base64, missing and error only when they are so.
 #[test]
 fn replies() {

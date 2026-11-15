@@ -3,9 +3,9 @@ import { fileURLToPath } from 'node:url'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 
-// The build lands inside the Go tree, where internal/webui embeds it into
-// hangar-server. In development Vite serves the UI itself, behind the Caddy
-// in compose.yaml, which sends /api/ to the Go server on the same origin.
+// The build lands in dist/, which hangar-server embeds (crates/server's
+// http/web.rs). In development Vite serves the UI itself, behind the Caddy
+// in compose.yaml, which sends /api/ to the server on the same origin.
 export default defineConfig({
   plugins: [react()],
   resolve: {
@@ -16,7 +16,7 @@ export default defineConfig({
     },
   },
   build: {
-    outDir: '../internal/webui/dist/app',
+    outDir: 'dist',
     emptyOutDir: true,
   },
   server: {

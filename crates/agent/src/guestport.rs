@@ -1,5 +1,5 @@
 //! The environment's own TCP ports, reached by the host on vsock port 108
-//! in the protocol `internal/guestport` defines: for each connection the
+//! (crates/server/src/ports.rs is the server's end): for each connection the
 //! agent connects to the port the host names on the guest's own loopback,
 //! then carries bytes both ways.
 //!

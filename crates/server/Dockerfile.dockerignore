@@ -1,0 +1,12 @@
+# Only what crates/server/Dockerfile copies. Rust targets and build output
+# elsewhere in the tree are gigabytes it never reads.
+*
+!api/
+!crates/
+!web/
+web/node_modules
+web/dist
+crates/agent/tests/service/node_modules
+crates/target
+crates/krun/libkrun
+crates/krun/target

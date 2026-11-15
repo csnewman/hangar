@@ -1,13 +1,13 @@
 //! The web UI, built into the binary so the control plane is one program
 //! with no Node.js beside it. `npm run build` in web/ writes it to
-//! internal/webui/dist/app; a binary built before that has no UI and says
-//! so. A debug build reads the files from there as it serves them.
+//! web/dist; a binary built before that has no UI and says so. A debug
+//! build reads the files from there as it serves them.
 
 use axum::http::{HeaderValue, StatusCode, Uri, header};
 use axum::response::{IntoResponse, Response};
 
 #[derive(rust_embed::RustEmbed)]
-#[folder = "../../internal/webui/dist/app/"]
+#[folder = "../../web/dist/"]
 #[allow_missing = true]
 struct Ui;
 

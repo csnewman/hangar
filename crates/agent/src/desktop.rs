@@ -1,5 +1,4 @@
-//! The environment's desktop, served to the host as VNC on vsock port 103
-//! in the protocol `internal/desktop` defines.
+//! The environment's desktop, served to the host as VNC on vsock port 103.
 //!
 //! The desktop is the image's own: a labwc session, headless, that draws
 //! into memory whether or not anyone is looking (hangar-desktop.service).

@@ -74,7 +74,7 @@ pub struct Request {
 pub struct Reply {
     pub start: i64,
     pub size: i64,
-    /// Base64, as Go writes a byte slice.
+    /// Standard base64.
     #[serde(
         serialize_with = "to_base64",
         deserialize_with = "from_base64",

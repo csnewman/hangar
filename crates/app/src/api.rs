@@ -1,4 +1,4 @@
-//! A server's client API, /api/v1 (internal/clientapi/openapi.yaml): what
+//! A server's client API, /api/v1 (api/client.yaml): what
 //! the app reads and asks of a server place. Its types and calls are
 //! generated from the spec (hangar-openapi); this is the app's blocking face
 //! on them, each call run to its end on a runtime of this module's, so each
