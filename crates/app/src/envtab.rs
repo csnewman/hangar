@@ -36,7 +36,7 @@ use crate::places::Places;
 use crate::ports::PortsView;
 use crate::problems::ProblemsView;
 use crate::project::{OpenFile, ProjectView};
-use crate::termview::{self, TerminalView};
+use crate::termview::{self, Signal, TerminalView};
 use crate::tools::Stripes;
 use crate::ui::{button, dot, primary, spark, tone};
 use crate::workspace::Workspace;
@@ -104,6 +104,30 @@ impl Render for DraggedTab {
             .shadow_md()
             .text_size(px(11.5))
             .text_color(p.text)
+            .child(self.title.clone())
+    }
+}
+
+/// A terminal's tab being dragged along the terminal's tabs.
+#[derive(Clone)]
+pub struct DraggedTerminal {
+    i: usize,
+    title: String,
+}
+
+impl Render for DraggedTerminal {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette::of(cx);
+        div()
+            .px(px(10.))
+            .py(px(2.))
+            .rounded(px(4.))
+            .bg(p.term_tab)
+            .border_1()
+            .border_color(p.border_strong)
+            .shadow_md()
+            .text_size(px(11.5))
+            .text_color(p.term_fg)
             .child(self.title.clone())
     }
 }
@@ -312,6 +336,17 @@ fn shortcut(t: Tool) -> Option<String> {
         _ => return None,
     })
 }
+
+/// What an environment's tab tells the window around it: the marks its
+/// terminals put on its tab changed, or a program in one of its terminals
+/// posted a notification.
+#[derive(Debug, Clone, PartialEq)]
+pub enum EnvSignal {
+    Marks,
+    Notification { title: String, body: String },
+}
+
+impl gpui::EventEmitter<EnvSignal> for EnvTab {}
 
 pub struct EnvTab {
     places: Entity<Places>,
@@ -578,6 +613,8 @@ struct TermTab {
     session: Option<String>,
     title: String,
     view: Option<Entity<TerminalView>>,
+    /// Whether its bell rang while it was not in front of the user.
+    rang: bool,
 }
 
 impl TermTab {
@@ -794,6 +831,7 @@ impl EnvTab {
                                 session: Some(s.id),
                                 title: s.title,
                                 view: None,
+                                rang: false,
                             });
                         }
                     }
@@ -847,6 +885,7 @@ impl EnvTab {
             session: None,
             title: String::new(),
             view: Some(view),
+            rang: false,
         });
         self.terms.menu = None;
         self.select_terminal(self.terms.tabs.len() - 1, true, window, cx);
@@ -875,13 +914,18 @@ impl EnvTab {
             self.terms.tabs[i].view = Some(view);
         }
         self.terms.active = Some(i);
-        if focus && let Some(v) = &self.terms.tabs[i].view {
-            window.focus(&v.focus_handle(cx), cx);
+        self.terms.tabs[i].rang = false;
+        if let Some(v) = self.terms.tabs[i].view.clone() {
+            v.update(cx, |v, cx| v.seen(cx));
+            if focus {
+                window.focus(&v.focus_handle(cx), cx);
+            }
         }
+        cx.emit(EnvSignal::Marks);
         cx.notify();
     }
 
-    /// Follows the links a terminal opens.
+    /// Follows the links a terminal opens, and what it signals.
     fn follow_terminal(
         &mut self,
         view: &Entity<TerminalView>,
@@ -894,6 +938,94 @@ impl EnvTab {
             |t, _, e: &crate::termview::OpenLink, window, cx| t.follow_link(e, window, cx),
         )
         .detach();
+        cx.subscribe_in(view, window, |t, view, e: &Signal, window, cx| {
+            t.terminal_signal(view, e, window, cx)
+        })
+        .detach();
+    }
+
+    /// A terminal's bell marks its tab and, with the app behind others,
+    /// bounces its Dock icon, as Ghostty's does; a notification its program
+    /// posts goes to the window's, unless the terminal holds a coding
+    /// agent's session, whose plugin says what it needs; a change in what
+    /// its programs are doing redraws the marks.
+    fn terminal_signal(
+        &mut self,
+        view: &Entity<TerminalView>,
+        e: &Signal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(i) = self
+            .terms
+            .tabs
+            .iter()
+            .position(|t| t.view.as_ref() == Some(view))
+        else {
+            return;
+        };
+        match e {
+            Signal::Bell => {
+                self.terms.tabs[i].rang = true;
+                if !window.is_window_active() {
+                    crate::dock::attention();
+                }
+                cx.emit(EnvSignal::Marks);
+            }
+            Signal::Notification { title, body } => {
+                if self.agent_in(i, cx) {
+                    return;
+                }
+                cx.emit(EnvSignal::Notification {
+                    title: title.clone(),
+                    body: body.clone(),
+                });
+            }
+            Signal::Status => cx.emit(EnvSignal::Marks),
+        }
+        cx.notify();
+    }
+
+    /// Moves a terminal's tab to another's place.
+    fn move_terminal(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        let tabs = &mut self.terms.tabs;
+        if from == to || from >= tabs.len() || to >= tabs.len() {
+            return;
+        }
+        let tab = tabs.remove(from);
+        tabs.insert(to, tab);
+        self.terms.active = self.terms.active.map(|a| moved(a, from, to));
+        cx.notify();
+    }
+
+    /// Whether a terminal tab holds a coding agent's session the plugin
+    /// reports.
+    fn agent_in(&self, i: usize, cx: &App) -> bool {
+        let Some(id) = self.terms.tabs.get(i).and_then(|t| t.id(cx)) else {
+            return false;
+        };
+        self.places
+            .read(cx)
+            .get(&self.place)
+            .and_then(|(_, s)| s.environment(&self.env))
+            .is_some_and(|e| {
+                e.agents
+                    .iter()
+                    .any(|a| a.terminal.as_deref() == Some(id.as_str()) && a.state != "ended")
+            })
+    }
+
+    /// Whether a terminal here wants the user: its bell rang unseen, or its
+    /// program waits on them (OSC 7501), for the window's tab to say.
+    pub fn needs_you(&self, cx: &App) -> bool {
+        self.terms.tabs.iter().enumerate().any(|(i, t)| {
+            t.rang
+                || (t.view.as_ref().is_some_and(|v| {
+                    v.read(cx)
+                        .status()
+                        .is_some_and(|s| s.state == crate::terminal::StatusState::Blocked)
+                }) && !self.agent_in(i, cx))
+        })
     }
 
     /// Follows a link opened in a terminal: a path into the editors at its
@@ -1003,6 +1135,7 @@ impl EnvTab {
                     session: Some(session.into()),
                     title: String::new(),
                     view: None,
+                    rang: false,
                 });
                 self.terms.tabs.len() - 1
             }
@@ -2820,6 +2953,7 @@ impl EnvTab {
             session: view.read(cx).session().map(str::to_string),
             title: view.read(cx).title().to_string(),
             view: Some(view),
+            rang: false,
         });
         let at = self.terms.tabs.len() - 1;
         self.select_terminal(at, true, window, cx);
@@ -4903,6 +5037,14 @@ impl EnvTab {
         if running {
             self.list_terminals(window, cx);
         }
+        // The tab in front of the user has its bell seen.
+        if window.is_window_active()
+            && let Some(tab) = self.terms.active.and_then(|i| self.terms.tabs.get_mut(i))
+            && tab.rang
+        {
+            tab.rang = false;
+            cx.emit(EnvSignal::Marks);
+        }
         let mut tabs = h_flex().gap(px(2.)).min_w_0().overflow_hidden();
         for (i, tab) in self.terms.tabs.iter().enumerate() {
             let on = self.terms.active == Some(i);
@@ -4911,10 +5053,56 @@ impl EnvTab {
                 .agents
                 .iter()
                 .find(|a| a.terminal.is_some() && a.terminal == id && a.state != "ended");
+            // What its program says it is doing (OSC 7501), where no
+            // agent's session says more.
+            let status = agent
+                .is_none()
+                .then(|| tab.view.as_ref().and_then(|v| v.read(cx).status()))
+                .flatten();
+            let status_tone = status.as_ref().and_then(|s| {
+                use crate::terminal::StatusState as S;
+                match s.state {
+                    S::Blocked => Some(Tone::Wait),
+                    S::Error => Some(Tone::Bad),
+                    S::Working => Some(Tone::Busy),
+                    S::Done => Some(Tone::Good),
+                    _ => None,
+                }
+            });
+            let said = status.filter(|s| !s.message.is_empty()).map(|s| {
+                let who = if s.title.is_empty() { s.app } else { s.title };
+                if who.is_empty() {
+                    s.message
+                } else {
+                    format!("{who}: {}", s.message)
+                }
+            });
             let hover = p.term_tab;
+            let accent = p.accent;
             tabs = tabs.child(
                 h_flex()
                     .id(("term-tab", i))
+                    // Dragged, it takes the place of the tab it is let go
+                    // on, the edge it goes beside marked.
+                    .on_drag(
+                        DraggedTerminal {
+                            i,
+                            title: tab.label(cx),
+                        },
+                        |d, _, _, cx| cx.new(|_| d.clone()),
+                    )
+                    .drag_over::<DraggedTerminal>(move |s, d, _, _| {
+                        if d.i < i {
+                            s.border_r_2().border_color(accent)
+                        } else {
+                            s.border_l_2().border_color(accent)
+                        }
+                    })
+                    .on_drop(
+                        cx.listener(move |t, d: &DraggedTerminal, _, cx| {
+                            t.move_terminal(d.i, i, cx)
+                        }),
+                    )
                     .debug_selector(move || format!("term-tab-{i}"))
                     .gap(px(5.))
                     .px(px(10.))
@@ -4925,7 +5113,21 @@ impl EnvTab {
                     .when(on, |d| d.bg(p.term_tab))
                     .when(!on, move |d| d.hover(move |s| s.bg(hover.opacity(0.6))))
                     .when_some(agent, |d, a| d.child(dot(agent_tone(a), p).size(px(7.))))
+                    .when_some(status_tone, |d, t| d.child(dot(t, p).size(px(7.))))
                     .child(div().max_w(px(160.)).truncate().child(tab.label(cx)))
+                    .when(tab.rang, |d| {
+                        d.child(
+                            svg()
+                                .path(assets::icon("bell"))
+                                .size(px(11.))
+                                .text_color(p.busy),
+                        )
+                    })
+                    .when_some(said, |d, said| {
+                        d.tooltip(move |window, cx| {
+                            gpui_component::tooltip::Tooltip::new(said.clone()).build(window, cx)
+                        })
+                    })
                     .child(
                         div()
                             .id(("term-close", i))
@@ -5216,6 +5418,19 @@ fn capital(s: &str) -> String {
 }
 
 /// An agent session's dot.
+/// Where an index in a list ends up when the item at `from` moves to `to`.
+pub fn moved(i: usize, from: usize, to: usize) -> usize {
+    if i == from {
+        to
+    } else if from < i && i <= to {
+        i - 1
+    } else if to <= i && i < from {
+        i + 1
+    } else {
+        i
+    }
+}
+
 fn agent_tone(a: &AgentSession) -> Tone {
     match a.state.as_str() {
         "asking" => Tone::Wait,

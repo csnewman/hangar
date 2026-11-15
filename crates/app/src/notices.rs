@@ -134,15 +134,48 @@ impl Notices {
         news
     }
 
+    /// Notes a notification a program in one of an environment's
+    /// terminals posted, returning its notice.
+    pub fn terminal(
+        &mut self,
+        place: &str,
+        env: &str,
+        title: &str,
+        (heading, body): (&str, &str),
+        now: DateTime<Utc>,
+    ) -> Notice {
+        let n = Notice {
+            event: Event::Terminal,
+            place: place.into(),
+            env: Some(env.into()),
+            tone: Tone::Wait,
+            title: title.into(),
+            what: if heading.is_empty() {
+                "a terminal notifies".into()
+            } else {
+                heading.into()
+            },
+            detail: body.into(),
+            at: now,
+            read: false,
+        };
+        self.add(n.clone());
+        n
+    }
+
     fn add(&mut self, n: Notice) {
-        // One notice per environment, and one of its image: a newer one
-        // takes its place.
-        let image = n.event == Event::Image;
+        // One notice per environment of its state, one of its image and
+        // one from its terminals: a newer one takes its place.
+        let kind = |e: Event| match e {
+            Event::Image => 1,
+            Event::Terminal => 2,
+            _ => 0,
+        };
         self.list.retain(|o| {
             !(o.place == n.place
                 && o.env == n.env
                 && o.env.is_some()
-                && (o.event == Event::Image) == image)
+                && kind(o.event) == kind(n.event))
         });
         self.list.insert(0, n);
         self.list.truncate(KEEP);

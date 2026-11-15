@@ -4,7 +4,7 @@
 
 use alacritty_terminal::vte::ansi::Rgb;
 use hangar_app::termghostty::Ghostty;
-use hangar_app::terminal::{CursorStyle, Emulator, LinkKind, Mark, Select, Underline};
+use hangar_app::terminal::{CursorStyle, Emulator, LinkKind, Mark, Pointer, Select, Underline};
 
 fn screen(cols: usize, rows: usize) -> Ghostty {
     let mut s = Ghostty::new(cols, rows);
@@ -90,6 +90,64 @@ fn the_cursor_is_drawn_as_asked() {
     assert_eq!(look.colour.map(|c| (c.r, c.g, c.b)), Some((0, 255, 0)));
 }
 
+/// The bell, a full reset and the pointer the program asks for are said.
+#[test]
+fn the_bell_a_reset_and_the_pointer_are_said() {
+    let mut s = screen(20, 2);
+    assert_eq!(s.pointer(), Pointer::Text);
+    s.feed(b"\x07\x1b]22;pointer\x07");
+    let e = s.effects();
+    assert!(e.bell && !e.reset);
+    assert_eq!(s.pointer(), Pointer::Pointer);
+    s.feed(b"\x1bc");
+    assert!(s.effects().reset);
+}
+
+/// A program's link that wraps onto the next row is one link, across both.
+#[test]
+fn a_programs_link_follows_its_text_onto_the_next_row() {
+    let mut s = screen(10, 3);
+    s.feed(b"see \x1b]8;;https://example.com/\x07a long link\x1b]8;;\x07 ok");
+    let link = s.link_at(1, 2).expect("the link's second row");
+    match &link.kind {
+        LinkKind::Embedded { text, .. } => assert_eq!(text, "a long link"),
+        other => panic!("{other:?}"),
+    }
+    // Hovered, it is underlined on both rows.
+    s.set_hover(Some(&link));
+    let lines = s.lines();
+    let underlined = |row: usize| -> String {
+        let line = &lines[row];
+        let mut at = 0;
+        let mut out = String::new();
+        for sp in &line.spans {
+            if sp.underline != Underline::None {
+                out += &line.text[at..at + sp.len];
+            }
+            at += sp.len;
+        }
+        out
+    };
+    assert_eq!(underlined(0), "a long");
+    assert_eq!(underlined(1), " link");
+}
+
+/// The view moves from prompt to prompt the shell marked (OSC 133).
+#[test]
+fn the_view_moves_by_prompts() {
+    let mut s = screen(20, 3);
+    for cmd in ["one", "two"] {
+        s.feed(format!("\x1b]133;A\x07$ {cmd}\r\n").as_bytes());
+        for i in 0..5 {
+            s.feed(format!("{cmd} {i}\r\n").as_bytes());
+        }
+    }
+    s.scroll_prompts(-2);
+    assert_eq!(s.lines()[0].text.trim_end(), "$ one");
+    s.scroll_prompts(1);
+    assert_eq!(s.lines()[0].text.trim_end(), "$ two");
+}
+
 /// The scrollback keeps thousands of lines, as Ghostty's own does.
 #[test]
 fn the_scrollback_keeps_thousands_of_lines() {
@@ -121,6 +179,16 @@ fn a_drag_selects_the_cells_it_passes() {
     let lines = s.lines();
     let marks: Vec<Mark> = lines[0].spans.iter().map(|sp| sp.mark).collect();
     assert!(marks.contains(&Mark::Selected), "{marks:?}");
+}
+
+/// A rectangle selects the same columns of each row between.
+#[test]
+fn a_rectangle_selects_columns() {
+    let mut s = screen(10, 3);
+    s.feed(b"abcdef\r\nghijkl\r\nmnopqr");
+    s.select(0, 1, false, Select::Block);
+    s.select_to(2, 3, true);
+    assert_eq!(s.selection().as_deref(), Some("bcd\nhij\nnop"));
 }
 
 #[test]
@@ -216,6 +284,9 @@ fn modes_reach_the_keys_and_mouse() {
     assert!(!s.wheel_is_arrows());
     s.feed(b"\x1b[?1049h\x1b[?1007h");
     assert!(s.wheel_is_arrows());
+    assert!(!s.reports_focus() && !s.reports_theme());
+    s.feed(b"\x1b[?1004h\x1b[?2031h");
+    assert!(s.reports_focus() && s.reports_theme());
 }
 
 #[test]

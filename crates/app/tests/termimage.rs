@@ -1,5 +1,5 @@
 use base64::Engine as _;
-use hangar_app::termimage::{Extract, Format, Piece, Progress, header, sixel};
+use hangar_app::termimage::{Extract, Format, Notification, Piece, Progress, header, sixel};
 use hangar_app::terminal::Screen;
 
 /// A PNG of the size given, every pixel red.
@@ -61,6 +61,32 @@ fn progress_is_taken_out_in_order_with_the_text() {
             Piece::Progress(Progress { state: 0, value: 0 }),
         ]
     );
+}
+
+/// Notifications are taken out, iTerm2's and rxvt's; ConEmu's numbered
+/// OSC 9 commands are not notifications and pass on.
+#[test]
+fn notifications_are_taken_out() {
+    let mut x = Extract::default();
+    let out =
+        x.split(b"a\x1b]9;Build done\x07b\x1b]777;notify;Tests;All passed\x1b\\c\x1b]9;9;/tmp\x07");
+    let notes: Vec<&Notification> = out
+        .iter()
+        .filter_map(|p| match p {
+            Piece::Notification(n) => Some(n),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(notes.len(), 2, "{out:?}");
+    assert_eq!(
+        (notes[0].title.as_str(), notes[0].body.as_str()),
+        ("", "Build done")
+    );
+    assert_eq!(
+        (notes[1].title.as_str(), notes[1].body.as_str()),
+        ("Tests", "All passed")
+    );
+    assert_eq!(text(&out), b"abc\x1b]9;9;/tmp\x07");
 }
 
 #[test]

@@ -257,6 +257,116 @@ fn recording(output: &'static [u8]) -> (String, std::sync::mpsc::Receiver<Vec<u8
     (url, typed)
 }
 
+/// A program that asked to hear of resizes (mode 2048) is told as the
+/// window resizes, not at its next output.
+#[gpui::test]
+fn a_resize_is_reported_at_once(cx: &mut TestAppContext) {
+    let (url, typed) = recording(b"\x1b[?2048h$ ");
+    let (_, cx) = attached(cx, &url);
+    let wait = std::time::Duration::from_secs(5);
+    // Ghostty reports the size as the mode is set.
+    let first = typed.recv_timeout(wait).expect("the first report");
+    assert!(first.starts_with(b"\x1b[48;"), "{first:?}");
+    while typed.try_recv().is_ok() {}
+    cx.simulate_resize(gpui::size(gpui::px(500.), gpui::px(250.)));
+    cx.run_until_parked();
+    let report = typed.recv_timeout(wait).expect("a report of the new size");
+    assert!(report.starts_with(b"\x1b[48;"), "{report:?}");
+    assert_ne!(report, first);
+}
+
+/// A terminal signals its bell, its program's notifications and what its
+/// programs say they are doing; a shell's new prompt ends their work.
+#[gpui::test]
+fn the_bell_notifications_and_status_are_signalled(cx: &mut TestAppContext) {
+    use hangar_app::termview::Signal;
+    let (url, to, _from) = shared(
+        r#"{"session":{"id":"s1","title":"zsh","created":"2026-11-07T10:00:00Z","clients":1,"cols":80,"rows":24},"history":0,"owner":true}"#,
+    );
+    let (term, cx) = attached(cx, &url);
+    let heard = std::rc::Rc::new(std::cell::RefCell::new(Vec::<Signal>::new()));
+    cx.update(|_, cx| {
+        let heard = heard.clone();
+        cx.subscribe(&term, move |_, e: &Signal, _| {
+            heard.borrow_mut().push(e.clone())
+        })
+        .detach();
+    });
+    let until = |cx: &mut VisualTestContext, n: usize| {
+        let start = std::time::Instant::now();
+        while heard.borrow().len() < n {
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(5),
+                "{n} signals"
+            );
+            cx.run_until_parked();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    to.send(b"o\x07\x1b]9;Built\x07\x1b]7501;state=working:app=cargo\x1b\\".to_vec())
+        .unwrap();
+    until(cx, 3);
+    assert_eq!(
+        heard.borrow()[..],
+        [
+            Signal::Notification {
+                title: String::new(),
+                body: "Built".into()
+            },
+            Signal::Bell,
+            Signal::Status
+        ]
+    );
+    let status = term.read_with(cx, |t, _| t.status()).expect("its status");
+    assert_eq!(status.app, "cargo");
+    to.send(b"o\x1b]133;A\x07$ ".to_vec()).unwrap();
+    until(cx, 4);
+    assert_eq!(heard.borrow()[3], Signal::Status);
+    assert_eq!(
+        term.read_with(cx, |t, _| t.status()),
+        None,
+        "the prompt ended it"
+    );
+}
+
+/// A program that asked (mode 1004) hears the terminal lose and gain the
+/// keys.
+#[gpui::test]
+fn focus_is_reported_to_a_program_that_asks(cx: &mut TestAppContext) {
+    let (url, to, from) = shared(
+        r#"{"session":{"id":"s1","title":"zsh","created":"2026-11-07T10:00:00Z","clients":1,"cols":80,"rows":24},"history":0,"owner":true}"#,
+    );
+    let (term, cx) = attached(cx, &url);
+    // A test's window is not in front until it is brought there.
+    cx.update(|window, _| window.activate_window());
+    to.send(b"o\x1b[?1004h".to_vec()).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    cx.run_until_parked();
+    while from.try_recv().is_ok() {}
+    // The next frame the program is sent that is typed input.
+    let typed = |cx: &mut VisualTestContext| -> Vec<u8> {
+        let start = std::time::Instant::now();
+        loop {
+            assert!(
+                start.elapsed() < std::time::Duration::from_secs(5),
+                "a report"
+            );
+            cx.update(|window, _| window.refresh());
+            cx.run_until_parked();
+            if let Ok(f) = from.recv_timeout(std::time::Duration::from_millis(20))
+                && f.first() == Some(&b'i')
+            {
+                return f;
+            }
+        }
+    };
+    cx.update(|window, cx| window.blur(cx));
+    assert_eq!(typed(cx), b"i\x1b[O");
+    let focus = term.read_with(cx, |t, cx| t.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&focus, cx));
+    assert_eq!(typed(cx), b"i\x1b[I");
+}
+
 /// A terminal in a window, attached to a session at url, focused.
 fn attached<'a>(
     cx: &'a mut TestAppContext,

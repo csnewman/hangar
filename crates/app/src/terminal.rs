@@ -14,7 +14,7 @@ use alacritty_terminal::term::{ClipboardType, Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
 use std::time::Duration;
 
-pub use hangar_ghostty::{CursorStyle, Underline};
+pub use hangar_ghostty::{CursorStyle, Pointer, ProgramStatus, StatusKind, StatusState, Underline};
 
 /// What names a link that anchors something drawn over the text rather
 /// than a link to follow.
@@ -62,6 +62,7 @@ struct Pending {
     replies: Vec<Reply>,
     title: Option<String>,
     copied: Option<String>,
+    bell: bool,
 }
 
 /// A reply as the program asked for it: written as it is, or a colour
@@ -95,6 +96,11 @@ impl Replies {
     pub fn copied(&self) -> Option<String> {
         self.pending.lock().unwrap().copied.take()
     }
+
+    /// Whether the bell rang since this was last called.
+    pub fn rang(&self) -> bool {
+        std::mem::take(&mut self.pending.lock().unwrap().bell)
+    }
 }
 
 impl EventListener for Replies {
@@ -105,6 +111,8 @@ impl EventListener for Replies {
             Event::ColorRequest(i, f) => p.replies.push(Reply::Colour(i, f)),
             Event::Title(t) => p.title = Some(t),
             Event::ClipboardStore(ClipboardType::Clipboard, text) => p.copied = Some(text),
+            Event::Bell => p.bell = true,
+            Event::ResetTitle => p.title = Some(String::new()),
             _ => {}
         }
     }
@@ -128,6 +136,15 @@ pub enum Select {
     Cells,
     Words,
     Lines,
+    /// A rectangle of cells: on each row, the columns between the press
+    /// and the pointer.
+    Block,
+}
+
+/// Whether a background is light, by its luminance: the screen's named
+/// colours, and what a program asking is told, follow it.
+pub fn is_light(bg: Rgb) -> bool {
+    (bg.r as u32 * 299 + bg.g as u32 * 587 + bg.b as u32 * 114) / 1000 > 128
 }
 
 /// Faint text's colour (SGR 2): halfway from its own colour to its
@@ -313,8 +330,7 @@ impl<L: EventListener> Screen<L> {
     /// Whether the background is light, and the named colours a light
     /// theme's.
     fn light(&self) -> bool {
-        let Rgb { r, g, b } = self.bg;
-        (r as u32 * 299 + g as u32 * 587 + b as u32 * 114) / 1000 > 128
+        is_light(self.bg)
     }
 
     /// Scrolls the view through the scrollback by lines, up for positive.
@@ -368,6 +384,22 @@ impl<L: EventListener> Screen<L> {
     /// Takes what the shell wrote.
     pub fn feed(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
+        self.end_late_update();
+    }
+
+    /// Whether a synchronized update (2026) is held back, to be drawn once
+    /// the program ends it or its time runs out.
+    pub fn synchronized(&self) -> bool {
+        self.parser.sync_timeout().sync_timeout().is_some()
+    }
+
+    /// Ends a synchronized update the program has not ended in its time,
+    /// drawing what it held back: otherwise it waits for megabytes more.
+    fn end_late_update(&mut self) {
+        let due = self.parser.sync_timeout().sync_timeout();
+        if due.is_some_and(|at| at <= std::time::Instant::now()) {
+            self.parser.stop_sync(&mut self.term);
+        }
     }
 
     pub fn resize(&mut self, columns: usize, lines: usize) {
@@ -391,6 +423,7 @@ impl<L: EventListener> Screen<L> {
             Select::Cells => SelectionType::Simple,
             Select::Words => SelectionType::Semantic,
             Select::Lines => SelectionType::Lines,
+            Select::Block => SelectionType::Block,
         };
         let side = if right_half { Side::Right } else { Side::Left };
         self.term.selection = Some(Selection::new(ty, self.point(row, col), side));
@@ -602,6 +635,12 @@ impl<L: EventListener> Screen<L> {
         self.term.mode().contains(TermMode::SHOW_CURSOR)
     }
 
+    /// Whether the program asks to hear when the terminal gains or loses
+    /// the keys (mode 1004).
+    pub fn reports_focus(&self) -> bool {
+        self.term.mode().contains(TermMode::FOCUS_IN_OUT)
+    }
+
     /// How the program asks for the cursor to be drawn.
     pub fn cursor_look(&self) -> CursorLook {
         use alacritty_terminal::vte::ansi::CursorShape;
@@ -636,6 +675,7 @@ impl<L: EventListener> Screen<L> {
     /// The visible rows, each a line of text with its spans, the selection
     /// and Find's matches marked.
     pub fn lines(&mut self) -> Vec<Line> {
+        self.end_late_update();
         let selected = self
             .term
             .selection
@@ -903,12 +943,19 @@ pub(crate) fn indexed_in(i: u8, light: bool) -> Rgb {
 }
 
 /// What the program asked of the terminal since it was last taken: the
-/// replies to write back to it, the title it set, the text it copied.
+/// replies to write back to it, the title it set, the text it copied,
+/// whether it rang the bell, whether it reset the terminal (RIS), which
+/// clears its title and status, what programs said they are doing
+/// (OSC 7501), and whether a shell's prompt started (OSC 133).
 #[derive(Debug, Default)]
 pub struct Effects {
     pub reply: Vec<u8>,
     pub title: Option<String>,
     pub copied: Option<String>,
+    pub bell: bool,
+    pub reset: bool,
+    pub statuses: Vec<ProgramStatus>,
+    pub prompt_started: bool,
 }
 
 /// A terminal's screen as the view drawing it uses it, whichever emulator
@@ -976,12 +1023,34 @@ pub trait Emulator {
     fn synchronized(&self) -> bool {
         false
     }
+    /// The mouse pointer the program asks for over the terminal (OSC 22).
+    fn pointer(&self) -> Pointer {
+        Pointer::Text
+    }
+    /// Scrolls the view by the shell's prompts (OSC 133): back for
+    /// negative. An emulator that keeps no prompts does nothing.
+    fn scroll_prompts(&mut self, _prompts: i32) {}
+    /// Whether the program asks to hear when the terminal gains or loses
+    /// the keys (mode 1004).
+    fn reports_focus(&self) -> bool {
+        false
+    }
+    /// Whether the program asks to hear when the terminal turns light or
+    /// dark (mode 2031).
+    fn reports_theme(&self) -> bool {
+        false
+    }
 }
 
 /// alacritty_terminal's screen, as an Emulator.
 pub struct Alacritty {
     screen: Screen<Replies>,
     replies: Replies,
+    /// Whether the program reset the terminal (RIS) since its effects were
+    /// last taken, which alacritty_terminal does without a word; and
+    /// whether the last bytes fed ended with an escape, the reset's first.
+    reset: bool,
+    escape: bool,
 }
 
 impl Alacritty {
@@ -990,12 +1059,23 @@ impl Alacritty {
         Alacritty {
             screen: Screen::with_listener(columns, lines, replies.clone()),
             replies,
+            reset: false,
+            escape: false,
         }
     }
 }
 
 impl Emulator for Alacritty {
     fn feed(&mut self, bytes: &[u8]) {
+        // ESC c is a reset wherever it is: an escape ends any string a
+        // program sends before it.
+        let starts = self.escape && bytes.first() == Some(&b'c');
+        if starts || bytes.windows(2).any(|w| w == b"\x1bc") {
+            self.reset = true;
+        }
+        if let Some(&last) = bytes.last() {
+            self.escape = last == 0x1b;
+        }
         self.screen.feed(bytes)
     }
     fn resize(&mut self, columns: usize, lines: usize, _: (u32, u32)) {
@@ -1071,6 +1151,15 @@ impl Emulator for Alacritty {
             reply,
             title,
             copied: self.replies.copied(),
+            bell: self.replies.rang(),
+            reset: std::mem::take(&mut self.reset),
+            ..Effects::default()
         }
+    }
+    fn synchronized(&self) -> bool {
+        self.screen.synchronized()
+    }
+    fn reports_focus(&self) -> bool {
+        self.screen.reports_focus()
     }
 }

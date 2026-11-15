@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use gpui::{AppContext, TestAppContext};
-use hangar_app::envtab::Tool;
+use hangar_app::envtab::{Tool, moved};
 use hangar_app::place::Connection;
 use hangar_app::places::Places;
 use hangar_app::shell::Shell;
@@ -125,4 +125,49 @@ fn go_to_symbol_opens_on_its_key(cx: &mut TestAppContext) {
         .read_with(cx, |s, _| s.search())
         .expect("the search open");
     assert_eq!(search.read_with(cx, |s, _| s.only()), Some("Symbols"));
+}
+
+/// A tab dragged onto another takes its place; the one shown stays shown.
+#[gpui::test]
+fn a_tab_is_dragged_to_another_place(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
+    let (shell, cx) = cx.add_window_view(|window, cx| Shell::new(places.clone(), window, cx));
+    cx.update(|window, cx| {
+        shell.update(cx, |s, cx| {
+            for e in ["e1", "e2", "e3"] {
+                s.open("p", e, window, cx);
+            }
+        })
+    });
+    cx.run_until_parked();
+    let from = cx.debug_bounds("env-tab-0").expect("the first").center();
+    let to = cx.debug_bounds("env-tab-2").expect("the third").center();
+    let none = gpui::Modifiers::none();
+    let left = gpui::MouseButton::Left;
+    cx.simulate_mouse_down(from, left, none);
+    cx.simulate_mouse_move(from + gpui::point(gpui::px(10.), gpui::px(0.)), left, none);
+    cx.simulate_mouse_move(to, left, none);
+    cx.simulate_mouse_up(to, left, none);
+    cx.run_until_parked();
+    shell.read_with(cx, |s, _| {
+        let (tabs, active) = s.tabs();
+        let order: Vec<&str> = tabs.iter().map(|o| o.env.as_str()).collect();
+        assert_eq!(order, ["e2", "e3", "e1"]);
+        assert_eq!(active, Some(1), "e3, still shown");
+    });
+}
+
+#[test]
+fn an_index_follows_its_item() {
+    // Moving the item at 1 to 3 in [a, b, c, d]: [a, c, d, b].
+    assert_eq!(
+        (0..4).map(|i| moved(i, 1, 3)).collect::<Vec<_>>(),
+        [0, 3, 1, 2]
+    );
+    // And back.
+    assert_eq!(
+        (0..4).map(|i| moved(i, 3, 1)).collect::<Vec<_>>(),
+        [0, 2, 3, 1]
+    );
 }

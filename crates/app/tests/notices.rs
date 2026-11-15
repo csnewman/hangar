@@ -202,3 +202,27 @@ fn a_newer_image_is_news_once_and_keeps_what_needs_you() {
         1
     );
 }
+
+/// A terminal's notification is listed beside what the environment's
+/// agent needs, and a newer one from its terminals takes its place.
+#[test]
+fn a_terminals_notification_is_listed_beside_the_rest() {
+    let mut n = Notices::default();
+    n.observe(
+        &places(Connection::Online, vec![env("a", "running", vec![])]),
+        now(),
+    );
+    let e = env("a", "running", vec![asking()]);
+    n.observe(&places(Connection::Online, vec![e.clone()]), now());
+    let first = n.terminal("p", &e.id, "a", ("Build", "done"), now());
+    assert_eq!(first.event, Event::Terminal);
+    assert_eq!(
+        (first.what.as_str(), first.detail.as_str()),
+        ("Build", "done")
+    );
+    let second = n.terminal("p", &e.id, "a", ("", "tests passed"), now());
+    assert_eq!(second.what, "a terminal notifies", "no heading of its own");
+    let kinds: Vec<Event> = n.list().iter().map(|x| x.event).collect();
+    assert_eq!(kinds, [Event::Terminal, Event::Asking]);
+    assert_eq!(n.list()[0].detail, "tests passed");
+}

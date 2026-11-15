@@ -96,6 +96,8 @@ const SCROLLBACK: usize = 50_000_000;
 enum Anchor {
     Cell(At, bool),
     Unit(At, At, Select),
+    /// A corner of a rectangle, and the side of its cell pressed.
+    Block(At, bool),
 }
 
 /// The version of Ghostty this emulation is.
@@ -151,7 +153,7 @@ impl Ghostty {
         let found = match how {
             Select::Words => self.t.word_at(at),
             Select::Lines => self.t.line_at(at),
-            Select::Cells => None,
+            Select::Cells | Select::Block => None,
         };
         found.unwrap_or((at, at))
     }
@@ -189,21 +191,42 @@ impl Ghostty {
         if uri.starts_with(ANCHOR) {
             return None;
         }
-        let same = |c: usize| self.t.hyperlink_at(row, c).as_deref() == Some(uri.as_str());
-        let mut start = col;
-        while start > 0 && same(start - 1) {
-            start -= 1;
+        // The cells the link covers, on into the rows it wraps onto.
+        let same =
+            |(r, c): (usize, usize)| self.t.hyperlink_at(r, c).as_deref() == Some(uri.as_str());
+        let before = |(r, c): (usize, usize)| {
+            if c > 0 {
+                Some((r, c - 1))
+            } else if r > 0 && self.t.wraps(r - 1) {
+                Some((r - 1, self.columns - 1))
+            } else {
+                None
+            }
+        };
+        let after = |(r, c): (usize, usize)| {
+            if c + 1 < self.columns {
+                Some((r, c + 1))
+            } else if r + 1 < self.rows && self.t.wraps(r) {
+                Some((r + 1, 0))
+            } else {
+                None
+            }
+        };
+        let mut start = (row, col);
+        while let Some(p) = before(start).filter(|&p| same(p)) {
+            start = p;
         }
-        let mut end = col;
-        while end + 1 < self.columns && same(end + 1) {
-            end += 1;
+        let mut end = (row, col);
+        while let Some(p) = after(end).filter(|&p| same(p)) {
+            end = p;
         }
-        let (line, places) = self.text_of(row, row);
+        let (line, places) = self.text_of(start.0, end.0);
         let top = self.t.above_viewport();
+        let range = ((top + start.0, start.1), (top + end.0, end.1));
         let text: String = line
             .chars()
             .zip(places)
-            .filter(|(_, (_, c))| (start..=end).contains(c))
+            .filter(|&(_, at)| within(at, range))
             .map(|(ch, _)| ch)
             .collect();
         Some(Link {
@@ -211,7 +234,7 @@ impl Ghostty {
                 uri,
                 text: text.trim_end().to_string(),
             },
-            range: Cells::Screen((top + row, start), (top + row, end)),
+            range: Cells::Screen(range.0, range.1),
         })
     }
 }
@@ -235,7 +258,7 @@ impl Emulator for Ghostty {
     /// theme's, so yellow and white stay readable, as alacritty's screen
     /// has them.
     fn set_default_colours(&mut self, fg: Rgb, bg: Rgb) {
-        let light = (bg.r as u32 * 299 + bg.g as u32 * 587 + bg.b as u32 * 114) / 1000 > 128;
+        let light = crate::terminal::is_light(bg);
         let palette: [hangar_ghostty::Rgb; 256] =
             std::array::from_fn(|i| ours(indexed_in(i as u8, light)));
         self.t.set_colours(ours(fg), ours(bg), &palette);
@@ -297,6 +320,10 @@ impl Emulator for Ghostty {
                 self.t.clear_selection();
                 self.anchor = Some(Anchor::Cell(at, right_half));
             }
+            Select::Block => {
+                self.t.clear_selection();
+                self.anchor = Some(Anchor::Block(at, right_half));
+            }
             how => {
                 let (a, b) = self.unit(at, how);
                 self.t.select(a, b);
@@ -327,6 +354,18 @@ impl Emulator for Ghostty {
             Some(Anchor::Unit(a, b, how)) => {
                 let (c, d) = self.unit(at, how);
                 self.t.select(a.min(c), b.max(d));
+            }
+            Some(Anchor::Block((row, col), right)) => {
+                // The columns between the boundaries the press and the
+                // pointer are at, as a drag by cells counts them.
+                let (a, b) = (col + right as usize, at.1 + right_half as usize);
+                let (left, past) = (a.min(b), a.max(b));
+                if past == left {
+                    self.t.clear_selection();
+                } else {
+                    let (top, bottom) = (row.min(at.0), row.max(at.0));
+                    self.t.select_rectangle((top, left), (bottom, past - 1));
+                }
             }
             None => {}
         }
@@ -515,7 +554,27 @@ impl Emulator for Ghostty {
             reply: e.reply,
             title: e.title,
             copied: e.copied,
+            bell: e.bell,
+            reset: e.reset,
+            statuses: e.statuses,
+            prompt_started: e.prompt_started,
         }
+    }
+
+    fn pointer(&self) -> crate::terminal::Pointer {
+        self.t.pointer()
+    }
+
+    fn scroll_prompts(&mut self, prompts: i32) {
+        self.t.scroll_prompts(prompts as isize)
+    }
+
+    fn reports_focus(&self) -> bool {
+        self.t.mode(1004, false)
+    }
+
+    fn reports_theme(&self) -> bool {
+        self.t.mode(2031, false)
     }
 
     fn takes_kitty_graphics(&self) -> bool {

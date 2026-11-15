@@ -19,11 +19,11 @@ use crate::addplace::{AddPlaceEvent, AddPlaceView};
 use crate::assets;
 use crate::doubleshift::DoubleShift;
 use crate::envsettings::{EnvSettingsEvent, EnvSettingsView, Page as EnvPage};
-use crate::envtab::{EnvTab, Tool};
+use crate::envtab::{EnvSignal, EnvTab, Tool};
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Action, Card, LineKind};
 use crate::newenv::{NewEnvEvent, NewEnvView};
-use crate::notices::Notices;
+use crate::notices::{Notice, Notices};
 use crate::palette::{self, Palette};
 use crate::places::Places;
 use crate::prefs::{Page, SettingsEvent, SettingsView};
@@ -37,6 +37,29 @@ const TICK: Duration = Duration::from_secs(30);
 
 /// The narrowest a card on Home may be.
 const CARD_MIN: f32 = 230.;
+
+/// An environment's tab being dragged along the window's tabs.
+#[derive(Clone)]
+struct DraggedEnv {
+    i: usize,
+    title: String,
+}
+
+impl Render for DraggedEnv {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let p = palette::of(cx);
+        div()
+            .px(px(12.))
+            .py(px(5.))
+            .rounded(px(6.))
+            .bg(p.surface)
+            .border_1()
+            .border_color(p.border_strong)
+            .shadow_md()
+            .text_color(p.text)
+            .child(self.title.clone())
+    }
+}
 
 /// An environment opened in a tab.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,13 +250,57 @@ impl Shell {
             Some(i) => i,
             None => {
                 let places = self.places.clone();
-                self.views
-                    .push(cx.new(|cx| EnvTab::new(places, &o.place, &o.env, cx)));
+                let view = cx.new(|cx| EnvTab::new(places, &o.place, &o.env, cx));
+                cx.subscribe_in(&view, window, |s, view, e: &EnvSignal, window, cx| {
+                    s.env_signal(view, e, window, cx)
+                })
+                .detach();
+                self.views.push(view);
                 self.tabs.push(o);
                 self.tabs.len() - 1
             }
         };
         self.show(i, window, cx);
+    }
+
+    /// What an environment's tab signals: its marks changed, or a program
+    /// in one of its terminals posted a notification, told as the settings
+    /// say.
+    fn env_signal(
+        &mut self,
+        view: &Entity<EnvTab>,
+        e: &EnvSignal,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let EnvSignal::Notification { title, body } = e else {
+            cx.notify();
+            return;
+        };
+        let Some(o) = self
+            .views
+            .iter()
+            .position(|v| v == view)
+            .and_then(|i| self.tabs.get(i))
+            .cloned()
+        else {
+            return;
+        };
+        let now = chrono::Utc::now();
+        let name = self
+            .places
+            .read(cx)
+            .get(&o.place)
+            .and_then(|(config, state)| {
+                let e = state.environment(&o.env)?;
+                Some(crate::model::card(config, e, now).title)
+            })
+            .unwrap_or_else(|| o.env.clone());
+        let n = self
+            .notices
+            .terminal(&o.place, &o.env, &name, (title, body), now);
+        self.announce(vec![n], window, cx);
+        cx.notify();
     }
 
     /// Shows an open tab, its view taking the keyboard.
@@ -260,6 +327,18 @@ impl Shell {
 
     pub fn set_home_mode(&mut self, mode: HomeMode, cx: &mut Context<Self>) {
         self.home_mode = mode;
+        cx.notify();
+    }
+
+    /// Moves an environment's tab to another's place.
+    fn move_tab(&mut self, from: usize, to: usize, cx: &mut Context<Self>) {
+        if from == to || from >= self.tabs.len() || to >= self.tabs.len() {
+            return;
+        }
+        let (tab, view) = (self.tabs.remove(from), self.views.remove(from));
+        self.tabs.insert(to, tab);
+        self.views.insert(to, view);
+        self.active = self.active.map(|a| crate::envtab::moved(a, from, to));
         cx.notify();
     }
 
@@ -634,6 +713,11 @@ impl Shell {
         let news = self
             .notices
             .observe(self.places.read(cx).list(), chrono::Utc::now());
+        self.announce(news, window, cx);
+    }
+
+    /// Tells the user of notices as the settings say.
+    fn announce(&mut self, news: Vec<Notice>, window: &mut Window, cx: &mut Context<Self>) {
         let notify = Settings::get(cx).notify;
         let front = self
             .active
@@ -1025,22 +1109,61 @@ impl Shell {
                 })
                 .when(!on, |d| d.text_color(p.muted).hover(move |s| s.bg(hover)))
         };
-        let mut tabs = h_flex().h_full().items_end().gap(px(2.)).min_w_0().child(
-            tab(
-                "tab-home".into(),
-                self.active.is_none() && self.adding.is_none(),
-            )
-            .child("Home")
-            .on_click(cx.listener(|this, _, _, cx| this.show_home(cx))),
-        );
+        // A press on a tab is the tab's, to click or drag, not the title
+        // bar's to move the window by.
+        let mut tabs = h_flex()
+            .h_full()
+            .items_end()
+            .gap(px(2.))
+            .min_w_0()
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(
+                tab(
+                    "tab-home".into(),
+                    self.active.is_none() && self.adding.is_none(),
+                )
+                .child("Home")
+                .on_click(cx.listener(|this, _, _, cx| this.show_home(cx))),
+            );
         for (i, o) in self.tabs.iter().enumerate() {
             let card = cards.iter().find(|c| c.place == o.place && c.env == o.env);
             let title = card.map_or_else(|| "Gone".to_string(), |c| c.title.clone());
             let on = self.active == Some(i) && self.adding.is_none();
+            // A terminal of its rang or waits on the user.
+            let needs = self.views.get(i).is_some_and(|v| v.read(cx).needs_you(cx));
+            let accent = p.accent;
             tabs = tabs.child(
                 tab(format!("tab-{i}").into(), on)
+                    .debug_selector(move || format!("env-tab-{i}"))
+                    // Dragged, it takes the place of the tab it is let go
+                    // on, the edge it goes beside marked.
+                    .on_drag(
+                        DraggedEnv {
+                            i,
+                            title: title.clone(),
+                        },
+                        |d, _, _, cx| cx.new(|_| d.clone()),
+                    )
+                    .drag_over::<DraggedEnv>(move |s, d, _, _| {
+                        if d.i < i {
+                            s.border_r_2().border_color(accent)
+                        } else {
+                            s.border_l_2().border_color(accent)
+                        }
+                    })
+                    .on_drop(
+                        cx.listener(move |this, d: &DraggedEnv, _, cx| this.move_tab(d.i, i, cx)),
+                    )
                     .when_some(card, |d, c| d.child(mark(c.mark, p)))
                     .child(div().max_w(px(170.)).truncate().child(title))
+                    .when(needs, |d| {
+                        d.child(
+                            svg()
+                                .path(assets::icon("bell"))
+                                .size(px(11.))
+                                .text_color(p.busy),
+                        )
+                    })
                     .when_some(card, |d, c| {
                         d.child(
                             div()

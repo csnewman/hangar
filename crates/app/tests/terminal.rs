@@ -4,7 +4,9 @@
 
 use std::time::Instant;
 
-use hangar_app::terminal::{CursorStyle, LinkKind, Mark, Replies, Screen, Select, Underline};
+use hangar_app::terminal::{
+    Alacritty, CursorStyle, Emulator, LinkKind, Mark, Replies, Screen, Select, Underline,
+};
 
 #[test]
 fn colours_and_attributes_become_spans() {
@@ -80,6 +82,31 @@ fn columns_name_their_characters() {
     assert_eq!(&line.cells[..4], &[0, 1, 1, 4]);
     let g: Vec<_> = line.graphemes().take(3).collect();
     assert_eq!(g, [(0, 1, "a"), (1, 2, "\u{4e16}"), (3, 1, "b")]);
+}
+
+/// A synchronized update the program never ends is drawn once its time
+/// runs out, not held back until megabytes more arrive.
+#[test]
+fn an_unended_synchronized_update_is_drawn_in_time() {
+    let mut s = Screen::new(20, 1);
+    s.feed(b"\x1b[?2026hheld");
+    assert!(s.synchronized());
+    assert_eq!(s.lines()[0].text.trim_end(), "", "held back");
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(s.lines()[0].text.trim_end(), "held");
+    assert!(!s.synchronized());
+}
+
+/// The bell and a full reset are said.
+#[test]
+fn the_bell_and_a_reset_are_said() {
+    let mut a = Alacritty::new(20, 2);
+    a.feed(b"\x07");
+    let e = a.effects();
+    assert!(e.bell && !e.reset);
+    a.feed(b"\x1b]0;mine\x07\x1bc");
+    let e = a.effects();
+    assert!(e.reset && !e.bell);
 }
 
 /// The cursor is drawn as the program asks.
@@ -167,6 +194,16 @@ fn marked(s: &mut Screen, row: usize, mark: Mark) -> String {
         at += span.len;
     }
     out
+}
+
+/// A rectangle selects the same columns of each row between.
+#[test]
+fn a_rectangle_selects_columns() {
+    let mut s = Screen::new(10, 3);
+    s.feed(b"abcdef\r\nghijkl\r\nmnopqr");
+    s.select(0, 1, false, Select::Block);
+    s.select_to(2, 3, true);
+    assert_eq!(s.selection().as_deref(), Some("bcd\nhij\nnop"));
 }
 
 #[test]

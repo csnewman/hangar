@@ -1,7 +1,8 @@
 //! What programs write to a terminal besides text, which alacritty_terminal
 //! does not keep: the progress they report (OSC 9;4, as Windows Terminal,
-//! iTerm2 and the web's terminals show it), the directory the shell is in
-//! (OSC 7, and systemd's OSC 3008 context), and the pictures they draw, in
+//! iTerm2 and the web's terminals show it), the notifications they post
+//! (OSC 9, iTerm2's, and OSC 777;notify, rxvt's), the directory the shell
+//! is in (OSC 7, and systemd's OSC 3008 context), and the pictures they draw, in
 //! sixel (DCS ... q), iTerm2's inline images (OSC 1337;File=) and the kitty
 //! graphics protocol (APC G). `Extract` takes them out of the output as it
 //! arrives, in order with the text around them, and passes everything else
@@ -17,6 +18,24 @@ use base64::Engine as _;
 pub struct Progress {
     pub state: u8,
     pub value: u8,
+}
+
+/// A notification a program posts: its title, if it gives one, and its
+/// body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notification {
+    pub title: String,
+    pub body: String,
+}
+
+/// Whether OSC 9's text is one of ConEmu's commands (a number from 1 to
+/// 12, then a semicolon or nothing), not a notification: Ghostty's rule.
+fn conemu(rest: &[u8]) -> bool {
+    let digits = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+    let number = std::str::from_utf8(&rest[..digits])
+        .ok()
+        .and_then(|n| n.parse::<u32>().ok());
+    number.is_some_and(|n| (1..=12).contains(&n)) && matches!(rest.get(digits), None | Some(b';'))
 }
 
 /// A picture to show at the cursor: its encoded bytes (PNG, JPEG, GIF or
@@ -42,6 +61,7 @@ pub enum Format {
 pub enum Piece {
     Text(Vec<u8>),
     Progress(Progress),
+    Notification(Notification),
     Picture(Picture),
     /// What the terminal answers the program: kitty's replies.
     Reply(Vec<u8>),
@@ -152,6 +172,22 @@ impl Extract {
             b']' => {
                 if let Some(rest) = body.strip_prefix(b"9;4;") {
                     return Some(progress(rest).map(Piece::Progress).into_iter().collect());
+                }
+                if let Some(rest) = body.strip_prefix(b"777;notify;") {
+                    let text = String::from_utf8_lossy(rest);
+                    let (title, body) = text.split_once(';').unwrap_or((&text, ""));
+                    return Some(vec![Piece::Notification(Notification {
+                        title: title.into(),
+                        body: body.into(),
+                    })]);
+                }
+                if let Some(rest) = body.strip_prefix(b"9;")
+                    && !conemu(rest)
+                {
+                    return Some(vec![Piece::Notification(Notification {
+                        title: String::new(),
+                        body: String::from_utf8_lossy(rest).into_owned(),
+                    })]);
                 }
                 if let Some(rest) = body.strip_prefix(b"7;") {
                     return Some(

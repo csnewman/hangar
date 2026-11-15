@@ -56,6 +56,10 @@ actions!(
         CloseSession,
         /// The terminal's session ended, and what runs in it, once asked.
         EndSession,
+        /// The view moved to the shell's prompt before the top one shown,
+        /// or after it (OSC 133's marks).
+        PreviousPrompt,
+        NextPrompt,
     ]
 );
 
@@ -64,8 +68,12 @@ actions!(
 /// and the menu's commands, with Cmd on macOS and Ctrl-Shift elsewhere,
 /// where Ctrl and a letter are the shell's.
 pub fn bind_keys(cx: &mut App) {
+    // A prompt before or after: Terminal.app's keys on macOS, as Ghostty
+    // has them, and Ghostty's elsewhere.
     let keys = if cfg!(target_os = "macos") {
-        ["cmd-f", "cmd-c", "cmd-v", "cmd-a", "cmd-t", "cmd-w"]
+        [
+            "cmd-f", "cmd-c", "cmd-v", "cmd-a", "cmd-t", "cmd-w", "cmd-up", "cmd-down",
+        ]
     } else {
         [
             "ctrl-shift-f",
@@ -74,9 +82,11 @@ pub fn bind_keys(cx: &mut App) {
             "ctrl-shift-a",
             "ctrl-shift-t",
             "ctrl-shift-w",
+            "ctrl-shift-up",
+            "ctrl-shift-down",
         ]
     };
-    let [find, copy, paste, all, new, close] = keys;
+    let [find, copy, paste, all, new, close, previous, next] = keys;
     let ctx = Some("Terminal");
     cx.bind_keys([
         KeyBinding::new("tab", SendTab, ctx),
@@ -87,6 +97,8 @@ pub fn bind_keys(cx: &mut App) {
         KeyBinding::new(all, SelectAll, ctx),
         KeyBinding::new(new, NewSession, ctx),
         KeyBinding::new(close, CloseSession, ctx),
+        KeyBinding::new(previous, PreviousPrompt, ctx),
+        KeyBinding::new(next, NextPrompt, ctx),
     ]);
 }
 
@@ -177,7 +189,8 @@ pub struct TerminalView {
     extract: crate::termimage::Extract,
     pictures: HashMap<u64, Shown>,
     next_picture: u64,
-    progress: Option<crate::termimage::Progress>,
+    /// The progress the program last reported, and when.
+    progress: Option<(crate::termimage::Progress, Instant)>,
     /// The pictures the emulator keeps, as drawn: by the screen they are
     /// on (a count of the screens made), image, generation of its pixels
     /// and the part shown.
@@ -189,6 +202,12 @@ pub struct TerminalView {
     redraw: Option<(Instant, Task<()>)>,
     /// When a blinking cursor last came on: at the last key or output.
     blink: Instant,
+    /// What the programs say they are doing (OSC 7501).
+    statuses: crate::termstatus::Records,
+    /// Signals for the window around, as they come.
+    signals: Vec<Signal>,
+    /// Whether the terminal had the keys when last drawn.
+    had_keys: bool,
 }
 
 type KittyKey = (u64, u32, u64, (u32, u32, u32, u32));
@@ -316,6 +335,9 @@ impl TerminalView {
             screens: 0,
             redraw: None,
             blink: Instant::now(),
+            statuses: Default::default(),
+            signals: vec![],
+            had_keys: false,
         };
         view.connect(session, cx);
         view
@@ -339,10 +361,10 @@ impl TerminalView {
             while let Ok(first) = rx.recv().await {
                 let alive = this.update(cx, |t, cx| {
                     let start = Instant::now();
-                    t.take(first);
+                    t.take(first, cx);
                     while start.elapsed() < FEED_BUDGET {
                         let Ok(more) = rx.try_recv() else { break };
-                        t.take(more);
+                        t.take(more, cx);
                     }
                     if let Some(text) = t.copied.take() {
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -372,6 +394,7 @@ impl TerminalView {
         }
         self.screen = screen(self.emulator, self.cols, self.rows, self.colours);
         self.screens += 1;
+        self.progress = None;
         let cell = self.cell_pixels();
         self.screen
             .resize(self.cols as usize, self.rows as usize, cell);
@@ -419,10 +442,8 @@ impl TerminalView {
             && !s.owner
         {
             s.owner = true;
-            let cell = self.cell_pixels();
-            self.screen
-                .resize(self.cols as usize, self.rows as usize, cell);
             self.send(Command::Resize(self.cols, self.rows));
+            self.resize_screen(self.cols, self.rows);
         }
     }
 
@@ -580,7 +601,14 @@ impl TerminalView {
         }
     }
 
-    fn take(&mut self, e: Event) {
+    fn take(&mut self, e: Event, cx: &mut Context<Self>) {
+        self.take_event(e);
+        for s in std::mem::take(&mut self.signals) {
+            cx.emit(s);
+        }
+    }
+
+    fn take_event(&mut self, e: Event) {
         match e {
             Event::Attached {
                 session,
@@ -593,6 +621,7 @@ impl TerminalView {
                 if self.session.is_some() && self.state != State::Connecting {
                     self.screen = screen(self.emulator, self.cols, self.rows, self.colours);
                     self.screens += 1;
+                    self.progress = None;
                     let cell = self.cell_pixels();
                     self.screen
                         .resize(self.cols as usize, self.rows as usize, cell);
@@ -622,30 +651,24 @@ impl TerminalView {
                 for piece in self.extract.split(&b) {
                     match piece {
                         crate::termimage::Piece::Text(t) => self.screen.feed(&t),
+                        // What the past posted was seen then.
+                        crate::termimage::Piece::Notification(n) => {
+                            if replayed == 0 {
+                                self.signals.push(Signal::Notification {
+                                    title: n.title,
+                                    body: n.body,
+                                });
+                            }
+                        }
                         crate::termimage::Piece::Progress(p) => {
-                            self.progress = (p.state != 0).then_some(p)
+                            self.progress = (p.state != 0).then(|| (p, Instant::now()))
                         }
                         crate::termimage::Piece::Picture(p) => self.place(p),
                         crate::termimage::Piece::Reply(r) => extra.extend(r),
                         crate::termimage::Piece::Directory(d) => self.cwd = Some(d),
                     }
                 }
-                let effects = self.screen.effects();
-                let (mut replies, title) = (effects.reply, effects.title);
-                replies.extend(extra);
-                if replayed == 0 && effects.copied.is_some() {
-                    self.copied = effects.copied;
-                }
-                // What the past asked was answered then; what the program
-                // asks is answered by the window holding the size alone,
-                // since every window watching would answer, and the program
-                // read every answer.
-                if replayed == 0 && !replies.is_empty() && self.holds_size() {
-                    self.send(Command::Input(replies));
-                }
-                if let Some(t) = title {
-                    self.title = t;
-                }
+                self.apply_effects(extra, replayed > 0);
             }
             Event::Size {
                 cols,
@@ -666,8 +689,7 @@ impl TerminalView {
                 } else {
                     (cols, rows)
                 };
-                let cell = self.cell_pixels();
-                self.screen.resize(c as usize, r as usize, cell);
+                self.resize_screen(c, r);
             }
             Event::Reconnecting { why, retry_in } => {
                 self.state =
@@ -676,12 +698,67 @@ impl TerminalView {
             Event::Exited(code) => {
                 self.state = State::Exited(code);
                 self.conn = None;
+                self.progress = None;
+                if self.statuses.ended() {
+                    self.signals.push(Signal::Status);
+                }
             }
             Event::Failed(e) => {
                 self.state = State::Failed(e);
                 self.conn = None;
             }
         }
+    }
+
+    /// Takes what the program asked of the terminal, with replies of the
+    /// view's own (kitty's): the replies, the title, the text copied, a
+    /// reset. The past, replayed, asked what was answered then.
+    fn apply_effects(&mut self, extra: Vec<u8>, replayed: bool) {
+        let effects = self.screen.effects();
+        let mut replies = effects.reply;
+        replies.extend(extra);
+        let mut changed = false;
+        if effects.reset {
+            self.title.clear();
+            self.progress = None;
+            changed |= self.statuses.clear();
+        }
+        // The past's bell rang then, and what it said of its work has
+        // moved on.
+        if !replayed {
+            if effects.bell {
+                self.signals.push(Signal::Bell);
+            }
+            for s in effects.statuses {
+                changed |= self.statuses.report(s);
+            }
+        }
+        if effects.prompt_started {
+            changed |= self.statuses.ended();
+        }
+        if changed {
+            self.signals.push(Signal::Status);
+        }
+        if !replayed && effects.copied.is_some() {
+            self.copied = effects.copied;
+        }
+        // What the program asks is answered by the window holding the size
+        // alone, since every window watching would answer, and the program
+        // read every answer.
+        if !replayed && !replies.is_empty() && self.holds_size() {
+            self.send(Command::Input(replies));
+        }
+        if let Some(t) = effects.title {
+            self.title = t;
+        }
+    }
+
+    /// Resizes the screen, answering at once a program that asked to hear
+    /// of it (mode 2048).
+    fn resize_screen(&mut self, cols: u16, rows: u16) {
+        let cell = self.cell_pixels();
+        self.screen.resize(cols as usize, rows as usize, cell);
+        self.apply_effects(vec![], false);
     }
 
     /// Fits the screen to bounds, telling the session its new size.
@@ -704,8 +781,7 @@ impl TerminalView {
         if (cols, rows) != (self.cols, self.rows) {
             (self.cols, self.rows) = (cols, rows);
             if self.holds_size() {
-                let cell = self.cell_pixels();
-                self.screen.resize(cols as usize, rows as usize, cell);
+                self.resize_screen(cols, rows);
             }
             self.send(Command::Prefer(cols, rows));
             cx.notify();
@@ -731,7 +807,21 @@ impl TerminalView {
         let modes = self.screen.key_modes(!cfg!(target_os = "macos"));
         if let Some(b) = crate::termkeys::encode(&key, &modes) {
             self.input(b);
+            self.seen(cx);
             cx.stop_propagation();
+        }
+    }
+
+    /// What its programs say they are doing that most needs the user.
+    pub fn status(&self) -> Option<crate::termstatus::Shown> {
+        self.statuses.shown()
+    }
+
+    /// The user has seen the terminal: what its programs finished or
+    /// failed at is let go.
+    pub fn seen(&mut self, cx: &mut Context<Self>) {
+        if self.statuses.seen() {
+            cx.emit(Signal::Status);
         }
     }
 
@@ -963,7 +1053,16 @@ impl TerminalView {
         if e.modifiers.shift && self.screen.selection().is_some() {
             self.screen.select_to(row, col, right);
         } else {
+            // A drag with Option (Ctrl-Alt elsewhere) selects a rectangle,
+            // as in Ghostty.
+            let m = &e.modifiers;
+            let block = if cfg!(target_os = "macos") {
+                m.alt
+            } else {
+                m.alt && (m.control || m.platform)
+            };
             let how = match e.click_count {
+                0 | 1 if block => Select::Block,
                 0 | 1 => Select::Cells,
                 2 => Select::Words,
                 _ => Select::Lines,
@@ -1269,6 +1368,18 @@ pub struct OpenLink {
 
 impl gpui::EventEmitter<OpenLink> for TerminalView {}
 
+/// What a terminal tells the window around it beyond its screen: its bell
+/// rang, its program posted a notification (OSC 9, OSC 777), or what its
+/// programs say they are doing changed (`TerminalView::status`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Signal {
+    Bell,
+    Notification { title: String, body: String },
+    Status,
+}
+
+impl gpui::EventEmitter<Signal> for TerminalView {}
+
 impl Focusable for TerminalView {
     fn focus_handle(&self, _: &App) -> FocusHandle {
         self.focus.clone()
@@ -1278,8 +1389,22 @@ impl Focusable for TerminalView {
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
-        self.screen
-            .set_default_colours(rgb(p.term_fg), rgb(p.term_tab));
+        // The theme's colours, given to the emulator when they change: each
+        // time, it draws every row afresh.
+        let colours = (rgb(p.term_fg), rgb(p.term_tab));
+        if colours != self.colours {
+            self.colours = colours;
+            self.screen.set_default_colours(colours.0, colours.1);
+            // A program that asked hears the terminal turn light or dark.
+            if self.screen.reports_theme() && self.holds_size() {
+                let scheme = if crate::terminal::is_light(colours.1) {
+                    2
+                } else {
+                    1
+                };
+                self.send(Command::Input(format!("\x1b[?997;{scheme}n").into_bytes()));
+            }
+        }
         // A size chosen in the settings: the cell is measured again, and
         // the next fit tells the session how many rows and columns fit.
         let (size, line) = metrics(cx);
@@ -1288,6 +1413,16 @@ impl Render for TerminalView {
             self.cell = None;
         }
         let focused = self.focus.is_focused(window);
+        // A program that asked hears the terminal gain and lose the keys:
+        // its focus, in the window in front.
+        let has_keys = focused && window.is_window_active();
+        if has_keys != self.had_keys {
+            self.had_keys = has_keys;
+            if self.screen.reports_focus() && self.holds_size() {
+                let report: &[u8] = if has_keys { b"\x1b[I" } else { b"\x1b[O" };
+                self.send(Command::Input(report.to_vec()));
+            }
+        }
         if let Some(due) = self.screen.tick_animations() {
             self.redraw_in(due, cx);
         }
@@ -1360,7 +1495,29 @@ impl Render for TerminalView {
                 })
                 .collect()
         };
-        let progress = self.progress;
+        // A report not renewed in 15 s is taken to be over, as Ghostty
+        // takes it, so a program that died part way leaves no bar behind.
+        const PROGRESS_LASTS: Duration = Duration::from_secs(15);
+        let progress = match self.progress {
+            Some((_, at)) if at.elapsed() >= PROGRESS_LASTS => {
+                self.progress = None;
+                None
+            }
+            Some((pr, at)) => {
+                self.redraw_in(PROGRESS_LASTS - at.elapsed(), cx);
+                // One that cannot say how far moves to and fro.
+                if pr.state == 3 {
+                    self.redraw_in(Duration::from_millis(33), cx);
+                }
+                Some((pr, at.elapsed()))
+            }
+            None => None,
+        };
+        let pointer = if self.opens && self.hover.is_some() {
+            gpui::CursorStyle::PointingHand
+        } else {
+            pointer(self.screen.pointer())
+        };
         let me = cx.entity().downgrade();
         let notice = match &self.state {
             State::Connecting => Some("Connecting…".to_string()),
@@ -1427,8 +1584,9 @@ impl Render for TerminalView {
                     }
                 }
             }))
-            // With the key that opens one held, a link is a link.
-            .when(self.opens && self.hover.is_some(), |d| d.cursor_pointer())
+            // The program's pointer; with the key that opens one held, a
+            // link is a link.
+            .cursor(pointer)
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseUpEvent, _, cx| this.release(e, cx)),
@@ -1438,6 +1596,14 @@ impl Render for TerminalView {
             .on_action(cx.listener(|this, _: &Paste, _, cx| this.paste(cx)))
             .on_action(cx.listener(|this, _: &SelectAll, _, cx| this.select_all(cx)))
             .on_action(cx.listener(|this, _: &ClearBuffer, _, cx| this.clear_buffer(cx)))
+            .on_action(cx.listener(|this, _: &PreviousPrompt, _, cx| {
+                this.screen.scroll_prompts(-1);
+                cx.notify()
+            }))
+            .on_action(cx.listener(|this, _: &NextPrompt, _, cx| {
+                this.screen.scroll_prompts(1);
+                cx.notify()
+            }))
             // The Edit menu's.
             .on_action(cx.listener(|this, _: &gpui_component::input::Copy, _, cx| this.copy(cx)))
             .on_action(cx.listener(|this, _: &gpui_component::input::Paste, _, cx| this.paste(cx)))
@@ -1495,19 +1661,26 @@ impl Render for TerminalView {
                     .children(pictures),
             )
             // A program's progress, along the top, as the web's terminal
-            // shows it: red when it failed, amber paused, full and faint
-            // when it cannot say how far.
-            .when_some(progress, |d, pr| {
+            // shows it: red when it failed, amber paused, and a part moving
+            // to and fro when it cannot say how far.
+            .when_some(progress, |d, (pr, age)| {
                 let colour = match pr.state {
                     2 => p.bad,
                     4 => p.busy,
-                    3 => p.accent.opacity(0.4),
                     _ => p.accent,
                 };
-                let done = if pr.state == 3 {
-                    1.
+                let bar = if pr.state == 3 {
+                    // A third of the width, across and back every 2 s.
+                    let phase = (age.as_secs_f32() / 2.).fract();
+                    let across = 1. - (2. * phase - 1.).abs();
+                    div()
+                        .absolute()
+                        .top_0()
+                        .h_full()
+                        .left(gpui::relative(across * 2. / 3.))
+                        .w(gpui::relative(1. / 3.))
                 } else {
-                    pr.value as f32 / 100.
+                    div().h_full().w(gpui::relative(pr.value as f32 / 100.))
                 };
                 d.child(
                     div()
@@ -1519,7 +1692,7 @@ impl Render for TerminalView {
                         .w_full()
                         .h(px(3.))
                         .bg(p.surface_2)
-                        .child(div().h_full().w(gpui::relative(done)).bg(colour))
+                        .child(bar.bg(colour))
                         .tooltip(|window, cx| {
                             gpui_component::tooltip::Tooltip::new("Progress the program reports")
                                 .build(window, cx)
@@ -1575,6 +1748,35 @@ impl Render for TerminalView {
                         }),
                 )
             })
+    }
+}
+
+/// The platform's pointer for one a program asks for, by its W3C name.
+fn pointer(p: crate::terminal::Pointer) -> gpui::CursorStyle {
+    use crate::terminal::Pointer as P;
+    use gpui::CursorStyle as C;
+    match p {
+        P::Text => C::IBeam,
+        P::VerticalText => C::IBeamCursorForVerticalLayout,
+        P::Pointer => C::PointingHand,
+        P::Crosshair | P::Cell => C::Crosshair,
+        P::ContextMenu => C::ContextualMenu,
+        P::Copy => C::DragCopy,
+        P::Alias => C::DragLink,
+        P::NoDrop | P::NotAllowed => C::OperationNotAllowed,
+        P::Grab => C::OpenHand,
+        P::Grabbing | P::Move | P::AllScroll => C::ClosedHand,
+        P::ColResize => C::ResizeColumn,
+        P::RowResize => C::ResizeRow,
+        P::NResize => C::ResizeUp,
+        P::SResize => C::ResizeDown,
+        P::EResize => C::ResizeRight,
+        P::WResize => C::ResizeLeft,
+        P::NsResize => C::ResizeUpDown,
+        P::EwResize => C::ResizeLeftRight,
+        P::NeResize | P::SwResize | P::NeswResize => C::ResizeUpRightDownLeft,
+        P::NwResize | P::SeResize | P::NwseResize => C::ResizeUpLeftDownRight,
+        P::Default | P::Help | P::Progress | P::Wait | P::ZoomIn | P::ZoomOut => C::Arrow,
     }
 }
 

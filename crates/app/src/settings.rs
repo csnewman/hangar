@@ -110,16 +110,19 @@ pub enum Event {
     SignIn,
     /// A newer image is out for an environment.
     Image,
+    /// A program in a terminal posts a notification (OSC 9, OSC 777).
+    Terminal,
 }
 
 impl Event {
-    pub const ALL: [Event; 6] = [
+    pub const ALL: [Event; 7] = [
         Event::Asking,
         Event::Finished,
         Event::Failed,
         Event::Ready,
         Event::SignIn,
         Event::Image,
+        Event::Terminal,
     ];
 
     pub fn label(self) -> &'static str {
@@ -130,6 +133,7 @@ impl Event {
             Event::Ready => "An environment is ready",
             Event::SignIn => "A place needs signing in",
             Event::Image => "A newer image is available",
+            Event::Terminal => "A program in a terminal notifies",
         }
     }
 }
@@ -169,6 +173,7 @@ pub struct Notify {
     pub ready: Ways,
     pub sign_in: Ways,
     pub image: Ways,
+    pub terminal: Ways,
     /// Places whose events raise nothing but the bell's list.
     pub quiet_places: Vec<String>,
     /// Whether an environment in front of the user, in the window they are
@@ -185,6 +190,7 @@ impl Default for Notify {
             ready: Ways::new(true, false, false, false),
             sign_in: Ways::new(true, true, false, false),
             image: Ways::new(true, false, false, false),
+            terminal: Ways::new(true, true, false, false),
             quiet_places: vec![],
             while_looking: true,
         }
@@ -200,6 +206,7 @@ impl Notify {
             Event::Ready => self.ready,
             Event::SignIn => self.sign_in,
             Event::Image => self.image,
+            Event::Terminal => self.terminal,
         }
     }
 
@@ -211,6 +218,7 @@ impl Notify {
             Event::Ready => &mut self.ready,
             Event::SignIn => &mut self.sign_in,
             Event::Image => &mut self.image,
+            Event::Terminal => &mut self.terminal,
         }
     }
 
