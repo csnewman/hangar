@@ -199,6 +199,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      # libghostty-vt (crates/ghostty) is built from source, with Zig.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates
@@ -291,6 +295,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
+      # libghostty-vt (crates/ghostty) is built from source, with Zig.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: crates
