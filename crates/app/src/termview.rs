@@ -766,11 +766,14 @@ impl TerminalView {
         let effects = self.screen.effects();
         let mut replies = effects.reply;
         replies.extend(extra);
-        let mut changed = false;
+        // What the tab shows of the programs' status, to tell the window
+        // around only when it changes: a program may report the same at
+        // every turn of its spinner.
+        let shown = self.statuses.shown();
         if effects.reset {
             self.title.clear();
             self.progress = None;
-            changed |= self.statuses.clear();
+            self.statuses.clear();
         }
         // The past's bell rang then, and what it said of its work has
         // moved on.
@@ -779,13 +782,13 @@ impl TerminalView {
                 self.signals.push(Signal::Bell);
             }
             for s in effects.statuses {
-                changed |= self.statuses.report(s);
+                self.statuses.report(s);
             }
         }
         if effects.prompt_started {
-            changed |= self.statuses.ended();
+            self.statuses.ended();
         }
-        if changed {
+        if self.statuses.shown() != shown {
             self.signals.push(Signal::Status);
         }
         if !replayed && let Some(text) = effects.copied {
@@ -1683,9 +1686,10 @@ impl Render for TerminalView {
             }
             Some((pr, at)) => {
                 self.redraw_in(PROGRESS_LASTS - at.elapsed(), cx);
-                // One that cannot say how far moves to and fro.
+                // One that cannot say how far moves to and fro, a step a
+                // tenth of a second: each step draws the terminal again.
                 if pr.state == 3 {
-                    self.redraw_in(Duration::from_millis(33), cx);
+                    self.redraw_in(Duration::from_millis(100), cx);
                 }
                 Some((pr, at.elapsed()))
             }

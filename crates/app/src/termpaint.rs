@@ -145,14 +145,17 @@ pub fn paint(s: &Screen, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut A
     });
 
     pictures(Layer::BelowBackground, window);
+    // The cells' backgrounds, then the marks over them, each joined where
+    // they meet: a screen of them is a few rectangles, not one a run.
+    let (mut grounds, mut marks) = (vec![], vec![]);
     for (r, line) in s.lines.iter().enumerate() {
         for (sp, &(c0, c1)) in line.spans.iter().zip(&columns[r]) {
             if c1 <= c0 {
                 continue;
             }
-            let (from, w) = (at(r, c0), cw * (c1 - c0) as f32);
+            let b = Bounds::new(at(r, c0), size(cw * (c1 - c0) as f32, lh));
             if sp.own_bg {
-                quad(window, from, w, lh, hsla(sp.bg));
+                grounds.push(Rect { b, c: hsla(sp.bg) });
             }
             let mark = match sp.mark {
                 Mark::None => None,
@@ -160,10 +163,13 @@ pub fn paint(s: &Screen, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut A
                 Mark::Match => Some(s.colours.found),
                 Mark::Current => Some(s.colours.current),
             };
-            if let Some(mark) = mark {
-                quad(window, from, w, lh, mark);
+            if let Some(c) = mark {
+                marks.push(Rect { b, c });
             }
         }
+    }
+    for r in coalesce(grounds).into_iter().chain(coalesce(marks)) {
+        window.paint_quad(fill(r.b, r.c));
     }
     pictures(Layer::BelowText, window);
     // A block cursor goes under its cell's text, drawn in the cell's
@@ -172,15 +178,31 @@ pub fn paint(s: &Screen, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut A
     if let Some((c, col, width, colour)) = block {
         quad(window, at(c.row, col), cw * width as f32, lh, colour);
     }
+    // Box drawing and blocks, gathered from every row and joined.
+    let mut sprites = vec![];
     for (r, line) in s.lines.iter().enumerate() {
         let on_cursor = |col: usize| block.is_some_and(|(c, cc, ..)| c.row == r && cc == col);
-        text(s, &m, line, &columns[r], at(r, 0), &on_cursor, window, cx);
+        let row = at(r, 0);
+        text(
+            s,
+            &m,
+            line,
+            &columns[r],
+            row,
+            &on_cursor,
+            &mut sprites,
+            window,
+            cx,
+        );
         for (sp, &(c0, c1)) in line.spans.iter().zip(&columns[r]) {
             if c1 > c0 {
                 let colour = text_colour(s, sp);
                 lines_through(s, &m, sp, at(r, c0), cw * (c1 - c0) as f32, colour, window);
             }
         }
+    }
+    for r in coalesce(sprites) {
+        window.paint_quad(fill(r.b, r.c));
     }
     pictures(Layer::AboveText, window);
     if let Some((c, col, width, colour)) = cursor {
@@ -278,6 +300,7 @@ fn text(
     columns: &[(usize, usize)],
     row: Point<Pixels>,
     on_cursor: &dyn Fn(usize) -> bool,
+    sprites: &mut Vec<Rect>,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -342,7 +365,7 @@ fn text(
             _ => None,
         };
         match sprite {
-            Some(shapes) => paint_shapes(&shapes, from, colour, window),
+            Some(shapes) => paint_shapes(&shapes, from, colour, sprites, window),
             None => shaped(
                 s,
                 g,
@@ -388,14 +411,78 @@ fn shaped(
     let _ = line.paint(from, s.line_height, TextAlign::Left, None, window, cx);
 }
 
-fn paint_shapes(shapes: &[Shape], from: Point<Pixels>, colour: Hsla, window: &mut Window) {
+/// A filled rectangle to paint.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rect {
+    pub b: Bounds<Pixels>,
+    pub c: Hsla,
+}
+
+/// Rectangles of a colour that meet, joined: those side by side on a row,
+/// then those stacked in a column. A rule across the screen is one
+/// rectangle, not two a cell, and each one painted costs.
+pub fn coalesce(mut rects: Vec<Rect>) -> Vec<Rect> {
+    let near = |a: Pixels, b: Pixels| (f32::from(a) - f32::from(b)).abs() < 0.01;
+    let key = |p: Pixels| f32::from(p);
+    // Side by side.
+    rects.sort_by(|a, b| {
+        (key(a.b.origin.y), key(a.b.size.height), key(a.b.origin.x))
+            .partial_cmp(&(key(b.b.origin.y), key(b.b.size.height), key(b.b.origin.x)))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut rows: Vec<Rect> = Vec::with_capacity(rects.len());
+    for r in rects {
+        match rows.last_mut() {
+            Some(l)
+                if l.c == r.c
+                    && near(l.b.origin.y, r.b.origin.y)
+                    && near(l.b.size.height, r.b.size.height)
+                    && near(l.b.origin.x + l.b.size.width, r.b.origin.x) =>
+            {
+                l.b.size.width = r.b.origin.x + r.b.size.width - l.b.origin.x;
+            }
+            _ => rows.push(r),
+        }
+    }
+    // Stacked.
+    rows.sort_by(|a, b| {
+        (key(a.b.origin.x), key(a.b.size.width), key(a.b.origin.y))
+            .partial_cmp(&(key(b.b.origin.x), key(b.b.size.width), key(b.b.origin.y)))
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut out: Vec<Rect> = Vec::with_capacity(rows.len());
+    for r in rows {
+        match out.last_mut() {
+            Some(l)
+                if l.c == r.c
+                    && near(l.b.origin.x, r.b.origin.x)
+                    && near(l.b.size.width, r.b.size.width)
+                    && near(l.b.origin.y + l.b.size.height, r.b.origin.y) =>
+            {
+                l.b.size.height = r.b.origin.y + r.b.size.height - l.b.origin.y;
+            }
+            _ => out.push(r),
+        }
+    }
+    out
+}
+
+/// Paints a sprite's lines and fills, its rectangles gathered to be
+/// joined with its neighbours'.
+fn paint_shapes(
+    shapes: &[Shape],
+    from: Point<Pixels>,
+    colour: Hsla,
+    sprites: &mut Vec<Rect>,
+    window: &mut Window,
+) {
     let to = |(x, y): (f32, f32)| from + point(px(x), px(y));
     for shape in shapes {
         match shape {
-            Shape::Rect { x, y, w, h, alpha } => window.paint_quad(fill(
-                Bounds::new(to((*x, *y)), size(px(*w), px(*h))),
-                colour.opacity(*alpha),
-            )),
+            Shape::Rect { x, y, w, h, alpha } => sprites.push(Rect {
+                b: Bounds::new(to((*x, *y)), size(px(*w), px(*h))),
+                c: colour.opacity(*alpha),
+            }),
             Shape::Stroke { points, width } => {
                 let mut path = PathBuilder::stroke(px(*width));
                 path_through(&mut path, points, &to);
