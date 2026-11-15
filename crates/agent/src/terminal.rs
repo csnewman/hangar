@@ -98,6 +98,30 @@ pub struct Request {
     /// Where a new session's shell starts, the user's home if none.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub dir: String,
+    /// The terminal emulator the window starting a new session runs, and
+    /// its version, which the shell is told (`terminal_program`).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub term_program: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub term_program_version: String,
+}
+
+/// What a new session's shell is told it runs in, TERM_PROGRAM and
+/// TERM_PROGRAM_VERSION: the emulator the window starting it names, so
+/// programs use what that emulator can do, else Hangar. A name or version
+/// that is not a short word of letters, digits and ._+- is passed over.
+pub fn terminal_program(req: &Request) -> (String, Option<String>) {
+    let word = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 32
+            && s.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c))
+    };
+    if !word(&req.term_program) {
+        return ("hangar".into(), None);
+    }
+    let version = word(&req.term_program_version).then(|| req.term_program_version.clone());
+    (req.term_program.clone(), version)
 }
 
 /// One session, as a list or an attach describes it.
@@ -691,8 +715,8 @@ fn last_of(hay: &[u8], needles: &[&[u8]]) -> Option<usize> {
 /// A new session's shell: a login shell for the request's user, or the
 /// environment's usual user, or whoever runs the agent if there is no such
 /// user here. It is given the environment a terminal program would set --
-/// TERM and COLORTERM, so programs use colour and what the browser's
-/// terminal can do -- and nothing of the agent's own.
+/// TERM, COLORTERM and TERM_PROGRAM, so programs use colour and what the
+/// window's terminal can do -- and nothing of the agent's own.
 pub fn login_shell(req: &Request) -> io::Result<Command> {
     let name = if req.user.is_empty() {
         user::DEFAULT_USER
@@ -728,9 +752,13 @@ pub fn login_shell(req: &Request) -> io::Result<Command> {
         .env("PATH", user::PATH)
         .env("TERM", "xterm-256color")
         .env("COLORTERM", "truecolor")
-        .env("TERM_PROGRAM", "hangar")
         .env("LANG", "C.UTF-8")
         .envs(user::session_env());
+    let (program, version) = terminal_program(req);
+    cmd.env("TERM_PROGRAM", program);
+    if let Some(v) = version {
+        cmd.env("TERM_PROGRAM_VERSION", v);
+    }
     user::prepare(&mut cmd, Some(&u), user::oom::USER);
     Ok(cmd)
 }

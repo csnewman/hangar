@@ -477,6 +477,10 @@ async fn terminal_socket(
     for (k, v) in url::form_urlencoded::parse(q.unwrap_or_default().as_bytes()) {
         match k.as_ref() {
             "session" | "dir" if !v.is_empty() => req[k.as_ref()] = json!(v),
+            // The emulator a new session's shell is told it runs in; the
+            // agent takes only a plain word of each.
+            "term" if !v.is_empty() => req["term_program"] = json!(v),
+            "term_version" if !v.is_empty() => req["term_program_version"] = json!(v),
             "cols" | "rows" => {
                 let n = v.parse::<i64>().unwrap_or(0).clamp(0, 1000);
                 if n > 0 {

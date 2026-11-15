@@ -20,7 +20,10 @@ info:
     Terminals. GET /api/v1/environments/{id}/terminal is a WebSocket attached
     to one of the environment's terminal sessions: ?session= names one (the
     terminals list gives them), or a new one starts, in ?dir= if given, at
-    ?cols= and ?rows=. The first message from the server is the attach's
+    ?cols= and ?rows=. ?term= and ?term_version= name the terminal
+    emulator the client runs, which a new session's shell is told
+    (TERM_PROGRAM and TERM_PROGRAM_VERSION) so programs use what it can
+    do; without them it is told hangar. The first message from the server is the attach's
     reply as JSON text: {"session": {"id", "title", "created", "clients",
     "cols", "rows"}, "history": N, "owner": bool, "service": {"protocol",
     "build", "features"}}, or {"err": "..."}. After it every message is binary, one frame

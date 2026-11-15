@@ -249,3 +249,31 @@ async fn frames() {
             .is_err()
     );
 }
+
+/// A new session's shell is told the terminal emulator the window starting
+/// it runs, when it names one plainly; else Hangar.
+#[test]
+fn the_shell_is_told_its_terminal() {
+    use hangar_agent::terminal::terminal_program;
+    let named = |p: &str, v: &str| Request {
+        term_program: p.into(),
+        term_program_version: v.into(),
+        ..attach("", 80, 24)
+    };
+    assert_eq!(
+        terminal_program(&named("ghostty", "1.4.1-dev")),
+        ("ghostty".to_string(), Some("1.4.1-dev".to_string()))
+    );
+    assert_eq!(
+        terminal_program(&named("", "")),
+        ("hangar".to_string(), None)
+    );
+    assert_eq!(
+        terminal_program(&named("ghostty", "1.0; rm -rf /")),
+        ("ghostty".to_string(), None)
+    );
+    assert_eq!(
+        terminal_program(&named("evil\nTERM=x", "1")),
+        ("hangar".to_string(), None)
+    );
+}
