@@ -6,17 +6,19 @@
 //! session's own commands.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Font, Hsla, IntoElement,
     KeyBinding, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     ParentElement, Pixels, Point, Render, Rgba, ScrollEvent, Styled, StyledText, Subscription,
-    TextRun, UnderlineStyle, WeakEntity, Window, actions, canvas, div, font, prelude::*, px,
+    Task, TextRun, UnderlineStyle, WeakEntity, Window, actions, canvas, div, font, prelude::*, px,
 };
 use gpui_component::Sizable;
 use gpui_component::input::{Input, InputEvent, InputState};
 use gpui_component::menu::{ContextMenuExt, PopupMenuItem};
+use hangar_ghostty::{Layer, Placement};
 
 use crate::api::Client;
 use crate::palette;
@@ -177,6 +179,24 @@ pub struct TerminalView {
     progress: Option<crate::termimage::Progress>,
     /// The window's pixels to a point, for a picture's size.
     scale: f32,
+    /// The pictures the emulator keeps, as drawn: by the screen they are
+    /// on (a count of the screens made), image, generation of its pixels
+    /// and the part shown.
+    kitty: HashMap<KittyKey, Arc<gpui::RenderImage>>,
+    screens: u64,
+    /// When the emulator's animations next move on, and the redraw then.
+    animation: Option<(Instant, Task<()>)>,
+}
+
+type KittyKey = (u64, u32, u64, (u32, u32, u32, u32));
+
+/// What of the text a row draws: all of it, or its cells' backgrounds or
+/// its text alone, when pictures go between the two.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    Both,
+    Grounds,
+    Text,
 }
 
 /// A picture drawn in the terminal, and its size where it is drawn.
@@ -304,6 +324,9 @@ impl TerminalView {
             next_picture: 0,
             progress: None,
             scale: 2.,
+            kitty: HashMap::new(),
+            screens: 0,
+            animation: None,
         };
         view.connect(session, cx);
         view
@@ -353,6 +376,7 @@ impl TerminalView {
             return;
         }
         self.screen = screen(self.emulator, self.cols, self.rows, self.colours);
+        self.screens += 1;
         let cell = self.cell_pixels();
         self.screen
             .resize(self.cols as usize, self.rows as usize, cell);
@@ -453,6 +477,79 @@ impl TerminalView {
         self.screen.feed(&anchor);
     }
 
+    /// The pictures the emulator placed, as elements where they are drawn:
+    /// those under the text, then those over it. A picture's pixels are
+    /// read once a generation of them, and let go once it is not shown.
+    fn kitty(
+        &mut self,
+        placed: &[Placement],
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (Vec<gpui::AnyElement>, Vec<gpui::AnyElement>) {
+        let (mut below, mut above) = (vec![], vec![]);
+        if placed.is_empty() && self.kitty.is_empty() {
+            return (below, above);
+        }
+        // Placements are in pixels of the cell size the emulator was
+        // given, the screen's, which a cell's points are rounded from.
+        let cell = self.cell.unwrap_or(px(7.5));
+        let (cw, ch) = self.cell_pixels();
+        let x = f32::from(cell) / cw.max(1) as f32;
+        let y = f32::from(self.line_height) / ch.max(1) as f32;
+        let mut shown = HashMap::new();
+        for p in placed {
+            let key = (self.screens, p.image, p.generation, p.source);
+            let image = if let Some(i) = shown.get(&key) {
+                Arc::clone(i)
+            } else if let Some(i) = self.kitty.remove(&key) {
+                i
+            } else if let Some(i) = self
+                .screen
+                .picture(p.image)
+                .and_then(|pic| picture_image(&pic, p.source))
+            {
+                i
+            } else {
+                continue;
+            };
+            shown.insert(key, Arc::clone(&image));
+            let el = gpui::img(image)
+                .absolute()
+                .left(cell * p.col as f32 + px(p.offset.0 as f32 * x))
+                .top(self.line_height * p.row as f32 + px(p.offset.1 as f32 * y))
+                .w(px(p.width as f32 * x))
+                .h(px(p.height as f32 * y))
+                .object_fit(gpui::ObjectFit::Fill)
+                .into_any_element();
+            if p.layer == Layer::AboveText {
+                above.push(el);
+            } else {
+                below.push(el);
+            }
+        }
+        for (_, gone) in std::mem::replace(&mut self.kitty, shown) {
+            cx.drop_image(gone, Some(window));
+        }
+        (below, above)
+    }
+
+    /// Draws the view again after a while, for an animation's next frame,
+    /// unless a redraw is due sooner.
+    fn redraw_in(&mut self, after: Duration, cx: &mut Context<Self>) {
+        let due = Instant::now() + after;
+        if self.animation.as_ref().is_some_and(|(at, _)| *at <= due) {
+            return;
+        }
+        let task = cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            cx.background_executor().timer(after).await;
+            let _ = this.update(cx, |t, cx| {
+                t.animation = None;
+                cx.notify();
+            });
+        });
+        self.animation = Some((due, task));
+    }
+
     /// A cell's size in the screen's pixels, for programs that ask.
     fn cell_pixels(&self) -> (u32, u32) {
         let w = f32::from(self.cell.unwrap_or(px(7.5))) * self.scale;
@@ -478,6 +575,7 @@ impl TerminalView {
                 // a clean screen, not over what was shown.
                 if self.session.is_some() && self.state != State::Connecting {
                     self.screen = screen(self.emulator, self.cols, self.rows, self.colours);
+                    self.screens += 1;
                     let cell = self.cell_pixels();
                     self.screen
                         .resize(self.cols as usize, self.rows as usize, cell);
@@ -1151,7 +1249,7 @@ pub struct OpenLink {
 impl gpui::EventEmitter<OpenLink> for TerminalView {}
 
 /// Splits the runs at the cursor's cell and swaps that cell's colours.
-fn cursor_runs(runs: Vec<TextRun>, at: usize, len: usize) -> Vec<TextRun> {
+fn cursor_runs(runs: Vec<TextRun>, at: usize, len: usize, ground: Hsla) -> Vec<TextRun> {
     let mut out = Vec::new();
     let mut pos = 0;
     for r in runs {
@@ -1169,7 +1267,7 @@ fn cursor_runs(runs: Vec<TextRun>, at: usize, len: usize) -> Vec<TextRun> {
         }
         out.push(TextRun {
             len,
-            color: r.background_color.unwrap_or(gpui::black()),
+            color: r.background_color.unwrap_or(ground),
             background_color: Some(r.color),
             ..r.clone()
         });
@@ -1210,57 +1308,77 @@ impl Render for TerminalView {
         let mark_text = p.term_bg;
         let show_cursor = focused && self.screen.scrolled_back() == 0 && self.screen.cursor_shown();
         let (cursor_row, cursor_col) = self.screen.cursor();
-        let rows: Vec<_> = self
-            .screen
-            .lines()
-            .into_iter()
-            .enumerate()
-            .map(|(row, line)| {
-                let mut runs: Vec<TextRun> = line
-                    .spans
-                    .iter()
-                    .map(|s| TextRun {
-                        len: s.len,
-                        font: Font {
-                            weight: if s.bold {
-                                gpui::FontWeight::BOLD
-                            } else {
-                                Default::default()
-                            },
-                            style: if s.italic {
-                                gpui::FontStyle::Italic
-                            } else {
-                                Default::default()
-                            },
-                            ..self.font.clone()
+        if let Some(due) = self.screen.tick_animations() {
+            self.redraw_in(due, cx);
+        }
+        let lines = self.screen.lines();
+        let placed = self.screen.placements();
+        // Pictures under the text go between the cells' backgrounds and
+        // their text, each drawn apart.
+        let under = placed.iter().any(|p| p.layer != Layer::AboveText);
+        let ground = hsla(rgb(p.term_tab));
+        let styled = |row: usize, line: &crate::terminal::Line, pass: Pass| {
+            let mut runs: Vec<TextRun> = line
+                .spans
+                .iter()
+                .map(|s| TextRun {
+                    len: s.len,
+                    font: Font {
+                        weight: if s.bold {
+                            gpui::FontWeight::BOLD
+                        } else {
+                            Default::default()
                         },
-                        color: match s.mark {
-                            Mark::Current => mark_text,
-                            _ => hsla(s.fg),
+                        style: if s.italic {
+                            gpui::FontStyle::Italic
+                        } else {
+                            Default::default()
                         },
-                        background_color: Some(match s.mark {
-                            Mark::None => hsla(s.bg),
-                            Mark::Selected => selected,
-                            Mark::Match => found,
-                            Mark::Current => current,
-                        }),
-                        underline: s.underline.then(|| UnderlineStyle {
-                            thickness: px(1.),
-                            ..Default::default()
-                        }),
-                        strikethrough: None,
-                    })
-                    .collect();
-                if show_cursor && row == cursor_row {
-                    let at = line.text.char_indices().nth(cursor_col).map(|(i, _)| i);
-                    if let Some(at) = at {
-                        let len = line.text[at..].chars().next().map_or(1, char::len_utf8);
-                        runs = cursor_runs(runs, at, len);
-                    }
+                        ..self.font.clone()
+                    },
+                    color: match (pass, s.mark) {
+                        (Pass::Grounds, _) => gpui::transparent_black(),
+                        (_, Mark::Current) => mark_text,
+                        _ => hsla(s.fg),
+                    },
+                    background_color: match (pass, s.mark) {
+                        (Pass::Text, Mark::None) => None,
+                        (_, Mark::None) => Some(hsla(s.bg)),
+                        (_, Mark::Selected) => Some(selected),
+                        (_, Mark::Match) => Some(found),
+                        (_, Mark::Current) => Some(current),
+                    },
+                    underline: (s.underline && pass != Pass::Grounds).then(|| UnderlineStyle {
+                        thickness: px(1.),
+                        ..Default::default()
+                    }),
+                    strikethrough: None,
+                })
+                .collect();
+            if show_cursor && row == cursor_row && pass != Pass::Grounds {
+                let at = line.text.char_indices().nth(cursor_col).map(|(i, _)| i);
+                if let Some(at) = at {
+                    let len = line.text[at..].chars().next().map_or(1, char::len_utf8);
+                    runs = cursor_runs(runs, at, len, ground);
                 }
-                StyledText::new(line.text).with_runs(runs)
-            })
+            }
+            StyledText::new(line.text.clone()).with_runs(runs)
+        };
+        let rows: Vec<_> = lines
+            .iter()
+            .enumerate()
+            .map(|(r, l)| styled(r, l, if under { Pass::Text } else { Pass::Both }))
             .collect();
+        let grounds: Vec<_> = if under {
+            lines
+                .iter()
+                .enumerate()
+                .map(|(r, l)| styled(r, l, Pass::Grounds))
+                .collect()
+        } else {
+            vec![]
+        };
+        let (below, above) = self.kitty(&placed, window, cx);
         // The pictures on the screen, or starting above it: each where its
         // anchor is.
         let cell = self.cell.unwrap_or(px(7.5));
@@ -1413,7 +1531,12 @@ impl Render for TerminalView {
                     .font(self.font.clone())
                     .text_size(self.font_size)
                     .line_height(self.line_height)
+                    .when(under, |d| {
+                        d.child(div().absolute().top_0().left_0().children(grounds))
+                            .children(below)
+                    })
                     .children(rows)
+                    .children(above)
                     .children(pictures)
                     .child(
                         canvas(
@@ -1524,4 +1647,28 @@ fn seconds(d: Duration) -> String {
     } else {
         format!("{}s", d.as_secs())
     }
+}
+
+/// The part of a picture shown, as gpui draws it (BGRA).
+fn picture_image(
+    pic: &hangar_ghostty::Picture,
+    (x, y, w, h): (u32, u32, u32, u32),
+) -> Option<Arc<gpui::RenderImage>> {
+    let (x, y) = (x.min(pic.width), y.min(pic.height));
+    let (w, h) = (w.min(pic.width - x), h.min(pic.height - y));
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let mut bgra = Vec::with_capacity(w as usize * h as usize * 4);
+    for row in y..y + h {
+        let start = (row as usize * pic.width as usize + x as usize) * 4;
+        let line = pic.rgba.get(start..start + w as usize * 4)?;
+        for p in line.as_chunks::<4>().0 {
+            bgra.extend_from_slice(&[p[2], p[1], p[0], p[3]]);
+        }
+    }
+    let buffer = image::RgbaImage::from_raw(w, h, bgra)?;
+    Some(Arc::new(gpui::RenderImage::new([image::Frame::new(
+        buffer,
+    )])))
 }

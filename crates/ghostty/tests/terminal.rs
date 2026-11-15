@@ -1,7 +1,7 @@
 //! The terminal as Hangar's app uses it: fed what a shell writes, read
 //! back as rows of cells, and what the program asks of it taken as effects.
 
-use hangar_ghostty::{Mouse, Progress, Rgb, Terminal, Wide};
+use hangar_ghostty::{Layer, Mouse, Progress, Rgb, Terminal, Wide};
 
 fn text(t: &mut Terminal, row: usize) -> String {
     t.frame().rows[row]
@@ -208,4 +208,102 @@ fn hyperlinks_are_read() {
         t.links_named("hangar-picture:", 0, 30, 2),
         [(0, 13, "7".to_string())]
     );
+}
+
+#[test]
+fn a_picture_is_placed_where_the_cursor_was() {
+    let mut t = Terminal::new(20, 4, "").unwrap();
+    t.resize(20, 4, 8, 16);
+    t.feed(b"ab\r\n  ");
+    // Two by two pixels, RGBA, shown at the cursor.
+    t.feed(b"\x1b_Ga=T,f=32,s=2,v=2,i=5,q=2;/wAA/wD/AP8AAP//////gA==\x1b\\");
+    let f = t.frame();
+    assert_eq!(f.placements.len(), 1, "{:?}", f.placements);
+    let p = f.placements[0];
+    assert_eq!((p.image, p.row, p.col), (5, 1, 2));
+    assert_eq!((p.width, p.height), (2, 2));
+    assert_eq!(p.source, (0, 0, 2, 2));
+    assert_eq!(p.layer, Layer::AboveText);
+    let pic = t.picture(5).expect("its pixels");
+    assert_eq!((pic.width, pic.height), (2, 2));
+    assert_eq!(&pic.rgba[..4], &[255, 0, 0, 255]);
+    assert_eq!(&pic.rgba[12..], &[255, 255, 255, 128]);
+    // Scrolled up with the text, and gone once deleted.
+    t.feed(b"\r\n\r\n\r\n");
+    assert_eq!(t.frame().placements[0].row, 0);
+    t.feed(b"\x1b_Ga=d,d=A,q=2\x1b\\");
+    assert!(t.frame().placements.is_empty());
+}
+
+#[test]
+fn rgb_and_png_pictures_are_read_as_rgba() {
+    let mut t = Terminal::new(20, 4, "").unwrap();
+    t.resize(20, 4, 8, 16);
+    t.feed(b"\x1b_Ga=t,f=24,s=2,v=1,i=1,q=2;ChQeKDI8\x1b\\");
+    let rgb = t.picture(1).expect("the RGB picture");
+    assert_eq!(rgb.rgba, [10, 20, 30, 255, 40, 50, 60, 255]);
+    // A PNG, sized by its own header, its placement in cells and pixels.
+    let mut png = vec![];
+    {
+        let mut e = png::Encoder::new(&mut png, 3, 1);
+        e.set_color(png::ColorType::Rgb);
+        e.set_depth(png::BitDepth::Eight);
+        let mut w = e.write_header().unwrap();
+        w.write_image_data(&[1, 2, 3, 4, 5, 6, 7, 8, 9]).unwrap();
+    }
+    let b64 = base64(&png);
+    t.feed(format!("\x1b_Ga=T,f=100,i=2,c=4,r=2,z=-5,q=2;{b64}\x1b\\").as_bytes());
+    let pic = t.picture(2).expect("the PNG decoded");
+    assert_eq!((pic.width, pic.height), (3, 1));
+    assert_eq!(pic.rgba, [1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255]);
+    let f = t.frame();
+    let p = f.placements.iter().find(|p| p.image == 2).expect("placed");
+    assert_eq!((p.width, p.height), (32, 32), "four cells by two");
+    assert_eq!((p.layer, p.z), (Layer::BelowText, -5));
+    assert!(t.picture(9).is_none(), "no such image");
+}
+
+#[test]
+fn an_animation_moves_on_when_ticked() {
+    let mut t = Terminal::new(10, 2, "").unwrap();
+    t.resize(10, 2, 8, 16);
+    assert_eq!(t.tick_animations(0), None, "nothing playing");
+    // A red pixel, then a blue frame shown 100 ms after, looping.
+    t.feed(b"\x1b_Ga=T,f=24,s=1,v=1,i=3,q=2;/wAA\x1b\\");
+    t.feed(b"\x1b_Ga=f,i=3,f=24,s=1,v=1,z=100,q=2;AAD/\x1b\\");
+    t.feed(b"\x1b_Ga=a,i=3,s=3,v=1,q=2\x1b\\");
+    let first = t.frame().placements[0].generation;
+    let next = t.tick_animations(1000).expect("playing");
+    assert!(next > 1000, "{next}");
+    let mut now = next;
+    for _ in 0..4 {
+        if t.picture(3).unwrap().rgba == [0, 0, 255, 255] {
+            break;
+        }
+        now = t.tick_animations(now).unwrap_or(now + 100);
+    }
+    assert_eq!(
+        t.picture(3).unwrap().rgba,
+        [0, 0, 255, 255],
+        "the blue frame"
+    );
+    assert_ne!(t.frame().placements[0].generation, first);
+}
+
+fn base64(bytes: &[u8]) -> String {
+    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16
+            | (*c.get(1).unwrap_or(&0) as u32) << 8
+            | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(A[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
 }

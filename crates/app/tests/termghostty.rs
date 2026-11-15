@@ -155,3 +155,22 @@ fn modes_reach_the_keys_and_mouse() {
     s.feed(b"\x1b[?1049h\x1b[?1007h");
     assert!(s.wheel_is_arrows());
 }
+
+#[test]
+fn a_programs_pictures_are_kept_and_placed() {
+    let mut s = screen(20, 4);
+    // Two by two pixels, RGBA, four cells wide and a row tall.
+    s.feed(b"\x1b_Ga=T,f=32,s=2,v=2,i=7,c=4,r=1,q=2;/wAA/wD/AP8AAP//////gA==\x1b\\");
+    s.lines();
+    let placed = s.placements();
+    assert_eq!(placed.len(), 1, "{placed:?}");
+    let p = placed[0];
+    assert_eq!((p.image, p.row, p.col), (7, 0, 0));
+    assert_eq!((p.width, p.height), (32, 16), "in the cells' pixels");
+    let pic = s.picture(7).expect("its pixels");
+    assert_eq!(&pic.rgba[..4], &[255, 0, 0, 255]);
+    // Files on this machine are never read for a program's picture.
+    s.feed(b"\x1b_Ga=T,t=f,i=8,q=2;L2V0Yy9wYXNzd2Q=\x1b\\");
+    s.lines();
+    assert!(s.picture(8).is_none());
+}

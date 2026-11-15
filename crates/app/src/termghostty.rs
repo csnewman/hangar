@@ -3,12 +3,17 @@
 //! Ghostty. A session it starts is told it runs in Ghostty, and it answers
 //! XTVERSION so, since what keeps its screen is Ghostty's own emulation.
 //!
-//! It keeps kitty graphics commands itself, so a program asking whether
-//! pictures are drawn is answered by Ghostty's emulation, which draws none
-//! here: their storage is set to nothing, and the question goes unanswered.
+//! It keeps kitty graphics itself, as Ghostty does: a program's pictures are
+//! stored and placed by Ghostty's emulation, up to PICTURE_STORAGE bytes a
+//! screen, and the view draws the placements it reads. Pictures come only
+//! in the commands themselves: the file, temporary file and shared memory
+//! media stay off, since the program runs on another machine and those
+//! would be this one's.
+
+use std::time::{Duration, Instant};
 
 use alacritty_terminal::vte::ansi::Rgb;
-use hangar_ghostty::{Mouse, Terminal, Wide};
+use hangar_ghostty::{Mouse, Picture, Placement, Terminal, Wide};
 use regex::Regex;
 
 use crate::terminal::{
@@ -31,7 +36,14 @@ pub struct Ghostty {
     anchor: Option<Anchor>,
     /// The patterns links are found by, made once.
     links: Option<(Regex, Regex)>,
+    /// The pictures on the lines last read.
+    placed: Vec<Placement>,
+    /// What animations' frames are timed from.
+    started: Instant,
 }
+
+/// How many bytes of pictures a screen keeps, the oldest deleted past it.
+const PICTURE_STORAGE: u64 = 64 << 20;
 
 #[derive(Debug, Clone, Copy)]
 enum Anchor {
@@ -52,7 +64,7 @@ impl Ghostty {
             &format!("ghostty {}", version()),
         )
         .expect("making a Ghostty terminal");
-        t.set_kitty_image_limit(0);
+        t.set_kitty_image_limit(PICTURE_STORAGE);
         Ghostty {
             t,
             columns,
@@ -60,6 +72,8 @@ impl Ghostty {
             hover: None,
             anchor: None,
             links: None,
+            placed: vec![],
+            started: Instant::now(),
         }
     }
 
@@ -351,7 +365,8 @@ impl Emulator for Ghostty {
     /// The visible rows, each a line of text with its spans, the selection
     /// and Find's matches marked.
     fn lines(&mut self) -> Vec<Line> {
-        let frame = self.t.frame();
+        let mut frame = self.t.frame();
+        self.placed = std::mem::take(&mut frame.placements);
         let found = self.t.found();
         let matches = self.t.matches();
         let top = self.t.above_viewport();
@@ -431,6 +446,20 @@ impl Emulator for Ghostty {
 
     fn identity(&self) -> Option<(String, String)> {
         Some(("ghostty".into(), version()))
+    }
+
+    fn placements(&self) -> Vec<Placement> {
+        self.placed.clone()
+    }
+
+    fn picture(&self, image: u32) -> Option<Picture> {
+        self.t.picture(image)
+    }
+
+    fn tick_animations(&mut self) -> Option<Duration> {
+        let now = self.started.elapsed().as_millis() as u64;
+        let next = self.t.tick_animations(now)?;
+        Some(Duration::from_millis(next.saturating_sub(now)))
     }
 }
 

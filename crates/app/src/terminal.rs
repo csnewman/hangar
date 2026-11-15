@@ -12,6 +12,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::search::{Match, RegexIter, RegexSearch};
 use alacritty_terminal::term::{ClipboardType, Config, Osc52, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor, Rgb};
+use std::time::Duration;
 
 /// What names a link that anchors something drawn over the text rather
 /// than a link to follow.
@@ -846,6 +847,20 @@ pub trait Emulator {
     /// The terminal emulator a session it starts is told it runs in, and
     /// its version.
     fn identity(&self) -> Option<(String, String)> {
+        None
+    }
+    /// The pictures the emulator keeps itself (kitty graphics, where it
+    /// takes them) on the lines last read, in the order they are drawn.
+    fn placements(&self) -> Vec<hangar_ghostty::Placement> {
+        vec![]
+    }
+    /// The pixels of a picture a placement shows.
+    fn picture(&self, _image: u32) -> Option<hangar_ghostty::Picture> {
+        None
+    }
+    /// Moves its pictures that are animations on to the frame due, and
+    /// says how long until the next one is, if one is playing.
+    fn tick_animations(&mut self) -> Option<Duration> {
         None
     }
 }

@@ -111,7 +111,8 @@ pub struct Row {
     pub cells: Vec<Cell>,
 }
 
-/// The screen as it is to be drawn: its rows, its colours, and the cursor.
+/// The screen as it is to be drawn: its rows, its colours, the cursor, and
+/// the pictures placed on it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Frame {
     pub rows: Vec<Row>,
@@ -121,6 +122,51 @@ pub struct Frame {
     /// program shows it.
     pub cursor: Option<(usize, usize)>,
     pub cursor_visible: bool,
+    /// The pictures on the viewport, in the order they are drawn.
+    pub placements: Vec<Placement>,
+}
+
+/// Where a picture is drawn against the text: under the cells' own
+/// backgrounds, between them and the text, or over the text.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Layer {
+    BelowBackground,
+    #[default]
+    BelowText,
+    AboveText,
+}
+
+/// A picture a program placed with kitty graphics, and where it is drawn:
+/// from a cell of the viewport, offset into it and sized in pixels of the
+/// cell size given to resize, showing a part of its image scaled to fit.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct Placement {
+    /// The image shown (Terminal::picture), and the generation of its
+    /// pixels, which changes whenever they do.
+    pub image: u32,
+    pub generation: u64,
+    pub layer: Layer,
+    /// Orders the pictures of a layer, the lowest drawn first.
+    pub z: i32,
+    /// The cell its top left is in, negative above or left of the
+    /// viewport: a picture is placed whole, and clipped where it is drawn.
+    pub row: i32,
+    pub col: i32,
+    /// How far into that cell it starts, in pixels.
+    pub offset: (u32, u32),
+    /// Its size drawn, in pixels.
+    pub width: u32,
+    pub height: u32,
+    /// The part of the image shown, in its pixels: x, y, width, height.
+    pub source: (u32, u32, u32, u32),
+}
+
+/// An image's pixels: RGBA, a byte a channel, row by row from the top left.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Picture {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
 }
 
 /// What the program has asked to hear of the mouse.
@@ -192,6 +238,7 @@ pub struct Terminal {
     render: sys::GhosttyRenderState,
     rows: sys::GhosttyRenderStateRowIterator,
     cells: sys::GhosttyRenderStateRowCells,
+    images: sys::GhosttyRenderStateImageIterator,
     search: sys::GhosttySearch,
     state: Box<State>,
 }
@@ -227,11 +274,21 @@ impl Terminal {
     /// A terminal of columns by rows, which answers XTVERSION with version
     /// ("ghostty 1.4.0", say; empty is libghostty-vt's own answer).
     pub fn new(columns: u16, rows: u16, version: &str) -> Result<Terminal, Error> {
+        static PNG: std::sync::Once = std::sync::Once::new();
+        // SAFETY: the decoder is a plain function, set once for the
+        // process before any terminal reads a picture.
+        PNG.call_once(|| unsafe {
+            sys::ghostty_sys_set(
+                sys::GhosttySysOption::GHOSTTY_SYS_OPT_DECODE_PNG,
+                decode_png as *const c_void,
+            );
+        });
         let mut t = Terminal {
             raw: ptr::null_mut(),
             render: ptr::null_mut(),
             rows: ptr::null_mut(),
             cells: ptr::null_mut(),
+            images: ptr::null_mut(),
             search: ptr::null_mut(),
             state: Box::new(State {
                 version: version.as_bytes().to_vec(),
@@ -257,6 +314,10 @@ impl Terminal {
             check(sys::ghostty_render_state_row_cells_new(
                 ptr::null(),
                 &mut t.cells,
+            ))?;
+            check(sys::ghostty_render_state_image_iterator_new(
+                ptr::null(),
+                &mut t.images,
             ))?;
             check(sys::ghostty_search_new(ptr::null(), &mut t.search, t.raw))?;
             use sys::GhosttyTerminalOption::*;
@@ -543,9 +604,192 @@ impl Terminal {
                 }
                 frame.rows.push(row);
             }
+            frame.placements = self.placements();
             sys::ghostty_render_state_clean(self.render);
         }
         frame
+    }
+
+    /// The pictures the render state found, in the order they are drawn.
+    ///
+    /// # Safety
+    /// The render state must be just updated.
+    unsafe fn placements(&mut self) -> Vec<Placement> {
+        use sys::GhosttyRenderStateImageData::*;
+        let mut out = vec![];
+        let r = unsafe {
+            sys::ghostty_render_state_get(
+                self.render,
+                sys::GhosttyRenderStateData::GHOSTTY_RENDER_STATE_DATA_IMAGE_ITERATOR,
+                &mut self.images as *mut _ as *mut c_void,
+            )
+        };
+        if r != GHOSTTY_SUCCESS {
+            return out;
+        }
+        while unsafe { sys::ghostty_render_state_image_iterator_next(self.images) } {
+            let images = self.images;
+            let get = |data, out: *mut c_void| unsafe {
+                sys::ghostty_render_state_image_get(images, data, out) == GHOSTTY_SUCCESS
+            };
+            let mut protocol: sys::GhosttyImageProtocol::Type = 0;
+            if !get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_PROTOCOL,
+                &mut protocol as *mut _ as *mut c_void,
+            ) || protocol != sys::GhosttyImageProtocol::GHOSTTY_IMAGE_PROTOCOL_KITTY
+            {
+                continue;
+            }
+            let mut p = Placement::default();
+            let mut layer: sys::GhosttyImageLayer::Type = 0;
+            let (mut sx, mut sy, mut sw, mut sh) = (0u32, 0u32, 0u32, 0u32);
+            let read = get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_ID,
+                &mut p.image as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_IMAGE_GENERATION,
+                &mut p.generation as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_LAYER,
+                &mut layer as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_Z,
+                &mut p.z as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_VIEWPORT_ROW,
+                &mut p.row as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_VIEWPORT_COL,
+                &mut p.col as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_CELL_OFFSET_X,
+                &mut p.offset.0 as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_CELL_OFFSET_Y,
+                &mut p.offset.1 as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_PIXEL_WIDTH,
+                &mut p.width as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_PIXEL_HEIGHT,
+                &mut p.height as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_X,
+                &mut sx as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_Y,
+                &mut sy as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_WIDTH,
+                &mut sw as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_RENDER_STATE_IMAGE_DATA_SOURCE_HEIGHT,
+                &mut sh as *mut _ as *mut c_void,
+            );
+            if !read {
+                continue;
+            }
+            use sys::GhosttyImageLayer::*;
+            p.layer = match layer {
+                GHOSTTY_IMAGE_LAYER_BELOW_BACKGROUND => Layer::BelowBackground,
+                GHOSTTY_IMAGE_LAYER_ABOVE_TEXT => Layer::AboveText,
+                _ => Layer::BelowText,
+            };
+            p.source = (sx, sy, sw, sh);
+            out.push(p);
+        }
+        out.sort_by_key(|p| (p.layer, p.z));
+        out
+    }
+
+    /// The kitty graphics storage of the screen shown.
+    fn graphics(&self) -> Option<sys::GhosttyKittyGraphics> {
+        let g: sys::GhosttyKittyGraphics = self
+            .get(sys::GhosttyTerminalData::GHOSTTY_TERMINAL_DATA_KITTY_GRAPHICS)
+            .unwrap_or(ptr::null_mut());
+        (!g.is_null()).then_some(g)
+    }
+
+    /// An image's pixels, as its current frame has them, if its pixels have
+    /// arrived.
+    pub fn picture(&self, image: u32) -> Option<Picture> {
+        use sys::GhosttyKittyGraphicsImageData::*;
+        use sys::GhosttyKittyImageFormat::*;
+        let graphics = self.graphics()?;
+        // SAFETY: the image and its pixels are read before the terminal
+        // next changes, and copied out.
+        unsafe {
+            let raw = sys::ghostty_kitty_graphics_image(graphics, image);
+            if raw.is_null() {
+                return None;
+            }
+            let get = |data, out: *mut c_void| {
+                sys::ghostty_kitty_graphics_image_get(raw, data, out) == GHOSTTY_SUCCESS
+            };
+            let (mut width, mut height) = (0u32, 0u32);
+            let mut format: sys::GhosttyKittyImageFormat::Type = 0;
+            let mut pixels = sys::GhosttyString {
+                ptr: ptr::null(),
+                len: 0,
+            };
+            if !(get(
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_WIDTH,
+                &mut width as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_HEIGHT,
+                &mut height as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_FORMAT,
+                &mut format as *mut _ as *mut c_void,
+            ) && get(
+                GHOSTTY_KITTY_GRAPHICS_IMAGE_DATA_PIXELS,
+                &mut pixels as *mut _ as *mut c_void,
+            )) || pixels.ptr.is_null()
+            {
+                return None;
+            }
+            let bytes = std::slice::from_raw_parts(pixels.ptr, pixels.len);
+            let n = width as usize * height as usize;
+            let rgba: Vec<u8> = match format {
+                GHOSTTY_KITTY_IMAGE_FORMAT_RGBA => bytes.get(..n * 4)?.to_vec(),
+                GHOSTTY_KITTY_IMAGE_FORMAT_RGB => bytes
+                    .get(..n * 3)?
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .flat_map(|p| [p[0], p[1], p[2], 255])
+                    .collect(),
+                GHOSTTY_KITTY_IMAGE_FORMAT_GRAY_ALPHA => bytes
+                    .get(..n * 2)?
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .flat_map(|p| [p[0], p[0], p[0], p[1]])
+                    .collect(),
+                GHOSTTY_KITTY_IMAGE_FORMAT_GRAY => bytes
+                    .get(..n)?
+                    .iter()
+                    .flat_map(|&g| [g, g, g, 255])
+                    .collect(),
+                _ => return None,
+            };
+            Some(Picture {
+                width,
+                height,
+                rgba,
+            })
+        }
+    }
+
+    /// Moves the pictures that are animations on to the frame due at now
+    /// (milliseconds, on any clock that only goes forward), and says when
+    /// the next is due on that clock, if one is playing.
+    pub fn tick_animations(&mut self, now: u64) -> Option<u64> {
+        let graphics = self.graphics()?;
+        let mut next = 0u64;
+        // SAFETY: a plain call on the terminal's storage.
+        let r = unsafe { sys::ghostty_kitty_graphics_animation_tick(graphics, now, &mut next) };
+        (r == GHOSTTY_SUCCESS).then_some(next)
     }
 
     /// The cell the cells iterator is on.
@@ -1072,6 +1316,7 @@ impl Drop for Terminal {
         unsafe {
             sys::ghostty_search_free(self.search);
             sys::ghostty_render_state_row_cells_free(self.cells);
+            sys::ghostty_render_state_image_iterator_free(self.images);
             sys::ghostty_render_state_row_iterator_free(self.rows);
             sys::ghostty_render_state_free(self.render);
             sys::ghostty_terminal_free(self.raw);
@@ -1257,4 +1502,67 @@ unsafe extern "C" fn progress(
         _ => Progress::Remove,
     };
     unsafe { state(userdata) }.effects.progress = Some(report);
+}
+
+/// Decodes a PNG a program sent as kitty graphics, into pixels the
+/// allocator given holds (RGBA, a byte a channel).
+unsafe extern "C" fn decode_png(
+    _: *mut c_void,
+    allocator: *const sys::GhosttyAllocator,
+    data: *const u8,
+    len: usize,
+    out: *mut sys::GhosttySysImage,
+) -> bool {
+    if data.is_null() || len == 0 || out.is_null() {
+        return false;
+    }
+    // SAFETY: the data is the library's, valid for the call.
+    let bytes = unsafe { std::slice::from_raw_parts(data, len) };
+    let Ok(Some((width, height, rgba))) = std::panic::catch_unwind(|| png_rgba(bytes)) else {
+        return false;
+    };
+    // SAFETY: the buffer is the allocator's, as long as the pixels, and
+    // the library takes it with out.
+    unsafe {
+        let buf = sys::ghostty_alloc(allocator, rgba.len());
+        if buf.is_null() {
+            return false;
+        }
+        ptr::copy_nonoverlapping(rgba.as_ptr(), buf, rgba.len());
+        *out = sys::GhosttySysImage {
+            width,
+            height,
+            data: buf,
+            data_len: rgba.len(),
+        };
+    }
+    true
+}
+
+/// A PNG's first frame as RGBA.
+fn png_rgba(bytes: &[u8]) -> Option<(u32, u32, Vec<u8>)> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(bytes));
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().ok()?;
+    let mut buf = vec![0; reader.output_buffer_size()?];
+    let info = reader.next_frame(&mut buf).ok()?;
+    let px = &buf[..info.buffer_size()];
+    let rgba = match info.color_type {
+        png::ColorType::Rgba => px.to_vec(),
+        png::ColorType::Rgb => px
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+        png::ColorType::GrayscaleAlpha => px
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[0], p[0], p[1]])
+            .collect(),
+        png::ColorType::Grayscale => px.iter().flat_map(|&g| [g, g, g, 255]).collect(),
+        png::ColorType::Indexed => return None,
+    };
+    Some((info.width, info.height, rgba))
 }

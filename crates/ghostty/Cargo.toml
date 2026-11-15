@@ -10,5 +10,8 @@ links = "ghostty-vt"
 name = "hangar_ghostty"
 path = "src/lib.rs"
 
+[dependencies]
+png = "0.18"
+
 [build-dependencies]
 sha2 = "0.10"
