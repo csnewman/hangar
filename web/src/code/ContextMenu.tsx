@@ -47,8 +47,26 @@ export function shortcut(keys: string): string {
     .join('')
 }
 
-export function copyText(text: string) {
-  navigator.clipboard?.writeText(text).catch(() => {})
+// copyText puts text on the clipboard, saying whether it did: by the
+// Clipboard API, or where a page has none (one not served over HTTPS or
+// from localhost) by the editing command, which works only in answer to a
+// click or a key.
+export function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(text).then(
+      () => true,
+      () => false,
+    )
+  }
+  const area = document.createElement('textarea')
+  area.value = text
+  area.style.position = 'fixed'
+  area.style.opacity = '0'
+  document.body.append(area)
+  area.select()
+  const done = document.execCommand('copy')
+  area.remove()
+  return Promise.resolve(done)
 }
 
 // A menu opens with its left edge at x, or its right edge for 'right'; and

@@ -94,6 +94,9 @@ export function TerminalPane({
   // Ctrl from the phone's keys, held for the next key.
   const [ctrl, setCtrl] = useState(false)
   const ctrlRef = useRef(false)
+  // Text a program copied that the browser would not put on the clipboard
+  // unasked, offered to be copied with a click.
+  const [unsent, setUnsent] = useState<string | null>(null)
   useEffect(() => {
     ctrlRef.current = ctrl
   })
@@ -178,11 +181,22 @@ export function TerminalPane({
     )
     // Programs in the environment may copy to the clipboard (OSC 52) but
     // never read it: a read would hand whatever the user last copied,
-    // anywhere, to code running in the environment.
+    // anywhere, to code running in the environment. A program whose mouse
+    // is its own copies this way what is selected in it, as Claude Code's
+    // full screen does. The copy comes after the click that made it, which
+    // some browsers (Safari; Firefox after a while) will not write to the
+    // clipboard: the window the person is in then offers it with a click.
+    // A copy in the replay was made long ago, and is not made again.
     term.loadAddon(
       new ClipboardAddon(undefined, {
         readText: () => '',
-        writeText: (_selection, text) => navigator.clipboard.writeText(text),
+        writeText: (_selection, text) => {
+          if (replaying) return
+          return copyText(text).then((copied) => {
+            if (copied) setUnsent(null)
+            else if (document.hasFocus()) setUnsent(text)
+          })
+        },
       }),
     )
     const progress = new ProgressAddon()
@@ -436,6 +450,24 @@ export function TerminalPane({
         <div ref={host} className="term-host" onContextMenu={openMenu} />
         {menu.menu}
         {state === 'live' && sizing && <SizeBar sizing={sizing} onFit={() => claimRef.current()} />}
+        {unsent !== null && (
+          <div className="term-copied" role="status">
+            <span>Copied in the terminal</span>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => {
+                void copyText(unsent).then((copied) => copied && setUnsent(null))
+                termRef.current?.focus()
+              }}
+            >
+              Copy to Clipboard
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" aria-label="Dismiss" onClick={() => setUnsent(null)}>
+              ×
+            </button>
+          </div>
+        )}
         {state !== 'live' && (
           <div className={`term-status term-status-${state}`}>
             {state === 'connecting' && 'Connecting…'}

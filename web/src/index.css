@@ -1900,6 +1900,25 @@ code {
   gap: 4px;
 }
 
+/* What a program copied that the browser would not put on the clipboard
+   unasked, offered with a click. */
+.term-copied {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  /* Above xterm.js's own layers, which reach z-index 11. */
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+  font-size: 12.5px;
+}
+
 .term-status {
   position: absolute;
   top: 10px;
