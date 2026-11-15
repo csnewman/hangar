@@ -191,13 +191,15 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          go-version: '1.27'
-      - run: go run ./cmd/hangar kernel --config-only -o out/kernel -v
+          workspaces: crates
+      - run: cargo build --manifest-path crates/Cargo.toml -p hangar-cli
+      - run: crates/target/debug/hangar kernel --config-only -o out/kernel -v
       # The arm64 kernel with 16 KiB pages, for workers on a Mac.
       - if: matrix.runner == 'ubuntu-26.04-arm'
-        run: go run ./cmd/hangar kernel --config-only -16k -o out/kernel-16k -v
+        run: crates/target/debug/hangar kernel --config-only -16k -o out/kernel-16k -v
 
   crates:
     # The Rust workspace: what the app and the guest agent share. Its change

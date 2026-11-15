@@ -13,12 +13,12 @@ on:
     branches: [master]
     paths:
       - 'images/**'
-      - 'internal/image/**'
+      - 'crates/cli/**'
       - '.github/workflows/images.yml'
   pull_request:
     paths:
       - 'images/**'
-      - 'internal/image/**'
+      - 'crates/cli/**'
   workflow_dispatch:
 
 concurrency:
@@ -46,16 +46,18 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
         with:
-          go-version: '1.27'
+          workspaces: crates
 
       # mkosi runs in the same builder container as a local `hangar build`,
       # so a config that builds on a laptop builds here. It builds for the
       # machine it runs on, hence a runner per architecture.
       - name: Build the images
         run: |
-          go build -o hangar ./cmd/hangar
+          cargo build --release --manifest-path crates/Cargo.toml -p hangar-cli
+          cp crates/target/release/hangar hangar
           sudo ./hangar build -C images/${{ matrix.distro }} -o out/${{ matrix.distro }} -v
           sudo ./hangar oci -i out/${{ matrix.distro }} -o out/oci -arch ${{ matrix.arch }}
 

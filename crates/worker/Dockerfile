@@ -15,7 +15,7 @@
 #                                     crates/krun), with libkrun linked in: the
 #                                     fork's hangar branch at krunHangar in
 #                                     dev/krun-build.sh
-#   /usr/share/hangar/vmlinuz         the guest kernel (internal/kernel)
+#   /usr/share/hangar/vmlinuz         the guest kernel (kernel/)
 #   /usr/share/hangar/vmlinux         on amd64, the same kernel as ELF, which
 #                                     libkrun boots there
 #   /usr/share/hangar/hangar-agent    the guest agent (crates/agent), static,
@@ -35,14 +35,14 @@ ARG UBUNTU=ubuntu:26.04
 
 # ---------------------------------------------------------------- guest kernel
 FROM ${UBUNTU} AS kernel
-# KERNEL_VERSION overrides internal/kernel/version, the version `hangar kernel`
+# KERNEL_VERSION overrides kernel/version, the version `hangar kernel`
 # builds too.
 ARG KERNEL_VERSION
-COPY internal/kernel/scripts/build.sh /scripts/build.sh
-COPY internal/kernel/version /cfg/version
-COPY internal/kernel/hangar.config internal/kernel/hangar-arm64.config internal/kernel/hangar-x86_64.config /cfg/
-COPY internal/kernel/patches/ /cfg/patches/
-COPY internal/kernel/tree/ /cfg/tree/
+COPY kernel/build.sh /scripts/build.sh
+COPY kernel/version /cfg/version
+COPY kernel/hangar.config kernel/hangar-arm64.config kernel/hangar-x86_64.config /cfg/
+COPY kernel/patches/ /cfg/patches/
+COPY kernel/tree/ /cfg/tree/
 RUN case "$(uname -m)" in aarch64) KARCH=arm64 ;; *) KARCH=x86_64 ;; esac \
  && mkdir -p /out \
  && KERNEL_VERSION=$KERNEL_VERSION KARCH=$KARCH sh /scripts/build.sh \
@@ -164,7 +164,7 @@ RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
       mkosi ubuntu-keyring dpkg-dev apt-utils uidmap dnf rpm ca-certificates \
       zstd gzip python3-minimal >/dev/null
-COPY internal/image/scripts/ /scripts/
+COPY images/scripts/ /scripts/
 COPY images/ /cfg/
 ENV IMAGE=ubuntu-26.04
 CMD ["sh", "/scripts/mkosi.sh"]

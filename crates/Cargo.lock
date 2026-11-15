@@ -3767,6 +3767,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-cli"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "flate2",
+ "hangar-erofs",
+ "hangar-images",
+ "libc",
+ "rust-embed",
+ "serde_json",
+ "sha2 0.10.9",
+ "tar",
+]
+
+[[package]]
 name = "hangar-erofs"
 version = "0.1.0"
 dependencies = [

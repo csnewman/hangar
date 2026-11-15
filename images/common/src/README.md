@@ -1,7 +1,7 @@
 # Guest programs
 
 Native programs installed into every `base` image that can run them. They are compiled
-by the image builder (`internal/image/scripts/mkosi.sh`), not in the image, so
+by the image builder (`images/scripts/mkosi.sh`), not in the image, so
 no base carries a toolchain.
 
 - `hangar-glcheck.c` renders continuously on the guest's GPU and checks every
