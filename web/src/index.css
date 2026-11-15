@@ -3642,3 +3642,20 @@ button.phone-back {
   margin: 0;
   padding: 4px 12px 0;
 }
+
+/* Offers a reload once the server serves a newer UI than the page's. */
+.update-notice {
+  position: fixed;
+  right: max(16px, env(safe-area-inset-right, 0px));
+  bottom: max(16px, env(safe-area-inset-bottom, 0px));
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-pop);
+}

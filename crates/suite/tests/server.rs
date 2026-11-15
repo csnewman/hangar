@@ -56,6 +56,37 @@ async fn health_endpoints_and_the_web_ui() {
     if !page.contains("not built into this binary") {
         assert_eq!(cache, "no-cache");
     }
+
+    // The page names its build, as every answer of the web UI's API does,
+    // so a page older than its server can tell.
+    let named = page
+        .split("<meta name=\"hangar-ui\" content=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap_or_default()
+        .to_string();
+    let r = http
+        .get(format!("{}/api/frontend/me", s.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        header(&r, "hangar-ui"),
+        named,
+        "the API names another build"
+    );
+    if !page.contains("not built into this binary") {
+        assert!(!named.is_empty(), "the page names no build: {page}");
+    }
+
+    // An asset the UI does not have, such as one a page from an earlier
+    // build asks for, is not found, rather than the page.
+    let r = http
+        .get(format!("{}/assets/index-gone.js", s.url()))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404);
 }
 
 /// A person's theme is theirs wherever they sign in; one that is not a

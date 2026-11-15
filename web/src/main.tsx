@@ -8,6 +8,8 @@ import { ApiError } from './api'
 import { RequireAdmin, RequireAuth } from './auth'
 import { meKey, onSessionChange } from './session'
 import { Shell } from './components/Shell'
+import { UpdateNotice } from './components/UpdateNotice'
+import { reloadForUpdate } from './update'
 import './index.css'
 import { AccountPage, SettingsPage } from './pages/Settings'
 import { FilesPage } from './pages/Files'
@@ -162,10 +164,18 @@ const router = createBrowserRouter([
 
 installTooltips()
 
+// A part of the UI that could not be loaded is, after an upgrade, one the
+// server's UI does not have: the page reloads to the server's UI.
+window.addEventListener('vite:preloadError', (e) => {
+  e.preventDefault()
+  reloadForUpdate()
+})
+
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <RouterProvider router={router} />
+      <UpdateNotice />
     </QueryClientProvider>
   </StrictMode>,
 )

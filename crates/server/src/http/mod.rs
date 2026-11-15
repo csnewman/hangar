@@ -116,8 +116,20 @@ pub fn router(app: Shared) -> Router {
             web::serve(uri).await
         })
         .layer(axum::middleware::from_fn(log_requests))
+        .layer(axum::middleware::from_fn(name_ui))
         .layer(axum::middleware::from_fn_with_state(app.clone(), hosts))
         .with_state(app)
+}
+
+/// Names the UI's build in every answer of the web UI's API, refusals
+/// included (`web`).
+async fn name_ui(req: Request, next: axum::middleware::Next) -> Response {
+    let api = req.uri().path().starts_with("/api/frontend/");
+    let mut resp = next.run(req).await;
+    if api {
+        web::name_build(&mut resp);
+    }
+    resp
 }
 
 /// Whether the server can reach its store.

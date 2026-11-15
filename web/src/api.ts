@@ -5,6 +5,7 @@
 import createClient from 'openapi-fetch'
 
 import type { components, paths } from './gen/frontend'
+import { served } from './update'
 
 type Schemas = components['schemas']
 
@@ -62,6 +63,11 @@ export type LocalImage = Schemas['LocalImage']
 export type TerminalSession = Schemas['TerminalSession']
 
 const client = createClient<paths>()
+client.use({
+  onResponse({ response }) {
+    served(response.headers.get('hangar-ui'))
+  },
+})
 
 // ApiError is a refusal: its status, and the spec's Error code, which
 // names what was refused however the message is worded.
