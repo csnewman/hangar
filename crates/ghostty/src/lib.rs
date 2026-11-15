@@ -394,6 +394,7 @@ struct State {
     /// The answer to XTVERSION.
     version: Vec<u8>,
     dark: bool,
+    bold_is_bright: bool,
     /// The terminal's size, for the size reports: rows, columns, and a
     /// cell's width and height in pixels.
     size: (u16, u16, u32, u32),
@@ -617,6 +618,38 @@ impl Terminal {
                 &bytes as *const usize as *const c_void,
             );
         }
+    }
+
+    /// The cursor's shape, and whether it blinks, until the program asks for
+    /// another (and when it asks for the default, DECSCUSR 0), taking the
+    /// place of whatever shape it has.
+    pub fn set_default_cursor(&mut self, style: CursorStyle, blink: bool) {
+        use sys::GhosttyCursorStyle::*;
+        let style: sys::GhosttyCursorStyle::Type = match style {
+            CursorStyle::Block => GHOSTTY_CURSOR_STYLE_BLOCK,
+            CursorStyle::HollowBlock => GHOSTTY_CURSOR_STYLE_BLOCK_HOLLOW,
+            CursorStyle::Bar => GHOSTTY_CURSOR_STYLE_BAR,
+            CursorStyle::Underline => GHOSTTY_CURSOR_STYLE_UNDERLINE,
+        };
+        // SAFETY: each option takes a pointer to its type, read in the call.
+        unsafe {
+            let _ = self.set(
+                sys::GhosttyTerminalOption::GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_STYLE,
+                &style as *const _ as *const c_void,
+            );
+            let _ = self.set(
+                sys::GhosttyTerminalOption::GHOSTTY_TERMINAL_OPT_DEFAULT_CURSOR_BLINK,
+                &blink as *const bool as *const c_void,
+            );
+        }
+        // The default is taken up when the program asks for it.
+        self.feed(b"\x1b[0 q");
+    }
+
+    /// Whether bold text in the first eight colours of the palette takes
+    /// the bright eight.
+    pub fn set_bold_is_bright(&mut self, on: bool) {
+        self.state.bold_is_bright = on;
     }
 
     /// Whether the terminal is dark, as a program that asks is told
@@ -1117,6 +1150,19 @@ impl Terminal {
                     GHOSTTY_SGR_UNDERLINE_DASHED => Underline::Dashed,
                     _ => Underline::Single,
                 };
+                // Bold in one of the first eight colours of the palette is
+                // the bright one, where it is asked for.
+                if cell.bold
+                    && self.state.bold_is_bright
+                    && style.fg_color.tag as u32
+                        == sys::GhosttyStyleColorTag::GHOSTTY_STYLE_COLOR_PALETTE
+                {
+                    // SAFETY: the tag says the palette index is set.
+                    let i = unsafe { style.fg_color.value.palette } as usize;
+                    if i < 8 {
+                        cell.fg = Some(palette[i + 8].into());
+                    }
+                }
                 let c = style.underline_color;
                 // SAFETY: the tag says which of the union's fields is set.
                 cell.underline_colour = match c.tag as u32 {
