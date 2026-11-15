@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{Path, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -19,6 +19,7 @@ use uuid::Uuid;
 use super::catalog::spec_json;
 use super::{ApiError, Body, List, OptionalBody, Shared, Signed, spec as to_spec};
 use crate::environments::{self as envs, Create, Machine, View};
+use crate::store::Mark;
 use crate::users::Principal;
 
 pub fn frontend() -> Router<Shared> {
@@ -136,6 +137,7 @@ fn frontend_json(v: &View) -> Value {
     if let Some(a) = &r.guest_agent {
         o.insert("guest_agent".into(), a.clone());
     }
+    o.insert("revision".into(), json!(r.revision));
     if let Some(c) = v.image_change {
         o.insert("image_change".into(), json!(c));
     }
@@ -236,6 +238,7 @@ fn client_json(v: &View) -> Value {
     if let Some(a) = &r.guest_agent {
         o.insert("guest_agent".into(), a.clone());
     }
+    o.insert("revision".into(), json!(r.revision));
     some_if(o, "editor_path", !s.editor_path.is_empty(), &s.editor_path);
     if let Some(st) = &v.stats {
         o.insert("stats".into(), client_stats(st));
@@ -790,18 +793,36 @@ const STREAM_PING: Duration = Duration::from_secs(30);
 /// How long a change waits for others close behind it, to go as one.
 const STREAM_GATHER: Duration = Duration::from_millis(50);
 
-fn event(name: &str, data: &Value) -> Bytes {
-    Bytes::from(format!("event: {name}\ndata: {data}\n\n"))
+/// An event, its ID the mark read from before it, which a client that
+/// loses the stream comes back with (Last-Event-ID).
+fn event(name: &str, data: &Value, at: &Mark) -> Bytes {
+    Bytes::from(format!(
+        "id: {}\nevent: {name}\ndata: {data}\n\n",
+        at.token()
+    ))
+}
+
+/// Where a read begun at this moment would read to.
+async fn mark(app: &Shared) -> Result<Mark, crate::store::Error> {
+    let mut tx = app.store.begin().await?;
+    let m = tx.mark().await?;
+    tx.commit().await?;
+    Ok(m)
 }
 
 /// The signed-in person's environments as server-sent events: each as it
-/// is, then each again as it changes, removed as it goes.
-async fn events(State(app): State<Shared>, s: Signed) -> Response {
+/// is, or for a client coming back with the last event's ID only each
+/// changed since, then each again as it changes, removed as it goes.
+async fn events(State(app): State<Shared>, s: Signed, headers: HeaderMap) -> Response {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, Infallible>>(64);
+    let since = headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(Mark::parse);
     // Watching before the first listing, so nothing between is missed.
     let watch = app.store.signals.watch_changes();
     tokio::spawn(async move {
-        if let Err(e) = stream(&app, &s.principal, &watch, &tx).await {
+        if let Err(e) = stream(&app, &s.principal, &watch, &tx, since).await {
             eprintln!("hangar-server: the event stream: {e}");
         }
     });
@@ -817,12 +838,14 @@ async fn events(State(app): State<Shared>, s: Signed) -> Response {
 
 type Sender = tokio::sync::mpsc::Sender<Result<Bytes, Infallible>>;
 
-/// Writes p's environments' changes to tx until whoever reads it goes.
+/// Writes p's environments' changes to tx until whoever reads it goes,
+/// to a client that had read to since only those it has not seen.
 async fn stream(
     app: &Shared,
     p: &Principal,
     watch: &crate::store::signals::Watch,
     tx: &Sender,
+    mut since: Option<Mark>,
 ) -> Result<(), crate::store::Error> {
     let gone = |_| crate::store::Error("closed".into());
     let mut sent: HashSet<Uuid> = HashSet::new();
@@ -830,49 +853,57 @@ async fn stream(
     let mut ping = tokio::time::interval(STREAM_PING);
     ping.tick().await;
     loop {
+        let at = mark(app).await?;
         if all {
+            let seen = since.take().filter(|m| m.before(&at));
             let list = envs::list(&app.store, p).await?;
             let mut now = HashSet::new();
             for v in list.iter().filter(|v| v.row.desired != "deleted") {
+                now.insert(v.row.id);
+                if seen.as_ref().is_some_and(|m| m.saw(&v.row)) {
+                    continue;
+                }
                 if tx
-                    .send(Ok(event("environment", &client_json(v))))
+                    .send(Ok(event("environment", &client_json(v), &at)))
                     .await
                     .is_err()
                 {
                     return Ok(());
                 }
-                now.insert(v.row.id);
             }
             for id in sent.difference(&now) {
-                if tx
-                    .send(Ok(event("removed", &json!({ "id": id.to_string() }))))
-                    .await
-                    .is_err()
-                {
+                let removed = event("removed", &json!({ "id": id.to_string() }), &at);
+                if tx.send(Ok(removed)).await.is_err() {
                     return Ok(());
                 }
             }
-            sent = now;
             if !synced {
-                if tx.send(Ok(event("synced", &json!({})))).await.is_err() {
+                // Every one there is, so a client coming back drops those
+                // gone while it was away.
+                let ids: Vec<String> = now.iter().map(Uuid::to_string).collect();
+                if tx
+                    .send(Ok(event("synced", &json!({ "ids": ids }), &at)))
+                    .await
+                    .is_err()
+                {
                     return Ok(());
                 }
                 synced = true;
             }
+            sent = now;
         } else {
             for id in ids.drain(..) {
                 match envs::get(&app.store, p, id).await? {
                     Some(v) if v.row.desired != "deleted" => {
                         sent.insert(id);
-                        tx.send(Ok(event("environment", &client_json(&v))))
+                        tx.send(Ok(event("environment", &client_json(&v), &at)))
                             .await
                             .map_err(gone)?;
                     }
                     _ => {
                         if sent.remove(&id) {
-                            tx.send(Ok(event("removed", &json!({ "id": id.to_string() }))))
-                                .await
-                                .map_err(gone)?;
+                            let removed = event("removed", &json!({ "id": id.to_string() }), &at);
+                            tx.send(Ok(removed)).await.map_err(gone)?;
                         }
                     }
                 }

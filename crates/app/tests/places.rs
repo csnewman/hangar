@@ -33,7 +33,49 @@ fn the_stream_is_read_as_events() {
     assert_eq!(e.task.as_ref().unwrap().text, "Fix rounding");
     assert!(e.agents[0].needs_you);
     assert_eq!(events[1], Event::Removed("gone".into()));
-    assert_eq!(events[2], Event::Synced);
+    assert_eq!(events[2], Event::Synced(Vec::new()));
+}
+
+/// Each event's ID is kept, to come back with, and a resumed stream's
+/// synced names every environment there is: those known and unchanged are
+/// kept, those changed replaced, and those not named dropped.
+#[test]
+fn a_resumed_stream_keeps_what_is_unchanged() {
+    let stream = format!(
+        "id: p:5:5:\nevent: environment\ndata: {}\n\nid: p:6:6:\nevent: synced\ndata: {{\"ids\":[\"e1\",\"e2\"]}}\n\n",
+        env_json("e2", "web", "stopped")
+    );
+    let mut events = Events::new(Cursor::new(stream));
+    let first = events.next().unwrap().unwrap();
+    assert_eq!(events.last_id(), Some("p:5:5:"));
+    assert_eq!(
+        events.next().unwrap().unwrap(),
+        Event::Synced(vec!["e1".into(), "e2".into()])
+    );
+    assert_eq!(events.last_id(), Some("p:6:6:"));
+    let Event::Environment(changed) = first else {
+        panic!("{first:?}")
+    };
+
+    let known = |id: &str, name: &str| -> hangar_app::api::Environment {
+        serde_json::from_str(&env_json(id, name, "running")).unwrap()
+    };
+    let mut st = PlaceState::default();
+    st.apply(Update::Snapshot(vec![
+        known("e1", "dev"),
+        known("e2", "web"),
+        known("e3", "old"),
+    ]));
+    st.apply(Update::Resumed {
+        changed: vec![*changed],
+        ids: vec!["e1".into(), "e2".into()],
+    });
+    let names: Vec<(&str, &str)> = st
+        .environments
+        .iter()
+        .map(|e| (e.id.as_str(), e.phase.as_str()))
+        .collect();
+    assert_eq!(names, [("e1", "running"), ("e2", "stopped")]);
 }
 
 /// A server for one test: answers each request with what reply says, and

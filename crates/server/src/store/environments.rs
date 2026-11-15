@@ -393,6 +393,7 @@ impl Tx {
     pub async fn insert_task(&mut self, t: &Task) -> Result<()> {
         match &mut self.inner {
             Backend::Pg(tx) => {
+                hold_environment(tx, t.environment_id).await?;
                 sqlx::query(
                     "INSERT INTO environment_tasks (id, environment_id, text, set_by, set_at)
                      VALUES ($1, $2, $3, $4, $5)",
@@ -415,6 +416,7 @@ impl Tx {
     pub async fn end_task(&mut self, env: Uuid, now: DateTime<Utc>) -> Result<()> {
         let ended = match &mut self.inner {
             Backend::Pg(tx) => {
+                hold_environment(tx, env).await?;
                 sqlx::query(
                     "UPDATE environment_tasks SET done_at = $2
                      WHERE environment_id = $1 AND done_at IS NULL",
@@ -482,6 +484,7 @@ impl Tx {
         let mut changed = false;
         match &mut self.inner {
             Backend::Pg(tx) => {
+                hold_environment(tx, env).await?;
                 sqlx::query(
                     "DELETE FROM agent_sessions WHERE environment_id = $1 AND NOT (id = ANY($2))",
                 )
@@ -570,6 +573,7 @@ impl Tx {
     pub async fn see_agent(&mut self, env: Uuid, id: &str, now: DateTime<Utc>) -> Result<bool> {
         let seen = match &mut self.inner {
             Backend::Pg(tx) => {
+                hold_environment(tx, env).await?;
                 sqlx::query(
                     "UPDATE agent_sessions SET seen_at = greatest($3, since)
                      WHERE environment_id = $1 AND id = $2",
@@ -662,4 +666,19 @@ impl Tx {
             }
         }
     }
+}
+
+/// Holds an environment's row until the transaction ends. A change to its
+/// task or agents raises its revision (migration 0020's trigger), so each
+/// writer of them holds the environment first, as everything else that
+/// changes the two does, and no two take them in opposite orders.
+async fn hold_environment(
+    tx: &mut sqlx::Transaction<'static, sqlx::Postgres>,
+    env: Uuid,
+) -> Result<()> {
+    sqlx::query("SELECT 1 FROM environments WHERE id = $1 FOR UPDATE")
+        .bind(env)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }

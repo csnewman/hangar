@@ -29,6 +29,8 @@ pub struct State {
     pub audit_events: Vec<AuditEvent>,
     /// The ID the next audit event takes, as Postgres's bigserial gives one.
     pub next_audit_id: i64,
+    /// The last revision an environment was given (`Tx::revise`).
+    pub last_revision: i64,
     pub workers: Vec<Worker>,
     pub environments: Vec<Environment>,
     pub worker_image_removals: Vec<ImageRemoval>,
@@ -174,6 +176,16 @@ impl File {
 }
 
 impl Tx {
+    /// Raises an environment's revision past every other: this file's
+    /// transactions take turns, so its revisions are in commit order.
+    pub fn revise(&mut self, id: uuid::Uuid) {
+        self.work.last_revision += 1;
+        let r = self.work.last_revision;
+        if let Some(e) = self.work.environments.iter_mut().find(|e| e.id == id) {
+            e.revision = r;
+        }
+    }
+
     /// Writes the copy to the file, then makes it the state.
     pub fn commit(mut self) -> Result<()> {
         let bytes = serde_json::to_vec_pretty(&self.work)

@@ -457,11 +457,12 @@ pub struct Events {
     buf: String,
 }
 
-/// One server-sent event: its type and its data.
+/// One server-sent event: its type, its data and its ID.
 #[derive(Debug, Clone)]
 pub struct Event {
     pub kind: String,
     pub data: serde_json::Value,
+    pub id: String,
 }
 
 impl Events {
@@ -478,6 +479,24 @@ impl Events {
         }
     }
 
+    /// Opens the stream with token, coming back with the ID of the last
+    /// event read (Last-Event-ID).
+    pub async fn resume(s: &Server, token: &str, last: &str) -> Events {
+        let r = s
+            .http()
+            .get(format!("{}/api/v1/events", s.url()))
+            .bearer_auth(token)
+            .header("last-event-id", last)
+            .send()
+            .await
+            .expect("opening the event stream");
+        assert!(r.status().is_success(), "the event stream: {}", r.status());
+        Events {
+            stream: Box::pin(r.bytes_stream()),
+            buf: String::new(),
+        }
+    }
+
     /// The next event, or None if none comes within 20 seconds or the stream
     /// ends. Comments (the server's keepalives) are passed over.
     pub async fn next(&mut self) -> Option<Event> {
@@ -485,12 +504,14 @@ impl Events {
         loop {
             if let Some(end) = self.buf.find("\n\n") {
                 let block: String = self.buf.drain(..end + 2).collect();
-                let (mut kind, mut data) = (String::new(), String::new());
+                let (mut kind, mut data, mut id) = (String::new(), String::new(), String::new());
                 for line in block.lines() {
                     if let Some(v) = line.strip_prefix("event:") {
                         kind = v.trim().to_string();
                     } else if let Some(v) = line.strip_prefix("data:") {
                         data.push_str(v.trim_start());
+                    } else if let Some(v) = line.strip_prefix("id:") {
+                        id = v.trim().to_string();
                     }
                 }
                 if kind.is_empty() && data.is_empty() {
@@ -499,6 +520,7 @@ impl Events {
                 return Some(Event {
                     kind,
                     data: serde_json::from_str(&data).unwrap_or(serde_json::Value::Null),
+                    id,
                 });
             }
             let left = deadline.checked_duration_since(Instant::now())?;

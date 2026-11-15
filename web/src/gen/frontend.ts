@@ -1488,6 +1488,11 @@ export interface components {
             /** @description Whether anyone may reach the environment's own web servers without signing in to Hangar. */
             ports_public?: boolean;
             image_update?: components["schemas"]["ImageUpdate"];
+            /**
+             * Format: int64
+             * @description Raised by every change to what is shown of the environment, so of two copies of it the one with the greater revision is the newer.
+             */
+            revision?: number;
             /** @description The Hangar agent in a running environment's machine, as its worker reports it. */
             guest_agent?: {
                 /**

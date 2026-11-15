@@ -477,6 +477,8 @@ pub async fn create(store: &Store, p: &Principal, ip: &str, req: Create) -> fail
             stats: None,
             progress: None,
             guest_agent: None,
+            revision: 0,
+            changed_by: None,
             created_at: now,
             updated_at: now,
         };

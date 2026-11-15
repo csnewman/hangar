@@ -146,6 +146,13 @@ pub struct Environment {
     /// hangar_api's GuestAgent.
     #[serde(default)]
     pub guest_agent: Option<serde_json::Value>,
+    /// Raised by every change to what a client is shown of it.
+    #[serde(default)]
+    pub revision: i64,
+    /// The Postgres transaction that last changed what a client is shown
+    /// of it; none in the JSON file, whose revisions are in commit order.
+    #[serde(skip)]
+    pub changed_by: Option<u64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

@@ -59,6 +59,85 @@ enum Kind {
     Json(Arc<json::File>),
 }
 
+/// How far a reader of environments had read: the Postgres snapshot it
+/// read from, or the JSON file's revisions up to one. A client keeps it as
+/// a token and comes back with it, to be sent only what it has not seen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Mark {
+    /// The transactions finished before xmin, and those before xmax but
+    /// for the ones still running then.
+    Snapshot {
+        xmin: u64,
+        xmax: u64,
+        running: Vec<u64>,
+    },
+    Revision(i64),
+}
+
+impl Mark {
+    /// Reads a token: "p:" and a Postgres snapshot (XMIN:XMAX:XIP,...), or
+    /// "j:" and a revision.
+    pub fn parse(s: &str) -> Option<Mark> {
+        if let Some(n) = s.strip_prefix("j:") {
+            return n.parse().ok().map(Mark::Revision);
+        }
+        let mut parts = s.strip_prefix("p:")?.splitn(3, ':');
+        let xmin = parts.next()?.parse().ok()?;
+        let xmax = parts.next()?.parse().ok()?;
+        let running = parts
+            .next()?
+            .split(',')
+            .filter(|x| !x.is_empty())
+            .map(str::parse)
+            .collect::<std::result::Result<_, _>>()
+            .ok()?;
+        Some(Mark::Snapshot {
+            xmin,
+            xmax,
+            running,
+        })
+    }
+
+    pub fn token(&self) -> String {
+        match self {
+            Mark::Snapshot {
+                xmin,
+                xmax,
+                running,
+            } => {
+                let running: Vec<String> = running.iter().map(u64::to_string).collect();
+                format!("p:{xmin}:{xmax}:{}", running.join(","))
+            }
+            Mark::Revision(n) => format!("j:{n}"),
+        }
+    }
+
+    /// Whether a reader that had read to this mark has seen e as it is.
+    pub fn saw(&self, e: &rows::Environment) -> bool {
+        match self {
+            Mark::Snapshot {
+                xmin,
+                xmax,
+                running,
+            } => e
+                .changed_by
+                .is_some_and(|x| x < *xmin || (x < *xmax && !running.contains(&x))),
+            Mark::Revision(n) => e.revision <= *n,
+        }
+    }
+
+    /// Whether this mark, a client's, can have been made by this store,
+    /// whose current mark is `now`: one from another store, or one past
+    /// the current, could say a client saw what it never did.
+    pub fn before(&self, now: &Mark) -> bool {
+        match (self, now) {
+            (Mark::Snapshot { xmax: a, .. }, Mark::Snapshot { xmax: b, .. }) => a <= b,
+            (Mark::Revision(a), Mark::Revision(b)) => a <= b,
+            _ => false,
+        }
+    }
+}
+
 /// One transaction: what it reads is as of its start, and what it writes is
 /// kept only once it commits; committing signals what it changed.
 pub struct Tx {
@@ -124,12 +203,34 @@ impl Tx {
                 }
                 tx.commit().await?
             }
-            Backend::Json(tx) => (*tx).commit()?,
+            Backend::Json(mut tx) => {
+                for s in &self.signalled {
+                    if let Signal::Environment(id) = s {
+                        tx.revise(*id);
+                    }
+                }
+                (*tx).commit()?
+            }
         }
         for s in self.signalled {
             self.signals.deliver(s);
         }
         Ok(())
+    }
+
+    /// Where a read begun after this would have read to, for a client to
+    /// come back with (`Mark`).
+    pub async fn mark(&mut self) -> Result<Mark> {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                let s: String = sqlx::query_scalar("SELECT pg_current_snapshot()::text")
+                    .fetch_one(&mut **tx)
+                    .await?;
+                Mark::parse(&format!("p:{s}"))
+                    .ok_or_else(|| Error(format!("the snapshot {s} does not read")))
+            }
+            Backend::Json(tx) => Ok(Mark::Revision(tx.work.last_revision)),
+        }
     }
 
     /// Notes something changed, to signal once this commits.

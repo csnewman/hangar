@@ -87,8 +87,10 @@ pub enum Event {
     Environment(Box<Environment>),
     /// An environment deleted, or out of reach.
     Removed(String),
-    /// Every environment has been sent; changes follow.
-    Synced,
+    /// Every environment has been sent, or for a stream resumed every one
+    /// changed since; changes follow. The IDs are every environment there
+    /// is (none from a server older than resuming).
+    Synced(Vec<String>),
 }
 
 /// The runtime every call runs on: reqwest's connections need tokio's,
@@ -449,17 +451,33 @@ impl Client {
         self.call(|c| c.see_agent(id, session))
     }
 
-    /// Opens the event stream: every environment, Synced, then changes.
-    pub fn events(&self) -> Result<Events<impl BufRead + use<>>, Error> {
+    /// Opens the event stream: every environment, Synced, then changes; or
+    /// coming back with the ID of the last event read, every environment
+    /// changed since, then Synced.
+    pub fn events(&self, last: Option<&str>) -> Result<Events<impl BufRead + use<>>, Error> {
+        use generated::ClientInfo;
         let (_, stream) = self.api.as_ref().map_err(|e| Error::Transport(e.clone()))?;
-        let bytes = runtime().block_on(async {
-            match stream.stream_events().await {
-                Ok(v) => Ok(v.into_inner()),
-                Err(e) => Err(error(e).await),
+        let mut req = stream.client().get(format!("{}/events", self.base));
+        if let Some(id) = last {
+            req = req.header("last-event-id", id);
+        }
+        let resp = runtime().block_on(async move {
+            let r = req
+                .send()
+                .await
+                .map_err(|e| Error::Transport(e.to_string()))?;
+            let status = r.status().as_u16();
+            if status == 401 {
+                return Err(Error::Unauthorized);
             }
+            if !r.status().is_success() {
+                let said = r.json::<types::Error>().await.map(|e| e.error);
+                return Err(Error::Status(status, said.unwrap_or_default()));
+            }
+            Ok(r)
         })?;
         Ok(Events::new(BufReader::new(StreamReader {
-            stream: bytes.into_inner(),
+            stream: Box::pin(resp.bytes_stream()),
             chunk: bytes::Bytes::new(),
         })))
     }
@@ -671,6 +689,7 @@ impl Read for StreamReader {
 pub struct Events<R> {
     r: R,
     line: String,
+    last_id: Option<String>,
 }
 
 impl<R: BufRead> Events<R> {
@@ -678,7 +697,13 @@ impl<R: BufRead> Events<R> {
         Events {
             r,
             line: String::new(),
+            last_id: None,
         }
+    }
+
+    /// The ID of the last event read that had one, to come back with.
+    pub fn last_id(&self) -> Option<&str> {
+        self.last_id.as_deref()
     }
 }
 
@@ -722,6 +747,7 @@ impl<R: BufRead> Iterator for Events<R> {
                     }
                     data.push_str(value);
                 }
+                "id" => self.last_id = Some(value.to_string()),
                 _ => {}
             }
         }
@@ -739,7 +765,14 @@ fn parse(name: &str, data: &str) -> Result<Option<Event>, Error> {
             }
             Event::Removed(serde_json::from_str::<Removed>(data).map_err(decode)?.id)
         }
-        "synced" => Event::Synced,
+        "synced" => {
+            #[derive(Deserialize)]
+            struct Synced {
+                #[serde(default)]
+                ids: Vec<String>,
+            }
+            Event::Synced(serde_json::from_str::<Synced>(data).map_err(decode)?.ids)
+        }
         _ => return Ok(None),
     }))
 }

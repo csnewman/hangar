@@ -15,7 +15,7 @@ pub(super) const WORKER_COLUMNS: &str = "id, name, credential_hash, labels, cpus
 pub const ENVIRONMENT_COLUMNS: &str = "id, short_id, owner_id, name, template_id, template_name, \
      template_revision, spec, image, image_digest, image_pin_want, image_drop_rollback, image_update, \
      image_rollback, ports_public, cpus, memory_mib, desired, worker_id, phase, reason, stats, progress, \
-     guest_agent, created_at, updated_at";
+     guest_agent, revision, changed_by::text AS changed_by, created_at, updated_at";
 
 pub(super) fn worker(r: &PgRow) -> Result<Worker> {
     Ok(Worker {
@@ -56,6 +56,11 @@ pub fn environment(r: &PgRow) -> Result<Environment> {
         image_update: r.try_get("image_update")?,
         image_rollback: r.try_get("image_rollback")?,
         guest_agent: r.try_get("guest_agent")?,
+        revision: r.try_get("revision")?,
+        changed_by: r
+            .try_get::<String, _>("changed_by")
+            .ok()
+            .and_then(|x| x.parse().ok()),
         ports_public: r.try_get("ports_public")?,
         cpus: r.try_get("cpus")?,
         memory_mib: r.try_get("memory_mib")?,

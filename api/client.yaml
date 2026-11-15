@@ -776,14 +776,21 @@ paths:
         each change to one is an environment event with all of it, and an
         environment deleted, or out of the user's reach, is a removed event.
         Changes close together may arrive as one. A comment line is sent
-        every 30 seconds when nothing else is. A client that loses the
-        stream opens it again, and is sent everything again. More event
-        types may come; ignore one you do not know.
+        every 30 seconds when nothing else is. More event types may come;
+        ignore one you do not know.
+
+
+        Every event has an ID. A client that loses the stream opens it
+        again with the last ID it had as Last-Event-ID, as a browser's
+        EventSource does, and its start is then an environment event only
+        for each environment changed since, then the synced event, whose
+        ids are every environment the user can reach: the client drops any
+        other it has. An ID the server cannot read starts the stream afresh.
 
 
         event: environment, data: an Environment.
         event: removed, data: {"id": "..."}.
-        event: synced, data: {}.
+        event: synced, data: {"ids": ["..."]}.
       responses:
         "200":
           description: The stream.
@@ -1465,6 +1472,12 @@ components:
           description: The copy of the image it runs.
         task: { $ref: "#/components/schemas/Task" }
         image_update: { $ref: "#/components/schemas/ImageUpdate" }
+        revision:
+          type: integer
+          format: int64
+          description: >-
+            Raised by every change to what is shown of the environment, so of
+            two copies of it the one with the greater revision is the newer.
         guest_agent:
           type: object
           description: >-

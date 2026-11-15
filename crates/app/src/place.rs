@@ -47,6 +47,12 @@ pub enum Update {
     Me(Me),
     /// Every environment, replacing what was known.
     Snapshot(Vec<Environment>),
+    /// A stream resumed: the environments changed since, and the IDs of
+    /// every one there is, the rest kept as they were known.
+    Resumed {
+        changed: Vec<Environment>,
+        ids: Vec<String>,
+    },
     Environment(Box<Environment>),
     Removed(String),
 }
@@ -70,6 +76,22 @@ impl PlaceState {
             Update::Connection(c) => self.connection = c,
             Update::Me(me) => self.me = Some(me),
             Update::Snapshot(mut envs) => {
+                envs.sort_by_key(|e| e.created_at);
+                self.environments = envs;
+                self.synced_at = Some(Utc::now());
+                self.connection = Connection::Online;
+            }
+            Update::Resumed { changed, ids } => {
+                let mut envs: Vec<Environment> = ids
+                    .iter()
+                    .filter_map(|id| {
+                        changed
+                            .iter()
+                            .chain(&self.environments)
+                            .find(|e| &e.id == id)
+                            .cloned()
+                    })
+                    .collect();
                 envs.sort_by_key(|e| e.created_at);
                 self.environments = envs;
                 self.synced_at = Some(Utc::now());
@@ -157,11 +179,14 @@ pub fn connect(client: Client, send: impl Fn(Update) -> bool + Send + 'static) -
             let running = || !stopped.load(Ordering::Relaxed);
             let send = |u: Update| running() && send(u);
             let mut wait = RETRY_FIRST;
+            // The last event's ID, kept while what it stands for is: what
+            // came before it has all been applied.
+            let mut last: Option<String> = None;
             while running() {
                 if !send(Update::Connection(Connection::Connecting)) {
                     return;
                 }
-                let (synced, err) = session(&client, &send);
+                let (synced, err) = session(&client, &send, &mut last);
                 let next = match err {
                     api::Error::Unauthorized => Connection::SignIn,
                     api::Error::Status(426, server) => Connection::Unsupported { server },
@@ -188,9 +213,13 @@ pub fn connect(client: Client, send: impl Fn(Update) -> bool + Send + 'static) -
 }
 
 /// One connection: the version, who is signed in, then the event stream
-/// until it ends. It returns whether the stream got as far as Synced, and
-/// why it ended.
-fn session(client: &Client, send: &impl Fn(Update) -> bool) -> (bool, api::Error) {
+/// until it ends, resumed from last, which it keeps up to date. It returns
+/// whether the stream got as far as Synced, and why it ended.
+fn session(
+    client: &Client,
+    send: &impl Fn(Update) -> bool,
+    last: &mut Option<String>,
+) -> (bool, api::Error) {
     let version = match client.version() {
         Ok(v) => v,
         Err(e) => return (false, e),
@@ -208,12 +237,12 @@ fn session(client: &Client, send: &impl Fn(Update) -> bool) -> (bool, api::Error
         }
         Err(e) => return (false, e),
     }
-    let events = match client.events() {
+    let mut events = match client.events(last.as_deref()) {
         Ok(e) => e,
         Err(e) => return (false, e),
     };
     let mut first: Option<Vec<Environment>> = Some(Vec::new());
-    for event in events {
+    while let Some(event) = events.next() {
         let update = match (event, first.as_mut()) {
             (Err(e), _) => return (first.is_none(), e),
             (Ok(Event::Environment(e)), Some(list)) => {
@@ -224,13 +253,26 @@ fn session(client: &Client, send: &impl Fn(Update) -> bool) -> (bool, api::Error
                 list.retain(|e| e.id != id);
                 continue;
             }
-            (Ok(Event::Synced), Some(_)) => Update::Snapshot(first.take().unwrap_or_default()),
+            (Ok(Event::Synced(ids)), Some(_)) => {
+                let changed = first.take().unwrap_or_default();
+                // A server older than resuming names none, and has sent
+                // every environment.
+                if ids.is_empty() {
+                    Update::Snapshot(changed)
+                } else {
+                    Update::Resumed { changed, ids }
+                }
+            }
             (Ok(Event::Environment(e)), None) => Update::Environment(e),
             (Ok(Event::Removed(id)), None) => Update::Removed(id),
-            (Ok(Event::Synced), None) => continue,
+            (Ok(Event::Synced(_)), None) => continue,
         };
         if !send(update) {
             return (true, api::Error::Transport("stopped".into()));
+        }
+        // Applied: a stream resumed from here misses nothing.
+        if first.is_none() {
+            *last = events.last_id().map(str::to_string);
         }
     }
     (

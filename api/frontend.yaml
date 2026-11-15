@@ -2126,6 +2126,12 @@ components:
             Whether anyone may reach the environment's own web servers without
             signing in to Hangar.
         image_update: { $ref: "#/components/schemas/ImageUpdate" }
+        revision:
+          type: integer
+          format: int64
+          description: >-
+            Raised by every change to what is shown of the environment, so of
+            two copies of it the one with the greater revision is the newer.
         guest_agent:
           type: object
           description: >-
