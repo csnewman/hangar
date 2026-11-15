@@ -268,7 +268,7 @@ fn run(cmd: &str, req: &Value, window: &mut Window, cx: &mut App) -> Result<Valu
             if !full && term.is_none() {
                 return Err("no terminal shown".into());
             }
-            let start = std::time::Instant::now();
+            let (start, cpu) = (std::time::Instant::now(), thread_cpu());
             for _ in 0..frames {
                 match &term {
                     Some(t) if !full => t.update(cx, |_, cx| cx.notify()),
@@ -277,7 +277,13 @@ fn run(cmd: &str, req: &Value, window: &mut Window, cx: &mut App) -> Result<Valu
                 let _ = window.draw(cx);
             }
             let ms = start.elapsed().as_secs_f64() * 1000. / frames as f64;
-            Ok(json!({ "frames": frames, "ms_per_frame": ms, "stats": crate::renderstats::take() }))
+            let cpu_ms = (thread_cpu() - cpu) * 1000. / frames as f64;
+            Ok(json!({
+                "frames": frames,
+                "ms_per_frame": ms,
+                "cpu_ms_per_frame": cpu_ms,
+                "stats": crate::renderstats::take(),
+            }))
         }
         "quit" => {
             cx.quit();
@@ -285,6 +291,26 @@ fn run(cmd: &str, req: &Value, window: &mut Window, cx: &mut App) -> Result<Valu
         }
         other => Err(format!("no command {other}")),
     }
+}
+
+/// The CPU time this thread has used, in seconds: a frame's cost whatever
+/// else the machine is doing.
+#[cfg(unix)]
+fn thread_cpu() -> f64 {
+    let mut t = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: clock_gettime writes the timespec given.
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut t) };
+    t.tv_sec as f64 + t.tv_nsec as f64 / 1e9
+}
+
+/// Elsewhere the thread's CPU time is not read, and frames are timed by
+/// the clock alone.
+#[cfg(not(unix))]
+fn thread_cpu() -> f64 {
+    0.
 }
 
 /// The environment named (or with the ID) in a place, the one named or

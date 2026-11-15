@@ -18,5 +18,86 @@ notify = "8"
 regex = "1"
 tokio = { version = "1", features = ["fs", "io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 
+# The desktop app's UI: gpui, its components, its layout engine and what
+# draws, and the terminal's emulator, optimised in dev builds too. Left
+# unoptimised, each of the app's frames costs several times as much (a
+# terminal's output about 10 ms where it is 2.7), and a terminal printing
+# fast asks for thirty a second. The rest of the
+# workspace builds as dev builds do.
+[profile.dev.package.gpui-pre]
+opt-level = 2
+
+[profile.dev.package.gpui-pre-macos]
+opt-level = 2
+
+[profile.dev.package.gpui-pre-apple]
+opt-level = 2
+
+[profile.dev.package.gpui-pre-platform]
+opt-level = 2
+
+[profile.dev.package.gpui-pre-sum-tree]
+opt-level = 2
+
+[profile.dev.package.gpui-pre-collections]
+opt-level = 2
+
+[profile.dev.package.gpui-pre-util]
+opt-level = 2
+
+[profile.dev.package.gpui-pre-scheduler]
+opt-level = 2
+
+[profile.dev.package.gpui-pre-refineable]
+opt-level = 2
+
+[profile.dev.package.gpui-component]
+opt-level = 2
+
+[profile.dev.package.gpui-base]
+opt-level = 2
+
+[profile.dev.package.taffy]
+opt-level = 2
+
+[profile.dev.package.slotmap]
+opt-level = 2
+
+[profile.dev.package.lyon_tessellation]
+opt-level = 2
+
+[profile.dev.package.lyon_path]
+opt-level = 2
+
+[profile.dev.package.lyon_geom]
+opt-level = 2
+
+[profile.dev.package.lyon_algorithms]
+opt-level = 2
+
+[profile.dev.package.etagere]
+opt-level = 2
+
+[profile.dev.package.resvg]
+opt-level = 2
+
+[profile.dev.package.usvg]
+opt-level = 2
+
+[profile.dev.package.tiny-skia]
+opt-level = 2
+
+[profile.dev.package.tiny-skia-path]
+opt-level = 2
+
+[profile.dev.package.fontdb]
+opt-level = 2
+
+[profile.dev.package.zed-font-kit]
+opt-level = 2
+
+[profile.dev.package.hangar-ghostty]
+opt-level = 2
+
 [profile.release]
 strip = true
