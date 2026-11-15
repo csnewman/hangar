@@ -589,7 +589,7 @@ impl Tab {
         match self {
             Tab::Doc(d) => d.clone().into_any_element(),
             Tab::Diff(d) => d.clone().into_any_element(),
-            Tab::Term(t) => t.clone().into_any_element(),
+            Tab::Term(t) => cached(t.clone()),
             Tab::View(v) => v.clone().into_any_element(),
             Tab::Log(l) => l.clone().into_any_element(),
             Tab::Desktop(d) => d.clone().into_any_element(),
@@ -2895,7 +2895,10 @@ impl EnvTab {
             .active
             .and_then(|i| self.terms.tabs[i].view.clone())
         {
-            v.update(cx, |v, _| v.type_text(text));
+            v.update(cx, |v, cx| {
+                v.type_text(text);
+                cx.notify()
+            });
         }
     }
 
@@ -2913,7 +2916,10 @@ impl EnvTab {
             .active
             .and_then(|i| self.terms.tabs[i].view.clone())
         {
-            v.update(cx, |v, _| v.type_text(text));
+            v.update(cx, |v, cx| {
+                v.type_text(text);
+                cx.notify()
+            });
         }
     }
 
@@ -4410,12 +4416,12 @@ impl EnvTab {
             Tool::Filesystem if self.filesystem.is_some() => self
                 .filesystem
                 .clone()
-                .map(|v| v.into_any_element())
+                .map(cached)
                 .unwrap_or_else(|| div().into_any_element()),
             Tool::Project if self.project.is_some() => self
                 .project
                 .clone()
-                .map(|v| v.into_any_element())
+                .map(cached)
                 .unwrap_or_else(|| div().into_any_element()),
             Tool::Commit if self.commit.is_some() => self
                 .commit
@@ -5176,7 +5182,7 @@ impl EnvTab {
             .and_then(|i| self.terms.tabs.get(i))
             .and_then(|t| t.view.clone())
         {
-            Some(v) if running => v.into_any_element(),
+            Some(v) if running => cached(v),
             _ => div()
                 .px(px(10.))
                 .py(px(6.))
@@ -5428,6 +5434,17 @@ fn capital(s: &str) -> String {
 }
 
 /// An agent session's dot.
+/// A view drawn from its last frame until it is notified or the window
+/// refreshed (focus, the settings and the appearance refresh it): a frame
+/// another part of the window asks for, a terminal's output say, lays it
+/// out and paints it again only if it changed. It fills what holds it,
+/// which must have a size of its own. A view embedded so must notify
+/// whatever changes what it shows, including what the tab asks of it.
+fn cached<V: Render>(v: Entity<V>) -> gpui::AnyElement {
+    v.cached(gpui::StyleRefinement::default().size_full())
+        .into_any_element()
+}
+
 /// Where an index in a list ends up when the item at `from` moves to `to`.
 pub fn moved(i: usize, from: usize, to: usize) -> usize {
     if i == from {
