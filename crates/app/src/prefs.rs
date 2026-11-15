@@ -80,8 +80,38 @@ impl Page {
                 "hidden files",
                 "ignored files",
                 "project",
+                "pointer",
+                "typing",
             ],
-            Page::Terminal => &["font", "size", "shell"],
+            Page::Terminal => &[
+                "font",
+                "family",
+                "size",
+                "line height",
+                "shell",
+                "theme",
+                "colours",
+                "colors",
+                "contrast",
+                "faint",
+                "bold",
+                "cursor",
+                "blink",
+                "option",
+                "alt",
+                "meta",
+                "copy",
+                "select",
+                "right-click",
+                "paste",
+                "scroll",
+                "bell",
+                "dock",
+                "sound",
+                "progress",
+                "clipboard",
+                "scrollback",
+            ],
             Page::Notifications => &[
                 "sound", "badge", "dock", "system", "agent", "asks", "finishes", "fails", "ready",
                 "sign in", "image", "quiet",
@@ -158,6 +188,9 @@ pub struct SettingsView {
     focus: FocusHandle,
     /// Each place's account page, made when first shown.
     accounts: Vec<(String, Entity<AccountView>)>,
+    /// The monospaced font families installed, found when the Terminal page
+    /// is first shown.
+    fonts: Option<Vec<String>>,
     _subs: Vec<gpui::Subscription>,
 }
 
@@ -211,6 +244,7 @@ impl SettingsView {
             folded: HashSet::new(),
             focus: cx.focus_handle(),
             accounts: vec![],
+            fonts: None,
             _subs: subs,
         };
         view.rows = view.place_rows(window, cx);
@@ -619,6 +653,13 @@ impl SettingsView {
             )))
             .child(section("Editing", p))
             .child(self.check("soft-wrap", "Soft-wrap long lines", d.soft_wrap, |v, b| v.soft_wrap = b, cx))
+            .child(self.check(
+                "hide-pointer",
+                "Hide the pointer while typing, until the mouse moves",
+                d.hide_pointer,
+                |v, b| v.hide_pointer = b,
+                cx,
+            ))
             .child(section("Project and Filesystem", p))
             .child(self.check(
                 "select-opened",
@@ -647,61 +688,302 @@ impl SettingsView {
             ))
     }
 
-    fn terminal(&self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
-        use crate::settings::TerminalEmulator;
-        let choice = self.draft.terminal_emulator;
-        let seg = |id: &'static str,
-                   label: &'static str,
-                   value: TerminalEmulator,
-                   cx: &mut Context<Self>| {
-            let on = choice == value;
-            div()
-                .id(id)
-                .px(px(12.))
-                .py(px(3.))
-                .cursor_pointer()
-                .when(on, |d| d.bg(p.accent).text_color(p.on_accent))
-                .when(!on, |d| d.hover(|s| s.bg(p.surface_2)))
-                .child(label)
-                .on_click(cx.listener(move |this, _, _, cx| {
-                    this.draft.terminal_emulator = value;
-                    cx.notify();
-                }))
+    fn terminal(&mut self, p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        use crate::settings::{Access, CursorShape, RightClick, TerminalEmulator};
+        let fonts = self
+            .fonts
+            .get_or_insert_with(|| monospaced_fonts(cx))
+            .clone();
+        let d = self.draft.clone();
+        let t = &d.terminal;
+        let family = if t.font_family.is_empty() {
+            format!("{} (the default)", crate::termview::mono_family())
+        } else {
+            t.font_family.clone()
         };
+        let mut families = vec![(
+            format!("{} (the default)", crate::termview::mono_family()),
+            String::new(),
+        )];
+        families.extend(fonts.into_iter().map(|f| (f.clone(), f)));
+        let themes = |chosen: &str| {
+            let mut list = vec![("The app's colours".to_string(), String::new())];
+            list.extend(
+                crate::termthemes::THEMES
+                    .iter()
+                    .map(|th| (th.name.to_string(), th.name.to_string())),
+            );
+            let label = if chosen.is_empty() {
+                "The app's colours".to_string()
+            } else {
+                chosen.to_string()
+            };
+            (label, list)
+        };
+        let (light_label, light_list) = themes(&t.theme_light);
+        let (dark_label, dark_list) = themes(&t.theme_dark);
+        let access = [
+            ("Allow", Access::Allow),
+            ("Ask", Access::Ask),
+            ("Deny", Access::Deny),
+        ];
         v_flex()
             .gap(px(10.))
             .child(section("Emulator", p))
-            .child(
-                field("Emulator", p).child(
-                    h_flex()
-                        .rounded(px(6.))
-                        .border_1()
-                        .border_color(p.border_strong)
-                        .overflow_hidden()
-                        .child(seg("emulator-ghostty", "Ghostty", TerminalEmulator::Ghostty, cx))
-                        .child(seg(
-                            "emulator-alacritty",
-                            "Alacritty",
-                            TerminalEmulator::Alacritty,
-                            cx,
-                        )),
-                ),
-            )
+            .child(field("Emulator", p).child(self.segments(
+                "emulator",
+                &[
+                    ("Ghostty", TerminalEmulator::Ghostty),
+                    ("Alacritty", TerminalEmulator::Alacritty),
+                ],
+                d.terminal_emulator,
+                |v, e| v.terminal_emulator = e,
+                p,
+                cx,
+            )))
             .child(note(
                 "Ghostty is libghostty-vt, Ghostty's terminal emulation; a session a Ghostty terminal starts is told it runs in Ghostty, so programs such as Claude Code use what Ghostty can do. Terminals opened after the choice use it.",
                 p,
             ))
             .child(section("Font", p))
+            .child(field("Family", p).child(self.choice(
+                "terminal-family",
+                family,
+                families,
+                t.font_family.clone(),
+                |v, f| v.terminal.font_family = f,
+                cx,
+            )))
             .child(field("Size", p).child(self.stepper(
                 "terminal-font",
-                self.draft.terminal_font(),
+                d.terminal_font(),
                 crate::settings::TERMINAL_FONT_SIZE,
                 |v, s| v.terminal_font_size = s,
                 p,
                 cx,
             )))
+            .child(field("Line height", p).child(self.amount(
+                Amount {
+                    id: "terminal-line",
+                    value: t.line_height(),
+                    default: crate::settings::LINE_HEIGHT,
+                    step: 0.05,
+                    range: (1., 2.),
+                    show: |v| format!("{v:.2}×"),
+                },
+                |v, h| v.terminal.line_height = h,
+                p,
+                cx,
+            )))
             .child(note(
                 "A terminal that changes size tells its session, so programs in it redraw to fit.",
+                p,
+            ))
+            .child(section("Colours", p))
+            .child(field("Light theme", p).child(self.choice(
+                "terminal-light",
+                light_label,
+                light_list,
+                t.theme_light.clone(),
+                |v, n| v.terminal.theme_light = n,
+                cx,
+            )))
+            .child(field("Dark theme", p).child(self.choice(
+                "terminal-dark",
+                dark_label,
+                dark_list,
+                t.theme_dark.clone(),
+                |v, n| v.terminal.theme_dark = n,
+                cx,
+            )))
+            .child(note(
+                "Each with the app's appearance, light or dark: the terminal's background, text and sixteen named colours, as Ghostty's themes of those names have them.",
+                p,
+            ))
+            .child(field("Contrast", p).child(self.amount(
+                Amount {
+                    id: "terminal-contrast",
+                    value: t.minimum_contrast(),
+                    default: 1.,
+                    step: 0.5,
+                    range: (1., 21.),
+                    show: |v| {
+                        if v <= 1. {
+                            "Off".into()
+                        } else {
+                            format!("{v:.1} : 1")
+                        }
+                    },
+                },
+                |v, c| v.terminal.minimum_contrast = c,
+                p,
+                cx,
+            )))
+            .child(note(
+                "Text with less contrast against its background than this is drawn white or black, whichever stands out more.",
+                p,
+            ))
+            .child(field("Faint text", p).child(self.amount(
+                Amount {
+                    id: "terminal-faint",
+                    value: t.faint_opacity(),
+                    default: 0.5,
+                    step: 0.05,
+                    range: (0., 1.),
+                    show: |v| format!("{:.0}%", v * 100.),
+                },
+                |v, f| v.terminal.faint_opacity = f,
+                p,
+                cx,
+            )))
+            .child(self.check(
+                "terminal-bold-bright",
+                "Draw bold text in the bright colours",
+                t.bold_is_bright,
+                |v, b| v.terminal.bold_is_bright = b,
+                cx,
+            ))
+            .child(section("Cursor", p))
+            .child(field("Shape", p).child(self.segments(
+                "terminal-cursor",
+                &[
+                    ("Block", CursorShape::Block),
+                    ("Bar", CursorShape::Bar),
+                    ("Underline", CursorShape::Underline),
+                ],
+                t.cursor,
+                |v, c| v.terminal.cursor = c,
+                p,
+                cx,
+            )))
+            .child(self.check(
+                "terminal-blink",
+                "Blink",
+                t.cursor_blink,
+                |v, b| v.terminal.cursor_blink = b,
+                cx,
+            ))
+            .child(note(
+                "Until a program asks for another, as editors and shells may.",
+                p,
+            ))
+            .child(section("Keyboard and mouse", p))
+            .when(cfg!(target_os = "macos"), |d| {
+                d.child(self.check(
+                    "terminal-option-alt",
+                    "Use Option as Alt (Meta)",
+                    t.option_as_alt,
+                    |v, b| v.terminal.option_as_alt = b,
+                    cx,
+                ))
+                .child(note(
+                    "Option-B and Option-F then move by words in the shell, as Alt does elsewhere, rather than typing ∫ and ƒ.",
+                    p,
+                ))
+            })
+            .child(self.check(
+                "terminal-copy-select",
+                "Copy text as it is selected",
+                t.copy_on_select,
+                |v, b| v.terminal.copy_on_select = b,
+                cx,
+            ))
+            .child(field("Right-click", p).child(self.segments(
+                "terminal-right",
+                &[
+                    ("Menu", RightClick::Menu),
+                    ("Paste", RightClick::Paste),
+                    ("Copy", RightClick::Copy),
+                    ("Copy or paste", RightClick::CopyOrPaste),
+                    ("Nothing", RightClick::Nothing),
+                ],
+                t.right_click,
+                |v, r| v.terminal.right_click = r,
+                p,
+                cx,
+            )))
+            .child(note(
+                "Shift-right-click opens the menu whatever is chosen. A program that asks for the mouse is told of the click instead.",
+                p,
+            ))
+            .child(field("Scroll speed", p).child(self.amount(
+                Amount {
+                    id: "terminal-scroll",
+                    value: t.scroll_speed(),
+                    default: 1.,
+                    step: 0.25,
+                    range: (0.25, 10.),
+                    show: |v| format!("{v:.2}×"),
+                },
+                |v, s| v.terminal.scroll_speed = s,
+                p,
+                cx,
+            )))
+            .child(section("Bell", p))
+            .child(self.check(
+                "terminal-bell-mark",
+                "Mark the terminal's tab",
+                t.bell_mark,
+                |v, b| v.terminal.bell_mark = b,
+                cx,
+            ))
+            .child(self.check(
+                "terminal-bell-bounce",
+                "Bounce the Dock icon while the app is behind others",
+                t.bell_bounce,
+                |v, b| v.terminal.bell_bounce = b,
+                cx,
+            ))
+            .child(self.check(
+                "terminal-bell-sound",
+                "Play the system's alert sound",
+                t.bell_sound,
+                |v, b| v.terminal.bell_sound = b,
+                cx,
+            ))
+            .child(section("Programs", p))
+            .child(self.check(
+                "terminal-progress",
+                "Show the progress programs report, along the terminal's top",
+                t.progress,
+                |v, b| v.terminal.progress = b,
+                cx,
+            ))
+            .child(field("Copy", p).child(self.segments(
+                "terminal-clip-write",
+                &access,
+                t.clipboard_write,
+                |v, a| v.terminal.clipboard_write = a,
+                p,
+                cx,
+            )))
+            .child(field("Read", p).child(self.segments(
+                "terminal-clip-read",
+                &access,
+                t.clipboard_read,
+                |v, a| v.terminal.clipboard_read = a,
+                p,
+                cx,
+            )))
+            .child(note(
+                "Whether a program may copy to the clipboard, and read what is on it (OSC 52), or asks you first. A read hands the program whatever was last copied, anywhere.",
+                p,
+            ))
+            .child(field("Scrollback", p).child(self.amount(
+                Amount {
+                    id: "terminal-scrollback",
+                    value: t.scrollback_mb.clamp(1, 1000) as f32,
+                    default: 50.,
+                    step: 10.,
+                    range: (10., 1000.),
+                    show: |v| format!("{v:.0} MB"),
+                },
+                |v, mb| v.terminal.scrollback_mb = mb as u32,
+                p,
+                cx,
+            )))
+            .child(note(
+                "Kept for each terminal, by Ghostty's emulation; alacritty's keeps 10,000 lines.",
                 p,
             ))
     }
@@ -1101,12 +1383,44 @@ impl SettingsView {
         p: &Palette,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        let step = |by: f32| {
+        self.amount(
+            Amount {
+                id,
+                value,
+                default,
+                step: 0.5,
+                range: (*FONT_SIZES.start(), *FONT_SIZES.end()),
+                show: |v| format!("{v:.1} pt"),
+            },
+            set,
+            p,
+            cx,
+        )
+    }
+
+    /// A number set a step at a time, with a way back to its default.
+    fn amount(
+        &self,
+        a: Amount,
+        set: fn(&mut Values, f32),
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let Amount {
+            id,
+            value,
+            default,
+            step,
+            range,
+            show,
+        } = a;
+        let by = move |sign: f32| {
             move |this: &mut SettingsView,
                   _: &gpui::ClickEvent,
                   _: &mut Window,
                   cx: &mut Context<SettingsView>| {
-                let next = (value + by).clamp(*FONT_SIZES.start(), *FONT_SIZES.end());
+                // Whole steps, so they add up without drifting.
+                let next = (((value + sign * step) / step).round() * step).clamp(range.0, range.1);
                 set(&mut this.draft, next);
                 cx.notify();
             }
@@ -1115,19 +1429,14 @@ impl SettingsView {
             .gap(px(6.))
             .child(
                 button(SharedString::from(format!("{id}-less")), "−", p)
-                    .on_click(cx.listener(step(-0.5))),
+                    .on_click(cx.listener(by(-1.))),
             )
-            .child(
-                div()
-                    .w(px(44.))
-                    .text_center()
-                    .child(format!("{value:.1} pt")),
-            )
+            .child(div().min_w(px(44.)).text_center().child(show(value)))
             .child(
                 button(SharedString::from(format!("{id}-more")), "+", p)
-                    .on_click(cx.listener(step(0.5))),
+                    .on_click(cx.listener(by(1.))),
             )
-            .when(value != default, |d| {
+            .when((value - default).abs() > step / 100., |d| {
                 d.child(
                     div()
                         .id(SharedString::from(format!("{id}-reset")))
@@ -1142,6 +1451,111 @@ impl SettingsView {
                 )
             })
     }
+
+    /// One of a few choices, side by side, the one chosen in the accent.
+    fn segments<T: Copy + PartialEq + 'static>(
+        &self,
+        id: &'static str,
+        options: &[(&'static str, T)],
+        chosen: T,
+        set: fn(&mut Values, T),
+        p: &Palette,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        h_flex()
+            .rounded(px(6.))
+            .border_1()
+            .border_color(p.border_strong)
+            .overflow_hidden()
+            .children(options.iter().map(|&(label, value)| {
+                let on = value == chosen;
+                let hover = p.surface_2;
+                div()
+                    .id(SharedString::from(format!(
+                        "{id}-{}",
+                        label.to_lowercase().replace(' ', "-")
+                    )))
+                    .px(px(12.))
+                    .py(px(3.))
+                    .cursor_pointer()
+                    .when(on, |d| d.bg(p.accent).text_color(p.on_accent))
+                    .when(!on, move |d| d.hover(move |s| s.bg(hover)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        set(&mut this.draft, value);
+                        cx.notify();
+                    }))
+            }))
+    }
+
+    /// One of a list, chosen from a menu: each a label and its value.
+    fn choice(
+        &self,
+        id: &'static str,
+        label: String,
+        options: Vec<(String, String)>,
+        chosen: String,
+        set: fn(&mut Values, String),
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use gpui_component::button::Button;
+        use gpui_component::menu::{DropdownMenu as _, PopupMenuItem};
+        let me = cx.entity().downgrade();
+        Button::new(SharedString::from(format!("setting-{id}")))
+            .small()
+            .outline()
+            .label(format!("{label} ▾"))
+            .dropdown_menu(move |mut menu, _, cx| {
+                crate::ui::modal(cx);
+                menu = menu.max_h(px(360.)).scrollable(true);
+                for (name, value) in options.clone() {
+                    let me = me.clone();
+                    let on = value == chosen;
+                    menu = menu.item(PopupMenuItem::new(name).checked(on).on_click(
+                        move |_, _, cx| {
+                            let value = value.clone();
+                            let _ = me.update(cx, |v, cx| {
+                                set(&mut v.draft, value);
+                                cx.notify();
+                            });
+                        },
+                    ));
+                }
+                menu
+            })
+    }
+}
+
+/// A number a setting is, and how it steps and shows.
+struct Amount {
+    id: &'static str,
+    value: f32,
+    default: f32,
+    step: f32,
+    range: (f32, f32),
+    show: fn(f32) -> String,
+}
+
+/// The font families installed whose characters are all one width, which
+/// a terminal can be drawn in.
+fn monospaced_fonts(cx: &App) -> Vec<String> {
+    let ts = cx.text_system();
+    ts.all_font_names()
+        .into_iter()
+        .filter(|name| !name.starts_with('.') && !name.starts_with('#'))
+        .filter(|name| {
+            let id = ts.resolve_font(&gpui::font(name.clone()));
+            // A family not found resolves to another, which is passed over.
+            if ts.get_font_for_id(id).is_none_or(|f| &f.family != name) {
+                return false;
+            }
+            let width = |c| ts.advance(id, px(12.), c).map(|s| s.width).ok();
+            matches!(
+                (width('i'), width('W'), width('.')),
+                (Some(a), Some(b), Some(c)) if a > px(0.) && a == b && b == c
+            )
+        })
+        .collect()
 }
 
 /// A heading over a page's settings.

@@ -17,8 +17,8 @@ use hangar_ghostty::{Mouse, Picture, Placement, Terminal, Wide};
 use regex::Regex;
 
 use crate::terminal::{
-    ANCHOR, Cells, CursorLook, Effects, Emulator, Line, Link, LinkKind, Mark, PATH, Select, Span,
-    URL, Underline, faded, indexed_in, path_and_place,
+    ANCHOR, Cells, CursorLook, Effects, Emulator, Line, Link, LinkKind, Look, Mark, PATH, Select,
+    Span, URL, Underline, faded, path_and_place,
 };
 
 /// A point of Ghostty's whole screen, scrollback and all: (row, column).
@@ -81,6 +81,8 @@ pub struct Ghostty {
     /// The pictures on the lines last read, and how the cursor is drawn.
     placed: Vec<Placement>,
     cursor_look: CursorLook,
+    /// How much of its colour faint text keeps.
+    faint: f32,
     /// What animations' frames are timed from.
     started: Instant,
 }
@@ -124,6 +126,7 @@ impl Ghostty {
             links: None,
             placed: vec![],
             cursor_look: CursorLook::default(),
+            faint: 0.5,
             started: Instant::now(),
         }
     }
@@ -257,12 +260,13 @@ impl Emulator for Ghostty {
     /// On a light background the sixteen named colours are a light
     /// theme's, so yellow and white stay readable, as alacritty's screen
     /// has them.
-    fn set_default_colours(&mut self, fg: Rgb, bg: Rgb) {
-        let light = crate::terminal::is_light(bg);
+    fn set_look(&mut self, look: &Look) {
         let palette: [hangar_ghostty::Rgb; 256] =
-            std::array::from_fn(|i| ours(indexed_in(i as u8, light)));
-        self.t.set_colours(ours(fg), ours(bg), &palette);
-        self.t.set_dark(!light);
+            std::array::from_fn(|i| ours(look.colour(i as u8)));
+        self.t.set_colours(ours(look.fg), ours(look.bg), &palette);
+        self.t.set_dark(!crate::terminal::is_light(look.bg));
+        self.t.set_bold_is_bright(look.bold_is_bright);
+        self.faint = look.faint;
     }
 
     fn set_hover(&mut self, link: Option<&Link>) {
@@ -487,7 +491,7 @@ impl Emulator for Ghostty {
                         std::mem::swap(&mut fg, &mut bg);
                     }
                     if cell.faint {
-                        fg = faded(fg, bg);
+                        fg = faded(fg, bg, self.faint);
                     }
                     if cell.invisible {
                         fg = bg;
@@ -571,6 +575,14 @@ impl Emulator for Ghostty {
 
     fn reports_focus(&self) -> bool {
         self.t.mode(1004, false)
+    }
+
+    fn set_cursor_default(&mut self, style: crate::terminal::CursorStyle, blink: bool) {
+        self.t.set_default_cursor(style, blink)
+    }
+
+    fn set_scrollback(&mut self, bytes: usize) {
+        self.t.set_scrollback(Some(bytes))
     }
 
     fn reports_theme(&self) -> bool {

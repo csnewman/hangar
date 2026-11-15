@@ -140,6 +140,30 @@ fn legacy_keys_as_xterm_sends_them() {
         "∫",
         "Option's own character"
     );
+    // Option as Alt on a Mac: the key's own character, not Option's.
+    assert_eq!(
+        sent(
+            Key {
+                alt: true,
+                text: Some("∫"),
+                ..key("b")
+            },
+            &meta
+        ),
+        "\x1bb"
+    );
+    assert_eq!(
+        sent(
+            Key {
+                alt: true,
+                shift: true,
+                text: Some("ı"),
+                ..key("b")
+            },
+            &meta
+        ),
+        "\x1bB"
+    );
 }
 
 #[test]

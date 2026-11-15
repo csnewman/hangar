@@ -138,12 +138,20 @@ pub fn encode(k: &Key, m: &KeyModes) -> Option<Vec<u8>> {
             return Some(if k.alt { vec![0x1b, b] } else { vec![b] });
         }
     }
-    let text = k.text?;
+    // Alt as Meta: an escape, then the key's own character, not the one
+    // Option makes of it on a Mac (∫ for B).
     if k.alt && m.alt_is_meta {
+        let mut chars = k.name.chars();
+        let own = match (chars.next(), chars.next()) {
+            (Some(c), None) if k.shift => c.to_uppercase().to_string(),
+            (Some(c), None) => c.to_string(),
+            _ => k.text?.to_string(),
+        };
         let mut b = vec![0x1b];
-        b.extend_from_slice(text.as_bytes());
+        b.extend_from_slice(own.as_bytes());
         return Some(b);
     }
+    let text = k.text?;
     Some(text.as_bytes().to_vec())
 }
 

@@ -89,6 +89,15 @@ fn notifications_are_taken_out() {
     assert_eq!(text(&out), b"abc\x1b]9;9;/tmp\x07");
 }
 
+/// A program's read of the clipboard is taken out; its write passes on.
+#[test]
+fn a_clipboard_read_is_taken_out() {
+    let mut x = Extract::default();
+    let out = x.split(b"a\x1b]52;c;?\x07b\x1b]52;c;aGk=\x07");
+    assert!(out.contains(&Piece::ClipboardRead("c".into())), "{out:?}");
+    assert_eq!(text(&out), b"ab\x1b]52;c;aGk=\x07");
+}
+
 #[test]
 fn iterm_and_kitty_pictures_are_read_with_their_sizes() {
     let image = png(30, 20);

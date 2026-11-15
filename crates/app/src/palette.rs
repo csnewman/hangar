@@ -109,6 +109,11 @@ pub fn dark() -> Palette {
 }
 
 /// The palette for the theme's mode.
+/// Whether the app is dark.
+pub fn is_dark(cx: &App) -> bool {
+    cx.theme().is_dark()
+}
+
 pub fn of(cx: &App) -> Palette {
     if cx.theme().is_dark() {
         dark()

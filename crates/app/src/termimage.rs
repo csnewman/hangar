@@ -1,7 +1,8 @@
 //! What programs write to a terminal besides text, which alacritty_terminal
 //! does not keep: the progress they report (OSC 9;4, as Windows Terminal,
 //! iTerm2 and the web's terminals show it), the notifications they post
-//! (OSC 9, iTerm2's, and OSC 777;notify, rxvt's), the directory the shell
+//! (OSC 9, iTerm2's, and OSC 777;notify, rxvt's), asks to read the
+//! clipboard (OSC 52's `?`), the directory the shell
 //! is in (OSC 7, and systemd's OSC 3008 context), and the pictures they draw, in
 //! sixel (DCS ... q), iTerm2's inline images (OSC 1337;File=) and the kitty
 //! graphics protocol (APC G). `Extract` takes them out of the output as it
@@ -62,6 +63,9 @@ pub enum Piece {
     Text(Vec<u8>),
     Progress(Progress),
     Notification(Notification),
+    /// The program asks for the clipboard (OSC 52 with `?`): its answer
+    /// goes to the clipboard named, as OSC 52 names them.
+    ClipboardRead(String),
     Picture(Picture),
     /// What the terminal answers the program: kitty's replies.
     Reply(Vec<u8>),
@@ -172,6 +176,14 @@ impl Extract {
             b']' => {
                 if let Some(rest) = body.strip_prefix(b"9;4;") {
                     return Some(progress(rest).map(Piece::Progress).into_iter().collect());
+                }
+                // A read of the clipboard is the view's to answer, as the
+                // settings say; a write passes on to the emulator.
+                if let Some(rest) = body.strip_prefix(b"52;")
+                    && let Some(targets) = rest.strip_suffix(b";?")
+                {
+                    let targets = String::from_utf8_lossy(targets).into_owned();
+                    return Some(vec![Piece::ClipboardRead(targets)]);
                 }
                 if let Some(rest) = body.strip_prefix(b"777;notify;") {
                     let text = String::from_utf8_lossy(rest);

@@ -24,6 +24,46 @@ fn an_older_settings_file_keeps_its_values_and_takes_the_rest_as_default() {
     assert!(v.notify.while_looking);
 }
 
+/// The terminal's settings default to what a terminal did before there
+/// were any, and keep within reason.
+#[test]
+fn the_terminals_settings_default_and_keep_within_reason() {
+    use hangar_app::settings::{Access, CursorShape, RightClick, Terminal};
+    let v: Values = serde_json::from_str(r#"{"terminal_font_size": 14}"#).unwrap();
+    let t = &v.terminal;
+    assert!(t.font_family.is_empty() && t.theme_light.is_empty() && t.theme_dark.is_empty());
+    assert_eq!(t.line_height(), 1.36);
+    assert_eq!((t.cursor, t.cursor_blink), (CursorShape::Block, false));
+    assert_eq!(t.right_click, RightClick::Menu);
+    assert!(t.bell_mark && t.bell_bounce && !t.bell_sound && t.progress);
+    assert_eq!(
+        (t.clipboard_write, t.clipboard_read),
+        (Access::Allow, Access::Ask)
+    );
+    assert_eq!(t.scrollback_bytes(), 50_000_000);
+    assert!(v.hide_pointer);
+    let part: Values = serde_json::from_str(
+        r#"{"terminal": {"progress": false, "right_click": "copy_or_paste"}}"#,
+    )
+    .unwrap();
+    assert!(!part.terminal.progress);
+    assert_eq!(part.terminal.right_click, RightClick::CopyOrPaste);
+    assert!(part.terminal.bell_mark, "the rest as default");
+    let wild = Terminal {
+        line_height: 9.,
+        minimum_contrast: 0.,
+        faint_opacity: f32::NAN,
+        scroll_speed: 100.,
+        scrollback_mb: 0,
+        ..Terminal::default()
+    };
+    assert_eq!(wild.line_height(), 2.);
+    assert_eq!(wild.minimum_contrast(), 1.);
+    assert_eq!(wild.faint_opacity(), 0.5);
+    assert_eq!(wild.scroll_speed(), 10.);
+    assert_eq!(wild.scrollback_bytes(), 1_000_000);
+}
+
 #[test]
 fn font_sizes_stay_within_reason() {
     let v = Values {

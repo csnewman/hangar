@@ -10,10 +10,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Font, Hsla, IntoElement,
+    App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, Font, IntoElement,
     KeyBinding, KeyDownEvent, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ParentElement, Pixels, Point, Render, Rgba, ScrollEvent, Styled, Subscription, Task,
-    WeakEntity, Window, actions, canvas, div, font, point, prelude::*, px, size,
+    ParentElement, Pixels, Point, Render, ScrollEvent, Styled, Subscription, Task, WeakEntity,
+    Window, actions, canvas, div, font, point, prelude::*, px, size,
 };
 use gpui_component::Sizable;
 use gpui_component::input::{Input, InputEvent, InputState};
@@ -23,17 +23,42 @@ use hangar_ghostty::Placement;
 use crate::api::Client;
 use crate::palette;
 use crate::settings::TerminalEmulator;
+use crate::settings::{Access, CursorShape, RightClick, Settings};
 use crate::termconn::{self, Command, Connection, Event};
-use crate::terminal::{Alacritty, CursorStyle, Emulator, Link, LinkKind, Select};
+use crate::terminal::{Alacritty, CursorStyle, Emulator, Link, LinkKind, Look, Select};
 use crate::termpaint::{self, hsla};
-
-/// A line's height for each point of the text's size.
-const LINE_SPACING: f32 = 1.36;
 
 /// The text's size the settings choose, and the height of a line.
 fn metrics(cx: &App) -> (Pixels, Pixels) {
-    let size = crate::settings::Settings::get(cx).terminal_font();
-    (px(size), px((size * LINE_SPACING).round()))
+    let s = Settings::get(cx);
+    let size = s.terminal_font();
+    (px(size), px((size * s.terminal.line_height()).round()))
+}
+
+/// What a terminal's screen is made with, from the settings: how it draws
+/// colours, its cursor until a program asks for another (and whether that
+/// blinks), and how many bytes of scrollback it keeps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Made {
+    look: Look,
+    cursor: (CursorStyle, bool),
+    scrollback: usize,
+}
+
+impl Made {
+    fn of(cx: &App) -> Made {
+        let t = Settings::get(cx).terminal;
+        let style = match t.cursor {
+            CursorShape::Block => CursorStyle::Block,
+            CursorShape::Bar => CursorStyle::Bar,
+            CursorShape::Underline => CursorStyle::Underline,
+        };
+        Made {
+            look: crate::termthemes::look(cx),
+            cursor: (style, t.cursor_blink),
+            scrollback: t.scrollback_bytes(),
+        }
+    }
 }
 
 /// How long a burst of output is taken in before a frame is drawn.
@@ -129,11 +154,10 @@ pub struct TerminalView {
     /// Which emulator keeps the screen, as the settings chose when the
     /// terminal opened.
     emulator: TerminalEmulator,
-    /// The default foreground and background, for a screen made afresh.
-    colours: (
-        alacritty_terminal::vte::ansi::Rgb,
-        alacritty_terminal::vte::ansi::Rgb,
-    ),
+    /// What its screen is made with, for one made afresh.
+    made: Made,
+    /// The font's family the settings name.
+    family: String,
     conn: Option<Connection>,
     focus: FocusHandle,
     state: State,
@@ -208,6 +232,20 @@ pub struct TerminalView {
     signals: Vec<Signal>,
     /// Whether the terminal had the keys when last drawn.
     had_keys: bool,
+    /// Whether a program may copy to the clipboard and read it, as the
+    /// settings say; what it asks of the user meanwhile; and the reads
+    /// let through, to answer.
+    access: (Access, Access),
+    asking: Option<Ask>,
+    reads: Vec<String>,
+}
+
+/// What a program asks of the clipboard, waiting on the user: to copy text
+/// to it, or to read it into the clipboard OSC 52 names.
+#[derive(Debug, Clone, PartialEq)]
+enum Ask {
+    Copy(String),
+    Read(String),
 }
 
 type KittyKey = (u64, u32, u64, (u32, u32, u32, u32));
@@ -228,16 +266,8 @@ const PICTURE: &str = "hangar-picture:";
 /// size against the text whichever screen the window is on.
 const PIXELS_PER_POINT: f32 = 2.;
 
-/// A screen kept by an emulator, of a size, in the default colours.
-fn screen(
-    emulator: TerminalEmulator,
-    cols: u16,
-    rows: u16,
-    colours: (
-        alacritty_terminal::vte::ansi::Rgb,
-        alacritty_terminal::vte::ansi::Rgb,
-    ),
-) -> Box<dyn Emulator> {
+/// A screen kept by an emulator, of a size, made as the settings say.
+fn screen(emulator: TerminalEmulator, cols: u16, rows: u16, made: &Made) -> Box<dyn Emulator> {
     let mut s: Box<dyn Emulator> = match emulator {
         TerminalEmulator::Ghostty => Box::new(crate::termghostty::Ghostty::new(
             cols as usize,
@@ -245,27 +275,30 @@ fn screen(
         )),
         TerminalEmulator::Alacritty => Box::new(Alacritty::new(cols as usize, rows as usize)),
     };
-    s.set_default_colours(colours.0, colours.1);
+    s.set_look(&made.look);
+    s.set_cursor_default(made.cursor.0, made.cursor.1);
+    s.set_scrollback(made.scrollback);
     s
 }
 
-fn mono() -> Font {
-    font(if cfg!(target_os = "macos") {
+/// The platform's monospaced font.
+pub fn mono_family() -> &'static str {
+    if cfg!(target_os = "macos") {
         "Menlo"
     } else if cfg!(target_os = "windows") {
         "Consolas"
     } else {
         "DejaVu Sans Mono"
-    })
+    }
 }
 
-fn rgb(c: Hsla) -> alacritty_terminal::vte::ansi::Rgb {
-    let c = Rgba::from(c);
-    alacritty_terminal::vte::ansi::Rgb {
-        r: (c.r * 255.) as u8,
-        g: (c.g * 255.) as u8,
-        b: (c.b * 255.) as u8,
-    }
+/// The font the settings name, else the platform's monospaced one.
+fn terminal_font(family: &str) -> Font {
+    font(if family.is_empty() {
+        mono_family().to_string()
+    } else {
+        family.to_string()
+    })
 }
 
 impl TerminalView {
@@ -288,16 +321,19 @@ impl TerminalView {
         cx: &mut Context<Self>,
     ) -> Self {
         let (cols, rows) = (80, 24);
-        let p = palette::of(cx);
-        let colours = (rgb(p.term_fg), rgb(p.term_tab));
-        let emulator = crate::settings::Settings::get(cx).terminal_emulator;
-        let screen = screen(emulator, cols, rows, colours);
+        let made = Made::of(cx);
+        let settings = Settings::get(cx);
+        let emulator = settings.terminal_emulator;
+        let family = settings.terminal.font_family.clone();
+        let screen = screen(emulator, cols, rows, &made);
         let mut extract = crate::termimage::Extract::default();
         extract.kitty_passes = screen.takes_kitty_graphics();
         let mut view = TerminalView {
             screen,
             emulator,
-            colours,
+            made,
+            font: terminal_font(&family),
+            family,
             conn: None,
             focus: cx.focus_handle(),
             state: State::Connecting,
@@ -307,7 +343,6 @@ impl TerminalView {
             copied: None,
             cols,
             rows,
-            font: mono(),
             font_size: metrics(cx).0,
             line_height: metrics(cx).1,
             cell: None,
@@ -338,6 +373,12 @@ impl TerminalView {
             statuses: Default::default(),
             signals: vec![],
             had_keys: false,
+            access: (
+                settings.terminal.clipboard_write,
+                settings.terminal.clipboard_read,
+            ),
+            asking: None,
+            reads: vec![],
         };
         view.connect(session, cx);
         view
@@ -392,7 +433,7 @@ impl TerminalView {
         if !matches!(self.state, State::Exited(_) | State::Failed(_)) {
             return;
         }
-        self.screen = screen(self.emulator, self.cols, self.rows, self.colours);
+        self.screen = screen(self.emulator, self.cols, self.rows, &self.made);
         self.screens += 1;
         self.progress = None;
         let cell = self.cell_pixels();
@@ -603,6 +644,9 @@ impl TerminalView {
 
     fn take(&mut self, e: Event, cx: &mut Context<Self>) {
         self.take_event(e);
+        for targets in std::mem::take(&mut self.reads) {
+            self.answer_read(&targets, cx);
+        }
         for s in std::mem::take(&mut self.signals) {
             cx.emit(s);
         }
@@ -619,7 +663,7 @@ impl TerminalView {
                 // Attached again, the session's past is replayed: drawn on
                 // a clean screen, not over what was shown.
                 if self.session.is_some() && self.state != State::Connecting {
-                    self.screen = screen(self.emulator, self.cols, self.rows, self.colours);
+                    self.screen = screen(self.emulator, self.cols, self.rows, &self.made);
                     self.screens += 1;
                     self.progress = None;
                     let cell = self.cell_pixels();
@@ -652,6 +696,11 @@ impl TerminalView {
                     match piece {
                         crate::termimage::Piece::Text(t) => self.screen.feed(&t),
                         // What the past posted was seen then.
+                        crate::termimage::Piece::ClipboardRead(targets) => {
+                            if replayed == 0 {
+                                self.asked_to_read(targets);
+                            }
+                        }
                         crate::termimage::Piece::Notification(n) => {
                             if replayed == 0 {
                                 self.signals.push(Signal::Notification {
@@ -739,8 +788,12 @@ impl TerminalView {
         if changed {
             self.signals.push(Signal::Status);
         }
-        if !replayed && effects.copied.is_some() {
-            self.copied = effects.copied;
+        if !replayed && let Some(text) = effects.copied {
+            match self.access.0 {
+                Access::Allow => self.copied = Some(text),
+                Access::Ask if self.holds_size() => self.asking = Some(Ask::Copy(text)),
+                _ => {}
+            }
         }
         // What the program asks is answered by the window holding the size
         // alone, since every window watching would answer, and the program
@@ -751,6 +804,85 @@ impl TerminalView {
         if let Some(t) = effects.title {
             self.title = t;
         }
+    }
+
+    /// A program asks for the clipboard: let through, asked of the user, or
+    /// left unanswered, as the settings say. The window holding the size
+    /// answers, as it answers the rest.
+    fn asked_to_read(&mut self, targets: String) {
+        if !self.holds_size() {
+            return;
+        }
+        match self.access.1 {
+            Access::Allow => self.reads.push(targets),
+            Access::Ask => self.asking = Some(Ask::Read(targets)),
+            Access::Deny => {}
+        }
+    }
+
+    /// Answers a read of the clipboard with what is on it.
+    fn answer_read(&self, targets: &str, cx: &mut App) {
+        use base64::Engine as _;
+        let text = cx
+            .read_from_clipboard()
+            .and_then(|c| c.text())
+            .unwrap_or_default();
+        let data = base64::engine::general_purpose::STANDARD.encode(text);
+        self.send(Command::Input(
+            format!("\x1b]52;{targets};{data}\x1b\\").into_bytes(),
+        ));
+    }
+
+    /// The user answers what the program asked of the clipboard.
+    fn answer_ask(&mut self, allow: bool, cx: &mut Context<Self>) {
+        match self.asking.take() {
+            Some(Ask::Copy(text)) if allow => {
+                cx.write_to_clipboard(ClipboardItem::new_string(text))
+            }
+            Some(Ask::Read(targets)) if allow => self.answer_read(&targets, cx),
+            _ => {}
+        }
+        cx.notify();
+    }
+
+    /// The bar asking the user to let the program at the clipboard.
+    fn ask_bar(&self, p: &palette::Palette, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let what = match self.asking.as_ref()? {
+            Ask::Copy(_) => "The program asks to copy to the clipboard.",
+            Ask::Read(_) => "The program asks to read the clipboard.",
+        };
+        Some(
+            gpui_component::h_flex()
+                .id("term-ask")
+                .debug_selector(|| "term-ask".into())
+                .absolute()
+                .top(px(8.))
+                .left(px(12.))
+                .gap(px(10.))
+                .pl(px(10.))
+                .pr(px(4.))
+                .py(px(3.))
+                .rounded(px(6.))
+                .bg(p.surface)
+                .border_1()
+                .border_color(p.busy)
+                .shadow_md()
+                .text_size(px(11.))
+                .text_color(p.text)
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(what)
+                .child(
+                    crate::ui::button("term-ask-allow", "Allow", p)
+                        .debug_selector(|| "term-ask-allow".into())
+                        .on_click(cx.listener(|t, _, _, cx| t.answer_ask(true, cx))),
+                )
+                .child(
+                    crate::ui::button("term-ask-deny", "Deny", p)
+                        .debug_selector(|| "term-ask-deny".into())
+                        .on_click(cx.listener(|t, _, _, cx| t.answer_ask(false, cx))),
+                )
+                .into_any_element(),
+        )
     }
 
     /// Resizes the screen, answering at once a program that asked to hear
@@ -804,7 +936,10 @@ impl TerminalView {
             alt: k.modifiers.alt,
             ctrl: k.modifiers.control,
         };
-        let modes = self.screen.key_modes(!cfg!(target_os = "macos"));
+        // Option is Alt on a Mac where the settings say, else the
+        // characters it types; Alt is always Alt elsewhere.
+        let alt_is_meta = !cfg!(target_os = "macos") || Settings::get(cx).terminal.option_as_alt;
+        let modes = self.screen.key_modes(alt_is_meta);
         if let Some(b) = crate::termkeys::encode(&key, &modes) {
             self.input(b);
             self.seen(cx);
@@ -840,7 +975,8 @@ impl TerminalView {
     /// scrollback.
     fn scroll(&mut self, e: &ScrollEvent, cx: &mut Context<Self>) {
         use crate::termkeys::{Button, Press};
-        self.scroll_left += f32::from(e.delta.pixel_delta(self.line_height).y);
+        let speed = Settings::get(cx).terminal.scroll_speed();
+        self.scroll_left += f32::from(e.delta.pixel_delta(self.line_height).y) * speed;
         let lines = (self.scroll_left / f32::from(self.line_height)).trunc();
         if lines == 0. {
             return;
@@ -973,6 +1109,21 @@ impl TerminalView {
             cx.stop_propagation();
             return;
         }
+        // What the settings make a right-click do, the menu's place taken;
+        // with Shift, it is the menu all the same.
+        let action = Settings::get(cx).terminal.right_click;
+        if action != RightClick::Menu && !e.modifiers.shift {
+            cx.stop_propagation();
+            let selected = self.screen.selection().is_some();
+            match action {
+                RightClick::Copy => self.copy(cx),
+                RightClick::Paste => self.paste(cx),
+                RightClick::CopyOrPaste if selected => self.copy(cx),
+                RightClick::CopyOrPaste => self.paste(cx),
+                RightClick::Menu | RightClick::Nothing => {}
+            }
+            return;
+        }
         let (row, col, _) = self.cell_at(e.position);
         self.menu_link = self.screen.link_at(row, col).map(|l| l.kind);
     }
@@ -1098,9 +1249,13 @@ impl TerminalView {
             self.report(button, crate::termkeys::Press::Up, e.position, &e.modifiers);
             return;
         }
-        self.selecting = false;
-        if self.screen.selection().is_none() {
-            self.screen.clear_selection();
+        let selected = std::mem::take(&mut self.selecting);
+        match self.screen.selection() {
+            None => self.screen.clear_selection(),
+            Some(text) if selected && Settings::get(cx).terminal.copy_on_select => {
+                cx.write_to_clipboard(ClipboardItem::new_string(text))
+            }
+            Some(_) => {}
         }
         cx.notify();
     }
@@ -1389,29 +1544,48 @@ impl Focusable for TerminalView {
 impl Render for TerminalView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
-        // The theme's colours, given to the emulator when they change: each
-        // time, it draws every row afresh.
-        let colours = (rgb(p.term_fg), rgb(p.term_tab));
-        if colours != self.colours {
-            self.colours = colours;
-            self.screen.set_default_colours(colours.0, colours.1);
-            // A program that asked hears the terminal turn light or dark.
-            if self.screen.reports_theme() && self.holds_size() {
-                let scheme = if crate::terminal::is_light(colours.1) {
-                    2
-                } else {
-                    1
-                };
-                self.send(Command::Input(format!("\x1b[?997;{scheme}n").into_bytes()));
+        let settings = Settings::get(cx);
+        // What the settings make the screen with, given to the emulator as
+        // it changes: the colours each time make it draw every row afresh.
+        let made = Made::of(cx);
+        if made != self.made {
+            let was = std::mem::replace(&mut self.made, made);
+            if made.look != was.look {
+                self.screen.set_look(&made.look);
+                // A program that asked hears the terminal turn light or dark.
+                let light = crate::terminal::is_light(made.look.bg);
+                if light != crate::terminal::is_light(was.look.bg)
+                    && self.screen.reports_theme()
+                    && self.holds_size()
+                {
+                    let scheme = if light { 2 } else { 1 };
+                    self.send(Command::Input(format!("\x1b[?997;{scheme}n").into_bytes()));
+                }
+            }
+            if made.cursor != was.cursor {
+                self.screen.set_cursor_default(made.cursor.0, made.cursor.1);
+            }
+            if made.scrollback != was.scrollback {
+                self.screen.set_scrollback(made.scrollback);
             }
         }
-        // A size chosen in the settings: the cell is measured again, and
-        // the next fit tells the session how many rows and columns fit.
+        // A font or size chosen in the settings: the cell is measured
+        // again, and the next fit tells the session how many rows and
+        // columns fit.
         let (size, line) = metrics(cx);
-        if (size, line) != (self.font_size, self.line_height) {
+        if (size, line) != (self.font_size, self.line_height)
+            || settings.terminal.font_family != self.family
+        {
             (self.font_size, self.line_height) = (size, line);
+            self.family = settings.terminal.font_family.clone();
+            self.font = terminal_font(&self.family);
             self.cell = None;
         }
+        let theme = crate::termthemes::chosen(cx);
+        self.access = (
+            settings.terminal.clipboard_write,
+            settings.terminal.clipboard_read,
+        );
         let focused = self.focus.is_focused(window);
         // A program that asked hears the terminal gain and lose the keys:
         // its focus, in the window in front.
@@ -1454,15 +1628,19 @@ impl Render for TerminalView {
             line_height: self.line_height,
             font: self.font.clone(),
             font_size: self.font_size,
-            // The selection in the accent, Find's matches in amber, the one
-            // it is on in solid amber.
+            // The selection in the theme's colour, else the accent; Find's
+            // matches in amber, the one it is on in solid amber.
             colours: termpaint::Colours {
-                selected: p.accent.opacity(0.35),
+                selected: theme.map_or(p.accent.opacity(0.35), |t| {
+                    hsla(crate::termthemes::rgb(t.selection))
+                }),
                 found: p.busy.opacity(0.3),
                 current: p.busy,
                 mark_text: p.term_bg,
-                fg: p.term_fg,
+                fg: hsla(self.made.look.fg),
+                cursor: theme.map(|t| hsla(crate::termthemes::rgb(t.cursor))),
             },
+            min_contrast: settings.terminal.minimum_contrast(),
             cursor,
             pictures: kitty,
         };
@@ -1498,7 +1676,7 @@ impl Render for TerminalView {
         // A report not renewed in 15 s is taken to be over, as Ghostty
         // takes it, so a program that died part way leaves no bar behind.
         const PROGRESS_LASTS: Duration = Duration::from_secs(15);
-        let progress = match self.progress {
+        let progress = match self.progress.filter(|_| settings.terminal.progress) {
             Some((_, at)) if at.elapsed() >= PROGRESS_LASTS => {
                 self.progress = None;
                 None
@@ -1635,7 +1813,7 @@ impl Render for TerminalView {
             .relative()
             .size_full()
             .overflow_hidden()
-            .bg(p.term_tab)
+            .bg(hsla(self.made.look.bg))
             .px(px(8.))
             .py(px(4.))
             .child(
@@ -1725,6 +1903,7 @@ impl Render for TerminalView {
                 )
             })
             .when_some(self.size_bar(&p, cx), |d, bar| d.child(bar))
+            .when_some(self.ask_bar(&p, cx), |d, bar| d.child(bar))
             .when_some(self.link_hint(&p), |d, hint| d.child(hint))
             .when_some(notice, |d, n| {
                 d.child(

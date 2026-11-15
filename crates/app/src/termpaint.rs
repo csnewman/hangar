@@ -18,6 +18,7 @@ use hangar_ghostty::Layer;
 
 use crate::terminal::{CursorStyle, Line, Mark, Span, Underline};
 use crate::termsprite::{self, Shape};
+use alacritty_terminal::vte::ansi::Rgb;
 
 /// A screen as it is to be painted.
 pub struct Screen {
@@ -29,6 +30,9 @@ pub struct Screen {
     pub colours: Colours,
     pub cursor: Option<Cursor>,
     pub pictures: Vec<Picture>,
+    /// The least contrast text keeps against its background: below it,
+    /// text is drawn white or black, whichever stands out more.
+    pub min_contrast: f32,
 }
 
 /// The colours of what the view marks on the screen, and the text's
@@ -40,6 +44,8 @@ pub struct Colours {
     /// The text on Find's current match.
     pub mark_text: Hsla,
     pub fg: Hsla,
+    /// The cursor's, where the theme gives one and the program none.
+    pub cursor: Option<Hsla>,
 }
 
 /// The cursor, where it is shown: its row and column, its shape, and its
@@ -134,7 +140,7 @@ pub fn paint(s: &Screen, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut A
             .iter()
             .position(|&(a, b)| col >= a && col < b)
             .map(|i| hsla(line.spans[i].fg));
-        let colour = c.colour.or(fg).unwrap_or(s.colours.fg);
+        let colour = c.colour.or(s.colours.cursor).or(fg).unwrap_or(s.colours.fg);
         Some((c, col, width, colour))
     });
 
@@ -197,12 +203,52 @@ pub fn paint(s: &Screen, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut A
     }
 }
 
-/// The colour a span's text is drawn in.
+/// The colour a span's text is drawn in, against its background with the
+/// contrast the settings ask for.
 fn text_colour(s: &Screen, sp: &Span) -> Hsla {
     if sp.mark == Mark::Current {
         s.colours.mark_text
     } else {
-        hsla(sp.fg)
+        hsla(contrasting(sp.fg, sp.bg, s.min_contrast))
+    }
+}
+
+/// A colour's relative luminance, as WCAG measures it.
+fn luminance(c: Rgb) -> f32 {
+    let lin = |v: u8| {
+        let v = v as f32 / 255.;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b)
+}
+
+/// The contrast between two colours, from 1 (none) to 21.
+pub fn contrast(a: Rgb, b: Rgb) -> f32 {
+    let (la, lb) = (luminance(a), luminance(b));
+    (la.max(lb) + 0.05) / (la.min(lb) + 0.05)
+}
+
+/// Text's colour against its background: as it is, unless its contrast is
+/// below `least`, then white or black, whichever has more, as Ghostty's
+/// minimum-contrast draws it.
+pub fn contrasting(fg: Rgb, bg: Rgb, least: f32) -> Rgb {
+    if least <= 1. || contrast(fg, bg) >= least {
+        return fg;
+    }
+    let white = Rgb {
+        r: 255,
+        g: 255,
+        b: 255,
+    };
+    let black = Rgb { r: 0, g: 0, b: 0 };
+    if contrast(white, bg) >= contrast(black, bg) {
+        white
+    } else {
+        black
     }
 }
 

@@ -29,6 +29,11 @@ pub struct Values {
     /// What keeps a terminal's screen, for terminals opened after it is
     /// chosen.
     pub terminal_emulator: TerminalEmulator,
+    /// How terminals look and behave.
+    pub terminal: Terminal,
+    /// Whether the pointer hides while typing, anywhere in the app, until
+    /// the mouse moves.
+    pub hide_pointer: bool,
     pub notify: Notify,
 }
 
@@ -44,9 +49,161 @@ impl Default for Values {
             editor_font_size: EDITOR_FONT_SIZE,
             terminal_font_size: TERMINAL_FONT_SIZE,
             terminal_emulator: TerminalEmulator::default(),
+            terminal: Terminal::default(),
+            hide_pointer: true,
             notify: Notify::default(),
         }
     }
+}
+
+/// How terminals look and behave: each as Ghostty's option of the name in
+/// brackets.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Terminal {
+    /// The font's family, empty for the platform's monospaced font
+    /// (`font-family`).
+    pub font_family: String,
+    /// A line's height, in the font's size (`adjust-cell-height`).
+    pub line_height: f32,
+    /// Whether Option is Alt, as a terminal's programs know it, rather than
+    /// typing the characters it makes on a Mac (`macos-option-as-alt`).
+    pub option_as_alt: bool,
+    /// The cursor until a program asks for another (`cursor-style`), and
+    /// whether it blinks (`cursor-style-blink`).
+    pub cursor: CursorShape,
+    pub cursor_blink: bool,
+    /// Whether selecting text copies it (`copy-on-select`).
+    pub copy_on_select: bool,
+    /// What a right-click does where the program has not asked for the
+    /// mouse (`right-click-action`).
+    pub right_click: RightClick,
+    /// What the bell does (`bell-features`): mark the terminal's tab and
+    /// the window's, bounce the Dock icon while the app is behind others,
+    /// play the system's sound.
+    pub bell_mark: bool,
+    pub bell_bounce: bool,
+    pub bell_sound: bool,
+    /// Whether the progress a program reports (OSC 9;4) shows along the
+    /// terminal's top.
+    pub progress: bool,
+    /// The colours in a light and a dark appearance: a theme's name, empty
+    /// for the app's own (`theme`).
+    pub theme_light: String,
+    pub theme_dark: String,
+    /// The least contrast text keeps against its background, 1 to 21: below
+    /// it, text is drawn white or black (`minimum-contrast`).
+    pub minimum_contrast: f32,
+    /// Whether bold text in the first eight colours takes their bright
+    /// ones (`bold-color = bright`).
+    pub bold_is_bright: bool,
+    /// How much of its colour faint text keeps (`faint-opacity`).
+    pub faint_opacity: f32,
+    /// How many megabytes of scrollback a terminal keeps
+    /// (`scrollback-limit-bytes`).
+    pub scrollback_mb: u32,
+    /// Whether a program may copy to the clipboard and read it (OSC 52;
+    /// `clipboard-write`, `clipboard-read`).
+    pub clipboard_write: Access,
+    pub clipboard_read: Access,
+    /// How far the wheel scrolls, times (`mouse-scroll-multiplier`).
+    pub scroll_speed: f32,
+}
+
+impl Default for Terminal {
+    fn default() -> Self {
+        Terminal {
+            font_family: String::new(),
+            line_height: LINE_HEIGHT,
+            option_as_alt: false,
+            cursor: CursorShape::Block,
+            cursor_blink: false,
+            copy_on_select: false,
+            right_click: RightClick::Menu,
+            bell_mark: true,
+            bell_bounce: true,
+            bell_sound: false,
+            progress: true,
+            theme_light: String::new(),
+            theme_dark: String::new(),
+            minimum_contrast: 1.,
+            bold_is_bright: false,
+            faint_opacity: 0.5,
+            scrollback_mb: 50,
+            clipboard_write: Access::Allow,
+            clipboard_read: Access::Ask,
+            scroll_speed: 1.,
+        }
+    }
+}
+
+/// A terminal's line height, in its font's size, unless the settings say.
+pub const LINE_HEIGHT: f32 = 1.36;
+
+impl Terminal {
+    /// The settings' numbers, kept to what makes sense.
+    pub fn line_height(&self) -> f32 {
+        within(self.line_height, 1.0..=2.0, LINE_HEIGHT)
+    }
+
+    pub fn minimum_contrast(&self) -> f32 {
+        within(self.minimum_contrast, 1.0..=21.0, 1.)
+    }
+
+    pub fn faint_opacity(&self) -> f32 {
+        within(self.faint_opacity, 0.0..=1.0, 0.5)
+    }
+
+    pub fn scroll_speed(&self) -> f32 {
+        within(self.scroll_speed, 0.25..=10.0, 1.)
+    }
+
+    pub fn scrollback_bytes(&self) -> usize {
+        self.scrollback_mb.clamp(1, 1000) as usize * 1_000_000
+    }
+}
+
+fn within(v: f32, range: std::ops::RangeInclusive<f32>, default: f32) -> f32 {
+    if v.is_finite() {
+        v.clamp(*range.start(), *range.end())
+    } else {
+        default
+    }
+}
+
+/// The cursor's shape until a program asks for another.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorShape {
+    #[default]
+    Block,
+    Bar,
+    Underline,
+}
+
+/// What a right-click in a terminal does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RightClick {
+    /// The terminal's menu.
+    #[default]
+    Menu,
+    Paste,
+    Copy,
+    /// Copies what is selected, else pastes.
+    CopyOrPaste,
+    Nothing,
+}
+
+/// Whether a program may do something: always, once the user says, or
+/// never.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Access {
+    #[default]
+    Allow,
+    Ask,
+    Deny,
 }
 
 pub const EDITOR_FONT_SIZE: f32 = 13.;
@@ -244,6 +401,7 @@ impl Settings {
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
         cx.set_global(Settings { values, file });
+        follow(cx);
     }
 
     pub fn get(cx: &App) -> Values {
@@ -266,6 +424,17 @@ impl Settings {
             let _ = std::fs::write(file, b);
         }
         crate::palette::follow_settings(cx);
+        follow(cx);
         cx.refresh_windows();
     }
+}
+
+/// What the settings change in the app as a whole: whether typing hides the
+/// pointer.
+fn follow(cx: &mut App) {
+    cx.set_cursor_hide_mode(if Settings::get(cx).hide_pointer {
+        gpui::CursorHideMode::OnTypingAndAction
+    } else {
+        gpui::CursorHideMode::Never
+    });
 }

@@ -367,6 +367,111 @@ fn focus_is_reported_to_a_program_that_asks(cx: &mut TestAppContext) {
     assert_eq!(typed(cx), b"i\x1b[I");
 }
 
+/// The next input a session is sent, the window drawn while it waits.
+fn next_input(
+    cx: &mut VisualTestContext,
+    from: &std::sync::mpsc::Receiver<Vec<u8>>,
+) -> Option<Vec<u8>> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(2) {
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+        if let Ok(f) = from.recv_timeout(std::time::Duration::from_millis(20))
+            && f.first() == Some(&b'i')
+        {
+            return Some(f);
+        }
+    }
+    None
+}
+
+fn set(cx: &mut VisualTestContext, f: impl FnOnce(&mut hangar_app::settings::Values)) {
+    cx.update(|window, cx| {
+        hangar_app::settings::Settings::update(cx, f);
+        window.refresh();
+    });
+    cx.run_until_parked();
+}
+
+/// A program's read of the clipboard is answered as the settings say:
+/// once the user allows it, at once, or never.
+#[gpui::test]
+fn a_clipboard_read_is_answered_as_the_settings_say(cx: &mut TestAppContext) {
+    use hangar_app::settings::Access;
+    let (url, to, from) = shared(
+        r#"{"session":{"id":"s1","title":"zsh","created":"2026-11-07T10:00:00Z","clients":1,"cols":80,"rows":24},"history":0,"owner":true}"#,
+    );
+    let (_, cx) = attached(cx, &url);
+    cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("secret".into())));
+    while from.try_recv().is_ok() {}
+    let answer = b"i\x1b]52;c;c2VjcmV0\x1b\\".to_vec();
+    // Asked first, by default.
+    to.send(b"o\x1b]52;c;?\x07".to_vec()).unwrap();
+    let start = std::time::Instant::now();
+    while cx.debug_bounds("term-ask-allow").is_none() {
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "the question"
+        );
+        cx.update(|window, _| window.refresh());
+        cx.run_until_parked();
+    }
+    let allow = cx.debug_bounds("term-ask-allow").unwrap().center();
+    cx.simulate_click(allow, gpui::Modifiers::none());
+    assert_eq!(next_input(cx, &from), Some(answer.clone()));
+    // Let through.
+    set(cx, |v| v.terminal.clipboard_read = Access::Allow);
+    to.send(b"o\x1b]52;c;?\x07".to_vec()).unwrap();
+    assert_eq!(next_input(cx, &from), Some(answer));
+    // Never.
+    set(cx, |v| v.terminal.clipboard_read = Access::Deny);
+    to.send(b"o\x1b]52;c;?\x07".to_vec()).unwrap();
+    assert_eq!(next_input(cx, &from), None);
+    assert!(cx.debug_bounds("term-ask").is_none());
+}
+
+/// A right-click does what the settings say in the menu's place, and a
+/// selection is copied as it is made where they say so.
+#[gpui::test]
+fn right_click_and_selection_do_as_the_settings_say(cx: &mut TestAppContext) {
+    use hangar_app::settings::RightClick;
+    let (url, typed) = recording(b"cargo build --release\r\nerror: it broke\r\n$ ");
+    let (_, cx) = attached(cx, &url);
+    set(cx, |v| {
+        v.terminal.right_click = RightClick::Paste;
+        v.terminal.copy_on_select = true;
+    });
+    cx.update(|_, cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("ls".into())));
+    let at = cx.debug_bounds("terminal").unwrap().origin
+        + gpui::point(gpui::px(14.), gpui::px(4. + 17. + 8.));
+    let none = gpui::Modifiers::none();
+    cx.simulate_mouse_down(at, gpui::MouseButton::Right, none);
+    cx.simulate_mouse_up(at, gpui::MouseButton::Right, none);
+    cx.run_until_parked();
+    let pasted = typed
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the paste");
+    assert_eq!(pasted, b"ls");
+    // A double click selects "error", and copies it.
+    for count in [1, 2] {
+        cx.simulate_event(gpui::MouseDownEvent {
+            button: gpui::MouseButton::Left,
+            position: at,
+            modifiers: none,
+            click_count: count,
+            first_mouse: false,
+        });
+        cx.simulate_event(gpui::MouseUpEvent {
+            button: gpui::MouseButton::Left,
+            position: at,
+            modifiers: none,
+            click_count: count,
+        });
+    }
+    let copied = cx.update(|_, cx| cx.read_from_clipboard().and_then(|c| c.text()));
+    assert_eq!(copied.as_deref(), Some("error"));
+}
+
 /// A terminal in a window, attached to a session at url, focused.
 fn attached<'a>(
     cx: &'a mut TestAppContext,

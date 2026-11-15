@@ -5,7 +5,7 @@
 use std::time::Instant;
 
 use hangar_app::terminal::{
-    Alacritty, CursorStyle, Emulator, LinkKind, Mark, Replies, Screen, Select, Underline,
+    Alacritty, CursorStyle, Emulator, LinkKind, Look, Mark, Replies, Screen, Select, Underline,
 };
 
 #[test]
@@ -460,4 +460,43 @@ fn select_all_and_clear_the_buffer() {
     assert_eq!(s.scrolled_back(), 0, "no scrollback is left");
     s.select_all();
     assert_eq!(s.selection().as_deref(), Some("$ ls"));
+}
+
+/// A look: the theme's sixteen colours, bold in the bright ones, faint text
+/// keeping what it says; and the cursor until a program asks for another.
+#[test]
+fn the_look_and_cursor_are_as_set() {
+    use alacritty_terminal::vte::ansi::Rgb;
+    let mut s = Alacritty::new(10, 1);
+    let c = |v: u8| Rgb { r: v, g: v, b: v };
+    let mut palette = [c(0); 16];
+    palette[1] = Rgb { r: 200, g: 0, b: 0 };
+    palette[9] = Rgb {
+        r: 255,
+        g: 100,
+        b: 100,
+    };
+    s.set_look(&Look {
+        fg: c(250),
+        bg: c(0),
+        palette: Some(palette),
+        bold_is_bright: true,
+        faint: 0.2,
+    });
+    s.feed(b"\x1b[31mr\x1b[1mR\x1b[0;2mf");
+    let sp = s.lines().remove(0).spans;
+    assert_eq!(sp[0].fg, palette[1], "the theme's red");
+    assert_eq!(sp[1].fg, palette[9], "bold, its bright red");
+    assert_eq!(sp[2].fg, c(50), "a fifth of its colour");
+    s.set_cursor_default(CursorStyle::Bar, true);
+    s.lines();
+    let look = s.cursor_look();
+    assert_eq!((look.style, look.blinking), (CursorStyle::Bar, true));
+    // A program's own shape wins until it asks for the default again.
+    s.feed(b"\x1b[2 q");
+    s.lines();
+    assert_eq!(s.cursor_look().style, CursorStyle::Block);
+    s.feed(b"\x1b[0 q");
+    s.lines();
+    assert_eq!(s.cursor_look().style, CursorStyle::Bar);
 }

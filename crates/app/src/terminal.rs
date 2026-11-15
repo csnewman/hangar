@@ -147,15 +147,50 @@ pub fn is_light(bg: Rgb) -> bool {
     (bg.r as u32 * 299 + bg.g as u32 * 587 + bg.b as u32 * 114) / 1000 > 128
 }
 
-/// Faint text's colour (SGR 2): halfway from its own colour to its
-/// background, as Ghostty draws it at its default faint-opacity of 0.5, so
-/// it fades towards the background in a light theme and a dark one alike.
-pub fn faded(fg: Rgb, bg: Rgb) -> Rgb {
-    let mix = |a: u8, b: u8| ((a as u16 + b as u16) / 2) as u8;
+/// Faint text's colour (SGR 2): its own colour drawn at `keep` over its
+/// background, as Ghostty draws it at its faint-opacity, so it fades
+/// towards the background in a light theme and a dark one alike.
+pub fn faded(fg: Rgb, bg: Rgb, keep: f32) -> Rgb {
+    let mix = |a: u8, b: u8| (a as f32 * keep + b as f32 * (1. - keep)).round() as u8;
     Rgb {
         r: mix(fg.r, bg.r),
         g: mix(fg.g, bg.g),
         b: mix(fg.b, bg.b),
+    }
+}
+
+/// How a screen draws colours: the text's and background's where the
+/// program names none, the sixteen named colours (a theme's, else those of
+/// a light or a dark background), whether bold text in the first eight
+/// takes the bright ones, and how much of its colour faint text keeps.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Look {
+    pub fg: Rgb,
+    pub bg: Rgb,
+    pub palette: Option<[Rgb; 16]>,
+    pub bold_is_bright: bool,
+    pub faint: f32,
+}
+
+impl Look {
+    /// Default colours alone, with the screen's own named colours.
+    pub fn plain(fg: Rgb, bg: Rgb) -> Look {
+        Look {
+            fg,
+            bg,
+            palette: None,
+            bold_is_bright: false,
+            faint: 0.5,
+        }
+    }
+
+    /// One of the 256 colours: the theme's sixteen, else the background's,
+    /// then xterm's cube and greys.
+    pub fn colour(&self, i: u8) -> Rgb {
+        match self.palette {
+            Some(p) if i < 16 => p[i as usize],
+            _ => indexed_in(i, is_light(self.bg)),
+        }
     }
 }
 
@@ -222,10 +257,12 @@ pub struct CursorLook {
 
 pub struct Screen<L: EventListener = Quiet> {
     term: Term<L>,
+    /// What the screen was made with, to change a part of.
+    config: Config,
     parser: Processor,
-    /// The colours text and background take when the shell names none.
-    fg: Rgb,
-    bg: Rgb,
+    /// The colours text and background take when the shell names none,
+    /// and how the rest are drawn.
+    look: Look,
     /// What Find looks for, and the match it is on.
     search: Option<(String, RegexSearch)>,
     found: Option<Match>,
@@ -285,25 +322,21 @@ impl Screen<Quiet> {
 
 impl<L: EventListener> Screen<L> {
     pub fn with_listener(columns: usize, lines: usize, listener: L) -> Self {
+        let config = Config {
+            kitty_keyboard: true,
+            // A program may copy to the clipboard, as Claude Code does what
+            // is selected in it, but never read it here: a read is the
+            // view's to answer, as the settings say.
+            osc52: Osc52::OnlyCopy,
+            ..Config::default()
+        };
         Screen {
             // The Kitty keyboard protocol, for programs that ask for it,
             // so they can tell Shift-Enter from Enter.
-            term: Term::new(
-                Config {
-                    kitty_keyboard: true,
-                    // A program may copy to the clipboard, as Claude Code
-                    // does what is selected in it, but never read it: a
-                    // read would hand it whatever was last copied,
-                    // anywhere.
-                    osc52: Osc52::OnlyCopy,
-                    ..Config::default()
-                },
-                &Size { columns, lines },
-                listener,
-            ),
+            term: Term::new(config.clone(), &Size { columns, lines }, listener),
+            config,
             parser: Processor::new(),
-            fg: named(NamedColor::Foreground),
-            bg: named(NamedColor::Background),
+            look: Look::plain(named(NamedColor::Foreground), named(NamedColor::Background)),
             search: None,
             found: None,
             hover: None,
@@ -323,14 +356,33 @@ impl<L: EventListener> Screen<L> {
     /// on a light background the sixteen named colours are a light theme's,
     /// so yellow and white stay readable.
     pub fn set_default_colours(&mut self, fg: Rgb, bg: Rgb) {
-        self.fg = fg;
-        self.bg = bg;
+        (self.look.fg, self.look.bg) = (fg, bg);
+    }
+
+    pub fn set_look(&mut self, look: Look) {
+        self.look = look;
+    }
+
+    /// The cursor's shape, and whether it blinks, until the program asks
+    /// for another.
+    pub fn set_cursor_default(&mut self, style: CursorStyle, blink: bool) {
+        use alacritty_terminal::vte::ansi::{CursorShape, CursorStyle as Their};
+        self.config.default_cursor_style = Their {
+            shape: match style {
+                CursorStyle::Bar => CursorShape::Beam,
+                CursorStyle::Underline => CursorShape::Underline,
+                CursorStyle::HollowBlock => CursorShape::HollowBlock,
+                CursorStyle::Block => CursorShape::Block,
+            },
+            blinking: blink,
+        };
+        self.term.set_options(self.config.clone());
     }
 
     /// Whether the background is light, and the named colours a light
     /// theme's.
     fn light(&self) -> bool {
-        is_light(self.bg)
+        is_light(self.look.bg)
     }
 
     /// Scrolls the view through the scrollback by lines, up for positive.
@@ -666,9 +718,9 @@ impl<L: EventListener> Screen<L> {
             return c;
         }
         match index {
-            i if i < 256 => indexed_in(i as u8, self.light()),
-            i if i == NamedColor::Background as usize => self.bg,
-            _ => self.fg,
+            i if i < 256 => self.look.colour(i as u8),
+            i if i == NamedColor::Background as usize => self.look.bg,
+            _ => self.look.fg,
         }
     }
 
@@ -712,13 +764,25 @@ impl<L: EventListener> Screen<L> {
                         continue;
                     }
                     line.cells.push(line.text.len());
-                    let (mut fg, mut bg) = (self.rgb(cell.fg), self.rgb(cell.bg));
+                    // Bold text in the first eight colours takes the bright
+                    // ones, where the look says.
+                    let bold = cell.flags.contains(Flags::BOLD);
+                    let named = match cell.fg {
+                        Color::Named(n) if bold && self.look.bold_is_bright && (n as usize) < 8 => {
+                            Color::Indexed(n as u8 + 8)
+                        }
+                        Color::Indexed(i) if bold && self.look.bold_is_bright && i < 8 => {
+                            Color::Indexed(i + 8)
+                        }
+                        c => c,
+                    };
+                    let (mut fg, mut bg) = (self.rgb(named), self.rgb(cell.bg));
                     let inverse = cell.flags.contains(Flags::INVERSE);
                     if inverse {
                         std::mem::swap(&mut fg, &mut bg);
                     }
                     if cell.flags.contains(Flags::DIM) {
-                        fg = faded(fg, bg);
+                        fg = faded(fg, bg, self.look.faint);
                     }
                     if cell.flags.contains(Flags::HIDDEN) {
                         fg = bg;
@@ -792,13 +856,17 @@ impl<L: EventListener> Screen<L> {
             Color::Spec(rgb) => rgb,
             Color::Named(n) => self.term.colors()[n].unwrap_or(match n {
                 NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::Cursor => {
-                    self.fg
+                    self.look.fg
                 }
-                NamedColor::Background => self.bg,
-                n => named_in(n, self.light()),
+                NamedColor::Background => self.look.bg,
+                NamedColor::DimForeground => named_in(n, self.light()),
+                n if (n as usize) < 16 => self.look.colour(n as u8),
+                n => self
+                    .look
+                    .colour((n as usize - NamedColor::DimBlack as usize) as u8),
             }),
             Color::Indexed(i) => {
-                self.term.colors()[i as usize].unwrap_or_else(|| indexed_in(i, self.light()))
+                self.term.colors()[i as usize].unwrap_or_else(|| self.look.colour(i))
             }
         }
     }
@@ -967,7 +1035,13 @@ pub trait Emulator {
     /// Sets the size in cells, and a cell's size in pixels.
     fn resize(&mut self, columns: usize, lines: usize, cell: (u32, u32));
     /// Sets the colours text and background take when the shell names none.
-    fn set_default_colours(&mut self, fg: Rgb, bg: Rgb);
+    /// Sets how the screen draws colours.
+    fn set_look(&mut self, look: &Look);
+    /// Sets the colours text and background take when the shell names
+    /// none, the rest the screen's own.
+    fn set_default_colours(&mut self, fg: Rgb, bg: Rgb) {
+        self.set_look(&Look::plain(fg, bg))
+    }
     /// Underlines the link given, the one the pointer is on.
     fn set_hover(&mut self, link: Option<&Link>);
     /// Scrolls the view through the scrollback by lines, up for positive.
@@ -1035,6 +1109,12 @@ pub trait Emulator {
     fn reports_focus(&self) -> bool {
         false
     }
+    /// Sets the cursor's shape, and whether it blinks, until the program
+    /// asks for another.
+    fn set_cursor_default(&mut self, style: CursorStyle, blink: bool);
+    /// Sets how many bytes of scrollback the screen keeps. An emulator
+    /// that counts its scrollback otherwise keeps its own.
+    fn set_scrollback(&mut self, _bytes: usize) {}
     /// Whether the program asks to hear when the terminal turns light or
     /// dark (mode 2031).
     fn reports_theme(&self) -> bool {
@@ -1081,8 +1161,8 @@ impl Emulator for Alacritty {
     fn resize(&mut self, columns: usize, lines: usize, _: (u32, u32)) {
         self.screen.resize(columns, lines)
     }
-    fn set_default_colours(&mut self, fg: Rgb, bg: Rgb) {
-        self.screen.set_default_colours(fg, bg)
+    fn set_look(&mut self, look: &Look) {
+        self.screen.set_look(*look)
     }
     fn set_hover(&mut self, link: Option<&Link>) {
         self.screen.set_hover(link)
@@ -1161,5 +1241,8 @@ impl Emulator for Alacritty {
     }
     fn reports_focus(&self) -> bool {
         self.screen.reports_focus()
+    }
+    fn set_cursor_default(&mut self, style: CursorStyle, blink: bool) {
+        self.screen.set_cursor_default(style, blink)
     }
 }

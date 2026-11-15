@@ -118,16 +118,17 @@ pub struct DraggedTerminal {
 impl Render for DraggedTerminal {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
+        let (fg, bg) = crate::termthemes::screen_colours(cx);
         div()
             .px(px(10.))
             .py(px(2.))
             .rounded(px(4.))
-            .bg(p.term_tab)
+            .bg(bg)
             .border_1()
             .border_color(p.border_strong)
             .shadow_md()
             .text_size(px(11.5))
-            .text_color(p.term_fg)
+            .text_color(fg)
             .child(self.title.clone())
     }
 }
@@ -966,11 +967,17 @@ impl EnvTab {
         };
         match e {
             Signal::Bell => {
-                self.terms.tabs[i].rang = true;
-                if !window.is_window_active() {
+                let t = crate::settings::Settings::get(cx).terminal;
+                if t.bell_mark {
+                    self.terms.tabs[i].rang = true;
+                    cx.emit(EnvSignal::Marks);
+                }
+                if t.bell_bounce && !window.is_window_active() {
                     crate::dock::attention();
                 }
-                cx.emit(EnvSignal::Marks);
+                if t.bell_sound {
+                    crate::dock::beep();
+                }
             }
             Signal::Notification { title, body } => {
                 if self.agent_in(i, cx) {
@@ -5037,6 +5044,9 @@ impl EnvTab {
         if running {
             self.list_terminals(window, cx);
         }
+        // The screen's colours, a theme's where the settings choose one:
+        // the tab in front is drawn as part of it.
+        let (screen_fg, screen_bg) = crate::termthemes::screen_colours(cx);
         // The tab in front of the user has its bell seen.
         if window.is_window_active()
             && let Some(tab) = self.terms.active.and_then(|i| self.terms.tabs.get_mut(i))
@@ -5077,7 +5087,7 @@ impl EnvTab {
                     format!("{who}: {}", s.message)
                 }
             });
-            let hover = p.term_tab;
+            let hover = screen_bg;
             let accent = p.accent;
             tabs = tabs.child(
                 h_flex()
@@ -5109,8 +5119,8 @@ impl EnvTab {
                     .py(px(2.))
                     .rounded_t(px(5.))
                     .cursor_pointer()
-                    .text_color(if on { p.term_fg } else { p.idle })
-                    .when(on, |d| d.bg(p.term_tab))
+                    .text_color(if on { screen_fg } else { p.idle })
+                    .when(on, |d| d.bg(screen_bg))
                     .when(!on, move |d| d.hover(move |s| s.bg(hover.opacity(0.6))))
                     .when_some(agent, |d, a| d.child(dot(agent_tone(a), p).size(px(7.))))
                     .when_some(status_tone, |d, t| d.child(dot(t, p).size(px(7.))))
@@ -5240,7 +5250,7 @@ impl EnvTab {
                         )
                     }),
             )
-            .child(div().flex_1().min_h_0().bg(p.term_tab).child(body))
+            .child(div().flex_1().min_h_0().bg(screen_bg).child(body))
             .when_some(menu, |d, list| {
                 let mut m = v_flex()
                     .absolute()

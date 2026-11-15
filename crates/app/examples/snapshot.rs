@@ -18,6 +18,8 @@
 //! SNAPSHOT_SEARCH=text opens Search Everywhere and types it;
 //! SNAPSHOT_NOTICES=1 opens the bell's notifications;
 //! SNAPSHOT_ADD=kinds (or address) opens Add a Place at that step;
+//! SNAPSHOT_PREFS=JSON sets settings over the copy of the user's, objects
+//! merged ({"terminal": {"theme_light": "Nord"}});
 //! SNAPSHOT_SETTINGS=page opens Settings at a page (appearance, keymap,
 //! editor, terminal, notifications, places, or account and browser for the
 //! first place);
@@ -99,6 +101,16 @@ fn main() {
                 copy(dirs.as_ref().map(|d| d.settings_file()), "settings.json"),
                 cx,
             );
+            // Settings of the snapshot's own, over the copy of the user's.
+            if let Ok(json) = std::env::var("SNAPSHOT_PREFS") {
+                let over: serde_json::Value =
+                    serde_json::from_str(&json).expect("SNAPSHOT_PREFS is JSON");
+                hangar_app::settings::Settings::update(cx, |v| {
+                    let mut all = serde_json::to_value(&*v).unwrap();
+                    merge(&mut all, over);
+                    *v = serde_json::from_value(all).expect("SNAPSHOT_PREFS are settings");
+                });
+            }
             let places = places::from_env(cx);
             let bounds = Bounds::centered(None, size(px(w), px(h)), cx);
             let mut shell = None;
@@ -814,5 +826,17 @@ async fn settle(cx: &mut gpui::AsyncApp, window: gpui::AnyWindowHandle, d: Durat
         cx.background_executor()
             .timer(Duration::from_millis(100))
             .await;
+    }
+}
+
+/// Sets what `over` has in `all`, objects merged key by key.
+fn merge(all: &mut serde_json::Value, over: serde_json::Value) {
+    match (all, over) {
+        (serde_json::Value::Object(a), serde_json::Value::Object(o)) => {
+            for (k, v) in o {
+                merge(a.entry(k).or_insert(serde_json::Value::Null), v);
+            }
+        }
+        (a, o) => *a = o,
     }
 }

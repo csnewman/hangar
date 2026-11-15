@@ -34,6 +34,15 @@ pub fn attention() {
 #[cfg(not(target_os = "macos"))]
 pub fn attention() {}
 
+/// Plays the system's alert sound, as a terminal's bell.
+#[cfg(target_os = "macos")]
+pub fn beep() {
+    objc2_app_kit::NSBeep();
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn beep() {}
+
 /// Plays the sound a notification asking for the user makes: the system's
 /// own Glass.
 #[cfg(target_os = "macos")]
