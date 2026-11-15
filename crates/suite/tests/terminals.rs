@@ -132,4 +132,18 @@ async fn a_stopped_environment_has_no_terminal() {
         .await
         .err();
     assert_eq!(refused, Some(409));
+    let r = s
+        .http()
+        .get(format!(
+            "{}/api/v1/environments/{}/processes",
+            s.url(),
+            e.id
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 409);
+    let body: serde_json::Value = r.json().await.unwrap();
+    assert_eq!(body["code"], "environment_not_running", "{body}");
 }

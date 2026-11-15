@@ -188,19 +188,54 @@ async fn hosts(
     next.run(req).await
 }
 
-/// An answer refusing a request: its status and the spec's Error body.
+/// An answer refusing a request: its status and the spec's Error body,
+/// whose code a client can act on where its message is for people.
 #[derive(Debug)]
 pub struct ApiError {
     status: StatusCode,
+    code: &'static str,
     message: String,
+}
+
+/// The codes the specs' Error has beyond those its status gives
+/// (`status_code`).
+pub mod code {
+    /// The environment is not running, and what was asked needs it to be.
+    pub const NOT_RUNNING: &str = "environment_not_running";
+    /// The environment's worker is not connected to this server.
+    pub const UNREACHABLE: &str = "worker_unreachable";
+    /// The environment is on no worker yet.
+    pub const NOT_PLACED: &str = "environment_not_placed";
+}
+
+/// The code a refusal with this status has unless it is given its own.
+fn status_code(status: StatusCode) -> &'static str {
+    match status {
+        StatusCode::BAD_REQUEST => "invalid",
+        StatusCode::UNAUTHORIZED => "unauthorized",
+        StatusCode::FORBIDDEN => "forbidden",
+        StatusCode::NOT_FOUND => "not_found",
+        StatusCode::CONFLICT => "conflict",
+        StatusCode::PAYLOAD_TOO_LARGE => "too_large",
+        StatusCode::SERVICE_UNAVAILABLE => "unavailable",
+        s if s.is_client_error() => "refused",
+        _ => "internal",
+    }
 }
 
 impl ApiError {
     pub fn new(status: StatusCode, message: impl Into<String>) -> ApiError {
         ApiError {
             status,
+            code: status_code(status),
             message: message.into(),
         }
+    }
+
+    /// The same refusal under a code of its own (`code`).
+    pub fn code(mut self, code: &'static str) -> ApiError {
+        self.code = code;
+        self
     }
 
     pub fn invalid(why: impl std::fmt::Display) -> ApiError {
@@ -220,7 +255,7 @@ impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         (
             self.status,
-            Json(serde_json::json!({ "error": self.message })),
+            Json(serde_json::json!({ "error": self.message, "code": self.code })),
         )
             .into_response()
     }

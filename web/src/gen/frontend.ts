@@ -1452,8 +1452,11 @@ export interface components {
             /** @description A private key to import. Absent generates an ed25519 key. */
             private_key?: string;
         };
+        /** @description Why a request was refused. The message is for people; the code is for programs, and stays the same however the message is worded. */
         Error: {
             error: string;
+            /** @description What the refusal is. Each status has its own: invalid (400), unauthorized (401), forbidden (403), not_found (404), conflict (409), too_large (413), refused (another 4xx), internal (5xx), unavailable (503). Some refusals have one of their own instead: environment_not_running (409), worker_unreachable (503), environment_not_placed (409). More may come; treat one you do not know as its status's. */
+            code: string;
         };
         /**
          * @description What the environment's owner has asked for.

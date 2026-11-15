@@ -28,6 +28,7 @@ async fn health_endpoints_and_the_web_ui() {
     assert_eq!(r.status(), 404);
     let body: serde_json::Value = r.json().await.expect("JSON");
     assert_eq!(body["error"], "no such endpoint");
+    assert_eq!(body["code"], "not_found");
 
     let r = http
         .get(format!("{}/environments/somewhere", s.url()))

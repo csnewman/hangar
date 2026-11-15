@@ -63,12 +63,16 @@ export type TerminalSession = Schemas['TerminalSession']
 
 const client = createClient<paths>()
 
+// ApiError is a refusal: its status, and the spec's Error code, which
+// names what was refused however the message is worded.
 export class ApiError extends Error {
   status: number
+  code: string
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code = '') {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 
@@ -79,11 +83,9 @@ async function unwrap<T>(
 ): Promise<T> {
   const { data, error, response } = await call
   if (!response.ok) {
-    const message =
-      typeof error === 'object' && error !== null && 'error' in error && typeof error.error === 'string'
-        ? error.error
-        : response.statusText
-    throw new ApiError(response.status, message)
+    const body = typeof error === 'object' && error !== null ? (error as Record<string, unknown>) : {}
+    const message = typeof body.error === 'string' ? body.error : response.statusText
+    throw new ApiError(response.status, message, typeof body.code === 'string' ? body.code : '')
   }
   return data as T
 }

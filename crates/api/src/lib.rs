@@ -350,10 +350,13 @@ pub struct Resources {
     pub memory_mib: i64,
 }
 
-/// The body of every non-2xx response.
+/// The body of every non-2xx response: a message for people and a code
+/// for programs (the server's `http::code`).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Error {
     pub error: String,
+    #[serde(default)]
+    pub code: String,
 }
 
 /// Sent once, with the bootstrap token, to exchange it for a credential of

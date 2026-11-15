@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use uuid::Uuid;
 
-use super::{ApiError, Body, Shared, Signed, Via};
+use super::{ApiError, Body, Shared, Signed, Via, code};
 use crate::environments::{self as envs, View};
 use crate::tunnel::{self, Conn, Header, OpenError};
 
@@ -97,7 +97,7 @@ async fn running(app: &Shared, s: &Signed, id: &str) -> Result<(View, Uuid), Api
         .ok_or_else(|| ApiError::not_found("environment"))?;
     match v.row.worker_id {
         Some(w) if v.row.phase == "running" => Ok((v, w)),
-        _ => Err(ApiError::new(StatusCode::CONFLICT, NOT_RUNNING)),
+        _ => Err(ApiError::new(StatusCode::CONFLICT, NOT_RUNNING).code(code::NOT_RUNNING)),
     }
 }
 
@@ -116,12 +116,12 @@ async fn open(app: &Shared, worker: Uuid, kind: &str, env: &str) -> Result<Conn,
             if !matches!(e, OpenError::NoTunnel) {
                 eprintln!("hangar-server: opening a {kind} stream to {env}: {e}");
             }
-            ApiError::new(StatusCode::SERVICE_UNAVAILABLE, UNREACHABLE)
+            ApiError::new(StatusCode::SERVICE_UNAVAILABLE, UNREACHABLE).code(code::UNREACHABLE)
         })
 }
 
 fn unreachable_error() -> ApiError {
-    ApiError::new(StatusCode::SERVICE_UNAVAILABLE, UNREACHABLE)
+    ApiError::new(StatusCode::SERVICE_UNAVAILABLE, UNREACHABLE).code(code::UNREACHABLE)
 }
 
 /// Writes one JSON line.
@@ -890,7 +890,7 @@ async fn environment_log(
         .await?
         .ok_or_else(|| ApiError::not_found("environment"))?;
     let Some(worker) = v.row.worker_id else {
-        return Err(ApiError::new(StatusCode::CONFLICT, NOT_PLACED));
+        return Err(ApiError::new(StatusCode::CONFLICT, NOT_PLACED).code(code::NOT_PLACED));
     };
     read_log(&app, worker, &v.row.id.to_string(), &log, offset(q)).await
 }
