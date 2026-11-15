@@ -179,6 +179,9 @@ pub struct MouseModes {
     pub motion: bool,
     /// Reports as CSI < b;x;y M/m (1006), not the 8-bit form.
     pub sgr: bool,
+    /// Reports so, with the position in pixels from the screen's top left
+    /// (1016), whichever form was asked for before.
+    pub pixels: bool,
 }
 
 impl MouseModes {
@@ -188,15 +191,17 @@ impl MouseModes {
     }
 }
 
-/// The report of a mouse event at a cell (0-based), with the modifiers
-/// held; None when the program did not ask for this kind of event, or the
-/// cell is beyond what the 8-bit form can say.
+/// The report of a mouse event at a cell (0-based) and pixel (from the
+/// screen's top left, in the cell size the program is told), with the
+/// modifiers held; None when the program did not ask for this kind of
+/// event, or the cell is beyond what the 8-bit form can say.
 #[allow(clippy::too_many_arguments)]
 pub fn mouse(
     button: Button,
     press: Press,
     col: usize,
     row: usize,
+    pixel: (u32, u32),
     shift: bool,
     alt: bool,
     ctrl: bool,
@@ -221,9 +226,12 @@ pub fn mouse(
         b += 32;
     }
     b += 4 * shift as u32 + 8 * alt as u32 + 16 * ctrl as u32;
+    let end = if press == Press::Up { 'm' } else { 'M' };
+    if m.pixels {
+        return Some(format!("\x1b[<{b};{};{}{end}", pixel.0, pixel.1).into_bytes());
+    }
     let (x, y) = (col + 1, row + 1);
     if m.sgr {
-        let end = if press == Press::Up { 'm' } else { 'M' };
         return Some(format!("\x1b[<{b};{x};{y}{end}").into_bytes());
     }
     // The 8-bit form says a release with button 3, and cannot reach past

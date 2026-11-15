@@ -297,6 +297,7 @@ impl<L: EventListener> Screen<L> {
             drags: m.contains(TermMode::MOUSE_DRAG),
             motion: m.contains(TermMode::MOUSE_MOTION),
             sgr: m.contains(TermMode::SGR_MOUSE),
+            pixels: false,
         }
     }
 
@@ -862,6 +863,12 @@ pub trait Emulator {
     /// says how long until the next one is, if one is playing.
     fn tick_animations(&mut self) -> Option<Duration> {
         None
+    }
+    /// Whether the program is in the middle of a synchronized update
+    /// (2026), which is drawn once it ends. An emulator that holds such an
+    /// update back itself says false.
+    fn synchronized(&self) -> bool {
+        false
     }
 }
 

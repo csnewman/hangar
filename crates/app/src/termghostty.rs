@@ -229,6 +229,7 @@ impl Emulator for Ghostty {
             drags: matches!(m, Mouse::Button | Mouse::Any),
             motion: m == Mouse::Any,
             sgr: self.t.mode(1006, false),
+            pixels: self.t.mode(1016, false),
         }
     }
 
@@ -454,6 +455,10 @@ impl Emulator for Ghostty {
 
     fn picture(&self, image: u32) -> Option<Picture> {
         self.t.picture(image)
+    }
+
+    fn synchronized(&self) -> bool {
+        self.t.mode(2026, false)
     }
 
     fn tick_animations(&mut self) -> Option<Duration> {

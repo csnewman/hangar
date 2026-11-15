@@ -212,7 +212,8 @@ fn kitty_escape_codes_when_the_program_asks() {
 }
 
 fn report(b: Button, p: Press, col: usize, row: usize, m: &MouseModes) -> Option<String> {
-    mouse(b, p, col, row, false, false, false, m).map(|v| String::from_utf8_lossy(&v).into_owned())
+    mouse(b, p, col, row, (0, 0), false, false, false, m)
+        .map(|v| String::from_utf8_lossy(&v).into_owned())
 }
 
 #[test]
@@ -246,7 +247,18 @@ fn the_mouse_is_reported_as_asked() {
         report(Button::WheelUp, Press::Down, 4, 4, &sgr).as_deref(),
         Some("\x1b[<64;5;5M")
     );
-    let ctrl = mouse(Button::Right, Press::Down, 0, 0, false, false, true, &sgr).unwrap();
+    let ctrl = mouse(
+        Button::Right,
+        Press::Down,
+        0,
+        0,
+        (0, 0),
+        false,
+        false,
+        true,
+        &sgr,
+    )
+    .unwrap();
     assert_eq!(ctrl, b"\x1b[<18;1;1M");
 
     let drags = MouseModes { drags: true, ..sgr };
@@ -268,6 +280,25 @@ fn the_mouse_is_reported_as_asked() {
         Some("\x1b[<35;3;2M")
     );
 
+    // In pixels, 0-based, for a program that asked for them.
+    let pixels = MouseModes {
+        pixels: true,
+        ..sgr
+    };
+    let at = mouse(
+        Button::Left,
+        Press::Up,
+        3,
+        1,
+        (29, 40),
+        false,
+        false,
+        false,
+        &pixels,
+    )
+    .unwrap();
+    assert_eq!(at, b"\x1b[<0;29;40m");
+
     // The 8-bit form: each number plus 32, a release as button 3.
     let normal = MouseModes {
         clicks: true,
@@ -278,6 +309,7 @@ fn the_mouse_is_reported_as_asked() {
         Press::Down,
         0,
         0,
+        (0, 0),
         false,
         false,
         false,
@@ -285,7 +317,18 @@ fn the_mouse_is_reported_as_asked() {
     )
     .unwrap();
     assert_eq!(down, [0x1b, b'[', b'M', 32, 33, 33]);
-    let up = mouse(Button::Left, Press::Up, 0, 0, false, false, false, &normal).unwrap();
+    let up = mouse(
+        Button::Left,
+        Press::Up,
+        0,
+        0,
+        (0, 0),
+        false,
+        false,
+        false,
+        &normal,
+    )
+    .unwrap();
     assert_eq!(up, [0x1b, b'[', b'M', 35, 33, 33]);
     assert_eq!(
         report(Button::Left, Press::Down, 300, 0, &normal),

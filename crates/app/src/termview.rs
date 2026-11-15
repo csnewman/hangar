@@ -177,15 +177,14 @@ pub struct TerminalView {
     pictures: HashMap<u64, Shown>,
     next_picture: u64,
     progress: Option<crate::termimage::Progress>,
-    /// The window's pixels to a point, for a picture's size.
-    scale: f32,
     /// The pictures the emulator keeps, as drawn: by the screen they are
     /// on (a count of the screens made), image, generation of its pixels
     /// and the part shown.
     kitty: HashMap<KittyKey, Arc<gpui::RenderImage>>,
     screens: u64,
-    /// When the emulator's animations next move on, and the redraw then.
-    animation: Option<(Instant, Task<()>)>,
+    /// A redraw due later, and when: an animation's next frame, or a
+    /// synchronized update the program has not yet ended.
+    redraw: Option<(Instant, Task<()>)>,
 }
 
 type KittyKey = (u64, u32, u64, (u32, u32, u32, u32));
@@ -209,6 +208,11 @@ struct Shown {
 /// What names a picture's anchor: an OSC 8 link on the cell it starts at,
 /// so it scrolls and clears with the text around it.
 const PICTURE: &str = "hangar-picture:";
+
+/// The pixels to a point that a program's pictures and its cell size are
+/// counted in: a Retina screen's, on every screen, so a picture keeps its
+/// size against the text whichever screen the window is on.
+const PIXELS_PER_POINT: f32 = 2.;
 
 /// A screen kept by an emulator, of a size, in the default colours.
 fn screen(
@@ -323,10 +327,9 @@ impl TerminalView {
             pictures: HashMap::new(),
             next_picture: 0,
             progress: None,
-            scale: 2.,
             kitty: HashMap::new(),
             screens: 0,
-            animation: None,
+            redraw: None,
         };
         view.connect(session, cx);
         view
@@ -358,7 +361,13 @@ impl TerminalView {
                     if let Some(text) = t.copied.take() {
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     }
-                    cx.notify();
+                    // A synchronized update is drawn once it ends, or after
+                    // a second if the program never ends it, as Ghostty does.
+                    if t.screen.synchronized() {
+                        t.redraw_in(Duration::from_secs(1), cx);
+                    } else {
+                        cx.notify();
+                    }
                 });
                 if alive.is_err() {
                     return;
@@ -456,7 +465,10 @@ impl TerminalView {
         };
         let cell = f32::from(self.cell.unwrap_or(px(7.5)));
         let room = (self.cols as f32 * cell).max(cell);
-        let (mut w, mut h) = (p.width as f32 / self.scale, p.height as f32 / self.scale);
+        let (mut w, mut h) = (
+            p.width as f32 / PIXELS_PER_POINT,
+            p.height as f32 / PIXELS_PER_POINT,
+        );
         if w > room {
             h *= room / w;
             w = room;
@@ -533,28 +545,37 @@ impl TerminalView {
         (below, above)
     }
 
-    /// Draws the view again after a while, for an animation's next frame,
-    /// unless a redraw is due sooner.
+    /// Draws the view again after a while, unless a redraw is due sooner.
     fn redraw_in(&mut self, after: Duration, cx: &mut Context<Self>) {
         let due = Instant::now() + after;
-        if self.animation.as_ref().is_some_and(|(at, _)| *at <= due) {
+        if self.redraw.as_ref().is_some_and(|(at, _)| *at <= due) {
             return;
         }
         let task = cx.spawn(async move |this: WeakEntity<Self>, cx| {
             cx.background_executor().timer(after).await;
             let _ = this.update(cx, |t, cx| {
-                t.animation = None;
+                t.redraw = None;
                 cx.notify();
             });
         });
-        self.animation = Some((due, task));
+        self.redraw = Some((due, task));
     }
 
-    /// A cell's size in the screen's pixels, for programs that ask.
+    /// A cell's size in pixels, for programs that ask.
     fn cell_pixels(&self) -> (u32, u32) {
-        let w = f32::from(self.cell.unwrap_or(px(7.5))) * self.scale;
-        let h = f32::from(self.line_height) * self.scale;
+        let w = f32::from(self.cell.unwrap_or(px(7.5))) * PIXELS_PER_POINT;
+        let h = f32::from(self.line_height) * PIXELS_PER_POINT;
         (w.round() as u32, h.round() as u32)
+    }
+
+    /// The pixel under the pointer, from the screen's top left, in the
+    /// cell size programs are told.
+    fn pixel_at(&self, at: Point<Pixels>) -> (u32, u32) {
+        let cell = f32::from(self.cell.unwrap_or(px(7.5)));
+        let (cw, ch) = self.cell_pixels();
+        let x = f32::from(at.x - self.origin.x).max(0.) / cell * cw as f32;
+        let y = f32::from(at.y - self.origin.y).max(0.) / f32::from(self.line_height) * ch as f32;
+        (x as u32, y as u32)
     }
 
     fn send(&self, c: Command) {
@@ -683,7 +704,6 @@ impl TerminalView {
             .floor()
             .max(1.) as u16;
         self.origin = bounds.origin;
-        self.scale = window.scale_factor();
         if (cols, rows) != (self.cols, self.rows) {
             (self.cols, self.rows) = (cols, rows);
             if self.holds_size() {
@@ -745,6 +765,7 @@ impl TerminalView {
         }
         if mouse.any() {
             let (row, col, _) = self.cell_at(e.position);
+            let pixel = self.pixel_at(e.position);
             let button = if up {
                 Button::WheelUp
             } else {
@@ -757,6 +778,7 @@ impl TerminalView {
                     Press::Down,
                     col,
                     row,
+                    pixel,
                     m.shift,
                     m.alt,
                     m.control,
@@ -805,9 +827,10 @@ impl TerminalView {
             row.min(self.rows as usize - 1),
             col.min(self.cols as usize - 1),
         );
-        if let Some(b) =
-            crate::termkeys::mouse(button, press, col, row, false, m.alt, m.control, &modes)
-        {
+        let pixel = self.pixel_at(at);
+        if let Some(b) = crate::termkeys::mouse(
+            button, press, col, row, pixel, false, m.alt, m.control, &modes,
+        ) {
             self.send(Command::Input(b));
         }
         true
