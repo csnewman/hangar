@@ -585,11 +585,11 @@ impl Tab {
         }
     }
 
-    fn element(&self) -> gpui::AnyElement {
+    fn element(&self, cx: &App) -> gpui::AnyElement {
         match self {
             Tab::Doc(d) => d.clone().into_any_element(),
             Tab::Diff(d) => d.clone().into_any_element(),
-            Tab::Term(t) => cached(t.clone()),
+            Tab::Term(t) => cached(t.clone(), cx),
             Tab::View(v) => v.clone().into_any_element(),
             Tab::Log(l) => l.clone().into_any_element(),
             Tab::Desktop(d) => d.clone().into_any_element(),
@@ -4448,12 +4448,12 @@ impl EnvTab {
             Tool::Filesystem if self.filesystem.is_some() => self
                 .filesystem
                 .clone()
-                .map(cached)
+                .map(|v| cached(v, cx))
                 .unwrap_or_else(|| div().into_any_element()),
             Tool::Project if self.project.is_some() => self
                 .project
                 .clone()
-                .map(cached)
+                .map(|v| cached(v, cx))
                 .unwrap_or_else(|| div().into_any_element()),
             Tool::Commit if self.commit.is_some() => self
                 .commit
@@ -4913,7 +4913,7 @@ impl EnvTab {
                     t.end_editor_terminal(i, window, cx);
                 }
             }))
-            .child(active.element())
+            .child(active.element(cx))
             // While a tab is dragged: on the other group's editor it moves
             // there; with one group, on the right half it splits right.
             .when(dragging && split && !used, |d| {
@@ -5214,7 +5214,7 @@ impl EnvTab {
             .and_then(|i| self.terms.tabs.get(i))
             .and_then(|t| t.view.clone())
         {
-            Some(v) if running => cached(v),
+            Some(v) if running => cached(v, cx),
             _ => div()
                 .px(px(10.))
                 .py(px(6.))
@@ -5465,14 +5465,20 @@ fn capital(s: &str) -> String {
         .unwrap_or_default()
 }
 
-/// An agent session's dot.
 /// A view drawn from its last frame until it is notified or the window
 /// refreshed (focus, the settings and the appearance refresh it): a frame
 /// another part of the window asks for, a terminal's output say, lays it
 /// out and paints it again only if it changed. It fills what holds it,
 /// which must have a size of its own. A view embedded so must notify
 /// whatever changes what it shows, including what the tab asks of it.
-fn cached<V: Render>(v: Entity<V>) -> gpui::AnyElement {
+///
+/// The view is read here, in every frame that embeds it, so its notifying
+/// reaches the window. A window hears an entity only if its last frame
+/// read it, and a frame that reuses a cached view counts only what the
+/// view's last drawing read first: not the view itself when the tab made
+/// it or read it earlier in that frame.
+fn cached<V: Render>(v: Entity<V>, cx: &App) -> gpui::AnyElement {
+    let _ = v.read(cx);
     v.cached(gpui::StyleRefinement::default().size_full())
         .into_any_element()
 }
@@ -5490,6 +5496,7 @@ pub fn moved(i: usize, from: usize, to: usize) -> usize {
     }
 }
 
+/// An agent session's dot.
 fn agent_tone(a: &AgentSession) -> Tone {
     match a.state.as_str() {
         "asking" => Tone::Wait,
