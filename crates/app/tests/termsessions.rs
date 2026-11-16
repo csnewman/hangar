@@ -1,6 +1,7 @@
-//! The Terminal window's sessions: a tab's menu ends its session, asking
-//! first, and Close Tab in a terminal closes its tab, leaving the session
-//! running.
+//! The Terminal window's sessions: closing a tab ends its session, asking
+//! first when a coding agent works in it, wherever the tab is; the
+//! sessions' tabs keep their order, and the window its environments' tabs,
+//! from one run to the next.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
@@ -11,12 +12,28 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use gpui::{AppContext, Modifiers, MouseButton, TestAppContext, VisualTestContext};
 use gpui_component::WindowExt;
-use hangar_app::api::Environment;
+use hangar_app::api::{AgentSession, Environment};
+use hangar_app::kept::Kept;
 use hangar_app::place::Update;
 use hangar_app::places::Places;
 use hangar_app::shell::Shell;
 use hangar_app::store::MemoryTokens;
 use hangar_app::tools::Tool;
+
+/// The environment, a coding agent working in its session s2.
+fn with_agent() -> Environment {
+    Environment {
+        agents: vec![AgentSession {
+            agent: "claude".into(),
+            id: "a1".into(),
+            state: "working".into(),
+            since: Utc::now(),
+            terminal: Some("s2".into()),
+            ..Default::default()
+        }],
+        ..running()
+    }
+}
 
 fn running() -> Environment {
     Environment {
@@ -130,19 +147,27 @@ fn until(cx: &mut VisualTestContext, what: &str, done: impl Fn(&mut VisualTestCo
     }
 }
 
-#[gpui::test]
-fn a_session_is_ended_once_asked_and_a_tab_closed_leaves_it(cx: &mut TestAppContext) {
+/// The app's keys, and a window on a place whose environment e1 runs, as
+/// env says, its tab open.
+fn open<'a>(
+    cx: &'a mut TestAppContext,
+    url: &str,
+    env: Environment,
+) -> (
+    gpui::Entity<Shell>,
+    gpui::Entity<hangar_app::envtab::EnvTab>,
+    &'a mut VisualTestContext,
+) {
     cx.executor().allow_parking();
     cx.update(|cx| {
         gpui_component::init(cx);
         hangar_app::envtab::bind_keys(cx);
         hangar_app::termview::bind_keys(cx);
     });
-    let (url, ended) = server();
     let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
     let id = places.update(cx, |p, cx| {
-        let id = p.add_server(&url, "hgr_t", cx).unwrap();
-        p.apply(&id, Update::Snapshot(vec![running()]), cx);
+        let id = p.add_server(url, "hgr_t", cx).unwrap();
+        p.apply(&id, Update::Snapshot(vec![env]), cx);
         id
     });
     let mut shell = None;
@@ -163,18 +188,33 @@ fn a_session_is_ended_once_asked_and_a_tab_closed_leaves_it(cx: &mut TestAppCont
     until(cx, "both sessions' tabs", |cx| {
         cx.debug_bounds("term-tab-1").is_some()
     });
+    (shell, tab, cx)
+}
 
-    // The second tab's menu: New Session, Close Tab, Close Other Tabs, End
-    // Session.
+fn close_key() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "cmd-w"
+    } else {
+        "ctrl-shift-w"
+    }
+}
+
+#[gpui::test]
+fn a_tab_closed_ends_its_session_once_asked_if_an_agent_works_there(cx: &mut TestAppContext) {
+    let (url, ended) = server();
+    let (_shell, _tab, cx) = open(cx, &url, with_agent());
+
+    // The second tab's menu: New Session, Close Tab, Close Other Tabs, Move
+    // to Editor. A coding agent works in s2, so closing it asks first.
     let second = cx.debug_bounds("term-tab-1").unwrap().center();
     cx.simulate_mouse_down(second, MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(second, MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_keystrokes("down down down down enter");
+    cx.simulate_keystrokes("down down enter");
     cx.run_until_parked();
     assert!(
         cx.update(|window, cx| window.has_active_dialog(cx)),
-        "End Session asks first"
+        "closing an agent's session asks first"
     );
     assert!(ended.try_recv().is_err(), "and ends nothing until told");
     cx.update(|window, _| window.refresh());
@@ -188,65 +228,87 @@ fn a_session_is_ended_once_asked_and_a_tab_closed_leaves_it(cx: &mut TestAppCont
     });
     assert!(cx.debug_bounds("term-tab-0").is_some(), "the first stays");
 
-    // Close Tab's key, in the terminal: its tab goes, its session stays.
+    // Close Tab's key, in a terminal no agent works in: its tab goes, and
+    // its session ends, without asking.
     let first = cx.debug_bounds("term-tab-0").unwrap().center();
     cx.simulate_click(first, Modifiers::none());
     cx.run_until_parked();
-    let close = if cfg!(target_os = "macos") {
-        "cmd-w"
-    } else {
-        "ctrl-shift-w"
-    };
-    cx.simulate_keystrokes(close);
+    cx.simulate_keystrokes(close_key());
+    let path = ended.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(path, "/api/v1/environments/e1/terminals/s1");
+    assert!(
+        !cx.update(|window, cx| window.has_active_dialog(cx)),
+        "nothing asked"
+    );
     until(cx, "the tab closes", |cx| {
         cx.debug_bounds("term-tab-0").is_none()
     });
-    std::thread::sleep(Duration::from_millis(200));
-    assert!(ended.try_recv().is_err(), "the session is left running");
 }
 
-/// Move to Editor puts a session in the editor area, out of the Terminal
-/// window; there Close Tab's key closes its tab and leaves it running.
+/// The order of the sessions' tabs, and the environments' tabs, as kept
+/// from the last run: they come back so, and changes are kept.
 #[gpui::test]
-fn a_session_moves_to_the_editor_area(cx: &mut TestAppContext) {
-    cx.executor().allow_parking();
-    cx.update(|cx| {
-        gpui_component::init(cx);
-        hangar_app::envtab::bind_keys(cx);
-        hangar_app::termview::bind_keys(cx);
-    });
-    let (url, ended) = server();
-    let places = cx.new(|cx| Places::offline(Arc::new(MemoryTokens::default()), cx));
-    let id = places.update(cx, |p, cx| {
-        let id = p.add_server(&url, "hgr_t", cx).unwrap();
-        p.apply(&id, Update::Snapshot(vec![running()]), cx);
-        id
-    });
-    let mut shell = None;
+fn tabs_come_back_as_they_were(cx: &mut TestAppContext) {
+    let (url, _ended) = server();
+    cx.update(|cx| Kept::init(None, cx));
+    let (shell, tab, cx) = open(cx, &url, running());
+    let place = shell.read_with(cx, |s, _| s.tabs().0[0].place.clone());
+    // Nothing kept yet: the sessions come as listed, and that is kept.
+    let labels = |cx: &mut VisualTestContext| tab.read_with(cx, |t, cx| t.terminal_tabs(cx).0);
+    assert_eq!(labels(cx), ["s1", "s2"]);
+    assert_eq!(
+        cx.update(|_, cx| Kept::terminals(&place, "e1", cx)),
+        ["s1", "s2"]
+    );
+    let kept = cx.update(|_, cx| Kept::open(cx));
+    assert_eq!(kept.tabs.len(), 1, "the environment's tab is kept");
+    assert_eq!(kept.active, Some(0), "and that it is shown");
+
+    // Kept in the other order, a window opened again shows them so, with
+    // the environment's tab open and shown.
+    cx.update(|_, cx| Kept::set_terminals(&place, "e1", vec!["s2".into(), "s1".into()], cx));
+    let places = shell.read_with(cx, |s, _| s.places().clone());
+    let mut again = None;
     let (_, cx) = cx.add_window_view(|window, cx| {
         let s = cx.new(|cx| Shell::new(places.clone(), window, cx));
-        shell = Some(s.clone());
+        again = Some(s.clone());
         gpui_component::Root::new(s, window, cx)
     });
-    let shell = shell.unwrap();
-    cx.simulate_resize(gpui::size(gpui::px(1200.), gpui::px(800.)));
-    cx.update(|window, cx| shell.update(cx, |s, cx| s.open(&id, "e1", window, cx)));
-    let tab = shell.read_with(cx, |s, _| s.active_view()).unwrap();
-    tab.update(cx, |t, cx| {
+    let again = again.unwrap();
+    let reopened = again
+        .read_with(cx, |s, _| s.active_view())
+        .expect("the tab reopened");
+    reopened.update(cx, |t, cx| {
         if !t.is_open(Tool::Terminal) {
             t.toggle(Tool::Terminal, cx)
         }
     });
     until(cx, "both sessions' tabs", |cx| {
-        cx.debug_bounds("term-tab-1").is_some()
+        reopened.read_with(cx, |t, cx| t.terminal_tabs(cx).0.len()) == 2
     });
-    // The first tab's menu: New Session, Close Tab, Close Other Tabs, End
-    // Session, Move to Editor.
+    assert_eq!(
+        reopened.read_with(cx, |t, cx| t.terminal_tabs(cx).0),
+        ["s2", "s1"]
+    );
+
+    // Its tab closed, the window keeps none.
+    again.update(cx, |s, cx| s.show_home(cx));
+    assert_eq!(cx.update(|_, cx| Kept::open(cx)).active, None);
+}
+
+/// Move to Editor puts a session in the editor area, out of the Terminal
+/// window; there Close Tab's key closes its tab and ends its session.
+#[gpui::test]
+fn a_session_moves_to_the_editor_area(cx: &mut TestAppContext) {
+    let (url, ended) = server();
+    let (_shell, tab, cx) = open(cx, &url, running());
+    // The first tab's menu: New Session, Close Tab, Close Other Tabs, Move
+    // to Editor.
     let first = cx.debug_bounds("term-tab-0").unwrap().center();
     cx.simulate_mouse_down(first, MouseButton::Right, Modifiers::none());
     cx.simulate_mouse_up(first, MouseButton::Right, Modifiers::none());
     cx.run_until_parked();
-    cx.simulate_keystrokes("down down down down down enter");
+    cx.simulate_keystrokes("down down down down enter");
     until(cx, "one tab left in the Terminal window", |cx| {
         cx.debug_bounds("term-tab-1").is_none()
     });
@@ -257,14 +319,9 @@ fn a_session_moves_to_the_editor_area(cx: &mut TestAppContext) {
         "a tab in the editor area"
     );
 
-    let close = if cfg!(target_os = "macos") {
-        "cmd-w"
-    } else {
-        "ctrl-shift-w"
-    };
-    cx.simulate_keystrokes(close);
+    cx.simulate_keystrokes(close_key());
     until(cx, "its tab closes", |cx| open(cx).0.is_empty());
     assert!(cx.debug_bounds("term-tab-0").is_some(), "the other stays");
-    std::thread::sleep(Duration::from_millis(200));
-    assert!(ended.try_recv().is_err(), "the session is left running");
+    let path = ended.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(path, "/api/v1/environments/e1/terminals/s1");
 }

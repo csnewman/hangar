@@ -42,6 +42,11 @@ impl Dirs {
         self.config.join("settings.json")
     }
 
+    /// Where the window's tabs are kept between launches.
+    pub fn open_file(&self) -> PathBuf {
+        self.config.join("open.json")
+    }
+
     fn places_file(&self) -> PathBuf {
         self.config.join("places.json")
     }
@@ -64,7 +69,7 @@ impl Dirs {
     }
 }
 
-fn write_atomic(path: &Path, b: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, b: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }

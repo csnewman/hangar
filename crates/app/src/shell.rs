@@ -20,6 +20,7 @@ use crate::assets;
 use crate::doubleshift::DoubleShift;
 use crate::envsettings::{EnvSettingsEvent, EnvSettingsView, Page as EnvPage};
 use crate::envtab::{EnvSignal, EnvTab, Tool};
+use crate::kept::Kept;
 use crate::layout::{self, Edge, Layout, Sizes};
 use crate::model::{self, Action, Card, LineKind};
 use crate::newenv::{NewEnvEvent, NewEnvView};
@@ -62,7 +63,7 @@ impl Render for DraggedEnv {
 }
 
 /// An environment opened in a tab.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Opened {
     pub place: String,
     pub env: String,
@@ -229,6 +230,7 @@ impl Shell {
         };
         shell.observe_notices(window, cx);
         window.focus(&shell.focus, cx);
+        shell.reopen(window, cx);
         if empty {
             shell.open_add(window, cx);
         }
@@ -248,19 +250,52 @@ impl Shell {
         };
         let i = match self.tabs.iter().position(|t| *t == o) {
             Some(i) => i,
-            None => {
-                let places = self.places.clone();
-                let view = cx.new(|cx| EnvTab::new(places, &o.place, &o.env, cx));
-                cx.subscribe_in(&view, window, |s, view, e: &EnvSignal, window, cx| {
-                    s.env_signal(view, e, window, cx)
-                })
-                .detach();
-                self.views.push(view);
-                self.tabs.push(o);
-                self.tabs.len() - 1
-            }
+            None => self.add_tab(o, window, cx),
         };
         self.show(i, window, cx);
+    }
+
+    /// Adds an environment's tab at the end, not shown, and says where.
+    fn add_tab(&mut self, o: Opened, window: &mut Window, cx: &mut Context<Self>) -> usize {
+        let places = self.places.clone();
+        let view = cx.new(|cx| EnvTab::new(places, &o.place, &o.env, cx));
+        cx.subscribe_in(&view, window, |s, view, e: &EnvSignal, window, cx| {
+            s.env_signal(view, e, window, cx)
+        })
+        .detach();
+        self.views.push(view);
+        self.tabs.push(o);
+        self.tabs.len() - 1
+    }
+
+    /// Opens the tabs kept from the last run in their order, showing the
+    /// one shown then; only environments their places list are opened.
+    fn reopen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let kept = Kept::open(cx);
+        let mut shown = None;
+        for (i, o) in kept.tabs.into_iter().enumerate() {
+            let known = self
+                .places
+                .read(cx)
+                .get(&o.place)
+                .is_some_and(|(_, state)| state.environment(&o.env).is_some());
+            if !known || self.tabs.contains(&o) {
+                continue;
+            }
+            let at = self.add_tab(o, window, cx);
+            if kept.active == Some(i) {
+                shown = Some(at);
+            }
+        }
+        match shown {
+            Some(i) => self.show(i, window, cx),
+            None => self.remember(cx),
+        }
+    }
+
+    /// Keeps the tabs and the one shown, for the next run.
+    fn remember(&self, cx: &mut Context<Self>) {
+        Kept::set_tabs(&self.tabs, self.active, cx);
     }
 
     /// What an environment's tab signals: its marks changed, or a program
@@ -310,6 +345,7 @@ impl Shell {
         if let Some(v) = self.views.get(i) {
             window.focus(&v.focus_handle(cx), cx);
         }
+        self.remember(cx);
         self.tell_seen(window, cx);
         cx.notify();
     }
@@ -327,6 +363,7 @@ impl Shell {
     pub fn show_home(&mut self, cx: &mut Context<Self>) {
         self.adding = None;
         self.active = None;
+        self.remember(cx);
         cx.notify();
     }
 
@@ -344,6 +381,7 @@ impl Shell {
         self.tabs.insert(to, tab);
         self.views.insert(to, view);
         self.active = self.active.map(|a| crate::envtab::moved(a, from, to));
+        self.remember(cx);
         cx.notify();
     }
 
@@ -355,6 +393,7 @@ impl Shell {
             Some(a) if a > i => Some(a - 1),
             a => a,
         };
+        self.remember(cx);
         cx.notify();
     }
 

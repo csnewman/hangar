@@ -274,7 +274,7 @@ pub fn bind_keys(cx: &mut App) {
 }
 
 /// A terminal tab's menu: a new session; closing this tab or the others,
-/// their sessions left running; ending this one's.
+/// which ends their sessions; moving it to the editor area.
 fn terminal_tab_menu(
     menu: gpui_component::menu::PopupMenu,
     view: gpui::WeakEntity<EnvTab>,
@@ -292,15 +292,16 @@ fn terminal_tab_menu(
             .on_click(on(|t, _, window, cx| t.new_terminal(window, cx))),
     )
     .separator()
-    .item(PopupMenuItem::new("Close Tab").on_click(on(|t, i, _, cx| t.close_terminal_tab(i, cx))))
+    .item(
+        PopupMenuItem::new("Close Tab")
+            .on_click(on(|t, i, window, cx| t.close_terminal_tab(i, window, cx))),
+    )
     .item(
         PopupMenuItem::new("Close Other Tabs")
             .disabled(only)
-            .on_click(on(|t, i, _, cx| t.close_other_terminal_tabs(i, cx))),
-    )
-    .item(
-        PopupMenuItem::new("End Session…")
-            .on_click(on(|t, i, window, cx| t.end_terminal(i, window, cx))),
+            .on_click(on(|t, i, window, cx| {
+                t.close_other_terminal_tabs(i, window, cx)
+            })),
     )
     .separator()
     .item(
@@ -822,7 +823,8 @@ impl EnvTab {
             let list = task.await;
             let _ = this.update_in(cx, |t, window, cx| match list {
                 Ok(list) if !list.is_empty() => {
-                    for s in list {
+                    let kept = crate::kept::Kept::terminals(&t.place, &t.env, cx);
+                    for s in crate::kept::ordered(list, &kept, |s| s.id.as_str()) {
                         // A session started here may be listed once it
                         // has attached.
                         if !t
@@ -842,6 +844,7 @@ impl EnvTab {
                     if t.terms.active.is_none() {
                         t.select_terminal(0, false, window, cx);
                     }
+                    t.remember_terminals(cx);
                     cx.notify();
                 }
                 Ok(_) if t.terms.tabs.is_empty() => t.new_terminal(window, cx),
@@ -960,6 +963,7 @@ impl EnvTab {
         cx: &mut Context<Self>,
     ) {
         if *e == Signal::Shown {
+            self.remember_terminals(cx);
             cx.notify();
             return;
         }
@@ -1009,6 +1013,7 @@ impl EnvTab {
         let tab = tabs.remove(from);
         tabs.insert(to, tab);
         self.terms.active = self.terms.active.map(|a| moved(a, from, to));
+        self.remember_terminals(cx);
         cx.notify();
     }
 
@@ -1046,9 +1051,16 @@ impl EnvTab {
     /// Whether a terminal tab holds a coding agent's session the plugin
     /// reports.
     fn agent_in(&self, i: usize, cx: &App) -> bool {
-        let Some(id) = self.terms.tabs.get(i).and_then(|t| t.id(cx)) else {
-            return false;
-        };
+        self.terms
+            .tabs
+            .get(i)
+            .and_then(|t| t.id(cx))
+            .is_some_and(|id| self.agent_working(&id, cx))
+    }
+
+    /// Whether a coding agent's session the plugin reports is in a
+    /// terminal session, and not ended.
+    fn agent_working(&self, session: &str, cx: &App) -> bool {
         self.places
             .read(cx)
             .get(&self.place)
@@ -1056,8 +1068,14 @@ impl EnvTab {
             .is_some_and(|e| {
                 e.agents
                     .iter()
-                    .any(|a| a.terminal.as_deref() == Some(id.as_str()) && a.state != "ended")
+                    .any(|a| a.terminal.as_deref() == Some(session) && a.state != "ended")
             })
+    }
+
+    /// Keeps the order of the Terminal window's sessions, for the next run.
+    fn remember_terminals(&self, cx: &mut Context<Self>) {
+        let ids = self.terms.tabs.iter().filter_map(|t| t.id(cx)).collect();
+        crate::kept::Kept::set_terminals(&self.place, &self.env, ids, cx);
     }
 
     /// Whether a terminal here wants the user: its bell rang unseen, or its
@@ -1844,17 +1862,74 @@ impl EnvTab {
         }
     }
 
+    /// Closes a tab of the group in use; a terminal's session ends with
+    /// it, unless the other group shows the same terminal.
     pub fn close_file(&mut self, i: usize, cx: &mut Context<Self>) {
+        let session = match self.files.get(i) {
+            Some(Tab::Term(v)) if !self.in_other_group(v.entity_id()) => {
+                v.read(cx).session().map(str::to_string)
+            }
+            _ => None,
+        };
+        self.remove_file(i, cx);
+        if let Some(session) = session {
+            self.end_session(session, cx);
+        }
+    }
+
+    /// Closes a tab as the user asks: a terminal a coding agent works in is
+    /// closed, and its session ended, once they say so.
+    fn close_file_asked(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(Tab::Term(view)) = self.files.get(i).cloned() else {
+            self.close_file(i, cx);
+            return;
+        };
+        let working = view
+            .read(cx)
+            .session()
+            .is_some_and(|s| self.agent_working(s, cx));
+        if !working {
+            self.close_file(i, cx);
+            return;
+        }
+        let label = self.files[i].title(cx);
+        let me = cx.entity().downgrade();
+        crate::treeops::confirm(
+            &format!("End {label}?"),
+            "A coding agent is working in it, and ends with the session.",
+            "End Session",
+            window,
+            cx,
+            move |_, cx| {
+                let _ = me.update(cx, |t, cx| {
+                    let at = t
+                        .files
+                        .iter()
+                        .position(|f| matches!(f, Tab::Term(v) if v == &view));
+                    if let Some(at) = at {
+                        t.close_file(at, cx);
+                    }
+                });
+            },
+        );
+    }
+
+    /// Whether the other group has a tab of this view.
+    fn in_other_group(&self, id: gpui::EntityId) -> bool {
+        self.other
+            .iter()
+            .flat_map(|g| g.files.iter())
+            .any(|f| f.entity_id() == id)
+    }
+
+    /// Takes a tab of the group in use away, leaving a terminal's session
+    /// as it is: the terminal moves back to the Terminal window.
+    fn remove_file(&mut self, i: usize, cx: &mut Context<Self>) {
         if i >= self.files.len() {
             return;
         }
         let id = self.files[i].entity_id();
-        let elsewhere = self
-            .other
-            .iter()
-            .flat_map(|g| g.files.iter())
-            .any(|f| f.entity_id() == id);
-        if !elsewhere {
+        if !self.in_other_group(id) {
             self.pinned.remove(&id);
         }
         if let Tab::Doc(doc) = self.files.remove(i) {
@@ -2448,7 +2523,8 @@ impl EnvTab {
         };
         let reveal = abs.clone();
         let reveal_fs = abs.clone();
-        menu.item(on("Close", Rc::new(move |t, _, cx| t.close_file(i, cx))))
+        let close: Act = Rc::new(move |t, window, cx| t.close_file_asked(i, window, cx));
+        menu.item(on("Close", close))
             .item(
                 on(
                     "Close Others",
@@ -2963,8 +3039,9 @@ impl EnvTab {
         }
     }
 
-    /// Takes a tab away, leaving its session running.
-    fn close_terminal_tab(&mut self, i: usize, cx: &mut Context<Self>) {
+    /// Takes a tab away and leaves its session as it is: the tab moves to
+    /// the editor area, or its session is ended apart from it.
+    fn take_terminal_tab(&mut self, i: usize, cx: &mut Context<Self>) {
         if i >= self.terms.tabs.len() {
             return;
         }
@@ -2976,7 +3053,106 @@ impl EnvTab {
             Some(a) if a > i => Some(a - 1),
             a => a,
         };
+        self.remember_terminals(cx);
         cx.notify();
+    }
+
+    /// Closes a tab and ends its session, and what runs in it, as the web
+    /// UI's terminals do; a session a coding agent works in is ended once
+    /// the user says so. The tab shown after it takes the keyboard.
+    fn close_terminal_tab(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(tab) = self.terms.tabs.get(i) else {
+            return;
+        };
+        if !self.agent_in(i, cx) {
+            self.end_terminal_tabs(vec![i], window, cx);
+            return;
+        }
+        let label = tab.label(cx);
+        let (session, view) = (tab.id(cx), tab.view.as_ref().map(|v| v.entity_id()));
+        let me = cx.entity().downgrade();
+        crate::treeops::confirm(
+            &format!("End {label}?"),
+            "A coding agent is working in it, and ends with the session.",
+            "End Session",
+            window,
+            cx,
+            move |window, cx| {
+                let _ = me.update(cx, |t, cx| {
+                    // The tab, found again: others may have closed since.
+                    let at = t.terms.tabs.iter().position(|x| {
+                        x.id(cx) == session && x.view.as_ref().map(|v| v.entity_id()) == view
+                    });
+                    if let Some(at) = at {
+                        t.end_terminal_tabs(vec![at], window, cx);
+                    }
+                });
+            },
+        );
+    }
+
+    /// Closes every tab but one and ends their sessions, once asked if a
+    /// coding agent works in any of them.
+    fn close_other_terminal_tabs(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(keep) = self.terms.tabs.get(i).map(|t| t.id(cx)) else {
+            return;
+        };
+        let others: Vec<usize> = (0..self.terms.tabs.len()).filter(|&j| j != i).collect();
+        let agents = others.iter().filter(|&&j| self.agent_in(j, cx)).count();
+        if agents == 0 {
+            self.end_terminal_tabs(others, window, cx);
+            return;
+        }
+        let n = others.len();
+        let me = cx.entity().downgrade();
+        crate::treeops::confirm(
+            &format!("End {n} other session{}?", if n == 1 { "" } else { "s" }),
+            &format!("A coding agent is working in {agents} of them, and ends with its session."),
+            "End Sessions",
+            window,
+            cx,
+            move |window, cx| {
+                let _ = me.update(cx, |t, cx| {
+                    let others = (0..t.terms.tabs.len())
+                        .filter(|&j| t.terms.tabs[j].id(cx) != keep)
+                        .collect();
+                    t.end_terminal_tabs(others, window, cx);
+                });
+            },
+        );
+    }
+
+    /// Takes tabs away and ends their sessions; if the tab shown goes, the
+    /// one shown after it takes the keyboard.
+    fn end_terminal_tabs(
+        &mut self,
+        mut at: Vec<usize>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        at.sort_unstable();
+        at.dedup();
+        let shown = self.terms.active.is_some_and(|a| at.contains(&a));
+        for &i in at.iter().rev() {
+            let session = self.terms.tabs.get(i).and_then(|t| t.id(cx));
+            self.take_terminal_tab(i, cx);
+            if let Some(session) = session {
+                self.end_session(session, cx);
+            }
+        }
+        if shown && let Some(a) = self.terms.active {
+            self.select_terminal(a, true, window, cx);
+        }
+    }
+
+    /// Ends a session, and what runs in it, in the environment.
+    fn end_session(&self, session: String, cx: &mut Context<Self>) {
+        let Some(client) = self.client(cx) else {
+            return;
+        };
+        let env = self.env.clone();
+        cx.background_spawn(async move { client.close_terminal(&env, &session) })
+            .detach();
     }
 
     /// Moves a session from the Terminal window into the editor area, as
@@ -2986,7 +3162,7 @@ impl EnvTab {
         let Some(view) = self.terms.tabs.get(i).and_then(|t| t.view.clone()) else {
             return;
         };
-        self.close_terminal_tab(i, cx);
+        self.take_terminal_tab(i, cx);
         self.files.push(Tab::Term(view.clone()));
         self.show_file(self.files.len() - 1, window, cx);
         window.focus(&view.focus_handle(cx), cx);
@@ -2998,7 +3174,7 @@ impl EnvTab {
         let Some(Tab::Term(view)) = self.files.get(i).cloned() else {
             return;
         };
-        self.close_file(i, cx);
+        self.remove_file(i, cx);
         self.open
             .insert(Layout::slot(Tool::Terminal, cx), Tool::Terminal);
         self.terms.listed = true;
@@ -3009,6 +3185,7 @@ impl EnvTab {
             rang: false,
         });
         let at = self.terms.tabs.len() - 1;
+        self.remember_terminals(cx);
         self.select_terminal(at, true, window, cx);
     }
 
@@ -3020,97 +3197,12 @@ impl EnvTab {
         })
     }
 
-    /// Ends the session of a terminal in the editor area, once asked, and
-    /// closes its tab.
-    fn end_editor_terminal(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(Tab::Term(view)) = self.files.get(i).cloned() else {
-            return;
-        };
-        let label = self.files[i].title(cx);
-        let session = view.read(cx).session().map(str::to_string);
-        let me = cx.entity().downgrade();
-        crate::treeops::confirm(
-            &format!("End {label}?"),
-            "The session ends, and what runs in it.",
-            "End Session",
-            window,
-            cx,
-            move |_, cx| {
-                let session = session.clone();
-                let view = view.clone();
-                let _ = me.update(cx, |t, cx| {
-                    let at = t
-                        .files
-                        .iter()
-                        .position(|f| matches!(f, Tab::Term(v) if v == &view));
-                    if let Some(at) = at {
-                        t.close_file(at, cx);
-                    }
-                    let (Some(session), Some(client)) = (session, t.client(cx)) else {
-                        return;
-                    };
-                    let env = t.env.clone();
-                    cx.background_spawn(async move { client.close_terminal(&env, &session) })
-                        .detach();
-                });
-            },
-        );
-    }
-
-    /// Closes the tab shown, as Close Tab in its terminal does, and gives
-    /// the keyboard to the one shown after it.
+    /// Closes the tab shown, as Close Tab in its terminal does, ending its
+    /// session.
     fn close_shown_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(i) = self.terms.active {
-            self.close_terminal_tab(i, cx);
-            if let Some(a) = self.terms.active {
-                self.select_terminal(a, true, window, cx);
-            }
+            self.close_terminal_tab(i, window, cx);
         }
-    }
-
-    /// Takes every tab away but one, leaving their sessions running.
-    fn close_other_terminal_tabs(&mut self, i: usize, cx: &mut Context<Self>) {
-        if i < self.terms.tabs.len() {
-            let keep = self.terms.tabs.swap_remove(i);
-            self.terms.tabs = vec![keep];
-            self.terms.active = Some(0);
-            cx.notify();
-        }
-    }
-
-    /// Ends a tab's session, and what runs in it, once asked; its tab goes.
-    fn end_terminal(&mut self, i: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(tab) = self.terms.tabs.get(i) else {
-            return;
-        };
-        let (label, session) = (tab.label(cx), tab.id(cx));
-        let view = tab.view.as_ref().map(|v| v.entity_id());
-        let me = cx.entity().downgrade();
-        crate::treeops::confirm(
-            &format!("End {label}?"),
-            "The session ends, and what runs in it.",
-            "End Session",
-            window,
-            cx,
-            move |_, cx| {
-                let session = session.clone();
-                let _ = me.update(cx, |t, cx| {
-                    // The tab, found again: others may have closed since.
-                    let at = t.terms.tabs.iter().position(|x| {
-                        x.id(cx) == session && x.view.as_ref().map(|v| v.entity_id()) == view
-                    });
-                    if let Some(at) = at {
-                        t.close_terminal_tab(at, cx);
-                    }
-                    let (Some(session), Some(client)) = (session, t.client(cx)) else {
-                        return;
-                    };
-                    let env = t.env.clone();
-                    cx.background_spawn(async move { client.close_terminal(&env, &session) })
-                        .detach();
-                });
-            },
-        );
     }
 
     /// Opens the menu of sessions not open here, or closes it.
@@ -3524,9 +3616,9 @@ impl Render for EnvTab {
                     cx,
                 )
             }))
-            .on_action(cx.listener(|t, _: &CloseTab, _, cx| {
+            .on_action(cx.listener(|t, _: &CloseTab, window, cx| {
                 if let Some(i) = t.file {
-                    t.close_file(i, cx);
+                    t.close_file_asked(i, window, cx);
                 }
             }))
             .on_action(
@@ -4814,10 +4906,10 @@ impl EnvTab {
                             .id(SharedString::from(format!("file-close-{side}{i}")))
                             .text_color(p.muted)
                             .child("×")
-                            .on_click(cx.listener(move |t, _: &gpui::ClickEvent, _, cx| {
+                            .on_click(cx.listener(move |t, _: &gpui::ClickEvent, window, cx| {
                                 cx.stop_propagation();
                                 t.use_side(right, cx);
-                                t.close_file(i, cx);
+                                t.close_file_asked(i, window, cx);
                             }))
                             .into_any_element()
                     })
@@ -4834,9 +4926,9 @@ impl EnvTab {
                     // As in IntelliJ, the middle button closes a tab.
                     .on_mouse_down(
                         gpui::MouseButton::Middle,
-                        cx.listener(move |t, _, _, cx| {
+                        cx.listener(move |t, _, window, cx| {
                             t.use_side(right, cx);
-                            t.close_file(i, cx)
+                            t.close_file_asked(i, window, cx)
                         }),
                     )
                     .context_menu({
@@ -4926,16 +5018,10 @@ impl EnvTab {
             .relative()
             .flex_1()
             .min_h_0()
-            // A terminal moved here: its Close Tab and End Session are this
-            // tab's.
+            // A terminal moved here: its Close Tab is this tab's.
             .on_action(cx.listener(|t, _: &termview::CloseSession, window, cx| {
                 if let Some(i) = t.focused_editor_terminal(window, cx) {
-                    t.close_file(i, cx);
-                }
-            }))
-            .on_action(cx.listener(|t, _: &termview::EndSession, window, cx| {
-                if let Some(i) = t.focused_editor_terminal(window, cx) {
-                    t.end_editor_terminal(i, window, cx);
+                    t.close_file_asked(i, window, cx);
                 }
             }))
             .child(active.element(cx))
@@ -5206,9 +5292,9 @@ impl EnvTab {
                             .id(("term-close", i))
                             .text_color(p.idle)
                             .child("×")
-                            .on_click(cx.listener(move |t, _: &gpui::ClickEvent, _, cx| {
+                            .on_click(cx.listener(move |t, _: &gpui::ClickEvent, window, cx| {
                                 cx.stop_propagation();
-                                t.close_terminal_tab(i, cx);
+                                t.close_terminal_tab(i, window, cx);
                             })),
                     )
                     .on_click(
@@ -5266,11 +5352,6 @@ impl EnvTab {
             )
             .on_action(cx.listener(|t, _: &termview::CloseSession, window, cx| {
                 t.close_shown_terminal(window, cx)
-            }))
-            .on_action(cx.listener(|t, _: &termview::EndSession, window, cx| {
-                if let Some(i) = t.terms.active {
-                    t.end_terminal(i, window, cx)
-                }
             }))
             .child(layout::handle("bottom-edge", Edge::Bottom))
             .child(

@@ -80,10 +80,9 @@ actions!(
         /// A new session in a tab of its own, for the window holding the
         /// terminal to start.
         NewSession,
-        /// The terminal's tab closed, its session left running.
+        /// The terminal's tab closed, and its session ended with what runs
+        /// in it.
         CloseSession,
-        /// The terminal's session ended, and what runs in it, once asked.
-        EndSession,
         /// The view moved to the shell's prompt before the top one shown,
         /// or after it (OSC 133's marks).
         PreviousPrompt,
@@ -1491,7 +1490,6 @@ fn terminal_menu(
         .separator()
         .menu("New Session", Box::new(NewSession))
         .menu("Close Tab", Box::new(CloseSession))
-        .menu("End Session…", Box::new(EndSession))
 }
 
 /// Whether a click with these keys opens a link: ⌘ on a Mac, Ctrl

@@ -26,6 +26,10 @@ fn main() {
                 hangar_app::store::Dirs::user().map(|d| d.layout_file()),
                 cx,
             );
+            hangar_app::kept::Kept::init(
+                hangar_app::store::Dirs::user().map(|d| d.open_file()),
+                cx,
+            );
             hangar_app::settings::Settings::init(
                 hangar_app::store::Dirs::user().map(|d| d.settings_file()),
                 cx,

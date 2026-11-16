@@ -33,6 +33,7 @@ pub mod find;
 pub mod findpop;
 pub mod fuzzy;
 pub mod gitlog;
+pub mod kept;
 pub mod languages;
 pub mod latency;
 pub mod layout;
