@@ -45,7 +45,7 @@ const CMDLINE: &str = "console=ttyS0 systemd.show_status=1 mitigations=off \
 
 /// The form of a template, part of its name: a template made to an older
 /// form is left for one of this form.
-const TEMPLATE_FORM: &str = "3";
+const TEMPLATE_FORM: &str = "4";
 
 /// The template's writable disk, grown for each environment.
 const TEMPLATE_UPPER_GIB: u64 = 1;
@@ -265,8 +265,8 @@ impl Pve {
             // A guest's reboot stops the VM, and the worker boots it
             // again, with a new secret.
             ("reboot", "0".into()),
+            // No network card: each start plugs one in (start).
             ("boot", "order=virtio2".into()),
-            ("net0", format!("virtio,bridge={}", self.cfg.bridge)),
             ("virtio0", disk(upper, UPPER_SERIAL, ",discard=on")),
             ("virtio1", disk(&image, IMAGE_SERIAL, ",ro=1")),
             ("virtio2", disk(&boot, BOOT_SERIAL, "")),
@@ -538,13 +538,27 @@ impl Pve {
             Some(u) => format!("{u},serial={serial},base64=1"),
             None => format!("serial={serial},base64=1"),
         };
-        if conf["lock"] != "suspended" {
-            self.client
-                .put(&self.vm(id, "config"), &[("smbios1", smbios.as_str())])
-                .await?;
+        let resuming = conf["lock"] == "suspended";
+        // A cold start's network card is plugged in once the VM runs: one
+        // there from the start has SeaBIOS run its iPXE ROM, which waits
+        // for a key for most of a second. It keeps its MAC, and so its
+        // DHCP lease.
+        let mac = network_mac(&conf).unwrap_or_else(|| derived_mac(&placed.environment));
+        if !resuming {
+            let mut form = vec![("smbios1", smbios.as_str())];
+            if conf["net0"].is_string() {
+                form.push(("delete", "net0"));
+            }
+            self.client.put(&self.vm(id, "config"), &form).await?;
         }
         let upid = self.client.post(&self.vm(id, "status/start"), &[]).await?;
         self.wait(&upid, Duration::from_secs(300)).await?;
+        if !resuming {
+            let net = format!("virtio={mac},bridge={}", self.cfg.bridge);
+            self.client
+                .put(&self.vm(id, "config"), &[("net0", net.as_str())])
+                .await?;
+        }
         self.give_secret(id, secret).await
     }
 
@@ -666,6 +680,27 @@ impl Pve {
             Err(e) => Err(e),
         }
     }
+}
+
+/// The MAC of a VM's network card, if its config has one.
+fn network_mac(conf: &Value) -> Option<String> {
+    conf["net0"]
+        .as_str()?
+        .split(',')
+        .filter_map(|p| p.split_once('=').map(|(_, v)| v))
+        .find(|v| v.len() == 17 && v.matches(':').count() == 5)
+        .map(str::to_string)
+}
+
+/// A MAC for an environment's network card, the same each time: a locally
+/// administered one, from its ID.
+fn derived_mac(environment: &str) -> String {
+    let h = ring::digest::digest(&ring::digest::SHA256, environment.as_bytes());
+    let b = h.as_ref();
+    format!(
+        "02:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+        b[0], b[1], b[2], b[3], b[4]
+    )
 }
 
 /// A VM name, which Proxmox takes as a DNS name.
