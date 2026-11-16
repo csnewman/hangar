@@ -59,13 +59,21 @@ pub struct Proxmox {
     pub node: String,
     /// Where VMs' disks go.
     pub storage: String,
-    /// Where images and the boot disk are uploaded, a storage holding
-    /// import content; empty is storage.
-    pub import_storage: String,
+    /// Where the release and image ISOs go, a storage holding iso
+    /// content; empty is storage.
+    pub iso_storage: String,
     /// The bridge or VNet environments' NICs join.
     pub bridge: String,
     /// The pool every VM joins; empty is none.
     pub pool: String,
+    /// What the names of everything the worker makes on Proxmox begin
+    /// with, and the tag its VMs carry: the place's own, so places sharing
+    /// a Proxmox leave each other's alone. 1 to 20 lowercase letters, digits
+    /// and hyphens, starting with a letter.
+    pub prefix: String,
+    /// mke2fs, static, for the release ISO's initramfs; unset, the worker
+    /// image's (/usr/share/hangar/mke2fs).
+    pub mke2fs: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -21,6 +21,9 @@
 #   /usr/share/hangar/hangar-agent    the guest agent (crates/agent), static,
 #                                     each boot's initramfs (as init) and
 #                                     then the agent
+#   /usr/share/hangar/mke2fs          mke2fs, static, which a Proxmox VM's
+#                                     initramfs carries to make its new
+#                                     writable disk's filesystem
 #
 # Environment images are not in it: an image is a root filesystem, built by the
 # imagebuilder target (see deploy/compose.yaml), which needs mount and
@@ -47,6 +50,29 @@ RUN case "$(uname -m)" in aarch64) KARCH=arm64 ;; *) KARCH=x86_64 ;; esac \
  && mkdir -p /out \
  && KERNEL_VERSION=$KERNEL_VERSION KARCH=$KARCH sh /scripts/build.sh \
  && rm -rf /src /var/lib/apt/lists/*
+
+# ---------------------------------------------------------------- mke2fs, static
+# For a Proxmox VM's initramfs (crates/vm/src/proxmox): the agent makes the
+# filesystem of the empty writable disk Proxmox gives a new VM with it, before
+# any of the image can run. Static against glibc, which the libraries' own
+# copies of libblkid and libuuid let it be; it looks no user or host up.
+FROM ${UBUNTU} AS mke2fs
+ARG E2FSPROGS=1.47.4
+ARG E2FSPROGS_SHA256=fd5bf388cbdbe006a3d3b318d983b2948382440acc85a87f1e7d108653e8db0b
+RUN apt-get update -qq \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
+      build-essential ca-certificates curl xz-utils >/dev/null \
+ && mkdir /src && cd /src \
+ && curl -fsSL -o e2fsprogs.tar.xz \
+      https://cdn.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v$E2FSPROGS/e2fsprogs-$E2FSPROGS.tar.xz \
+ && echo "$E2FSPROGS_SHA256  e2fsprogs.tar.xz" | sha256sum -c - >/dev/null \
+ && tar -xf e2fsprogs.tar.xz && cd e2fsprogs-$E2FSPROGS \
+ && ./configure -q --disable-nls --disable-fuse2fs --disable-defrag --disable-imager \
+      --disable-debugfs --disable-e2initrd-helper --disable-tdb --disable-uuidd \
+      --enable-libuuid --enable-libblkid LDFLAGS=-static >/dev/null \
+ && make -s -j"$(nproc)" libs >/dev/null && make -s -C misc mke2fs >/dev/null \
+ && mkdir /out && strip -o /out/mke2fs misc/mke2fs \
+ && cd / && rm -rf /src /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------- Rust toolchain
 FROM ${UBUNTU} AS rust
@@ -135,12 +161,12 @@ RUN ln -s /libkrun /src/krun/libkrun && cd /src/krun \
 FROM ${UBUNTU} AS worker
 # libopengl0 is desktop OpenGL through EGL, which libepoxy loads for
 # virglrenderer and aborts without: the GPU backend would die as the guest
-# first asked what it offers. dosfstools, syslinux and mtools make the boot
-# disk a Proxmox worker's VMs share, on amd64 alone: Proxmox's guests are
-# x86_64, the image's kernel and agent are its own architecture, and Ubuntu
-# has no syslinux for arm64.
+# first asked what it offers. xorriso and isolinux make the release ISO a
+# Proxmox worker's VMs boot, on amd64 alone: Proxmox's guests are x86_64,
+# the image's kernel and agent are its own architecture, and Ubuntu has no
+# isolinux for arm64.
 RUN apt-get update -qq \
- && proxmox=$([ "$(dpkg --print-architecture)" != amd64 ] || echo "dosfstools syslinux mtools") \
+ && proxmox=$([ "$(dpkg --print-architecture)" != amd64 ] || echo "xorriso isolinux syslinux-common") \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
       ca-certificates passt e2fsprogs coreutils $proxmox \
       libepoxy0 libgbm1 libegl1 libgles2 libopengl0 libdrm2 libvulkan1 \
@@ -154,6 +180,7 @@ COPY --from=gpu /out/hangar-gpu /usr/local/bin/
 COPY --from=krun /out/hangar-krun /usr/local/bin/
 COPY --from=crates /out/hangar-worker /usr/local/bin/
 COPY --from=crates /out/hangar-agent /usr/share/hangar/hangar-agent
+COPY --from=mke2fs /out/mke2fs /usr/share/hangar/mke2fs
 # vmlinux is amd64's alone; the pattern lets the copy go ahead without it.
 COPY --from=kernel /out/vmlinuz /out/vmlinu[x] /usr/share/hangar/
 ENTRYPOINT ["hangar-worker"]

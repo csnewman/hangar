@@ -104,10 +104,13 @@ vm:
   #     base: /var/lib/hangar/image-src/ubuntu-26.04/minimal/rootfs
 
 # Proxmox VE (runtime: proxmox): each environment is a VM of the node's,
-# made through its API, and the worker runs beside it, in a container on
-# that node. Its VMs have no vsock, so their agents dial the hub instead;
-# address is this machine's, as the VMs reach it on their network.
-# docs/proxmox-vms.md has the design.
+# made through its API, and the worker runs beside it, in a VM on that
+# node. Its VMs have no vsock, so their agents dial the hub instead;
+# address is this machine's, as the VMs reach it on their network. Its VMs
+# boot a release ISO and read their image from an ISO, which go in
+# iso_storage. prefix names everything the worker makes there, so places
+# sharing a Proxmox leave each other's alone. docs/proxmox-vms.md has the
+# design.
 # runtime: proxmox
 # hub:
 #   listen: 0.0.0.0:7443
@@ -118,6 +121,7 @@ vm:
 #   fingerprint: ""     # the node certificate's SHA-256, for a self-signed one
 #   node: pve1
 #   storage: local-lvm
-#   import_storage: local   # a storage with import content; empty is storage
+#   iso_storage: local      # a storage with iso content; empty is storage
 #   bridge: vmbr0
 #   pool: ""
+#   prefix: acme           # 1-20 of a-z, 0-9, -; starting with a letter

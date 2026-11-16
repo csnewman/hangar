@@ -1748,7 +1748,7 @@ impl Machine {
         };
         pve.destroy(id).await?;
         let _ = std::fs::remove_file(&file);
-        // Its template may have been the last of an older agent's.
+        // It may have been the last VM to use an older release or image.
         tokio::spawn(async move { pve.sweep().await });
         Ok(())
     }

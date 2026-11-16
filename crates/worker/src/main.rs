@@ -123,13 +123,19 @@ async fn run(path: PathBuf, rings: Arc<Rings>) -> Result<(), String> {
                 fingerprint: p.fingerprint.clone(),
                 node: p.node.clone(),
                 storage: p.storage.clone(),
-                import_storage: p.import_storage.clone(),
+                iso_storage: p.iso_storage.clone(),
                 bridge: if p.bridge.is_empty() {
                     "vmbr0".into()
                 } else {
                     p.bridge.clone()
                 },
                 pool: p.pool.clone(),
+                prefix: p.prefix.clone(),
+                mke2fs: if p.mke2fs.is_empty() {
+                    "/usr/share/hangar/mke2fs".into()
+                } else {
+                    p.mke2fs.clone().into()
+                },
             },
             &dir,
             log.clone(),

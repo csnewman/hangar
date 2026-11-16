@@ -900,9 +900,10 @@ impl Instance {
 
 impl Instance {
     /// Boots the machine as a Proxmox VM (`crate::proxmox`): its VM made
-    /// from its image's template the first time, sized, started with its
-    /// SMBIOS serial saying where the hub is, given its secret through its
-    /// agent channel, and connected once its agent dials the hub. A VM
+    /// the first time, with its image's ISO and the release ISO of the
+    /// worker's kernel and agent (each uploaded once), sized, started with
+    /// its SMBIOS serial saying where the hub is, given its secret through
+    /// its agent channel, and connected once its agent dials the hub. A VM
     /// hibernated is resumed by its start, keeping the secret it booted
     /// with.
     async fn boot_proxmox(
@@ -935,23 +936,31 @@ impl Instance {
             }
             None => false,
         };
+        if id.is_none() {
+            cfg.progress("making its VM");
+        }
+        let release = pve.release(&cfg.kernel, &cfg.agent).await?;
+        let image = pve.image(&cfg.image_key, &cfg.base_file).await?;
         let id = match id {
             Some(n) => n,
             None => {
-                cfg.progress("making its VM");
-                let tpl = pve
-                    .template(&cfg.image_key, &cfg.base_file, &cfg.kernel, &cfg.agent)
-                    .await?;
-                // Templates this one supersedes are removed while it boots.
-                let p = pve.clone();
-                tokio::spawn(async move { p.sweep().await });
                 let n = pve
-                    .create(tpl, &cfg.id, &cfg.name, cfg.upper_gib, cfg.swap_mib)
+                    .create(
+                        &cfg.id,
+                        &cfg.name,
+                        &image,
+                        &release,
+                        cfg.upper_gib,
+                        cfg.swap_mib,
+                    )
                     .await?;
                 std::fs::write(&vm_file, n.to_string())?;
                 n
             }
         };
+        // ISOs this boot supersedes go while it boots.
+        let p = pve.clone();
+        tokio::spawn(async move { p.sweep().await });
         if !resuming {
             pve.size(id, cfg.memory_mib, cfg.cpus).await?;
         }
@@ -981,7 +990,9 @@ impl Instance {
         });
         let exit = Arc::new(Mutex::new(Exit::default()));
         let console = crate::proxmox::console::follow(pve.clone(), id, cfg.console_file.clone());
-        let started = pve.start(id, &reg.settings(), reg.secret()).await;
+        let started = pve
+            .start(id, &reg.settings(), reg.secret(), &image, &release)
+            .await;
         parts.process = Some(watch_vm(pve.clone(), id, &exit));
         let session = match started {
             Ok(()) => await_agent(&cfg, &parts, &exit).await,

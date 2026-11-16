@@ -1,20 +1,28 @@
 //! Environments as Proxmox VE VMs (`runtime: proxmox`): the worker runs
-//! beside Proxmox, in a container on one of its nodes, and asks its API for
-//! a VM per environment. Design and measurements: docs/proxmox-vms.md.
+//! beside Proxmox, in a VM of its own on one of its nodes, and asks its API
+//! for a VM per environment. Design and measurements: docs/proxmox-vms.md.
 //!
-//! An image becomes a template VM once: its EROFS image, a boot disk of the
-//! worker's kernel and agent, and a small empty writable disk, each a disk
-//! named by its serial, which the agent's init finds them by. An environment
-//! is a linked clone of it, its writable disk grown to the environment's
-//! size, with a swap disk of its own. Each boot, the VM's SMBIOS serial says
-//! where the worker's hub is, and the hub's secret for the boot is written
-//! into the guest through its agent channel (`hangar-agent`'s qga), never
-//! into the VM's configuration, which anyone who may see the VM can read.
+//! What the VMs read and never write is in ISOs, which any number of VMs
+//! attach as CD-ROMs at once, with no copy: a release ISO of the worker's
+//! kernel and agent (the initramfs, with mke2fs beside it), which every VM
+//! boots, and an ISO per image holding its EROFS, which the agent's init
+//! mounts as the root's base. An environment's VM is made with the two as
+//! CD-ROMs, an empty writable disk (its filesystem made by the agent at its
+//! first boot) and a swap disk; each cold start points it at the current
+//! release, so it boots the worker's own kernel and agent. Each boot, the
+//! VM's SMBIOS serial says where the worker's hub is, and the hub's secret
+//! for the boot is written into the guest through its agent channel
+//! (`hangar-agent`'s qga), never into the VM's configuration, which anyone
+//! who may see the VM can read.
+//!
+//! Places may share a Proxmox. Everything the worker makes is named with its
+//! place's prefix, its VMs carry the prefix as a tag, and the worker removes
+//! only what has it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use base64::Engine;
 use serde_json::Value;
@@ -29,29 +37,29 @@ use client::{Client, enc};
 
 /// Where the agent's init finds each disk, by the serial Proxmox gives it.
 const UPPER_SERIAL: &str = "hangar-upper";
-const IMAGE_SERIAL: &str = "hangar-image";
-const BOOT_SERIAL: &str = "hangar-boot";
 const SWAP_SERIAL: &str = "hangar-swap";
 
-/// The kernel command line every environment boots with, fixed on the boot
-/// disk its template shares with every clone. Headless: a Proxmox VM has no
-/// virtual GPU of Hangar's. The guest puts its own firewall up: the VM is
-/// on its place's network, among other machines.
+/// The CD-ROMs' slots: a VM's image on scsi0, its release on scsi1, which it
+/// boots from. Proxmox puts scsiN at LUN N, which the agent's init finds the
+/// image by (`scsi:0`): a CD-ROM's serial does not reach the guest.
+const IMAGE_SLOT: &str = "scsi0";
+const RELEASE_SLOT: &str = "scsi1";
+
+/// The kernel command line every VM boots with, in the release ISO.
+/// Headless: a Proxmox VM has no virtual GPU of Hangar's. The guest puts its
+/// own firewall up: the VM is on its place's network, among other machines.
 const CMDLINE: &str = "console=ttyS0 systemd.show_status=1 mitigations=off \
     memory_hotplug.online_policy=auto-movable \
-    hangar.upper=serial:hangar-upper hangar.image=serial:hangar-image \
+    hangar.upper=serial:hangar-upper hangar.image=scsi:0 \
     hangar.swap=serial:hangar-swap hangar.firewall=1 \
     systemd.unit=multi-user.target systemd.mask=hangar-desktop.service";
 
-/// The form of a template, part of its name: a template made to an older
-/// form is left for one of this form.
-const TEMPLATE_FORM: &str = "5";
-
-/// The template's writable disk, grown for each environment.
-const TEMPLATE_UPPER_GIB: u64 = 1;
-
-/// The tag every VM the worker makes carries.
+/// The tag every VM the worker makes carries, beside its place's prefix.
 const TAG: &str = "hangar";
+
+/// How long an ISO the worker has just uploaded or found is kept from the
+/// sweep though no VM names it yet: a VM being made may be about to.
+const ISO_GRACE: Duration = Duration::from_secs(3600);
 
 /// What a Proxmox place is: its API, and where VMs go.
 #[derive(Debug, Clone, Default)]
@@ -66,13 +74,39 @@ pub struct Config {
     pub node: String,
     /// Where VMs' disks are.
     pub storage: String,
-    /// Where images and the boot disk are uploaded to, a storage with
-    /// import content; empty is storage.
-    pub import_storage: String,
+    /// Where the release and image ISOs go, a storage holding iso content;
+    /// empty is storage.
+    pub iso_storage: String,
     /// The bridge or VNet environments' NICs join.
     pub bridge: String,
     /// The pool every VM joins; empty is none.
     pub pool: String,
+    /// What the names of everything the worker makes begin with, and the
+    /// tag its VMs carry: its place's own (check_prefix).
+    pub prefix: String,
+    /// mke2fs, static, which the release ISO's initramfs carries for the
+    /// agent to make a new writable disk's filesystem with.
+    pub mke2fs: PathBuf,
+}
+
+/// Whether prefix can name a place's things on Proxmox: 1 to 20 lowercase
+/// letters, digits and hyphens, starting with a letter and not ending with
+/// a hyphen, which VM names, tags and storage file names all take.
+pub fn check_prefix(prefix: &str) -> Result<(), String> {
+    let ok = (1..=20).contains(&prefix.len())
+        && prefix.starts_with(|c: char| c.is_ascii_lowercase())
+        && !prefix.ends_with('-')
+        && prefix
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!(
+            "proxmox prefix {prefix:?}: 1 to 20 lowercase letters, digits and hyphens, \
+             starting with a letter and not ending with a hyphen"
+        ))
+    }
 }
 
 /// One Proxmox node, as the worker uses it.
@@ -122,10 +156,13 @@ pub struct Pve {
     cfg: Config,
     /// Where the worker builds what it uploads.
     dir: PathBuf,
-    /// The templates made, by image and boot.
-    templates: tokio::sync::Mutex<HashMap<String, u32>>,
-    /// The boot disk's key templates are made with, once one has been.
-    boot_key: std::sync::Mutex<Option<String>>,
+    /// The release ISO VMs boot, by name, once the worker has made one.
+    release: std::sync::Mutex<Option<String>>,
+    /// The ISOs the worker has uploaded or found lately, by name, when:
+    /// the sweep leaves them for ISO_GRACE.
+    seen: std::sync::Mutex<HashMap<String, Instant>>,
+    /// One upload of a file at a time.
+    uploading: tokio::sync::Mutex<()>,
     log: Log,
 }
 
@@ -134,14 +171,16 @@ pub type Placed = hangar_hub::Settings;
 
 impl Pve {
     pub fn new(cfg: Config, dir: &Path, log: Log) -> io::Result<Pve> {
+        check_prefix(&cfg.prefix).map_err(err)?;
         let fp = (!cfg.fingerprint.is_empty()).then_some(cfg.fingerprint.as_str());
         let client = Client::new(&cfg.url, &cfg.token, fp)?;
         Ok(Pve {
             client,
             cfg,
             dir: dir.to_path_buf(),
-            templates: Default::default(),
-            boot_key: Default::default(),
+            release: Default::default(),
+            seen: Default::default(),
+            uploading: Default::default(),
             log,
         })
     }
@@ -150,12 +189,22 @@ impl Pve {
         enc(&self.cfg.node)
     }
 
-    fn import_storage(&self) -> &str {
-        if self.cfg.import_storage.is_empty() {
+    fn iso_storage(&self) -> &str {
+        if self.cfg.iso_storage.is_empty() {
             &self.cfg.storage
         } else {
-            &self.cfg.import_storage
+            &self.cfg.iso_storage
         }
+    }
+
+    /// What a file of this place's in the ISO storage is named, from its
+    /// kind and key.
+    fn iso_name(&self, kind: &str, key: &str) -> String {
+        format!("{}-{kind}-{key}.iso", self.cfg.prefix)
+    }
+
+    fn iso_volid(&self, name: &str) -> String {
+        format!("{}:iso/{name}", self.iso_storage())
     }
 
     /// Checks the API answers and the node is there.
@@ -196,97 +245,245 @@ impl Pve {
             .ok_or_else(|| err(format!("proxmox gave no free VMID: {v}")))
     }
 
-    /// The template for an image (base, its EROFS file, named by key) and
-    /// the worker's kernel and agent, made if it is not there yet.
-    pub async fn template(
-        &self,
-        key: &str,
-        base: &Path,
-        kernel: &Path,
-        agent: &Path,
-    ) -> io::Result<u32> {
-        let boot_key = short_hash(&format!(
-            "{}{}{CMDLINE}",
+    /// The release ISO, which VMs boot: the worker's kernel, and its agent
+    /// as the initramfs with mke2fs beside it, booting with CMDLINE. Made and
+    /// uploaded once per kernel, agent and mke2fs; its volume's ID.
+    pub async fn release(&self, kernel: &Path, agent: &Path) -> io::Result<String> {
+        let key = short_hash(&format!(
+            "{}{}{}{CMDLINE}",
             crate::suspend::fingerprint(kernel),
-            crate::suspend::fingerprint(agent)
+            crate::suspend::fingerprint(agent),
+            crate::suspend::fingerprint(&self.cfg.mke2fs)
         ));
-        let name = format!("hangar-tpl{TEMPLATE_FORM}-{}-{boot_key}", short_hash(key));
-        *self.boot_key.lock().unwrap() = Some(boot_key.clone());
-        let mut made = self.templates.lock().await;
-        if let Some(id) = made.get(&name) {
-            return Ok(*id);
+        let name = self.iso_name("release", &key);
+        let file = self.dir.join(&name);
+        build_release_iso(&file, kernel, agent, &self.cfg.mke2fs).await?;
+        let uploaded = self.ensure_iso(&file, &name).await?;
+        let first = self.release.lock().unwrap().replace(name.clone()) != Some(name.clone());
+        if first {
+            // Built-up files of older releases go; their ISOs go in the
+            // sweep, once no VM boots them.
+            for e in std::fs::read_dir(&self.dir).into_iter().flatten().flatten() {
+                let n = e.file_name().to_string_lossy().to_string();
+                if n != name && n.starts_with(&format!("{}-release-", self.cfg.prefix)) {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
         }
-        if let Some(id) = self.find_vm(&name).await? {
-            made.insert(name, id);
-            return Ok(id);
+        if uploaded {
+            self.log.info("made a release ISO", &[("iso", &name)]);
+        }
+        Ok(self.iso_volid(&name))
+    }
+
+    /// The ISO of an image (base, its EROFS file, named by key), uploaded if
+    /// it is not there yet; its volume's ID. Proxmox takes any file named
+    /// .iso as one: it is never booted, only read as a CD-ROM.
+    pub async fn image(&self, key: &str, base: &Path) -> io::Result<String> {
+        let name = self.iso_name("image", &short_hash(key));
+        self.ensure_iso(base, &name).await?;
+        Ok(self.iso_volid(&name))
+    }
+
+    /// Uploads file as name into the ISO storage, unless it is there;
+    /// whether it uploaded it.
+    async fn ensure_iso(&self, file: &Path, name: &str) -> io::Result<bool> {
+        let _one = self.uploading.lock().await;
+        self.seen
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), Instant::now());
+        if self.isos().await?.contains(&self.iso_volid(name)) {
+            return Ok(false);
         }
         self.log.info(
-            "making a proxmox template",
-            &[("template", &name), ("image", &key)],
+            "uploading to proxmox",
+            &[("file", &file.display()), ("as", &name)],
         );
-        let image = format!("hangar-image-{}.raw", short_hash(key));
-        self.upload_once(base, &image).await?;
-        let boot_file = self.dir.join(format!("boot-{boot_key}.raw"));
-        build_boot_disk(&boot_file, kernel, agent).await?;
-        let boot = format!("hangar-boot-{boot_key}.raw");
-        self.upload_once(&boot_file, &boot).await?;
-        let upper_file = self.dir.join("upper.raw");
-        crate::provision::ensure_disk(
-            &upper_file,
-            UPPER_SERIAL,
-            TEMPLATE_UPPER_GIB,
-            &crate::provision::find_mkfs()?,
-        )
-        .await?;
-        let upper = "hangar-upper.raw";
-        self.upload_once(&upper_file, upper).await?;
-
-        let (store, imports) = (&self.cfg.storage, self.import_storage());
-        let disk = |name: &str, serial: &str, extra: &str| {
-            format!("{store}:0,import-from={imports}:import/{name},serial={serial}{extra}")
-        };
-        let id = self.next_id().await?;
-        let mut form = vec![
-            ("vmid", id.to_string()),
-            ("name", name.clone()),
-            ("tags", format!("{TAG};hangar-template")),
-            ("ostype", "l26".into()),
-            ("cpu", "host".into()),
-            ("cores", "1".into()),
-            // Memory hotplug, which Proxmox has only with NUMA: the VM
-            // boots with STATIC_MIB of RAM and the rest as DIMMs, which the
-            // guest finds through ACPI, and its memory is resized while it
-            // runs by plugging and unplugging them.
-            ("memory", STATIC_MIB.to_string()),
-            ("numa", "1".into()),
-            ("hotplug", "network,disk,usb,memory".into()),
-            ("agent", "1".into()),
-            ("serial0", "socket".into()),
-            // A guest's reboot stops the VM, and the worker boots it
-            // again, with a new secret.
-            ("reboot", "0".into()),
-            // No network card: each start plugs one in (start).
-            ("boot", "order=virtio2".into()),
-            ("virtio0", disk(upper, UPPER_SERIAL, ",discard=on")),
-            ("virtio1", disk(&image, IMAGE_SERIAL, ",ro=1")),
-            ("virtio2", disk(&boot, BOOT_SERIAL, "")),
-            ("description", format!("Hangar's template for image {key}")),
-        ];
-        if !self.cfg.pool.is_empty() {
-            form.push(("pool", self.cfg.pool.clone()));
-        }
-        let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
         let upid = self
             .client
-            .post(&format!("/nodes/{}/qemu", self.node()), &form)
+            .upload(&self.cfg.node, self.iso_storage(), "iso", file, name)
             .await?;
-        self.wait(&upid, Duration::from_secs(600)).await?;
-        // Proxmox's own firewall for the VM, which its clones copy and which
-        // applies where the datacenter's firewall is on: nothing inbound
-        // but replies, DHCP and neighbour discovery, no router
-        // advertisements out, and no MAC but the VM's own. Not an address
-        // filter: the network's DHCP gives the address. The guest's own
-        // firewall stands either way.
+        self.client
+            .wait(&self.cfg.node, &upid, Duration::from_secs(1800))
+            .await?;
+        self.seen
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), Instant::now());
+        Ok(true)
+    }
+
+    /// The volume IDs of the ISOs in the ISO storage.
+    async fn isos(&self) -> io::Result<HashSet<String>> {
+        let path = format!(
+            "/nodes/{}/storage/{}/content?content=iso",
+            self.node(),
+            enc(self.iso_storage())
+        );
+        let have = self.client.get(&path).await?;
+        Ok(have
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v["volid"].as_str().map(str::to_string))
+            .collect())
+    }
+
+    /// This place's VMs, on any node: those in its pool carrying its prefix
+    /// as a tag, as (node, VMID).
+    async fn own_vms(&self) -> io::Result<Vec<(String, u64)>> {
+        let all = self.client.get("/cluster/resources?type=vm").await?;
+        Ok(all
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|v| {
+                v["tags"]
+                    .as_str()
+                    .is_some_and(|t| t.split(';').any(|t| t == self.cfg.prefix))
+                    && (self.cfg.pool.is_empty() || v["pool"] == self.cfg.pool.as_str())
+            })
+            .filter_map(|v| Some((v["node"].as_str()?.to_string(), v["vmid"].as_u64()?)))
+            .collect())
+    }
+
+    /// Removes this place's ISOs that none of its VMs names, but the current
+    /// release and any the worker has uploaded or found within ISO_GRACE.
+    /// Only names with the place's prefix are touched: places sharing a
+    /// Proxmox leave each other's alone. A VM whose config cannot be read
+    /// stops the sweep, as what it names is not known.
+    pub async fn sweep(&self) {
+        if let Err(e) = self.try_sweep().await {
+            self.log.debug("sweeping proxmox ISOs", &[("err", &e)]);
+        }
+    }
+
+    async fn try_sweep(&self) -> io::Result<()> {
+        let mut named = HashSet::new();
+        for (node, id) in self.own_vms().await? {
+            let conf = self
+                .client
+                .get(&format!("/nodes/{}/qemu/{id}/config", enc(&node)))
+                .await?;
+            for (_, v) in conf.as_object().into_iter().flatten() {
+                if let Some(volid) = v.as_str().and_then(|s| s.split(',').next()) {
+                    named.insert(volid.to_string());
+                }
+            }
+        }
+        let current = self.release.lock().unwrap().clone();
+        let mine = |n: &str| {
+            [("release"), ("image")]
+                .iter()
+                .any(|k| n.starts_with(&format!("{}-{k}-", self.cfg.prefix)))
+                && n.ends_with(".iso")
+        };
+        for volid in self.isos().await? {
+            let name = volid.rsplit('/').next().unwrap_or_default().to_string();
+            let recent = self
+                .seen
+                .lock()
+                .unwrap()
+                .get(&name)
+                .is_some_and(|t| t.elapsed() < ISO_GRACE);
+            if !mine(&name) || named.contains(&volid) || recent || current.as_ref() == Some(&name) {
+                continue;
+            }
+            let path = format!(
+                "/nodes/{}/storage/{}/content/{}",
+                self.node(),
+                enc(self.iso_storage()),
+                enc(&volid)
+            );
+            let upid = self.client.delete(&path, &[]).await?;
+            self.wait(&upid, Duration::from_secs(120)).await?;
+            self.seen.lock().unwrap().remove(&name);
+            self.log
+                .info("removed an ISO no VM uses", &[("iso", &name)]);
+        }
+        Ok(())
+    }
+
+    /// Makes an environment's VM: the image and release ISOs as CD-ROMs, an
+    /// empty writable disk of upper_gib, whose filesystem its agent makes,
+    /// and a swap disk, named and tagged for this place.
+    pub async fn create(
+        &self,
+        environment: &str,
+        name: &str,
+        image: &str,
+        release: &str,
+        upper_gib: u64,
+        swap_mib: u64,
+    ) -> io::Result<u32> {
+        let store = &self.cfg.storage;
+        let swap_gib = swap_mib.div_ceil(1024).max(1);
+        let mut tries = 0;
+        let id = loop {
+            let id = self.next_id().await?;
+            let mut form = vec![
+                ("vmid", id.to_string()),
+                ("name", vm_name(&self.cfg.prefix, name)),
+                ("tags", format!("{TAG};{};hangar-env", self.cfg.prefix)),
+                ("description", format!("Hangar environment {environment}")),
+                ("ostype", "l26".into()),
+                ("cpu", "host".into()),
+                ("cores", "1".into()),
+                // Memory hotplug, which Proxmox has only with NUMA: the VM
+                // boots with STATIC_MIB of RAM and the rest as DIMMs, which
+                // the guest finds through ACPI, and its memory is resized
+                // while it runs by plugging and unplugging them.
+                ("memory", STATIC_MIB.to_string()),
+                ("numa", "1".into()),
+                ("hotplug", "network,disk,usb,memory".into()),
+                ("agent", "1".into()),
+                ("serial0", "socket".into()),
+                // A guest's reboot stops the VM, and the worker boots it
+                // again, with a new secret.
+                ("reboot", "0".into()),
+                // One controller: each CD-ROM's scsiN is its LUN.
+                ("scsihw", "virtio-scsi-pci".into()),
+                (IMAGE_SLOT, format!("{image},media=cdrom")),
+                (RELEASE_SLOT, format!("{release},media=cdrom")),
+                (
+                    "virtio0",
+                    format!(
+                        "{store}:{},serial={UPPER_SERIAL},discard=on",
+                        upper_gib.max(1)
+                    ),
+                ),
+                (
+                    "virtio1",
+                    format!("{store}:{swap_gib},serial={SWAP_SERIAL}"),
+                ),
+                ("vmstatestorage", store.clone()),
+                // No network card: each start plugs one in (start).
+                ("boot", format!("order={RELEASE_SLOT}")),
+            ];
+            if !self.cfg.pool.is_empty() {
+                form.push(("pool", self.cfg.pool.clone()));
+            }
+            let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            match self
+                .client
+                .post(&format!("/nodes/{}/qemu", self.node()), &form)
+                .await
+            {
+                Ok(upid) => {
+                    self.wait(&upid, Duration::from_secs(600)).await?;
+                    break id;
+                }
+                // Another took the VMID between asking and making the VM.
+                Err(e) if tries < 5 && e.to_string().contains("already exists") => tries += 1,
+                Err(e) => return Err(e),
+            }
+        };
+        // Proxmox's own firewall for the VM, which applies where the
+        // datacenter's firewall is on: nothing inbound but replies, DHCP
+        // and neighbour discovery, no router advertisements out, and no MAC
+        // but the VM's own. Not an address filter: the network's DHCP gives
+        // the address. The guest's own firewall stands either way.
         self.client
             .put(
                 &self.vm(id, "firewall/options"),
@@ -302,199 +499,6 @@ impl Pve {
                 ],
             )
             .await?;
-        let upid = self
-            .client
-            .post(&format!("/nodes/{}/qemu/{id}/template", self.node()), &[])
-            .await?;
-        self.wait(&upid, Duration::from_secs(300)).await?;
-        made.insert(name, id);
-        Ok(id)
-    }
-
-    /// Removes this node's templates of another form or boot disk than the
-    /// ones this worker makes, and the uploads of boot disks no template
-    /// has left.
-    /// Proxmox refuses to remove a template whose disks a linked clone
-    /// still uses (on LVM-thin or ZFS; on btrfs a clone stands alone),
-    /// which is then kept until a sweep after its last environment goes.
-    pub async fn sweep(&self) {
-        let Some(boot_key) = self.boot_key.lock().unwrap().clone() else {
-            return;
-        };
-        let Ok(all) = self.client.get("/cluster/resources?type=vm").await else {
-            return;
-        };
-        let current = format!("hangar-tpl{TEMPLATE_FORM}-");
-        let mut boots_kept = std::collections::HashSet::from([boot_key.clone()]);
-        for v in all.as_array().into_iter().flatten() {
-            let (Some(name), Some(id)) = (v["name"].as_str(), v["vmid"].as_u64()) else {
-                continue;
-            };
-            let ours = v["node"] == self.cfg.node.as_str()
-                && v["template"].as_u64() == Some(1)
-                && name.starts_with("hangar-tpl")
-                && v["tags"]
-                    .as_str()
-                    .is_some_and(|t| t.split(';').any(|t| t == TAG));
-            if !ours {
-                continue;
-            }
-            let boot = name.rsplit('-').next().unwrap_or_default().to_string();
-            if name.starts_with(&current) && boot == boot_key {
-                continue;
-            }
-            match self.destroy(id as u32).await {
-                Ok(()) => {
-                    self.log.info(
-                        "removed a superseded proxmox template",
-                        &[("template", &name)],
-                    );
-                    self.templates.lock().await.remove(name);
-                }
-                Err(e) => {
-                    self.log.debug(
-                        "keeping a superseded proxmox template",
-                        &[("template", &name), ("err", &e)],
-                    );
-                    boots_kept.insert(boot);
-                }
-            }
-        }
-        let path = format!(
-            "/nodes/{}/storage/{}/content?content=import",
-            self.node(),
-            enc(self.import_storage())
-        );
-        let Ok(have) = self.client.get(&path).await else {
-            return;
-        };
-        for v in have.as_array().into_iter().flatten() {
-            let Some(volid) = v["volid"].as_str() else {
-                continue;
-            };
-            let Some(key) = volid
-                .rsplit('/')
-                .next()
-                .and_then(|f| f.strip_prefix("hangar-boot-"))
-                .and_then(|f| f.strip_suffix(".raw"))
-            else {
-                continue;
-            };
-            if boots_kept.contains(key) {
-                continue;
-            }
-            let path = format!(
-                "/nodes/{}/storage/{}/content/{}",
-                self.node(),
-                enc(self.import_storage()),
-                enc(volid)
-            );
-            if let Ok(upid) = self.client.delete(&path, &[]).await {
-                let _ = self.wait(&upid, Duration::from_secs(120)).await;
-            }
-            let _ = std::fs::remove_file(self.dir.join(format!("boot-{key}.raw")));
-        }
-    }
-
-    /// The VMID of the VM on this node named name, if there is one.
-    async fn find_vm(&self, name: &str) -> io::Result<Option<u32>> {
-        let all = self.client.get("/cluster/resources?type=vm").await?;
-        Ok(all.as_array().and_then(|vms| {
-            vms.iter()
-                .find(|v| v["name"] == name && v["node"] == self.cfg.node.as_str())
-                .and_then(|v| v["vmid"].as_u64())
-                .map(|n| n as u32)
-        }))
-    }
-
-    /// Uploads file as name into the import storage, unless it is there.
-    async fn upload_once(&self, file: &Path, name: &str) -> io::Result<()> {
-        let path = format!(
-            "/nodes/{}/storage/{}/content?content=import",
-            self.node(),
-            enc(self.import_storage())
-        );
-        let have = self.client.get(&path).await?;
-        let volid = format!("{}:import/{name}", self.import_storage());
-        if have
-            .as_array()
-            .is_some_and(|c| c.iter().any(|v| v["volid"] == volid.as_str()))
-        {
-            return Ok(());
-        }
-        self.log.info(
-            "uploading to proxmox",
-            &[("file", &file.display()), ("as", &name)],
-        );
-        let upid = self
-            .client
-            .upload(&self.cfg.node, self.import_storage(), "import", file, name)
-            .await?;
-        self.client
-            .wait(&self.cfg.node, &upid, Duration::from_secs(1800))
-            .await
-    }
-
-    /// Makes an environment's VM: a linked clone of template, named for it,
-    /// with its writable disk grown to upper_gib and swap of its own.
-    pub async fn create(
-        &self,
-        template: u32,
-        environment: &str,
-        name: &str,
-        upper_gib: u64,
-        swap_mib: u64,
-    ) -> io::Result<u32> {
-        let mut tries = 0;
-        let id = loop {
-            let id = self.next_id().await?;
-            let mut form = vec![
-                ("newid", id.to_string()),
-                ("name", vm_name(name)),
-                ("full", "0".to_string()),
-            ];
-            if !self.cfg.pool.is_empty() {
-                form.push(("pool", self.cfg.pool.clone()));
-            }
-            let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
-            match self
-                .client
-                .post(
-                    &format!("/nodes/{}/qemu/{template}/clone", self.node()),
-                    &form,
-                )
-                .await
-            {
-                Ok(upid) => {
-                    self.wait(&upid, Duration::from_secs(600)).await?;
-                    break id;
-                }
-                // Another took the VMID between asking and cloning.
-                Err(e) if tries < 5 && e.to_string().contains("already exists") => tries += 1,
-                Err(e) => return Err(e),
-            }
-        };
-        let swap_gib = swap_mib.div_ceil(1024).max(1);
-        let form = [
-            ("tags", format!("{TAG};hangar-env")),
-            ("description", format!("Hangar environment {environment}")),
-            (
-                "virtio3",
-                format!("{}:{swap_gib},serial={SWAP_SERIAL}", self.cfg.storage),
-            ),
-        ];
-        let form: Vec<(&str, &str)> = form.iter().map(|(k, v)| (*k, v.as_str())).collect();
-        let upid = self.client.post(&self.vm(id, "config"), &form).await?;
-        self.wait(&upid, Duration::from_secs(300)).await?;
-        let size = format!("{}G", upper_gib.max(TEMPLATE_UPPER_GIB));
-        let upid = self
-            .client
-            .put(
-                &self.vm(id, "resize"),
-                &[("disk", "virtio0"), ("size", size.as_str())],
-            )
-            .await?;
-        self.wait(&upid, Duration::from_secs(300)).await?;
         Ok(id)
     }
 
@@ -542,8 +546,17 @@ impl Pve {
 
     /// Starts a VM, or resumes it from a hibernate, saying in its SMBIOS
     /// serial where its hub is, then hands it secret through its agent
-    /// channel once its agent answers there.
-    pub async fn start(&self, id: u32, placed: &Placed, secret: &str) -> io::Result<()> {
+    /// channel once its agent answers there. A cold start boots the release
+    /// ISO given and reads the image ISO given (the environment's pin may
+    /// have moved); a resume keeps the ones it was hibernated with.
+    pub async fn start(
+        &self,
+        id: u32,
+        placed: &Placed,
+        secret: &str,
+        image: &str,
+        release: &str,
+    ) -> io::Result<()> {
         let mut placed = placed.clone();
         placed.secret.clear();
         let serial = base64::engine::general_purpose::STANDARD
@@ -566,7 +579,13 @@ impl Pve {
         // DHCP lease.
         let mac = network_mac(&conf).unwrap_or_else(|| derived_mac(&placed.environment));
         if !resuming {
-            let mut form = vec![("smbios1", smbios.as_str())];
+            let image = format!("{image},media=cdrom");
+            let release = format!("{release},media=cdrom");
+            let mut form = vec![
+                ("smbios1", smbios.as_str()),
+                (IMAGE_SLOT, image.as_str()),
+                (RELEASE_SLOT, release.as_str()),
+            ];
             if conf["net0"].is_string() {
                 form.push(("delete", "net0"));
             }
@@ -640,7 +659,7 @@ impl Pve {
         if disks {
             let conf = self.client.get(&self.vm(id, "config")).await?;
             v.upper_used = self.volume_used(&conf, "virtio0").await;
-            v.swap_used = self.volume_used(&conf, "virtio3").await;
+            v.swap_used = self.volume_used(&conf, "virtio1").await;
         }
         Ok(v)
     }
@@ -735,8 +754,9 @@ fn derived_mac(environment: &str) -> String {
     )
 }
 
-/// A VM name, which Proxmox takes as a DNS name.
-fn vm_name(name: &str) -> String {
+/// A VM's name, which Proxmox takes as a DNS name: the place's prefix,
+/// then the environment's name.
+fn vm_name(prefix: &str, name: &str) -> String {
     let n: String = name
         .chars()
         .map(|c| {
@@ -748,10 +768,12 @@ fn vm_name(name: &str) -> String {
         })
         .collect();
     let n = n.trim_matches('-');
-    format!("hangar-{}", if n.is_empty() { "env" } else { n })
+    format!("{prefix}-{}", if n.is_empty() { "env" } else { n })
         .chars()
         .take(63)
-        .collect()
+        .collect::<String>()
+        .trim_end_matches('-')
+        .to_string()
 }
 
 /// Twelve hex digits of a string's SHA-256.
@@ -764,72 +786,87 @@ fn short_hash(s: &str) -> String {
         .collect()
 }
 
-/// Builds the boot disk every clone of a template shares: a FAT disk with
-/// syslinux, the kernel, and the agent as the initramfs, booting with
-/// CMDLINE. SeaBIOS boots it, faster than OVMF does (docs/proxmox-vms.md).
-async fn build_boot_disk(out: &Path, kernel: &Path, agent: &Path) -> io::Result<()> {
+/// Where a system's isolinux keeps the El Torito boot image and the module
+/// it loads, by distribution (Debian and Ubuntu's first).
+const ISOLINUX_BIN: [&str; 3] = [
+    "/usr/lib/ISOLINUX/isolinux.bin",
+    "/usr/share/syslinux/isolinux.bin",
+    "/usr/lib/syslinux/isolinux.bin",
+];
+const LDLINUX_C32: [&str; 3] = [
+    "/usr/lib/syslinux/modules/bios/ldlinux.c32",
+    "/usr/share/syslinux/ldlinux.c32",
+    "/usr/lib/syslinux/ldlinux.c32",
+];
+
+/// Builds the release ISO at out, unless it is there: isolinux booting the
+/// kernel with CMDLINE, its initramfs the agent with mke2fs beside it.
+/// SeaBIOS boots it from a CD-ROM on virtio-scsi.
+async fn build_release_iso(
+    out: &Path,
+    kernel: &Path,
+    agent: &Path,
+    mke2fs: &Path,
+) -> io::Result<()> {
     if out.exists() {
         return Ok(());
     }
+    let need = "the worker needs xorriso and isolinux";
+    let find = |paths: &[&str]| {
+        paths
+            .iter()
+            .map(Path::new)
+            .find(|p| p.is_file())
+            .map(Path::to_path_buf)
+            .ok_or_else(|| err(format!("no {} ({need})", paths[0])))
+    };
+    let (isolinux, ldlinux) = (find(&ISOLINUX_BIN)?, find(&LDLINUX_C32)?);
+    let mke2fs_bin = std::fs::read(mke2fs).map_err(|e| {
+        err(format!(
+            "mke2fs for the release ISO, {}: {e}",
+            mke2fs.display()
+        ))
+    })?;
     let dir = out.with_extension("d");
     let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir)?;
-    crate::write_initrd(agent, &dir.join("initrd.img"))?;
-    std::fs::copy(kernel, dir.join("vmlinuz"))?;
+    std::fs::create_dir_all(dir.join("isolinux"))?;
+    std::fs::copy(&isolinux, dir.join("isolinux/isolinux.bin"))?;
+    std::fs::copy(&ldlinux, dir.join("isolinux/ldlinux.c32"))?;
     std::fs::write(
-        dir.join("syslinux.cfg"),
+        dir.join("isolinux/isolinux.cfg"),
         format!(
             "DEFAULT hangar\nPROMPT 0\nTIMEOUT 0\nLABEL hangar\n  LINUX /vmlinuz\n  INITRD /initrd.img\n  APPEND {CMDLINE}\n"
         ),
     )?;
-    let img = dir.join("boot.img");
-    let img_s = img.to_string_lossy().to_string();
-    let run = |prog: &str, args: Vec<String>| {
-        let prog = prog.to_string();
-        async move {
-            let out = tokio::process::Command::new(&prog)
-                .args(&args)
-                .output()
-                .await
-                .map_err(|e| {
-                    err(format!(
-                        "{prog}: {e} (the worker needs dosfstools, syslinux and mtools)"
-                    ))
-                })?;
-            if !out.status.success() {
-                return Err(err(format!(
-                    "{prog}: {}",
-                    String::from_utf8_lossy(&out.stderr).trim()
-                )));
-            }
-            Ok(())
-        }
-    };
-    run(
-        "mkfs.fat",
-        vec![
-            "-n".into(),
-            "HANGARBOOT".into(),
-            "-C".into(),
-            img_s.clone(),
-            "65536".into(),
-        ],
-    )
-    .await?;
-    run("syslinux", vec!["--install".into(), img_s.clone()]).await?;
-    for f in ["vmlinuz", "initrd.img", "syslinux.cfg"] {
-        run(
-            "mcopy",
-            vec![
-                "-i".into(),
-                img_s.clone(),
-                dir.join(f).to_string_lossy().to_string(),
-                "::/".into(),
-            ],
-        )
-        .await?;
-    }
-    std::fs::rename(&img, out)?;
+    std::fs::copy(kernel, dir.join("vmlinuz"))?;
+    crate::write_initrd_with(
+        agent,
+        &dir.join("initrd.img"),
+        &[("mke2fs", 0o755, &mke2fs_bin)],
+    )?;
+    let tmp = out.with_extension("iso.new");
+    let made = tokio::process::Command::new("xorriso")
+        .args(["-as", "mkisofs", "-quiet", "-V", "HANGAR", "-R", "-J"])
+        .args(["-b", "isolinux/isolinux.bin", "-c", "isolinux/boot.cat"])
+        .args([
+            "-no-emul-boot",
+            "-boot-load-size",
+            "4",
+            "-boot-info-table",
+            "-o",
+        ])
+        .arg(&tmp)
+        .arg(&dir)
+        .output()
+        .await
+        .map_err(|e| err(format!("xorriso: {e} ({need})")))?;
     let _ = std::fs::remove_dir_all(&dir);
-    Ok(())
+    if !made.status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(err(format!(
+            "xorriso: {}",
+            String::from_utf8_lossy(&made.stderr).trim()
+        )));
+    }
+    std::fs::rename(&tmp, out)
 }
