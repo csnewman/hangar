@@ -61,6 +61,9 @@ pub const LOGS: [&str; 3] = ["console", "monitor", "gpu"];
 
 /// How often a running machine is measured.
 const SAMPLE_EVERY: Duration = Duration::from_secs(5);
+/// How often a Proxmox VM's storage is asked what its disks hold, which
+/// changes slowly and costs a call per disk.
+const VM_DISKS_EVERY: Duration = Duration::from_secs(60);
 
 /// How long a guest has to give back memory it was asked to. One that has
 /// not by then is using it, and asking on would have it kill what it runs
@@ -1788,6 +1791,8 @@ impl Machine {
         let mut prev: Option<Counters> = None;
         // Since when the guest has had more memory than it was asked to.
         let mut shrinking: Option<Instant> = None;
+        // A Proxmox VM's disks, as its storage last said, and when.
+        let mut vm_disks: Option<(Instant, i64, i64)> = None;
         loop {
             let mut now = Counters::new(Instant::now());
             let mut st = EnvironmentStats {
@@ -1799,6 +1804,26 @@ impl Machine {
             if pid != 0 {
                 now.cpu_ticks = stats::process_ticks(pid);
                 st.host_memory_mib = (stats::guest_ram(pid) >> 20) as i64;
+            }
+            let disks_due = vm_disks.is_none_or(|(at, _, _)| now.at - at > VM_DISKS_EVERY);
+            let vm = match inst.proxmox_stats(disks_due).await {
+                Some(Ok(v)) => Some(v),
+                Some(Err(e)) => {
+                    self.log
+                        .debug("asking proxmox for its stats", &[("err", &e)]);
+                    None
+                }
+                None => None,
+            };
+            if let Some(v) = &vm {
+                st.host_memory_mib = (v.host_memory >> 20) as i64;
+                if let (Some(u), Some(w)) = (v.upper_used, v.swap_used) {
+                    vm_disks = Some((now.at, u as i64, w as i64));
+                }
+            }
+            if let Some((_, upper, swap)) = vm_disks {
+                st.disk_used_bytes = upper;
+                st.swap_disk_bytes = swap;
             }
             if let Ok(Ok(mem)) = tokio::time::timeout(Duration::from_secs(5), inst.memory()).await {
                 st.machine_memory_mib = mem.actual as i64;
@@ -1865,6 +1890,9 @@ impl Machine {
             };
             if let Some(p) = &prev {
                 stats::rates(p, &now, cpus, page, &mut st);
+                if let Some(v) = &vm {
+                    st.cpu_percent = v.cpu_percent;
+                }
                 self.st.lock().unwrap().stats = Some(st);
             }
             prev = Some(now);

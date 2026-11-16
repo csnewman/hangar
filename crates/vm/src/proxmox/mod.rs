@@ -23,6 +23,7 @@ use crate::err;
 use crate::log::Log;
 
 pub mod client;
+pub mod console;
 
 use client::{Client, enc};
 
@@ -75,6 +76,19 @@ pub struct Config {
 }
 
 /// One Proxmox node, as the worker uses it.
+/// What Proxmox measures of a running VM.
+#[derive(Debug, Clone, Copy)]
+pub struct VmStats {
+    /// Of its vCPUs together.
+    pub cpu_percent: f64,
+    /// The VM's process on the host, in bytes.
+    pub host_memory: u64,
+    /// What the storage holds of its writable and swap disks, in bytes,
+    /// when asked.
+    pub upper_used: Option<u64>,
+    pub swap_used: Option<u64>,
+}
+
 pub struct Pve {
     client: Client,
     cfg: Config,
@@ -426,6 +440,40 @@ impl Pve {
     /// What Proxmox knows of a running VM: its status/current.
     pub async fn status(&self, id: u32) -> io::Result<Value> {
         self.client.get(&self.vm(id, "status/current")).await
+    }
+
+    /// What Proxmox measures of a running VM, and with disks, what its
+    /// storage holds of its writable and swap disks.
+    pub async fn stats(&self, id: u32, disks: bool) -> io::Result<VmStats> {
+        let st = self.status(id).await?;
+        let mut v = VmStats {
+            cpu_percent: st["cpu"].as_f64().unwrap_or_default() * 100.0,
+            host_memory: st["memhost"]
+                .as_u64()
+                .or_else(|| st["mem"].as_u64())
+                .unwrap_or_default(),
+            upper_used: None,
+            swap_used: None,
+        };
+        if disks {
+            let conf = self.client.get(&self.vm(id, "config")).await?;
+            v.upper_used = self.volume_used(&conf, "virtio0").await;
+            v.swap_used = self.volume_used(&conf, "virtio3").await;
+        }
+        Ok(v)
+    }
+
+    /// What a storage has allocated to the volume in a VM's disk slot.
+    async fn volume_used(&self, conf: &Value, slot: &str) -> Option<u64> {
+        let volid = conf[slot].as_str()?.split(',').next()?;
+        let (storage, _) = volid.split_once(':')?;
+        let path = format!(
+            "/nodes/{}/storage/{}/content/{}",
+            self.node(),
+            enc(storage),
+            enc(volid)
+        );
+        self.client.get(&path).await.ok()?["used"].as_u64()
     }
 
     /// Asks a VM to shut down, through its agent or ACPI.

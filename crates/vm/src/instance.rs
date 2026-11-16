@@ -280,6 +280,8 @@ pub struct Instance {
     hub: Option<crate::hub::Registration>,
     /// The machine's VMID, under Proxmox.
     vm: Option<u32>,
+    /// A Proxmox VM's serial console, followed into its console log.
+    _console: Option<crate::proxmox::console::Following>,
     gpu: Option<GpuBackend>,
     net: Option<Passt>,
     mac_net: Option<crate::gvproxy::Network>,
@@ -491,6 +493,7 @@ impl Instance {
             vsock: std::mem::take(&mut parts.vsock),
             hub,
             vm: None,
+            _console: None,
             gpu: parts.gpu.take(),
             net: parts.net.take(),
             mac_net: parts.mac_net.take(),
@@ -533,6 +536,13 @@ impl Instance {
     /// The monitor's process ID.
     pub fn pid(&self) -> u32 {
         self.process.pid
+    }
+
+    /// What Proxmox measures of the machine, if it is a Proxmox VM; with
+    /// disks, what its storage holds of its disks too.
+    pub async fn proxmox_stats(&self, disks: bool) -> Option<io::Result<crate::proxmox::VmStats>> {
+        let (pve, id) = self.process.vm.as_ref()?;
+        Some(pve.stats(*id, disks).await)
     }
 
     /// Waits for the monitor to exit.
@@ -953,6 +963,7 @@ impl Instance {
             "starting its VM"
         });
         let exit = Arc::new(Mutex::new(Exit::default()));
+        let console = crate::proxmox::console::follow(pve.clone(), id, cfg.console_file.clone());
         let started = pve.start(id, &reg.settings(), reg.secret()).await;
         parts.process = Some(watch_vm(pve.clone(), id, &exit));
         let session = match started {
@@ -997,6 +1008,7 @@ impl Instance {
             vsock: std::mem::take(&mut parts.vsock),
             hub: Some(reg),
             vm: Some(id),
+            _console: Some(console),
             gpu: None,
             net: None,
             mac_net: None,

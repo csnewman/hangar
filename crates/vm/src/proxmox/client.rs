@@ -188,6 +188,36 @@ impl Client {
         Ok(v["data"].clone())
     }
 
+    /// Opens a websocket to a path of the API (`/nodes/...`, its query
+    /// included), signed in with the token.
+    pub async fn websocket(
+        &self,
+        path: &str,
+    ) -> io::Result<tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<TcpStream>>>
+    {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let url = format!("wss://{}/api2/json{path}", self.host_header());
+        let mut req = url.into_client_request().map_err(io::Error::other)?;
+        let h = req.headers_mut();
+        h.insert(
+            "Authorization",
+            self.auth.parse().map_err(io::Error::other)?,
+        );
+        h.insert(
+            "Sec-WebSocket-Protocol",
+            hyper::header::HeaderValue::from_static("binary"),
+        );
+        let tls = tokio::time::timeout(REQUEST_WITHIN, self.connect())
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connecting to proxmox"))??;
+        let (ws, _) =
+            tokio::time::timeout(REQUEST_WITHIN, tokio_tungstenite::client_async(req, tls))
+                .await
+                .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "proxmox's websocket"))?
+                .map_err(io::Error::other)?;
+        Ok(ws)
+    }
+
     /// Waits for a task (its UPID, as an asynchronous call answers) to end,
     /// and says how it failed if it did.
     pub async fn wait(&self, node: &str, upid: &str, within: Duration) -> io::Result<()> {
