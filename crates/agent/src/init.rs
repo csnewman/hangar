@@ -15,9 +15,15 @@
 //! ```
 //!
 //! and swaps to the disk hangar.swap= names, if it names one. A disk is
-//! named by its path, or as serial:NAME by the serial its host gave it, as
-//! Proxmox gives each of a VM's disks, so the order the kernel finds them
-//! in does not matter.
+//! named by its path, as serial:NAME by the serial its host gave it, as
+//! Proxmox gives each of a VM's disks, or as scsi:N by its LUN on the SCSI
+//! controller, as Proxmox places its scsiN (a CD-ROM's serial does not
+//! reach the guest), so the order the kernel finds them in does not
+//! matter.
+//!
+//! A writable disk that is new, its first MiB all zeros, is given an ext4
+//! filesystem first, by the mke2fs the initramfs carries beside the agent
+//! when its host makes empty disks (Proxmox).
 //!
 //! /var/lib/docker is not part of the root: overlay2 cannot stack on
 //! overlayfs. It is /rw/docker, a directory on the same writable disk,
@@ -78,6 +84,9 @@ mod boot {
     const OLD_RUST_HALF: &str = "/usr/local/bin/hangar-agent-rs";
 
     const UPPER_DISK: &str = "/dev/vda";
+    /// Where the initramfs carries mke2fs, static, when the host makes
+    /// writable disks empty (`hangar_vm::proxmox`).
+    const MKE2FS: &str = "/mke2fs";
     const NEW_ROOT: &str = "/root";
     /// Where the overlay hangarfs serves is mounted.
     const LOWER: &str = "/lower";
@@ -170,11 +179,29 @@ mod boot {
             .map(str::to_string)
     }
 
-    /// Waits for a device node, which the kernel may still be probing.
-    /// The device a kernel command line names: its path, waited for, or
-    /// serial:NAME, the disk whose serial is NAME, once it appears.
+    /// The device a kernel command line names: its path, waited for;
+    /// serial:NAME, the disk whose serial is NAME; or scsi:N, the SCSI
+    /// device at LUN N of target 0; the last two once they appear.
     fn device(name: &str) -> io::Result<String> {
-        let Some(serial) = name.strip_prefix("serial:") else {
+        let matches: Box<dyn Fn(&Path) -> bool> = if let Some(serial) = name.strip_prefix("serial:")
+        {
+            let serial = serial.to_string();
+            Box::new(move |dir: &Path| {
+                fs::read_to_string(dir.join("serial")).is_ok_and(|s| s.trim() == serial)
+            })
+        } else if let Some(lun) = name.strip_prefix("scsi:") {
+            // The device's own directory is named for its SCSI address,
+            // host:channel:target:lun; the host's number is the order
+            // controllers were found in.
+            let lun = lun.to_string();
+            Box::new(move |dir: &Path| {
+                fs::read_link(dir.join("device")).is_ok_and(|l| {
+                    let a = l.file_name().unwrap_or_default().to_string_lossy();
+                    let mut parts = a.rsplit(':');
+                    parts.next() == Some(lun.as_str()) && parts.next() == Some("0")
+                })
+            })
+        } else {
             wait_for(name)?;
             return Ok(name.to_string());
         };
@@ -182,8 +209,7 @@ mod boot {
         loop {
             if let Ok(dir) = fs::read_dir("/sys/block") {
                 for e in dir.flatten() {
-                    let s = fs::read_to_string(e.path().join("serial")).unwrap_or_default();
-                    if s.trim() == serial {
+                    if matches(&e.path()) {
                         let dev = format!("/dev/{}", e.file_name().to_string_lossy());
                         wait_for(&dev)?;
                         return Ok(dev);
@@ -193,11 +219,43 @@ mod boot {
             if Instant::now() > deadline {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
-                    format!("no disk with serial {serial}"),
+                    format!("no disk at {name}"),
                 ));
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// Gives a new disk, its first MiB all zeros, an ext4 filesystem, with
+    /// the mke2fs the initramfs carries (MKE2FS). A disk with anything on
+    /// it is left as it is, for mounting it to say what is wrong.
+    fn format_if_new(device: &str) -> io::Result<()> {
+        let mut head = vec![0u8; 1 << 20];
+        let n = fs::File::open(device)?.read(&mut head)?;
+        if head[..n].iter().any(|&b| b != 0) {
+            return Ok(());
+        }
+        if !Path::new(MKE2FS).exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the writable disk is empty and the initramfs has no mke2fs",
+            ));
+        }
+        // The disk reads as zeros, so neither the inode tables nor the
+        // journal need writing, and nothing needs discarding.
+        let out = std::process::Command::new(MKE2FS)
+            .args(["-q", "-F", "-t", "ext4", "-L", "hangar-upper", "-E"])
+            .arg("lazy_itable_init=1,lazy_journal_init=1,nodiscard")
+            .arg(device)
+            .output()?;
+        if !out.status.success() {
+            return Err(io::Error::other(format!(
+                "mke2fs: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            )));
+        }
+        eprintln!("INITRAMFS: made the writable layer's filesystem on {device}");
+        Ok(())
     }
 
     /// Grows the ext4 filesystem mounted at dir to fill its disk, device,
@@ -279,6 +337,7 @@ mod boot {
 
         let upper = arg(&args, "hangar.upper").unwrap_or_else(|| UPPER_DISK.to_string());
         let upper = device(&upper).map_err(context("the writable disk"))?;
+        format_if_new(&upper).map_err(context(&format!("making a filesystem on {upper}")))?;
         // discard hands freed blocks back to the host as files are deleted:
         // the disk is a sparse file there, and without it everything an
         // environment ever wrote stays allocated. Nothing in the guest can trim
