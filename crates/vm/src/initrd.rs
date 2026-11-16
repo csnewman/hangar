@@ -10,6 +10,16 @@ use std::path::Path;
 /// filesystem and nothing else, and every environment runs the agent of the
 /// worker that boots it.
 pub fn write_initrd(agent: &Path, path: &Path) -> io::Result<()> {
+    write_initrd_with(agent, path, &[])
+}
+
+/// Writes the initramfs with files beside the agent: each a name at its
+/// root, its mode, and its contents, which the agent reads as init.
+pub fn write_initrd_with(
+    agent: &Path,
+    path: &Path,
+    files: &[(&str, u32, &[u8])],
+) -> io::Result<()> {
     let bin = std::fs::read(agent)
         .map_err(|e| io::Error::new(e.kind(), format!("reading the agent: {e}")))?;
     let mut tmp = path.as_os_str().to_owned();
@@ -17,14 +27,19 @@ pub fn write_initrd(agent: &Path, path: &Path) -> io::Result<()> {
     let tmp = std::path::PathBuf::from(tmp);
     let written = (|| {
         let mut out = io::BufWriter::new(std::fs::File::create(&tmp)?);
-        write_cpio(
-            &mut out,
-            &[Entry {
-                name: "init",
-                mode: 0o100755,
-                data: &bin,
-            }],
-        )?;
+        let mut entries = vec![Entry {
+            name: "init",
+            mode: 0o100755,
+            data: &bin,
+        }];
+        for (name, mode, data) in files {
+            entries.push(Entry {
+                name,
+                mode: 0o100000 | (mode & 0o7777),
+                data,
+            });
+        }
+        write_cpio(&mut out, &entries)?;
         out.into_inner().map_err(|e| e.into_error())?.sync_all()
     })();
     if let Err(e) = written {

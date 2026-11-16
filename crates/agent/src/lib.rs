@@ -9,6 +9,7 @@ pub mod control;
 pub mod desktop;
 pub mod fdio;
 pub mod guestport;
+pub mod hub;
 pub mod init;
 pub mod launch;
 pub mod memory;

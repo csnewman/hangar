@@ -50,14 +50,20 @@ pub async fn serve() -> io::Result<()> {
 }
 
 /// Answers every connection to `port`, each on a task of its own, listening
-/// again if the socket fails.
+/// again if the socket fails; on the hub, every stream the worker opens to
+/// the port.
 #[cfg(target_os = "linux")]
 pub(crate) async fn listen<F, Fut>(name: &str, port: u32, handle: F)
 where
-    F: Fn(crate::fdio::FdStream) -> Fut,
+    F: Fn(crate::fdio::FdStream) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
     use std::time::Duration;
+
+    if crate::hub::settings().is_some() {
+        crate::hub::handle(port, handle);
+        return std::future::pending().await;
+    }
 
     loop {
         let ln = match crate::vsock::Listener::bind(port) {
@@ -86,7 +92,7 @@ where
 #[cfg(not(target_os = "linux"))]
 pub(crate) async fn listen<F, Fut>(name: &str, _port: u32, _handle: F)
 where
-    F: Fn(crate::fdio::FdStream) -> Fut,
+    F: Fn(crate::fdio::FdStream) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = ()> + Send + 'static,
 {
     eprintln!("hangar-agent: {name}: no vsock here");

@@ -129,6 +129,9 @@ pub struct Config {
     pub monitor_bin: Option<PathBuf>,
     pub mkfs: Option<PathBuf>,
     pub gvproxy: Option<PathBuf>,
+    /// The hub every environment's agent dials in place of vsock, if the
+    /// worker runs one.
+    pub hub: Option<Arc<crate::hub::Hub>>,
     pub log: Log,
 }
 
@@ -1355,6 +1358,7 @@ impl Machine {
             progress: Some(Arc::new(move |step: &str| me.step_to(Step::Boot, step))),
             log: self.log.clone(),
             shared_files: files.map(|(root, view)| (root, view(&self.id))),
+            hub: rt.cfg.hub.clone(),
             cancel: Some(cancel.clone()),
             ..Default::default()
         };

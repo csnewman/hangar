@@ -9,6 +9,7 @@ pub mod gitout;
 pub mod guest;
 pub mod gvproxy;
 pub mod host;
+pub mod hub;
 pub mod hugepages;
 mod initrd;
 pub mod instance;
@@ -21,7 +22,7 @@ pub mod suspend;
 mod swap;
 pub mod vsock;
 
-pub use initrd::write_initrd;
+pub use initrd::{write_initrd, write_initrd_with};
 pub use swap::{drop_swap, make_swap};
 
 /// An error that is a message.

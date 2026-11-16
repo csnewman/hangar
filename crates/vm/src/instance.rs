@@ -137,6 +137,9 @@ pub struct InstanceConfig {
     pub shared_files: Option<(PathBuf, Arc<dyn hangar_nfs::View>)>,
     /// How long the agent has to dial back.
     pub agent_wait: Duration,
+    /// The hub the guest's agent dials over the network, standing in for
+    /// the monitor's vsock (`crate::hub`); none uses vsock.
+    pub hub: Option<Arc<crate::hub::Hub>>,
     /// Set to true when the boot stops being wanted: one waiting for its
     /// agent gives up, and what it started is stopped again.
     pub cancel: Option<watch::Receiver<bool>>,
@@ -252,6 +255,9 @@ pub struct Instance {
     resumed: bool,
     /// The base of the unix sockets the guest's vsock is carried on.
     vsock: PathBuf,
+    /// The machine's place on the hub, which carries its connections in
+    /// place of vsock, if it uses one.
+    hub: Option<crate::hub::Registration>,
     gpu: Option<GpuBackend>,
     net: Option<Passt>,
     mac_net: Option<crate::gvproxy::Network>,
@@ -368,7 +374,32 @@ impl Instance {
         let caps = host::detect(&cfg.monitor)?;
 
         let initrd = run.join("initrd.img");
-        crate::write_initrd(&cfg.agent, &initrd)?;
+        // A machine on the hub is expected there before it boots, and its
+        // agent is told in its initramfs where to dial and with what
+        // secret. One resuming keeps the secret it booted with, which its
+        // memory holds.
+        let hub = match &cfg.hub {
+            Some(h) => {
+                let kept = if resuming {
+                    crate::hub::saved_secret(&cfg.dir)
+                } else {
+                    None
+                };
+                let reg = h.register(&cfg.id, kept);
+                crate::hub::save_secret(&cfg.dir, reg.secret())?;
+                let settings = serde_json::to_vec(&reg.settings()).map_err(io::Error::other)?;
+                crate::write_initrd_with(
+                    &cfg.agent,
+                    &initrd,
+                    &[(crate::hub::SETTINGS_FILE, 0o600, &settings)],
+                )?;
+                Some(reg)
+            }
+            None => {
+                crate::write_initrd(&cfg.agent, &initrd)?;
+                None
+            }
+        };
         // Each start writes its console and monitor logs anew, as new files:
         // a reader following one knows it is another log by that, even once
         // it has grown past where the last ended.
@@ -386,6 +417,9 @@ impl Instance {
                 start_cloud_hypervisor(&cfg, &caps, &initrd, resuming, &exit, &mut parts).await
             }
         };
+        if let (Ok(()), Some(reg)) = (&started, &hub) {
+            reg.set_base(&parts.vsock);
+        }
         let session = match started {
             Ok(()) => await_agent(&cfg, &parts, &exit).await,
             Err(e) => Err(e),
@@ -429,6 +463,7 @@ impl Instance {
             session: Arc::new(session),
             resumed: resuming,
             vsock: std::mem::take(&mut parts.vsock),
+            hub,
             gpu: parts.gpu.take(),
             net: parts.net.take(),
             mac_net: parts.mac_net.take(),
@@ -549,6 +584,9 @@ impl Instance {
     /// Opens a connection to a port in the guest, as its monitor carries
     /// vsock.
     pub async fn dial_guest(&self, port: u32) -> io::Result<GuestConn> {
+        if let Some(h) = &self.hub {
+            return h.dial(port).await;
+        }
         match self.monitor {
             Monitor::Krun => guest::dial_krun(&self.vsock, port).await,
             Monitor::CloudHypervisor => guest::dial_cloud_hypervisor(&self.vsock, port).await,

@@ -156,8 +156,18 @@ mod linux {
         // or directory for a second: a file another environment makes is
         // seen at once, and one it removes -- a lock directory let go of --
         // within a second.
+        // Over vsock to the host's server, or on the hub to the agent's own
+        // relay of it on the loopback.
+        let transport = if crate::hub::settings().is_some() {
+            format!(
+                "proto=tcp,addr=127.0.0.1,port={}",
+                crate::hub::NFS_RELAY_PORT
+            )
+        } else {
+            format!("proto=vsock,addr=vsock:{HOST_CID},port={PORT}")
+        };
         let options = CString::new(format!(
-            "vers=4.2,proto=vsock,addr=vsock:{HOST_CID},port={PORT},hard,lookupcache=positive,actimeo=1"
+            "vers=4.2,{transport},hard,lookupcache=positive,actimeo=1"
         ))?;
         let target = CString::new(r.shared.as_os_str().as_encoded_bytes())?;
         // SAFETY: every pointer is to a live, NUL-terminated string.

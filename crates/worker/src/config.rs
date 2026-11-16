@@ -36,6 +36,19 @@ pub struct Config {
     pub runtime: String,
     /// Configures the cloud-hypervisor and krun runtimes.
     pub vm: VmConfig,
+    /// Where guests' agents dial this worker over the network, standing in
+    /// for vsock (hangar-hub). Set, every environment here uses it.
+    pub hub: Hub,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Hub {
+    /// Where the hub listens, as host:port; empty runs none.
+    pub listen: String,
+    /// What guests dial to reach it, as host:port: an address of this
+    /// machine they can route to.
+    pub address: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

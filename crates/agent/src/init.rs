@@ -244,6 +244,10 @@ mod boot {
         install_oom_drop_in(root).map_err(context("installing the agent's OOM settings"))?;
         ensure_machine_id(root).map_err(context("giving the environment a machine ID"))?;
 
+        // The hub's settings, if the worker gave any, kept where the agent
+        // finds them once systemd runs.
+        crate::hub::keep_settings().map_err(context("keeping the hub's settings"))?;
+
         // The layers stay reachable in the new root rather than orphaned, and
         // the kernel's filesystems move with it.
         for (from, to) in [

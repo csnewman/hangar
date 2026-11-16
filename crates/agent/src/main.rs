@@ -130,6 +130,12 @@ fn usage() -> ExitCode {
 /// The agent, for as long as the guest runs: the control channel to the
 /// host, and every service.
 async fn agent() -> std::io::Result<()> {
+    // With no vsock to the host, the worker's hub carries what vsock would.
+    #[cfg(target_os = "linux")]
+    if let Some(s) = hangar_agent::hub::settings() {
+        tokio::spawn(hangar_agent::hub::run(s));
+        tokio::spawn(hangar_agent::hub::relay_shared_files());
+    }
     #[cfg(target_os = "linux")]
     tokio::spawn(hangar_agent::control::run());
     hangar_agent::serve::serve().await

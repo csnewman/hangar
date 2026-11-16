@@ -97,10 +97,12 @@ pub async fn run() {
     let mut failing: Option<Instant> = None;
     let mut said: Option<Instant> = None;
     loop {
-        let dialed =
-            tokio::task::spawn_blocking(|| crate::vsock::connect(crate::vsock::HOST, PORT))
+        let dialed = match crate::hub::settings() {
+            Some(_) => crate::hub::open(PORT).await,
+            None => tokio::task::spawn_blocking(|| crate::vsock::connect(crate::vsock::HOST, PORT))
                 .await
-                .unwrap_or_else(|e| Err(io::Error::other(e)));
+                .unwrap_or_else(|e| Err(io::Error::other(e))),
+        };
         match dialed {
             // Expected while the host is not listening: in early boot, and
             // while the environment is being restored.

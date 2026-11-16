@@ -27,6 +27,13 @@ impl GuestConn {
     pub fn into_inner(self) -> BufReader<UnixStream> {
         self.r
     }
+
+    /// A connection carried to the guest by other means, such as the hub.
+    pub fn from_unix(c: UnixStream) -> GuestConn {
+        GuestConn {
+            r: BufReader::new(c),
+        }
+    }
 }
 
 impl AsyncRead for GuestConn {

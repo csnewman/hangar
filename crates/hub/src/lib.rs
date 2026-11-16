@@ -33,6 +33,18 @@ pub const SERVER_NAME: &str = "hangar-hub";
 /// The longest line either end reads before the streams start.
 const MAX_LINE: u64 = 64 << 10;
 
+/// What an agent needs to dial its worker, which the worker gives the guest
+/// with its boot: where the hub is, its certificate's fingerprint, and the
+/// environment's name and secret for this boot.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Settings {
+    /// The hub's host and port, as the guest reaches it.
+    pub address: String,
+    pub fingerprint: String,
+    pub environment: String,
+    pub secret: String,
+}
+
 /// What an agent says first.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {

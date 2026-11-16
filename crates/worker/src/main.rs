@@ -93,11 +93,26 @@ async fn run(path: PathBuf, rings: Arc<Rings>) -> Result<(), String> {
             ));
         }
     }
-    let machines = hangar_vm::runtime::Runtime::new(
-        vm::runtime_config(&cfg, log.clone()).map_err(|e| e.to_string())?,
-    )
-    .await
-    .map_err(|e| e.to_string())?;
+    let mut rtcfg = vm::runtime_config(&cfg, log.clone()).map_err(|e| e.to_string())?;
+    if !cfg.hub.listen.is_empty() {
+        if cfg.hub.address.is_empty() {
+            return Err("hub.listen is set without hub.address, what guests dial".into());
+        }
+        // The hub's certificate is kept beside the worker's credential: its
+        // fingerprint is in every guest booted since, so it outlives
+        // caches.
+        let dir = std::path::Path::new(&cfg.server.credential_file)
+            .parent()
+            .map(|d| d.join("hub"))
+            .unwrap_or_else(|| PathBuf::from("hub"));
+        let hub = hangar_vm::hub::Hub::start(&cfg.hub.listen, &cfg.hub.address, &dir, log.clone())
+            .await
+            .map_err(|e| e.to_string())?;
+        rtcfg.hub = Some(hub);
+    }
+    let machines = hangar_vm::runtime::Runtime::new(rtcfg)
+        .await
+        .map_err(|e| e.to_string())?;
     let w =
         Worker::new(cfg, machines.clone(), log.clone(), Some(rings)).map_err(|e| e.to_string())?;
 
