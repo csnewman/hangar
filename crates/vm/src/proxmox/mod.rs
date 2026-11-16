@@ -45,7 +45,7 @@ const CMDLINE: &str = "console=ttyS0 systemd.show_status=1 mitigations=off \
 
 /// The form of a template, part of its name: a template made to an older
 /// form is left for one of this form.
-const TEMPLATE_FORM: &str = "2";
+const TEMPLATE_FORM: &str = "3";
 
 /// The template's writable disk, grown for each environment.
 const TEMPLATE_UPPER_GIB: u64 = 1;
@@ -76,6 +76,34 @@ pub struct Config {
 }
 
 /// One Proxmox node, as the worker uses it.
+/// The RAM a VM boots with under memory hotplug, which it always has
+/// (qemu-server's static memory).
+pub const STATIC_MIB: u32 = 1024;
+
+/// Every memory size a VM can have under hotplug: STATIC_MIB, then whole
+/// DIMMs, 512 MiB each for the first 32 and each 32 after twice the size of
+/// the 32 before (qemu-server's foreach_dimm), to its last.
+fn memory_sizes() -> impl Iterator<Item = u32> {
+    (0..8 * 32u32).scan(STATIC_MIB, |at, i| {
+        *at += 512 << (i / 32);
+        Some(*at)
+    })
+}
+
+/// The memory size a VM can have nearest mib: mib rounded up to whole
+/// DIMMs, at least STATIC_MIB and at most the largest size within max.
+pub fn fit_memory(mib: u32, max: u32) -> u32 {
+    let cap = std::iter::once(STATIC_MIB)
+        .chain(memory_sizes())
+        .take_while(|&s| s <= max.max(STATIC_MIB))
+        .last()
+        .unwrap_or(STATIC_MIB);
+    if mib <= STATIC_MIB {
+        return STATIC_MIB;
+    }
+    memory_sizes().find(|&s| s >= mib).unwrap_or(cap).min(cap)
+}
+
 /// What Proxmox measures of a running VM.
 #[derive(Debug, Clone, Copy)]
 pub struct VmStats {
@@ -96,6 +124,8 @@ pub struct Pve {
     dir: PathBuf,
     /// The templates made, by image and boot.
     templates: tokio::sync::Mutex<HashMap<String, u32>>,
+    /// The boot disk's key templates are made with, once one has been.
+    boot_key: std::sync::Mutex<Option<String>>,
     log: Log,
 }
 
@@ -111,6 +141,7 @@ impl Pve {
             cfg,
             dir: dir.to_path_buf(),
             templates: Default::default(),
+            boot_key: Default::default(),
             log,
         })
     }
@@ -180,6 +211,7 @@ impl Pve {
             crate::suspend::fingerprint(agent)
         ));
         let name = format!("hangar-tpl{TEMPLATE_FORM}-{}-{boot_key}", short_hash(key));
+        *self.boot_key.lock().unwrap() = Some(boot_key.clone());
         let mut made = self.templates.lock().await;
         if let Some(id) = made.get(&name) {
             return Ok(*id);
@@ -221,12 +253,13 @@ impl Pve {
             ("ostype", "l26".into()),
             ("cpu", "host".into()),
             ("cores", "1".into()),
-            // All of its memory is RAM from boot: Proxmox's memory
-            // hotplug adds DIMMs the guest kernel finds through ACPI,
-            // which Hangar's does not look for. The balloon takes memory
-            // back while it runs.
-            ("memory", "1024".into()),
-            ("hotplug", "network,disk,usb".into()),
+            // Memory hotplug, which Proxmox has only with NUMA: the VM
+            // boots with STATIC_MIB of RAM and the rest as DIMMs, which the
+            // guest finds through ACPI, and its memory is resized while it
+            // runs by plugging and unplugging them.
+            ("memory", STATIC_MIB.to_string()),
+            ("numa", "1".into()),
+            ("hotplug", "network,disk,usb,memory".into()),
             ("agent", "1".into()),
             ("serial0", "socket".into()),
             // A guest's reboot stops the VM, and the worker boots it
@@ -255,6 +288,91 @@ impl Pve {
         self.wait(&upid, Duration::from_secs(300)).await?;
         made.insert(name, id);
         Ok(id)
+    }
+
+    /// Removes this node's templates of another form or boot disk than the
+    /// ones this worker makes, and the uploads of boot disks no template
+    /// has left.
+    /// Proxmox refuses to remove a template whose disks a linked clone
+    /// still uses (on LVM-thin or ZFS; on btrfs a clone stands alone),
+    /// which is then kept until a sweep after its last environment goes.
+    pub async fn sweep(&self) {
+        let Some(boot_key) = self.boot_key.lock().unwrap().clone() else {
+            return;
+        };
+        let Ok(all) = self.client.get("/cluster/resources?type=vm").await else {
+            return;
+        };
+        let current = format!("hangar-tpl{TEMPLATE_FORM}-");
+        let mut boots_kept = std::collections::HashSet::from([boot_key.clone()]);
+        for v in all.as_array().into_iter().flatten() {
+            let (Some(name), Some(id)) = (v["name"].as_str(), v["vmid"].as_u64()) else {
+                continue;
+            };
+            let ours = v["node"] == self.cfg.node.as_str()
+                && v["template"].as_u64() == Some(1)
+                && name.starts_with("hangar-tpl")
+                && v["tags"]
+                    .as_str()
+                    .is_some_and(|t| t.split(';').any(|t| t == TAG));
+            if !ours {
+                continue;
+            }
+            let boot = name.rsplit('-').next().unwrap_or_default().to_string();
+            if name.starts_with(&current) && boot == boot_key {
+                continue;
+            }
+            match self.destroy(id as u32).await {
+                Ok(()) => {
+                    self.log.info(
+                        "removed a superseded proxmox template",
+                        &[("template", &name)],
+                    );
+                    self.templates.lock().await.remove(name);
+                }
+                Err(e) => {
+                    self.log.debug(
+                        "keeping a superseded proxmox template",
+                        &[("template", &name), ("err", &e)],
+                    );
+                    boots_kept.insert(boot);
+                }
+            }
+        }
+        let path = format!(
+            "/nodes/{}/storage/{}/content?content=import",
+            self.node(),
+            enc(self.import_storage())
+        );
+        let Ok(have) = self.client.get(&path).await else {
+            return;
+        };
+        for v in have.as_array().into_iter().flatten() {
+            let Some(volid) = v["volid"].as_str() else {
+                continue;
+            };
+            let Some(key) = volid
+                .rsplit('/')
+                .next()
+                .and_then(|f| f.strip_prefix("hangar-boot-"))
+                .and_then(|f| f.strip_suffix(".raw"))
+            else {
+                continue;
+            };
+            if boots_kept.contains(key) {
+                continue;
+            }
+            let path = format!(
+                "/nodes/{}/storage/{}/content/{}",
+                self.node(),
+                enc(self.import_storage()),
+                enc(volid)
+            );
+            if let Ok(upid) = self.client.delete(&path, &[]).await {
+                let _ = self.wait(&upid, Duration::from_secs(120)).await;
+            }
+            let _ = std::fs::remove_file(self.dir.join(format!("boot-{key}.raw")));
+        }
     }
 
     /// The VMID of the VM on this node named name, if there is one.
@@ -363,13 +481,42 @@ impl Pve {
         format!("/nodes/{}/qemu/{id}/{rest}", self.node())
     }
 
-    /// Sizes a VM that is not running: its memory and vCPUs.
+    /// Sizes a VM that is not running: its memory, as fit_memory makes
+    /// it, and its vCPUs.
     pub async fn size(&self, id: u32, memory_mib: u32, cpus: u32) -> io::Result<()> {
-        let (m, c) = (memory_mib.max(256).to_string(), cpus.max(1).to_string());
+        let m = fit_memory(memory_mib, u32::MAX).to_string();
+        let c = cpus.max(1).to_string();
         self.client
             .put(&self.vm(id, "config"), &[("memory", &m), ("cores", &c)])
             .await
             .map(|_| ())
+    }
+
+    /// Asks a running VM to have mib MiB of memory (fit_memory's), which
+    /// Proxmox plugs in or unplugs as DIMMs in a task of its own: memory
+    /// says how far it has got. A DIMM the guest cannot give back stays,
+    /// and the rest of the change waits for the VM's next start.
+    pub async fn set_memory(&self, id: u32, mib: u32) -> io::Result<()> {
+        let m = mib.to_string();
+        self.client
+            .post(&self.vm(id, "config"), &[("memory", &m)])
+            .await
+            .map(|_| ())
+    }
+
+    /// The memory a VM has, in MiB: under hotplug, what is plugged in.
+    pub async fn memory(&self, id: u32) -> io::Result<u32> {
+        let conf = self.client.get(&self.vm(id, "config")).await?;
+        let m = match &conf["memory"] {
+            Value::Number(n) => n.as_u64(),
+            Value::String(s) => s
+                .split(',')
+                .map(|p| p.strip_prefix("current=").unwrap_or(p))
+                .find_map(|p| p.parse().ok()),
+            _ => None,
+        };
+        m.map(|m| m as u32)
+            .ok_or_else(|| err("the VM's config has no memory"))
     }
 
     /// Starts a VM, or resumes it from a hibernate, saying in its SMBIOS

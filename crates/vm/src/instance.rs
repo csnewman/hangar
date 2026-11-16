@@ -282,6 +282,8 @@ pub struct Instance {
     vm: Option<u32>,
     /// A Proxmox VM's serial console, followed into its console log.
     _console: Option<crate::proxmox::console::Following>,
+    /// The memory a Proxmox VM was last asked to have, in MiB.
+    vm_memory: std::sync::atomic::AtomicU32,
     gpu: Option<GpuBackend>,
     net: Option<Passt>,
     mac_net: Option<crate::gvproxy::Network>,
@@ -494,6 +496,7 @@ impl Instance {
             hub,
             vm: None,
             _console: None,
+            vm_memory: Default::default(),
             gpu: parts.gpu.take(),
             net: parts.net.take(),
             mac_net: parts.mac_net.take(),
@@ -582,14 +585,16 @@ impl Instance {
         if self.monitor == Monitor::Krun {
             return self.krun_memory().await;
         }
-        // A Proxmox VM keeps the memory it booted with.
-        if self.monitor == Monitor::Proxmox {
-            let m = self.cfg.memory_mib;
+        // A Proxmox VM's memory is its static part and the DIMMs plugged
+        // in beyond it.
+        if let (Some((pve, id)), Monitor::Proxmox) = (&self.process.vm, self.monitor) {
+            let max = crate::proxmox::fit_memory(self.cfg.memory_max_mib, self.cfg.memory_max_mib);
+            let actual = pve.memory(*id).await?;
             return Ok(Memory {
-                boot: m,
-                max: m,
-                requested: m,
-                actual: m,
+                boot: crate::proxmox::STATIC_MIB,
+                max: max.max(actual),
+                requested: self.vm_memory.load(std::sync::atomic::Ordering::Relaxed),
+                actual,
             });
         }
         match &self.api {
@@ -607,6 +612,15 @@ impl Instance {
             return Err(err(
                 "it booted with no room to resize its memory; it takes a new size when it next starts",
             ));
+        }
+        if let (Some((pve, id)), Monitor::Proxmox) = (&self.process.vm, self.monitor) {
+            let want = crate::proxmox::fit_memory(mib, m.max);
+            if want != m.requested || want != m.actual {
+                self.vm_memory
+                    .store(want, std::sync::atomic::Ordering::Relaxed);
+                pve.set_memory(*id, want).await?;
+            }
+            return Ok(want);
         }
         let want = m.fit(mib);
         if want == m.requested {
@@ -928,6 +942,9 @@ impl Instance {
                 let tpl = pve
                     .template(&cfg.image_key, &cfg.base_file, &cfg.kernel, &cfg.agent)
                     .await?;
+                // Templates this one supersedes are removed while it boots.
+                let p = pve.clone();
+                tokio::spawn(async move { p.sweep().await });
                 let n = pve
                     .create(tpl, &cfg.id, &cfg.name, cfg.upper_gib, cfg.swap_mib)
                     .await?;
@@ -1009,6 +1026,7 @@ impl Instance {
             hub: Some(reg),
             vm: Some(id),
             _console: Some(console),
+            vm_memory: pve.memory(id).await.unwrap_or(cfg.memory_mib).into(),
             gpu: None,
             net: None,
             mac_net: None,

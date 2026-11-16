@@ -1748,6 +1748,8 @@ impl Machine {
         };
         pve.destroy(id).await?;
         let _ = std::fs::remove_file(&file);
+        // Its template may have been the last of an older agent's.
+        tokio::spawn(async move { pve.sweep().await });
         Ok(())
     }
 
