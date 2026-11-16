@@ -132,6 +132,9 @@ pub struct Config {
     /// The hub every environment's agent dials in place of vsock, if the
     /// worker runs one.
     pub hub: Option<Arc<crate::hub::Hub>>,
+    /// The Proxmox node that runs every environment as a VM, under
+    /// runtime proxmox.
+    pub proxmox: Option<Arc<crate::proxmox::Pve>>,
     pub log: Log,
 }
 
@@ -193,6 +196,9 @@ pub struct Runtime {
     gpu_zink: bool,
     stop: watch::Sender<bool>,
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
+    /// The CPUs and memory its machines run on when that is not this
+    /// machine: a Proxmox node's.
+    capacity: Option<Resources>,
 }
 
 impl Runtime {
@@ -205,6 +211,11 @@ impl Runtime {
     pub async fn new(mut cfg: Config) -> io::Result<Arc<Runtime>> {
         cfg.defaults();
         preflight(&cfg)?;
+        // Proxmox's guests are x86-64 whatever runs the worker, and images
+        // are pulled for them.
+        if cfg.monitor == Monitor::Proxmox.name() {
+            hangar_images::set_guest_arch("amd64");
+        }
         std::fs::create_dir_all(&cfg.state_dir)?;
         let store = {
             let (dir, sources, auth) = (
@@ -244,7 +255,25 @@ impl Runtime {
                     gpu = Some(gpu_info(&cfg, ch::probe_gpu(&gpu_env).await));
                 }
             }
+            // Proxmox's VMs have no virtual GPU of Hangar's.
+            Monitor::Proxmox => {}
         }
+        let capacity = match (&caps.monitor, &cfg.proxmox) {
+            (Monitor::Proxmox, Some(pve)) => {
+                let version = pve.check().await?;
+                let r = pve.resources().await?;
+                cfg.log.info(
+                    "environments run as Proxmox VMs",
+                    &[
+                        ("proxmox", &version),
+                        ("cpus", &r.cpus),
+                        ("memory_mib", &r.memory_mib),
+                    ],
+                );
+                Some(r)
+            }
+            _ => None,
+        };
         let (stop, _) = watch::channel(false);
         let rt = Arc::new(Runtime {
             cfg,
@@ -257,8 +286,11 @@ impl Runtime {
             gpu_zink,
             stop,
             tasks: Mutex::default(),
+            capacity,
         });
-        if caps.monitor == Monitor::CloudHypervisor || caps.os == "linux" {
+        if caps.monitor == Monitor::CloudHypervisor
+            || (caps.monitor == Monitor::Krun && caps.os == "linux")
+        {
             rt.spawn(watch_huge_pages(
                 Arc::downgrade(&rt),
                 rt.stop.subscribe(),
@@ -293,6 +325,12 @@ impl Runtime {
     /// What runs the environments.
     pub fn monitor(&self) -> &'static str {
         self.monitor.name()
+    }
+
+    /// The CPUs and memory the machines run on, when that is not this
+    /// machine's.
+    pub fn capacity(&self) -> Option<Resources> {
+        self.capacity
     }
 
     /// Whether the environments can be suspended, which they can under
@@ -634,6 +672,17 @@ fn preflight(cfg: &Config) -> io::Result<()> {
                     )));
                 }
             }
+        }
+        Monitor::Proxmox => {
+            if cfg.proxmox.is_none() {
+                return Err(err("runtime proxmox needs the proxmox section"));
+            }
+            if cfg.hub.is_none() {
+                return Err(err(
+                    "runtime proxmox needs the hub (hub.listen and hub.address): a Proxmox VM has no vsock",
+                ));
+            }
+            cfg.mkfs()?;
         }
         Monitor::CloudHypervisor => {
             crate::hugepages::check()?;
@@ -1188,6 +1237,10 @@ impl Machine {
                 DesiredState::Deleted => {
                     self.set(Phase::Deleting, "");
                     self.power_off().await;
+                    if let Err(e) = self.destroy_vm().await {
+                        self.set(Phase::Failed, &format!("removing its VM: {e}"));
+                        continue;
+                    }
                     let _ = std::fs::remove_dir_all(
                         std::env::temp_dir().join(format!("hangar-{}", self.id)),
                     );
@@ -1278,6 +1331,12 @@ impl Machine {
             self.change_image(spec).await?;
         }
         let img = self.resolve(spec, &cancel).await?;
+        if s.display == Display::Desktop && rt.monitor == Monitor::Proxmox {
+            return Err(err(
+                "a Proxmox VM here boots headless: set the template's display to none",
+            )
+            .into());
+        }
         if s.display == Display::Desktop {
             // An image that says it has no desktop would boot to one that
             // never appears; one that does not say is taken at its word.
@@ -1296,13 +1355,16 @@ impl Machine {
         // which the agent mounts at /var/lib/docker beside the root rather
         // than in it: overlay2 cannot stack on the overlay root.
         let upper = self.dir.join("upper.ext4");
-        provision::ensure_disk(
-            &upper,
-            "hangar-upper",
-            rt.cfg.upper_gib + rt.cfg.docker_gib,
-            &rt.cfg.mkfs()?,
-        )
-        .await?;
+        // A Proxmox VM's writable disk is a volume of its own there.
+        if rt.monitor != Monitor::Proxmox {
+            provision::ensure_disk(
+                &upper,
+                "hangar-upper",
+                rt.cfg.upper_gib + rt.cfg.docker_gib,
+                &rt.cfg.mkfs()?,
+            )
+            .await?;
+        }
         // Built once per copy of the image, and shared by every machine on
         // it.
         self.step_to(Step::Disks, "preparing the image");
@@ -1328,6 +1390,13 @@ impl Machine {
             (st.memory_max_mib, st.files.clone())
         };
         let me = self.clone();
+        // A copy of an image is a directory of the store's, named for the
+        // image and its digest: one Proxmox template serves it.
+        let image_key = base_file
+            .parent()
+            .and_then(|d| d.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let mut cfg = InstanceConfig {
             id: self.id.clone(),
             name: spec.name.clone(),
@@ -1359,6 +1428,9 @@ impl Machine {
             log: self.log.clone(),
             shared_files: files.map(|(root, view)| (root, view(&self.id))),
             hub: rt.cfg.hub.clone(),
+            proxmox: rt.cfg.proxmox.clone(),
+            image_key,
+            upper_gib: rt.cfg.upper_gib + rt.cfg.docker_gib,
             cancel: Some(cancel.clone()),
             ..Default::default()
         };
@@ -1659,6 +1731,23 @@ impl Machine {
     }
 
     /// Stops the machine if one is running, cleanly if it can.
+    /// Destroys the environment's Proxmox VM, if it has one.
+    async fn destroy_vm(&self) -> io::Result<()> {
+        let Some(pve) = self.rt().and_then(|rt| rt.cfg.proxmox.clone()) else {
+            return Ok(());
+        };
+        let file = self.dir.join(crate::instance::PROXMOX_VM_FILE);
+        let Some(id) = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+        else {
+            return Ok(());
+        };
+        pve.destroy(id).await?;
+        let _ = std::fs::remove_file(&file);
+        Ok(())
+    }
+
     async fn power_off(&self) {
         let inst = self.st.lock().unwrap().running.take();
         if let Some(inst) = inst {

@@ -80,13 +80,26 @@ fn other(msg: String) -> io::Error {
     io::Error::other(msg)
 }
 
-/// The architecture a guest shares with this machine, as images name it.
+/// The architecture of the guests images are pulled for, as images name
+/// it: this machine's, unless set_guest_arch says otherwise.
 pub fn guest_arch() -> &'static str {
+    if let Some(a) = GUEST_ARCH.get() {
+        return a;
+    }
     match std::env::consts::ARCH {
         "aarch64" => "arm64",
         "x86_64" => "amd64",
         a => a,
     }
+}
+
+static GUEST_ARCH: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+/// Pulls images for guests of another architecture than this machine's,
+/// as a worker whose guests run elsewhere (on a Proxmox node) does. Set
+/// once, before anything is pulled.
+pub fn set_guest_arch(arch: &'static str) {
+    let _ = GUEST_ARCH.set(arch);
 }
 
 /// Pulls images and looks up what their references name.

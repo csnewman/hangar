@@ -86,10 +86,10 @@ async fn run(path: PathBuf, rings: Arc<Rings>) -> Result<(), String> {
     let cfg = Config::load(&path).map_err(|e| e.to_string())?;
     let log = Log::default();
     match cfg.runtime.as_str() {
-        "cloud-hypervisor" | "krun" => {}
+        "cloud-hypervisor" | "krun" | "proxmox" => {}
         other => {
             return Err(format!(
-                "unknown runtime {other:?}: want cloud-hypervisor or krun"
+                "unknown runtime {other:?}: want cloud-hypervisor, krun or proxmox"
             ));
         }
     }
@@ -109,6 +109,33 @@ async fn run(path: PathBuf, rings: Arc<Rings>) -> Result<(), String> {
             .await
             .map_err(|e| e.to_string())?;
         rtcfg.hub = Some(hub);
+    }
+    if cfg.runtime == "proxmox" {
+        let p = &cfg.proxmox;
+        let token = std::fs::read_to_string(&p.token_file)
+            .map_err(|e| format!("proxmox.token_file {}: {e}", p.token_file))?;
+        let dir = PathBuf::from(&cfg.storage.caches).join("proxmox");
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let pve = hangar_vm::proxmox::Pve::new(
+            hangar_vm::proxmox::Config {
+                url: p.url.clone(),
+                token: token.trim().to_string(),
+                fingerprint: p.fingerprint.clone(),
+                node: p.node.clone(),
+                storage: p.storage.clone(),
+                import_storage: p.import_storage.clone(),
+                bridge: if p.bridge.is_empty() {
+                    "vmbr0".into()
+                } else {
+                    p.bridge.clone()
+                },
+                pool: p.pool.clone(),
+            },
+            &dir,
+            log.clone(),
+        )
+        .map_err(|e| e.to_string())?;
+        rtcfg.proxmox = Some(Arc::new(pve));
     }
     let machines = hangar_vm::runtime::Runtime::new(rtcfg)
         .await

@@ -1818,10 +1818,10 @@ export interface components {
             memory_mib: number;
         };
         /**
-         * @description What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS or Linux. Absent until the worker says.
+         * @description What runs a worker's environments: cloud-hypervisor on Linux; krun, libkrun on macOS or Linux; proxmox, each a Proxmox VE VM. Absent until the worker says.
          * @enum {string}
          */
-        Monitor: "cloud-hypervisor" | "krun";
+        Monitor: "cloud-hypervisor" | "krun" | "proxmox";
         Worker: {
             id: string;
             name: string;

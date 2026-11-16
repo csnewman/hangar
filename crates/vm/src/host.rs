@@ -16,6 +16,9 @@ pub enum Monitor {
     /// Runs guests through libkrun (hangar-krun): on macOS's
     /// Hypervisor.framework, and on Linux's KVM beside Cloud Hypervisor.
     Krun,
+    /// Has Proxmox VE run each guest as a VM of its own, through its API
+    /// (`crate::proxmox`): nothing runs here but the worker.
+    Proxmox,
 }
 
 impl Monitor {
@@ -24,6 +27,7 @@ impl Monitor {
         match self {
             Monitor::CloudHypervisor => "cloud-hypervisor",
             Monitor::Krun => "krun",
+            Monitor::Proxmox => "proxmox",
         }
     }
 
@@ -31,6 +35,7 @@ impl Monitor {
         match s {
             "cloud-hypervisor" => Some(Monitor::CloudHypervisor),
             "krun" => Some(Monitor::Krun),
+            "proxmox" => Some(Monitor::Proxmox),
             _ => None,
         }
     }
@@ -67,6 +72,20 @@ pub fn detect(monitor: &str) -> io::Result<Caps> {
         "" => None,
         m => Some(Monitor::parse(m).ok_or_else(|| err(format!("unknown monitor {m:?}")))?),
     };
+    // Proxmox runs the guests, on its own x86-64 nodes, whatever this host
+    // is: nothing here needs KVM.
+    if named == Some(Monitor::Proxmox) {
+        return Ok(Caps {
+            os: if std::env::consts::OS == "macos" {
+                "darwin"
+            } else {
+                "linux"
+            },
+            arch: "x86_64",
+            console_tty: "ttyS0",
+            monitor: Monitor::Proxmox,
+        });
+    }
     match std::env::consts::OS {
         "linux" => {
             // libkrun unless Cloud Hypervisor is named; its console is a
@@ -76,7 +95,7 @@ pub fn detect(monitor: &str) -> io::Result<Caps> {
                     Monitor::CloudHypervisor,
                     if arch == "x86_64" { "ttyS0" } else { "ttyAMA0" },
                 ),
-                None | Some(Monitor::Krun) => (Monitor::Krun, "hvc0"),
+                None | Some(Monitor::Krun) | Some(Monitor::Proxmox) => (Monitor::Krun, "hvc0"),
             };
             // Neither monitor has an emulation mode: without KVM there is
             // no way to run a guest at all, fast or slow. So this is a

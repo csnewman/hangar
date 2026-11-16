@@ -494,6 +494,7 @@ pub mod feature {
 /// The monitors a worker runs environments under.
 pub const MONITOR_CLOUD_HYPERVISOR: &str = "cloud-hypervisor";
 pub const MONITOR_KRUN: &str = "krun";
+pub const MONITOR_PROXMOX: &str = "proxmox";
 
 /// An amount of CPU and memory.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

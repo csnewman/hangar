@@ -39,6 +39,33 @@ pub struct Config {
     /// Where guests' agents dial this worker over the network, standing in
     /// for vsock (hangar-hub). Set, every environment here uses it.
     pub hub: Hub,
+    /// The Proxmox VE node that runs each environment as a VM, for runtime
+    /// proxmox.
+    pub proxmox: Proxmox,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Proxmox {
+    /// Its API, https://host:8006.
+    pub url: String,
+    /// Holds the API token, USER@REALM!ID=SECRET, as its page shows it.
+    pub token_file: String,
+    /// The SHA-256 fingerprint of the node's certificate, as Proxmox shows
+    /// it under the node's Certificates; empty takes a certificate the
+    /// system's roots vouch for.
+    pub fingerprint: String,
+    /// The node the worker makes VMs on: the one it runs on.
+    pub node: String,
+    /// Where VMs' disks go.
+    pub storage: String,
+    /// Where images and the boot disk are uploaded, a storage holding
+    /// import content; empty is storage.
+    pub import_storage: String,
+    /// The bridge or VNet environments' NICs join.
+    pub bridge: String,
+    /// The pool every VM joins; empty is none.
+    pub pool: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

@@ -205,6 +205,7 @@ type Opener = oneshot::Sender<Result<yamux::Stream, yamux::ConnectionError>>;
 pub struct Link {
     opens: mpsc::UnboundedSender<Opener>,
     closed: watch::Receiver<bool>,
+    shut: std::sync::Arc<watch::Sender<bool>>,
 }
 
 /// The streams the other end opens.
@@ -220,8 +221,16 @@ impl Link {
         let (opens, open_rx) = mpsc::unbounded_channel();
         let (inbound, rx) = mpsc::unbounded_channel();
         let (closed_tx, closed) = watch::channel(false);
-        tokio::spawn(drive(conn, open_rx, inbound, closed_tx));
-        (Link { opens, closed }, Incoming { rx })
+        let (shut, shut_rx) = watch::channel(false);
+        tokio::spawn(drive(conn, open_rx, inbound, closed_tx, shut_rx));
+        (
+            Link {
+                opens,
+                closed,
+                shut: std::sync::Arc::new(shut),
+            },
+            Incoming { rx },
+        )
     }
 
     /// Opens a stream standing in for the other end's vsock port.
@@ -232,6 +241,12 @@ impl Link {
         let mut s = s.compat();
         write_line(&mut s, &Open { port }).await?;
         Ok(BufReader::new(s))
+    }
+
+    /// Closes the connection, every stream on it with it: the other end
+    /// finds it closed, as a guest does once it resumes.
+    pub fn close(&self) {
+        let _ = self.shut.send(true);
     }
 
     /// Whether the connection has closed.
@@ -287,10 +302,19 @@ async fn drive<T: futures_util::AsyncRead + futures_util::AsyncWrite + Unpin>(
     mut opens: mpsc::UnboundedReceiver<Opener>,
     inbound: mpsc::UnboundedSender<yamux::Stream>,
     closed: watch::Sender<bool>,
+    mut shut: watch::Receiver<bool>,
 ) {
     let mut waiting: VecDeque<Opener> = VecDeque::new();
     let mut asking = true;
+    let mut shutting = std::pin::pin!(async move {
+        let _ = shut.wait_for(|s| *s).await;
+    });
+    let mut closing = false;
     std::future::poll_fn(|cx| {
+        if closing || shutting.as_mut().poll(cx).is_ready() {
+            closing = true;
+            return conn.poll_close(cx).map(|_| ());
+        }
         while asking {
             match opens.poll_recv(cx) {
                 Poll::Ready(Some(o)) => waiting.push_back(o),

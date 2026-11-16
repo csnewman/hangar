@@ -10,7 +10,7 @@ mod store;
 
 pub use merge::{EROFS_ALIGN, Merge, build_erofs};
 pub use reference::Reference;
-pub use registry::{Auth, Client, HangarRegistry, Progress, Stage, guest_arch};
+pub use registry::{Auth, Client, HangarRegistry, Progress, Stage, guest_arch, set_guest_arch};
 #[cfg(unix)]
 pub use store::{
     EROFS_FILE, IMAGE_INFO_PATH, Image, ImageCopy, ImageInfo, LocalImage, Store, allocated,

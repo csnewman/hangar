@@ -93,6 +93,11 @@ pub trait Runtime: Clone + Send + Sync + 'static {
     /// Sizes what it runs by what the worker offers: a machine whose memory
     /// can be resized while it runs can grow to all of it.
     fn use_capacity(&self, _offered: Resources) {}
+    /// What its environments run on, when that is not this machine: the
+    /// worker offers it in place of its own.
+    fn capacity(&self) -> Option<Resources> {
+        None
+    }
     /// Serves environments the files they share with others: from root,
     /// each what view says it may reach.
     fn use_shared_files(&self, _root: PathBuf, _view: FilesView) {}
@@ -116,7 +121,9 @@ impl<R: Runtime> Worker<R> {
     /// configuration reserves for the host, times its overcommit, which
     /// answers the control plane's requests for its log from rings.
     pub fn new(cfg: Config, rt: R, log: Log, rings: Option<Arc<Rings>>) -> io::Result<Arc<Self>> {
-        let total = sys::machine_capacity()
+        let total = rt
+            .capacity()
+            .map_or_else(sys::machine_capacity, Ok)
             .map_err(|e| io::Error::other(format!("measuring this machine: {e}")))?;
         let offered = offer(&cfg, total, sys::swap_mib(), &log);
         let client = Client::new(&cfg.server.url);

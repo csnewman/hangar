@@ -135,10 +135,11 @@ RUN ln -s /libkrun /src/krun/libkrun && cd /src/krun \
 FROM ${UBUNTU} AS worker
 # libopengl0 is desktop OpenGL through EGL, which libepoxy loads for
 # virglrenderer and aborts without: the GPU backend would die as the guest
-# first asked what it offers.
+# first asked what it offers. dosfstools, syslinux and mtools make the boot
+# disk a Proxmox worker's VMs share.
 RUN apt-get update -qq \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends \
-      ca-certificates passt e2fsprogs coreutils \
+      ca-certificates passt e2fsprogs coreutils dosfstools syslinux mtools \
       libepoxy0 libgbm1 libegl1 libgles2 libopengl0 libdrm2 libvulkan1 \
       libgl1-mesa-dri mesa-vulkan-drivers >/dev/null \
  && rm -rf /var/lib/apt/lists/*

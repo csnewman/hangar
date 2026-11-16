@@ -16,6 +16,7 @@ pub mod instance;
 pub mod krun;
 pub mod log;
 pub mod provision;
+pub mod proxmox;
 pub mod runtime;
 pub mod stats;
 pub mod suspend;

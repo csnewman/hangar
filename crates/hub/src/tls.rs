@@ -30,11 +30,28 @@ pub fn fingerprint(cert: &[u8]) -> String {
 /// The agent's TLS: TLS 1.3 to the certificate with this fingerprint
 /// alone.
 pub fn client(fingerprint: &str) -> io::Result<Arc<rustls::ClientConfig>> {
-    let fingerprint = fingerprint.trim().to_ascii_lowercase();
+    let mut c = pinned(fingerprint, &[&rustls::version::TLS13])?;
+    c.alpn_protocols = vec![ALPN.to_vec()];
+    Ok(Arc::new(c))
+}
+
+/// TLS to the server whose certificate has this fingerprint, and no other,
+/// in the versions given: for the hub, and for a server whose certificate
+/// no authority signs, as a Proxmox node's own is.
+pub fn pinned(
+    fingerprint: &str,
+    versions: &[&'static rustls::SupportedProtocolVersion],
+) -> io::Result<rustls::ClientConfig> {
+    let fingerprint = fingerprint
+        .trim()
+        .chars()
+        .filter(|c| *c != ':')
+        .collect::<String>()
+        .to_ascii_lowercase();
     if fingerprint.len() != 64 || !fingerprint.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "a hub fingerprint is 64 hex digits",
+            "a SHA-256 fingerprint is 64 hex digits",
         ));
     }
     let provider = provider();
@@ -42,14 +59,12 @@ pub fn client(fingerprint: &str) -> io::Result<Arc<rustls::ClientConfig>> {
         fingerprint,
         algorithms: provider.signature_verification_algorithms,
     };
-    let mut c = rustls::ClientConfig::builder_with_provider(provider)
-        .with_protocol_versions(&[&rustls::version::TLS13])
+    Ok(rustls::ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(versions)
         .map_err(io::Error::other)?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(pinned))
-        .with_no_client_auth();
-    c.alpn_protocols = vec![ALPN.to_vec()];
-    Ok(Arc::new(c))
+        .with_no_client_auth())
 }
 
 /// The worker's TLS: TLS 1.3, presenting cert (DER) and its PKCS #8 key.
@@ -103,13 +118,11 @@ impl ServerCertVerifier for Pinned {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
     ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        Err(rustls::Error::General(
-            "the hub speaks TLS 1.3 alone".into(),
-        ))
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.algorithms)
     }
 
     fn verify_tls13_signature(

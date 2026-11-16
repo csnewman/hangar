@@ -45,14 +45,18 @@ pub struct Hub {
     address: String,
     fingerprint: String,
     envs: Mutex<HashMap<String, Entry>>,
+    /// Numbers registrations, so one ending removes itself alone and not
+    /// a newer one of the same environment.
+    next: std::sync::atomic::AtomicU64,
     log: Log,
 }
 
 struct Entry {
+    registration: u64,
     secret: String,
     /// The machine's vsock base, where the worker listens for what the
     /// guest dials; set once its sockets are bound.
-    base: watch::Sender<Option<PathBuf>>,
+    base: Option<PathBuf>,
     link: watch::Sender<Option<Link>>,
 }
 
@@ -71,6 +75,7 @@ impl Hub {
             address: address.to_string(),
             fingerprint,
             envs: Mutex::new(HashMap::new()),
+            next: std::sync::atomic::AtomicU64::new(1),
             log,
         });
         hub.log.info(
@@ -98,20 +103,28 @@ impl Hub {
     /// one it booted with, else a new one.
     pub fn register(self: &Arc<Self>, environment: &str, secret: Option<String>) -> Registration {
         let secret = secret.unwrap_or_else(new_secret);
-        let (base, _) = watch::channel(None);
+        let id = self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (link, _) = watch::channel(None);
-        self.envs.lock().unwrap().insert(
+        let replaced = self.envs.lock().unwrap().insert(
             environment.to_string(),
             Entry {
+                registration: id,
                 secret: secret.clone(),
-                base,
+                base: None,
                 link,
             },
         );
+        if let Some(old) = replaced
+            && let Some(l) = old.link.borrow().as_ref()
+        {
+            l.close();
+        }
         Registration {
             hub: self.clone(),
             environment: environment.to_string(),
             secret,
+            id,
+            ended: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -129,14 +142,14 @@ impl Hub {
                 return;
             }
         };
-        let env = g.hello.environment.clone();
-        let entry = {
-            let envs = self.envs.lock().unwrap();
-            envs.get(&env)
-                .filter(|e| same(&e.secret, &g.hello.secret))
-                .map(|e| (e.base.subscribe(), e.link.clone()))
-        };
-        let Some((base, link_tx)) = entry else {
+        let (env, secret) = (g.hello.environment.clone(), g.hello.secret.clone());
+        let expected = self
+            .envs
+            .lock()
+            .unwrap()
+            .get(&env)
+            .is_some_and(|e| same(&e.secret, &secret));
+        if !expected {
             self.log.warn(
                 "refused an agent: no such environment here, or the wrong secret",
                 &[("environment", &env), ("peer", &peer)],
@@ -144,7 +157,7 @@ impl Hub {
             g.refuse("no such environment here, or the wrong secret")
                 .await;
             return;
-        };
+        }
         let (link, mut incoming) = match g.welcome().await {
             Ok(l) => l,
             Err(_) => return,
@@ -153,9 +166,16 @@ impl Hub {
             "agent connected to the hub",
             &[("environment", &env), ("peer", &peer)],
         );
-        link_tx.send_replace(Some(link.clone()));
+        // A registration that has ended since the hello takes the link
+        // with it.
+        match self.envs.lock().unwrap().get(&env) {
+            Some(e) if same(&e.secret, &secret) => {
+                e.link.send_replace(Some(link.clone()));
+            }
+            _ => link.close(),
+        }
         while let Some(a) = incoming.next().await {
-            let mut base = base.clone();
+            let (hub, env, secret) = (self.clone(), env.clone(), secret.clone());
             tokio::spawn(async move {
                 let Ok((port, stream)) = a.open().await else {
                     return;
@@ -163,11 +183,7 @@ impl Hub {
                 if !GUEST_DIALS.contains(&port) {
                     return;
                 }
-                let waited = async move {
-                    let got = base.wait_for(|b| b.is_some()).await.ok()?;
-                    got.clone()
-                };
-                let Ok(Some(base)) = tokio::time::timeout(LINK_WITHIN, waited).await else {
+                let Some(base) = hub.base(&env, &secret).await else {
                     return;
                 };
                 let Ok(to) = UnixStream::connect(hybrid_path(&base, port)).await else {
@@ -177,13 +193,38 @@ impl Hub {
             });
         }
         // The link is over: forget it, unless a newer one has replaced it.
-        link_tx.send_if_modified(|l| match l {
-            Some(cur) if cur.is_closed() => {
-                *l = None;
-                true
+        if let Some(e) = self.envs.lock().unwrap().get(&env) {
+            e.link.send_if_modified(|l| match l {
+                Some(cur) if cur.is_closed() => {
+                    *l = None;
+                    true
+                }
+                _ => false,
+            });
+        }
+    }
+
+    /// Where the worker listens for what an environment's guest dials,
+    /// once a registration with this secret says, waiting for a while: a
+    /// guest resuming dials before the worker has bound its sockets again.
+    async fn base(&self, environment: &str, secret: &str) -> Option<PathBuf> {
+        let deadline = tokio::time::Instant::now() + LINK_WITHIN;
+        loop {
+            let base = self
+                .envs
+                .lock()
+                .unwrap()
+                .get(environment)
+                .filter(|e| same(&e.secret, secret))
+                .and_then(|e| e.base.clone());
+            if base.is_some() {
+                return base;
             }
-            _ => false,
-        });
+            if tokio::time::Instant::now() > deadline {
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 
     /// Opens a connection to port in environment's guest.
@@ -223,6 +264,8 @@ pub struct Registration {
     hub: Arc<Hub>,
     environment: String,
     secret: String,
+    id: u64,
+    ended: std::sync::atomic::AtomicBool,
 }
 
 impl Registration {
@@ -242,8 +285,8 @@ impl Registration {
 
     /// Says where the machine's vsock sockets are, once they are bound.
     pub fn set_base(&self, base: &Path) {
-        if let Some(e) = self.hub.envs.lock().unwrap().get(&self.environment) {
-            e.base.send_replace(Some(base.to_path_buf()));
+        if let Some(e) = self.hub.envs.lock().unwrap().get_mut(&self.environment) {
+            e.base = Some(base.to_path_buf());
         }
     }
 
@@ -251,17 +294,29 @@ impl Registration {
     pub async fn dial(&self, port: u32) -> io::Result<GuestConn> {
         self.hub.dial(&self.environment, port).await
     }
+
+    /// Ends the registration, and closes the machine's link: a guest
+    /// suspended finds it closed when it resumes, and dials again, as a
+    /// resumed guest's vsock connections are reset under it.
+    pub fn end(&self) {
+        if self.ended.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let mut envs = self.hub.envs.lock().unwrap();
+        if envs
+            .get(&self.environment)
+            .is_some_and(|e| e.registration == self.id)
+            && let Some(e) = envs.remove(&self.environment)
+            && let Some(l) = e.link.borrow().as_ref()
+        {
+            l.close();
+        }
+    }
 }
 
 impl Drop for Registration {
     fn drop(&mut self) {
-        let mut envs = self.hub.envs.lock().unwrap();
-        if envs
-            .get(&self.environment)
-            .is_some_and(|e| e.secret == self.secret)
-        {
-            envs.remove(&self.environment);
-        }
+        self.end();
     }
 }
 

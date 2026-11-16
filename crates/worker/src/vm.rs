@@ -108,6 +108,10 @@ impl crate::Runtime for Arc<runtime::Runtime> {
         )
     }
 
+    fn capacity(&self) -> Option<Resources> {
+        runtime::Runtime::capacity(self)
+    }
+
     fn use_capacity(&self, offered: Resources) {
         runtime::Runtime::use_capacity(self, offered);
     }

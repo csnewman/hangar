@@ -173,3 +173,19 @@ async fn many_streams_carry_their_own_bytes() {
             .unwrap();
     }
 }
+
+/// Closing a link ends it at both ends, every stream on it with it.
+#[tokio::test]
+async fn a_link_closed_ends_at_both_ends() {
+    let (addr, fp, mut links) = worker().await;
+    let (agent, _agent_in) = connect(&addr, &fp, &hello(SECRET)).await.unwrap();
+    let (worker, _worker_in) = links.recv().await.unwrap();
+    let mut s = agent.open(8100).await.unwrap();
+    worker.close();
+    tokio::time::timeout(Duration::from_secs(5), agent.closed())
+        .await
+        .expect("the agent's end closes");
+    let mut buf = [0u8; 1];
+    let n = s.read(&mut buf).await.unwrap_or(0);
+    assert_eq!(n, 0, "and its streams end");
+}

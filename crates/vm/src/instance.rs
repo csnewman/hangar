@@ -140,6 +140,12 @@ pub struct InstanceConfig {
     /// The hub the guest's agent dials over the network, standing in for
     /// the monitor's vsock (`crate::hub`); none uses vsock.
     pub hub: Option<Arc<crate::hub::Hub>>,
+    /// The Proxmox node that runs the machine as a VM, under runtime
+    /// proxmox; its image is named by image_key, and its writable disk
+    /// grown to upper_gib.
+    pub proxmox: Option<Arc<crate::proxmox::Pve>>,
+    pub image_key: String,
+    pub upper_gib: u64,
     /// Set to true when the boot stops being wanted: one waiting for its
     /// agent gives up, and what it started is stopped again.
     pub cancel: Option<watch::Receiver<bool>>,
@@ -195,21 +201,35 @@ struct Exit {
     panicked: bool,
 }
 
-/// The monitor's process.
+/// The monitor's process, or a Proxmox VM standing where one would be.
 struct Process {
     pid: u32,
     exited: watch::Receiver<bool>,
     /// Set when the worker stops it, so its exit is not a failure.
     stopping: Arc<AtomicBool>,
+    /// The VM, under Proxmox: SIGTERM is its shutdown, SIGKILL its stop.
+    vm: Option<(Arc<crate::proxmox::Pve>, u32)>,
 }
 
 impl Process {
     fn signal(&self, sig: libc::c_int) {
-        if !*self.exited.borrow() {
-            // SAFETY: kill has no memory preconditions; the process is not
-            // reaped while exited is false, so the ID is still its own.
-            unsafe { libc::kill(self.pid as libc::pid_t, sig) };
+        if *self.exited.borrow() {
+            return;
         }
+        if let Some((pve, id)) = &self.vm {
+            let (pve, id) = (pve.clone(), *id);
+            tokio::spawn(async move {
+                let _ = if sig == libc::SIGKILL {
+                    pve.stop(id).await
+                } else {
+                    pve.shutdown(id).await
+                };
+            });
+            return;
+        }
+        // SAFETY: kill has no memory preconditions; the process is not
+        // reaped while exited is false, so the ID is still its own.
+        unsafe { libc::kill(self.pid as libc::pid_t, sig) };
     }
 
     async fn wait(&self) {
@@ -258,6 +278,8 @@ pub struct Instance {
     /// The machine's place on the hub, which carries its connections in
     /// place of vsock, if it uses one.
     hub: Option<crate::hub::Registration>,
+    /// The machine's VMID, under Proxmox.
+    vm: Option<u32>,
     gpu: Option<GpuBackend>,
     net: Option<Passt>,
     mac_net: Option<crate::gvproxy::Network>,
@@ -328,6 +350,9 @@ impl Instance {
             cfg.agent_wait = Duration::from_secs(180);
         }
         std::fs::create_dir_all(&cfg.dir)?;
+        if let Some(pve) = cfg.proxmox.clone() {
+            return Instance::boot_proxmox(cfg, pve).await;
+        }
         let run = cfg.run_dir();
         std::fs::create_dir_all(&run)?;
         set_mode(&run, 0o700)?;
@@ -416,6 +441,7 @@ impl Instance {
             Monitor::CloudHypervisor => {
                 start_cloud_hypervisor(&cfg, &caps, &initrd, resuming, &exit, &mut parts).await
             }
+            Monitor::Proxmox => Err(err("a Proxmox machine boots through the proxmox section")),
         };
         if let (Ok(()), Some(reg)) = (&started, &hub) {
             reg.set_base(&parts.vsock);
@@ -464,6 +490,7 @@ impl Instance {
             resumed: resuming,
             vsock: std::mem::take(&mut parts.vsock),
             hub,
+            vm: None,
             gpu: parts.gpu.take(),
             net: parts.net.take(),
             mac_net: parts.mac_net.take(),
@@ -545,6 +572,16 @@ impl Instance {
         if self.monitor == Monitor::Krun {
             return self.krun_memory().await;
         }
+        // A Proxmox VM keeps the memory it booted with.
+        if self.monitor == Monitor::Proxmox {
+            let m = self.cfg.memory_mib;
+            return Ok(Memory {
+                boot: m,
+                max: m,
+                requested: m,
+                actual: m,
+            });
+        }
         match &self.api {
             Some(api) => api.memory().await,
             None => Err(err("the monitor has no API socket")),
@@ -590,6 +627,7 @@ impl Instance {
         match self.monitor {
             Monitor::Krun => guest::dial_krun(&self.vsock, port).await,
             Monitor::CloudHypervisor => guest::dial_cloud_hypervisor(&self.vsock, port).await,
+            Monitor::Proxmox => Err(err("a Proxmox machine is reached over the hub alone")),
         }
     }
 
@@ -672,6 +710,19 @@ impl Instance {
     pub async fn suspend(&self) -> io::Result<()> {
         if self.monitor == Monitor::Krun {
             return self.suspend_krun().await;
+        }
+        if let (Some((pve, id)), Monitor::Proxmox) = (&self.process.vm, self.monitor) {
+            self.process.stopping.store(true, Ordering::SeqCst);
+            if let Err(e) = pve.hibernate(*id).await {
+                self.process.stopping.store(false, Ordering::SeqCst);
+                return Err(err(format!("hibernating the VM: {e}")));
+            }
+            let mut rec = self.cfg.record();
+            rec.agent = self.agent_booted.clone();
+            suspend::mark(&self.cfg.dir, &rec)?;
+            self.process.wait_for(Duration::from_secs(30)).await;
+            self.close().await;
+            return Ok(());
         }
         let c = &self.cfg;
         let api = self.api.as_ref().expect("an API");
@@ -801,6 +852,9 @@ impl Instance {
             return;
         }
         *closed = true;
+        if let Some(h) = &self.hub {
+            h.end();
+        }
         self.process.stop().await;
         if let Some(f) = &self.files {
             f.close();
@@ -817,6 +871,199 @@ impl Instance {
         if let Some(d) = &self.krun_dir {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+}
+
+impl Instance {
+    /// Boots the machine as a Proxmox VM (`crate::proxmox`): its VM made
+    /// from its image's template the first time, sized, started with its
+    /// SMBIOS serial saying where the hub is, given its secret through its
+    /// agent channel, and connected once its agent dials the hub. A VM
+    /// hibernated is resumed by its start, keeping the secret it booted
+    /// with.
+    async fn boot_proxmox(
+        cfg: InstanceConfig,
+        pve: Arc<crate::proxmox::Pve>,
+    ) -> io::Result<Instance> {
+        let hub = cfg
+            .hub
+            .clone()
+            .ok_or_else(|| err("a Proxmox VM has no vsock: the worker needs the hub"))?;
+        let vm_file = cfg.dir.join(PROXMOX_VM_FILE);
+        let mut id = std::fs::read_to_string(&vm_file)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok());
+        if let Some(n) = id
+            && pve.status(n).await.is_err()
+        {
+            cfg.log.warn(
+                "the environment's VM is gone; making it again",
+                &[("vmid", &n)],
+            );
+            id = None;
+            suspend::discard(&cfg.dir);
+        }
+        let mut agent_booted = suspend::fingerprint(&cfg.agent);
+        let resuming = match suspend::suspended(&cfg.dir) {
+            Some(rec) => {
+                agent_booted = rec.agent;
+                true
+            }
+            None => false,
+        };
+        let id = match id {
+            Some(n) => n,
+            None => {
+                cfg.progress("making its VM");
+                let tpl = pve
+                    .template(&cfg.image_key, &cfg.base_file, &cfg.kernel, &cfg.agent)
+                    .await?;
+                let n = pve
+                    .create(tpl, &cfg.id, &cfg.name, cfg.upper_gib, cfg.swap_mib)
+                    .await?;
+                std::fs::write(&vm_file, n.to_string())?;
+                n
+            }
+        };
+        if !resuming {
+            pve.size(id, cfg.memory_mib, cfg.cpus).await?;
+        }
+        let kept = if resuming {
+            crate::hub::saved_secret(&cfg.dir)
+        } else {
+            None
+        };
+        let reg = hub.register(&cfg.id, kept);
+        crate::hub::save_secret(&cfg.dir, reg.secret())?;
+        let dir = krun_dir(&cfg.id)?;
+        let base = dir.join("v");
+        let mut parts = Parts {
+            server: Some(agent::Server::listen_hybrid(&base, GUEST_CID)?),
+            vsock: base.clone(),
+            krun_dir: Some(dir),
+            ..Default::default()
+        };
+        if let Some((root, view)) = &cfg.shared_files {
+            parts.files = Some(SharedFiles::serve(&base, GUEST_CID, root, view.clone())?);
+        }
+        reg.set_base(&base);
+        cfg.progress(if resuming {
+            "resuming its VM"
+        } else {
+            "starting its VM"
+        });
+        let exit = Arc::new(Mutex::new(Exit::default()));
+        let started = pve.start(id, &reg.settings(), reg.secret()).await;
+        parts.process = Some(watch_vm(pve.clone(), id, &exit));
+        let session = match started {
+            Ok(()) => await_agent(&cfg, &parts, &exit).await,
+            Err(e) => Err(e),
+        };
+        let session = match session {
+            Ok(s) => s,
+            Err(e) => {
+                parts.close().await;
+                return Err(e);
+            }
+        };
+        cfg.log.info(
+            "agent connected",
+            &[
+                ("vmid", &id),
+                ("hostname", &session.hello.hostname),
+                ("kernel", &session.hello.kernel),
+                ("up_seconds", &(session.hello.boot_micros as f64 / 1e6)),
+                ("resumed", &resuming),
+            ],
+        );
+        if let Err(e) = session
+            .set_clock(SystemTime::now(), Duration::from_secs(5))
+            .await
+        {
+            cfg.log
+                .warn("could not set the guest clock", &[("err", &e)]);
+        }
+        if resuming {
+            suspend::discard(&cfg.dir);
+        }
+        Ok(Instance {
+            _server: parts.server.take(),
+            monitor: Monitor::Proxmox,
+            process: parts.process.take().expect("a watched VM"),
+            exit,
+            api: None,
+            session: Arc::new(session),
+            resumed: resuming,
+            vsock: std::mem::take(&mut parts.vsock),
+            hub: Some(reg),
+            vm: Some(id),
+            gpu: None,
+            net: None,
+            mac_net: None,
+            files: parts.files.take(),
+            krun: None,
+            krun_boot: 0,
+            krun_region: 0,
+            krun_dir: parts.krun_dir.take(),
+            closed: tokio::sync::Mutex::new(false),
+            agent_booted,
+            cfg,
+        })
+    }
+
+    /// The machine's VMID, under Proxmox.
+    pub fn vmid(&self) -> Option<u32> {
+        self.vm
+    }
+}
+
+/// Where a Proxmox machine's VMID is kept, in its directory.
+pub const PROXMOX_VM_FILE: &str = "proxmox-vm";
+
+/// Watches a Proxmox VM as a monitor's process is watched: it has exited
+/// once Proxmox says the VM is stopped, which is a failure unless the
+/// worker stopped it.
+fn watch_vm(pve: Arc<crate::proxmox::Pve>, id: u32, exit: &Arc<Mutex<Exit>>) -> Process {
+    let (tx, exited) = watch::channel(false);
+    let stopping = Arc::new(AtomicBool::new(false));
+    let (exit, stop) = (exit.clone(), stopping.clone());
+    let watcher = pve.clone();
+    tokio::spawn(async move {
+        let mut misses = 0;
+        loop {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            let why = match watcher.status(id).await {
+                Ok(st) if st["status"] == "running" => {
+                    misses = 0;
+                    continue;
+                }
+                Ok(st) => format!(
+                    "the VM stopped ({})",
+                    st["qmpstatus"].as_str().unwrap_or("stopped")
+                ),
+                Err(e) if e.kind() == io::ErrorKind::NotFound => "the VM is gone".to_string(),
+                // The API not answering is not the VM stopping, for a
+                // while.
+                Err(e) => {
+                    misses += 1;
+                    if misses < 30 {
+                        continue;
+                    }
+                    format!("Proxmox has not answered about the VM: {e}")
+                }
+            };
+            if !stop.load(Ordering::SeqCst) {
+                exit.lock().unwrap().err = Some(why);
+            }
+            let _ = tx.send(true);
+            return;
+        }
+    });
+    Process {
+        pid: 0,
+        exited,
+        stopping,
+        vm: Some((pve, id)),
     }
 }
 
@@ -945,6 +1192,7 @@ fn spawn_monitor(
         pid,
         exited,
         stopping,
+        vm: None,
     })
 }
 
