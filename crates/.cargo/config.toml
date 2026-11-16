@@ -2,11 +2,13 @@
 # from any host. The C it has, ring's (russh's crypto), uses only the
 # compiler's freestanding headers, so clang compiles it with no musl
 # sysroot: clang's own headers defer to musl's while __musl__ is defined,
-# which a host without musl's headers does not have. On a Mac the archive
-# is LLVM's ar's (dev/mac-worker.sh): the Mac's own writes one ELF's linker
-# finds nothing in.
+# which a host without musl's headers does not have; on x86_64 ring also
+# reaches for assert.h unless told there are no C library headers
+# (RING_CORE_NOSTDLIBINC), which aarch64's build tells it itself. On a Mac
+# the archive is LLVM's ar's (dev/mac-worker.sh): the Mac's own writes one
+# ELF's linker finds nothing in.
 [env]
 CC_aarch64_unknown_linux_musl = "clang"
 CFLAGS_aarch64_unknown_linux_musl = "-ffreestanding -U__musl__"
 CC_x86_64_unknown_linux_musl = "clang"
-CFLAGS_x86_64_unknown_linux_musl = "-ffreestanding -U__musl__"
+CFLAGS_x86_64_unknown_linux_musl = "-ffreestanding -U__musl__ -DRING_CORE_NOSTDLIBINC"

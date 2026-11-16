@@ -136,6 +136,9 @@ async fn agent() -> std::io::Result<()> {
         tokio::spawn(hangar_agent::hub::run(s));
         tokio::spawn(hangar_agent::hub::relay_shared_files());
     }
+    // A Proxmox VM's guest agent channel, if it has one.
+    #[cfg(target_os = "linux")]
+    tokio::spawn(hangar_agent::qga::serve());
     #[cfg(target_os = "linux")]
     tokio::spawn(hangar_agent::control::run());
     hangar_agent::serve::serve().await

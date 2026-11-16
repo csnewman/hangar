@@ -15,6 +15,7 @@ pub mod launch;
 pub mod memory;
 pub mod procs;
 pub mod profile;
+pub mod qga;
 pub mod serve;
 pub mod service;
 pub mod sftp;

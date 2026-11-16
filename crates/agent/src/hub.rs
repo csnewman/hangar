@@ -9,6 +9,11 @@
 //! The worker gives the agent where to dial and with what secret in the
 //! initramfs, which init keeps for the agent in /dev, the one filesystem
 //! that passes into the new root untouched (systemd mounts its own /run).
+//! A Proxmox VM's boot disk is shared, so there the settings come in the
+//! VM's SMBIOS serial instead, and the secret apart from them, written by
+//! the worker through the guest agent channel (`crate::qga`), since a VM's
+//! configuration, the serial included, is anyone's to read who may see the
+//! VM.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -29,6 +34,13 @@ pub const SETTINGS: &str = "/dev/hangar/hub.json";
 /// Where they arrive, in the initramfs.
 pub const INITRAMFS_SETTINGS: &str = "/hub.json";
 
+/// Where the secret is written apart from the settings: root's alone.
+pub const SECRET_FILE: &str = "/dev/hangar/hub-secret";
+
+/// The SMBIOS serial, root's alone to read, holding the settings but the
+/// secret on a Proxmox VM.
+const SMBIOS_SERIAL: &str = "/sys/class/dmi/id/product_serial";
+
 /// Where the agent relays the shared files' NFS on the guest's loopback,
 /// for the kernel's client: a port only root may bind, so no other program
 /// in the guest can take it while the agent restarts.
@@ -42,10 +54,30 @@ const LINK_WITHIN: Duration = Duration::from_secs(30);
 pub fn settings() -> Option<&'static Settings> {
     static S: OnceLock<Option<Settings>> = OnceLock::new();
     S.get_or_init(|| {
-        let b = std::fs::read(SETTINGS).ok()?;
-        serde_json::from_slice(&b).ok()
+        let from_file = std::fs::read(SETTINGS).ok();
+        let b = from_file.or_else(|| std::fs::read(SMBIOS_SERIAL).ok())?;
+        let s: Settings = serde_json::from_slice(&b).ok()?;
+        let whole = !s.address.is_empty() && !s.fingerprint.is_empty();
+        (whole && !s.environment.is_empty()).then_some(s)
     })
     .as_ref()
+}
+
+/// The secret for this boot: the settings', or the one written apart from
+/// them, once it is.
+async fn secret(settings: &Settings) -> String {
+    if !settings.secret.is_empty() {
+        return settings.secret.clone();
+    }
+    loop {
+        if let Ok(s) = std::fs::read_to_string(SECRET_FILE) {
+            let s = s.trim();
+            if !s.is_empty() {
+                return s.to_string();
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 type Handler = Arc<dyn Fn(FdStream) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
@@ -74,14 +106,16 @@ where
 /// Keeps the agent connected to the worker's hub for as long as the guest
 /// runs, dialling again whenever the link drops.
 pub async fn run(settings: &'static Settings) {
-    let hello = Hello {
-        environment: settings.environment.clone(),
-        secret: settings.secret.clone(),
-        agent: crate::service::BUILD.to_string(),
-    };
     let mut wait = Duration::from_secs(1);
     let mut said = false;
     loop {
+        // Read again at each dial: a secret written apart is written anew
+        // at each boot.
+        let hello = Hello {
+            environment: settings.environment.clone(),
+            secret: secret(settings).await,
+            agent: crate::service::BUILD.to_string(),
+        };
         match hangar_hub::connect(&settings.address, &settings.fingerprint, &hello).await {
             Ok((l, mut incoming)) => {
                 wait = Duration::from_secs(1);

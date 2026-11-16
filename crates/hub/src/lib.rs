@@ -37,11 +37,15 @@ const MAX_LINE: u64 = 64 << 10;
 /// with its boot: where the hub is, its certificate's fingerprint, and the
 /// environment's name and secret for this boot.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct Settings {
     /// The hub's host and port, as the guest reaches it.
     pub address: String,
     pub fingerprint: String,
     pub environment: String,
+    /// Empty where the secret comes apart from the rest, as the guest agent
+    /// channel brings it to a Proxmox VM (`SECRET_FILE` in the agent).
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub secret: String,
 }
 

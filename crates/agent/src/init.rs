@@ -9,11 +9,15 @@
 //!         command line names (hangar.image=), with DAX if
 //!         hangar.image_dax=1
 //! /rw     the environment's writable disk, the first virtio-blk device
+//!         or the one hangar.upper= names, grown to the disk's size
 //! /lower  overlayfs of the two
 //! /root   hangarfs over /lower, which becomes /
 //! ```
 //!
-//! and swaps to the disk hangar.swap= names, if it names one.
+//! and swaps to the disk hangar.swap= names, if it names one. A disk is
+//! named by its path, or as serial:NAME by the serial its host gave it, as
+//! Proxmox gives each of a VM's disks, so the order the kernel finds them
+//! in does not matter.
 //!
 //! /var/lib/docker is not part of the root: overlay2 cannot stack on
 //! overlayfs. It is /rw/docker, a directory on the same writable disk,
@@ -59,6 +63,7 @@ mod boot {
     use std::ffi::CString;
     use std::fs;
     use std::io::{self, Read, Seek, SeekFrom, Write};
+    use std::os::fd::AsRawFd;
     use std::os::unix::fs::{DirBuilderExt, FileExt, OpenOptionsExt};
     use std::os::unix::process::CommandExt;
     use std::path::Path;
@@ -159,6 +164,65 @@ mod boot {
     }
 
     /// Waits for a device node, which the kernel may still be probing.
+    /// The device a kernel command line names: its path, waited for, or
+    /// serial:NAME, the disk whose serial is NAME, once it appears.
+    fn device(name: &str) -> io::Result<String> {
+        let Some(serial) = name.strip_prefix("serial:") else {
+            wait_for(name)?;
+            return Ok(name.to_string());
+        };
+        let deadline = Instant::now() + DISK_WAIT;
+        loop {
+            if let Ok(dir) = fs::read_dir("/sys/block") {
+                for e in dir.flatten() {
+                    let s = fs::read_to_string(e.path().join("serial")).unwrap_or_default();
+                    if s.trim() == serial {
+                        let dev = format!("/dev/{}", e.file_name().to_string_lossy());
+                        wait_for(&dev)?;
+                        return Ok(dev);
+                    }
+                }
+            }
+            if Instant::now() > deadline {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("no disk with serial {serial}"),
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Grows the ext4 filesystem mounted at dir to fill its disk, device,
+    /// when the disk is larger: a clone of a small template's disk, grown
+    /// for the environment. One ioctl, the kernel's online resize.
+    fn grow(device: &str, dir: &str) -> io::Result<()> {
+        /// _IOW('f', 16, __u64)
+        const EXT4_IOC_RESIZE_FS: libc::c_ulong = 0x4008_6610;
+        let mut f = fs::File::open(device)?;
+        let size = f.seek(SeekFrom::End(0))?;
+        let mut sb = [0u8; 1024];
+        f.read_exact_at(&mut sb, 1024)?;
+        let u32_at = |o: usize| u32::from_le_bytes(sb[o..o + 4].try_into().unwrap()) as u64;
+        let block = 1024u64 << u32_at(0x18);
+        let blocks = u32_at(0x04) | u32_at(0x150) << 32;
+        let want = size / block;
+        if want <= blocks {
+            return Ok(());
+        }
+        let d = fs::File::open(dir)?;
+        // SAFETY: the ioctl reads one u64, the new count of blocks.
+        if unsafe { libc::ioctl(d.as_raw_fd(), EXT4_IOC_RESIZE_FS as _, &want) } < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        eprintln!(
+            "INITRAMFS: grew the writable layer from {} to {} MiB",
+            (blocks * block) >> 20,
+            (want * block) >> 20
+        );
+        Ok(())
+    }
+
     fn wait_for(device: &str) -> io::Result<()> {
         let deadline = Instant::now() + DISK_WAIT;
         while fs::metadata(device).is_err() {
@@ -200,14 +264,17 @@ mod boot {
         let args = cmdline();
         mount_base(&args)?;
 
-        wait_for(UPPER_DISK).map_err(context("the writable disk"))?;
+        let upper = arg(&args, "hangar.upper").unwrap_or_else(|| UPPER_DISK.to_string());
+        let upper = device(&upper).map_err(context("the writable disk"))?;
         // discard hands freed blocks back to the host as files are deleted:
         // the disk is a sparse file there, and without it everything an
         // environment ever wrote stays allocated. Nothing in the guest can trim
         // it later, for systemd's /run hides where it is mounted.
-        mount(UPPER_DISK, "/rw", "ext4", 0, "discard").map_err(context(&format!(
-            "mounting the writable layer ({UPPER_DISK})"
-        )))?;
+        mount(&upper, "/rw", "ext4", 0, "discard")
+            .map_err(context(&format!("mounting the writable layer ({upper})")))?;
+        if let Err(e) = grow(&upper, "/rw") {
+            eprintln!("INITRAMFS: growing the writable layer: {e}");
+        }
         mkdir("/rw/upper", 0o755)?;
         mkdir("/rw/work", 0o755)?;
         // The overlay is hangarfs's lower directory, left in the initramfs:
@@ -290,14 +357,14 @@ mod boot {
 
     /// Mounts the image at /base.
     fn mount_base(args: &[String]) -> io::Result<()> {
-        let Some(device) = arg(args, "hangar.image") else {
+        let Some(named) = arg(args, "hangar.image") else {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 "the kernel command line names no image (hangar.image=)",
             ));
         };
         let dax = args.iter().any(|a| a == "hangar.image_dax=1");
-        wait_for(&device)?;
+        let device = device(&named)?;
         let opts = if dax { "dax=always" } else { "" };
         mount(&device, "/base", "erofs", libc::MS_RDONLY, opts)
             .map_err(context(&format!("mounting the base from {device}")))?;
@@ -314,10 +381,10 @@ mod boot {
     /// the host back the space of what is swapped in again: the disk is a
     /// sparse file there.
     fn swap_on(args: &[String]) -> io::Result<()> {
-        let Some(device) = arg(args, "hangar.swap") else {
+        let Some(named) = arg(args, "hangar.swap") else {
             return Ok(());
         };
-        wait_for(&device)?;
+        let device = device(&named)?;
         let mut f = fs::OpenOptions::new()
             .read(true)
             .write(true)
