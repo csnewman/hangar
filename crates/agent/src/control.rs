@@ -122,6 +122,7 @@ pub async fn run() {
             Ok(conn) => {
                 failing = None;
                 serve(conn).await;
+                eprintln!("hangar-agent: control: the host hung up; dialling again");
             }
         }
         tokio::time::sleep(RETRY).await;

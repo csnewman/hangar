@@ -211,6 +211,10 @@ impl Session {
             ));
         }
         let f = write_private(path).map_err(generic)?;
+        // Opened empty: the agent's link to the hub ends and it waits for
+        // the secret being written.
+        #[cfg(target_os = "linux")]
+        crate::hub::secret_written();
         self.next += 1;
         self.files.insert(self.next, f);
         Ok(json!(self.next))

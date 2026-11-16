@@ -87,6 +87,22 @@ fn handlers() -> &'static Mutex<HashMap<u32, Handler>> {
     H.get_or_init(Default::default)
 }
 
+/// Counts the secrets written apart (SECRET_FILE), as the worker writes
+/// one at every start of a Proxmox VM, a resume from a hibernate included:
+/// each as the file is opened, empty, to be written.
+fn secrets() -> &'static watch::Sender<u64> {
+    static S: OnceLock<watch::Sender<u64>> = OnceLock::new();
+    S.get_or_init(|| watch::channel(0).0)
+}
+
+/// Says a secret has been written apart, as at a resume, when the link
+/// may be dead although the guest has not heard so (the worker closed it
+/// while the guest was frozen): the agent tries it at once (alive) rather
+/// than waiting for TCP to find out.
+pub fn secret_written() {
+    secrets().send_modify(|n| *n += 1);
+}
+
 fn link() -> &'static watch::Sender<Option<Link>> {
     static L: OnceLock<watch::Sender<Option<Link>>> = OnceLock::new();
     L.get_or_init(|| watch::channel(None).0)
@@ -108,20 +124,37 @@ where
 pub async fn run(settings: &'static Settings) {
     let mut wait = Duration::from_secs(1);
     let mut said = false;
+    let mut written = secrets().subscribe();
     loop {
         // Read again at each dial: a secret written apart is written anew
-        // at each boot.
+        // at each boot. One written after it was read ends the link.
         let hello = Hello {
             environment: settings.environment.clone(),
             secret: secret(settings).await,
             agent: crate::service::BUILD.to_string(),
         };
+        written.borrow_and_update();
         match hangar_hub::connect(&settings.address, &settings.fingerprint, &hello).await {
             Ok((l, mut incoming)) => {
                 wait = Duration::from_secs(1);
                 said = false;
                 link().send_replace(Some(l.clone()));
-                while let Some(a) = incoming.next().await {
+                loop {
+                    let a = tokio::select! {
+                        a = incoming.next() => a,
+                        _ = written.changed() => {
+                            let l = l.clone();
+                            tokio::spawn(async move {
+                                if !alive(&l).await {
+                                    eprintln!("hangar-agent: hub: the link did not answer; dialling again");
+                                    l.close();
+                                }
+                            });
+                            continue;
+                        }
+                    };
+                    let Some(a) = a else { break };
+                    let l = l.clone();
                     tokio::spawn(async move {
                         let Ok((port, stream)) = a.open().await else {
                             return;
@@ -133,10 +166,11 @@ pub async fn run(settings: &'static Settings) {
                             return;
                         };
                         tokio::spawn(h(conn));
-                        hangar_hub::relay(stream, here).await;
+                        l.relay(stream, here).await;
                     });
                 }
                 link().send_replace(None);
+                eprintln!("hangar-agent: hub: the link dropped; dialling again");
                 // A link that was up has dropped, as a resumed guest's does:
                 // dial again at once.
                 continue;
@@ -148,16 +182,41 @@ pub async fn run(settings: &'static Settings) {
                 }
             }
         }
-        tokio::time::sleep(wait).await;
+        tokio::select! {
+            _ = tokio::time::sleep(wait) => {}
+            _ = written.changed() => {}
+        }
         wait = (wait * 2).min(Duration::from_secs(10));
     }
 }
 
+/// A port the worker serves nothing on, and so answers by closing a
+/// stream to it.
+const PROBE_PORT: u32 = 0;
+
+/// How long the worker has to answer a probe.
+const PROBE_WITHIN: Duration = Duration::from_secs(3);
+
+/// Whether the worker is still at the other end of a link: a stream to
+/// PROBE_PORT is answered by its closing. Writing it on a link the worker
+/// has closed draws TCP's reset, which ends the link anyway.
+async fn alive(l: &Link) -> bool {
+    use tokio::io::AsyncReadExt;
+    let probe = async {
+        let mut s = l.open(PROBE_PORT).await?;
+        let mut b = [0u8; 1];
+        s.read(&mut b).await
+    };
+    tokio::time::timeout(PROBE_WITHIN, probe)
+        .await
+        .is_ok_and(|r| r.is_ok())
+}
+
 /// Opens a stream to port on the host over the hub, as a connection.
 pub async fn open(port: u32) -> io::Result<FdStream> {
-    let stream = stream(port).await?;
+    let (l, stream) = stream(port).await?;
     let (here, there) = pair()?;
-    tokio::spawn(hangar_hub::relay(stream, here));
+    tokio::spawn(l.relay(stream, here));
     FdStream::new(there)
 }
 
@@ -178,8 +237,8 @@ pub async fn relay_shared_files() {
         };
         while let Ok((tcp, _)) = ln.accept().await {
             tokio::spawn(async move {
-                if let Ok(s) = stream(SHARED_FILES_PORT).await {
-                    hangar_hub::relay(tcp, s).await;
+                if let Ok((l, s)) = stream(SHARED_FILES_PORT).await {
+                    l.relay(s, tcp).await;
                 }
             });
         }
@@ -187,7 +246,7 @@ pub async fn relay_shared_files() {
 }
 
 /// Opens a stream to port on the host over the hub.
-async fn stream(port: u32) -> io::Result<hangar_hub::Stream> {
+async fn stream(port: u32) -> io::Result<(Link, hangar_hub::Stream)> {
     let mut rx = link().subscribe();
     let l = tokio::time::timeout(
         LINK_WITHIN,
@@ -198,7 +257,8 @@ async fn stream(port: u32) -> io::Result<hangar_hub::Stream> {
     .map_err(io::Error::other)?
     .clone()
     .expect("a link");
-    l.open(port).await
+    let s = l.open(port).await?;
+    Ok((l, s))
 }
 
 /// A connected pair of sockets: one end relayed to a stream here, the other

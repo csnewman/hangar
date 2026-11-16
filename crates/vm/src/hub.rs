@@ -176,20 +176,34 @@ impl Hub {
         }
         while let Some(a) = incoming.next().await {
             let (hub, env, secret) = (self.clone(), env.clone(), secret.clone());
+            let link = link.clone();
             tokio::spawn(async move {
                 let Ok((port, stream)) = a.open().await else {
                     return;
                 };
+                // Any other port is the agent trying the link, answered
+                // by closing the stream.
                 if !GUEST_DIALS.contains(&port) {
                     return;
                 }
                 let Some(base) = hub.base(&env, &secret).await else {
+                    hub.log.warn(
+                        "a guest dialled a machine the hub is not expecting",
+                        &[("environment", &env), ("port", &port)],
+                    );
                     return;
                 };
-                let Ok(to) = UnixStream::connect(hybrid_path(&base, port)).await else {
-                    return;
+                let to = match UnixStream::connect(hybrid_path(&base, port)).await {
+                    Ok(t) => t,
+                    Err(e) => {
+                        hub.log.warn(
+                            "a guest dialled a port nothing listens on",
+                            &[("environment", &env), ("port", &port), ("err", &e)],
+                        );
+                        return;
+                    }
                 };
-                hangar_hub::relay(stream, to).await;
+                link.relay(stream, to).await;
             });
         }
         // The link is over: forget it, unless a newer one has replaced it.
@@ -254,7 +268,7 @@ impl Hub {
         .expect("a link");
         let stream = link.open(port).await?;
         let (here, there) = UnixStream::pair()?;
-        tokio::spawn(hangar_hub::relay(stream, there));
+        tokio::spawn(link.relay(stream, there));
         Ok(GuestConn::from_unix(here))
     }
 }

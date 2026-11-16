@@ -652,12 +652,23 @@ impl Pve {
     }
 
     /// Hibernates a VM: its memory to disk, resumed by its next start.
+    /// The task waits for the VM's config lock, which the task resuming it
+    /// holds for a while after the VM runs; a lock not got is tried again.
     pub async fn hibernate(&self, id: u32) -> io::Result<()> {
-        let upid = self
-            .client
-            .post(&self.vm(id, "status/suspend"), &[("todisk", "1")])
-            .await?;
-        self.wait(&upid, Duration::from_secs(900)).await
+        let mut tries = 0;
+        loop {
+            let upid = self
+                .client
+                .post(&self.vm(id, "status/suspend"), &[("todisk", "1")])
+                .await?;
+            match self.wait(&upid, Duration::from_secs(900)).await {
+                Err(e) if tries < 5 && e.to_string().contains("can't lock file") => {
+                    tries += 1;
+                    tokio::time::sleep(Duration::from_secs(2)).await;
+                }
+                r => return r,
+            }
+        }
     }
 
     /// Destroys a VM and its disks, stopping it first.
