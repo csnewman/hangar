@@ -45,7 +45,7 @@ const CMDLINE: &str = "console=ttyS0 systemd.show_status=1 mitigations=off \
 
 /// The form of a template, part of its name: a template made to an older
 /// form is left for one of this form.
-const TEMPLATE_FORM: &str = "4";
+const TEMPLATE_FORM: &str = "5";
 
 /// The template's writable disk, grown for each environment.
 const TEMPLATE_UPPER_GIB: u64 = 1;
@@ -281,6 +281,27 @@ impl Pve {
             .post(&format!("/nodes/{}/qemu", self.node()), &form)
             .await?;
         self.wait(&upid, Duration::from_secs(600)).await?;
+        // Proxmox's own firewall for the VM, which its clones copy and which
+        // applies where the datacenter's firewall is on: nothing inbound
+        // but replies, DHCP and neighbour discovery, no router
+        // advertisements out, and no MAC but the VM's own. Not an address
+        // filter: the network's DHCP gives the address. The guest's own
+        // firewall stands either way.
+        self.client
+            .put(
+                &self.vm(id, "firewall/options"),
+                &[
+                    ("enable", "1"),
+                    ("policy_in", "DROP"),
+                    ("policy_out", "ACCEPT"),
+                    ("dhcp", "1"),
+                    ("ndp", "1"),
+                    ("radv", "0"),
+                    ("macfilter", "1"),
+                    ("ipfilter", "0"),
+                ],
+            )
+            .await?;
         let upid = self
             .client
             .post(&format!("/nodes/{}/qemu/{id}/template", self.node()), &[])
@@ -554,7 +575,7 @@ impl Pve {
         let upid = self.client.post(&self.vm(id, "status/start"), &[]).await?;
         self.wait(&upid, Duration::from_secs(300)).await?;
         if !resuming {
-            let net = format!("virtio={mac},bridge={}", self.cfg.bridge);
+            let net = format!("virtio={mac},bridge={},firewall=1", self.cfg.bridge);
             self.client
                 .put(&self.vm(id, "config"), &[("net0", net.as_str())])
                 .await?;
