@@ -3808,6 +3808,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "hangar-hub"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "hangar-hub",
+ "rcgen",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "socket2",
+ "tokio",
+ "tokio-rustls",
+ "tokio-util",
+ "yamux",
+]
+
+[[package]]
 name = "hangar-images"
 version = "0.1.0"
 dependencies = [

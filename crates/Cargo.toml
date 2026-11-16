@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["agent", "api", "app", "cli", "erofs", "ext4", "ghostty", "images", "layercheck", "nfs", "openapi", "proto", "server", "suite", "vm", "worker"]
+members = ["agent", "api", "app", "cli", "erofs", "ext4", "ghostty", "hub", "images", "layercheck", "nfs", "openapi", "proto", "server", "suite", "vm", "worker"]
 
 [workspace.package]
 edition = "2024"
