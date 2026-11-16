@@ -34,11 +34,12 @@ const SWAP_SERIAL: &str = "hangar-swap";
 
 /// The kernel command line every environment boots with, fixed on the boot
 /// disk its template shares with every clone. Headless: a Proxmox VM has no
-/// virtual GPU of Hangar's.
+/// virtual GPU of Hangar's. The guest puts its own firewall up: the VM is
+/// on its place's network, among other machines.
 const CMDLINE: &str = "console=ttyS0 systemd.show_status=1 mitigations=off \
     memory_hotplug.online_policy=auto-movable \
     hangar.upper=serial:hangar-upper hangar.image=serial:hangar-image \
-    hangar.swap=serial:hangar-swap \
+    hangar.swap=serial:hangar-swap hangar.firewall=1 \
     systemd.unit=multi-user.target systemd.mask=hangar-desktop.service";
 
 /// The form of a template, part of its name: a template made to an older

@@ -101,6 +101,13 @@ mod boot {
     /// image's unit and /etc are left to it and the user.
     const OOM_DROP_IN_PATH: &str = "/usr/local/lib/systemd/system/hangar-agent.service.d/oom.conf";
 
+    /// With the guest's firewall, the agent starts after the image's own
+    /// nftables.service, whose `flush ruleset` removes the firewall init put
+    /// up, and puts it back at once.
+    const FIREWALL_DROP_IN: &str = "[Unit]\nAfter=nftables.service\n";
+    const FIREWALL_DROP_IN_PATH: &str =
+        "/usr/local/lib/systemd/system/hangar-agent.service.d/firewall.conf";
+
     /// linux/swap.h's SWAP_FLAG_DISCARD: the device is discarded whole when
     /// swapping to it starts, and each run of pages as it is freed.
     const SWAP_FLAG_DISCARD: libc::c_int = 0x10000;
@@ -262,6 +269,12 @@ mod boot {
             mount(src, dst, fstype, 0, "").map_err(context(&format!("mounting {dst}")))?;
         }
         let args = cmdline();
+        // Before the machine's network card can be up, and long before
+        // anything of the image runs.
+        let firewall = arg(&args, "hangar.firewall").is_some_and(|v| v != "0");
+        if firewall {
+            crate::firewall::install().map_err(context("putting the guest's firewall in place"))?;
+        }
         mount_base(&args)?;
 
         let upper = arg(&args, "hangar.upper").unwrap_or_else(|| UPPER_DISK.to_string());
@@ -309,6 +322,13 @@ mod boot {
             .map_err(context("installing the agent"))?;
         let _ = fs::remove_file(root.join(&OLD_RUST_HALF[1..]));
         install_oom_drop_in(root).map_err(context("installing the agent's OOM settings"))?;
+        let drop_in = root.join(&FIREWALL_DROP_IN_PATH[1..]);
+        if firewall {
+            fs::write(&drop_in, FIREWALL_DROP_IN)
+                .map_err(context("ordering the agent after nftables.service"))?;
+        } else {
+            let _ = fs::remove_file(&drop_in);
+        }
         ensure_machine_id(root).map_err(context("giving the environment a machine ID"))?;
 
         // The hub's settings, if the worker gave any, kept where the agent

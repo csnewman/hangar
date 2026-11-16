@@ -8,6 +8,8 @@ pub mod codeservice;
 pub mod control;
 pub mod desktop;
 pub mod fdio;
+#[cfg(target_os = "linux")]
+pub mod firewall;
 pub mod guestport;
 pub mod hub;
 pub mod init;
