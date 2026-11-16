@@ -189,3 +189,44 @@ async fn a_link_closed_ends_at_both_ends() {
     let n = s.read(&mut buf).await.unwrap_or(0);
     assert_eq!(n, 0, "and its streams end");
 }
+
+/// A relay whose stream has spent its window on a peer that stops reading
+/// ends when the link closes, letting its connection go: the stream itself
+/// is not woken.
+#[tokio::test]
+async fn a_relay_ends_with_its_link() {
+    let (addr, fp, mut links) = worker().await;
+    let (agent, _agent_in) = connect(&addr, &fp, &hello(SECRET)).await.unwrap();
+    let (_worker, mut worker_in) = links.recv().await.unwrap();
+    let s = agent.open(8100).await.unwrap();
+    // The worker takes the stream and never reads it.
+    let held = tokio::spawn(async move {
+        let (_, stream) = worker_in.next().await.unwrap().open().await.unwrap();
+        tokio::time::sleep(Duration::from_secs(3600)).await;
+        drop(stream);
+    });
+    let (mut here, there) = tokio::net::UnixStream::pair().unwrap();
+    let relaying = tokio::spawn(agent.relay(s, there));
+    // Far more than a stream's window and the sockets' buffers between.
+    let writing = tokio::spawn(async move {
+        let chunk = vec![7u8; 64 * 1024];
+        for _ in 0..256 {
+            if here.write_all(&chunk).await.is_err() {
+                break;
+            }
+        }
+        here
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(!relaying.is_finished(), "the relay is held by the stream");
+    agent.close();
+    tokio::time::timeout(Duration::from_secs(5), relaying)
+        .await
+        .expect("the relay ends once its link has closed")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), writing)
+        .await
+        .expect("and its connection is let go")
+        .unwrap();
+    held.abort();
+}

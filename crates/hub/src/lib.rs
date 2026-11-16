@@ -261,6 +261,24 @@ impl Link {
             let _ = rx.wait_for(|c| *c).await;
         }
     }
+
+    /// Relays between a stream of this link and a connection, as relay
+    /// does, and ends too when the link closes: a stream waiting to write
+    /// to a peer that has gone, its window spent, is not woken by the
+    /// connection closing, and its connection would be held for ever.
+    pub fn relay<A, B>(&self, a: A, b: B) -> impl Future<Output = ()> + Send + 'static
+    where
+        A: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+        B: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let closed = self.closed();
+        async move {
+            tokio::select! {
+                _ = relay(a, b) => {}
+                _ = closed => {}
+            }
+        }
+    }
 }
 
 impl Incoming {
