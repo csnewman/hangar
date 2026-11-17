@@ -115,6 +115,10 @@ pub struct Shell {
     new_env: Option<(Entity<NewEnvView>, gpui::Subscription)>,
     /// The count on the Dock icon, as last set.
     badge_shown: Option<usize>,
+    /// The tab strip, scrolled sideways when its tabs do not fit, and the
+    /// tab it last brought into view (None is Home).
+    tab_scroll: gpui::ScrollHandle,
+    tab_seen: std::cell::Cell<Option<Option<usize>>>,
 }
 
 gpui::actions!(
@@ -227,6 +231,8 @@ impl Shell {
             env_settings: None,
             new_env: None,
             badge_shown: None,
+            tab_scroll: gpui::ScrollHandle::new(),
+            tab_seen: std::cell::Cell::new(None),
         };
         shell.observe_notices(window, cx);
         window.focus(&shell.focus, cx);
@@ -1132,6 +1138,54 @@ impl Render for Shell {
 }
 
 impl Shell {
+    /// "»", listing every open tab, for when the strip cannot show them
+    /// all at once.
+    fn all_tabs(&self, cards: &[Card], p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_component::button::ButtonVariants as _;
+        use gpui_component::menu::DropdownMenu as _;
+        let names: Vec<(String, bool)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .map(|(i, o)| {
+                let card = cards.iter().find(|c| c.place == o.place && c.env == o.env);
+                let title = card.map_or_else(|| "Gone".to_string(), |c| c.title.clone());
+                (title, self.active == Some(i))
+            })
+            .collect();
+        let at_home = self.active.is_none();
+        let me = cx.entity().downgrade();
+        gpui_component::button::Button::new("all-tabs")
+            .ghost()
+            .small()
+            .flex_none()
+            .label("»")
+            .text_color(p.muted)
+            .tooltip("All Tabs")
+            .dropdown_menu_with_anchor(gpui::Anchor::TopRight, move |menu, _, cx| {
+                crate::ui::modal(cx);
+                let home = me.clone();
+                let menu =
+                    menu.item(PopupMenuItem::new("Home").checked(at_home).on_click(
+                        move |_, _, cx| {
+                            let _ = home.update(cx, |s, cx| s.show_home(cx));
+                        },
+                    ))
+                    .separator();
+                names
+                    .iter()
+                    .enumerate()
+                    .fold(menu, |menu, (i, (title, on))| {
+                        let me = me.clone();
+                        menu.item(PopupMenuItem::new(title.clone()).checked(*on).on_click(
+                            move |_, window, cx| {
+                                let _ = me.update(cx, |s, cx| s.show(i, window, cx));
+                            },
+                        ))
+                    })
+            })
+    }
+
     fn title_bar(&self, cards: &[Card], p: &Palette, cx: &mut Context<Self>) -> impl IntoElement {
         let tab = |id: SharedString, on: bool| {
             let hover = p.surface_2;
@@ -1154,13 +1208,32 @@ impl Shell {
                 })
                 .when(!on, |d| d.text_color(p.muted).hover(move |s| s.bg(hover)))
         };
+        // The strip takes what the search and the bell leave and scrolls
+        // sideways when its tabs, each its full width, do not fit; the tab
+        // shown is brought into view when it changes, which takes the
+        // strip's layout, so a frame after.
+        if self.tab_seen.get() != Some(self.active) {
+            self.tab_seen.set(Some(self.active));
+            self.tab_scroll
+                .scroll_to_item(self.active.map_or(0, |i| i + 1));
+            cx.notify();
+        }
+        let overflowing = self.tab_scroll.max_offset().x > px(0.);
         // A press on a tab is the tab's, to click or drag, not the title
         // bar's to move the window by.
         let mut tabs = h_flex()
+            .id("tab-strip")
             .h_full()
             .items_end()
             .gap(px(2.))
+            // No width of its own: gpui-component's title bar never shrinks
+            // below its content, so the tabs' width would push the search
+            // and the bell out of the window.
+            .w_0()
+            .flex_grow(1.)
             .min_w_0()
+            .overflow_x_scroll()
+            .track_scroll(&self.tab_scroll)
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
                 tab(
@@ -1170,6 +1243,8 @@ impl Shell {
                 .child("Home")
                 .on_click(cx.listener(|this, _, _, cx| this.show_home(cx))),
             );
+        // Each tab names its place only when the tabs are from more than one.
+        let places_differ = self.tabs.iter().any(|o| o.place != self.tabs[0].place);
         for (i, o) in self.tabs.iter().enumerate() {
             let card = cards.iter().find(|c| c.place == o.place && c.env == o.env);
             let title = card.map_or_else(|| "Gone".to_string(), |c| c.title.clone());
@@ -1179,6 +1254,7 @@ impl Shell {
             let accent = p.accent;
             tabs = tabs.child(
                 tab(format!("tab-{i}").into(), on)
+                    .flex_none()
                     .debug_selector(move || format!("env-tab-{i}"))
                     // Dragged, it takes the place of the tab it is let go
                     // on, the edge it goes beside marked.
@@ -1209,7 +1285,7 @@ impl Shell {
                                 .text_color(p.busy),
                         )
                     })
-                    .when_some(card, |d, c| {
+                    .when_some(card.filter(|_| places_differ), |d, c| {
                         d.child(
                             div()
                                 .text_size(px(10.5))
@@ -1220,6 +1296,7 @@ impl Shell {
                     .child(
                         div()
                             .id(("close", i))
+                            .flex_none()
                             .ml_1()
                             .text_color(p.muted)
                             .child("×")
@@ -1238,10 +1315,11 @@ impl Shell {
                 .gap(px(8.))
                 .pr(px(10.))
                 .child(tabs)
-                .child(div().flex_1())
+                .when(overflowing, |d| d.child(self.all_tabs(cards, p, cx)))
                 .child(
                     h_flex()
                         .id("search")
+                        .flex_none()
                         .gap(px(8.))
                         .min_w(px(220.))
                         .px(px(10.))
@@ -1260,6 +1338,7 @@ impl Shell {
                 .child(
                     div()
                         .id("bell")
+                        .flex_none()
                         .relative()
                         .ml(px(6.))
                         .text_color(p.muted)
