@@ -58,7 +58,8 @@ pub struct Config {
 /// `HANGAR_INITIAL_ADMIN_PASSWORD`, with an access token whose SHA-256 is
 /// `HANGAR_INITIAL_ADMIN_TOKEN_SHA256` (hex), or with both. A token is for
 /// whoever deploys the server and keeps the token, as the app does for a
-/// Hangar it makes: the server only ever has its hash.
+/// Hangar it makes: the server only ever has its hash. A new hash replaces
+/// the token the administrator was given (`users::ensure_admin`).
 #[derive(Debug, Clone)]
 pub struct InitialAdmin {
     pub username: String,

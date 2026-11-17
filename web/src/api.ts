@@ -105,7 +105,7 @@ export const api = {
   logout: () => unwrap(client.POST('/api/frontend/auth/logout')),
   setPreferences: (preferences: Schemas['Preferences']) =>
     unwrap(client.PUT('/api/frontend/me/preferences', { body: preferences })),
-  changePassword: (current_password: string, new_password: string) =>
+  changePassword: (current_password: string | undefined, new_password: string) =>
     unwrap(client.POST('/api/frontend/me/password', { body: { current_password, new_password } })),
 
   audit: (subject: string[], before?: number, limit = 50) =>

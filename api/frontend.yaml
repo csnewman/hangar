@@ -42,6 +42,35 @@ paths:
         "400": { $ref: "#/components/responses/Invalid" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /api/frontend/auth/link/{token}:
+    parameters:
+      - name: token
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      operationId: followSignInLink
+      description: >-
+        A sign-in link an app made (the client API's createSignInLink): it
+        signs the browser in as the link's person, once, and sends it on to
+        the path it names. A link expired or used goes to the sign-in page,
+        and on to the same path from there.
+      security: []
+      parameters:
+        - name: to
+          in: query
+          required: false
+          description: A path on this server to go on to; the web UI's start page unless set.
+          schema: { type: string }
+      responses:
+        "303":
+          description: On to the path, signed in, or to sign in.
+          headers:
+            Location:
+              schema: { type: string }
+            Set-Cookie:
+              schema: { type: string }
+
   /api/frontend/auth/logout:
     post:
       operationId: logout
@@ -85,8 +114,8 @@ paths:
     post:
       operationId: changePassword
       description: >-
-        Changes the signed-in user's password. Every other session they have
-        is ended; this one continues.
+        Changes the signed-in user's password, or sets an administrator's
+        first. Every other session they have is ended; this one continues.
       requestBody:
         required: true
         content:
@@ -3108,10 +3137,12 @@ components:
 
     ChangePassword:
       type: object
-      required: [current_password, new_password]
+      required: [new_password]
       additionalProperties: false
       properties:
-        current_password: { type: string }
+        current_password:
+          type: string
+          description: Needed unless the account has no password yet.
         new_password: { type: string, minLength: 8 }
 
     User:

@@ -39,7 +39,7 @@ import {
 import { desktop } from '../desktop'
 import { usePhone } from '../phone'
 import { profileKey } from '../profile'
-import { announceSessionChange, useMe } from '../session'
+import { announceSessionChange, meKey, useMe } from '../session'
 import type { Theme } from '../theme'
 import { tokensKey, useThemeChoice } from './themeChoice'
 
@@ -238,8 +238,66 @@ function AccountSettings() {
           <Row label="Role">{me.admin ? 'Administrator' : 'User'}</Row>
         </Rows>
       </Section>
-      {me.has_password && <ChangePassword />}
+      {me.has_password ? <ChangePassword /> : me.admin && <SetPassword />}
     </>
+  )
+}
+
+// An administrator made with an access token alone, as the app makes a
+// Hangar's owner, sets a first password to sign in with.
+function SetPassword() {
+  const qc = useQueryClient()
+  const [next, setNext] = useState('')
+  const [confirm, setConfirm] = useState('')
+  const set = useMutation({
+    mutationFn: () => api.changePassword(undefined, next),
+    onSuccess: () => qc.invalidateQueries({ queryKey: meKey }),
+  })
+  const mismatch = confirm !== '' && confirm !== next
+  const submit = (e: FormEvent) => {
+    e.preventDefault()
+    if (!mismatch) set.mutate()
+  }
+  return (
+    <Section title="Password">
+      <form onSubmit={submit}>
+        <fieldset className="pane-fields">
+          <Rows>
+            <Row label="New password">
+              <input
+                type="password"
+                className="pane-wide"
+                required
+                minLength={8}
+                autoComplete="new-password"
+                aria-label="New password"
+                value={next}
+                onChange={(e) => setNext(e.target.value)}
+              />
+            </Row>
+            <Row label="Confirm">
+              <input
+                type="password"
+                className="pane-wide"
+                required
+                autoComplete="new-password"
+                aria-label="Confirm the new password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+              />
+            </Row>
+            <Row label="">
+              <button type="submit" className="btn btn-primary btn-sm" disabled={set.isPending || mismatch}>
+                Set Password
+              </button>
+              {mismatch && <span className="action-error">The passwords do not match.</span>}
+              {set.error && <span className="action-error">{set.error.message}</span>}
+            </Row>
+          </Rows>
+        </fieldset>
+      </form>
+      <p className="pane-hint">No password is set. Set one to sign in without the app.</p>
+    </Section>
   )
 }
 

@@ -43,6 +43,9 @@ pub struct Server {
     ssh_port: u16,
     dir: PathBuf,
     log: PathBuf,
+    /// How it was started, to start it again: its binary and settings.
+    bin: String,
+    env: Vec<(String, String)>,
     _database: Option<Database>,
 }
 
@@ -91,42 +94,58 @@ impl Server {
         .expect("the secret key");
         let (port, ssh_port) = (free_port(), free_port());
         let log = dir.join("server.log");
-        let out = fs::File::create(&log).expect("the server's log");
-        let mut cmd = Command::new(&bin);
-        cmd.env_clear();
-        match &database {
-            Some(db) => cmd.env("HANGAR_DATABASE_URL", create_database(&db.admin, &db.name)),
-            None => cmd.env("HANGAR_STATE_FILE", dir.join("state.json")),
-        };
-        let child = cmd
-            .env("PATH", std::env::var("PATH").unwrap_or_default())
-            .env("HOME", &dir)
-            .env("HANGAR_LISTEN", format!("127.0.0.1:{port}"))
-            .env("HANGAR_BOOTSTRAP_TOKEN", BOOTSTRAP_TOKEN)
-            .env("HANGAR_INITIAL_ADMIN_USERNAME", ADMIN)
-            .env("HANGAR_INITIAL_ADMIN_PASSWORD", ADMIN_PASSWORD)
-            .env("HANGAR_SECRET_KEY_FILE", &key)
-            .env("HANGAR_FILES_DIR", dir.join("files"))
-            .env("HANGAR_BLOB_URL", blobs)
-            .env("HANGAR_PUBLIC_URL", format!("http://{HOST}:{port}"))
-            .env("HANGAR_SSH_LISTEN", format!("127.0.0.1:{ssh_port}"))
-            .env("HANGAR_SSH_ADDRESS", format!("{HOST}:{ssh_port}"))
-            .envs(settings.iter().map(|(k, v)| (k, v)))
-            .stdin(Stdio::null())
-            .stdout(out.try_clone().expect("the log"))
-            .stderr(out)
-            .spawn()
-            .unwrap_or_else(|e| panic!("starting {bin}: {e}"));
+        let path = |p: PathBuf| p.to_string_lossy().into_owned();
+        let mut env: Vec<(String, String)> = vec![
+            match &database {
+                Some(db) => (
+                    "HANGAR_DATABASE_URL".into(),
+                    create_database(&db.admin, &db.name),
+                ),
+                None => ("HANGAR_STATE_FILE".into(), path(dir.join("state.json"))),
+            },
+            ("PATH".into(), std::env::var("PATH").unwrap_or_default()),
+            ("HOME".into(), path(dir.clone())),
+            ("HANGAR_LISTEN".into(), format!("127.0.0.1:{port}")),
+            ("HANGAR_BOOTSTRAP_TOKEN".into(), BOOTSTRAP_TOKEN.into()),
+            ("HANGAR_INITIAL_ADMIN_USERNAME".into(), ADMIN.into()),
+            (
+                "HANGAR_INITIAL_ADMIN_PASSWORD".into(),
+                ADMIN_PASSWORD.into(),
+            ),
+            ("HANGAR_SECRET_KEY_FILE".into(), path(key)),
+            ("HANGAR_FILES_DIR".into(), path(dir.join("files"))),
+            ("HANGAR_BLOB_URL".into(), blobs),
+            ("HANGAR_PUBLIC_URL".into(), format!("http://{HOST}:{port}")),
+            ("HANGAR_SSH_LISTEN".into(), format!("127.0.0.1:{ssh_port}")),
+            ("HANGAR_SSH_ADDRESS".into(), format!("{HOST}:{ssh_port}")),
+        ];
+        env.extend(settings.iter().map(|(k, v)| (k.to_string(), v.clone())));
+        let child = spawn(&bin, &env, &log);
         let mut s = Server {
             child,
             port,
             ssh_port,
             dir,
             log,
+            bin,
+            env,
             _database: database,
         };
         s.wait_ready();
         Some(s)
+    }
+
+    /// Stops the server and starts it again on the same state, database
+    /// and ports, with settings changed as given.
+    pub fn restart_with(&mut self, settings: &[(&str, String)]) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        for (k, v) in settings {
+            self.env.retain(|(o, _)| o != k);
+            self.env.push((k.to_string(), v.clone()));
+        }
+        self.child = spawn(&self.bin, &self.env, &self.log);
+        self.wait_ready();
     }
 
     /// The server's address: http://hangar.localhost:<port>.
@@ -326,6 +345,23 @@ impl Drop for Server {
         }
         let _ = fs::remove_dir_all(&self.dir);
     }
+}
+
+/// Starts bin with env alone, its output appended to log.
+fn spawn(bin: &str, env: &[(String, String)], log: &std::path::Path) -> Child {
+    let out = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log)
+        .expect("the server's log");
+    Command::new(bin)
+        .env_clear()
+        .envs(env.iter().map(|(k, v)| (k, v)))
+        .stdin(Stdio::null())
+        .stdout(out.try_clone().expect("the log"))
+        .stderr(out)
+        .spawn()
+        .unwrap_or_else(|e| panic!("starting {bin}: {e}"))
 }
 
 /// A name no other test's has: prefix, the process and a count.

@@ -224,6 +224,55 @@ impl Tx {
         }
     }
 
+    /// The server's key of a name, if it has one.
+    pub async fn find_server_key(&mut self, name: &str) -> Result<Option<ServerKey>> {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                let r = sqlx::query(
+                    "SELECT name, value, sealed, created_at FROM server_keys WHERE name = $1",
+                )
+                .bind(name)
+                .fetch_optional(&mut **tx)
+                .await?;
+                r.map(|r| {
+                    Ok(ServerKey {
+                        name: r.try_get("name")?,
+                        value: r.try_get("value")?,
+                        sealed: r.try_get("sealed")?,
+                        created_at: r.try_get("created_at")?,
+                    })
+                })
+                .transpose()
+            }
+            Backend::Json(tx) => Ok(tx.work.server_keys.iter().find(|k| k.name == name).cloned()),
+        }
+    }
+
+    /// Sets the server's key of a name, made or replaced.
+    pub async fn put_server_key(&mut self, k: &ServerKey) -> Result<()> {
+        match &mut self.inner {
+            Backend::Pg(tx) => {
+                sqlx::query(
+                    "INSERT INTO server_keys (name, value, sealed, created_at) VALUES ($1, $2, $3, $4)
+                     ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, sealed = EXCLUDED.sealed,
+                     created_at = EXCLUDED.created_at",
+                )
+                .bind(&k.name)
+                .bind(&k.value)
+                .bind(k.sealed)
+                .bind(k.created_at)
+                .execute(&mut **tx)
+                .await?;
+            }
+            Backend::Json(tx) => {
+                let keys = &mut tx.work.server_keys;
+                keys.retain(|o| o.name != k.name);
+                keys.push(k.clone());
+            }
+        }
+        Ok(())
+    }
+
     /// The server's key of a name, made with value as given when there is
     /// none yet: whichever server gets there first makes it.
     pub async fn server_key(&mut self, fresh: &ServerKey) -> Result<ServerKey> {

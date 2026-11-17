@@ -2,7 +2,9 @@
 //! UI on every other path, people's preferences, and the development
 //! stack's automatic sign-in.
 
-use hangar_suite::{ADMIN, Server, frontendapi, status};
+use hangar_suite::{ADMIN, ADMIN_PASSWORD, Server, body, clientapi, frontendapi, status};
+use serde_json::json;
+use sha2::Digest;
 
 /// The server says it is healthy, knows no API endpoint it does not serve,
 /// and serves the web UI's page on every other path, so the UI's own
@@ -192,4 +194,178 @@ async fn the_initial_administrator_can_be_made_with_a_token() {
     assert_eq!(body["admin"], true);
     let r = me("hgr_another-token").await.expect("me");
     assert_eq!(r.status(), 401);
+}
+
+fn sha256_hex(s: &str) -> String {
+    sha2::Sha256::digest(s.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn client_status<T, E>(r: Result<T, clientapi::Error<E>>) -> Option<u16> {
+    r.err().and_then(|e| e.status()).map(|s| s.as_u16())
+}
+
+/// The initial administrator's token follows the setting: a new hash
+/// replaces the token they were given and ends their sessions, whatever
+/// name the setting gives them by then, and a token revoked is not given
+/// back by the next start.
+#[tokio::test]
+async fn the_initial_administrators_token_follows_the_setting() {
+    const FIRST: &str = "hgr_the-token-its-maker-kept-first";
+    const SECOND: &str = "hgr_the-token-its-maker-made-afresh";
+    let Some(mut s) = Server::start_with(&[
+        ("HANGAR_INITIAL_ADMIN_USERNAME", "owner".into()),
+        ("HANGAR_INITIAL_ADMIN_TOKEN_SHA256", sha256_hex(FIRST)),
+    ]) else {
+        return;
+    };
+    let me = s.client(FIRST).get_me().await.expect("the first token");
+    assert_eq!(me.username, "owner");
+    let session = s.sign_in("owner", ADMIN_PASSWORD).await;
+
+    s.restart_with(&[
+        ("HANGAR_INITIAL_ADMIN_USERNAME", "someone-else".into()),
+        ("HANGAR_INITIAL_ADMIN_TOKEN_SHA256", sha256_hex(SECOND)),
+    ]);
+    assert_eq!(client_status(s.client(FIRST).get_me().await), Some(401));
+    let second = s.client(SECOND);
+    let me = second.get_me().await.expect("the second token");
+    assert_eq!(
+        me.username, "owner",
+        "the token goes to whom it went before"
+    );
+    assert_eq!(
+        status(session.get_me().await),
+        Some(401),
+        "their sessions end"
+    );
+    let users: serde_json::Value = s
+        .http()
+        .get(format!("{}/api/frontend/users", s.url()))
+        .bearer_auth(SECOND)
+        .send()
+        .await
+        .expect("users")
+        .json()
+        .await
+        .expect("JSON");
+    assert!(
+        !users.to_string().contains("someone-else"),
+        "no one else is made: {users}"
+    );
+
+    let tokens = second.list_tokens().await.expect("tokens").into_inner();
+    let current = tokens
+        .items
+        .iter()
+        .find(|t| t.current)
+        .expect("the token used");
+    second
+        .revoke_token(&current.id)
+        .await
+        .expect("revoking the token");
+    s.restart_with(&[]);
+    assert_eq!(
+        client_status(s.client(SECOND).get_me().await),
+        Some(401),
+        "a token revoked stays revoked"
+    );
+}
+
+/// An app holding a token signs its person in to the web UI with a link
+/// it opens in the browser: the link signs a browser in once and sends it
+/// on, and a used one goes to the sign-in page with the same destination.
+#[tokio::test]
+async fn a_sign_in_link_signs_a_browser_in_once() {
+    let Some(s) = Server::start() else { return };
+    let admin = s.admin().await;
+    let app = s.client(&s.token(&admin, "the app").await);
+    let link = app
+        .create_sign_in_link(&body(json!({ "to": "/environments" })))
+        .await
+        .expect("a link")
+        .into_inner();
+    assert!(
+        link.path.starts_with("/api/frontend/auth/link/"),
+        "{}",
+        link.path
+    );
+
+    let browser = s.http_to(&[]);
+    let r = browser
+        .get(format!("{}{}", s.url(), link.path))
+        .send()
+        .await
+        .expect("following the link");
+    assert_eq!(r.status(), 303);
+    assert_eq!(r.headers()["location"], "/environments");
+    let me = browser
+        .get(format!("{}/api/frontend/me", s.url()))
+        .send()
+        .await
+        .expect("me");
+    assert_eq!(me.status(), 200, "the browser is signed in");
+    let me: serde_json::Value = me.json().await.expect("JSON");
+    assert_eq!(me["username"], ADMIN);
+
+    let other = s.http_to(&[]);
+    let r = other
+        .get(format!("{}{}", s.url(), link.path))
+        .send()
+        .await
+        .expect("following the link again");
+    assert_eq!(r.status(), 303);
+    assert_eq!(r.headers()["location"], "/login?next=%2Fenvironments");
+    let me = other
+        .get(format!("{}/api/frontend/me", s.url()))
+        .send()
+        .await
+        .expect("me");
+    assert_eq!(me.status(), 401, "a used link signs no one in");
+
+    assert_eq!(
+        client_status(
+            app.create_sign_in_link(&body(json!({ "to": "//elsewhere.example" })))
+                .await
+        ),
+        Some(400),
+        "a link goes on only to a path on the server"
+    );
+}
+
+/// An administrator made with a token alone, as the app makes a Hangar's,
+/// sets a first password with it, and changes it only with the current one.
+#[tokio::test]
+async fn an_administrator_without_a_password_sets_one() {
+    const TOKEN: &str = "hgr_the-token-of-an-owner-without-a-password";
+    let Some(s) = Server::start_with(&[
+        ("HANGAR_INITIAL_ADMIN_USERNAME", "owner".into()),
+        ("HANGAR_INITIAL_ADMIN_PASSWORD", String::new()),
+        ("HANGAR_INITIAL_ADMIN_TOKEN_SHA256", sha256_hex(TOKEN)),
+    ]) else {
+        return;
+    };
+    let app = s.client(TOKEN);
+    assert_eq!(app.get_me().await.expect("me").has_password, Some(false));
+    app.change_password(&body(json!({ "new_password": "the-owners-password" })))
+        .await
+        .expect("setting a first password");
+    assert_eq!(app.get_me().await.expect("me").has_password, Some(true));
+    s.sign_in("owner", "the-owners-password").await;
+    assert_eq!(
+        client_status(
+            app.change_password(&body(json!({ "new_password": "another-password" })))
+                .await
+        ),
+        Some(400),
+        "changing it needs the current one"
+    );
+    app.change_password(&body(json!({
+        "current_password": "the-owners-password",
+        "new_password": "another-password",
+    })))
+    .await
+    .expect("changing it with the current one");
 }

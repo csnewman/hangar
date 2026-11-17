@@ -20,6 +20,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/frontend/auth/link/{token}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        /** @description A sign-in link an app made (the client API's createSignInLink): it signs the browser in as the link's person, once, and sends it on to the path it names. A link expired or used goes to the sign-in page, and on to the same path from there. */
+        get: operations["followSignInLink"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/frontend/auth/logout": {
         parameters: {
             query?: never;
@@ -78,7 +97,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** @description Changes the signed-in user's password. Every other session they have is ended; this one continues. */
+        /** @description Changes the signed-in user's password, or sets an administrator's first. Every other session they have is ended; this one continues. */
         post: operations["changePassword"];
         delete?: never;
         options?: never;
@@ -2044,7 +2063,8 @@ export interface components {
             theme: components["schemas"]["Theme"];
         };
         ChangePassword: {
-            current_password: string;
+            /** @description Needed unless the account has no password yet. */
+            current_password?: string;
             new_password: string;
         };
         User: {
@@ -2164,6 +2184,31 @@ export interface operations {
             };
             400: components["responses"]["Invalid"];
             401: components["responses"]["Unauthorized"];
+        };
+    };
+    followSignInLink: {
+        parameters: {
+            query?: {
+                /** @description A path on this server to go on to; the web UI's start page unless set. */
+                to?: string;
+            };
+            header?: never;
+            path: {
+                token: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description On to the path, signed in, or to sign in. */
+            303: {
+                headers: {
+                    Location?: string;
+                    "Set-Cookie"?: string;
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
     logout: {

@@ -161,6 +161,42 @@ paths:
               schema: { $ref: "#/components/schemas/Me" }
         "401": { $ref: "#/components/responses/Unauthorized" }
 
+  /me/password:
+    post:
+      operationId: changePassword
+      summary: >-
+        Change the user's password, or set an administrator's first, which
+        signs them in to the web UI. Their sessions there are ended.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangePassword" }
+      responses:
+        "204": { description: Changed. }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /me/sign-in-link:
+    post:
+      operationId: createSignInLink
+      summary: >-
+        A link that signs a browser in to the web UI as the user, once, for
+        an app to open: the token alone cannot sign a browser in.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/NewSignInLink" }
+      responses:
+        "201":
+          description: The link.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SignInLink" }
+        "400": { $ref: "#/components/responses/Invalid" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /me/login-keys:
     get:
       operationId: listLoginKeys
@@ -1042,6 +1078,9 @@ components:
         username: { type: string }
         display_name: { type: string }
         admin: { type: boolean }
+        has_password:
+          type: boolean
+          description: Whether they have a password to sign in to the web UI with.
         ssh: { $ref: "#/components/schemas/SSHGateway" }
         environment_host_suffix:
           type: string
@@ -1112,6 +1151,31 @@ components:
         interval:
           type: integer
           description: Seconds between asks for the token.
+
+    ChangePassword:
+      type: object
+      required: [new_password]
+      properties:
+        current_password:
+          type: string
+          description: Needed unless the account has no password yet.
+        new_password: { type: string, minLength: 8 }
+
+    NewSignInLink:
+      type: object
+      properties:
+        to:
+          type: string
+          description: A path on the server for the browser to go on to, such as /environments/ID; the web UI's start page unless set.
+
+    SignInLink:
+      type: object
+      required: [path, expires_at]
+      properties:
+        path:
+          type: string
+          description: The link, a path on the server, which signs a browser in once.
+        expires_at: { type: string, format: date-time }
 
     FinishSignIn:
       type: object

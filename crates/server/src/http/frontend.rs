@@ -1,7 +1,7 @@
 //! The web UI's API, /api/frontend (api/frontend.yaml):
 //! what the browser asks of the server.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::{StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -15,6 +15,7 @@ use crate::users;
 pub fn routes() -> Router<Shared> {
     Router::new()
         .route("/auth/login", post(login))
+        .route("/auth/link/{token}", get(follow_link))
         .route("/auth/logout", post(logout))
         .route("/me", get(me))
         .route("/me/tokens", get(list_tokens).post(create_token))
@@ -257,7 +258,7 @@ async fn change_password(
         &s.principal,
         &s.ip,
         session,
-        &b.current_password,
+        b.current_password.as_deref(),
         &b.new_password,
     )
     .await?;
@@ -311,6 +312,47 @@ async fn login(
         Json(me),
     )
         .into_response())
+}
+
+/// Whether to is a path on this server: one / and then anything but a
+/// second, which a browser takes for another host.
+pub fn local_path(to: &str) -> bool {
+    to.starts_with('/') && !to.starts_with("//") && !to.starts_with("/\\")
+}
+
+async fn follow_link(
+    State(app): State<Shared>,
+    ClientIp(ip): ClientIp,
+    Path(token): Path<String>,
+    RawQuery(q): RawQuery,
+) -> Result<Response, ApiError> {
+    let to = url::form_urlencoded::parse(q.unwrap_or_default().as_bytes())
+        .find(|(k, _)| k == "to")
+        .map(|(_, v)| v.into_owned())
+        .filter(|t| local_path(t))
+        .unwrap_or_else(|| "/".into());
+    let see = |loc: &str| {
+        let mut r = StatusCode::SEE_OTHER.into_response();
+        if let Ok(v) = header::HeaderValue::from_str(loc) {
+            r.headers_mut().insert(header::LOCATION, v);
+        }
+        r
+    };
+    Ok(match users::follow_link(&app.store, &ip, &token).await? {
+        Some(session) => {
+            let mut r = see(&to);
+            if let Ok(v) = header::HeaderValue::from_str(&session_cookie(&app, Some(&session))) {
+                r.headers_mut().append(header::SET_COOKIE, v);
+            }
+            r
+        }
+        None => see(&format!(
+            "/login?{}",
+            url::form_urlencoded::Serializer::new(String::new())
+                .append_pair("next", &to)
+                .finish()
+        )),
+    })
 }
 
 async fn logout(State(app): State<Shared>, s: Signed) -> Result<Response, ApiError> {

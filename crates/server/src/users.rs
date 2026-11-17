@@ -99,61 +99,154 @@ fn sha256(s: &str) -> Vec<u8> {
 /// The name of the access token an initial administrator is made with.
 pub const INITIAL_TOKEN: &str = "initial";
 
+/// The server key recording whom the initial administrator's token was
+/// last given to, and its hash (`Given`).
+const GIVEN_KEY: &str = "initial-administrator-token";
+
+/// Whom the initial administrator's token went to, and its SHA-256 (hex).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct Given {
+    user: Uuid,
+    token_sha256: String,
+}
+
+/// What ensure_admin did.
+#[derive(Debug, PartialEq)]
+pub enum Ensured {
+    /// Made the administrator, named so.
+    Made(String),
+    /// Gave the administrator, named so, the token in place of their
+    /// INITIAL_TOKEN, ending their sessions.
+    Replaced(String),
+    Kept,
+}
+
 /// Makes the administrator named username, with password and an access
 /// token whose SHA-256 is token_sha256 (INITIAL_TOKEN, never expiring),
-/// either or both, unless there is a user by that name; says whether it
-/// did.
+/// either or both, unless there is a user by that name.
+///
+/// The token is whoever deployed the server's, and follows the setting:
+/// given a hash other than the last one given, the person the token went
+/// to (else the one named username) has their INITIAL_TOKEN replaced by it
+/// and every session ended. That is how the maker of a Hangar of its own
+/// takes it back with a token of a new one. A hash given once is not given
+/// again, so a token revoked stays revoked.
 pub async fn ensure_admin(
     store: &Store,
     username: &str,
     password: Option<&str>,
     token_sha256: Option<&[u8]>,
-) -> Result<bool> {
+) -> Result<Ensured> {
     let mut tx = store.begin().await?;
-    if tx.person_by_name(username).await?.is_some() {
-        return Ok(false);
-    }
-    let u = User {
-        id: Uuid::new_v4(),
-        username: username.to_string(),
-        display_name: String::new(),
-        password_hash: password.map(hash_password),
-        is_admin: true,
-        kind: "person".into(),
-        disabled_at: None,
-        created_at: Utc::now(),
-        theme: "system".into(),
+    let given: Option<Given> = tx
+        .find_server_key(GIVEN_KEY)
+        .await?
+        .and_then(|k| serde_json::from_slice(&k.value).ok());
+    let holder = match &given {
+        Some(g) => tx.user(g.user).await?,
+        None => None,
     };
-    tx.insert_user(&u).await?;
-    audit::record(
-        &mut tx,
-        &audit::system(),
-        Event::new("user.create", "user", u.id, username)
-            .details(serde_json::json!({ "admin": true })),
-    )
-    .await?;
-    if let Some(hash) = token_sha256 {
-        let t = AccessToken {
-            id: Uuid::new_v4(),
-            user_id: u.id,
-            name: INITIAL_TOKEN.into(),
-            token_hash: hash.to_vec(),
-            created_at: u.created_at,
-            last_used_at: None,
-            expires_at: None,
-        };
-        tx.insert_token(&t).await?;
-        audit::record(
-            &mut tx,
-            &audit::system(),
-            Event::new("token.create", "token", t.id, INITIAL_TOKEN)
-                .related("user", u.id)
-                .related("owner", u.id),
-        )
+    let found = match holder {
+        Some(u) => Some(u),
+        None => tx.person_by_name(username).await?,
+    };
+    let hex = token_sha256.map(|h| h.iter().map(|b| format!("{b:02x}")).collect::<String>());
+    let (u, out) = match found {
+        Some(u) => {
+            let (Some(hash), Some(hex)) = (token_sha256, &hex) else {
+                return Ok(Ensured::Kept);
+            };
+            if given
+                .as_ref()
+                .is_some_and(|g| g.user == u.id && &g.token_sha256 == hex)
+            {
+                return Ok(Ensured::Kept);
+            }
+            let tokens = tx.tokens_of(u.id).await?;
+            if tokens.iter().any(|t| t.token_hash == hash) {
+                (u, Ensured::Kept)
+            } else {
+                for t in tokens.iter().filter(|t| t.name == INITIAL_TOKEN) {
+                    tx.delete_token(u.id, t.id).await?;
+                    audit::record(
+                        &mut tx,
+                        &audit::system(),
+                        Event::new("token.revoke", "token", t.id, &t.name)
+                            .related("user", u.id)
+                            .related("owner", u.id),
+                    )
+                    .await?;
+                }
+                initial_token(&mut tx, u.id, hash).await?;
+                tx.delete_sessions(u.id, None).await?;
+                let name = u.username.clone();
+                (u, Ensured::Replaced(name))
+            }
+        }
+        None => {
+            let u = User {
+                id: Uuid::new_v4(),
+                username: username.to_string(),
+                display_name: String::new(),
+                password_hash: password.map(hash_password),
+                is_admin: true,
+                kind: "person".into(),
+                disabled_at: None,
+                created_at: Utc::now(),
+                theme: "system".into(),
+            };
+            tx.insert_user(&u).await?;
+            audit::record(
+                &mut tx,
+                &audit::system(),
+                Event::new("user.create", "user", u.id, username)
+                    .details(serde_json::json!({ "admin": true })),
+            )
+            .await?;
+            if let Some(hash) = token_sha256 {
+                initial_token(&mut tx, u.id, hash).await?;
+            }
+            (u, Ensured::Made(username.to_string()))
+        }
+    };
+    if let Some(hex) = hex {
+        let value = serde_json::to_vec(&Given {
+            user: u.id,
+            token_sha256: hex,
+        })
+        .unwrap_or_default();
+        tx.put_server_key(&crate::store::rows::ServerKey {
+            name: GIVEN_KEY.into(),
+            value,
+            sealed: false,
+            created_at: Utc::now(),
+        })
         .await?;
     }
     tx.commit().await?;
-    Ok(true)
+    Ok(out)
+}
+
+/// Gives user_id an INITIAL_TOKEN access token whose SHA-256 is hash.
+async fn initial_token(tx: &mut crate::store::Tx, user_id: Uuid, hash: &[u8]) -> Result<()> {
+    let t = AccessToken {
+        id: Uuid::new_v4(),
+        user_id,
+        name: INITIAL_TOKEN.into(),
+        token_hash: hash.to_vec(),
+        created_at: Utc::now(),
+        last_used_at: None,
+        expires_at: None,
+    };
+    tx.insert_token(&t).await?;
+    audit::record(
+        tx,
+        &audit::system(),
+        Event::new("token.create", "token", t.id, INITIAL_TOKEN)
+            .related("user", user_id)
+            .related("owner", user_id),
+    )
+    .await
 }
 
 /// Signs in username with password, giving the session's token and the
@@ -314,6 +407,71 @@ pub async fn sign_in_as(
     .await?;
     tx.commit().await?;
     Ok(Some((token, p)))
+}
+
+/// How long a sign-in link lasts.
+pub const LINK_LIFETIME: Duration = Duration::minutes(2);
+
+/// Makes a sign-in link for p, for an app holding their access token to
+/// sign its person in to the web UI with: the token of a session lasting
+/// LINK_LIFETIME, which follow_link trades once for a session of its own.
+pub async fn sign_in_link(
+    store: &Store,
+    p: &Principal,
+    ip: &str,
+) -> Result<(String, chrono::DateTime<Utc>)> {
+    let token = secret();
+    let now = Utc::now();
+    let expires = now + LINK_LIFETIME;
+    let mut tx = store.begin().await?;
+    tx.insert_session(&Session {
+        token_hash: sha256(&token),
+        user_id: p.user_id,
+        created_at: now,
+        last_seen_at: now,
+        expires_at: expires,
+    })
+    .await?;
+    audit::record(
+        &mut tx,
+        &p.actor(ip),
+        Event::new("auth.sign_in_link", "user", p.user_id, &p.username),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok((token, expires))
+}
+
+/// Trades a sign-in link's token for a session, ending the link; None for
+/// a link expired or used, or a token that is no link.
+pub async fn follow_link(store: &Store, ip: &str, token: &str) -> Result<Option<String>> {
+    let hash = sha256(token);
+    let now = Utc::now();
+    let mut tx = store.begin().await?;
+    let Some((user, s)) = tx.session(&hash, now).await? else {
+        return Ok(None);
+    };
+    if s.expires_at - s.created_at > LINK_LIFETIME {
+        return Ok(None);
+    }
+    tx.delete_session(&hash).await?;
+    let session = secret();
+    tx.insert_session(&Session {
+        token_hash: sha256(&session),
+        user_id: user.id,
+        created_at: now,
+        last_seen_at: now,
+        expires_at: now + SESSION_LIFETIME,
+    })
+    .await?;
+    audit::record(
+        &mut tx,
+        &Principal::of(&user).actor(ip),
+        Event::new("auth.login_link", "user", user.id, &user.username),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Some(session))
 }
 
 /// The user signed in as p.
@@ -749,22 +907,29 @@ pub async fn delete(store: &Store, by: &Principal, ip: &str, id: Uuid) -> crate:
 }
 
 /// Changes p's own password, given the current one, ending every session
-/// of theirs but the one asking (whose token is session).
+/// of theirs but the one asking (whose token is session). An administrator
+/// without one may set their first, as they may set anyone's.
 pub async fn change_password(
     store: &Store,
     p: &Principal,
     ip: &str,
     session: Option<&str>,
-    current: &str,
+    current: Option<&str>,
     next: &str,
 ) -> crate::fail::Result<()> {
     valid_password(next)?;
     let mut tx = store.begin().await?;
-    let Some(hash) = tx.user(p.user_id).await?.and_then(|u| u.password_hash) else {
-        return crate::fail::invalid("this account has no password to change");
+    let Some(u) = tx.user(p.user_id).await? else {
+        return crate::fail::invalid("no such user");
     };
-    if !check_password(&hash, current) {
-        return crate::fail::invalid("the current password is incorrect");
+    match &u.password_hash {
+        Some(hash) if !current.is_some_and(|c| check_password(hash, c)) => {
+            return crate::fail::invalid("the current password is incorrect");
+        }
+        None if !u.is_admin => {
+            return crate::fail::invalid("this account has no password to change");
+        }
+        _ => {}
     }
     let new_hash = hash_password(next);
     tx.update_user(p.user_id, None, None, None, Some(&new_hash), Utc::now())
