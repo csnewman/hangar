@@ -412,6 +412,11 @@ impl AddPlaceView {
             isos: plan.isos.clone(),
             pool: plan.pool.clone(),
             prefix: plan.prefix.clone(),
+            disks: plan.disks.clone(),
+            network: plan.network.clone(),
+            cores: plan.cores,
+            memory_mib: plan.memory_mib,
+            data_gib: plan.data_gib,
         };
         let token = self.pve.token.clone();
         self.pve.making = Some(cx.spawn(async move |this, cx| {

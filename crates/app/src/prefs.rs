@@ -248,6 +248,26 @@ impl SettingsView {
                     cx.notify();
                 }
             }),
+            // A place removed while the window is open (This Hangar's
+            // Remove) leaves its rows and pages.
+            cx.observe(&places, |this, places, cx| {
+                let places = places.read(cx);
+                let gone = |id: &str| places.get(id).is_none();
+                let before = this.rows.len();
+                this.rows.retain(|r| !gone(&r.id));
+                this.accounts.retain(|(id, _)| !gone(id));
+                this.hangars.retain(|(id, _)| !gone(id));
+                let mut moved = false;
+                if let Page::Account(id) | Page::Browser(id) | Page::Hangar(id) = &this.page
+                    && gone(id)
+                {
+                    this.page = Page::Places;
+                    moved = true;
+                }
+                if moved || this.rows.len() != before {
+                    cx.notify();
+                }
+            }),
         ];
         let mut view = SettingsView {
             places,

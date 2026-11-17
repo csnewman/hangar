@@ -40,6 +40,18 @@ pub struct ProxmoxPlace {
     pub isos: String,
     pub pool: String,
     pub prefix: String,
+    /// Where its environments' disks go, and the network they join.
+    #[serde(default)]
+    pub disks: String,
+    #[serde(default)]
+    pub network: String,
+    /// Its VM's size.
+    #[serde(default)]
+    pub cores: u32,
+    #[serde(default)]
+    pub memory_mib: u32,
+    #[serde(default)]
+    pub data_gib: u32,
 }
 
 /// How a place's connection is.

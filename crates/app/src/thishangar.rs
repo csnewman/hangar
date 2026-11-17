@@ -11,7 +11,7 @@ use gpui_component::{h_flex, v_flex};
 use hangar_proxmox::hangar::{self, Made, Proxmox};
 
 use crate::palette::{self, Palette};
-use crate::place::PlaceConfig;
+use crate::place::{PlaceConfig, ProxmoxPlace};
 use crate::places::Places;
 use crate::ui::{button, disabled, primary};
 
@@ -58,7 +58,7 @@ impl ThisHangarView {
         let task = cx.background_spawn(async move {
             let runs = client
                 .and_then(|c| c.version().ok())
-                .map(|v| v.server.to_string());
+                .map(|v| build_of(&v.server).to_string());
             let latest = latest_version().ok();
             (runs, latest)
         });
@@ -187,6 +187,40 @@ fn short(v: &str) -> String {
     v.chars().take(12).collect()
 }
 
+/// The build in a server's description of itself ("hangar-server 0.44"),
+/// which names the program first.
+fn build_of(server: &str) -> &str {
+    server.rsplit(' ').next().unwrap_or(server)
+}
+
+/// Its VM, and its size when the app made it.
+fn vm_line(at: &ProxmoxPlace) -> String {
+    let mut s = format!("{} {}-hangar", at.vmid, at.prefix);
+    if at.cores > 0 {
+        s += &format!(
+            " · {} vCPUs · {} GB · {} GB",
+            at.cores,
+            at.memory_mib / 1024,
+            at.data_gib
+        );
+    }
+    s
+}
+
+/// Where its environments go.
+fn environments_line(at: &ProxmoxPlace) -> String {
+    let mut parts = Vec::new();
+    if !at.disks.is_empty() {
+        parts.push(format!("disks on {}", at.disks));
+    }
+    parts.push(format!("ISOs on {}", at.isos));
+    if !at.network.is_empty() {
+        parts.push(at.network.clone());
+    }
+    parts.push(format!("pool {}", at.pool));
+    parts.join(" · ")
+}
+
 impl Render for ThisHangarView {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let p = palette::of(cx);
@@ -200,52 +234,51 @@ impl Render for ThisHangarView {
         let name = config.name.clone();
         let row = |k: &str, v: String, p: &Palette| {
             h_flex()
-                .gap(px(12.))
+                .max_w(px(560.))
+                .gap(px(8.))
+                .child(div().flex_none().text_color(p.muted).child(k.to_string()))
                 .child(
-                    div()
-                        .w(px(110.))
-                        .flex_none()
-                        .text_color(p.muted)
-                        .child(k.to_string()),
+                    div().flex_1().min_w_0().flex().justify_end().child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(v),
+                    ),
                 )
-                .child(div().min_w_0().truncate().child(v))
         };
         let newer = match (&self.runs, &self.latest) {
             (Some(r), Some(l)) => !l.starts_with(r.as_str()) && !r.starts_with(l.as_str()),
             _ => false,
         };
-        let release_note = match (&self.doing, &self.runs, &self.latest) {
-            (Doing::Upgrading, ..) => "Moving it to the latest release…".to_string(),
-            (Doing::Upgraded(v), ..) => format!(
-                "Its VM restarts into {}; its environments carry on and are picked up again.",
-                short(v)
+        let (release_note, release_aside) = match (&self.doing, &self.runs, &self.latest) {
+            (Doing::Upgrading, ..) => ("Moving it to the latest release…".to_string(), None),
+            (Doing::Upgraded(v), ..) => (format!("Its VM restarts into {}.", short(v)), None),
+            (_, Some(r), Some(l)) if newer => (
+                format!("{} is out", short(l)),
+                Some(format!(" · it runs {}", short(r))),
             ),
-            (_, Some(r), Some(l)) if newer => {
-                format!("It runs {}; {} is out.", short(r), short(l))
-            }
-            (_, Some(r), _) => format!("It runs {}, the latest.", short(r)),
-            _ => "Asking it what it runs…".into(),
+            (_, Some(r), _) => (format!("It runs {}, the latest", short(r)), None),
+            _ => ("Asking it what it runs…".into(), None),
         };
+        let fingerprint = hangar::show_fingerprint(&config.pin);
+        let fingerprint = format!(
+            "{}…:{}",
+            &fingerprint[..fingerprint.len().min(6)],
+            &fingerprint[fingerprint.len().saturating_sub(2)..]
+        );
         v_flex()
-            .gap(px(10.))
+            .gap(px(6.))
             .child(section("Where it runs", &p))
             .child(row("Proxmox", format!("{}, node {}", crate::store::place_id(&at.url), at.node), &p))
-            .child(row("Its VM", format!("{} {}-hangar", at.vmid, at.prefix), &p))
+            .child(row("Its VM", vm_line(&at), &p))
             .child(row(
                 "Address",
-                format!(
-                    "{} · certificate pinned, SHA-256 {}",
-                    config.url,
-                    hangar::show_fingerprint(&config.pin)
-                        .chars()
-                        .take(17)
-                        .collect::<String>()
-                        + "…"
-                ),
+                format!("{} · certificate pinned, SHA-256 {fingerprint}", config.url),
                 &p,
             ))
             .child(row("Prefix", at.prefix.clone(), &p))
-            .child(row("ISOs", format!("{} · pool {}", at.isos, at.pool), &p))
+            .child(row("Environments", environments_line(&at), &p))
             .child(section("Release", &p))
             .child(
                 h_flex()
@@ -259,7 +292,13 @@ impl Render for ThisHangarView {
                         v_flex()
                             .flex_1()
                             .min_w_0()
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child(release_note))
+                            .child(
+                                h_flex()
+                                    .child(div().font_weight(FontWeight::SEMIBOLD).child(release_note))
+                                    .when_some(release_aside, |d, a| {
+                                        d.child(div().text_color(p.muted).child(a))
+                                    }),
+                            )
                             .child(div().text_size(px(11.)).text_color(p.muted).child(
                                 "Its VM restarts into the new release, a few seconds; its environments keep running and are picked up again. Should the new release's Hangar not run, it goes back to the one before by itself.",
                             )),
@@ -282,7 +321,7 @@ impl Render for ThisHangarView {
                     .rounded(px(6.))
                     .border_1()
                     .border_color(p.bad)
-                    .child(div().flex_1().child(format!(
+                    .child(div().flex_1().min_w_0().child(format!(
                         "Remove {name}? Its VM, its environments' VMs and their disks, and its ISOs, all named {}-, are deleted from Proxmox. This cannot be undone.",
                         at.prefix
                     )))
@@ -304,24 +343,45 @@ impl Render for ThisHangarView {
                             p.bad.opacity(0.88),
                         )
                         .on_click(cx.listener(|this, _, _, cx| this.remove(cx))),
-                    ),
+                    )
+                    .into_any_element(),
                 Doing::Removing => h_flex()
                     .text_color(p.muted)
-                    .child(format!("Removing {name} from Proxmox…")),
+                    .child(format!("Removing {name} from Proxmox…"))
+                    .into_any_element(),
                 _ => h_flex()
+                    .id("hangar-remove")
                     .gap(px(8.))
-                    .child(div().flex_1().text_size(px(11.5)).text_color(p.muted).child(format!(
-                        "Stops and deletes its VM and all it made on Proxmox, named {}-…, environments' disks too; asks first.",
-                        at.prefix
-                    )))
+                    .px(px(6.))
+                    .py(px(3.))
+                    .rounded(px(5.))
+                    .border_1()
+                    .border_color(p.border)
+                    .cursor_pointer()
+                    .hover(|d| d.bg(p.surface_2))
                     .child(
-                        button("hangar-remove", format!("Remove {name}…"), &p).on_click(
-                            cx.listener(|this, _, _, cx| {
-                                this.doing = Doing::AskingRemove;
-                                cx.notify();
-                            }),
-                        ),
-                    ),
+                        div()
+                            .flex_none()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(p.bad)
+                            .child(format!("Remove {name}…")),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .justify_end()
+                            .child(div().min_w_0().truncate().text_size(px(10.5)).text_color(p.muted).child(format!(
+                                "stops and deletes its VM and all it made on Proxmox, named {}-…, environments' disks too; asks first",
+                                at.prefix
+                            ))),
+                    )
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.doing = Doing::AskingRemove;
+                        cx.notify();
+                    }))
+                    .into_any_element(),
             })
             .when_some(self.error.clone(), |d, e| {
                 d.child(div().text_color(p.bad).child(e))
