@@ -18,10 +18,17 @@
 //! shutdown through the agent channel stops the worker, unmounts the data
 //! disk and powers off.
 //!
+//! A worker VM joins the Hangar server its settings name, or, with none,
+//! is a Hangar of its own: it runs the release's server beside the worker,
+//! which joins it on the loopback, its state on the data disk, serving
+//! HTTPS and the SSH gateway on the VM's address with the certificate its
+//! maker gave it, and making its first administrator with the access token
+//! its maker keeps (only the token's hash is given).
+//!
 //! Nothing runs from the ISO, so the worker can change the VM's to another
 //! release's as it runs, as it does to move to the release its server names,
-//! then reboot into it. The worker of the release booted before is kept, and
-//! run should the new one keep failing.
+//! then reboot into it. The release booted before is kept, and run should
+//! the new one keep failing.
 
 /// Where the worker VM's maker writes its settings through the guest agent
 /// channel: root's alone.
@@ -34,7 +41,7 @@ pub use role::{is_worker, power_off, run};
 mod role {
     use std::io;
     use std::net::Ipv4Addr;
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
     use std::path::Path;
     use std::sync::atomic::{AtomicI32, Ordering};
     use std::time::{Duration, Instant};
@@ -61,6 +68,15 @@ mod role {
     const CURRENT: &str = "/data/release";
     const PREVIOUS: &str = "/data/release-previous";
     const RELEASE_FILES: [&str; 3] = ["hangar-worker", "ca-certificates.crt", "VERSION"];
+    /// The server, which a release may lack: a worker VM that joins a
+    /// server runs none.
+    const SERVER_FILE: &str = "hangar-server";
+    /// A Hangar of its own's server: its state, keys and certificate.
+    const SERVER_DIR: &str = "/data/server";
+    /// Where its server answers the worker, on the loopback alone.
+    const LOCAL_API: &str = "127.0.0.1:8081";
+    const HTTPS_PORT: u16 = 443;
+    const SSH_PORT: u16 = 22;
     /// How many times a new release's worker may fail, within how long of
     /// the boot, before the one before it is run.
     const FAILURES: usize = 3;
@@ -76,20 +92,52 @@ mod role {
     /// How long the worker has to stop before it is killed.
     const STOP_WITHIN: Duration = Duration::from_secs(60);
 
-    /// The worker that runs, by PID, or 0.
+    /// The worker and the server that run, by PID, or 0.
     static WORKER: AtomicI32 = AtomicI32::new(0);
+    static SERVER: AtomicI32 = AtomicI32::new(0);
 
     /// What the worker VM's maker gives it.
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Settings {
-        /// The Hangar server, as the worker reaches it.
+        /// The Hangar server the worker joins, as it reaches it; empty, the
+        /// VM is a Hangar of its own (own).
+        #[serde(default)]
         server: String,
-        /// The token the worker enrols with, the first time.
+        /// The token the worker enrols with the first time, with server.
+        #[serde(default)]
         bootstrap_token: String,
         /// The worker's name in Hangar, which templates place by.
         node: String,
         proxmox: Proxmox,
+        /// The VM's own server, without server.
+        #[serde(default)]
+        own: Option<Own>,
+    }
+
+    /// A Hangar of its own's server, as its maker made it.
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Own {
+        /// Its first administrator, made at its first start with the access
+        /// token whose SHA-256 (hex) is admin_token_sha256: the maker keeps
+        /// the token.
+        admin: String,
+        admin_token_sha256: String,
+        /// Its HTTPS certificate and key, PEM, which its maker made and pins.
+        tls_cert: String,
+        tls_key: String,
+    }
+
+    impl Settings {
+        /// Whether they say what the VM is: one joining a server, or one of
+        /// its own.
+        fn whole(&self) -> bool {
+            match &self.own {
+                Some(_) => self.server.is_empty(),
+                None => !self.server.is_empty() && !self.bootstrap_token.is_empty(),
+            }
+        }
     }
 
     #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,7 +235,11 @@ mod role {
             "/etc/hosts",
             format!("127.0.0.1 localhost\n::1 localhost\n127.0.1.1 {HOSTNAME}\n"),
         )?;
-        crate::firewall::open_tcp(HUB_PORT);
+        // A Hangar of its own's ports besides; nothing listens on them in a
+        // VM that joins a server.
+        for port in [HUB_PORT, HTTPS_PORT, SSH_PORT] {
+            crate::firewall::open_tcp(port);
+        }
         crate::firewall::install().map_err(boot::context("putting the firewall in place"))?;
         eprintln!(
             "INITRAMFS: worker VM: data disk {data}, release {} from {release}{}",
@@ -197,12 +249,16 @@ mod role {
         Ok(fresh)
     }
 
-    /// Copies the release's worker off its ISO, mounted at RELEASE, to
-    /// CURRENT, unless it is there already, moving what was there to
-    /// PREVIOUS; whether it was not there.
+    /// Copies the release's worker and server off its ISO, mounted at
+    /// RELEASE, to CURRENT, unless they are there already, moving what was
+    /// there to PREVIOUS; whether they were not there.
     fn take_release() -> io::Result<bool> {
         let iso = Path::new(RELEASE);
-        let same = RELEASE_FILES.iter().all(|f| {
+        let files: Vec<&str> = RELEASE_FILES
+            .into_iter()
+            .chain(iso.join(SERVER_FILE).exists().then_some(SERVER_FILE))
+            .collect();
+        let same = files.iter().all(|f| {
             match (
                 std::fs::read(iso.join(f)),
                 std::fs::read(Path::new(CURRENT).join(f)),
@@ -210,14 +266,15 @@ mod role {
                 (Ok(a), Ok(b)) => a == b,
                 _ => false,
             }
-        });
+        }) && (files.contains(&SERVER_FILE)
+            || !Path::new(CURRENT).join(SERVER_FILE).exists());
         if same {
             return Ok(false);
         }
         let new = format!("{CURRENT}.new");
         let _ = std::fs::remove_dir_all(&new);
         std::fs::create_dir(&new)?;
-        for f in RELEASE_FILES {
+        for f in files {
             std::fs::copy(iso.join(f), Path::new(&new).join(f))?;
         }
         if Path::new(CURRENT).exists() {
@@ -246,10 +303,11 @@ mod role {
         supervise(rx, fresh).await
     }
 
-    /// Runs the worker with the settings and the address it has, again
-    /// whenever it exits or either changes. A new release's worker that
-    /// fails FAILURES times within FAILING_WITHIN of the boot gives way to
-    /// the release's before it, for the rest of the boot.
+    /// Runs the worker, and the server of a Hangar of its own, with the
+    /// settings and the address it has, both again whenever either exits
+    /// or the settings or address change. A new release that fails
+    /// FAILURES times within FAILING_WITHIN of the boot gives way to the
+    /// release before it, for the rest of the boot.
     async fn supervise(mut lease: watch::Receiver<Option<Lease>>, fresh: bool) {
         let (exited_tx, mut exited) = watch::channel((0u64, 0i32));
         EXITED.get_or_init(|| exited_tx);
@@ -273,23 +331,36 @@ mod role {
                     .unwrap_or(Ipv4Addr::UNSPECIFIED),
                 Err(_) => return std::future::pending().await,
             };
-            if let Err(e) = configure(&settings, address) {
-                eprintln!("hangar-agent: worker VM: writing the worker's configuration: {e}");
-                tokio::time::sleep(Duration::from_secs(5)).await;
-                continue;
-            }
-            exited.borrow_and_update();
-            let pid = match start(dir) {
-                Ok(p) => p,
+            let server = match configure(&settings, address) {
+                Ok(s) => s,
                 Err(e) => {
-                    eprintln!("hangar-agent: worker VM: starting the worker: {e}");
+                    eprintln!("hangar-agent: worker VM: writing the configuration: {e}");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                     continue;
                 }
             };
+            exited.borrow_and_update();
+            let started = match &server {
+                Some(env) => start_server(dir, env).and_then(|_| start(dir)),
+                None => start(dir),
+            };
+            if let Err(e) = started {
+                eprintln!(
+                    "hangar-agent: worker VM: starting release {}: {e}",
+                    version(dir)
+                );
+                stop_all().await;
+                tokio::time::sleep(Duration::from_secs(5)).await;
+                continue;
+            }
             eprintln!(
-                "hangar-agent: worker VM: the worker of release {} runs (pid {pid}) at {address}",
-                version(dir)
+                "hangar-agent: worker VM: release {} runs at {address}{}",
+                version(dir),
+                if server.is_some() {
+                    ", with its own server"
+                } else {
+                    ""
+                }
             );
             let restart = loop {
                 tokio::select! {
@@ -307,25 +378,29 @@ mod role {
                     }
                 }
             };
+            // The exit that ended the run, before stopping the other adds
+            // its own.
+            let status = exited.borrow().1;
+            stop_all().await;
             if restart {
                 eprintln!(
-                    "hangar-agent: worker VM: its settings or address changed; restarting the worker"
+                    "hangar-agent: worker VM: its settings or address changed; starting it afresh"
                 );
-                stop(pid).await;
             } else {
-                let status = exited.borrow().1;
                 if status != 0 && fresh && dir == CURRENT && booted.elapsed() < FAILING_WITHIN {
                     failures += 1;
                     if failures >= FAILURES && Path::new(PREVIOUS).join("hangar-worker").exists() {
                         eprintln!(
-                            "hangar-agent: worker VM: the worker of release {} failed {failures} times; running release {}'s",
+                            "hangar-agent: worker VM: release {} failed {failures} times; running release {}",
                             version(CURRENT),
                             version(PREVIOUS)
                         );
                         dir = PREVIOUS;
                     }
                 }
-                eprintln!("hangar-agent: worker VM: the worker exited; starting it again");
+                eprintln!(
+                    "hangar-agent: worker VM: the worker or server exited; starting both again"
+                );
                 tokio::time::sleep(Duration::from_secs(5)).await;
             }
         }
@@ -337,6 +412,7 @@ mod role {
         if let Some(s) = std::fs::read(SETTINGS)
             .ok()
             .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
+            .filter(Settings::whole)
         {
             let kept = std::fs::read(KEPT)
                 .ok()
@@ -350,19 +426,32 @@ mod role {
         }
         std::fs::read(KEPT)
             .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
+            .and_then(|b| serde_json::from_slice::<Settings>(&b).ok())
+            .filter(Settings::whole)
     }
 
     /// Writes the worker's configuration and the tokens it reads, all on
-    /// the data disk. JSON is YAML, which the worker reads.
-    fn configure(s: &Settings, address: Ipv4Addr) -> io::Result<()> {
+    /// the data disk (JSON is YAML, which the worker reads), and for a
+    /// Hangar of its own, what its server reads; the server's environment,
+    /// if it has one.
+    fn configure(s: &Settings, address: Ipv4Addr) -> io::Result<Option<Vec<(String, String)>>> {
         let p = &s.proxmox;
-        write_private("/data/bootstrap-token", s.bootstrap_token.as_bytes())?;
         write_private("/data/proxmox-token", p.token.as_bytes())?;
+        let (server, token_file, env) = match &s.own {
+            Some(own) => {
+                let env = configure_server(own, address)?;
+                let token = format!("{SERVER_DIR}/bootstrap-token");
+                (format!("http://{LOCAL_API}"), token, Some(env))
+            }
+            None => {
+                write_private("/data/bootstrap-token", s.bootstrap_token.as_bytes())?;
+                (s.server.clone(), "/data/bootstrap-token".to_string(), None)
+            }
+        };
         let config = json!({
             "server": {
-                "url": s.server,
-                "token_file": "/data/bootstrap-token",
+                "url": server,
+                "token_file": token_file,
                 "credential_file": "/data/worker-credential",
             },
             "node": {
@@ -401,7 +490,63 @@ mod role {
         write_private(
             CONFIG,
             &serde_json::to_vec_pretty(&config).map_err(io::Error::other)?,
-        )
+        )?;
+        Ok(env)
+    }
+
+    /// Readies a Hangar of its own's server: its directory, the secrets it
+    /// makes once (its key for secrets at rest, the token its worker
+    /// enrols with) and the certificate its maker gave; its environment.
+    /// Its state is a file (`HANGAR_STATE_FILE`), and its files root the
+    /// worker's own. Its registry stays off while its address is an IP
+    /// address, as the registry is a host name of its own.
+    fn configure_server(own: &Own, address: Ipv4Addr) -> io::Result<Vec<(String, String)>> {
+        std::fs::create_dir_all(SERVER_DIR)?;
+        std::fs::set_permissions(SERVER_DIR, std::fs::Permissions::from_mode(0o700))?;
+        let dir = Path::new(SERVER_DIR);
+        for secret in ["secret-key", "bootstrap-token"] {
+            let path = dir.join(secret);
+            if !path.exists() {
+                write_private(&path.to_string_lossy(), random_hex()?.as_bytes())?;
+            }
+        }
+        write_private(
+            &dir.join("tls.crt").to_string_lossy(),
+            own.tls_cert.as_bytes(),
+        )?;
+        write_private(
+            &dir.join("tls.key").to_string_lossy(),
+            own.tls_key.as_bytes(),
+        )?;
+        let at = |f: &str| dir.join(f).to_string_lossy().into_owned();
+        Ok([
+            ("HANGAR_STATE_FILE", at("state.json")),
+            ("HANGAR_LISTEN", LOCAL_API.to_string()),
+            ("HANGAR_PUBLIC_URL", format!("https://{address}")),
+            ("HANGAR_TLS_LISTEN", format!(":{HTTPS_PORT}")),
+            ("HANGAR_TLS_CERT_FILE", at("tls.crt")),
+            ("HANGAR_TLS_KEY_FILE", at("tls.key")),
+            ("HANGAR_SSH_LISTEN", format!(":{SSH_PORT}")),
+            ("HANGAR_BOOTSTRAP_TOKEN_FILE", at("bootstrap-token")),
+            ("HANGAR_SECRET_KEY_FILE", at("secret-key")),
+            ("HANGAR_FILES_DIR", "/data/files".to_string()),
+            ("HANGAR_REGISTRY_ENABLED", "false".to_string()),
+            ("HANGAR_INITIAL_ADMIN_USERNAME", own.admin.clone()),
+            (
+                "HANGAR_INITIAL_ADMIN_TOKEN_SHA256",
+                own.admin_token_sha256.clone(),
+            ),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect())
+    }
+
+    /// 32 random bytes, as hex.
+    fn random_hex() -> io::Result<String> {
+        let mut b = [0u8; 32];
+        io::Read::read_exact(&mut std::fs::File::open("/dev/urandom")?, &mut b)?;
+        Ok(b.iter().map(|x| format!("{x:02x}")).collect())
     }
 
     fn write_private(path: &str, b: &[u8]) -> io::Result<()> {
@@ -418,40 +563,69 @@ mod role {
     }
 
     /// Starts the worker of the release in dir, its output on the console.
-    fn start(dir: &str) -> io::Result<i32> {
+    fn start(dir: &str) -> io::Result<()> {
+        spawn(&WORKER, dir, "hangar-worker", &["-config", CONFIG], &[])
+    }
+
+    /// Starts the server of the release in dir, with its environment.
+    fn start_server(dir: &str, env: &[(String, String)]) -> io::Result<()> {
+        if !Path::new(dir).join(SERVER_FILE).exists() {
+            return Err(io::Error::other(format!(
+                "release {} has no server, and the VM is a Hangar of its own",
+                version(dir)
+            )));
+        }
+        spawn(&SERVER, dir, SERVER_FILE, &[], env)
+    }
+
+    /// Starts program of the release in dir as the process slot names, its
+    /// output on the console.
+    fn spawn(
+        slot: &AtomicI32,
+        dir: &str,
+        program: &str,
+        args: &[&str],
+        env: &[(String, String)],
+    ) -> io::Result<()> {
         let dir = Path::new(dir);
-        let child = std::process::Command::new(dir.join("hangar-worker"))
-            .args(["-config", CONFIG])
+        let child = std::process::Command::new(dir.join(program))
+            .args(args)
             .env_clear()
             .env("PATH", dir)
             .env("HOME", DATA)
             .env("SSL_CERT_FILE", dir.join("ca-certificates.crt"))
+            .envs(env.iter().map(|(k, v)| (k, v)))
             .current_dir(DATA)
             .spawn()?;
-        let pid = child.id() as i32;
-        WORKER.store(pid, Ordering::SeqCst);
+        slot.store(child.id() as i32, Ordering::SeqCst);
         // Reaped by reap, which sees every child exit.
         std::mem::forget(child);
-        Ok(pid)
+        Ok(())
     }
 
-    /// Asks the worker to stop, and kills it if it has not within
-    /// STOP_WITHIN.
-    async fn stop(pid: i32) {
-        // SAFETY: kill(2) of a process of ours.
-        unsafe { libc::kill(pid, libc::SIGTERM) };
-        let deadline = tokio::time::Instant::now() + STOP_WITHIN;
-        while WORKER.load(Ordering::SeqCst) == pid {
-            if tokio::time::Instant::now() > deadline {
-                // SAFETY: as above.
-                unsafe { libc::kill(pid, libc::SIGKILL) };
-                break;
+    /// Stops the worker, then the server it joins: each is asked to, and
+    /// killed if it has not within STOP_WITHIN.
+    async fn stop_all() {
+        for slot in [&WORKER, &SERVER] {
+            let pid = slot.load(Ordering::SeqCst);
+            if pid <= 0 {
+                continue;
             }
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            // SAFETY: kill(2) of a process of ours.
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+            let deadline = tokio::time::Instant::now() + STOP_WITHIN;
+            while slot.load(Ordering::SeqCst) == pid {
+                if tokio::time::Instant::now() > deadline {
+                    // SAFETY: as above.
+                    unsafe { libc::kill(pid, libc::SIGKILL) };
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
         }
     }
 
-    /// Counts the worker's exits, with the last's wait status.
+    /// Counts the worker's and server's exits, with the last's wait status.
     static EXITED: std::sync::OnceLock<watch::Sender<(u64, i32)>> = std::sync::OnceLock::new();
 
     /// Reaps every child that exits, as PID 1 must, and says when the
@@ -465,11 +639,14 @@ mod role {
                 std::thread::sleep(Duration::from_millis(200));
                 continue;
             }
-            if WORKER
-                .compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                eprintln!("hangar-agent: worker VM: the worker (pid {pid}) exited ({status:#x})");
+            for (slot, what) in [(&WORKER, "worker"), (&SERVER, "server")] {
+                if slot
+                    .compare_exchange(pid, 0, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_err()
+                {
+                    continue;
+                }
+                eprintln!("hangar-agent: worker VM: the {what} (pid {pid}) exited ({status:#x})");
                 if let Some(tx) = EXITED.get() {
                     tx.send_modify(|(n, st)| {
                         *n += 1;
@@ -480,9 +657,9 @@ mod role {
         }
     }
 
-    /// Stops the worker, unmounts the data disk and powers the VM off, or
-    /// restarts it, as the guest agent channel asks (verb: poweroff, halt,
-    /// reboot).
+    /// Stops the worker and the server, unmounts the data disk and powers
+    /// the VM off, or restarts it, as the guest agent channel asks (verb:
+    /// poweroff, halt, reboot).
     pub fn power_off(verb: &str) {
         let cmd = if verb == "reboot" {
             libc::LINUX_REBOOT_CMD_RESTART
@@ -490,12 +667,15 @@ mod role {
             libc::LINUX_REBOOT_CMD_POWER_OFF
         };
         std::thread::spawn(move || {
-            let pid = WORKER.load(Ordering::SeqCst);
-            if pid > 0 {
+            for slot in [&WORKER, &SERVER] {
+                let pid = slot.load(Ordering::SeqCst);
+                if pid <= 0 {
+                    continue;
+                }
                 // SAFETY: kill(2) of a process of ours.
                 unsafe { libc::kill(pid, libc::SIGTERM) };
                 let deadline = Instant::now() + STOP_WITHIN;
-                while WORKER.load(Ordering::SeqCst) == pid && Instant::now() < deadline {
+                while slot.load(Ordering::SeqCst) == pid && Instant::now() < deadline {
                     std::thread::sleep(Duration::from_millis(200));
                 }
             }

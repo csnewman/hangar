@@ -11,6 +11,10 @@
 !images/
 !dev/krun-build.sh
 !deploy/proxmox/release-iso.sh
+!api/
+!web/
+web/node_modules
+web/dist
 crates/agent/tests/service/node_modules
 crates/target
 crates/krun/libkrun

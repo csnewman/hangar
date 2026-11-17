@@ -192,6 +192,32 @@ COPY --from=kernel /out/vmlinuz /out/vmlinu[x] /usr/share/hangar/
 ENTRYPOINT ["hangar-worker"]
 CMD ["-config", "/etc/hangar/worker.yaml"]
 
+# ---------------------------------------------------------------- the server, for the release ISO
+# A worker VM that is a Hangar of its own runs the server beside the worker:
+# the web UI, then the server with it built in, static against musl as the
+# worker is for the ISO. Only the release ISO uses it.
+FROM --platform=$BUILDPLATFORM node:24 AS web
+WORKDIR /src/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ ./
+RUN npm run build
+
+FROM rust AS server
+ARG VERSION=dev
+WORKDIR /src
+COPY api/ api/
+COPY crates/ crates/
+COPY --from=web /src/web/dist web/dist
+RUN target="$(uname -m)-unknown-linux-musl" \
+ && rustup target add "$target" \
+ && t=$(echo "$target" | tr - _) \
+ && cd crates \
+ && env "CC_$t=musl-gcc" "CFLAGS_$t=" HANGAR_VERSION="$VERSION" \
+      cargo build --release --locked --target "$target" -p hangar-server \
+ && install -D "target/$target/release/hangar-server" /out/hangar-server \
+ && cd / && rm -rf /src /root/.cargo/registry /root/.cargo/git
+
 # ---------------------------------------------------------------- release ISO
 # What a Proxmox place's VMs boot, worker VM and environments alike
 # (deploy/proxmox/release-iso.sh): amd64 alone, as Proxmox's guests are
@@ -208,9 +234,11 @@ RUN apt-get update -qq \
 COPY deploy/proxmox/release-iso.sh /scripts/release-iso.sh
 COPY --from=kernel /out/vmlinuz /in/
 COPY --from=crates /out/hangar-agent /out/hangar-worker-static /in/
+COPY --from=server /out/hangar-server /in/
 COPY --from=mke2fs /out/mke2fs /in/
 RUN mkdir /out && sh /scripts/release-iso.sh /in/vmlinuz /in/hangar-agent /in/mke2fs \
-      /in/hangar-worker-static /etc/ssl/certs/ca-certificates.crt "$VERSION" /out/hangar-release.iso
+      /in/hangar-worker-static /in/hangar-server /etc/ssl/certs/ca-certificates.crt \
+      "$VERSION" /out/hangar-release.iso
 
 FROM scratch AS release-iso
 COPY --from=release-iso-build /out/hangar-release.iso /
