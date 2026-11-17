@@ -60,7 +60,7 @@ where
 {
     use std::time::Duration;
 
-    if crate::hub::settings().is_some() {
+    if crate::hub::used() {
         crate::hub::handle(port, handle);
         return std::future::pending().await;
     }

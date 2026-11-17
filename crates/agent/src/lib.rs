@@ -7,6 +7,8 @@ pub mod clock;
 pub mod codeservice;
 pub mod control;
 pub mod desktop;
+#[cfg(target_os = "linux")]
+pub mod dhcp;
 pub mod fdio;
 #[cfg(target_os = "linux")]
 pub mod firewall;
@@ -26,3 +28,4 @@ pub mod terminal;
 pub mod user;
 #[cfg(target_os = "linux")]
 pub mod vsock;
+pub mod worker;

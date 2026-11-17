@@ -685,7 +685,6 @@ fn preflight(cfg: &Config) -> io::Result<()> {
                     "runtime proxmox needs the hub (hub.listen and hub.address): a Proxmox VM has no vsock",
                 ));
             }
-            cfg.mkfs()?;
         }
         Monitor::CloudHypervisor => {
             crate::hugepages::check()?;

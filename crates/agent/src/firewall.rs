@@ -13,6 +13,9 @@
 //! an image's nftables.service starts with `flush ruleset`. Root in the
 //! guest can stop the agent and remove it, which exposes only that
 //! environment.
+//!
+//! A worker VM's firewall lets in the one port its hub listens on, which
+//! its environments dial (`open_tcp`).
 
 use std::io;
 use std::time::Duration;
@@ -74,6 +77,7 @@ const NFT_CMP_NEQ: u32 = 1;
 const ARPHRD_LOOPBACK: u16 = 772;
 /// ct state established and related (NF_CT_STATE_BIT of each).
 const CT_ESTABLISHED_RELATED: u32 = 2 | 4;
+const IPPROTO_TCP: u8 = 6;
 const IPPROTO_UDP: u8 = 17;
 const IPPROTO_ICMPV6: u8 = 58;
 const ICMPV6_ECHO_REQUEST: u8 = 128;
@@ -92,6 +96,21 @@ pub fn wanted() -> bool {
         .filter_map(|a| a.strip_prefix("hangar.firewall="))
         .next_back()
         .is_some_and(|v| v != "0")
+}
+
+/// The TCP ports connections may be made to from the network.
+fn open() -> &'static std::sync::Mutex<Vec<u16>> {
+    static OPEN: std::sync::OnceLock<std::sync::Mutex<Vec<u16>>> = std::sync::OnceLock::new();
+    OPEN.get_or_init(Default::default)
+}
+
+/// Lets connections to port in from the network, as a worker VM's hub
+/// needs; from the next install.
+pub fn open_tcp(port: u16) {
+    let mut o = open().lock().unwrap();
+    if !o.contains(&port) {
+        o.push(port);
+    }
 }
 
 /// Puts the firewall back whenever it has gone, for as long as the agent
@@ -143,6 +162,18 @@ pub fn install() -> io::Result<()> {
             accept(),
         ],
     );
+    for port in open().lock().unwrap().iter() {
+        batch.rule(
+            "input",
+            &[
+                Expr::LoadL4Proto,
+                eq(&[IPPROTO_TCP]),
+                Expr::LoadTransport { offset: 2, len: 2 },
+                eq(&port.to_be_bytes()),
+                accept(),
+            ],
+        );
+    }
     for port in [68u16, 546] {
         batch.rule(
             "input",

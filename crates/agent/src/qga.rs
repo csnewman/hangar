@@ -2,8 +2,9 @@
 //! whose agent channel is on (`agent: 1`, the virtio-serial port
 //! org.qemu.guest_agent.0). Proxmox's API uses it to shut the VM down
 //! cleanly, to show its addresses and its OS, and to write a file into it:
-//! the worker writes one, the hub's secret for this boot
-//! (`crate::hub::SECRET_FILE`), and no other file may be opened.
+//! the worker writes the hub's settings for this boot, secret and all
+//! (`crate::hub::SETTINGS`), and a worker VM's maker writes its settings
+//! (`crate::worker::SETTINGS`); no other file may be opened.
 //!
 //! Requests are JSON objects, `{"execute": name, "arguments": {...}}`, one
 //! after another on the port, each answered with `{"return": ...}` or
@@ -27,6 +28,9 @@ const PORT_NAME: &str = "org.qemu.guest_agent.0";
 
 /// How long the port is looked for: a VM without one has none to find.
 const PORT_WITHIN: Duration = Duration::from_secs(30);
+
+/// The files the host may write, and no others.
+const WRITABLE: [&str; 2] = [crate::hub::SETTINGS, crate::worker::SETTINGS];
 
 /// What a request may name, each answered unless it is guest-shutdown.
 const COMMANDS: [&str; 15] = [
@@ -188,6 +192,12 @@ impl Session {
                     "halt" => "halt",
                     _ => "poweroff",
                 };
+                // A worker VM's agent is its whole system, PID 1.
+                #[cfg(target_os = "linux")]
+                if std::process::id() == 1 {
+                    crate::worker::power_off(verb);
+                    return None;
+                }
                 let _ = std::process::Command::new("systemctl").arg(verb).spawn();
                 return None;
             }
@@ -205,16 +215,19 @@ impl Session {
     fn file_open(&mut self, args: &Value) -> Result<Value, Value> {
         let path = args["path"].as_str().unwrap_or_default();
         let mode = args["mode"].as_str().unwrap_or("r");
-        if path != crate::hub::SECRET_FILE || !mode.starts_with('w') {
+        if !WRITABLE.contains(&path) || !mode.starts_with('w') {
             return Err(generic(
-                "Hangar's agent opens no file but the hub's secret, to write",
+                "Hangar's agent opens no file but its settings, to write",
             ));
         }
         let f = write_private(path).map_err(generic)?;
-        // Opened empty: the agent's link to the hub ends and it waits for
-        // the secret being written.
+        // Opened empty: the agent tries its link to the hub, which is dead
+        // if the guest has just resumed, and reads the settings again as it
+        // dials.
         #[cfg(target_os = "linux")]
-        crate::hub::secret_written();
+        if path == crate::hub::SETTINGS {
+            crate::hub::settings_written();
+        }
         self.next += 1;
         self.files.insert(self.next, f);
         Ok(json!(self.next))

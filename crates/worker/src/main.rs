@@ -16,13 +16,18 @@ mod tools;
 const USAGE: &str = "usage: hangar-worker [-config FILE] [-debug]
        hangar-worker doctor                  check this machine can run environments
        hangar-worker erofs -o IMAGE DIR      write a directory as an EROFS image
-       hangar-worker erofs -o IMAGE -tar     write a tar archive on standard input as one";
+       hangar-worker erofs -o IMAGE -tar     write a tar archive on standard input as one
+       hangar-worker proxmox-cmdline         print the kernel command line Proxmox VMs boot with";
 
 fn main() -> ExitCode {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     match argv.first().map(String::as_str) {
         Some("doctor") => return tools::doctor(),
         Some("erofs") => return tools::erofs(&argv[1..]),
+        Some("proxmox-cmdline") => {
+            println!("{}", hangar_vm::proxmox::CMDLINE);
+            return ExitCode::SUCCESS;
+        }
         _ => {}
     }
     raise_file_limit();
@@ -136,6 +141,7 @@ async fn run(path: PathBuf, rings: Arc<Rings>) -> Result<(), String> {
                 } else {
                     p.mke2fs.clone().into()
                 },
+                release_iso: p.release_iso.clone(),
             },
             &dir,
             log.clone(),

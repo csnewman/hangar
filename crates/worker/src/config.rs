@@ -74,6 +74,10 @@ pub struct Proxmox {
     /// mke2fs, static, for the release ISO's initramfs; unset, the worker
     /// image's (/usr/share/hangar/mke2fs).
     pub mke2fs: String,
+    /// The release ISO environments boot, by its volume's ID
+    /// (STORAGE:iso/NAME), as one is published with each release and a
+    /// worker VM boots; unset, the worker builds its own.
+    pub release_iso: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

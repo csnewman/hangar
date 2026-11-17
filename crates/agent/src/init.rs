@@ -63,7 +63,7 @@ pub fn machine_id(mut raw: [u8; 16]) -> String {
 }
 
 #[cfg(target_os = "linux")]
-mod boot {
+pub(crate) mod boot {
     use super::{machine_id, swap_header, valid_machine_id};
 
     use std::ffi::CString;
@@ -134,7 +134,7 @@ mod boot {
         }
     }
 
-    fn mount(
+    pub(crate) fn mount(
         src: &str,
         dst: &str,
         fstype: &str,
@@ -159,11 +159,11 @@ mod boot {
         Ok(())
     }
 
-    fn context(what: &str) -> impl Fn(io::Error) -> io::Error + '_ {
+    pub(crate) fn context(what: &str) -> impl Fn(io::Error) -> io::Error + '_ {
         move |e| io::Error::new(e.kind(), format!("{what}: {e}"))
     }
 
-    fn cmdline() -> Vec<String> {
+    pub(crate) fn cmdline() -> Vec<String> {
         fs::read_to_string("/proc/cmdline")
             .unwrap_or_default()
             .split_whitespace()
@@ -172,7 +172,7 @@ mod boot {
     }
 
     /// The value of `key=` on the kernel's command line.
-    fn arg(args: &[String], key: &str) -> Option<String> {
+    pub(crate) fn arg(args: &[String], key: &str) -> Option<String> {
         args.iter()
             .rev()
             .find_map(|a| a.strip_prefix(key)?.strip_prefix('='))
@@ -182,7 +182,7 @@ mod boot {
     /// The device a kernel command line names: its path, waited for;
     /// serial:NAME, the disk whose serial is NAME; or scsi:N, the SCSI
     /// device at LUN N of target 0; the last two once they appear.
-    fn device(name: &str) -> io::Result<String> {
+    pub(crate) fn device(name: &str) -> io::Result<String> {
         let matches: Box<dyn Fn(&Path) -> bool> = if let Some(serial) = name.strip_prefix("serial:")
         {
             let serial = serial.to_string();
@@ -226,10 +226,11 @@ mod boot {
         }
     }
 
-    /// Gives a new disk, its first MiB all zeros, an ext4 filesystem, with
-    /// the mke2fs the initramfs carries (MKE2FS). A disk with anything on
-    /// it is left as it is, for mounting it to say what is wrong.
-    fn format_if_new(device: &str) -> io::Result<()> {
+    /// Gives a new disk, its first MiB all zeros, an ext4 filesystem labelled
+    /// label, with the mke2fs the initramfs carries (MKE2FS). A disk with
+    /// anything on it is left as it is, for mounting it to say what is
+    /// wrong.
+    pub(crate) fn format_if_new(device: &str, label: &str) -> io::Result<()> {
         let mut head = vec![0u8; 1 << 20];
         let n = fs::File::open(device)?.read(&mut head)?;
         if head[..n].iter().any(|&b| b != 0) {
@@ -244,7 +245,7 @@ mod boot {
         // The disk reads as zeros, so neither the inode tables nor the
         // journal need writing, and nothing needs discarding.
         let out = std::process::Command::new(MKE2FS)
-            .args(["-q", "-F", "-t", "ext4", "-L", "hangar-upper", "-E"])
+            .args(["-q", "-F", "-t", "ext4", "-L", label, "-E"])
             .arg("lazy_itable_init=1,lazy_journal_init=1,nodiscard")
             .arg(device)
             .output()?;
@@ -254,7 +255,7 @@ mod boot {
                 String::from_utf8_lossy(&out.stderr).trim()
             )));
         }
-        eprintln!("INITRAMFS: made the writable layer's filesystem on {device}");
+        eprintln!("INITRAMFS: made a filesystem ({label}) on {device}");
         Ok(())
     }
 
@@ -288,7 +289,7 @@ mod boot {
         Ok(())
     }
 
-    fn wait_for(device: &str) -> io::Result<()> {
+    pub(crate) fn wait_for(device: &str) -> io::Result<()> {
         let deadline = Instant::now() + DISK_WAIT;
         while fs::metadata(device).is_err() {
             if Instant::now() > deadline {
@@ -302,7 +303,7 @@ mod boot {
         Ok(())
     }
 
-    fn mkdir(dir: &str, mode: u32) -> io::Result<()> {
+    pub(crate) fn mkdir(dir: &str, mode: u32) -> io::Result<()> {
         fs::DirBuilder::new().recursive(true).mode(mode).create(dir)
     }
 
@@ -327,6 +328,11 @@ mod boot {
             mount(src, dst, fstype, 0, "").map_err(context(&format!("mounting {dst}")))?;
         }
         let args = cmdline();
+        // A Proxmox VM boots the release ISO as a worker VM or an
+        // environment, which its disks tell apart.
+        if crate::worker::is_worker(&args) {
+            crate::worker::run();
+        }
         // Before the machine's network card can be up, and long before
         // anything of the image runs.
         let firewall = arg(&args, "hangar.firewall").is_some_and(|v| v != "0");
@@ -337,7 +343,8 @@ mod boot {
 
         let upper = arg(&args, "hangar.upper").unwrap_or_else(|| UPPER_DISK.to_string());
         let upper = device(&upper).map_err(context("the writable disk"))?;
-        format_if_new(&upper).map_err(context(&format!("making a filesystem on {upper}")))?;
+        format_if_new(&upper, "hangar-upper")
+            .map_err(context(&format!("making a filesystem on {upper}")))?;
         // discard hands freed blocks back to the host as files are deleted:
         // the disk is a sparse file there, and without it everything an
         // environment ever wrote stays allocated. Nothing in the guest can trim

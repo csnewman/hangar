@@ -158,7 +158,7 @@ mod linux {
         // within a second.
         // Over vsock to the host's server, or on the hub to the agent's own
         // relay of it on the loopback.
-        let transport = if crate::hub::settings().is_some() {
+        let transport = if crate::hub::used() {
             format!(
                 "proto=tcp,addr=127.0.0.1,port={}",
                 crate::hub::NFS_RELAY_PORT

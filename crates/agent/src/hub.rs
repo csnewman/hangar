@@ -6,14 +6,14 @@
 //! dials on the host, the control channel and the shared files, it opens
 //! as a stream.
 //!
-//! The worker gives the agent where to dial and with what secret in the
-//! initramfs, which init keeps for the agent in /dev, the one filesystem
-//! that passes into the new root untouched (systemd mounts its own /run).
-//! A Proxmox VM's boot disk is shared, so there the settings come in the
-//! VM's SMBIOS serial instead, and the secret apart from them, written by
-//! the worker through the guest agent channel (`crate::qga`), since a VM's
-//! configuration, the serial included, is anyone's to read who may see the
-//! VM.
+//! The worker gives the agent where to dial and with what secret as JSON
+//! (hangar_hub::Settings) in /dev/hangar/hub.json, root's alone: in the
+//! initramfs, which init moves there, or, on a Proxmox VM, whose boot is
+//! shared, written by the worker through the guest agent channel
+//! (`crate::qga`) at every start, which the kernel command line says
+//! (`hangar.hub=channel`). Nothing of it is in the VM's configuration,
+//! which anyone who may see the VM can read, and /dev does not outlive the
+//! boot.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -28,18 +28,15 @@ use tokio::sync::watch;
 
 use crate::fdio::FdStream;
 
-/// Where init keeps the hub's settings for the agent: root's alone.
+/// Where the hub's settings are kept for the agent: root's alone.
 pub const SETTINGS: &str = "/dev/hangar/hub.json";
 
 /// Where they arrive, in the initramfs.
 pub const INITRAMFS_SETTINGS: &str = "/hub.json";
 
-/// Where the secret is written apart from the settings: root's alone.
-pub const SECRET_FILE: &str = "/dev/hangar/hub-secret";
-
-/// The SMBIOS serial, root's alone to read, holding the settings but the
-/// secret on a Proxmox VM.
-const SMBIOS_SERIAL: &str = "/sys/class/dmi/id/product_serial";
+/// The kernel command line's word for settings that come through the guest
+/// agent channel, after the agent has started.
+const CHANNEL_ARG: &str = "hangar.hub=channel";
 
 /// Where the agent relays the shared files' NFS on the guest's loopback,
 /// for the kernel's client: a port only root may bind, so no other program
@@ -50,31 +47,32 @@ pub const NFS_RELAY_PORT: u16 = 849;
 /// just started or the guest has just resumed.
 const LINK_WITHIN: Duration = Duration::from_secs(30);
 
-/// The settings, if the worker gave any: the agent uses the hub.
-pub fn settings() -> Option<&'static Settings> {
-    static S: OnceLock<Option<Settings>> = OnceLock::new();
-    S.get_or_init(|| {
-        let from_file = std::fs::read(SETTINGS).ok();
-        let b = from_file.or_else(|| std::fs::read(SMBIOS_SERIAL).ok())?;
-        let s: Settings = serde_json::from_slice(&b).ok()?;
-        let whole = !s.address.is_empty() && !s.fingerprint.is_empty();
-        (whole && !s.environment.is_empty()).then_some(s)
+/// Whether the agent reaches its worker through the hub: its settings
+/// came in the initramfs, or will come through the guest agent channel.
+pub fn used() -> bool {
+    static U: OnceLock<bool> = OnceLock::new();
+    *U.get_or_init(|| {
+        std::path::Path::new(SETTINGS).exists()
+            || std::fs::read_to_string("/proc/cmdline")
+                .unwrap_or_default()
+                .split_whitespace()
+                .any(|a| a == CHANNEL_ARG)
     })
-    .as_ref()
 }
 
-/// The secret for this boot: the settings', or the one written apart from
-/// them, once it is.
-async fn secret(settings: &Settings) -> String {
-    if !settings.secret.is_empty() {
-        return settings.secret.clone();
-    }
+/// The settings as they are, if they are whole: a file being written is
+/// not yet.
+fn current() -> Option<Settings> {
+    let s: Settings = serde_json::from_slice(&std::fs::read(SETTINGS).ok()?).ok()?;
+    let whole = !s.address.is_empty() && !s.fingerprint.is_empty();
+    (whole && !s.environment.is_empty() && !s.secret.is_empty()).then_some(s)
+}
+
+/// The settings, once there are whole ones.
+async fn settings() -> Settings {
     loop {
-        if let Ok(s) = std::fs::read_to_string(SECRET_FILE) {
-            let s = s.trim();
-            if !s.is_empty() {
-                return s.to_string();
-            }
+        if let Some(s) = current() {
+            return s;
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -87,19 +85,19 @@ fn handlers() -> &'static Mutex<HashMap<u32, Handler>> {
     H.get_or_init(Default::default)
 }
 
-/// Counts the secrets written apart (SECRET_FILE), as the worker writes
-/// one at every start of a Proxmox VM, a resume from a hibernate included:
-/// each as the file is opened, empty, to be written.
+/// Counts the settings written through the guest agent channel, as the
+/// worker writes them at every start of a Proxmox VM, a resume from a
+/// hibernate included: each as the file is opened, empty, to be written.
 fn secrets() -> &'static watch::Sender<u64> {
     static S: OnceLock<watch::Sender<u64>> = OnceLock::new();
     S.get_or_init(|| watch::channel(0).0)
 }
 
-/// Says a secret has been written apart, as at a resume, when the link
-/// may be dead although the guest has not heard so (the worker closed it
-/// while the guest was frozen): the agent tries it at once (alive) rather
-/// than waiting for TCP to find out.
-pub fn secret_written() {
+/// Says settings have been written, as at a resume, when the link may be
+/// dead although the guest has not heard so (the worker closed it while the
+/// guest was frozen): the agent tries it at once (alive) rather than waiting
+/// for TCP to find out.
+pub fn settings_written() {
     secrets().send_modify(|n| *n += 1);
 }
 
@@ -121,16 +119,17 @@ where
 
 /// Keeps the agent connected to the worker's hub for as long as the guest
 /// runs, dialling again whenever the link drops.
-pub async fn run(settings: &'static Settings) {
+pub async fn run() {
     let mut wait = Duration::from_secs(1);
     let mut said = false;
     let mut written = secrets().subscribe();
     loop {
-        // Read again at each dial: a secret written apart is written anew
-        // at each boot. One written after it was read ends the link.
+        // Read again at each dial: settings come through the guest agent
+        // channel anew at each boot, with a secret of their own.
+        let settings = settings().await;
         let hello = Hello {
             environment: settings.environment.clone(),
-            secret: secret(settings).await,
+            secret: settings.secret.clone(),
             agent: crate::service::BUILD.to_string(),
         };
         written.borrow_and_update();

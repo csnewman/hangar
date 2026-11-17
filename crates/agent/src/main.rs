@@ -132,8 +132,8 @@ fn usage() -> ExitCode {
 async fn agent() -> std::io::Result<()> {
     // With no vsock to the host, the worker's hub carries what vsock would.
     #[cfg(target_os = "linux")]
-    if let Some(s) = hangar_agent::hub::settings() {
-        tokio::spawn(hangar_agent::hub::run(s));
+    if hangar_agent::hub::used() {
+        tokio::spawn(hangar_agent::hub::run());
         tokio::spawn(hangar_agent::hub::relay_shared_files());
     }
     // A guest on a shared network keeps its firewall up.

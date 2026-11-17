@@ -24,7 +24,6 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use base64::Engine;
 use serde_json::Value;
 
 use crate::err;
@@ -48,10 +47,13 @@ const RELEASE_SLOT: &str = "scsi1";
 /// The kernel command line every VM boots with, in the release ISO.
 /// Headless: a Proxmox VM has no virtual GPU of Hangar's. The guest puts its
 /// own firewall up: the VM is on its place's network, among other machines.
-const CMDLINE: &str = "console=ttyS0 systemd.show_status=1 mitigations=off \
+/// Its hub settings come through the guest agent channel (`hangar.hub`). A
+/// worker VM boots the same, its agent finding a data disk where the
+/// writable disk would be.
+pub const CMDLINE: &str = "console=ttyS0 systemd.show_status=1 mitigations=off \
     memory_hotplug.online_policy=auto-movable \
     hangar.upper=serial:hangar-upper hangar.image=scsi:0 \
-    hangar.swap=serial:hangar-swap hangar.firewall=1 \
+    hangar.swap=serial:hangar-swap hangar.firewall=1 hangar.hub=channel \
     systemd.unit=multi-user.target systemd.mask=hangar-desktop.service";
 
 /// The tag every VM the worker makes carries, beside its place's prefix.
@@ -87,6 +89,10 @@ pub struct Config {
     /// mke2fs, static, which the release ISO's initramfs carries for the
     /// agent to make a new writable disk's filesystem with.
     pub mke2fs: PathBuf,
+    /// The release ISO environments boot, by its volume's ID, as one is
+    /// published with each release; empty, the worker builds and uploads
+    /// its own (release).
+    pub release_iso: String,
 }
 
 /// Whether prefix can name a place's things on Proxmox: 1 to 20 lowercase
@@ -245,10 +251,16 @@ impl Pve {
             .ok_or_else(|| err(format!("proxmox gave no free VMID: {v}")))
     }
 
-    /// The release ISO, which VMs boot: the worker's kernel, and its agent
-    /// as the initramfs with mke2fs beside it, booting with CMDLINE. Made and
-    /// uploaded once per kernel, agent and mke2fs; its volume's ID.
+    /// The release ISO, which VMs boot: the one configured (release_iso),
+    /// or the worker's kernel, and its agent as the initramfs with mke2fs
+    /// beside it, booting with CMDLINE, made and uploaded once per kernel,
+    /// agent and mke2fs. Its volume's ID.
     pub async fn release(&self, kernel: &Path, agent: &Path) -> io::Result<String> {
+        if !self.cfg.release_iso.is_empty() {
+            let name = self.cfg.release_iso.rsplit('/').next().unwrap_or_default();
+            *self.release.lock().unwrap() = Some(name.to_string());
+            return Ok(self.cfg.release_iso.clone());
+        }
         let key = short_hash(&format!(
             "{}{}{}{CMDLINE}",
             crate::suspend::fingerprint(kernel),
@@ -544,9 +556,10 @@ impl Pve {
             .ok_or_else(|| err("the VM's config has no memory"))
     }
 
-    /// Starts a VM, or resumes it from a hibernate, saying in its SMBIOS
-    /// serial where its hub is, then hands it secret through its agent
-    /// channel once its agent answers there. A cold start boots the release
+    /// Starts a VM, or resumes it from a hibernate, then gives it its hub
+    /// settings, secret and all, through its agent channel once its agent
+    /// answers there: nothing of them goes in the VM's configuration, which
+    /// anyone who may see the VM can read. A cold start boots the release
     /// ISO given and reads the image ISO given (the environment's pin may
     /// have moved); a resume keeps the ones it was hibernated with.
     pub async fn start(
@@ -558,20 +571,9 @@ impl Pve {
         release: &str,
     ) -> io::Result<()> {
         let mut placed = placed.clone();
-        placed.secret.clear();
-        let serial = base64::engine::general_purpose::STANDARD
-            .encode(serde_json::to_vec(&placed).map_err(io::Error::other)?);
+        placed.secret = secret.to_string();
+        let settings = serde_json::to_string(&placed).map_err(io::Error::other)?;
         let conf = self.client.get(&self.vm(id, "config")).await?;
-        let uuid = conf["smbios1"]
-            .as_str()
-            .unwrap_or_default()
-            .split(',')
-            .find(|p| p.starts_with("uuid="))
-            .map(str::to_string);
-        let smbios = match uuid {
-            Some(u) => format!("{u},serial={serial},base64=1"),
-            None => format!("serial={serial},base64=1"),
-        };
         let resuming = conf["lock"] == "suspended";
         // A cold start's network card is plugged in once the VM runs: one
         // there from the start has SeaBIOS run its iPXE ROM, which waits
@@ -582,7 +584,6 @@ impl Pve {
             let image = format!("{image},media=cdrom");
             let release = format!("{release},media=cdrom");
             let mut form = vec![
-                ("smbios1", smbios.as_str()),
                 (IMAGE_SLOT, image.as_str()),
                 (RELEASE_SLOT, release.as_str()),
             ];
@@ -599,12 +600,12 @@ impl Pve {
                 .put(&self.vm(id, "config"), &[("net0", net.as_str())])
                 .await?;
         }
-        self.give_secret(id, secret).await
+        self.give_settings(id, &settings).await
     }
 
-    /// Writes the hub's secret into the guest once its agent answers on the
-    /// agent channel.
-    async fn give_secret(&self, id: u32, secret: &str) -> io::Result<()> {
+    /// Writes the hub's settings into the guest once its agent answers on
+    /// the agent channel.
+    async fn give_settings(&self, id: u32, settings: &str) -> io::Result<()> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(180);
         loop {
             if self
@@ -626,7 +627,7 @@ impl Pve {
         self.client
             .post(
                 &self.vm(id, "agent/file-write"),
-                &[("file", "/dev/hangar/hub-secret"), ("content", secret)],
+                &[("file", "/dev/hangar/hub.json"), ("content", settings)],
             )
             .await
             .map(|_| ())

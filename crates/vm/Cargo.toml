@@ -10,7 +10,6 @@ name = "hangar_vm"
 path = "src/lib.rs"
 
 [dependencies]
-base64.workspace = true
 hangar-api = { path = "../api" }
 hangar-erofs = { path = "../erofs" }
 hangar-ext4 = { path = "../ext4" }

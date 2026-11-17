@@ -43,8 +43,7 @@ pub struct Settings {
     pub address: String,
     pub fingerprint: String,
     pub environment: String,
-    /// Empty where the secret comes apart from the rest, as the guest agent
-    /// channel brings it to a Proxmox VM (`SECRET_FILE` in the agent).
+    /// The secret for this boot, which the worker gives each boot anew.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub secret: String,
 }
